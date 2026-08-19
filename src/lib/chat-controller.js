@@ -3,6 +3,7 @@ import { applyBufferedChatEvents, applyChatEvent, historyMessages, settledPhases
 const historyPageCap = 100
 const historyPageLimit = 100
 const signaledThreadCap = 256
+const signaledRunCap = 256
 
 export function createChatController({
   invoke,
@@ -66,6 +67,12 @@ export function createChatController({
   const signaledThreads = new Set()
   let signaledThreadRefreshInFlight = false
   let signaledThreadRefreshFollowUp = false
+  // The signaled-run set marks each new run id once. A later event with the
+  // same run id does not re-read. The set is insertion-ordered and holds at
+  // most 256 run ids. It drops the oldest entry past that bound.
+  const signaledRuns = new Set()
+  let signaledRunRefreshInFlight = false
+  let signaledRunRefreshFollowUp = false
 
   function holdBuffer() {
     runIdWaits += 1
@@ -136,6 +143,36 @@ export function createChatController({
     return true
   }
 
+  // Signals that arrive during a re-read collapse into one follow-up re-read.
+  async function refreshSignaledOpenThread() {
+    signaledRunRefreshInFlight = true
+    try {
+      do {
+        signaledRunRefreshFollowUp = false
+        await refreshOpenThread()
+      } while (signaledRunRefreshFollowUp && !destroyed)
+    } finally {
+      signaledRunRefreshInFlight = false
+    }
+  }
+
+  function signalRun(runId, threadId) {
+    if (!runId || !threadId || destroyed) return false
+    if (threadId !== readThreadId()) return false
+    if (messages().some((message) => message.run?.id === runId)) return false
+    if (signaledRuns.has(runId)) return false
+    if (signaledRuns.size >= signaledRunCap) {
+      signaledRuns.delete(signaledRuns.values().next().value)
+    }
+    signaledRuns.add(runId)
+    if (signaledRunRefreshInFlight || refreshingOpenThread) {
+      signaledRunRefreshFollowUp = true
+      return true
+    }
+    void refreshSignaledOpenThread()
+    return true
+  }
+
   function handleEvent({ payload }) {
     const signaled = signalThread(payload.threadId)
     // A thread load replaces the whole transcript, so no published run describes
@@ -147,6 +184,9 @@ export function createChatController({
       // to another surface. Hold the event only while a call waits for its run
       // id. Drop it otherwise, or the map grows for the life of the window.
       if (runIdWaits) buffered.set(payload.runId, [...(buffered.get(payload.runId) ?? []), payload])
+      // A new run on the open thread is the exception. Re-read those pages once.
+      // Signal after the drop so this event is not applied twice onto the pages.
+      signalRun(payload.runId, payload.threadId)
       return
     }
     const projected = applyChatEvent(current, payload)
@@ -420,6 +460,11 @@ export function createChatController({
       historyLoads -= 1
       releaseBuffer()
       refreshingOpenThread = false
+    }
+    // A signal can land on a re-read that a reconnect started. Collapse it
+    // into one follow-up once that re-read ends.
+    if (signaledRunRefreshFollowUp && !signaledRunRefreshInFlight && !destroyed) {
+      void refreshSignaledOpenThread()
     }
   }
 
