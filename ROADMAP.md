@@ -30,8 +30,10 @@ them must exercise the real contracts. It must add no mocked production path.
 > (2026-08-19) recorded the eighty-eighth-wave landings. The thirty-ninth
 > (2026-08-19) recorded the eighty-ninth-wave landings and named the two
 > remaining consumers. The fortieth (2026-08-19) recorded the ninetieth-wave
-> open-thread landing and named the remaining reconnect consumer. It grows every
-> wave, so it stays the next compaction target.
+> open-thread landing and named the remaining reconnect consumer. The
+> forty-first (2026-08-19) recorded the reconnect landing and named the
+> remaining attach operations. It grows every wave, so it stays the next
+> compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -593,18 +595,16 @@ for a run id the transcript does not hold. The signaled-run set is bounded
 at 256 entries. Signals that arrive during a re-read collapse into one
 follow-up.
 
-MEASURED 2026-08-19 (ninety-first wave, planner, read applyDesktopClientStatus
-beside refreshThreads) — the 2026-08-18 reconnect list consumer stays unbuilt.
-`applyDesktopClientStatus` (`src/App.svelte:234`) re-reads the open thread
-when `chat_events_connected` recovers. It does not call `refreshThreads`.
-`refreshThreads` (`src/lib/chat-controller.js:96`) exists and is not exported.
-A dropped chat-event subscription loses pending thread signals. The newest
-page then stays stale until another refresh.
+DONE 2026-08-19 — a chat-event reconnect refreshes the thread list
+(MUNIDESK-1384). `applyDesktopClientStatus` (`src/App.svelte:234`) calls
+`refreshOpenThread` and `refreshThreads` when `chat_events_connected`
+recovers. `refreshThreads` (`src/lib/chat-controller.js:96`) is exported.
+The first status still re-reads nothing. The ADR 0012 passive-delivery
+chain is complete on Linux.
 
-SEQUENCED 2026-08-19 (ninety-first wave) — this wave files that reconnect
-consumer. After it lands, the ADR 0012 passive-delivery chain is complete on
-Linux. The next locally verifiable slice is `request.cancel` for a companion
-run.stream subscription. Remote Control stays gated for three reasons.
+OPEN — `request.cancel` for a companion `run.stream` subscription stays
+in the backlog. After it lands, the next attach slices are `run.open` and
+the artifact transfer registry. Remote Control stays gated for three reasons.
 Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`. No muniment-cloud relay contract has published. The
 desktop states stay pending owner mockup confirmation
