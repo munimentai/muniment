@@ -44,7 +44,7 @@ use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::PiArtifactDescriptor;
 
 use crate::service::{self, ConfigureRunError};
-use crate::{RuntimeChatEventBroadcast, RuntimeChatEventSink};
+use crate::{RuntimeChatEventBroadcast, RuntimeChatEventSink, RuntimeChatEventTarget};
 
 const ATTACH_PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -459,7 +459,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             files,
             grant,
             Arc::clone(&self.active),
-            None,
+            RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
             self.pi_artifact,
         )
         .map_err(run_service_error)?;
@@ -508,7 +508,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             tokens.subject,
             grant,
             Arc::clone(&self.active),
-            None,
+            RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
             self.pi_artifact,
         )
         .map_err(run_service_error)?;

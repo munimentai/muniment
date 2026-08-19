@@ -19,6 +19,7 @@ use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::validate_pi_session;
 use muniment_runtime::{
     accept_prompt, drive_prompt, open_profile_storage, run_prompt, thread_page, RuntimeAttachState,
+    RuntimeChatEventTarget,
 };
 
 mod common;
@@ -126,7 +127,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
         Vec::new(),
         fixture_grant(),
         Arc::clone(&active),
-        None,
+        RuntimeChatEventTarget::Subscriber(None),
         None,
     )
     .unwrap();
@@ -149,7 +150,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
         Vec::new(),
         fixture_grant(),
         Arc::clone(&active),
-        None,
+        RuntimeChatEventTarget::Subscriber(None),
         None,
     )
     .unwrap();
@@ -208,7 +209,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
         Vec::new(),
         fixture_grant(),
         active,
-        None,
+        RuntimeChatEventTarget::Subscriber(None),
         None,
     )
     .unwrap_err();
@@ -257,7 +258,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         Vec::new(),
         fixture_grant(),
         Arc::new(Mutex::new(None)),
-        None,
+        RuntimeChatEventTarget::Subscriber(None),
         Some(descriptor),
     )
     .unwrap_err();
@@ -292,7 +293,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
                 Vec::new(),
                 fixture_grant(),
                 Arc::clone(&active),
-                Some(subscriber),
+                RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
             )
         });
@@ -343,7 +344,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         }],
         fixture_grant(),
         Arc::clone(&second_active),
-        None,
+        RuntimeChatEventTarget::Subscriber(None),
         Some(descriptor),
     )
     .unwrap();
@@ -501,6 +502,8 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
         spawn_server_sequence(vec![(200, session_body()), (200, grant_body())]);
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let state = RuntimeAttachState::open(&profile, &config).unwrap();
+    let mut subscription_service = state.attach_service().unwrap();
+    let events = subscription_service.subscribe_chat_events().unwrap();
     let mut service = muniment_runtime::compose_attach_service(
         state.boundaries().with_pi_artifact(descriptor),
         state.companion_registry(),
@@ -528,6 +531,8 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     assert_eq!(accepted.run_id, run_id);
     assert!(!accepted.thread_id.is_empty());
     assert!(accepted.committed_seq > 0);
+    let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(event.run_id, run_id);
     server.join().unwrap();
 
     let storage = open_profile_storage(&profile).unwrap();
