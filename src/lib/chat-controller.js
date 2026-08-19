@@ -2,6 +2,7 @@ import { applyBufferedChatEvents, applyChatEvent, historyMessages, settledPhases
 
 const historyPageCap = 100
 const historyPageLimit = 100
+const signaledThreadCap = 256
 
 export function createChatController({
   invoke,
@@ -59,6 +60,12 @@ export function createChatController({
   // no thread id. loadHistory reads this flag back to tell the two apart.
   let freshThread = false
   const renameQueues = new Map()
+  // The signaled-thread set marks each new thread id once. A later event with
+  // the same thread id does not refresh. The set is insertion-ordered and holds
+  // at most 256 thread ids. It drops the oldest entry past that bound.
+  const signaledThreads = new Set()
+  let signaledThreadRefreshInFlight = false
+  let signaledThreadRefreshFollowUp = false
 
   function holdBuffer() {
     runIdWaits += 1
@@ -100,7 +107,37 @@ export function createChatController({
     }
   }
 
+  // Signals that arrive during a refresh collapse into one follow-up refresh.
+  async function refreshSignaledThreads() {
+    signaledThreadRefreshInFlight = true
+    try {
+      do {
+        signaledThreadRefreshFollowUp = false
+        await refreshThreads()
+      } while (signaledThreadRefreshFollowUp && !destroyed)
+    } finally {
+      signaledThreadRefreshInFlight = false
+    }
+  }
+
+  function signalThread(threadId) {
+    if (!threadId || destroyed) return false
+    if (readThreadSummaries().some((summary) => summary.threadId === threadId)) return false
+    if (signaledThreads.has(threadId)) return false
+    if (signaledThreads.size >= signaledThreadCap) {
+      signaledThreads.delete(signaledThreads.values().next().value)
+    }
+    signaledThreads.add(threadId)
+    if (signaledThreadRefreshInFlight) {
+      signaledThreadRefreshFollowUp = true
+      return true
+    }
+    void refreshSignaledThreads()
+    return true
+  }
+
   function handleEvent({ payload }) {
+    const signaled = signalThread(payload.threadId)
     // A thread load replaces the whole transcript, so no published run describes
     // this event yet. openThread and refreshOpenThread drain the buffer onto the
     // loaded pages.
@@ -118,7 +155,7 @@ export function createChatController({
     if (active()?.id === payload.runId) {
       const settled = projected && settledPhases.has(projected.phase)
       onActive(settled ? null : projected)
-      if (settled) void refreshThreads()
+      if (settled && !signaled) void refreshThreads()
     }
   }
 
