@@ -234,13 +234,17 @@
   function applyDesktopClientStatus(status) {
     // The runtime drops a chat-event subscriber whose queue fills, and the
     // desktop resubscribes after a retry. No window saw the events inside that
-    // gap, so the shell reads the open thread again on the recovery. The first
-    // status compares against no earlier status, so it re-reads nothing.
+    // gap, so the shell reads the open thread and the newest list page again
+    // on the recovery. The first status compares against no earlier status, so
+    // it re-reads nothing.
     const chatEventsRecovered = desktopClientStatus?.chat_events_connected === false
       && status?.chat_events_connected === true
     desktopClientStatus = status
     backgroundServiceNotice.update(status)
-    if (chatEventsRecovered) void chatController.refreshOpenThread()
+    if (chatEventsRecovered) {
+      void chatController.refreshOpenThread()
+      void chatController.refreshThreads()
+    }
   }
 
   function toggleSidebar() {
