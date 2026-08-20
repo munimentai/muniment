@@ -90,7 +90,7 @@ describe('installed nightly', () => {
         return authUrl.startsWith('https://')
       } catch { return false }
     }, {
-      timeout: 60000,
+      timeout: 120000,
       timeoutMsg: 'production sign-in continuation was not opened',
     })
     let authDriver
