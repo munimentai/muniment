@@ -713,6 +713,16 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             },
         )?;
     }
+    insert(
+        &mut fixtures,
+        "error-slow-consumer.json",
+        &ErrorEnvelope {
+            protocol: Protocol,
+            request_id: None,
+            ok: Failure,
+            error: ProtocolError::slow_consumer(),
+        },
+    )?;
 
     let events = [
         ("run-stream", EventName::RunEvent),
@@ -748,6 +758,18 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             },
         )?;
     }
+    insert(
+        &mut fixtures,
+        "event-stream-closed-slow-consumer.json",
+        &Event {
+            protocol: Protocol,
+            subscription_id: id(400)?,
+            event: EventName::StreamClosed,
+            run_id: None,
+            run_seq: None,
+            body: json!({"code": "slow_consumer", "resumable": true}),
+        },
+    )?;
     insert(
         &mut fixtures,
         "event-run-stream-tool-effect.json",
@@ -884,6 +906,7 @@ fn error_fixture(code: crate::ErrorCode) -> (&'static str, ProtocolError) {
             "invalid-artifact-cursor",
             ProtocolError::invalid_artifact_cursor(),
         ),
+        SlowConsumer => ("slow-consumer", ProtocolError::slow_consumer()),
         InvalidRequest => ("invalid-request", ProtocolError::invalid_request()),
         ThreadNotFound => ("thread-not-found", ProtocolError::thread_not_found()),
         TransferNotFound => ("transfer-not-found", ProtocolError::transfer_not_found()),
@@ -1077,6 +1100,7 @@ mod tests {
             crate::ErrorCode::RuntimeDraining,
             crate::ErrorCode::SubscriptionNotFound,
             crate::ErrorCode::AlreadyCompleted,
+            crate::ErrorCode::SlowConsumer,
         ];
         for code in error_codes {
             let (name, _) = error_fixture(code);
@@ -1094,13 +1118,14 @@ mod tests {
             "event-request-cancelled.json",
             "event-capability-revoked.json",
             "event-stream-closed.json",
+            "event-stream-closed-slow-consumer.json",
             "event-unknown.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            76,
+            78,
             "every canonical fixture must be inventoried"
         );
     }

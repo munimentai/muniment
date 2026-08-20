@@ -22,10 +22,10 @@ use sha2::{Digest, Sha256};
 use super::{
     encode_frame, welcome, Approval, ArtifactMetadata, ArtifactTransfer, ArtifactTransferRegistry,
     ArtifactTransferRegistryError, AuthorizationClock, AuthorizationError, AuthorizationState,
-    AuthorizationTokenGenerator, ConnectionBinding, Envelope, ErrorEnvelope, Event, EventName,
-    Failure, FirstMessage, NegotiationError, Operation, Protocol, ProtocolError, Request, Response,
-    Success, VersionRange, WorkspaceOnboardRequest, WorkspaceOnboarded, CHALLENGE_LIFETIME,
-    MAX_ARTIFACT_CHUNK_BYTES, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH,
+    AuthorizationTokenGenerator, ConnectionBinding, Envelope, ErrorCode, ErrorEnvelope, Event,
+    EventName, Failure, FirstMessage, NegotiationError, Operation, Protocol, ProtocolError,
+    Request, Response, Success, VersionRange, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    CHALLENGE_LIFETIME, MAX_ARTIFACT_CHUNK_BYTES, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH,
 };
 use super::{
     RunEventAdmission, RunStreamCursor, MAX_RUN_STREAM_WINDOW_BYTES, MAX_RUN_STREAM_WINDOW_EVENTS,
@@ -2135,7 +2135,11 @@ fn run_migration_control_session<S: ThreadListService>(
                     deadline,
                 )?;
             }
-            Err(failure) => write_request_error(stream, Some(request_id), failure.error, deadline),
+            Err(failure) => {
+                let request_id =
+                    (failure.error.code() != ErrorCode::SlowConsumer).then_some(request_id);
+                write_request_error(stream, request_id, failure.error, deadline);
+            }
         }
     }
 }
@@ -2246,7 +2250,9 @@ fn serve_desktop_client_requests<S: ThreadListService>(
                 }
             }
             Err(failure) => {
-                write_request_error(stream, Some(request_id), failure.error, deadline);
+                let request_id =
+                    (failure.error.code() != ErrorCode::SlowConsumer).then_some(request_id);
+                write_request_error(stream, request_id, failure.error, deadline);
                 for event in failure.events {
                     write_before(
                         stream,
@@ -2563,7 +2569,9 @@ where
                 }
             }
             Err(failure) => {
-                write_request_error(stream, Some(request_id), failure.error, deadline);
+                let request_id =
+                    (failure.error.code() != ErrorCode::SlowConsumer).then_some(request_id);
+                write_request_error(stream, request_id, failure.error, deadline);
                 for event in failure.events {
                     let frame =
                         encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?;
@@ -3005,6 +3013,7 @@ fn dispatch_request<S: ThreadListService>(
                 Ok(granted_chunks) => granted_chunks,
                 Err(error) => {
                     let close = error.close();
+                    let code = close.code.as_str();
                     registries
                         .artifact_transfers
                         .remove(&transfer_id)
@@ -3018,7 +3027,7 @@ fn dispatch_request<S: ThreadListService>(
                             run_id: None,
                             run_seq: None,
                             body: serde_json::json!({
-                                "code": "invalid_artifact_cursor",
+                                "code": code,
                                 "resumable": close.resumable,
                             }),
                         }],
@@ -3081,6 +3090,7 @@ fn dispatch_request<S: ThreadListService>(
                 );
             if let Err(error) = admission {
                 let close = error.close();
+                let code = close.code.as_str();
                 registries.artifact_transfers.remove(&transfer_id).ok();
                 return Err(DispatchFailure {
                     error: error.error().clone(),
@@ -3091,7 +3101,7 @@ fn dispatch_request<S: ThreadListService>(
                         run_id: None,
                         run_seq: None,
                         body: serde_json::json!({
-                            "code": "invalid_artifact_cursor",
+                            "code": code,
                             "resumable": close.resumable,
                         }),
                     }],
