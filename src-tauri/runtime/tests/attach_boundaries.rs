@@ -693,7 +693,9 @@ fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
     }
 
     let success_id = Id::new("01900000-0000-7000-8000-000000000101").unwrap();
-    let success = boundaries.fetch_artifact("workspace-a", &success_id).unwrap();
+    let success = boundaries
+        .fetch_artifact("workspace-a", &success_id)
+        .unwrap();
     assert_eq!(success.total_bytes, 7);
     assert_eq!(success.sha256, hashes[success_id.as_str()].to_string());
 
