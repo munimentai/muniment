@@ -459,10 +459,30 @@ pub struct ArtifactChunk {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactTransferTerminalCode {
+    Cancelled,
+    SlowConsumer,
+    InvalidArtifactCursor,
+    TransferNotFound,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArtifactTransferEvent {
     Chunk(ArtifactChunk),
     Complete,
+    Cancelled {
+        request_id: String,
+    },
+    Error {
+        code: ArtifactTransferTerminalCode,
+        retryable: bool,
+    },
+    Closed {
+        code: ArtifactTransferTerminalCode,
+        resumable: bool,
+    },
 }
 
 impl fmt::Debug for ThreadListPage {
@@ -479,12 +499,13 @@ impl fmt::Debug for ThreadListPage {
 mod linux {
     use super::{
         ApprovalDecision, ApprovalPresentRequest, ApprovalPresenterServeOutcome, ArtifactChunk,
-        ArtifactTransferEvent, ArtifactTransferMetadata, ArtifactWindowGrant, AuthorizationSummary,
-        ChatPermissionAnswer, ClientError, MigrationControlFailure, MigrationControlOutcome,
-        PendingPermission, PermissionAnswerAccepted, PermissionDecision, RedactedRunEvent,
-        RunCancelAccepted, RunMessageAccepted, RunOpenPage, RunPermissionAnswerAccepted,
-        RunResumeAccepted, RunStartAccepted, RunStreamMessage, RunStreamSubscription,
-        RunSubmitAccepted, ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
+        ArtifactTransferEvent, ArtifactTransferMetadata, ArtifactTransferTerminalCode,
+        ArtifactWindowGrant, AuthorizationSummary, ChatPermissionAnswer, ClientError,
+        MigrationControlFailure, MigrationControlOutcome, PendingPermission,
+        PermissionAnswerAccepted, PermissionDecision, RedactedRunEvent, RunCancelAccepted,
+        RunMessageAccepted, RunOpenPage, RunPermissionAnswerAccepted, RunResumeAccepted,
+        RunStartAccepted, RunStreamMessage, RunStreamSubscription, RunSubmitAccepted,
+        ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
     };
     use crate::{
         decode_frame, encode_frame, Authorization, Authorized, Client,
@@ -951,11 +972,23 @@ mod linux {
             {
                 return Err(ClientError::ProtocolIncompatible);
             }
-            let event =
-                match serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)? {
-                    Envelope::Event(event) => event,
-                    _ => return Err(ClientError::UnexpectedMessage),
-                };
+            let envelope =
+                serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)?;
+            if let Envelope::Error(error) = envelope {
+                if error.request_id.is_some()
+                    || error.error.code() != ErrorCode::SlowConsumer
+                    || !error.error.retryable()
+                {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(ArtifactTransferEvent::Error {
+                    code: ArtifactTransferTerminalCode::SlowConsumer,
+                    retryable: true,
+                });
+            }
+            let Envelope::Event(event) = envelope else {
+                return Err(ClientError::UnexpectedMessage);
+            };
             if event.subscription_id.as_str() != metadata.transfer_id
                 || event.run_id.is_some()
                 || event.run_seq.is_some()
@@ -1021,6 +1054,40 @@ mod linux {
                         return Err(ClientError::UnexpectedMessage);
                     }
                     Ok(ArtifactTransferEvent::Complete)
+                }
+                EventName::RequestCancelled => {
+                    #[derive(serde::Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct Body {
+                        request_id: String,
+                    }
+                    let body: Body = serde_json::from_value(event.body)
+                        .map_err(|_| ClientError::UnexpectedMessage)?;
+                    if Id::new(&body.request_id).is_err() {
+                        return Err(ClientError::UnexpectedMessage);
+                    }
+                    Ok(ArtifactTransferEvent::Cancelled {
+                        request_id: body.request_id,
+                    })
+                }
+                EventName::StreamClosed => {
+                    #[derive(serde::Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct Body {
+                        code: ArtifactTransferTerminalCode,
+                        resumable: bool,
+                    }
+                    let body: Body = serde_json::from_value(event.body)
+                        .map_err(|_| ClientError::UnexpectedMessage)?;
+                    let expected_resumable =
+                        !matches!(body.code, ArtifactTransferTerminalCode::TransferNotFound);
+                    if body.resumable != expected_resumable {
+                        return Err(ClientError::UnexpectedMessage);
+                    }
+                    Ok(ArtifactTransferEvent::Closed {
+                        code: body.code,
+                        resumable: body.resumable,
+                    })
                 }
                 _ => Err(ClientError::UnexpectedMessage),
             }
