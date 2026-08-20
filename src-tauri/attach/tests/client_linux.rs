@@ -4719,6 +4719,7 @@ fn artifact_reader_returns_typed_cancellation_error_and_closure_events() {
         }),
         serde_json::json!({
             "protocol": "muniment.attach/1",
+            "request_id": "00000000000000000000000000000064",
             "ok": false,
             "error": {
                 "code": "slow_consumer",
@@ -4806,7 +4807,6 @@ fn artifact_reader_rejects_malformed_or_mismatched_terminals() {
         serde_json::json!({
             "protocol": "muniment.attach/1",
             "ok": false,
-            "request_id": "00000000000000000000000000000064",
             "error": {
                 "code": "slow_consumer",
                 "message": "Artifact consumer is too slow.",
@@ -4815,6 +4815,7 @@ fn artifact_reader_rejects_malformed_or_mismatched_terminals() {
         }),
         serde_json::json!({
             "protocol": "muniment.attach/1",
+            "request_id": "00000000000000000000000000000064",
             "ok": false,
             "error": {
                 "code": "slow_consumer",
@@ -4825,6 +4826,7 @@ fn artifact_reader_rejects_malformed_or_mismatched_terminals() {
         }),
         serde_json::json!({
             "protocol": "muniment.attach/1",
+            "request_id": "00000000000000000000000000000064",
             "ok": false,
             "error": {
                 "code": "slow_consumer",
@@ -4867,6 +4869,7 @@ fn artifact_reader_pairs_an_unbound_slow_consumer_error_with_its_transfer() {
     let frames = [
         serde_json::json!({
             "protocol": "muniment.attach/1",
+            "request_id": "00000000000000000000000000000064",
             "ok": false,
             "error": {
                 "code": "slow_consumer",

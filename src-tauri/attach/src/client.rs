@@ -982,6 +982,8 @@ mod linux {
                 #[serde(deny_unknown_fields)]
                 struct SlowConsumerFrame {
                     protocol: String,
+                    #[serde(rename = "request_id")]
+                    _request_id: Id,
                     ok: bool,
                     error: SlowConsumerError,
                 }
