@@ -477,7 +477,10 @@ fn slow_consumer_fixtures_match_the_artifact_transfer_contract() {
     else {
         panic!("expected error fixture");
     };
-    assert!(error.request_id.is_none());
+    assert_eq!(
+        error.request_id.unwrap().as_str(),
+        "0000000000000000000000000000013e"
+    );
     assert_eq!(error.error, expected);
     assert_eq!(
         serde_json::to_value(&error.error).unwrap(),

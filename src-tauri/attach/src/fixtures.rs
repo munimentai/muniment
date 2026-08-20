@@ -699,6 +699,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         crate::ErrorCode::SubscriptionNotFound,
         crate::ErrorCode::AlreadyCompleted,
         crate::ErrorCode::TransferNotFound,
+        crate::ErrorCode::SlowConsumer,
     ];
     for (index, code) in errors.into_iter().enumerate() {
         let (name, error) = error_fixture(code);
@@ -713,17 +714,6 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             },
         )?;
     }
-    insert(
-        &mut fixtures,
-        "error-slow-consumer.json",
-        &ErrorEnvelope {
-            protocol: Protocol,
-            request_id: None,
-            ok: Failure,
-            error: ProtocolError::slow_consumer(),
-        },
-    )?;
-
     let events = [
         ("run-stream", EventName::RunEvent),
         ("subscription-caught-up", EventName::SubscriptionCaughtUp),
