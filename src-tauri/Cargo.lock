@@ -2784,10 +2784,8 @@ dependencies = [
 name = "muniment-attach"
 version = "0.0.1"
 dependencies = [
- "base64 0.22.1",
  "serde",
  "serde_json",
- "sha2",
  "uuid",
 ]
 
