@@ -32,8 +32,10 @@ them must exercise the real contracts. It must add no mocked production path.
 > remaining consumers. The fortieth (2026-08-19) recorded the ninetieth-wave
 > open-thread landing and named the remaining reconnect consumer. The
 > forty-first (2026-08-19) recorded the reconnect landing and named the
-> remaining attach operations. It grows every wave, so it stays the next
-> compaction target.
+> remaining attach operations. The forty-second (2026-08-19) recorded the
+> request.cancel, run.open contract, artifact registry, and open_run client
+> landings. It named attach run.open dispatch as the next slice. It grows
+> every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -602,9 +604,32 @@ recovers. `refreshThreads` (`src/lib/chat-controller.js:96`) is exported.
 The first status still re-reads nothing. The ADR 0012 passive-delivery
 chain is complete on Linux.
 
-OPEN — `request.cancel` for a companion `run.stream` subscription stays
-in the backlog. After it lands, the next attach slices are `run.open` and
-the artifact transfer registry. Remote Control stays gated for three reasons.
+DONE 2026-08-19 — a companion may cancel a `run.stream` subscription
+(MUNIDESK-1385). `request.cancel` with a subscription target removes that
+stream. It records the id and emits `request.cancelled` then `stream.closed
+{code:"cancelled", resumable:true}`. A second cancel of the same id returns
+`already_completed`. The `request` kind still returns
+`unsupported_operation`.
+
+DONE 2026-08-19 — ADR 0009 names the `run.open` contract (MUNIDESK-1387).
+The attach client sends it and returns the first page (MUNIDESK-1390).
+`Client::open_run` (`src-tauri/attach/src/client.rs:799`) writes
+`{run_id}` and decodes `RunOpenPage`. Dispatch still returns
+`unsupported_operation`. The test
+`unserved_operations_remain_unsupported_without_dispatch`
+(`src-tauri/core/tests/attach_linux_session.rs:5373`) still pins that
+gap.
+
+DONE 2026-08-19 — the attach crate holds a bounded artifact transfer
+registry (MUNIDESK-1388, 1389). `ArtifactTransferRegistry`
+(`src-tauri/core/src/attach/artifact.rs:208`) caps live transfers at 64.
+The closed error schema includes `transfer_not_found`. No session holds
+a registry yet. `artifact.fetch` and `artifact.window` still return
+`unsupported_operation`.
+
+OPEN — attach `run.open` dispatch is the next slice. After it lands,
+name how `artifact.fetch` resolves a journal `artifact_id`, then dispatch
+that operation. Remote Control stays gated for three reasons.
 Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`. No muniment-cloud relay contract has published. The
 desktop states stay pending owner mockup confirmation
