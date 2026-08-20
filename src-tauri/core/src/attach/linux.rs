@@ -3721,18 +3721,33 @@ fn dispatch_request<S: ThreadListService>(
         {
             return Err(ProtocolError::persistence_failed().into());
         }
-        let events = page
+        let mut events = page
             .events
             .iter()
             .map(redacted_run_open_event)
             .collect::<Result<Vec<_>, _>>()?;
-        return bounded_response(serde_json::json!({
-            "run_id": page.run_id,
-            "first_available_run_seq": page.first_available_run_seq,
-            "current_run_seq": page.current_run_seq,
-            "events": events,
-            "exhausted": page.exhausted,
-        }));
+        let mut exhausted = page.exhausted;
+        loop {
+            let body = serde_json::json!({
+                "run_id": page.run_id,
+                "first_available_run_seq": page.first_available_run_seq,
+                "current_run_seq": page.current_run_seq,
+                "events": &events,
+                "exhausted": exhausted,
+            });
+            if serde_json::to_vec(&body)
+                .map_err(|_| ProtocolError::persistence_failed())?
+                .len()
+                <= MAX_RESPONSE_BODY_LENGTH
+            {
+                return Ok(response_only(body));
+            }
+            if events.len() <= 1 {
+                return Err(ProtocolError::persistence_failed().into());
+            }
+            events.pop();
+            exhausted = false;
+        }
     }
     if request.operation == Operation::RunStream {
         if subscriptions.len() >= MAX_ACTIVE_RUN_STREAMS {
