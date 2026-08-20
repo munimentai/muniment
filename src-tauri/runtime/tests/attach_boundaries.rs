@@ -701,6 +701,11 @@ fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
         .unwrap();
     assert_eq!(success.total_bytes, 7);
     assert_eq!(success.sha256, hashes[success_id.as_str()].to_string());
+    assert_eq!(
+        RunAttachBoundaries::read_artifact_range(&boundaries, "workspace-a", &success_id, 2, 3)
+            .unwrap(),
+        b"cce"
+    );
 
     for id in [
         "01900000-0000-7000-8000-000000000199",
