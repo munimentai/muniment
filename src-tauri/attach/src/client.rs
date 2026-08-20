@@ -978,12 +978,23 @@ mod linux {
                 return Err(ClientError::ProtocolIncompatible);
             }
             if value.get("ok") == Some(&Value::Bool(false)) {
+                fn deserialize_request_id<'de, D>(deserializer: D) -> Result<Option<Id>, D::Error>
+                where
+                    D: serde::Deserializer<'de>,
+                {
+                    <Id as serde::Deserialize>::deserialize(deserializer).map(Some)
+                }
+
                 #[derive(serde::Deserialize)]
                 #[serde(deny_unknown_fields)]
                 struct SlowConsumerFrame {
                     protocol: String,
-                    #[serde(rename = "request_id")]
-                    _request_id: Id,
+                    #[serde(
+                        default,
+                        rename = "request_id",
+                        deserialize_with = "deserialize_request_id"
+                    )]
+                    _request_id: Option<Id>,
                     ok: bool,
                     error: SlowConsumerError,
                 }

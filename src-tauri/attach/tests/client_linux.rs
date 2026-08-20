@@ -4719,7 +4719,6 @@ fn artifact_reader_returns_typed_cancellation_error_and_closure_events() {
         }),
         serde_json::json!({
             "protocol": "muniment.attach/1",
-            "request_id": "00000000000000000000000000000064",
             "ok": false,
             "error": {
                 "code": "slow_consumer",
@@ -4806,6 +4805,7 @@ fn artifact_reader_rejects_malformed_or_mismatched_terminals() {
         }),
         serde_json::json!({
             "protocol": "muniment.attach/1",
+            "request_id": null,
             "ok": false,
             "error": {
                 "code": "slow_consumer",
