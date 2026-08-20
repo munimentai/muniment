@@ -819,6 +819,10 @@ It stops the clock if no retained bytes remain. A later emission starts a new
 30-second interval. These rules apply across every window. At 30,000 elapsed
 milliseconds with retained bytes, the transfer expires. The server uses a
 monotonic clock and checks the deadline independently of later client traffic.
+The server checks expiration before it processes an acknowledgement. An
+advancing acknowledgement received exactly at the deadline loses the race and
+the transfer expires. An advancing acknowledgement received before the
+deadline resets or stops the clock under the rules above.
 
 Before a byte-limit violation, or at a time-limit expiration, the server stops
 emitting chunks and removes the transfer. It writes these two frames in order:
@@ -842,12 +846,13 @@ resume and verify the artifact from chunk zero.
 
 The first implementation slice is **artifact retained-output accounting**. It
 adds the two response fields, monotonic deadline state, retained decoded-byte
-accounting, and the `slow_consumer` error schema. Unit tests cover zero-byte
-artifacts, the exact byte limit, one-byte overflow, the exact deadline,
-partial and full advancing acknowledgements, repeated acknowledgements, and
-new windows before and after acknowledgements. Session contract tests cover
-the two-frame order, transfer removal, isolation from other streams, and the
-absence of path and extra identifier fields. This amendment changes no code.
+accounting, the `slow_consumer` error schema, and closure wiring. Unit tests
+cover zero-byte artifacts, the exact byte limit, one-byte overflow, the exact
+deadline, an advancing acknowledgement exactly at the deadline, partial and
+full advancing acknowledgements, repeated acknowledgements, and new windows
+before and after acknowledgements. Session contract tests cover the two-frame
+order, transfer removal, isolation from other streams, and the absence of path
+and extra identifier fields. This amendment changes no code.
 
 ## Rejected alternatives
 

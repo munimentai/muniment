@@ -646,7 +646,7 @@ is already queued. After it lands, dispatch `artifact.window`. Then emit
 `artifact.chunk` under the granted window. ADR 0009 fixes each transfer's
 retained-output limits at 8 MiB and 30 seconds. The first slow-consumer slice
 is **artifact retained-output accounting**. It adds advertised limits, byte
-accounting, monotonic deadline state, and boundary tests before closure wiring.
+accounting, monotonic deadline state, closure wiring, and boundary tests.
 Remote Control stays gated for three reasons.
 Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`. No muniment-cloud relay contract has published. The
