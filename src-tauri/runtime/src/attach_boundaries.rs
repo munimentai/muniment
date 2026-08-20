@@ -798,6 +798,32 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         })
     }
 
+    fn read_artifact_range(
+        &self,
+        workspace: &str,
+        artifact_id: &muniment_core::attach::Id,
+        offset: u64,
+        length: u64,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        let mut storage = self
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let reference = storage
+            .journal
+            .workspace_artifact(workspace, artifact_id.as_str())
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .ok_or_else(ProtocolError::invalid_request)?;
+        let hash: ContentHash = reference
+            .sha256
+            .parse()
+            .map_err(|_| ProtocolError::invalid_request())?;
+        storage
+            .cas
+            .read_range(&hash, offset, length)
+            .map_err(|_| ProtocolError::persistence_failed())
+    }
+
     fn subscribe_run_commits(
         &self,
         run_id: &str,
