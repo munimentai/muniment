@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(target_os = "linux")]
 static NEXT_SCRIPTED_PROMPT: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+static NEXT_REJECTED_LOAD: AtomicU64 = AtomicU64::new(0);
 
 fn exchange(messages: &[Value]) -> Vec<Value> {
     exchange_with_command(Command::new(env!("CARGO_BIN_EXE_muniment-acp")), messages)
@@ -232,8 +234,9 @@ fn rejected_scripted_load(case: &str) -> Vec<Value> {
             .unwrap();
     }
 
+    let sequence = NEXT_REJECTED_LOAD.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(
-        "muniment-acp-rejected-load-{}-{}",
+        "muniment-acp-rejected-load-{}-{}-{sequence}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
