@@ -6,7 +6,7 @@ them must exercise the real contracts. It must add no mocked production path.
 
 > **Compacted 2026-08-04, again 2026-08-07, again 2026-08-12, again
 > 2026-08-13, again 2026-08-14, again 2026-08-15, again 2026-08-16, again
-> 2026-08-17, again 2026-08-18, and again 2026-08-19.** This document reached 265 KB and no longer
+> 2026-08-17, again 2026-08-18, again 2026-08-19, and again 2026-08-20.** This document reached 265 KB and no longer
 > fit in one read.
 > Every landed slice used to carry its own paragraph. Those paragraphs are now
 > per-lane summaries with their ticket ranges. Every open item, parked item,
@@ -34,8 +34,10 @@ them must exercise the real contracts. It must add no mocked production path.
 > forty-first (2026-08-19) recorded the reconnect landing and named the
 > remaining attach operations. The forty-second (2026-08-19) recorded the
 > request.cancel, run.open contract, artifact registry, and open_run client
-> landings. It named attach run.open dispatch as the next slice. It grows
-> every wave, so it stays the next compaction target.
+> landings. The forty-third (2026-08-20) recorded the run.open dispatch,
+> artifact identity, and artifact client landings. It named attach
+> artifact.fetch dispatch as the next slice. It grows every wave, so it
+> stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -613,23 +615,35 @@ stream. It records the id and emits `request.cancelled` then `stream.closed
 
 DONE 2026-08-19 — ADR 0009 names the `run.open` contract (MUNIDESK-1387).
 The attach client sends it and returns the first page (MUNIDESK-1390).
-`Client::open_run` (`src-tauri/attach/src/client.rs:799`) writes
-`{run_id}` and decodes `RunOpenPage`. Dispatch still returns
-`unsupported_operation`. The test
-`unserved_operations_remain_unsupported_without_dispatch`
-(`src-tauri/core/tests/attach_linux_session.rs:5373`) still pins that
-gap.
+`Client::open_run` (`src-tauri/attach/src/client.rs:817`) writes
+`{run_id}` and decodes `RunOpenPage`.
+
+DONE 2026-08-19 — attach `run.open` dispatch reuses `stream_run` from
+sequence 0 (MUNIDESK-1392). `dispatch_request`
+(`src-tauri/core/src/attach/linux.rs:3700`) returns the redacted page
+with no `subscription_id` and emits no events.
+`authorized_run_open_returns_stream_run_page_without_subscription`
+(`src-tauri/core/tests/attach_linux_session.rs:5411`) pins that shape.
+A missing, foreign, or inaccessible run maps to `invalid_request`.
+
+DONE 2026-08-19 — ADR 0009 names how `artifact.fetch` resolves
+`artifact_id` (MUNIDESK-1393). The id is `EventEnvelope.event_id`.
+The attach client sends `artifact.fetch` and `artifact.window`
+(MUNIDESK-1394, 1395).
 
 DONE 2026-08-19 — the attach crate holds a bounded artifact transfer
 registry (MUNIDESK-1388, 1389). `ArtifactTransferRegistry`
 (`src-tauri/core/src/attach/artifact.rs:208`) caps live transfers at 64.
 The closed error schema includes `transfer_not_found`. No session holds
 a registry yet. `artifact.fetch` and `artifact.window` still return
-`unsupported_operation`.
+`unsupported_operation`. The test
+`unserved_operations_remain_unsupported_without_dispatch`
+(`src-tauri/core/tests/attach_linux_session.rs:6022`) still pins that
+gap.
 
-OPEN — attach `run.open` dispatch is the next slice. After it lands,
-name how `artifact.fetch` resolves a journal `artifact_id`, then dispatch
-that operation. Remote Control stays gated for three reasons.
+OPEN — attach `artifact.fetch` dispatch is the next slice. That ticket
+is already queued. After it lands, dispatch `artifact.window`. Then emit
+`artifact.chunk` under the granted window. Remote Control stays gated for three reasons.
 Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`. No muniment-cloud relay contract has published. The
 desktop states stay pending owner mockup confirmation
