@@ -439,6 +439,17 @@ pub struct ArtifactWindowGrant {
     pub granted_chunks: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactTransferMetadata {
+    pub transfer_id: String,
+    pub artifact_id: String,
+    pub total_bytes: u64,
+    pub sha256: String,
+    pub chunk_bytes: u64,
+    pub chunk_count: u64,
+}
+
 impl fmt::Debug for ThreadListPage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -453,8 +464,8 @@ impl fmt::Debug for ThreadListPage {
 mod linux {
     use super::{
         ApprovalDecision, ApprovalPresentRequest, ApprovalPresenterServeOutcome,
-        ArtifactWindowGrant, AuthorizationSummary, ChatPermissionAnswer, ClientError,
-        MigrationControlFailure, MigrationControlOutcome, PendingPermission,
+        ArtifactTransferMetadata, ArtifactWindowGrant, AuthorizationSummary, ChatPermissionAnswer,
+        ClientError, MigrationControlFailure, MigrationControlOutcome, PendingPermission,
         PermissionAnswerAccepted, PermissionDecision, RedactedRunEvent, RunCancelAccepted,
         RunMessageAccepted, RunOpenPage, RunPermissionAnswerAccepted, RunResumeAccepted,
         RunStartAccepted, RunStreamMessage, RunStreamSubscription, RunSubmitAccepted,
@@ -867,6 +878,30 @@ mod linux {
             };
             let response = self.send_request(request, &request_id)?;
             serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)
+        }
+
+        pub fn fetch_artifact(
+            &mut self,
+            artifact_id: &str,
+        ) -> Result<ArtifactTransferMetadata, ClientError> {
+            let artifact_id =
+                Id::new(artifact_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
+            let request_id = fresh_request_id()?;
+            let request = Request {
+                protocol: Protocol,
+                request_id: request_id.clone(),
+                operation: Operation::ArtifactFetch,
+                capability: self.capability.clone(),
+                idempotency_key: None,
+                body: serde_json::json!({"artifact_id": artifact_id.as_str()}),
+            };
+            let response = self.send_request(request, &request_id)?;
+            let metadata: ArtifactTransferMetadata = serde_json::from_value(response.body)
+                .map_err(|_| ClientError::UnexpectedMessage)?;
+            if Id::new(&metadata.transfer_id).is_err() || Id::new(&metadata.artifact_id).is_err() {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            Ok(metadata)
         }
 
         pub fn start_run(
@@ -3717,6 +3752,13 @@ impl AuthorizedClient {
         _ack_through_chunk: i64,
         _max_chunks: u32,
     ) -> Result<ArtifactWindowGrant, ClientError> {
+        Err(ClientError::UnsupportedPlatform)
+    }
+
+    pub fn fetch_artifact(
+        &mut self,
+        _artifact_id: &str,
+    ) -> Result<ArtifactTransferMetadata, ClientError> {
         Err(ClientError::UnsupportedPlatform)
     }
 
