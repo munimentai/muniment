@@ -465,16 +465,13 @@ pub enum ArtifactTransferTerminalCode {
     Cancelled,
     SlowConsumer,
     InvalidArtifactCursor,
-    TransferNotFound,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArtifactTransferEvent {
     Chunk(ArtifactChunk),
     Complete,
-    Cancelled {
-        request_id: String,
-    },
+    Cancelled,
     Error {
         code: ArtifactTransferTerminalCode,
         retryable: bool,
@@ -602,6 +599,7 @@ mod linux {
         authorized_at: Instant,
         io_timeout: Duration,
         active_run_stream: Option<ActiveRunStream>,
+        pending_artifact_events: BTreeMap<String, VecDeque<ArtifactTransferEvent>>,
         authorized_client_credential: String,
     }
 
@@ -964,6 +962,13 @@ mod linux {
             {
                 return Err(ClientError::UnexpectedMessage);
             }
+            if let Some(events) = self.pending_artifact_events.get_mut(&metadata.transfer_id) {
+                let event = events.pop_front().ok_or(ClientError::UnexpectedMessage)?;
+                if events.is_empty() {
+                    self.pending_artifact_events.remove(&metadata.transfer_id);
+                }
+                return Ok(event);
+            }
             let value = read_value(&mut self.stream, deadline(self.io_timeout))?;
             if value
                 .get("protocol")
@@ -972,20 +977,66 @@ mod linux {
             {
                 return Err(ClientError::ProtocolIncompatible);
             }
-            let envelope =
-                serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)?;
-            if let Envelope::Error(error) = envelope {
-                if error.request_id.is_some()
-                    || error.error.code() != ErrorCode::SlowConsumer
-                    || !error.error.retryable()
+            if value.get("ok") == Some(&Value::Bool(false)) {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct SlowConsumerFrame {
+                    protocol: String,
+                    ok: bool,
+                    error: SlowConsumerError,
+                }
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct SlowConsumerError {
+                    code: String,
+                    message: String,
+                    retryable: bool,
+                }
+                let error: SlowConsumerFrame =
+                    serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)?;
+                if error.protocol != PROTOCOL
+                    || error.ok
+                    || error.error.code != "slow_consumer"
+                    || error.error.message != "Artifact consumer is too slow."
+                    || !error.error.retryable
                 {
                     return Err(ClientError::UnexpectedMessage);
                 }
+                let closure = read_value(&mut self.stream, deadline(self.io_timeout))?;
+                let (transfer_id, event) = decode_artifact_closure(closure)?;
+                if !matches!(
+                    event,
+                    ArtifactTransferEvent::Closed {
+                        code: ArtifactTransferTerminalCode::SlowConsumer,
+                        resumable: true,
+                    }
+                ) {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                if transfer_id != metadata.transfer_id {
+                    self.pending_artifact_events.insert(
+                        transfer_id,
+                        VecDeque::from([
+                            ArtifactTransferEvent::Error {
+                                code: ArtifactTransferTerminalCode::SlowConsumer,
+                                retryable: true,
+                            },
+                            event,
+                        ]),
+                    );
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                self.pending_artifact_events
+                    .entry(transfer_id)
+                    .or_default()
+                    .push_back(event);
                 return Ok(ArtifactTransferEvent::Error {
                     code: ArtifactTransferTerminalCode::SlowConsumer,
                     retryable: true,
                 });
             }
+            let envelope =
+                serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)?;
             let Envelope::Event(event) = envelope else {
                 return Err(ClientError::UnexpectedMessage);
             };
@@ -1058,37 +1109,12 @@ mod linux {
                 EventName::RequestCancelled => {
                     #[derive(serde::Deserialize)]
                     #[serde(deny_unknown_fields)]
-                    struct Body {
-                        request_id: String,
-                    }
-                    let body: Body = serde_json::from_value(event.body)
+                    struct Body {}
+                    let _: Body = serde_json::from_value(event.body)
                         .map_err(|_| ClientError::UnexpectedMessage)?;
-                    if Id::new(&body.request_id).is_err() {
-                        return Err(ClientError::UnexpectedMessage);
-                    }
-                    Ok(ArtifactTransferEvent::Cancelled {
-                        request_id: body.request_id,
-                    })
+                    Ok(ArtifactTransferEvent::Cancelled)
                 }
-                EventName::StreamClosed => {
-                    #[derive(serde::Deserialize)]
-                    #[serde(deny_unknown_fields)]
-                    struct Body {
-                        code: ArtifactTransferTerminalCode,
-                        resumable: bool,
-                    }
-                    let body: Body = serde_json::from_value(event.body)
-                        .map_err(|_| ClientError::UnexpectedMessage)?;
-                    let expected_resumable =
-                        !matches!(body.code, ArtifactTransferTerminalCode::TransferNotFound);
-                    if body.resumable != expected_resumable {
-                        return Err(ClientError::UnexpectedMessage);
-                    }
-                    Ok(ArtifactTransferEvent::Closed {
-                        code: body.code,
-                        resumable: body.resumable,
-                    })
-                }
+                EventName::StreamClosed => decode_artifact_closure_body(event.body),
                 _ => Err(ClientError::UnexpectedMessage),
             }
         }
@@ -1773,6 +1799,50 @@ mod linux {
                 reason: body.reason,
             }))
         }
+    }
+
+    fn decode_artifact_closure(
+        value: Value,
+    ) -> Result<(String, ArtifactTransferEvent), ClientError> {
+        if value
+            .get("protocol")
+            .and_then(Value::as_str)
+            .is_some_and(|protocol| protocol != PROTOCOL)
+        {
+            return Err(ClientError::ProtocolIncompatible);
+        }
+        let envelope: Envelope =
+            serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)?;
+        let Envelope::Event(event) = envelope else {
+            return Err(ClientError::UnexpectedMessage);
+        };
+        if event.run_id.is_some()
+            || event.run_seq.is_some()
+            || event.event != EventName::StreamClosed
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let transfer_id = event.subscription_id.as_str().to_owned();
+        let event = decode_artifact_closure_body(event.body)?;
+        Ok((transfer_id, event))
+    }
+
+    fn decode_artifact_closure_body(body: Value) -> Result<ArtifactTransferEvent, ClientError> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Body {
+            code: ArtifactTransferTerminalCode,
+            resumable: bool,
+        }
+        let body: Body =
+            serde_json::from_value(body).map_err(|_| ClientError::UnexpectedMessage)?;
+        if !body.resumable {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(ArtifactTransferEvent::Closed {
+            code: body.code,
+            resumable: true,
+        })
     }
 
     /// A connection-bound client for the peer-authorized migration session.
@@ -3522,6 +3592,7 @@ mod linux {
             authorized_at: Instant::now(),
             io_timeout,
             active_run_stream: None,
+            pending_artifact_events: BTreeMap::new(),
             authorized_client_credential: authorized.authorized_client_credential,
         })
     }
