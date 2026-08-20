@@ -6034,13 +6034,60 @@ fn run_open_rejects_missing_scope_malformed_bodies_and_inaccessible_runs() {
 
 #[test]
 fn artifact_fetch_rejects_a_malformed_body() {
+    for (request_id, body) in [
+        (79, json!({})),
+        (80, json!({"artifact_id": "not-an-id"})),
+        (
+            81,
+            json!({
+                "artifact_id": "0190a100-0000-7000-8000-000000000079",
+                "unknown": true
+            }),
+        ),
+    ] {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(&hello(1, 1)).unwrap();
+        client
+            .write_all(&request(request_id, Operation::ArtifactFetch, body))
+            .unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        let mut service = StartService::default();
+        assert_eq!(
+            dispatch_session(
+                &mut client,
+                server,
+                TestClock(Rc::new(Cell::new(Duration::ZERO))),
+                &mut service,
+            ),
+            Ok(())
+        );
+        let error: ErrorEnvelope = read_frame(&mut client);
+        assert_eq!(
+            error.request_id,
+            Some(Id::new(format!("{request_id:032x}")).unwrap())
+        );
+        assert_eq!(error.error.code(), ErrorCode::InvalidRequest);
+        assert!(!error.error.retryable());
+        assert!(service.calls.is_empty());
+        assert!(service.artifact_ids.is_empty());
+    }
+}
+
+#[test]
+fn artifact_fetch_requires_thread_read() {
+    let artifact_id = "0190a100-0000-7000-8000-000000000079";
     let (mut client, server) = UnixStream::pair().unwrap();
     client.write_all(&hello(1, 1)).unwrap();
     client
-        .write_all(&request(79, Operation::ArtifactFetch, json!({})))
+        .write_all(&request(
+            82,
+            Operation::ArtifactFetch,
+            json!({"artifact_id": artifact_id}),
+        ))
         .unwrap();
     client.shutdown(Shutdown::Write).unwrap();
     let mut approved = approval();
+    approved.scopes.clear();
     approved.scopes.insert("run.write".into());
     let mut service = StartService::default();
     assert_eq!(
@@ -6051,15 +6098,11 @@ fn artifact_fetch_rejects_a_malformed_body() {
             approved,
             &mut service,
         ),
-        Ok(())
+        Err(AttachSessionError::Authorization)
     );
     let error: ErrorEnvelope = read_frame(&mut client);
-    assert_eq!(
-        error.request_id,
-        Some(Id::new(format!("{:032x}", 79)).unwrap())
-    );
-    assert_eq!(error.error.code(), ErrorCode::InvalidRequest);
-    assert!(service.calls.is_empty());
+    assert_eq!(error.error.code(), ErrorCode::Unauthorized);
+    assert!(!error.error.retryable());
     assert!(service.artifact_ids.is_empty());
 }
 

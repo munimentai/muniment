@@ -1,6 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::AtomicBool;
@@ -18,7 +19,7 @@ use muniment_core::auth::{
     BrowserOpenError, EntitlementSnapshotTracker, KeyringNativeCredentialStore,
     NativeCredentialStore,
 };
-use muniment_core::journal::Provenance;
+use muniment_core::journal::{CasReference, EventEnvelope, EventPayload, Provenance};
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::pi_execution::PiRuntime;
@@ -53,6 +54,37 @@ fn provenance() -> Provenance {
         .extra
         .insert("attach_profile".into(), "profile-a".into());
     provenance
+}
+
+fn artifact_event(
+    event_id: &str,
+    run_id: &str,
+    run_seq: u64,
+    payload: EventPayload,
+) -> EventEnvelope {
+    EventEnvelope {
+        event_id: event_id.into(),
+        run_id: run_id.into(),
+        run_seq,
+        event_type: "test.artifact".into(),
+        event_version: 1,
+        envelope_version: 1,
+        recorded_at: "2026-08-20T00:00:00Z".into(),
+        occurred_at: None,
+        correlation_id: None,
+        causation_id: None,
+        payload,
+        provenance: provenance(),
+        extra: BTreeMap::new(),
+    }
+}
+
+fn assert_invalid_artifact(
+    result: Result<muniment_core::attach::linux::ArtifactFetchResult, ProtocolError>,
+) {
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(!error.retryable());
 }
 
 #[derive(Clone)]
@@ -558,6 +590,147 @@ fn runtime_boundaries_answer_all_attach_reads() {
 
     drop(boundaries);
     drop(storage);
+}
+
+#[test]
+fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
+    let temporary_profile = TemporaryProfile::new("attach-artifacts", false);
+    let profile = temporary_profile.profile.clone();
+    let storage = open_profile_storage(&profile).unwrap();
+    let config = temporary_profile.config.clone();
+    let boundaries = RuntimeAttachBoundaries::new(
+        Arc::clone(&storage),
+        Arc::new(Mutex::new(None)),
+        profile.clone(),
+        config.clone(),
+        Arc::new(Mutex::new(None::<PiRuntime>)),
+        Arc::new(ApplicationMemoryRuntime::new(config, profile.join("memory"))),
+        RuntimeActivityRegistry::new(),
+        Arc::new(EntitlementSnapshotTracker::new()),
+        SignedWorkspaceApproval::default(),
+        Arc::new(SessionThread::default()),
+        open_companion_registry(&profile).unwrap(),
+    );
+    let cases = [
+        (
+            "01900000-0000-7000-8000-000000000101",
+            "01900000-0000-7000-8000-000000000201",
+            "workspace-a",
+            b"success".as_slice(),
+        ),
+        (
+            "01900000-0000-7000-8000-000000000102",
+            "01900000-0000-7000-8000-000000000202",
+            "workspace-b",
+            b"foreign".as_slice(),
+        ),
+        (
+            "01900000-0000-7000-8000-000000000104",
+            "01900000-0000-7000-8000-000000000204",
+            "workspace-a",
+            b"missing".as_slice(),
+        ),
+        (
+            "01900000-0000-7000-8000-000000000105",
+            "01900000-0000-7000-8000-000000000205",
+            "workspace-a",
+            b"corrupt".as_slice(),
+        ),
+        (
+            "01900000-0000-7000-8000-000000000106",
+            "01900000-0000-7000-8000-000000000206",
+            "workspace-a",
+            b"unreadable".as_slice(),
+        ),
+    ];
+    let mut hashes = BTreeMap::new();
+    {
+        let mut storage = storage.lock().unwrap();
+        for (event_id, run_id, workspace, bytes) in cases {
+            let hash = storage.cas.put(bytes).unwrap();
+            storage
+                .journal
+                .append(
+                    0,
+                    &artifact_event(
+                        event_id,
+                        run_id,
+                        1,
+                        EventPayload::Cas {
+                            payload_cas: CasReference {
+                                sha256: hash.to_string(),
+                                media_type: "application/octet-stream".into(),
+                                byte_length: bytes.len() as u64,
+                            },
+                        },
+                    ),
+                )
+                .unwrap();
+            storage.journal.bind_run_workspace(run_id, workspace).unwrap();
+            hashes.insert(event_id, hash);
+        }
+        storage
+            .journal
+            .append(
+                0,
+                &artifact_event(
+                    "01900000-0000-7000-8000-000000000103",
+                    "01900000-0000-7000-8000-000000000203",
+                    1,
+                    EventPayload::Inline {
+                        payload_json: serde_json::json!({"text": "not an artifact"}),
+                    },
+                ),
+            )
+            .unwrap();
+        storage
+            .journal
+            .bind_run_workspace(
+                "01900000-0000-7000-8000-000000000203",
+                "workspace-a",
+            )
+            .unwrap();
+    }
+
+    let success_id = Id::new("01900000-0000-7000-8000-000000000101").unwrap();
+    let success = boundaries.fetch_artifact("workspace-a", &success_id).unwrap();
+    assert_eq!(success.total_bytes, 7);
+    assert_eq!(success.sha256, hashes[success_id.as_str()].to_string());
+
+    for id in [
+        "01900000-0000-7000-8000-000000000199",
+        "01900000-0000-7000-8000-000000000102",
+        "01900000-0000-7000-8000-000000000103",
+    ] {
+        assert_invalid_artifact(boundaries.fetch_artifact("workspace-a", &Id::new(id).unwrap()));
+    }
+
+    let object_path = |id: &str| {
+        let hash = hashes[id].as_str();
+        profile
+            .join("cas/objects")
+            .join(&hash[..2])
+            .join(&hash[2..])
+    };
+    let missing_id = "01900000-0000-7000-8000-000000000104";
+    fs::remove_file(object_path(missing_id)).unwrap();
+    assert_invalid_artifact(
+        boundaries.fetch_artifact("workspace-a", &Id::new(missing_id).unwrap()),
+    );
+
+    let corrupt_id = "01900000-0000-7000-8000-000000000105";
+    fs::write(object_path(corrupt_id), b"CORRUPT").unwrap();
+    assert_invalid_artifact(
+        boundaries.fetch_artifact("workspace-a", &Id::new(corrupt_id).unwrap()),
+    );
+
+    let unreadable_id = "01900000-0000-7000-8000-000000000106";
+    let unreadable_path = object_path(unreadable_id);
+    fs::remove_file(&unreadable_path).unwrap();
+    std::os::unix::fs::symlink(unreadable_path.file_name().unwrap(), &unreadable_path).unwrap();
+    assert_invalid_artifact(
+        boundaries.fetch_artifact("workspace-a", &Id::new(unreadable_id).unwrap()),
+    );
 }
 
 #[test]
