@@ -450,6 +450,19 @@ pub struct ArtifactTransferMetadata {
     pub chunk_count: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArtifactChunk {
+    pub chunk_index: u64,
+    pub offset: u64,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ArtifactTransferEvent {
+    Chunk(ArtifactChunk),
+    Complete,
+}
+
 impl fmt::Debug for ThreadListPage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -463,13 +476,13 @@ impl fmt::Debug for ThreadListPage {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        ApprovalDecision, ApprovalPresentRequest, ApprovalPresenterServeOutcome,
-        ArtifactTransferMetadata, ArtifactWindowGrant, AuthorizationSummary, ChatPermissionAnswer,
-        ClientError, MigrationControlFailure, MigrationControlOutcome, PendingPermission,
-        PermissionAnswerAccepted, PermissionDecision, RedactedRunEvent, RunCancelAccepted,
-        RunMessageAccepted, RunOpenPage, RunPermissionAnswerAccepted, RunResumeAccepted,
-        RunStartAccepted, RunStreamMessage, RunStreamSubscription, RunSubmitAccepted,
-        ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
+        ApprovalDecision, ApprovalPresentRequest, ApprovalPresenterServeOutcome, ArtifactChunk,
+        ArtifactTransferEvent, ArtifactTransferMetadata, ArtifactWindowGrant, AuthorizationSummary,
+        ChatPermissionAnswer, ClientError, MigrationControlFailure, MigrationControlOutcome,
+        PendingPermission, PermissionAnswerAccepted, PermissionDecision, RedactedRunEvent,
+        RunCancelAccepted, RunMessageAccepted, RunOpenPage, RunPermissionAnswerAccepted,
+        RunResumeAccepted, RunStartAccepted, RunStreamMessage, RunStreamSubscription,
+        RunSubmitAccepted, ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
     };
     use crate::{
         decode_frame, encode_frame, Authorization, Authorized, Client,
@@ -477,8 +490,10 @@ mod linux {
         Hello, Id, Operation, PeerAuthorizedGrant, Protocol, Request, Response, VersionRange,
         Welcome, WorkspaceOnboarded, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH, PROTOCOL,
     };
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use serde::de::DeserializeOwned;
     use serde_json::Value;
+    use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
     use std::env;
     use std::fs::File;
@@ -898,10 +913,117 @@ mod linux {
             let response = self.send_request(request, &request_id)?;
             let metadata: ArtifactTransferMetadata = serde_json::from_value(response.body)
                 .map_err(|_| ClientError::UnexpectedMessage)?;
-            if Id::new(&metadata.transfer_id).is_err() || Id::new(&metadata.artifact_id).is_err() {
+            if metadata.chunk_bytes == 0 {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            let expected_chunks = metadata.total_bytes.div_ceil(metadata.chunk_bytes);
+            if Id::new(&metadata.transfer_id).is_err()
+                || metadata.artifact_id != artifact_id.as_str()
+                || !valid_sha256(&metadata.sha256)
+                || metadata.chunk_bytes > 256 * 1024
+                || metadata.chunk_count != expected_chunks
+            {
                 return Err(ClientError::UnexpectedMessage);
             }
             Ok(metadata)
+        }
+
+        pub fn read_artifact_event(
+            &mut self,
+            metadata: &ArtifactTransferMetadata,
+        ) -> Result<ArtifactTransferEvent, ClientError> {
+            if Id::new(&metadata.transfer_id).is_err()
+                || Id::new(&metadata.artifact_id).is_err()
+                || !valid_sha256(&metadata.sha256)
+                || metadata.chunk_bytes == 0
+                || metadata.chunk_bytes > 256 * 1024
+                || metadata.chunk_count != metadata.total_bytes.div_ceil(metadata.chunk_bytes)
+            {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            let value = read_value(&mut self.stream, deadline(self.io_timeout))?;
+            if value
+                .get("protocol")
+                .and_then(Value::as_str)
+                .is_some_and(|protocol| protocol != PROTOCOL)
+            {
+                return Err(ClientError::ProtocolIncompatible);
+            }
+            let event =
+                match serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)? {
+                    Envelope::Event(event) => event,
+                    _ => return Err(ClientError::UnexpectedMessage),
+                };
+            if event.subscription_id.as_str() != metadata.transfer_id
+                || event.run_id.is_some()
+                || event.run_seq.is_some()
+            {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            match event.event {
+                EventName::ArtifactChunk => {
+                    #[derive(serde::Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct Body {
+                        artifact_id: String,
+                        byte_length: u64,
+                        chunk_index: u64,
+                        chunk_sha256: String,
+                        data: String,
+                        offset: u64,
+                    }
+                    let body: Body = serde_json::from_value(event.body)
+                        .map_err(|_| ClientError::UnexpectedMessage)?;
+                    let expected_offset = body
+                        .chunk_index
+                        .checked_mul(metadata.chunk_bytes)
+                        .ok_or(ClientError::UnexpectedMessage)?;
+                    let remaining = metadata
+                        .total_bytes
+                        .checked_sub(expected_offset)
+                        .ok_or(ClientError::UnexpectedMessage)?;
+                    let expected_length = remaining.min(metadata.chunk_bytes);
+                    let bytes = STANDARD
+                        .decode(body.data)
+                        .map_err(|_| ClientError::UnexpectedMessage)?;
+                    if body.artifact_id != metadata.artifact_id
+                        || body.chunk_index >= metadata.chunk_count
+                        || body.offset != expected_offset
+                        || body.byte_length != expected_length
+                        || usize::try_from(body.byte_length).ok() != Some(bytes.len())
+                        || !valid_sha256(&body.chunk_sha256)
+                        || format!("{:x}", Sha256::digest(&bytes)) != body.chunk_sha256
+                    {
+                        return Err(ClientError::UnexpectedMessage);
+                    }
+                    Ok(ArtifactTransferEvent::Chunk(ArtifactChunk {
+                        chunk_index: body.chunk_index,
+                        offset: body.offset,
+                        bytes,
+                    }))
+                }
+                EventName::ArtifactComplete => {
+                    #[derive(serde::Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct Body {
+                        artifact_id: String,
+                        sha256: String,
+                        total_bytes: u64,
+                        transfer_id: String,
+                    }
+                    let body: Body = serde_json::from_value(event.body)
+                        .map_err(|_| ClientError::UnexpectedMessage)?;
+                    if body.artifact_id != metadata.artifact_id
+                        || body.transfer_id != metadata.transfer_id
+                        || body.total_bytes != metadata.total_bytes
+                        || body.sha256 != metadata.sha256
+                    {
+                        return Err(ClientError::UnexpectedMessage);
+                    }
+                    Ok(ArtifactTransferEvent::Complete)
+                }
+                _ => Err(ClientError::UnexpectedMessage),
+            }
         }
 
         pub fn start_run(
@@ -3506,6 +3628,13 @@ mod linux {
         }
     }
 
+    fn valid_sha256(value: &str) -> bool {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }
+
     fn map_io_error(error: io::Error) -> ClientError {
         match error.kind() {
             io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => ClientError::Timeout,
@@ -3781,6 +3910,13 @@ impl AuthorizedClient {
         &mut self,
         _artifact_id: &str,
     ) -> Result<ArtifactTransferMetadata, ClientError> {
+        Err(ClientError::UnsupportedPlatform)
+    }
+
+    pub fn read_artifact_event(
+        &mut self,
+        _metadata: &ArtifactTransferMetadata,
+    ) -> Result<ArtifactTransferEvent, ClientError> {
         Err(ClientError::UnsupportedPlatform)
     }
 
