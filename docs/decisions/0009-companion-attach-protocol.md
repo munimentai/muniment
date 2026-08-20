@@ -774,6 +774,20 @@ The first implementation slice is **attach run.open dispatch**. It adds
 request routing, the `stream_run` reuse, error mapping, and contract tests.
 This amendment changes no code.
 
+## Amendment — 2026-08-19: artifact identity
+
+For `artifact.fetch`, `artifact_id` is the journal event's durable
+`EventEnvelope.event_id`. The event's workspace must equal the authorized
+workspace. The event must carry a CAS body that the actor may currently read.
+
+A missing, foreign, or inaccessible event returns non-retryable
+`invalid_request`. The lookup accepts no path or CAS hash. This identity needs
+no new column, table, or migration.
+
+The first implementation slice is **attach artifact.fetch dispatch**. It adds
+request routing, event resolution, authorization, error mapping, and contract
+tests. This amendment changes no code.
+
 ## Rejected alternatives
 
 **TCP loopback alone.** Loopback limits network reach but supplies no portable
