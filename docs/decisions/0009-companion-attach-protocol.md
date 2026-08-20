@@ -244,11 +244,10 @@ the cancel request then reports `already_completed`. Malformed target unions
 return `invalid_request` and affect no target.
 
 A consumer that exhausts an acknowledgement window or stops requesting
-artifact windows is simply paused. If retained unacknowledged output exceeds
-the advertised time/byte budget, it receives `slow_consumer` and
-`stream.closed {code:"slow_consumer", resumable:true}` for that stream, while
-the desktop continues journaling. Malformed flow-control requests count toward
-the connection violation limit; exceeding it closes the connection.
+artifact windows is simply paused. The artifact slow-consumer amendment below
+defines the retained-output limits and closure order. Malformed flow-control
+requests count toward the connection violation limit; exceeding it closes the
+connection.
 
 There is no arbitrary Pi command/frame passthrough, database query, filesystem
 API, runtime spawn/control, credential/auth flow, background daemon mode,
@@ -787,6 +786,68 @@ no new column, table, or migration.
 The first implementation slice is **attach artifact.fetch dispatch**. It adds
 request routing, event resolution, authorization, error mapping, and contract
 tests. This amendment changes no code.
+
+## Amendment — 2026-08-20: artifact slow-consumer limits
+
+Each artifact transfer may retain at most 8 MiB (8,388,608 decoded bytes) of
+emitted, unacknowledged chunk data. It may retain that data for at most 30
+seconds. These fixed v1 limits apply per transfer, not per window or
+connection. The connection's separate outbound queue and byte limits still
+apply.
+
+`artifact.fetch` advertises both limits in its response as
+`max_unacknowledged_bytes:8388608` and `acknowledgement_timeout_ms:30000`.
+These fields join the existing `{transfer_id, artifact_id, total_bytes,
+sha256, chunk_bytes, chunk_count}` body. The response adds no path, CAS hash,
+workspace ID, run ID, journal event ID beyond `artifact_id`, or other
+identifier.
+
+Retained bytes equal the decoded lengths of chunks emitted after
+`ack_through_chunk`. The byte count starts at zero when `artifact.fetch`
+creates the transfer. A valid acknowledgement that advances
+`ack_through_chunk` releases every chunk through that index. A repeated
+acknowledgement releases nothing and resets no limit. Window grants do not
+start or reset either limit. The server must not emit a chunk that would make
+the retained byte count exceed 8,388,608. Reaching exactly that count remains
+valid. An acknowledgement of all emitted chunks resets the byte count to zero.
+The byte limit expires immediately before an emission would exceed it.
+
+The time limit has no running clock while the transfer retains zero bytes. Its
+clock starts when the server emits the first retained chunk. A valid advancing
+acknowledgement resets the clock at receipt time if any retained bytes remain.
+It stops the clock if no retained bytes remain. A later emission starts a new
+30-second interval. These rules apply across every window. At 30,000 elapsed
+milliseconds with retained bytes, the transfer expires. The server uses a
+monotonic clock and checks the deadline independently of later client traffic.
+
+Before a byte-limit violation, or at a time-limit expiration, the server stops
+emitting chunks and removes the transfer. It writes these two frames in order:
+
+```text
+error { protocol:"muniment.attach/1", ok:false,
+        error:{ code:"slow_consumer",
+                message:"Artifact consumer is too slow.",
+                retryable:true } }
+event { protocol:"muniment.attach/1", subscription_id:transfer_id,
+        event:"stream.closed",
+        body:{code:"slow_consumer",resumable:true} }
+```
+
+The error has no `request_id`, `action`, or `details`. No
+`artifact.complete`, `artifact.chunk`, or other transfer event may appear
+between those frames or after `stream.closed`. The connection and its other
+streams remain open. A later operation for the removed transfer returns
+`transfer_not_found`. The client must use a new authorized `artifact.fetch` to
+resume and verify the artifact from chunk zero.
+
+The first implementation slice is **artifact retained-output accounting**. It
+adds the two response fields, monotonic deadline state, retained decoded-byte
+accounting, and the `slow_consumer` error schema. Unit tests cover zero-byte
+artifacts, the exact byte limit, one-byte overflow, the exact deadline,
+partial and full advancing acknowledgements, repeated acknowledgements, and
+new windows before and after acknowledgements. Session contract tests cover
+the two-frame order, transfer removal, isolation from other streams, and the
+absence of path and extra identifier fields. This amendment changes no code.
 
 ## Rejected alternatives
 
