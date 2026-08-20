@@ -604,7 +604,10 @@ fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
         profile.clone(),
         config.clone(),
         Arc::new(Mutex::new(None::<PiRuntime>)),
-        Arc::new(ApplicationMemoryRuntime::new(config, profile.join("memory"))),
+        Arc::new(ApplicationMemoryRuntime::new(
+            config,
+            profile.join("memory"),
+        )),
         RuntimeActivityRegistry::new(),
         Arc::new(EntitlementSnapshotTracker::new()),
         SignedWorkspaceApproval::default(),
@@ -666,7 +669,10 @@ fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
                     ),
                 )
                 .unwrap();
-            storage.journal.bind_run_workspace(run_id, workspace).unwrap();
+            storage
+                .journal
+                .bind_run_workspace(run_id, workspace)
+                .unwrap();
             hashes.insert(event_id, hash);
         }
         storage
@@ -685,10 +691,7 @@ fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
             .unwrap();
         storage
             .journal
-            .bind_run_workspace(
-                "01900000-0000-7000-8000-000000000203",
-                "workspace-a",
-            )
+            .bind_run_workspace("01900000-0000-7000-8000-000000000203", "workspace-a")
             .unwrap();
     }
 
