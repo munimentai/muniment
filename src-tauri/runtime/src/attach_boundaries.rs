@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
 use muniment_core::attach::linux::{
-    EntitlementSnapshotResult, RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService,
-    ThreadOpenPage, ThreadOpenRequest,
+    ArtifactFetchResult, EntitlementSnapshotResult, RunStreamPage, ThreadListPage,
+    ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{
@@ -19,6 +19,7 @@ use muniment_core::attach::{
 use muniment_core::auth::{
     BrowserOpenError, BrowserOpener, EntitlementSnapshotTracker, NativeDeviceListError, TokenSet,
 };
+use muniment_core::cas::ContentHash;
 use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
 use muniment_core::chat_resume::{clear_active_run, install_active_run};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
@@ -759,6 +760,42 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;
         ThreadListService::stream_run(&mut storage.journal, workspace, run_id, after_run_seq)
+    }
+
+    fn fetch_artifact(
+        &self,
+        workspace: &str,
+        artifact_id: &muniment_core::attach::Id,
+    ) -> Result<ArtifactFetchResult, ProtocolError> {
+        let mut storage = self
+            .storage
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?;
+        let reference = storage
+            .journal
+            .workspace_artifact(workspace, artifact_id.as_str())
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .ok_or_else(ProtocolError::invalid_request)?;
+        let hash: ContentHash = reference
+            .sha256
+            .parse()
+            .map_err(|_| ProtocolError::invalid_request())?;
+        let object = storage
+            .cas
+            .open_object(&hash)
+            .map_err(|_| ProtocolError::invalid_request())?
+            .ok_or_else(ProtocolError::invalid_request)?;
+        let total_bytes = object
+            .metadata()
+            .map_err(|_| ProtocolError::invalid_request())?
+            .len();
+        if total_bytes != reference.byte_length || storage.cas.verify(&hash).is_err() {
+            return Err(ProtocolError::invalid_request());
+        }
+        Ok(ArtifactFetchResult {
+            total_bytes,
+            sha256: reference.sha256,
+        })
     }
 
     fn subscribe_run_commits(
