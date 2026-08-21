@@ -179,7 +179,12 @@ where
     F: std::future::Future<Output = Result<SubmitResult, String>>,
 {
     match session {
-        RunCommandSession::NoSupervisor => local(files).await,
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local(files).await
+        }
         RunCommandSession::Connected(client) => {
             let thread_id = state.session_thread.current(subject);
             let file_paths = files
@@ -216,7 +221,12 @@ where
     F: std::future::Future<Output = Result<SubmitResult, String>>,
 {
     match session {
-        RunCommandSession::NoSupervisor => local().await,
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local().await
+        }
         RunCommandSession::Connected(client) => client
             .run_resume(run_id)
             .map(resume_result)
@@ -262,7 +272,12 @@ fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     local: L,
 ) -> Result<(), String> {
     match session {
-        RunCommandSession::NoSupervisor => local(),
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local()
+        }
         RunCommandSession::Connected(client) => match delivery {
             ChatDelivery::Steer => client.run_steer(run_id, message),
             ChatDelivery::FollowUp => client.run_follow_up(run_id, message),
@@ -280,7 +295,12 @@ fn handle_run_cancel<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     local: L,
 ) -> Result<(), String> {
     match session {
-        RunCommandSession::NoSupervisor => local(),
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local()
+        }
         RunCommandSession::Connected(client) => client
             .run_cancel(run_id)
             .map(|_| ())
@@ -298,7 +318,12 @@ fn handle_run_permission_answer<C: RunCommandClient, L: FnOnce() -> Result<(), S
     local: L,
 ) -> Result<(), String> {
     match session {
-        RunCommandSession::NoSupervisor => local(),
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local()
+        }
         RunCommandSession::Connected(client) => client
             .run_permission_answer(run_id, gate_id, answer)
             .map(|_| ())
@@ -349,9 +374,9 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
 }
 
 pub struct ChatState {
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     pub(crate) storage: SharedStorage,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) storage: DeferredStorage,
     active: Arc<Mutex<Option<ActiveRun>>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
@@ -384,10 +409,10 @@ impl RetentionTrigger {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) struct DeferredStorage(OnceLock<SharedStorage>);
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl DeferredStorage {
     fn new() -> Self {
         Self(OnceLock::new())
@@ -410,17 +435,20 @@ impl DeferredStorage {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) struct TauriRunStartBoundaries<R: tauri::Runtime> {
     pub(crate) app: tauri::AppHandle<R>,
     pub(crate) continue_session_thread: bool,
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
     fn state(&self) -> tauri::State<'_, ChatState> {
         self.app.state::<ChatState>()
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
     #[cfg(target_os = "linux")]
     fn queue_attach_message(
@@ -546,6 +574,7 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     fn mark_active_run(&self) -> RuntimeActivityGuard {
         self.state().runtime_activity.mark_active_run()
@@ -763,7 +792,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 }
 
 impl ChatState {
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     pub fn new<R: tauri::Runtime>(
         app: &tauri::AppHandle<R>,
         runtime_activity: RuntimeActivityRegistry,
@@ -789,8 +818,13 @@ impl ChatState {
         })
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub fn new(runtime_activity: RuntimeActivityRegistry) -> Self {
+        Self::new_runtime_owned(runtime_activity)
+    }
+
+    #[cfg(unix)]
+    fn new_runtime_owned(runtime_activity: RuntimeActivityRegistry) -> Self {
         Self {
             storage: DeferredStorage::new(),
             active: Arc::new(Mutex::new(None)),
@@ -823,14 +857,14 @@ impl ChatState {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
         self.storage
             .get()
             .ok_or_else(auth::background_service_error)
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
         Ok(&self.storage)
     }
@@ -950,6 +984,7 @@ pub async fn chat_submit(
             None
         };
         let selected_files = files.unwrap_or_default();
+        #[cfg(target_os = "linux")]
         let local_prompt = prompt.clone();
         return handle_run_submit(
             session,
@@ -957,7 +992,10 @@ pub async fn chat_submit(
             subject.as_deref(),
             &prompt,
             selected_files,
+            #[cfg(target_os = "linux")]
             |local_files| local_chat_submit(app, local_prompt, local_files),
+            #[cfg(target_os = "macos")]
+            |_| async { Err(auth::background_service_error()) },
         )
         .await;
     }
@@ -966,6 +1004,7 @@ pub async fn chat_submit(
     return local_chat_submit(app, prompt, files.unwrap_or_default()).await;
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 async fn local_chat_submit(
     app: tauri::AppHandle,
     prompt: String,
@@ -1004,9 +1043,14 @@ pub async fn chat_resume(
             .state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
             .into();
+        #[cfg(target_os = "linux")]
         let local_state = state.clone();
+        #[cfg(target_os = "linux")]
         let local_run_id = run_id.clone();
         return handle_run_resume(session, &state, &run_id, || {
+            #[cfg(target_os = "macos")]
+            return async { Err(auth::background_service_error()) };
+            #[cfg(target_os = "linux")]
             local_chat_resume(app, auth_state, local_state, local_run_id)
         })
         .await;
@@ -1016,6 +1060,7 @@ pub async fn chat_resume(
     return local_chat_resume(app, auth_state, state, run_id).await;
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 async fn local_chat_resume(
     app: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,
@@ -1603,10 +1648,8 @@ mod tests {
             cas: LocalCas::open(&directory.join("cas")).unwrap(),
         }));
         let state = ChatState {
-            #[cfg(target_os = "linux")]
+            #[cfg(unix)]
             storage: DeferredStorage(OnceLock::from(storage)),
-            #[cfg(target_os = "macos")]
-            storage,
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
@@ -1618,13 +1661,19 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn deferred_command_test_state() -> (Option<PathBuf>, ChatState) {
-        #[cfg(target_os = "linux")]
-        return (None, ChatState::new(RuntimeActivityRegistry::new()));
-        #[cfg(target_os = "macos")]
-        {
-            let (directory, state) = command_test_state();
-            (Some(directory), state)
-        }
+        (None, ChatState::new(RuntimeActivityRegistry::new()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn macos_chat_state_starts_without_desktop_storage() {
+        let state = ChatState::new_runtime_owned(RuntimeActivityRegistry::new());
+
+        assert!(state.storage.get().is_none());
+        assert!(matches!(
+            state.storage(),
+            Err(error) if error == "Muniment cannot reach its background service."
+        ));
     }
 
     #[cfg(target_os = "linux")]
@@ -1661,8 +1710,16 @@ mod tests {
                 })
             },
         ));
-        assert_eq!(local.unwrap().run_id, "local-run");
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(local.unwrap().run_id, "local-run");
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
 
         let (deferred_directory, deferred_state) = deferred_command_test_state();
         deferred_state
@@ -1755,8 +1812,16 @@ mod tests {
                 })
             },
         ));
-        assert_eq!(local.unwrap().run_id, "local-run");
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(local.unwrap().run_id, "local-run");
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
         let client = FakeRunClient::default();
         let (deferred_directory, deferred_state) = deferred_command_test_state();
         let connected = tauri::async_runtime::block_on(handle_run_resume(
@@ -1795,7 +1860,7 @@ mod tests {
     #[test]
     fn chat_queue_routes_all_desktop_client_states_and_deliveries() {
         let local_called = AtomicBool::new(false);
-        assert!(handle_run_queue::<FakeRunClient, _>(
+        let local = handle_run_queue::<FakeRunClient, _>(
             RunCommandSession::NoSupervisor,
             "run-1",
             ChatDelivery::Steer,
@@ -1803,10 +1868,18 @@ mod tests {
             || {
                 local_called.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
-            }
-        )
-        .is_ok());
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+            },
+        );
+        #[cfg(target_os = "linux")]
+        {
+            assert!(local.is_ok());
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
         let client = FakeRunClient::default();
         assert!(handle_run_queue(
             RunCommandSession::Connected(client.clone()),
@@ -1851,16 +1924,21 @@ mod tests {
     #[test]
     fn chat_cancel_routes_all_desktop_client_states() {
         let local_called = AtomicBool::new(false);
-        assert!(handle_run_cancel::<FakeRunClient, _>(
-            RunCommandSession::NoSupervisor,
-            "run-1",
-            || {
+        let local =
+            handle_run_cancel::<FakeRunClient, _>(RunCommandSession::NoSupervisor, "run-1", || {
                 local_called.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
-            }
-        )
-        .is_ok());
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+            });
+        #[cfg(target_os = "linux")]
+        {
+            assert!(local.is_ok());
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
         let client = FakeRunClient::default();
         assert!(handle_run_cancel(
             RunCommandSession::Connected(client.clone()),
@@ -1881,7 +1959,7 @@ mod tests {
     fn chat_answer_permission_routes_all_desktop_client_states() {
         let answer = AttachChatPermissionAnswer::Confirm(true);
         let local_called = AtomicBool::new(false);
-        assert!(handle_run_permission_answer::<FakeRunClient, _>(
+        let local = handle_run_permission_answer::<FakeRunClient, _>(
             RunCommandSession::NoSupervisor,
             "run-1",
             "gate-1",
@@ -1889,10 +1967,18 @@ mod tests {
             || {
                 local_called.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
-            }
-        )
-        .is_ok());
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+            },
+        );
+        #[cfg(target_os = "linux")]
+        {
+            assert!(local.is_ok());
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
         let client = FakeRunClient::default();
         assert!(handle_run_permission_answer(
             RunCommandSession::Connected(client.clone()),

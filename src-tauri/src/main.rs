@@ -55,12 +55,15 @@ fn main() {
                 app_data.join("memory"),
             ));
             app.manage(Arc::clone(&memory_runtime));
-            #[cfg(target_os = "linux")]
+            #[cfg(unix)]
             {
                 app.manage(chat::ChatState::new(runtime_activity.clone()));
+            }
+            #[cfg(target_os = "linux")]
+            {
                 attach_service::start_attach_listener(app.handle().clone());
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "windows")]
             {
                 app.manage(chat::ChatState::new(
                     app.handle(),
