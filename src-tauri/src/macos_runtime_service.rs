@@ -1,9 +1,6 @@
 use std::fmt;
 use std::io;
-use std::path::Path;
-
-#[cfg(target_os = "macos")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 const RUNTIME_AGENT_PLIST: &str = "ai.muniment.runtime.plist";
@@ -199,23 +196,23 @@ pub(crate) fn activate_bundled_runtime_service() -> RuntimeServiceActivation {
     if let Ok(home) = muniment_core::user_diagnostics::effective_user_home() {
         let log_directory = home.join("Library/Logs/Muniment");
         let _ = write_activation_diagnostic(&log_directory, activation);
-        let start_adapter = MacosRuntimeStartAdapter::new(home);
-        let outcome = request_enabled_runtime_start(activation, &start_adapter);
-        let _ = write_start_diagnostic(&log_directory, outcome);
+        if let Ok(profile_directory) = muniment_runtime::profile_directory() {
+            let start_adapter = MacosRuntimeStartAdapter::new(profile_directory);
+            let outcome = request_enabled_runtime_start(activation, &start_adapter);
+            let _ = write_start_diagnostic(&log_directory, outcome);
+        }
     }
     activation
 }
 
-#[cfg(target_os = "macos")]
 struct MacosRuntimeStartAdapter {
     endpoint: PathBuf,
 }
 
-#[cfg(target_os = "macos")]
 impl MacosRuntimeStartAdapter {
-    fn new(home: PathBuf) -> Self {
+    fn new(profile_directory: PathBuf) -> Self {
         Self {
-            endpoint: home.join("Library/Application Support/Muniment/runtime/attach-v1.sock"),
+            endpoint: profile_directory.join("muniment/attach-v1.sock"),
         }
     }
 }
@@ -412,6 +409,17 @@ mod tests {
             assert_eq!(adapter.endpoint_calls.get(), 0);
             assert_eq!(adapter.request_calls.get(), 0);
         }
+    }
+
+    #[test]
+    fn start_adapter_checks_the_canonical_profile_endpoint() {
+        let profile_directory = PathBuf::from("/profiles/current");
+        let adapter = MacosRuntimeStartAdapter::new(profile_directory);
+
+        assert_eq!(
+            adapter.endpoint,
+            PathBuf::from("/profiles/current/muniment/attach-v1.sock")
+        );
     }
 
     #[test]

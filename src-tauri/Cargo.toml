@@ -35,6 +35,7 @@ tauri-plugin-wdio-webdriver = { version = "1.3.0", optional = true }
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+muniment-runtime = { path = "runtime" }
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSError", "NSString"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["SMAppService", "SMErrors", "objc2", "objc2-foundation", "std"] }
