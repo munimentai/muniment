@@ -597,6 +597,16 @@ impl AttachCompanionState {
         self.start_chat_events_locked(start_chat_events);
     }
 
+    #[cfg(unix)]
+    fn start_macos_desktop_supervisors(
+        &self,
+        start_presenter: impl FnOnce(ApprovalPresenterStopHandle),
+        start_supervisors: impl FnOnce(),
+    ) {
+        self.start_approval_presenter(start_presenter);
+        start_supervisors();
+    }
+
     fn stop_desktop_client(&self) {
         let _lifecycle = self
             .desktop_supervisor_lifecycle
@@ -1142,9 +1152,12 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
     let event_app = app.clone();
     let event_status_app = app.clone();
     #[cfg(target_os = "macos")]
-    start_approval_presenter(app);
-    app.state::<AttachCompanionState>()
-        .start_desktop_supervisors(
+    let presenter_endpoint = endpoint.clone();
+    #[cfg(target_os = "macos")]
+    let presenter_app = app.clone();
+    let state = app.state::<AttachCompanionState>();
+    let start_supervisors = || {
+        state.start_desktop_supervisors(
             move |stop, holder| {
                 std::thread::spawn(move || {
                     let observer_app = client_app.clone();
@@ -1198,6 +1211,27 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                 })
             },
         );
+    };
+    #[cfg(target_os = "macos")]
+    state.start_macos_desktop_supervisors(
+        move |stop| {
+            std::thread::spawn(move || {
+                let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
+                serve_approval_presenter_at(
+                    &presenter_endpoint,
+                    env!("CARGO_PKG_VERSION"),
+                    Duration::from_secs(5),
+                    Duration::from_millis(250),
+                    stop,
+                    |_| {},
+                    move |request| answer_presented_approval(&approvals, request),
+                );
+            });
+        },
+        start_supervisors,
+    );
+    #[cfg(target_os = "linux")]
+    start_supervisors();
     #[cfg(target_os = "linux")]
     {
         let status = app.state::<AttachCompanionState>().listener_status();
@@ -1564,18 +1598,37 @@ mod tests {
 
         let state = AttachCompanionState::default();
         let presenter_starts = AtomicUsize::new(0);
+        let presenter_workers = Arc::new(AtomicUsize::new(0));
+        let presenter_worker = Arc::new(Mutex::new(None));
 
         for _ in 0..2 {
-            state.start_approval_presenter(|_| {
-                presenter_starts.fetch_add(1, Ordering::SeqCst);
-            });
-            state.start_desktop_supervisors(
-                |_, _| std::thread::spawn(|| {}),
-                |_| std::thread::spawn(|| {}),
+            let presenter_workers = presenter_workers.clone();
+            let presenter_worker = presenter_worker.clone();
+            state.start_macos_desktop_supervisors(
+                |_| {
+                    presenter_starts.fetch_add(1, Ordering::SeqCst);
+                    *presenter_worker.lock().unwrap() = Some(std::thread::spawn(move || {
+                        presenter_workers.fetch_add(1, Ordering::SeqCst);
+                    }));
+                },
+                || {
+                    state.start_desktop_supervisors(
+                        |_, _| std::thread::spawn(|| {}),
+                        |_| std::thread::spawn(|| {}),
+                    );
+                },
             );
         }
 
         assert_eq!(presenter_starts.load(Ordering::SeqCst), 1);
+        presenter_worker
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(presenter_workers.load(Ordering::SeqCst), 1);
         state.stop_approval_presenter();
         state.stop_desktop_client();
     }
