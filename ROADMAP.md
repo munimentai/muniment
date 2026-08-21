@@ -35,9 +35,10 @@ them must exercise the real contracts. It must add no mocked production path.
 > remaining attach operations. The forty-second (2026-08-19) recorded the
 > request.cancel, run.open contract, artifact registry, and open_run client
 > landings. The forty-third (2026-08-20) recorded the run.open dispatch,
-> artifact identity, and artifact client landings. It named attach
-> artifact.fetch dispatch as the next slice. It grows every wave, so it
-> stays the next compaction target.
+> artifact identity, and artifact client landings. The forty-fourth
+> (2026-08-20) recorded the completed ADR 0009 artifact-transfer chain and
+> held product consumption for its real event contract. It grows every wave,
+> so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
