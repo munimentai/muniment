@@ -39,8 +39,9 @@ pub use directories::{
     profile_directory, resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
 };
 pub use macos_activation::{
-    record_macos_failed_exit, record_macos_orderly_exit, record_macos_start, MacosStart,
-    MacosStartDecision,
+    macos_rollback_pending, record_macos_failed_exit, record_macos_orderly_exit,
+    record_macos_start, MacosRollbackMarkerError, MacosStart, MacosStartDecision,
+    MACOS_ROLLBACK_MARKER_NAME,
 };
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};

@@ -81,8 +81,8 @@ enum MacosActivationExit {
 
 fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit) -> i32 {
     use muniment_runtime::{
-        profile_directory, record_macos_failed_exit, record_macos_orderly_exit, record_macos_start,
-        MacosStartDecision,
+        macos_rollback_pending, profile_directory, record_macos_failed_exit,
+        record_macos_orderly_exit, record_macos_start, MacosStartDecision,
     };
 
     let state_directory = match profile_directory() {
@@ -92,6 +92,14 @@ fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit)
             return FAILURE_EXIT_STATUS;
         }
     };
+    match macos_rollback_pending(&state_directory) {
+        Ok(true) => return SUCCESS_EXIT_STATUS,
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            return FAILURE_EXIT_STATUS;
+        }
+    }
     let start = match record_macos_start(&state_directory) {
         Ok((MacosStartDecision::StopRestartLoop, _)) => return SUCCESS_EXIT_STATUS,
         Ok((MacosStartDecision::Run, start)) => start,

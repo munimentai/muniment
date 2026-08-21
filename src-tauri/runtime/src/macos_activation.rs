@@ -1,13 +1,77 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const FAILURE_LIMIT: usize = 5;
 const FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
 const RECORD_NAME: &str = "macos-starts";
+pub const MACOS_ROLLBACK_MARKER_NAME: &str = "rollback-pending";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MacosRollbackMarkerError {
+    Check,
+    Unsafe,
+}
+
+impl std::fmt::Display for MacosRollbackMarkerError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Check => "rollback marker could not be checked",
+            Self::Unsafe => "rollback marker is unsafe",
+        })
+    }
+}
+
+impl std::error::Error for MacosRollbackMarkerError {}
+
+/// Checks the fixed rollback marker without following a final-component symlink.
+#[cfg(unix)]
+pub fn macos_rollback_pending(
+    profile_directory: impl AsRef<Path>,
+) -> Result<bool, MacosRollbackMarkerError> {
+    let path = profile_directory.as_ref().join(MACOS_ROLLBACK_MARKER_NAME);
+    let initial_metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(MacosRollbackMarkerError::Check),
+    };
+    if !private_regular_file(&initial_metadata) {
+        return Err(MacosRollbackMarkerError::Unsafe);
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let file = options
+        .open(path)
+        .map_err(|_| MacosRollbackMarkerError::Check)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| MacosRollbackMarkerError::Check)?;
+    if !private_regular_file(&metadata) {
+        return Err(MacosRollbackMarkerError::Unsafe);
+    }
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+pub fn macos_rollback_pending(
+    _profile_directory: impl AsRef<Path>,
+) -> Result<bool, MacosRollbackMarkerError> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn private_regular_file(metadata: &fs::Metadata) -> bool {
+    // SAFETY: geteuid takes no arguments and has no preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    metadata.is_file()
+        && metadata.uid() == effective_uid
+        && metadata.mode() & 0o077 == 0
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosStartDecision {
