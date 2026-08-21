@@ -312,6 +312,46 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
     return fixture.outcome(spawnSync('bash', [runnerPath], { encoding: 'utf8', env: fixture.env }))
   }
 
+  const runMacosPayload = ({ runtime = 'ok', agent = true, field = '', value = '' } = {}) => {
+    const directory = temp(); const bundle = path.join(directory, 'muniment.app'); const artifacts = path.join(directory, 'artifacts')
+    const runtimePath = path.join(bundle, 'Contents/Library/LaunchServices/muniment-runtime')
+    const agentPath = path.join(bundle, 'Contents/Library/LaunchAgents/ai.muniment.runtime.plist')
+    const plistBuddy = path.join(directory, 'PlistBuddy')
+    fs.mkdirSync(path.dirname(runtimePath), { recursive: true })
+    fs.mkdirSync(path.dirname(agentPath), { recursive: true })
+    fs.writeFileSync(runtimePath, runtime === 'failure' ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\nprintf '${runtime === 'empty' ? '   ' : 'muniment-runtime 0.0.1'}\\n'\n`)
+    if (runtime !== 'missing') fs.chmodSync(runtimePath, runtime === 'not-executable' ? 0o600 : 0o700)
+    else fs.rmSync(runtimePath)
+    if (agent) fs.writeFileSync(agentPath, '<plist/>\n')
+    fs.writeFileSync(plistBuddy, `#!/bin/sh
+key=\${2#Print :}
+if [ "$key" = "$MUNIMENT_E2E_TEST_FIELD" ]; then
+  [ "$MUNIMENT_E2E_TEST_VALUE" != unavailable ] || exit 1
+  printf '%s\\n' "$MUNIMENT_E2E_TEST_VALUE"
+  exit
+fi
+case "$key" in
+  Label) printf 'ai.muniment.runtime\\n' ;;
+  BundleProgram) printf 'Contents/Library/LaunchServices/muniment-runtime\\n' ;;
+  ThrottleInterval) printf '5\\n' ;;
+  KeepAlive:SuccessfulExit) printf 'false\\n' ;;
+  *) exit 1 ;;
+esac
+`)
+    fs.chmodSync(plistBuddy, 0o700)
+    const result = spawnSync('bash', [runnerPath], { encoding: 'utf8', env: {
+      ...process.env,
+      TMPDIR: directory,
+      DCI_ARTIFACTS_DIR: artifacts,
+      MUNIMENT_E2E_PAYLOAD_TEST_MODE: '1',
+      MUNIMENT_E2E_PAYLOAD_TEST_BUNDLE: bundle,
+      MUNIMENT_E2E_PLIST_BUDDY: plistBuddy,
+      MUNIMENT_E2E_TEST_FIELD: field,
+      MUNIMENT_E2E_TEST_VALUE: value,
+    } })
+    return { result, artifacts }
+  }
+
   const signalMacosFinalizer = (signal) => new Promise((resolve, reject) => {
     const fixture = macosFixture(); const ready = path.join(fixture.directory, 'ready')
     const child = spawn('bash', [runnerPath], { env: { ...fixture.env, MUNIMENT_E2E_FINALIZER_TEST_READY: ready }, stdio: 'ignore' })
@@ -338,6 +378,38 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
     expect(runner).toContain('>"$raw/first-window-timeout.log"')
     expect(runner).toContain("printf 'last_visible_window_count=%s\\n' \"${window_count:-unavailable}\"")
     expect(runner).toContain('screendump=requested-by-desktop-ci')
+  })
+
+  it('verifies the installed runtime and LaunchAgent without registering the agent', () => {
+    const { result, artifacts } = runMacosPayload()
+    const payloadLog = fs.existsSync(path.join(artifacts, 'payload.log')) ? fs.readFileSync(path.join(artifacts, 'payload.log'), 'utf8') : ''
+    const cleanupLog = fs.existsSync(path.join(artifacts, 'cleanup.log')) ? fs.readFileSync(path.join(artifacts, 'cleanup.log'), 'utf8') : ''
+    expect(result.status, `${result.stderr}\n${payloadLog}\n${cleanupLog}`).toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'payload.log'), 'utf8')).toContain('payload=verified')
+    expect(runner).not.toMatch(/launchctl|SMAppService/)
+  })
+
+  it.each([
+    ['missing runtime', { runtime: 'missing' }, 'installed runtime is unavailable or not executable'],
+    ['non-executable runtime', { runtime: 'not-executable' }, 'installed runtime is unavailable or not executable'],
+    ['failed version probe', { runtime: 'failure' }, 'installed runtime version probe failed'],
+    ['empty version', { runtime: 'empty' }, 'installed runtime version is empty'],
+    ['missing LaunchAgent', { agent: false }, 'installed runtime LaunchAgent is unavailable'],
+    ['missing label', { field: 'Label', value: 'unavailable' }, 'installed runtime LaunchAgent label is unavailable'],
+    ['invalid label', { field: 'Label', value: 'wrong' }, 'installed runtime LaunchAgent label is invalid'],
+    ['missing executable path', { field: 'BundleProgram', value: 'unavailable' }, 'installed runtime LaunchAgent executable path is unavailable'],
+    ['invalid executable path', { field: 'BundleProgram', value: '/tmp/runtime' }, 'installed runtime LaunchAgent executable path is invalid'],
+    ['missing throttle', { field: 'ThrottleInterval', value: 'unavailable' }, 'installed runtime LaunchAgent throttle is unavailable'],
+    ['invalid throttle', { field: 'ThrottleInterval', value: '0' }, 'installed runtime LaunchAgent throttle is invalid'],
+    ['missing unsuccessful-exit policy', { field: 'KeepAlive:SuccessfulExit', value: 'unavailable' }, 'installed runtime LaunchAgent unsuccessful-exit policy is unavailable'],
+    ['invalid unsuccessful-exit policy', { field: 'KeepAlive:SuccessfulExit', value: 'true' }, 'installed runtime LaunchAgent unsuccessful-exit policy is invalid'],
+  ])('fails for a %s and retains JUnit evidence', (_name, options, message) => {
+    const { result, artifacts } = runMacosPayload(options)
+    expect(result.status).not.toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'payload.log'), 'utf8')).toContain(message)
+    const junit = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, 'installed-macos', '1', '0'], { encoding: 'utf8' })
+    expect(junit.status, junit.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')).toContain('<failure message=')
   })
 
   it('probes windows through CoreGraphics, which needs no privacy grant', () => {
