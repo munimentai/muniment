@@ -5,10 +5,13 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::APPLICATION_IDENTIFIER;
+
 const FAILURE_LIMIT: usize = 5;
 const FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
 const RECORD_NAME: &str = "macos-starts";
 pub const MACOS_RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
+pub const MACOS_UNIFIED_LOG_CATEGORY: &str = "runtime";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosDiagnosticEvent {
@@ -39,20 +42,149 @@ impl MacosDiagnosticEvent {
             }
         }
     }
+
+    fn unified_message(self) -> &'static str {
+        let record = self.record();
+        std::str::from_utf8(&record[..record.len() - 1]).expect("diagnostic records are UTF-8")
+    }
+}
+
+/// Fixed unified-log payload for one runtime diagnostic event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MacosUnifiedLogRecord {
+    pub subsystem: &'static str,
+    pub category: &'static str,
+    pub message: &'static str,
+}
+
+/// Adapter seam for macOS unified logging.
+pub trait MacosUnifiedLog {
+    fn emit(&self, record: MacosUnifiedLogRecord);
+}
+
+/// Production unified logger. It writes through os_log on macOS.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemMacosUnifiedLog;
+
+impl MacosUnifiedLog for SystemMacosUnifiedLog {
+    fn emit(&self, record: MacosUnifiedLogRecord) {
+        emit_system_unified_log(record);
+    }
+}
+
+fn unified_record(event: MacosDiagnosticEvent) -> MacosUnifiedLogRecord {
+    MacosUnifiedLogRecord {
+        subsystem: APPLICATION_IDENTIFIER,
+        category: MACOS_UNIFIED_LOG_CATEGORY,
+        message: event.unified_message(),
+    }
+}
+
+/// Emits one fixed unified-log record for `event`.
+pub fn emit_macos_unified_log(event: MacosDiagnosticEvent) {
+    emit_macos_unified_log_with(&SystemMacosUnifiedLog, event);
+}
+
+/// Emits one fixed unified-log record through `logger`.
+#[doc(hidden)]
+pub fn emit_macos_unified_log_with(logger: &impl MacosUnifiedLog, event: MacosDiagnosticEvent) {
+    logger.emit(unified_record(event));
 }
 
 /// Appends one fixed record and truncates the log before it exceeds 256 KiB.
+/// It also emits the same record through unified logging.
 #[cfg(unix)]
 pub fn write_macos_diagnostic(
     log_directory: impl AsRef<Path>,
     event: MacosDiagnosticEvent,
 ) -> io::Result<()> {
+    write_macos_diagnostic_with(log_directory, event, &SystemMacosUnifiedLog)
+}
+
+/// Writes the bounded file log and emits one unified-log record through `logger`.
+#[doc(hidden)]
+#[cfg(unix)]
+pub fn write_macos_diagnostic_with(
+    log_directory: impl AsRef<Path>,
+    event: MacosDiagnosticEvent,
+    logger: &impl MacosUnifiedLog,
+) -> io::Result<()> {
+    emit_macos_unified_log_with(logger, event);
     muniment_core::user_diagnostics::append_owner_only_record(
         log_directory.as_ref(),
         c"runtime.log",
         MACOS_RUNTIME_LOG_MAX_BYTES,
         event.record(),
     )
+}
+
+fn emit_system_unified_log(record: MacosUnifiedLogRecord) {
+    #[cfg(target_os = "macos")]
+    macos_os_log::emit(record);
+    #[cfg(not(target_os = "macos"))]
+    let _ = record;
+}
+
+#[cfg(target_os = "macos")]
+mod macos_os_log {
+    use super::MacosUnifiedLogRecord;
+    use std::ffi::{c_char, c_void, CString};
+    use std::ptr;
+    use std::sync::OnceLock;
+
+    const OS_LOG_TYPE_ERROR: u8 = 16;
+
+    struct CachedLog {
+        handle: usize,
+        _subsystem: CString,
+        _category: CString,
+    }
+
+    // os_log_with_type is a C macro. `_os_log_internal` is the exported implementation.
+    extern "C" {
+        static __dso_handle: u8;
+        fn os_log_create(subsystem: *const c_char, category: *const c_char) -> *mut c_void;
+        fn _os_log_internal(
+            dso: *const c_void,
+            log: *mut c_void,
+            type_: u8,
+            format: *const c_char,
+            ...
+        );
+    }
+
+    fn runtime_log(subsystem: &str, category: &str) -> *mut c_void {
+        static LOG: OnceLock<CachedLog> = OnceLock::new();
+        let cached = LOG.get_or_init(|| {
+            let subsystem = CString::new(subsystem).expect("unified log subsystem is a C string");
+            let category = CString::new(category).expect("unified log category is a C string");
+            let handle = unsafe { os_log_create(subsystem.as_ptr(), category.as_ptr()) as usize };
+            CachedLog {
+                handle,
+                _subsystem: subsystem,
+                _category: category,
+            }
+        });
+        cached.handle as *mut c_void
+    }
+
+    pub fn emit(record: MacosUnifiedLogRecord) {
+        let Ok(message) = CString::new(record.message) else {
+            return;
+        };
+        let log = runtime_log(record.subsystem, record.category);
+        if log.is_null() {
+            return;
+        }
+        unsafe {
+            _os_log_internal(
+                ptr::addr_of!(__dso_handle).cast(),
+                log,
+                OS_LOG_TYPE_ERROR,
+                message.as_ptr(),
+            );
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
