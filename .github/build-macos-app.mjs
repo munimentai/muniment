@@ -16,6 +16,7 @@ import {
 
 const bundleDir = join("src-tauri", "target", "universal-apple-darwin", "release", "bundle", "macos");
 const app = join(bundleDir, "muniment.app");
+const runtime = join(app, "Contents", "Library", "LaunchServices", "muniment-runtime");
 const appZip = `${app}.zip`;
 const pkgDir = join(bundleDir, "..", "pkg");
 const pkg = join(pkgDir, "muniment.pkg");
@@ -64,6 +65,7 @@ if (signing && signingConfig === null) {
 
 // Always build the universal .app first; signing (when enabled) operates on the
 // finished bundle so the unsigned and signed paths build identical bits.
+mustRun("build universal runtime", process.execPath, [join(".github", "build-macos-runtime.mjs")]);
 tauri("build", "--target", "universal-apple-darwin", "--bundles", "app");
 
 if (!signing) {
@@ -132,6 +134,7 @@ const collectDylibs = async (dir) => {
 };
 await collectDylibs(app);
 for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArguments(identity.hash, file));
+mustRun("codesign runtime", "codesign", codesignArguments(identity.hash, runtime));
 mustRun("codesign app", "codesign", codesignArguments(identity.hash, app));
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
