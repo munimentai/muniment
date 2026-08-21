@@ -1,6 +1,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 #[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -27,27 +29,34 @@ impl std::fmt::Display for MacosRollbackMarkerError {
 
 impl std::error::Error for MacosRollbackMarkerError {}
 
-/// Checks the fixed rollback marker without following a final-component symlink.
+/// Checks the fixed rollback marker without following symlinks.
 #[cfg(unix)]
 pub fn macos_rollback_pending(
     profile_directory: impl AsRef<Path>,
 ) -> Result<bool, MacosRollbackMarkerError> {
-    let path = profile_directory.as_ref().join(MACOS_ROLLBACK_MARKER_NAME);
-    let initial_metadata = match fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(_) => return Err(MacosRollbackMarkerError::Check),
-    };
-    if !private_regular_file(&initial_metadata) {
-        return Err(MacosRollbackMarkerError::Unsafe);
-    }
-    let mut options = OpenOptions::new();
-    options
+    let profile = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    let file = options
-        .open(path)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(profile_directory)
         .map_err(|_| MacosRollbackMarkerError::Check)?;
+    let marker_name = c"rollback-pending";
+    // SAFETY: openat receives a valid directory descriptor and a static C string.
+    let descriptor = unsafe {
+        libc::openat(
+            profile.as_raw_fd(),
+            marker_name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor == -1 {
+        return match io::Error::last_os_error().raw_os_error() {
+            Some(libc::ENOENT) => Ok(false),
+            Some(libc::ELOOP) => Err(MacosRollbackMarkerError::Unsafe),
+            _ => Err(MacosRollbackMarkerError::Check),
+        };
+    }
+    // SAFETY: openat returned an owned descriptor.
+    let file = unsafe { fs::File::from_raw_fd(descriptor) };
     let metadata = file
         .metadata()
         .map_err(|_| MacosRollbackMarkerError::Check)?;
@@ -68,9 +77,7 @@ pub fn macos_rollback_pending(
 fn private_regular_file(metadata: &fs::Metadata) -> bool {
     // SAFETY: geteuid takes no arguments and has no preconditions.
     let effective_uid = unsafe { libc::geteuid() };
-    metadata.is_file()
-        && metadata.uid() == effective_uid
-        && metadata.mode() & 0o077 == 0
+    metadata.is_file() && metadata.uid() == effective_uid && metadata.mode() & 0o077 == 0
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

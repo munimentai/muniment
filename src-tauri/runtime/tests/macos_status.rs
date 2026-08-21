@@ -60,6 +60,28 @@ fn rollback_marker_stops_before_profile_state_opens() {
 }
 
 #[test]
+fn profile_directory_symlink_fails_before_state_opens() {
+    let directory = directory();
+    let profile = directory.join(muniment_runtime::APPLICATION_IDENTIFIER);
+    let target = directory.join("profile-target");
+    fs::rename(&profile, &target).unwrap();
+    symlink(&target, &profile).unwrap();
+
+    let output = runtime(&directory, "orderly");
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "muniment-runtime: rollback marker could not be checked\n"
+    );
+    for name in ["macos-starts", "runs.sqlite3", "cas", "pi-sessions"] {
+        assert!(!target.join(name).exists(), "{name} must remain unopened");
+    }
+    assert!(!target.join("muniment/attach-v1.sock").exists());
+
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn unsafe_rollback_markers_fail_with_a_redacted_error() {
     for (name, setup) in [
         ("permissions", insecure_marker as fn(&Path)),
