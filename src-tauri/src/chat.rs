@@ -14,7 +14,7 @@ use muniment_core::active_run::{
 use muniment_core::attach::linux::{
     ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use muniment_core::attach::{
     ClientError, DesktopClientHolder, ProtocolError, RunCancelAccepted, RunMessageAccepted,
     RunPermissionAnswerAccepted, RunResumeAccepted, RunSubmitAccepted,
@@ -67,16 +67,16 @@ use tauri::{Emitter, Manager};
 #[cfg(test)]
 use uuid::Uuid;
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use crate::attach_service::DesktopClientSession;
 use crate::auth;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use muniment_core::attach::ChatPermissionAnswer as AttachChatPermissionAnswer;
 #[cfg(test)]
 use muniment_core::session_thread::OfferedThread;
 use muniment_core::session_thread::SessionThread;
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 trait RunCommandClient {
     fn run_submit(
         &self,
@@ -96,7 +96,7 @@ trait RunCommandClient {
     ) -> Result<RunPermissionAnswerAccepted, ClientError>;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl RunCommandClient for DesktopClientHolder {
     fn run_submit(
         &self,
@@ -146,14 +146,14 @@ impl RunCommandClient for DesktopClientHolder {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 enum RunCommandSession<C> {
     NoSupervisor,
     Connected(C),
     Disconnected,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl From<DesktopClientSession> for RunCommandSession<DesktopClientHolder> {
     fn from(session: DesktopClientSession) -> Self {
         match session {
@@ -164,7 +164,7 @@ impl From<DesktopClientSession> for RunCommandSession<DesktopClientHolder> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 async fn handle_run_submit<C, L, F>(
     session: RunCommandSession<C>,
     state: &ChatState,
@@ -203,7 +203,7 @@ where
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 async fn handle_run_resume<C, L, F>(
     session: RunCommandSession<C>,
     _state: &ChatState,
@@ -225,7 +225,7 @@ where
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn submit_result(accepted: RunSubmitAccepted) -> SubmitResult {
     SubmitResult {
         run_id: accepted.run_id,
@@ -243,7 +243,7 @@ fn submit_result(accepted: RunSubmitAccepted) -> SubmitResult {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn resume_result(accepted: RunResumeAccepted) -> SubmitResult {
     SubmitResult {
         run_id: accepted.run_id,
@@ -253,7 +253,7 @@ fn resume_result(accepted: RunResumeAccepted) -> SubmitResult {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     session: RunCommandSession<C>,
     run_id: &str,
@@ -273,7 +273,7 @@ fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn handle_run_cancel<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     session: RunCommandSession<C>,
     run_id: &str,
@@ -289,7 +289,7 @@ fn handle_run_cancel<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn handle_run_permission_answer<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     session: RunCommandSession<C>,
     run_id: &str,
@@ -905,7 +905,7 @@ fn chat_resume_error_message(error: ChatResumeError) -> String {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn attach_permission_answer(answer: ChatPermissionAnswer) -> AttachChatPermissionAnswer {
     match answer {
         ChatPermissionAnswer::Select(value) => AttachChatPermissionAnswer::Select(value),
@@ -937,7 +937,7 @@ pub async fn chat_submit(
     prompt: String,
     files: Option<Vec<SelectedFile>>,
 ) -> Result<SubmitResult, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         let session: RunCommandSession<_> = app
             .state::<crate::attach_service::AttachCompanionState>()
@@ -962,7 +962,7 @@ pub async fn chat_submit(
         .await;
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     return local_chat_submit(app, prompt, files.unwrap_or_default()).await;
 }
 
@@ -998,7 +998,7 @@ pub async fn chat_resume(
     state: tauri::State<'_, ChatState>,
     run_id: String,
 ) -> Result<SubmitResult, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         let session = app
             .state::<crate::attach_service::AttachCompanionState>()
@@ -1012,7 +1012,7 @@ pub async fn chat_resume(
         .await;
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     return local_chat_resume(app, auth_state, state, run_id).await;
 }
 
@@ -1302,11 +1302,11 @@ pub async fn chat_queue(
     delivery: ChatDelivery,
     message: String,
 ) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     let local_run_id = run_id.clone();
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     let local_message = message.clone();
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     return handle_run_queue(
         app.state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
@@ -1317,7 +1317,7 @@ pub async fn chat_queue(
         || local_chat_queue(&state, local_run_id, delivery, local_message),
     );
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     return local_chat_queue(&state, run_id, delivery, message);
 }
 
@@ -1344,7 +1344,7 @@ pub async fn chat_cancel(
     state: tauri::State<'_, ChatState>,
     run_id: String,
 ) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     return handle_run_cancel(
         app.state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
@@ -1353,7 +1353,7 @@ pub async fn chat_cancel(
         || cancel_active_run(&state.active, &run_id, None),
     );
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     return cancel_active_run(&state.active, &run_id, None);
 }
 
@@ -1365,11 +1365,11 @@ pub async fn chat_answer_permission(
     gate_id: String,
     answer: ChatPermissionAnswer,
 ) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     let local_run_id = run_id.clone();
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     let local_gate_id = gate_id.clone();
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     return handle_run_permission_answer(
         app.state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
@@ -1380,7 +1380,7 @@ pub async fn chat_answer_permission(
         || queue_permission_answer(&state.active, local_run_id, local_gate_id, answer),
     );
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     return queue_permission_answer(&state.active, run_id, gate_id, answer);
 }
 
@@ -1446,7 +1446,7 @@ mod tests {
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[derive(Clone, Debug, Eq, PartialEq)]
     enum RunClientCall {
         Submit(String, Vec<String>, Option<String>),
@@ -1457,11 +1457,11 @@ mod tests {
         PermissionAnswer(String, String, AttachChatPermissionAnswer),
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[derive(Clone, Default)]
     struct FakeRunClient(Arc<Mutex<Vec<RunClientCall>>>, bool);
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     impl FakeRunClient {
         fn calls(&self) -> Vec<RunClientCall> {
             self.0.lock().unwrap().clone()
@@ -1472,7 +1472,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     impl RunCommandClient for FakeRunClient {
         fn run_submit(
             &self,
@@ -1577,7 +1577,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn assert_disconnected<T>(result: Result<T, String>) {
         assert_eq!(
             result.err().unwrap(),
@@ -1585,7 +1585,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn assert_runtime_update_pending<T>(result: Result<T, String>) {
         assert_eq!(
             result.err().unwrap(),
@@ -1593,16 +1593,20 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn command_test_state() -> (PathBuf, ChatState) {
         let directory =
             std::env::temp_dir().join(format!("muniment-run-command-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
         let state = ChatState {
-            storage: DeferredStorage(OnceLock::from(Arc::new(Mutex::new(ChatStorage {
-                journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
-                cas: LocalCas::open(&directory.join("cas")).unwrap(),
-            })))),
+            #[cfg(target_os = "linux")]
+            storage: DeferredStorage(OnceLock::from(storage)),
+            #[cfg(target_os = "macos")]
+            storage,
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
@@ -1612,15 +1616,21 @@ mod tests {
         (directory, state)
     }
 
-    #[cfg(target_os = "linux")]
-    fn deferred_command_test_state() -> ChatState {
-        ChatState::new(RuntimeActivityRegistry::new())
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn deferred_command_test_state() -> (Option<PathBuf>, ChatState) {
+        #[cfg(target_os = "linux")]
+        return (None, ChatState::new(RuntimeActivityRegistry::new()));
+        #[cfg(target_os = "macos")]
+        {
+            let (directory, state) = command_test_state();
+            (Some(directory), state)
+        }
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_chat_storage_starts_deferred() {
-        let state = deferred_command_test_state();
+        let (_, state) = deferred_command_test_state();
 
         assert!(state.storage.get().is_none());
         assert!(matches!(
@@ -1629,7 +1639,7 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_submit_routes_all_states_and_connected_stops_before_local_run() {
         let (directory, state) = command_test_state();
@@ -1654,7 +1664,7 @@ mod tests {
         assert_eq!(local.unwrap().run_id, "local-run");
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
 
-        let deferred_state = deferred_command_test_state();
+        let (deferred_directory, deferred_state) = deferred_command_test_state();
         deferred_state
             .session_thread
             .select("selected-thread".into(), Some("subject-1"));
@@ -1719,10 +1729,13 @@ mod tests {
             vec![],
             |_| async { panic!("disconnected submit called the local operation") },
         )));
+        if let Some(directory) = deferred_directory {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_resume_routes_all_states_and_connected_stops_before_local_run() {
         let (directory, state) = command_test_state();
@@ -1745,7 +1758,7 @@ mod tests {
         assert_eq!(local.unwrap().run_id, "local-run");
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
         let client = FakeRunClient::default();
-        let deferred_state = deferred_command_test_state();
+        let (deferred_directory, deferred_state) = deferred_command_test_state();
         let connected = tauri::async_runtime::block_on(handle_run_resume(
             RunCommandSession::Connected(client.clone()),
             &deferred_state,
@@ -1772,10 +1785,13 @@ mod tests {
             "run-1",
             || async { panic!("disconnected resume called the local operation") },
         )));
+        if let Some(directory) = deferred_directory {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_queue_routes_all_desktop_client_states_and_deliveries() {
         let local_called = AtomicBool::new(false);
@@ -1831,7 +1847,7 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_cancel_routes_all_desktop_client_states() {
         let local_called = AtomicBool::new(false);
@@ -1860,7 +1876,7 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_answer_permission_routes_all_desktop_client_states() {
         let answer = AttachChatPermissionAnswer::Confirm(true);
