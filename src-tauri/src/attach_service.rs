@@ -1131,15 +1131,13 @@ fn runtime_profile_endpoint() -> Option<PathBuf> {
         .map(|profile| profile.join("muniment/attach-v1.sock"))
 }
 
-#[cfg(unix)]
-fn start_desktop_client_with_supervisors(
-    state: &AttachCompanionState,
-    start_presenter: impl FnOnce(ApprovalPresenterStopHandle),
-    start_supervisors: impl FnOnce(),
-) {
-    state.start_approval_presenter(start_presenter);
-    start_supervisors();
-}
+#[cfg(all(test, target_os = "macos"))]
+static TEST_PRESENTER_STARTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(all(test, target_os = "macos"))]
+static TEST_PRESENTER_WORKERS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(unix)]
 pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
@@ -1213,10 +1211,13 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
         );
     };
     #[cfg(target_os = "macos")]
-    start_desktop_client_with_supervisors(
-        &state,
-        move |stop| {
+    {
+        state.start_approval_presenter(move |stop| {
+            #[cfg(test)]
+            TEST_PRESENTER_STARTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             std::thread::spawn(move || {
+                #[cfg(test)]
+                TEST_PRESENTER_WORKERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
                 serve_approval_presenter_at(
                     &presenter_endpoint,
@@ -1228,9 +1229,9 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                     move |request| answer_presented_approval(&approvals, request),
                 );
             });
-        },
-        start_supervisors,
-    );
+        });
+        start_supervisors();
+    }
     #[cfg(target_os = "linux")]
     start_supervisors();
     #[cfg(target_os = "linux")]
@@ -1592,45 +1593,29 @@ mod tests {
         assert!(state.approval_presenter.lock().unwrap().is_none());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[test]
     fn macos_desktop_supervisor_restart_does_not_duplicate_presenter() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::atomic::Ordering;
 
-        let state = AttachCompanionState::default();
-        let presenter_starts = AtomicUsize::new(0);
-        let presenter_workers = Arc::new(AtomicUsize::new(0));
-        let presenter_worker = Arc::new(Mutex::new(None));
+        TEST_PRESENTER_STARTS.store(0, Ordering::SeqCst);
+        TEST_PRESENTER_WORKERS.store(0, Ordering::SeqCst);
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        app.manage(AttachApprovalState::default());
 
-        for _ in 0..2 {
-            let presenter_workers = presenter_workers.clone();
-            let presenter_worker = presenter_worker.clone();
-            start_desktop_client_with_supervisors(
-                &state,
-                |_| {
-                    presenter_starts.fetch_add(1, Ordering::SeqCst);
-                    *presenter_worker.lock().unwrap() = Some(std::thread::spawn(move || {
-                        presenter_workers.fetch_add(1, Ordering::SeqCst);
-                    }));
-                },
-                || {
-                    state.start_desktop_supervisors(
-                        |_, _| std::thread::spawn(|| {}),
-                        |_| std::thread::spawn(|| {}),
-                    );
-                },
-            );
+        start_desktop_client(app.handle());
+        start_desktop_client(app.handle());
+
+        assert_eq!(TEST_PRESENTER_STARTS.load(Ordering::SeqCst), 1);
+        for _ in 0..100 {
+            if TEST_PRESENTER_WORKERS.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
-
-        assert_eq!(presenter_starts.load(Ordering::SeqCst), 1);
-        presenter_worker
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap()
-            .join()
-            .unwrap();
-        assert_eq!(presenter_workers.load(Ordering::SeqCst), 1);
+        assert_eq!(TEST_PRESENTER_WORKERS.load(Ordering::SeqCst), 1);
+        let state = app.state::<AttachCompanionState>();
         state.stop_approval_presenter();
         state.stop_desktop_client();
     }
