@@ -14,13 +14,17 @@ use muniment_core::attach::{
     ClientCredential, CompanionRegistry, WorkspaceContextMap, COMPANION_CREDENTIAL_FILE_NAME,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
+#[cfg(target_os = "macos")]
+use muniment_core::attach::accept_macos_attach;
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 #[cfg(target_os = "linux")]
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::path::PathBuf;
 use std::sync::Mutex;
 #[cfg(target_os = "linux")]
 use std::sync::{Arc, Condvar};
@@ -1226,6 +1230,33 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             return;
         };
         run_attach_listener(app, state, filesystem);
+    });
+}
+
+#[cfg(target_os = "macos")]
+pub fn start_attach_listener<R: tauri::Runtime>(_app: tauri::AppHandle<R>) {
+    std::thread::spawn(move || {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return;
+        };
+        if !home.is_absolute() {
+            return;
+        }
+        let runtime = home.join("Library/Application Support/Muniment/runtime");
+        if std::fs::create_dir_all(&runtime).is_err() {
+            return;
+        }
+        let endpoint = runtime.join("attach-v1.sock");
+        let Ok(listener) = std::os::unix::net::UnixListener::bind(endpoint) else {
+            return;
+        };
+        loop {
+            match accept_macos_attach(&listener) {
+                Ok(stream) => drop(stream),
+                Err(muniment_core::attach::MacosAttachAcceptError::PeerRejected) => continue,
+                Err(muniment_core::attach::MacosAttachAcceptError::Accept) => break,
+            }
+        }
     });
 }
 

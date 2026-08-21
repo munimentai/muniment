@@ -61,6 +61,8 @@ fn main() {
                 )?);
                 app.manage(attach_service::AttachCompanionState::default());
             }
+            #[cfg(target_os = "macos")]
+            attach_service::start_attach_listener(app.handle().clone());
             let parakeet_root = app.path().app_data_dir()?.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
