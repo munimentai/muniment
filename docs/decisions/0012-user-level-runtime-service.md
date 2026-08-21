@@ -178,6 +178,8 @@ opens the browser itself, as the authentication decision requires.
 - [ADR 0011 — companion surface repository strategy](0011-companion-surface-repo-strategy.md)
 - [Harness specification](../spec/harness-spec.md)
 - [Native authentication contract](../auth.md)
+- [Apple Service Management](https://developer.apple.com/documentation/servicemanagement/)
+- [Apple launchd job guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
 
 ## Amendment — 2026-08-04: runtime-service extraction sequence
 
@@ -273,7 +275,8 @@ one handoff at a time. It rejects a second request while a handoff is prepared.
 
 This rule excludes an approved companion from migration control authority. It
 does not defend against compromise by another process running as the current
-OS user. Windows and macOS need a later amendment for their own peer identity.
+OS user. Windows needs a later amendment for its own peer identity. The macOS
+peer rule appears in the 2026-08-20 amendment.
 
 ## Amendment — 2026-08-10: migration control session admission
 
@@ -294,8 +297,9 @@ match its executable to the installed payload. The request still passes the
 migration control peer check and the single-prepared-handoff rule from the
 2026-08-05 amendment. This admission path shares that amendment's limitation:
 it does not defend against compromise by another process running as the
-current OS user. Windows and macOS need later peer-identity amendments before
-they can use this admission path.
+current OS user. Windows needs a later peer-identity amendment before it can
+use this admission path. The macOS peer rule appears in the 2026-08-20
+amendment.
 
 ## Amendment – 2026-08-13: approval presentation session
 
@@ -329,8 +333,8 @@ approved connections and active runs do not depend on the presenter session.
 
 This admission proves only the installed desktop payload under the same OS
 user. It does not defend against compromise by another process running as that
-user. Windows and macOS need later peer-identity amendments before they can
-admit a presenter session.
+user. Windows needs a later peer-identity amendment before it can admit a
+presenter session. The macOS peer rule appears in the 2026-08-20 amendment.
 
 ## Amendment – 2026-08-13: runtime attach connection routing
 
@@ -385,9 +389,9 @@ later connection.
 Admission fails closed when the runtime cannot resolve the peer or cannot
 match its executable to the installed payload. This admission proves only the
 installed desktop payload under the same OS user. It does not defend against
-compromise by another process running as that user. Windows and macOS need
-their own peer-identity amendments before they can admit a desktop client
-session.
+compromise by another process running as that user. Windows needs its own
+peer-identity amendment before it can admit a desktop client session. The
+macOS peer rule appears in the 2026-08-20 amendment.
 
 ## Amendment – 2026-08-14: desktop client session lifecycle
 
@@ -853,3 +857,72 @@ The later slice touches these sites:
 
 The later slice changes no attach boundary, no sink, and no `ChatEvent`
 field. This amendment changes no runtime code.
+
+## Amendment – 2026-08-20: macOS activation and peer identity
+
+### Registration and activation
+
+The macOS app bundle carries the runtime at
+`/Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime`.
+It carries `ai.muniment.runtime.plist` in `Contents/Library/LaunchAgents`.
+The plist runs the runtime in the foreground and labels the job
+`ai.muniment.runtime`.
+
+Each user registers that bundled LaunchAgent in their login domain with
+`SMAppService.agent(plistName: "ai.muniment.runtime.plist").register()`.
+Registration immediately bootstraps the job. `launchd` bootstraps it again at
+later logins. A surface that finds no attach endpoint asks the `gui/<uid>`
+domain to kick-start `ai.muniment.runtime`, then uses the existing bounded
+readiness retry. Registration and activation never use a system LaunchDaemon
+or elevated helper.
+
+The job uses `KeepAlive` only for unsuccessful exits and sets
+`ThrottleInterval` to five seconds. The runtime records starts in its per-user
+state and returns a successful status after five failures within five minutes.
+That successful exit stops the restart loop and records a needs-attention
+diagnostic. A later explicit kick-start starts a new bounded window. Normal
+idle, logout, manager stop, and uninstall exits are successful and do not
+restart the job.
+
+### Replacement, logout, and removal
+
+Package replacement follows the installed-payload refresh amendment. The
+installer verifies and atomically replaces the signed app bundle without
+changing the registered label or payload path. The old runtime drains durable
+work and exits with status 75 after it detects replacement. `launchd` then
+starts the new payload. A failed readiness check restores the old verified
+bundle and kick-starts the same job. The per-user install lock serializes
+replacement, rollback, and concurrent surface installers.
+
+At logout, `launchd` sends `SIGTERM`. The runtime stops accepting new work,
+uses the existing bounded graceful-stop deadline, commits recoverable state,
+and exits. If the deadline expires, launchd may kill it. The journal remains
+the only recovery authority at the next login.
+
+Managed uninstall calls `unregister()` in every registered user context and
+waits for each bounded completion. Unregistration stops each job and prevents
+later login activation. The package removes the app bundle only after every
+runtime stops. Any unregister or stop failure leaves the signed payload in
+place and reports the failure. Uninstall never removes a running payload or
+user journals, credentials, CAS data, or diagnostics. Service Management
+registration remains per-user.
+
+### Peer admission and diagnostics
+
+Both ends of every macOS attach connection call `getpeereid` on the connected
+Unix-domain socket. They require the kernel-supplied effective UID to equal
+their own effective UID before either end reads or writes a
+`muniment.attach/1` frame. A failed call, a changed result, or a UID mismatch
+closes the socket without a protocol response. Socket ownership, directory
+modes, pairing, capabilities, signed workspace grants, and operation-specific
+checks remain unchanged. A claimed client kind, PID, path, or UID grants no
+authority. This check rejects other OS users but does not defend against a
+compromised process running as the current user.
+
+The runtime writes only redacted, bounded diagnostics to
+`~/Library/Logs/Muniment/runtime.log`. The LaunchAgent sends stdout and stderr
+to that file, and structured records use the macOS unified log subsystem
+`ai.muniment.desktop` with category `runtime`. Diagnostics omit tokens,
+credentials, prompts, model output, local paths, workspace values, connection
+nonces, and peer identifiers. Rotation and retention use the existing bounded
+diagnostic policy.
