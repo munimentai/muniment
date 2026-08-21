@@ -25,8 +25,10 @@ use tauri::Emitter;
 
 #[cfg(target_os = "linux")]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
+#[cfg(unix)]
+use muniment_core::attach::ClientError;
 #[cfg(target_os = "linux")]
-use muniment_core::attach::{ClientError, DesktopClientHolder};
+use muniment_core::attach::DesktopClientHolder;
 
 /// How long the loopback listener waits for the user to finish in the
 /// browser before the sign-in attempt is abandoned.
@@ -465,17 +467,17 @@ async fn auth_devices_with_state<R: tauri::Runtime>(
     .map_err(|_| device_list_error())?
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn background_service_error() -> String {
     "Muniment cannot reach its background service.".to_string()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn runtime_update_pending_error() -> String {
     "A runtime update is pending. Muniment will start new runs after the update.".to_string()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn desktop_client_error(error: ClientError) -> String {
     match error {
         ClientError::DesktopBusy => "Muniment is busy with another request. Try again.".to_string(),
