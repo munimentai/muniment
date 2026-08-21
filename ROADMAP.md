@@ -413,6 +413,8 @@ restored the control and its tests.
 
 ### ADR 0012 runtime-service extraction
 
+DONE 2026-08-20 through 2026-08-21 — the macOS activation amendment and its first implementation slices landed (MUNIDESK-1417, 1418, 1420, 1421, 1423, 1424, and 1426). The app bundle carries the universal runtime and LaunchAgent payload. The desktop checks and registers the per-user service through `SMAppService`. The runtime bounds failed starts, writes owner-only bounded diagnostics, and mirrors fixed records into unified logging. The installed macOS smoke verifies the bundled payload. The approval action, enabled-service kick-start, and desktop client cutover remain open. Rollback-marker admission and both-endpoint peer identity remain in Needs Human.
+
 DONE 2026-08-04 through 2026-08-17 — phase one is built and the Linux cutover
 is complete (MUNIDESK-863, 868 through 1067, 1103, 1150 through 1191, 1188
 through 1327, and 1329 through 1341). ADR 0012 carries the extraction-sequence
@@ -652,9 +654,8 @@ Remote Control stays gated for three reasons.
 Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`. No muniment-cloud relay contract has published. The
 desktop states stay pending owner mockup confirmation
-(`docs/design-reference/remote-control-ux.md`). macOS `launchd` registration
-and Windows Scheduled Task registration still need a later ADR 0012
-amendment.
+(`docs/design-reference/remote-control-ux.md`). Windows Scheduled Task
+registration still needs a later ADR 0012 amendment.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
