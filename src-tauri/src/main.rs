@@ -6,7 +6,7 @@ mod chat;
 mod chat_threads;
 mod dictation;
 mod home;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos_runtime_service;
 mod memory;
 mod model_install;
