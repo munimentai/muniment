@@ -1195,6 +1195,7 @@ fn pairing_failure(error: ClientError) -> &'static str {
         ClientError::UnexpectedMessage => "Muniment runtime sent an invalid pairing message",
         ClientError::CapabilityRevoked => "Muniment capability revoked",
         ClientError::ProtocolIncompatible => "Muniment runtime attach protocol is incompatible",
+        ClientError::WriterFailed => "Muniment artifact writer failed",
         ClientError::RandomnessUnavailable => {
             "Muniment runtime pairing could not create an identity"
         }
