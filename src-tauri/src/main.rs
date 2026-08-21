@@ -6,6 +6,8 @@ mod chat;
 mod chat_threads;
 mod dictation;
 mod home;
+#[cfg(any(target_os = "macos", test))]
+mod macos_runtime_service;
 mod memory;
 mod model_install;
 mod onboarding_import;
@@ -41,6 +43,12 @@ fn main() {
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(attach_service::AttachApprovalState::default())
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            {
+                let activation = macos_runtime_service::activate_bundled_runtime_service();
+                eprintln!("runtime service activation: {activation}");
+                app.manage(activation);
+            }
             let app_data = app.path().app_data_dir()?;
             let app_config = app.path().app_config_dir()?;
             let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
