@@ -494,7 +494,7 @@ impl fmt::Debug for ThreadListPage {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod linux {
     use super::{
         ApprovalDecision, ApprovalPresentRequest, ApprovalPresenterServeOutcome, ArtifactChunk,
@@ -4216,7 +4216,7 @@ mod linux {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub use linux::{
     connect_approval_presenter, connect_approval_presenter_at, connect_desktop_client,
     connect_desktop_client_at, handshake_approval_presenter_stream,
@@ -4227,15 +4227,15 @@ pub use linux::{
     DesktopClientStopHandle, InterruptibleConnectState, MigrationControlClient,
 };
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 #[derive(Debug)]
 pub struct AuthorizedClient;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 #[derive(Debug)]
 pub struct DesktopClient;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 impl DesktopClient {
     pub fn run_submit(
         &mut self,
@@ -4276,11 +4276,11 @@ impl DesktopClient {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 #[derive(Clone, Debug, Default)]
 pub struct DesktopClientHolder;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 impl DesktopClientHolder {
     pub fn new() -> Self {
         Self
@@ -4329,7 +4329,7 @@ impl DesktopClientHolder {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 impl AuthorizedClient {
     pub fn onboard_workspace(
         &mut self,
@@ -4455,7 +4455,7 @@ impl AuthorizedClient {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub fn handshake(
     client_version: &str,
     client_kind: &str,
@@ -4464,7 +4464,7 @@ pub fn handshake(
     linux::handshake(client_version, client_kind, pairing_pending)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub fn handshake_as(
     client_version: &str,
     client_kind: &str,
@@ -4479,7 +4479,7 @@ pub fn handshake_as(
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub fn handshake_as_with_credential(
     client_version: &str,
     client_kind: &str,
