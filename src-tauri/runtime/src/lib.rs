@@ -9,6 +9,7 @@ mod attach_service;
 #[cfg(target_os = "linux")]
 mod attach_state;
 mod directories;
+mod macos_activation;
 #[cfg(target_os = "linux")]
 mod migration;
 pub mod service;
@@ -36,6 +37,10 @@ pub use attach_state::RuntimeAttachState;
 pub use directories::{
     config_directory, installed_desktop_executable, installed_desktop_executable_from,
     profile_directory, resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
+};
+pub use macos_activation::{
+    record_macos_failed_exit, record_macos_orderly_exit, record_macos_start, MacosStart,
+    MacosStartDecision,
 };
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};

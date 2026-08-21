@@ -52,7 +52,38 @@ fn main() {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        use muniment_runtime::{
+            profile_directory, record_macos_failed_exit, record_macos_start, MacosStartDecision,
+        };
+
+        let state_directory = match profile_directory() {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("muniment-runtime: {error}");
+                std::process::exit(1);
+            }
+        };
+        let start = match record_macos_start(&state_directory) {
+            Ok((MacosStartDecision::StopRestartLoop, _)) => return,
+            Ok((MacosStartDecision::Run, start)) => start,
+            Err(error) => {
+                eprintln!("muniment-runtime: start record failed: {error}");
+                std::process::exit(1);
+            }
+        };
+        if matches!(
+            record_macos_failed_exit(state_directory, start),
+            Ok(MacosStartDecision::StopRestartLoop)
+        ) {
+            return;
+        }
+        eprintln!("muniment-runtime: macOS activation is not available");
+        std::process::exit(1);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         eprintln!("muniment-runtime: Linux is the only supported platform");
         std::process::exit(1);
