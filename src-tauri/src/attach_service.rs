@@ -2,17 +2,16 @@
 use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ClientError;
-#[cfg(target_os = "linux")]
-use muniment_core::attach::{
-    answer_presented_approval, bounded_claim, load_client_credentials,
-    save_client_credentials as persist_client_credentials, serve_approval_presenter_at,
-    ApprovalPresenterStopHandle, ClientCredential, CompanionRegistry, WorkspaceContextMap,
-    COMPANION_CREDENTIAL_FILE_NAME,
-};
 #[cfg(unix)]
 use muniment_core::attach::{
-    handshake_desktop_client_stream, interruptible_connect_with_state, serve_desktop_client_at,
+    answer_presented_approval, handshake_desktop_client_stream, interruptible_connect_with_state,
+    serve_approval_presenter_at, serve_desktop_client_at, ApprovalPresenterStopHandle,
     DesktopClientHolder, DesktopClientStopHandle, InterruptibleConnectState,
+};
+#[cfg(target_os = "linux")]
+use muniment_core::attach::{
+    bounded_claim, load_client_credentials, save_client_credentials as persist_client_credentials,
+    ClientCredential, CompanionRegistry, WorkspaceContextMap, COMPANION_CREDENTIAL_FILE_NAME,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 use std::collections::HashMap;
@@ -234,7 +233,7 @@ pub struct AttachCompanionState {
     listener_stop: Mutex<AttachListenerStopState>,
     #[cfg(target_os = "linux")]
     listener_stopped: Condvar,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     approval_presenter: Mutex<Option<ApprovalPresenterStopHandle>>,
     #[cfg(target_os = "linux")]
     presenting: Mutex<bool>,
@@ -500,7 +499,7 @@ impl AttachCompanionState {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn start_approval_presenter(&self, start: impl FnOnce(ApprovalPresenterStopHandle)) {
         let mut presenter = self
             .approval_presenter
@@ -515,7 +514,7 @@ impl AttachCompanionState {
         start(stop);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn stop_approval_presenter(&self) {
         if let Some(stop) = self
             .approval_presenter
@@ -735,7 +734,7 @@ impl Default for AttachCompanionState {
 #[cfg(unix)]
 impl Drop for AttachCompanionState {
     fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         if let Some(stop) = self
             .approval_presenter
             .get_mut()
@@ -769,6 +768,7 @@ impl Drop for AttachCompanionState {
 impl Default for AttachCompanionState {
     fn default() -> Self {
         Self {
+            approval_presenter: Mutex::new(None),
             desktop_supervisor_lifecycle: Mutex::new(()),
             desktop_client: Mutex::new(None),
             desktop_client_holder: DesktopClientHolder::new(),
@@ -1082,18 +1082,18 @@ where
     Some(state)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    let Ok(filesystem) = AttachFilesystem::from_environment() else {
-        eprintln!("approval presenter filesystem lookup failed");
+    let Some(endpoint) = runtime_profile_endpoint() else {
+        eprintln!("approval presenter profile lookup failed");
         return;
     };
-    let endpoint = filesystem.endpoint_path().to_owned();
     let presenter_app = app.clone();
     app.state::<AttachCompanionState>()
         .start_approval_presenter(move |stop| {
             std::thread::spawn(move || {
                 let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
+                #[cfg(target_os = "linux")]
                 let observer_app = presenter_app.clone();
                 serve_approval_presenter_at(
                     &endpoint,
@@ -1102,9 +1102,12 @@ fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                     Duration::from_millis(250),
                     stop,
                     move |presenting| {
+                        #[cfg(target_os = "linux")]
                         observer_app
                             .state::<AttachCompanionState>()
                             .record_presenting(presenting);
+                        #[cfg(target_os = "macos")]
+                        let _ = presenting;
                     },
                     move |request| answer_presented_approval(&approvals, request),
                 );
@@ -1138,6 +1141,8 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
     let client_app = app.clone();
     let event_app = app.clone();
     let event_status_app = app.clone();
+    #[cfg(target_os = "macos")]
+    start_approval_presenter(app);
     app.state::<AttachCompanionState>()
         .start_desktop_supervisors(
             move |stop, holder| {
@@ -1550,6 +1555,29 @@ mod tests {
         state.record_listener_started();
         worker.lock().unwrap().take().unwrap().join().unwrap();
         assert!(state.approval_presenter.lock().unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn macos_desktop_supervisor_restart_does_not_duplicate_presenter() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = AttachCompanionState::default();
+        let presenter_starts = AtomicUsize::new(0);
+
+        for _ in 0..2 {
+            state.start_approval_presenter(|_| {
+                presenter_starts.fetch_add(1, Ordering::SeqCst);
+            });
+            state.start_desktop_supervisors(
+                |_, _| std::thread::spawn(|| {}),
+                |_| std::thread::spawn(|| {}),
+            );
+        }
+
+        assert_eq!(presenter_starts.load(Ordering::SeqCst), 1);
+        state.stop_approval_presenter();
+        state.stop_desktop_client();
     }
 
     #[cfg(target_os = "linux")]
