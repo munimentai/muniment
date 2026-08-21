@@ -43,12 +43,16 @@ fn main() {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(exit) = test_macos_activation_exit() {
-        std::process::exit(run_recorded_macos_activation(exit));
+        std::process::exit(run_recorded_macos_activation(|| match macos_activation() {
+            MacosActivationExit::Orderly(_) => exit(),
+            failed => failed,
+        }));
     }
 
     #[cfg(target_os = "linux")]
-    match run() {
+    match run(RuntimeDirectorySource::Environment) {
         Ok(RuntimeActivationExit::ManagerStop) => {}
         Ok(RuntimeActivationExit::UpgradeRefresh) => {
             std::process::exit(UPGRADE_REFRESH_EXIT_STATUS)
@@ -126,9 +130,9 @@ fn test_macos_activation_exit() -> Option<impl FnOnce() -> MacosActivationExit> 
     Some(move || exit)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn macos_activation() -> MacosActivationExit {
-    match run() {
+    match run(RuntimeDirectorySource::Profile) {
         Ok(RuntimeActivationExit::ManagerStop) => MacosActivationExit::Orderly(SUCCESS_EXIT_STATUS),
         Ok(RuntimeActivationExit::UpgradeRefresh) => {
             MacosActivationExit::Orderly(UPGRADE_REFRESH_EXIT_STATUS)
@@ -138,6 +142,13 @@ fn macos_activation() -> MacosActivationExit {
             MacosActivationExit::Failed(FAILURE_EXIT_STATUS)
         }
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Clone, Copy)]
+enum RuntimeDirectorySource {
+    Environment,
+    Profile,
 }
 
 fn handle_arguments() -> Result<bool, String> {
@@ -160,24 +171,27 @@ fn handle_arguments() -> Result<bool, String> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn run() -> Result<RuntimeActivationExit, String> {
+fn run(runtime_directory_source: RuntimeDirectorySource) -> Result<RuntimeActivationExit, String> {
     let termination_signal = TerminationSignalWait::new().map_err(|error| error.to_string())?;
     let wait_timeout = test_wait_timeout()?;
     if std::env::var_os(EXIT_AFTER_LOCK_ENV).is_some() {
         return wait_for_instance_lock(wait_timeout).map(|_| RuntimeActivationExit::ManagerStop);
     }
     let profile_directory = profile_directory().map_err(|error| error.to_string())?;
-    #[cfg(target_os = "linux")]
-    let runtime_directory = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_owned())?;
-    #[cfg(target_os = "macos")]
-    let runtime_directory = profile_directory.clone();
+    let runtime_directory = match runtime_directory_source {
+        RuntimeDirectorySource::Environment => std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_owned())?,
+        RuntimeDirectorySource::Profile => profile_directory.clone(),
+    };
     let config_directory = config_directory().map_err(|error| error.to_string())?;
     let takeover_deadline = wait_timeout
         .and_then(|timeout| Instant::now().checked_add(timeout))
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(100 * 365 * 24 * 60 * 60));
     let (stop_tx, stop_rx) = mpsc::channel();
+    if std::env::var_os(MACOS_TEST_EXIT_ENV).is_some() {
+        let _ = stop_tx.send(());
+    }
     std::thread::spawn(move || {
         if termination_signal.wait().is_ok() {
             let _ = stop_tx.send(());

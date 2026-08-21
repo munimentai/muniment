@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -10,6 +11,9 @@ fn directory() -> PathBuf {
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&path);
+    let profile = path.join(muniment_runtime::APPLICATION_IDENTIFIER);
+    fs::create_dir_all(&profile).unwrap();
+    fs::set_permissions(profile, fs::Permissions::from_mode(0o700)).unwrap();
     path
 }
 
