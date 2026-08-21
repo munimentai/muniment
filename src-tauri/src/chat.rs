@@ -349,9 +349,9 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
 }
 
 pub struct ChatState {
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     pub(crate) storage: SharedStorage,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) storage: DeferredStorage,
     active: Arc<Mutex<Option<ActiveRun>>>,
     runtime: Arc<Mutex<Option<PiRuntime>>>,
@@ -384,10 +384,10 @@ impl RetentionTrigger {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) struct DeferredStorage(OnceLock<SharedStorage>);
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl DeferredStorage {
     fn new() -> Self {
         Self(OnceLock::new())
@@ -763,7 +763,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 }
 
 impl ChatState {
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     pub fn new<R: tauri::Runtime>(
         app: &tauri::AppHandle<R>,
         runtime_activity: RuntimeActivityRegistry,
@@ -789,8 +789,13 @@ impl ChatState {
         })
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub fn new(runtime_activity: RuntimeActivityRegistry) -> Self {
+        Self::new_runtime_owned(runtime_activity)
+    }
+
+    #[cfg(unix)]
+    fn new_runtime_owned(runtime_activity: RuntimeActivityRegistry) -> Self {
         Self {
             storage: DeferredStorage::new(),
             active: Arc::new(Mutex::new(None)),
@@ -823,14 +828,14 @@ impl ChatState {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
         self.storage
             .get()
             .ok_or_else(auth::background_service_error)
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
         Ok(&self.storage)
     }
@@ -1603,10 +1608,8 @@ mod tests {
             cas: LocalCas::open(&directory.join("cas")).unwrap(),
         }));
         let state = ChatState {
-            #[cfg(target_os = "linux")]
+            #[cfg(unix)]
             storage: DeferredStorage(OnceLock::from(storage)),
-            #[cfg(target_os = "macos")]
-            storage,
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
@@ -1618,13 +1621,19 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn deferred_command_test_state() -> (Option<PathBuf>, ChatState) {
-        #[cfg(target_os = "linux")]
-        return (None, ChatState::new(RuntimeActivityRegistry::new()));
-        #[cfg(target_os = "macos")]
-        {
-            let (directory, state) = command_test_state();
-            (Some(directory), state)
-        }
+        (None, ChatState::new(RuntimeActivityRegistry::new()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn macos_chat_state_starts_without_desktop_storage() {
+        let state = ChatState::new_runtime_owned(RuntimeActivityRegistry::new());
+
+        assert!(state.storage.get().is_none());
+        assert!(matches!(
+            state.storage(),
+            Err(error) if error == "Muniment cannot reach its background service."
+        ));
     }
 
     #[cfg(target_os = "linux")]
