@@ -41,12 +41,14 @@ pub use directories::{
     macos_log_directory_from_home, profile_directory, resolve_directory, DirectoryUnavailableError,
     APPLICATION_IDENTIFIER,
 };
-#[cfg(unix)]
-pub use macos_activation::write_macos_diagnostic;
 pub use macos_activation::{
-    record_macos_failed_exit, record_macos_orderly_exit, record_macos_start, MacosDiagnosticEvent,
-    MacosStart, MacosStartDecision, MACOS_RUNTIME_LOG_MAX_BYTES,
+    emit_macos_unified_log, emit_macos_unified_log_with, record_macos_failed_exit,
+    record_macos_orderly_exit, record_macos_start, MacosDiagnosticEvent, MacosStart,
+    MacosStartDecision, MacosUnifiedLog, MacosUnifiedLogRecord, MACOS_RUNTIME_LOG_MAX_BYTES,
+    MACOS_UNIFIED_LOG_CATEGORY,
 };
+#[cfg(unix)]
+pub use macos_activation::{write_macos_diagnostic, write_macos_diagnostic_with};
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};
 pub use service::{
