@@ -4,27 +4,28 @@ use muniment_core::attach::ApprovalRequest;
 use muniment_core::attach::ClientError;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    answer_presented_approval, handshake_desktop_client_stream, interruptible_connect_with_state,
-    serve_approval_presenter_at, serve_desktop_client_at, ApprovalPresenterStopHandle,
-    DesktopClientHolder, DesktopClientStopHandle, InterruptibleConnectState,
+    answer_presented_approval, bounded_claim, load_client_credentials,
+    save_client_credentials as persist_client_credentials, serve_approval_presenter_at,
+    ApprovalPresenterStopHandle, ClientCredential, CompanionRegistry, WorkspaceContextMap,
+    COMPANION_CREDENTIAL_FILE_NAME,
 };
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use muniment_core::attach::{
-    bounded_claim, load_client_credentials, save_client_credentials as persist_client_credentials,
-    ClientCredential, CompanionRegistry, WorkspaceContextMap, COMPANION_CREDENTIAL_FILE_NAME,
+    handshake_desktop_client_stream, interruptible_connect_with_state, serve_desktop_client_at,
+    DesktopClientHolder, DesktopClientStopHandle, InterruptibleConnectState,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::sync::{Arc, Condvar};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
@@ -58,28 +59,30 @@ use muniment_core::journal::Provenance;
 #[cfg(target_os = "linux")]
 use muniment_core::permission_gate::ChatPermissionAnswer;
 #[cfg(target_os = "linux")]
-use serde_json::{json, Value};
-#[cfg(target_os = "linux")]
+use serde_json::json;
+#[cfg(unix)]
+use serde_json::Value;
+#[cfg(unix)]
 use tauri::{Emitter, Manager};
 #[cfg(target_os = "linux")]
 use uuid::Uuid;
 
 /// Matches the `muniment-runtime` version in `src-tauri/runtime/Cargo.toml`.
 /// Raise this constant when a new run needs a newer runtime.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) const MINIMUM_COMPATIBLE_RUNTIME_VERSION: &str = "0.0.1";
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn runtime_upgrade_pending(client: &DesktopClientHolder) -> bool {
     runtime_version_upgrade_pending(client.runtime_version().as_deref())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn runtime_version_compatible(version: &str) -> bool {
     !runtime_version_upgrade_pending(Some(version))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn runtime_version_upgrade_pending(connected_version: Option<&str>) -> bool {
     let minimum = semver::Version::parse(MINIMUM_COMPATIBLE_RUNTIME_VERSION)
         .expect("minimum compatible runtime version must be valid");
@@ -235,17 +238,17 @@ pub struct AttachCompanionState {
     approval_presenter: Mutex<Option<ApprovalPresenterStopHandle>>,
     #[cfg(target_os = "linux")]
     presenting: Mutex<bool>,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     desktop_supervisor_lifecycle: Mutex<()>,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     desktop_client: Mutex<Option<DesktopClientSupervisor>>,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     desktop_client_holder: DesktopClientHolder,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     chat_events: Mutex<Option<ChatEventSupervisor>>,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     connected: Mutex<bool>,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     chat_events_connected: Mutex<bool>,
 }
 
@@ -269,32 +272,32 @@ enum AttachListenerStopState {
     Stopped,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct DesktopClientSupervisor {
     stop: DesktopClientStopHandle,
     worker: std::thread::JoinHandle<()>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct ChatEventSupervisor {
     stop: ChatEventStopHandle,
     worker: std::thread::JoinHandle<()>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Clone, Default)]
 struct ChatEventStopHandle {
     inner: Arc<(Mutex<ChatEventStopState>, Condvar)>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Default)]
 struct ChatEventStopState {
     stopped: bool,
     stream: Option<UnixStream>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl InterruptibleConnectState for ChatEventStopState {
     fn stopped(&self) -> bool {
         self.stopped
@@ -305,7 +308,7 @@ impl InterruptibleConnectState for ChatEventStopState {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl ChatEventStopHandle {
     fn stop(&self) {
         let (state, wake) = &*self.inner;
@@ -320,15 +323,16 @@ impl ChatEventStopHandle {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) enum DesktopClientSession {
     NoSupervisor,
     Connected(DesktopClientHolder),
     Disconnected,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl AttachCompanionState {
+    #[cfg(target_os = "linux")]
     fn new(listener: Arc<AttachListenerState>) -> Self {
         Self {
             approval: listener.approval.clone(),
@@ -349,6 +353,7 @@ impl AttachCompanionState {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn set_listener(&self, listener: Arc<AttachListenerState>) {
         *self
             .listener
@@ -356,6 +361,7 @@ impl AttachCompanionState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(listener);
     }
 
+    #[cfg(target_os = "linux")]
     fn listener(&self) -> Result<Arc<AttachListenerState>, ProtocolError> {
         self.listener
             .lock()
@@ -364,6 +370,7 @@ impl AttachCompanionState {
             .ok_or_else(ProtocolError::persistence_failed)
     }
 
+    #[cfg(target_os = "linux")]
     fn record_listener_started(&self) {
         self.stop_approval_presenter();
         self.stop_desktop_client();
@@ -373,6 +380,7 @@ impl AttachCompanionState {
             .record_listening();
     }
 
+    #[cfg(target_os = "linux")]
     fn record_listener_pending(&self) {
         self.listener_lifecycle
             .lock()
@@ -387,6 +395,7 @@ impl AttachCompanionState {
             };
     }
 
+    #[cfg(target_os = "linux")]
     fn record_listener_start_failure(&self, failure: AttachListenerStartFailure) {
         self.listener_lifecycle
             .lock()
@@ -395,6 +404,7 @@ impl AttachCompanionState {
         self.record_listener_finished();
     }
 
+    #[cfg(target_os = "linux")]
     fn publish_listener_stop(&self, stop: AttachStopHandle) {
         let mut listener_stop = self
             .listener_stop
@@ -411,6 +421,7 @@ impl AttachCompanionState {
         *listener_stop = AttachListenerStopState::Listening(stop);
     }
 
+    #[cfg(target_os = "linux")]
     fn record_listener_stopped(&self) {
         self.listener_lifecycle
             .lock()
@@ -419,6 +430,7 @@ impl AttachCompanionState {
         self.record_listener_finished();
     }
 
+    #[cfg(target_os = "linux")]
     fn record_listener_finished(&self) {
         *self
             .listener_stop
@@ -427,6 +439,7 @@ impl AttachCompanionState {
         self.listener_stopped.notify_all();
     }
 
+    #[cfg(target_os = "linux")]
     fn stop_listener(&self) {
         let mut stop = self
             .listener_stop
@@ -445,6 +458,7 @@ impl AttachCompanionState {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn listener_status(&self) -> AttachListenerStatus {
         let lifecycle = *self
             .listener_lifecycle
@@ -486,6 +500,7 @@ impl AttachCompanionState {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn start_approval_presenter(&self, start: impl FnOnce(ApprovalPresenterStopHandle)) {
         let mut presenter = self
             .approval_presenter
@@ -500,6 +515,7 @@ impl AttachCompanionState {
         start(stop);
     }
 
+    #[cfg(target_os = "linux")]
     fn stop_approval_presenter(&self) {
         if let Some(stop) = self
             .approval_presenter
@@ -669,6 +685,7 @@ impl AttachCompanionState {
         self.stop_desktop_client();
     }
 
+    #[cfg(target_os = "linux")]
     fn record_presenting(&self, presenting: bool) {
         *self
             .presenting
@@ -676,14 +693,17 @@ impl AttachCompanionState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = presenting;
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn record_workspace(&self, workspace: String) {
         self.approval.record(workspace);
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn clear_workspace(&self) {
         self.approval.clear();
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn approval(&self) -> Option<Approval> {
         self.approval.approval()
     }
@@ -712,9 +732,10 @@ impl Default for AttachCompanionState {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl Drop for AttachCompanionState {
     fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
         if let Some(stop) = self
             .approval_presenter
             .get_mut()
@@ -744,7 +765,21 @@ impl Drop for AttachCompanionState {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+impl Default for AttachCompanionState {
+    fn default() -> Self {
+        Self {
+            desktop_supervisor_lifecycle: Mutex::new(()),
+            desktop_client: Mutex::new(None),
+            desktop_client_holder: DesktopClientHolder::new(),
+            chat_events: Mutex::new(None),
+            connected: Mutex::new(false),
+            chat_events_connected: Mutex::new(false),
+        }
+    }
+}
+
+#[cfg(not(unix))]
 impl Default for AttachCompanionState {
     fn default() -> Self {
         Self {}
@@ -1078,12 +1113,27 @@ fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 #[cfg(target_os = "linux")]
-fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+fn runtime_profile_endpoint() -> Option<PathBuf> {
     let Ok(filesystem) = AttachFilesystem::from_environment() else {
         eprintln!("desktop client filesystem lookup failed");
+        return None;
+    };
+    Some(filesystem.endpoint_path().to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn runtime_profile_endpoint() -> Option<PathBuf> {
+    muniment_runtime::profile_directory()
+        .ok()
+        .map(|profile| profile.join("muniment/attach-v1.sock"))
+}
+
+#[cfg(unix)]
+pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(endpoint) = runtime_profile_endpoint() else {
+        eprintln!("desktop client profile lookup failed");
         return;
     };
-    let endpoint = filesystem.endpoint_path().to_owned();
     let client_endpoint = endpoint.clone();
     let client_app = app.clone();
     let event_app = app.clone();
@@ -1104,10 +1154,13 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                             observer_app
                                 .state::<AttachCompanionState>()
                                 .record_connected(connected);
-                            let status = observer_app
-                                .state::<AttachCompanionState>()
-                                .listener_status();
-                            let _ = observer_app.emit("desktop-client-status-changed", status);
+                            #[cfg(target_os = "linux")]
+                            {
+                                let status = observer_app
+                                    .state::<AttachCompanionState>()
+                                    .listener_status();
+                                let _ = observer_app.emit("desktop-client-status-changed", status);
+                            }
                         },
                     );
                 })
@@ -1124,10 +1177,14 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                             event_status_app
                                 .state::<AttachCompanionState>()
                                 .record_chat_events_connected(connected);
-                            let status = event_status_app
-                                .state::<AttachCompanionState>()
-                                .listener_status();
-                            let _ = event_status_app.emit("desktop-client-status-changed", status);
+                            #[cfg(target_os = "linux")]
+                            {
+                                let status = event_status_app
+                                    .state::<AttachCompanionState>()
+                                    .listener_status();
+                                let _ =
+                                    event_status_app.emit("desktop-client-status-changed", status);
+                            }
                         },
                         move |event| {
                             let _ = event_app.emit("chat-event", event);
@@ -1136,11 +1193,14 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 })
             },
         );
-    let status = app.state::<AttachCompanionState>().listener_status();
-    let _ = app.emit("desktop-client-status-changed", status);
+    #[cfg(target_os = "linux")]
+    {
+        let status = app.state::<AttachCompanionState>().listener_status();
+        let _ = app.emit("desktop-client-status-changed", status);
+    }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn serve_chat_events_at(
     endpoint: &Path,
     client_version: &str,
@@ -1389,6 +1449,52 @@ mod tests {
     };
     use muniment_core::journal::reducer::reduce;
     use muniment_core::journal::RunJournal;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_starts_both_desktop_supervisors_without_a_listener() {
+        let state = AttachCompanionState::default();
+        let endpoint = std::env::temp_dir().join(format!("mt-macos-client-{}", std::process::id()));
+        let _ = std::fs::remove_file(&endpoint);
+        assert!(!endpoint.exists());
+        let client_endpoint = endpoint.clone();
+        state.start_desktop_supervisors(
+            move |stop, holder| {
+                std::thread::spawn(move || {
+                    serve_desktop_client_at(
+                        &client_endpoint,
+                        "0.0.1",
+                        Duration::from_millis(10),
+                        Duration::from_secs(30),
+                        stop,
+                        holder,
+                        |_| {},
+                    );
+                })
+            },
+            move |stop| {
+                std::thread::spawn(move || {
+                    serve_chat_events_at(
+                        &endpoint,
+                        "0.0.1",
+                        Duration::from_millis(10),
+                        Duration::from_secs(30),
+                        stop,
+                        |_| {},
+                        |_| {},
+                    );
+                })
+            },
+        );
+
+        assert!(matches!(
+            state.desktop_client_session(),
+            DesktopClientSession::Disconnected
+        ));
+        assert!(state.desktop_client.lock().unwrap().is_some());
+        assert!(state.chat_events.lock().unwrap().is_some());
+        state.stop_desktop_client();
+    }
 
     #[cfg(target_os = "linux")]
     fn handoff_test_runtime(name: &str) -> PathBuf {
