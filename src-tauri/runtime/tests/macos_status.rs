@@ -16,6 +16,7 @@ fn directory() -> PathBuf {
 fn runtime(directory: &PathBuf, exit: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
         .env("XDG_DATA_HOME", directory)
+        .env_remove("XDG_RUNTIME_DIR")
         .env(MACOS_TEST_EXIT_ENV, exit)
         .output()
         .unwrap()

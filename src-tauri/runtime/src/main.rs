@@ -129,9 +129,7 @@ fn test_macos_activation_exit() -> Option<impl FnOnce() -> MacosActivationExit> 
 #[cfg(target_os = "macos")]
 fn macos_activation() -> MacosActivationExit {
     match run() {
-        Ok(RuntimeActivationExit::ManagerStop) => {
-            MacosActivationExit::Orderly(SUCCESS_EXIT_STATUS)
-        }
+        Ok(RuntimeActivationExit::ManagerStop) => MacosActivationExit::Orderly(SUCCESS_EXIT_STATUS),
         Ok(RuntimeActivationExit::UpgradeRefresh) => {
             MacosActivationExit::Orderly(UPGRADE_REFRESH_EXIT_STATUS)
         }
@@ -168,10 +166,13 @@ fn run() -> Result<RuntimeActivationExit, String> {
     if std::env::var_os(EXIT_AFTER_LOCK_ENV).is_some() {
         return wait_for_instance_lock(wait_timeout).map(|_| RuntimeActivationExit::ManagerStop);
     }
+    let profile_directory = profile_directory().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "linux")]
     let runtime_directory = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_owned())?;
-    let profile_directory = profile_directory().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    let runtime_directory = profile_directory.clone();
     let config_directory = config_directory().map_err(|error| error.to_string())?;
     let takeover_deadline = wait_timeout
         .and_then(|timeout| Instant::now().checked_add(timeout))
