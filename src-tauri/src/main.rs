@@ -46,7 +46,6 @@ fn main() {
             #[cfg(target_os = "macos")]
             {
                 let activation = macos_runtime_service::activate_bundled_runtime_service();
-                eprintln!("runtime service activation: {activation}");
                 app.manage(activation);
             }
             let app_data = app.path().app_data_dir()?;

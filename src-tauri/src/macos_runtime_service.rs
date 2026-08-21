@@ -1,7 +1,14 @@
 use std::fmt;
+use std::io;
+use std::path::Path;
 
 #[cfg(target_os = "macos")]
 const RUNTIME_AGENT_PLIST: &str = "ai.muniment.runtime.plist";
+const MACOS_RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
+const RUNTIME_SERVICE_NOT_FOUND_RECORD: &[u8] =
+    b"event=runtime_service_not_found message=runtime service not found\n";
+const RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD: &[u8] =
+    b"event=runtime_service_registration_failed message=runtime service registration failed\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,10 +106,38 @@ fn map_status(status: Result<ServiceStatus, ()>) -> RuntimeServiceActivation {
     }
 }
 
+fn diagnostic_record(activation: RuntimeServiceActivation) -> Option<&'static [u8]> {
+    match activation {
+        RuntimeServiceActivation::NotFound => Some(RUNTIME_SERVICE_NOT_FOUND_RECORD),
+        RuntimeServiceActivation::Failed => Some(RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD),
+        RuntimeServiceActivation::Enabled | RuntimeServiceActivation::RequiresApproval => None,
+    }
+}
+
+fn write_activation_diagnostic(
+    log_directory: &Path,
+    activation: RuntimeServiceActivation,
+) -> io::Result<()> {
+    let Some(record) = diagnostic_record(activation) else {
+        return Ok(());
+    };
+    muniment_core::user_diagnostics::append_owner_only_record(
+        log_directory,
+        c"runtime.log",
+        MACOS_RUNTIME_LOG_MAX_BYTES,
+        record,
+    )
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn activate_bundled_runtime_service() -> RuntimeServiceActivation {
-    activate_runtime_service_at_startup(&MacosRuntimeServiceAdapter::new())
-        .expect("macOS startup activates the runtime service")
+    let activation = activate_runtime_service_at_startup(&MacosRuntimeServiceAdapter::new())
+        .expect("macOS startup activates the runtime service");
+    if let Ok(home) = muniment_core::user_diagnostics::effective_user_home() {
+        let log_directory = home.join("Library/Logs/Muniment");
+        let _ = write_activation_diagnostic(&log_directory, activation);
+    }
+    activation
 }
 
 #[cfg(target_os = "macos")]
@@ -158,6 +193,10 @@ mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     struct FakeAdapter {
         statuses: RefCell<VecDeque<Result<ServiceStatus, ()>>>,
@@ -191,6 +230,15 @@ mod tests {
                 .set(self.registration_calls.get() + 1);
             self.registration
         }
+    }
+
+    fn directory() -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "muniment-desktop-runtime-service-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
     }
 
     #[test]
@@ -286,6 +334,69 @@ mod tests {
         );
         assert_eq!(registration_failure.status_calls.get(), 2);
         assert_eq!(RuntimeServiceActivation::Failed.to_string(), "failed");
+    }
+
+    #[test]
+    fn maps_only_failure_outcomes_to_exact_redacted_records() {
+        assert_eq!(
+            diagnostic_record(RuntimeServiceActivation::NotFound),
+            Some(b"event=runtime_service_not_found message=runtime service not found\n".as_slice())
+        );
+        assert_eq!(
+            diagnostic_record(RuntimeServiceActivation::Failed),
+            Some(
+                b"event=runtime_service_registration_failed message=runtime service registration failed\n"
+                    .as_slice()
+            )
+        );
+        assert_eq!(diagnostic_record(RuntimeServiceActivation::Enabled), None);
+        assert_eq!(
+            diagnostic_record(RuntimeServiceActivation::RequiresApproval),
+            None
+        );
+    }
+
+    #[test]
+    fn writes_only_failure_outcomes_to_the_bounded_runtime_log() {
+        let root = directory();
+        let logs = root.join("Library/Logs/Muniment");
+        fs::create_dir_all(root.join("Library/Logs")).unwrap();
+        fs::set_permissions(root.join("Library/Logs"), fs::Permissions::from_mode(0o700)).unwrap();
+
+        write_activation_diagnostic(&logs, RuntimeServiceActivation::Enabled).unwrap();
+        write_activation_diagnostic(&logs, RuntimeServiceActivation::RequiresApproval).unwrap();
+        assert!(!logs.exists());
+
+        write_activation_diagnostic(&logs, RuntimeServiceActivation::NotFound).unwrap();
+        write_activation_diagnostic(&logs, RuntimeServiceActivation::Failed).unwrap();
+        assert_eq!(
+            fs::read(logs.join("runtime.log")).unwrap(),
+            [
+                RUNTIME_SERVICE_NOT_FOUND_RECORD,
+                RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD,
+            ]
+            .concat()
+        );
+        assert_eq!(
+            fs::metadata(logs.join("runtime.log"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        fs::write(
+            logs.join("runtime.log"),
+            vec![b'x'; MACOS_RUNTIME_LOG_MAX_BYTES as usize],
+        )
+        .unwrap();
+        write_activation_diagnostic(&logs, RuntimeServiceActivation::NotFound).unwrap();
+        assert_eq!(
+            fs::read(logs.join("runtime.log")).unwrap(),
+            RUNTIME_SERVICE_NOT_FOUND_RECORD
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
