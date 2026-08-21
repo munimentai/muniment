@@ -18,16 +18,16 @@ use muniment_core::auth::{
     NativeCredentialStore, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
     UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
 };
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use serde::Deserialize;
 use serde::Serialize;
 use tauri::Emitter;
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 #[cfg(unix)]
 use muniment_core::attach::ClientError;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use muniment_core::attach::DesktopClientHolder;
 
 /// How long the loopback listener waits for the user to finish in the
@@ -49,7 +49,7 @@ struct EntitlementChanged {
     snapshot_version: u64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EntitlementSnapshotResponse {
@@ -180,7 +180,7 @@ async fn marked_blocking<T: Send + 'static>(
 /// Run the browser sign-in flow, persist the tokens, and report the new
 /// status. Concurrent invocations are rejected while one is in flight.
 #[tauri::command]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub async fn auth_sign_in(
     app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
@@ -200,7 +200,7 @@ pub async fn auth_sign_in(
 }
 
 #[tauri::command]
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub async fn auth_sign_in(
     app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
@@ -212,7 +212,7 @@ pub async fn auth_sign_in(
     .await
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn decode_sign_in_status(response: serde_json::Value) -> Result<AuthStatus, String> {
     let status = response
         .get("status")
@@ -221,7 +221,7 @@ fn decode_sign_in_status(response: serde_json::Value) -> Result<AuthStatus, Stri
     serde_json::from_value(status).map_err(|error| error.to_string())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 async fn sign_in_for_session(
     state: &AuthState,
     session: DesktopClientSession,
@@ -313,7 +313,7 @@ fn unix_time() -> u64 {
 
 /// Signed-in subject/expiry from the stored tokens; no network.
 #[tauri::command]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub async fn auth_status(
     state: tauri::State<'_, AuthState>,
     attach_state: tauri::State<'_, AttachCompanionState>,
@@ -331,7 +331,7 @@ pub async fn auth_status(
 }
 
 #[tauri::command]
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
     tauri::async_runtime::spawn_blocking(move || auth::native_status(store.as_ref(), unix_time()))
@@ -340,7 +340,7 @@ pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatu
         .map_err(|e| e.to_string())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 async fn status_for_session(
     session: DesktopClientSession,
     local_step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
@@ -358,7 +358,7 @@ async fn status_for_session(
 
 /// Fetch the authoritative native session and expose only its typed,
 /// display-only entitlement projection.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tauri::command]
 pub async fn auth_entitlement_snapshot(
     app: tauri::AppHandle,
@@ -368,7 +368,7 @@ pub async fn auth_entitlement_snapshot(
     auth_entitlement_snapshot_with_state(app, state, attach_state).await
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 #[tauri::command]
 pub async fn auth_entitlement_snapshot(
     app: tauri::AppHandle,
@@ -380,9 +380,9 @@ pub async fn auth_entitlement_snapshot(
 async fn auth_entitlement_snapshot_with_state<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AuthState>,
-    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    #[cfg(unix)] attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<auth::EntitlementSnapshotView, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     match attach_state.desktop_client_session() {
         DesktopClientSession::Connected(client) => {
             let response: EntitlementSnapshotResponse = serde_json::from_value(
@@ -414,7 +414,7 @@ async fn auth_entitlement_snapshot_with_state<R: tauri::Runtime>(
 }
 
 /// List display-only metadata for this account's native installations.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tauri::command]
 pub async fn auth_devices(
     app: tauri::AppHandle,
@@ -424,7 +424,7 @@ pub async fn auth_devices(
     auth_devices_with_state(app, state, attach_state).await
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 #[tauri::command]
 pub async fn auth_devices(
     app: tauri::AppHandle,
@@ -436,9 +436,9 @@ pub async fn auth_devices(
 async fn auth_devices_with_state<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AuthState>,
-    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    #[cfg(unix)] attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<Vec<auth::NativeDevice>, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     match attach_state.desktop_client_session() {
         DesktopClientSession::Connected(client) => {
             let response: auth::NativeDeviceList =
@@ -516,7 +516,7 @@ pub async fn auth_sign_out(
 ) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     return sign_out_for_session(
         &state,
         attach_state.desktop_client_session(),
@@ -529,7 +529,7 @@ pub async fn auth_sign_out(
     )
     .await;
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     sign_out_marked(
         &state,
         || attach_state.clear_workspace(),
@@ -538,7 +538,7 @@ pub async fn auth_sign_out(
     .await
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn decode_sign_out_status(response: serde_json::Value) -> Result<AuthStatus, String> {
     let status = response
         .get("status")
@@ -557,7 +557,7 @@ fn local_sign_out(store: Arc<KeyringNativeCredentialStore>) -> Result<AuthStatus
     auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 async fn sign_out_for_session(
     state: &AuthState,
     session: DesktopClientSession,
