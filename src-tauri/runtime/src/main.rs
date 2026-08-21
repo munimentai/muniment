@@ -22,6 +22,9 @@ const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
 #[cfg(target_os = "linux")]
 const UPGRADE_REFRESH_EXIT_STATUS: i32 = 75;
+const FAILURE_EXIT_STATUS: i32 = 1;
+const SUCCESS_EXIT_STATUS: i32 = 0;
+const MACOS_TEST_EXIT_ENV: &str = "MUNIMENT_RUNTIME_TEST_MACOS_ACTIVATION_EXIT";
 
 const HELP: &str = "\
 Usage: muniment-runtime [OPTIONS]
@@ -40,6 +43,10 @@ fn main() {
         }
     }
 
+    if let Some(exit) = test_macos_activation_exit() {
+        std::process::exit(run_recorded_macos_activation(exit));
+    }
+
     #[cfg(target_os = "linux")]
     match run() {
         Ok(RuntimeActivationExit::ManagerStop) => {}
@@ -53,41 +60,76 @@ fn main() {
     }
 
     #[cfg(target_os = "macos")]
-    {
-        use muniment_runtime::{
-            profile_directory, record_macos_failed_exit, record_macos_start, MacosStartDecision,
-        };
-
-        let state_directory = match profile_directory() {
-            Ok(directory) => directory,
-            Err(error) => {
-                eprintln!("muniment-runtime: {error}");
-                std::process::exit(1);
-            }
-        };
-        let start = match record_macos_start(&state_directory) {
-            Ok((MacosStartDecision::StopRestartLoop, _)) => return,
-            Ok((MacosStartDecision::Run, start)) => start,
-            Err(error) => {
-                eprintln!("muniment-runtime: start record failed: {error}");
-                std::process::exit(1);
-            }
-        };
-        if matches!(
-            record_macos_failed_exit(state_directory, start),
-            Ok(MacosStartDecision::StopRestartLoop)
-        ) {
-            return;
-        }
-        eprintln!("muniment-runtime: macOS activation is not available");
-        std::process::exit(1);
-    }
+    std::process::exit(run_recorded_macos_activation(macos_activation));
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         eprintln!("muniment-runtime: Linux is the only supported platform");
         std::process::exit(1);
     }
+}
+
+#[derive(Clone, Copy)]
+enum MacosActivationExit {
+    Orderly(i32),
+    Failed(i32),
+}
+
+fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit) -> i32 {
+    use muniment_runtime::{
+        profile_directory, record_macos_failed_exit, record_macos_orderly_exit, record_macos_start,
+        MacosStartDecision,
+    };
+
+    let state_directory = match profile_directory() {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            return FAILURE_EXIT_STATUS;
+        }
+    };
+    let start = match record_macos_start(&state_directory) {
+        Ok((MacosStartDecision::StopRestartLoop, _)) => return SUCCESS_EXIT_STATUS,
+        Ok((MacosStartDecision::Run, start)) => start,
+        Err(error) => {
+            eprintln!("muniment-runtime: start record failed: {error}");
+            return FAILURE_EXIT_STATUS;
+        }
+    };
+    match activate() {
+        MacosActivationExit::Orderly(status) => {
+            if let Err(error) = record_macos_orderly_exit(state_directory, start) {
+                eprintln!("muniment-runtime: start record failed: {error}");
+                return FAILURE_EXIT_STATUS;
+            }
+            status
+        }
+        MacosActivationExit::Failed(status) => {
+            match record_macos_failed_exit(state_directory, start) {
+                Ok(MacosStartDecision::StopRestartLoop) => SUCCESS_EXIT_STATUS,
+                Ok(MacosStartDecision::Run) => status,
+                Err(error) => {
+                    eprintln!("muniment-runtime: start record failed: {error}");
+                    FAILURE_EXIT_STATUS
+                }
+            }
+        }
+    }
+}
+
+fn test_macos_activation_exit() -> Option<impl FnOnce() -> MacosActivationExit> {
+    let exit = match std::env::var_os(MACOS_TEST_EXIT_ENV)?.to_str()? {
+        "orderly" => MacosActivationExit::Orderly(SUCCESS_EXIT_STATUS),
+        "failed" => MacosActivationExit::Failed(FAILURE_EXIT_STATUS),
+        _ => return None,
+    };
+    Some(move || exit)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_activation() -> MacosActivationExit {
+    eprintln!("muniment-runtime: macOS activation is not available");
+    MacosActivationExit::Failed(FAILURE_EXIT_STATUS)
 }
 
 fn handle_arguments() -> Result<bool, String> {
