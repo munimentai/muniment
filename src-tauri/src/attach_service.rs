@@ -597,16 +597,6 @@ impl AttachCompanionState {
         self.start_chat_events_locked(start_chat_events);
     }
 
-    #[cfg(unix)]
-    fn start_macos_desktop_supervisors(
-        &self,
-        start_presenter: impl FnOnce(ApprovalPresenterStopHandle),
-        start_supervisors: impl FnOnce(),
-    ) {
-        self.start_approval_presenter(start_presenter);
-        start_supervisors();
-    }
-
     fn stop_desktop_client(&self) {
         let _lifecycle = self
             .desktop_supervisor_lifecycle
@@ -1142,6 +1132,16 @@ fn runtime_profile_endpoint() -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
+fn start_desktop_client_with_supervisors(
+    state: &AttachCompanionState,
+    start_presenter: impl FnOnce(ApprovalPresenterStopHandle),
+    start_supervisors: impl FnOnce(),
+) {
+    state.start_approval_presenter(start_presenter);
+    start_supervisors();
+}
+
+#[cfg(unix)]
 pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let Some(endpoint) = runtime_profile_endpoint() else {
         eprintln!("desktop client profile lookup failed");
@@ -1213,7 +1213,8 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
         );
     };
     #[cfg(target_os = "macos")]
-    state.start_macos_desktop_supervisors(
+    start_desktop_client_with_supervisors(
+        &state,
         move |stop| {
             std::thread::spawn(move || {
                 let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
@@ -1604,7 +1605,8 @@ mod tests {
         for _ in 0..2 {
             let presenter_workers = presenter_workers.clone();
             let presenter_worker = presenter_worker.clone();
-            state.start_macos_desktop_supervisors(
+            start_desktop_client_with_supervisors(
+                &state,
                 |_| {
                     presenter_starts.fetch_add(1, Ordering::SeqCst);
                     *presenter_worker.lock().unwrap() = Some(std::thread::spawn(move || {
