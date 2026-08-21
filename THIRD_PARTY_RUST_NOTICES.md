@@ -301,6 +301,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `objc2-javascript-core` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-quartz-core` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-security` 0.3.2 — Zlib OR Apache-2.0 OR MIT
+- `objc2-service-management` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-ui-kit` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-user-notifications` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-web-kit` 0.3.2 — Zlib OR Apache-2.0 OR MIT
