@@ -631,22 +631,22 @@ DONE 2026-08-19 — ADR 0009 names how `artifact.fetch` resolves
 The attach client sends `artifact.fetch` and `artifact.window`
 (MUNIDESK-1394, 1395).
 
-DONE 2026-08-19 — the attach crate holds a bounded artifact transfer
-registry (MUNIDESK-1388, 1389). `ArtifactTransferRegistry`
-(`src-tauri/core/src/attach/artifact.rs:208`) caps live transfers at 64.
-The closed error schema includes `transfer_not_found`. No session holds
-a registry yet. `artifact.fetch` and `artifact.window` still return
-`unsupported_operation`. The test
-`unserved_operations_remain_unsupported_without_dispatch`
-(`src-tauri/core/tests/attach_linux_session.rs:6022`) still pins that
-gap.
+DONE 2026-08-20 — the ADR 0009 artifact-transfer chain is complete
+(MUNIDESK-1397, 1399, and 1404 through 1415). Each attach session holds a
+64-entry `ArtifactTransferRegistry`. `artifact.fetch` resolves an authorized
+journal event and opens a bounded transfer. `artifact.window` releases
+acknowledged output and grants the next window. The session emits verified
+`artifact.chunk` events and emits `artifact.complete` after the final
+acknowledgement. A subscription cancellation removes its transfer. Each
+transfer advertises and enforces the 8 MiB retained-output limit and the
+30-second acknowledgement limit. Expiration emits the ordered
+`slow_consumer` error and closure without later transfer output.
+`Client::download_artifact` writes one transfer from chunk zero and verifies
+each chunk, the byte count, and the whole-artifact hash.
 
-OPEN — attach `artifact.fetch` dispatch is the next slice. That ticket
-is already queued. After it lands, dispatch `artifact.window`. Then emit
-`artifact.chunk` under the granted window. ADR 0009 fixes each transfer's
-retained-output limits at 8 MiB and 30 seconds. The first slow-consumer slice
-is **artifact retained-output accounting**. It adds advertised limits, byte
-accounting, monotonic deadline state, closure wiring, and boundary tests.
+No product consumer can request an artifact yet. `RedactedRunEvent`
+(`src-tauri/attach/src/client.rs:256`) exposes no `artifact_id`, and Phase 4
+artifact events remain unspecified. The planner must not invent that boundary.
 Remote Control stays gated for three reasons.
 Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`. No muniment-cloud relay contract has published. The
