@@ -1710,8 +1710,16 @@ mod tests {
                 })
             },
         ));
-        assert_eq!(local.unwrap().run_id, "local-run");
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(local.unwrap().run_id, "local-run");
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
 
         let (deferred_directory, deferred_state) = deferred_command_test_state();
         deferred_state
@@ -1804,8 +1812,16 @@ mod tests {
                 })
             },
         ));
-        assert_eq!(local.unwrap().run_id, "local-run");
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(local.unwrap().run_id, "local-run");
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
         let client = FakeRunClient::default();
         let (deferred_directory, deferred_state) = deferred_command_test_state();
         let connected = tauri::async_runtime::block_on(handle_run_resume(
@@ -1844,7 +1860,7 @@ mod tests {
     #[test]
     fn chat_queue_routes_all_desktop_client_states_and_deliveries() {
         let local_called = AtomicBool::new(false);
-        assert!(handle_run_queue::<FakeRunClient, _>(
+        let local = handle_run_queue::<FakeRunClient, _>(
             RunCommandSession::NoSupervisor,
             "run-1",
             ChatDelivery::Steer,
@@ -1852,10 +1868,18 @@ mod tests {
             || {
                 local_called.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
-            }
-        )
-        .is_ok());
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+            },
+        );
+        #[cfg(target_os = "linux")]
+        {
+            assert!(local.is_ok());
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
         let client = FakeRunClient::default();
         assert!(handle_run_queue(
             RunCommandSession::Connected(client.clone()),
@@ -1900,16 +1924,21 @@ mod tests {
     #[test]
     fn chat_cancel_routes_all_desktop_client_states() {
         let local_called = AtomicBool::new(false);
-        assert!(handle_run_cancel::<FakeRunClient, _>(
-            RunCommandSession::NoSupervisor,
-            "run-1",
-            || {
+        let local =
+            handle_run_cancel::<FakeRunClient, _>(RunCommandSession::NoSupervisor, "run-1", || {
                 local_called.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
-            }
-        )
-        .is_ok());
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+            });
+        #[cfg(target_os = "linux")]
+        {
+            assert!(local.is_ok());
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
         let client = FakeRunClient::default();
         assert!(handle_run_cancel(
             RunCommandSession::Connected(client.clone()),
@@ -1930,7 +1959,7 @@ mod tests {
     fn chat_answer_permission_routes_all_desktop_client_states() {
         let answer = AttachChatPermissionAnswer::Confirm(true);
         let local_called = AtomicBool::new(false);
-        assert!(handle_run_permission_answer::<FakeRunClient, _>(
+        let local = handle_run_permission_answer::<FakeRunClient, _>(
             RunCommandSession::NoSupervisor,
             "run-1",
             "gate-1",
@@ -1938,10 +1967,18 @@ mod tests {
             || {
                 local_called.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(())
-            }
-        )
-        .is_ok());
-        assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+            },
+        );
+        #[cfg(target_os = "linux")]
+        {
+            assert!(local.is_ok());
+            assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_disconnected(local);
+            assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
+        }
         let client = FakeRunClient::default();
         assert!(handle_run_permission_answer(
             RunCommandSession::Connected(client.clone()),
