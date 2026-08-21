@@ -34,14 +34,19 @@ pub use attach_listener::{
 pub use attach_service::compose_attach_service;
 #[cfg(target_os = "linux")]
 pub use attach_state::RuntimeAttachState;
+#[cfg(target_os = "macos")]
+pub use directories::effective_user_macos_log_directory;
 pub use directories::{
     config_directory, installed_desktop_executable, installed_desktop_executable_from,
-    profile_directory, resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
+    macos_log_directory_from_home, profile_directory, resolve_directory, DirectoryUnavailableError,
+    APPLICATION_IDENTIFIER,
 };
+#[cfg(unix)]
+pub use macos_activation::write_macos_diagnostic;
 pub use macos_activation::{
     macos_rollback_pending, record_macos_failed_exit, record_macos_orderly_exit,
-    record_macos_start, MacosRollbackMarkerError, MacosStart, MacosStartDecision,
-    MACOS_ROLLBACK_MARKER_NAME,
+    record_macos_start, MacosDiagnosticEvent, MacosRollbackMarkerError, MacosStart,
+    MacosStartDecision, MACOS_ROLLBACK_MARKER_NAME, MACOS_RUNTIME_LOG_MAX_BYTES,
 };
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};

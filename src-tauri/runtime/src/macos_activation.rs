@@ -11,6 +11,7 @@ const FAILURE_LIMIT: usize = 5;
 const FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
 const RECORD_NAME: &str = "macos-starts";
 pub const MACOS_ROLLBACK_MARKER_NAME: &str = "rollback-pending";
+pub const MACOS_RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosRollbackMarkerError {
@@ -90,6 +91,51 @@ fn private_regular_file(metadata: &fs::Metadata) -> bool {
     // SAFETY: geteuid takes no arguments and has no preconditions.
     let effective_uid = unsafe { libc::geteuid() };
     metadata.is_file() && metadata.uid() == effective_uid && metadata.mode() & 0o077 == 0
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MacosDiagnosticEvent {
+    ActivationFailed,
+    ArgumentsInvalid,
+    InstanceLockWait,
+    StartRecordFailed,
+    RestartLoopStopped,
+}
+
+impl MacosDiagnosticEvent {
+    fn record(self) -> &'static [u8] {
+        match self {
+            Self::ActivationFailed => {
+                b"event=activation_failed message=runtime activation failed\n"
+            }
+            Self::ArgumentsInvalid => {
+                b"event=arguments_invalid message=runtime arguments invalid\n"
+            }
+            Self::InstanceLockWait => {
+                b"event=instance_lock_wait message=runtime instance lock is held\n"
+            }
+            Self::StartRecordFailed => {
+                b"event=start_record_failed message=start record update failed\n"
+            }
+            Self::RestartLoopStopped => {
+                b"event=restart_loop_stopped message=runtime restart limit reached\n"
+            }
+        }
+    }
+}
+
+/// Appends one fixed record and truncates the log before it exceeds 256 KiB.
+#[cfg(unix)]
+pub fn write_macos_diagnostic(
+    log_directory: impl AsRef<Path>,
+    event: MacosDiagnosticEvent,
+) -> io::Result<()> {
+    muniment_core::user_diagnostics::append_owner_only_record(
+        log_directory.as_ref(),
+        c"runtime.log",
+        MACOS_RUNTIME_LOG_MAX_BYTES,
+        event.record(),
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
