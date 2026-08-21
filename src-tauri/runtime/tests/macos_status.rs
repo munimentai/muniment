@@ -143,15 +143,25 @@ fn rejects_symlinks_and_group_access() {
 
 #[test]
 fn rejects_foreign_ownership_when_the_test_can_change_owners() {
-    if unsafe { libc::geteuid() } != 0 {
+    if !Command::new("id")
+        .args(["-u"])
+        .output()
+        .unwrap()
+        .stdout
+        .starts_with(b"0\n")
+    {
         return;
     }
     let root = directory();
     let logs = root.join("logs");
     fs::create_dir(&logs).unwrap();
     fs::set_permissions(&logs, fs::Permissions::from_mode(0o700)).unwrap();
-    let path = std::ffi::CString::new(logs.as_os_str().as_encoded_bytes()).unwrap();
-    assert_eq!(unsafe { libc::chown(path.as_ptr(), 1, 1) }, 0);
+    assert!(Command::new("chown")
+        .args(["1:1"])
+        .arg(&logs)
+        .status()
+        .unwrap()
+        .success());
 
     assert!(muniment_runtime::write_macos_diagnostic(
         &logs,
@@ -159,17 +169,31 @@ fn rejects_foreign_ownership_when_the_test_can_change_owners() {
     )
     .is_err());
 
-    assert_eq!(unsafe { libc::chown(path.as_ptr(), 0, 0) }, 0);
+    assert!(Command::new("chown")
+        .args(["0:0"])
+        .arg(&logs)
+        .status()
+        .unwrap()
+        .success());
     let log = logs.join("runtime.log");
     fs::write(&log, b"").unwrap();
     fs::set_permissions(&log, fs::Permissions::from_mode(0o600)).unwrap();
-    let log_path = std::ffi::CString::new(log.as_os_str().as_encoded_bytes()).unwrap();
-    assert_eq!(unsafe { libc::chown(log_path.as_ptr(), 1, 1) }, 0);
+    assert!(Command::new("chown")
+        .args(["1:1"])
+        .arg(&log)
+        .status()
+        .unwrap()
+        .success());
     assert!(muniment_runtime::write_macos_diagnostic(
         &logs,
         muniment_runtime::MacosDiagnosticEvent::ActivationFailed,
     )
     .is_err());
-    assert_eq!(unsafe { libc::chown(log_path.as_ptr(), 0, 0) }, 0);
+    assert!(Command::new("chown")
+        .args(["0:0"])
+        .arg(&log)
+        .status()
+        .unwrap()
+        .success());
     fs::remove_dir_all(root).unwrap();
 }

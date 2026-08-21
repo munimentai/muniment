@@ -4,6 +4,5 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-libc = "0.2"
 muniment-attach = { path = "../attach", features = ["client"] }
 muniment-core = { path = "../core", features = ["keyring"] }

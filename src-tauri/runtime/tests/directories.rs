@@ -2,8 +2,8 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use muniment_runtime::{
-    installed_desktop_executable, installed_desktop_executable_from, resolve_directory,
-    macos_log_directory_from_home, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
+    installed_desktop_executable, installed_desktop_executable_from, macos_log_directory_from_home,
+    resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
 };
 
 #[test]

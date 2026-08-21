@@ -1,9 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-#[cfg(unix)]
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -11,7 +9,6 @@ const FAILURE_LIMIT: usize = 5;
 const FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
 const RECORD_NAME: &str = "macos-starts";
 pub const MACOS_RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
-const RUNTIME_LOG_NAME: &str = "runtime.log";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosDiagnosticEvent {
@@ -25,8 +22,12 @@ pub enum MacosDiagnosticEvent {
 impl MacosDiagnosticEvent {
     fn record(self) -> &'static [u8] {
         match self {
-            Self::ActivationFailed => b"event=activation_failed message=runtime activation failed\n",
-            Self::ArgumentsInvalid => b"event=arguments_invalid message=runtime arguments invalid\n",
+            Self::ActivationFailed => {
+                b"event=activation_failed message=runtime activation failed\n"
+            }
+            Self::ArgumentsInvalid => {
+                b"event=arguments_invalid message=runtime arguments invalid\n"
+            }
             Self::InstanceLockWait => {
                 b"event=instance_lock_wait message=runtime instance lock is held\n"
             }
@@ -46,74 +47,12 @@ pub fn write_macos_diagnostic(
     log_directory: impl AsRef<Path>,
     event: MacosDiagnosticEvent,
 ) -> io::Result<()> {
-    let log_directory = log_directory.as_ref();
-    match fs::symlink_metadata(log_directory) {
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir(log_directory)?;
-            fs::set_permissions(log_directory, fs::Permissions::from_mode(0o700))?;
-        }
-        Err(error) => return Err(error),
-    }
-
-    let mut directory_options = OpenOptions::new();
-    directory_options
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let directory = directory_options.open(log_directory)?;
-    validate_owner_only_directory(&directory.metadata()?)?;
-
-    let name = std::ffi::CString::new(RUNTIME_LOG_NAME).unwrap();
-    let descriptor = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDWR
-                | libc::O_APPEND
-                | libc::O_CREAT
-                | libc::O_NOFOLLOW
-                | libc::O_CLOEXEC,
-            0o600,
-        )
-    };
-    if descriptor < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let mut file = unsafe { fs::File::from_raw_fd(descriptor) };
-    let metadata = file.metadata()?;
-    if !metadata.is_file()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "runtime log path is unsafe",
-        ));
-    }
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let metadata = file.metadata()?;
-    let record = event.record();
-    if metadata.len().saturating_add(record.len() as u64) > MACOS_RUNTIME_LOG_MAX_BYTES {
-        file.set_len(0)?;
-    }
-    file.write_all(record)?;
-    file.sync_data()
-}
-
-#[cfg(unix)]
-fn validate_owner_only_directory(metadata: &fs::Metadata) -> io::Result<()> {
-    if !metadata.is_dir()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "runtime log directory is unsafe",
-        ));
-    }
-    Ok(())
+    muniment_core::user_diagnostics::append_owner_only_record(
+        log_directory.as_ref(),
+        c"runtime.log",
+        MACOS_RUNTIME_LOG_MAX_BYTES,
+        event.record(),
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
