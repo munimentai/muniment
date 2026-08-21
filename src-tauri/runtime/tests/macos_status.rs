@@ -3,6 +3,12 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
+use muniment_runtime::{
+    MacosDiagnosticEvent, MacosUnifiedLog, MacosUnifiedLogRecord, APPLICATION_IDENTIFIER,
+    MACOS_UNIFIED_LOG_CATEGORY,
+};
 
 const MACOS_TEST_EXIT_ENV: &str = "MUNIMENT_RUNTIME_TEST_MACOS_ACTIVATION_EXIT";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -287,5 +293,139 @@ fn rejects_foreign_ownership_when_the_test_can_change_owners() {
         .status()
         .unwrap()
         .success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[derive(Default)]
+struct RecordingUnifiedLog {
+    records: Mutex<Vec<MacosUnifiedLogRecord>>,
+}
+
+impl MacosUnifiedLog for RecordingUnifiedLog {
+    fn emit(&self, record: MacosUnifiedLogRecord) {
+        self.records.lock().unwrap().push(record);
+    }
+}
+
+impl RecordingUnifiedLog {
+    fn records(&self) -> Vec<MacosUnifiedLogRecord> {
+        self.records.lock().unwrap().clone()
+    }
+}
+
+fn expected_unified_message(event: MacosDiagnosticEvent) -> &'static str {
+    match event {
+        MacosDiagnosticEvent::ActivationFailed => {
+            "event=activation_failed message=runtime activation failed"
+        }
+        MacosDiagnosticEvent::ArgumentsInvalid => {
+            "event=arguments_invalid message=runtime arguments invalid"
+        }
+        MacosDiagnosticEvent::InstanceLockWait => {
+            "event=instance_lock_wait message=runtime instance lock is held"
+        }
+        MacosDiagnosticEvent::StartRecordFailed => {
+            "event=start_record_failed message=start record update failed"
+        }
+        MacosDiagnosticEvent::RestartLoopStopped => {
+            "event=restart_loop_stopped message=runtime restart limit reached"
+        }
+    }
+}
+
+fn diagnostic_events() -> [MacosDiagnosticEvent; 5] {
+    [
+        MacosDiagnosticEvent::ActivationFailed,
+        MacosDiagnosticEvent::ArgumentsInvalid,
+        MacosDiagnosticEvent::InstanceLockWait,
+        MacosDiagnosticEvent::StartRecordFailed,
+        MacosDiagnosticEvent::RestartLoopStopped,
+    ]
+}
+
+#[test]
+fn mirrors_each_fixed_event_through_the_unified_log_adapter() {
+    let root = directory();
+    let logs = root.join("logs");
+    let logger = RecordingUnifiedLog::default();
+
+    for event in diagnostic_events() {
+        muniment_runtime::write_macos_diagnostic_with(&logs, event, &logger).unwrap();
+    }
+
+    let records = logger.records();
+    assert_eq!(records.len(), diagnostic_events().len());
+    for (index, event) in diagnostic_events().into_iter().enumerate() {
+        assert_eq!(
+            records[index],
+            MacosUnifiedLogRecord {
+                subsystem: APPLICATION_IDENTIFIER,
+                category: MACOS_UNIFIED_LOG_CATEGORY,
+                message: expected_unified_message(event),
+            }
+        );
+        assert_eq!(records[index].subsystem, "ai.muniment.desktop");
+        assert_eq!(records[index].category, "runtime");
+        assert!(!records[index].message.contains('%'));
+        assert!(!records[index]
+            .message
+            .contains(&root.to_string_lossy().to_string()));
+    }
+
+    let contents = fs::read_to_string(logs.join("runtime.log")).unwrap();
+    let expected_file: String = diagnostic_events()
+        .into_iter()
+        .map(|event| format!("{}\n", expected_unified_message(event)))
+        .collect();
+    assert_eq!(contents, expected_file);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn emits_unified_log_when_the_file_write_fails() {
+    let root = directory();
+    let target = root.join("target");
+    fs::create_dir(&target).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+    let linked_logs = root.join("linked-logs");
+    symlink(&target, &linked_logs).unwrap();
+    let logger = RecordingUnifiedLog::default();
+
+    assert!(muniment_runtime::write_macos_diagnostic_with(
+        &linked_logs,
+        MacosDiagnosticEvent::ActivationFailed,
+        &logger,
+    )
+    .is_err());
+    assert_eq!(
+        logger.records(),
+        [MacosUnifiedLogRecord {
+            subsystem: APPLICATION_IDENTIFIER,
+            category: MACOS_UNIFIED_LOG_CATEGORY,
+            message: expected_unified_message(MacosDiagnosticEvent::ActivationFailed),
+        }]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn emit_macos_unified_log_with_does_not_write_the_file() {
+    let root = directory();
+    let logs = root.join("logs");
+    fs::create_dir(&logs).unwrap();
+    fs::set_permissions(&logs, fs::Permissions::from_mode(0o700)).unwrap();
+    let logger = RecordingUnifiedLog::default();
+
+    muniment_runtime::emit_macos_unified_log_with(&logger, MacosDiagnosticEvent::ArgumentsInvalid);
+
+    assert_eq!(
+        logger.records(),
+        [MacosUnifiedLogRecord {
+            subsystem: APPLICATION_IDENTIFIER,
+            category: MACOS_UNIFIED_LOG_CATEGORY,
+            message: expected_unified_message(MacosDiagnosticEvent::ArgumentsInvalid),
+        }]
+    );
+    assert!(!logs.join("runtime.log").exists());
     fs::remove_dir_all(root).unwrap();
 }

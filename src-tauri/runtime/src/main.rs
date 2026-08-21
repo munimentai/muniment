@@ -148,6 +148,8 @@ fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit)
 fn record_macos_diagnostic(event: muniment_runtime::MacosDiagnosticEvent) {
     if let Ok(directory) = muniment_runtime::effective_user_macos_log_directory() {
         let _ = muniment_runtime::write_macos_diagnostic(directory, event);
+    } else {
+        muniment_runtime::emit_macos_unified_log(event);
     }
 }
 

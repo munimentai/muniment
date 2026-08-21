@@ -2563,7 +2563,7 @@ where
         let artifact_now =
             artifact_clock_origin.1 + authorization.now().saturating_sub(artifact_clock_origin.0);
         registries.artifact_now = Some(artifact_now);
-        match dispatch_request(
+        let dispatched = dispatch_request(
             request,
             session.workspace,
             session.provenance.clone(),
@@ -2571,7 +2571,9 @@ where
             &mut subscriptions,
             &mut None,
             &mut registries,
-        ) {
+        );
+        let deadline = Instant::now() + HELLO_TIMEOUT;
+        match dispatched {
             Ok(dispatched) => {
                 let response = Response {
                     protocol: Protocol,
