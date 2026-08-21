@@ -16,6 +16,7 @@ import {
 
 const bundleDir = join("src-tauri", "target", "universal-apple-darwin", "release", "bundle", "macos");
 const app = join(bundleDir, "muniment.app");
+const runtime = join(app, "Contents", "Library", "LaunchServices", "muniment-runtime");
 const appZip = `${app}.zip`;
 const pkgDir = join(bundleDir, "..", "pkg");
 const pkg = join(pkgDir, "muniment.pkg");
@@ -133,6 +134,7 @@ const collectDylibs = async (dir) => {
 };
 await collectDylibs(app);
 for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArguments(identity.hash, file));
+mustRun("codesign runtime", "codesign", codesignArguments(identity.hash, runtime));
 mustRun("codesign app", "codesign", codesignArguments(identity.hash, app));
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 

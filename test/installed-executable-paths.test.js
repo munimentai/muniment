@@ -84,6 +84,14 @@ describe('macOS runtime bundle paths', () => {
     expect(ci).toContain('node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin')
   })
 
+  it('signs the bundled runtime before the app', () => {
+    const runtimeSigning = macosAppBuild.indexOf('mustRun("codesign runtime"')
+    const appSigning = macosAppBuild.indexOf('mustRun("codesign app"')
+
+    expect(runtimeSigning).toBeGreaterThan(-1)
+    expect(runtimeSigning).toBeLessThan(appSigning)
+  })
+
   it('defines the bundled runtime LaunchAgent', () => {
     expect(plistValue('Label')).toBe('ai.muniment.runtime')
     expect(plistValue('BundleProgram')).toBe('Contents/Library/LaunchServices/muniment-runtime')
