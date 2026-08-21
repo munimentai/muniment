@@ -1,15 +1,98 @@
 //! macOS attach listener admission.
 
+use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 
 use super::{
-    verify_macos_attach_peer, verify_macos_attach_peer_with_reader, MacosPeerReader,
+    decode_frame, encode_frame, negotiate_first, verify_macos_attach_peer,
+    verify_macos_attach_peer_with_reader, welcome, FirstMessage, MacosPeerReader, VersionRange,
+    MAX_FRAME_LENGTH,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosAttachAcceptError {
     Accept,
     PeerRejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MacosAttachSessionError {
+    Read,
+    MalformedFrame,
+    Randomness,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MacosAttachListenerError {
+    Accept(MacosAttachAcceptError),
+    Session(MacosAttachSessionError),
+}
+
+/// Serves the attach opening frame after peer admission.
+pub fn serve_macos_attach_session(
+    mut stream: UnixStream,
+    desktop_version: &str,
+) -> Result<(), MacosAttachSessionError> {
+    let mut prefix = [0_u8; 4];
+    stream
+        .read_exact(&mut prefix)
+        .map_err(|_| MacosAttachSessionError::Read)?;
+    let length = u32::from_be_bytes(prefix) as usize;
+    if length > MAX_FRAME_LENGTH {
+        return Err(MacosAttachSessionError::MalformedFrame);
+    }
+    let mut frame = vec![0_u8; 4 + length];
+    frame[..4].copy_from_slice(&prefix);
+    stream
+        .read_exact(&mut frame[4..])
+        .map_err(|_| MacosAttachSessionError::Read)?;
+    let message = decode_frame::<FirstMessage>(&frame)
+        .map_err(|_| MacosAttachSessionError::MalformedFrame)?
+        .ok_or(MacosAttachSessionError::MalformedFrame)?
+        .0;
+    let selected = negotiate_first(message, VersionRange { min: 1, max: 1 })
+        .map_err(|_| MacosAttachSessionError::MalformedFrame)?;
+    let mut random = [0_u8; 32];
+    getrandom::fill(&mut random).map_err(|_| MacosAttachSessionError::Randomness)?;
+    let server_nonce: String = random[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let approval_challenge: String = random[16..]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let response = welcome(
+        selected,
+        desktop_version,
+        server_nonce,
+        approval_challenge,
+    );
+    stream
+        .write_all(&encode_frame(&response).map_err(|_| MacosAttachSessionError::MalformedFrame)?)
+        .map_err(|_| MacosAttachSessionError::Write)
+}
+
+/// Accepts, verifies, and serves one attach stream.
+pub fn serve_next_macos_attach(
+    listener: &UnixListener,
+    desktop_version: &str,
+) -> Result<(), MacosAttachListenerError> {
+    let stream = accept_macos_attach(listener).map_err(MacosAttachListenerError::Accept)?;
+    serve_macos_attach_session(stream, desktop_version).map_err(MacosAttachListenerError::Session)
+}
+
+/// Testable listener path through an injected peer identity boundary.
+#[doc(hidden)]
+pub fn serve_next_macos_attach_with_reader(
+    listener: &UnixListener,
+    reader: &impl MacosPeerReader,
+    desktop_version: &str,
+) -> Result<(), MacosAttachListenerError> {
+    let stream = accept_macos_attach_with_reader(listener, reader)
+        .map_err(MacosAttachListenerError::Accept)?;
+    serve_macos_attach_session(stream, desktop_version).map_err(MacosAttachListenerError::Session)
 }
 
 /// Accepts a stream and verifies its owner before any frame read.

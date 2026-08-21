@@ -15,7 +15,9 @@ use muniment_core::attach::{
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 #[cfg(target_os = "macos")]
-use muniment_core::attach::accept_macos_attach;
+use muniment_core::attach::{
+    serve_next_macos_attach, MacosAttachAcceptError, MacosAttachListenerError,
+};
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::collections::{BTreeMap, BTreeSet};
@@ -1251,10 +1253,13 @@ pub fn start_attach_listener<R: tauri::Runtime>(_app: tauri::AppHandle<R>) {
             return;
         };
         loop {
-            match accept_macos_attach(&listener) {
-                Ok(stream) => drop(stream),
-                Err(muniment_core::attach::MacosAttachAcceptError::PeerRejected) => continue,
-                Err(muniment_core::attach::MacosAttachAcceptError::Accept) => break,
+            match serve_next_macos_attach(&listener, env!("CARGO_PKG_VERSION")) {
+                Ok(()) => {}
+                Err(MacosAttachListenerError::Accept(MacosAttachAcceptError::PeerRejected)) => {
+                    continue;
+                }
+                Err(MacosAttachListenerError::Accept(MacosAttachAcceptError::Accept)) => break,
+                Err(MacosAttachListenerError::Session(_)) => continue,
             }
         }
     });

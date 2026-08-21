@@ -1,8 +1,10 @@
 #![cfg(target_os = "macos")]
 
 use muniment_core::attach::{
-    accept_macos_attach_with_reader, verify_macos_attach_peer_with_reader, MacosAttachAcceptError,
-    MacosPeerError, MacosPeerReadError, MacosPeerReader,
+    accept_macos_attach_with_reader, decode_frame, encode_frame,
+    serve_next_macos_attach_with_reader, verify_macos_attach_peer_with_reader, Client, Hello, Id,
+    MacosAttachAcceptError, MacosPeerError, MacosPeerReadError, MacosPeerReader, Protocol,
+    VersionRange, Welcome,
 };
 use std::cell::Cell;
 use std::io::{self, Read};
@@ -104,4 +106,47 @@ fn rejects_a_peer_identity_syscall_failure() {
     );
     assert_eq!(reader.reads.get(), 1);
     accept_and_assert_no_response(&reader);
+}
+
+#[test]
+fn verified_listener_stream_serves_a_valid_first_frame() {
+    use std::io::Write;
+
+    let reader = FakePeerReader {
+        peer_uid: Ok(501),
+        local_uid: 501,
+        reads: Cell::new(0),
+    };
+    let path = std::env::temp_dir().join(format!(
+        "muniment-attach-session-{}.sock",
+        std::process::id()
+    ));
+    let listener = UnixListener::bind(&path).unwrap();
+    let mut client = UnixStream::connect(&path).unwrap();
+    let hello = Hello {
+        protocol: Protocol,
+        client: Client {
+            kind: "test-client".into(),
+            version: "1.0.0".into(),
+        },
+        supported: VersionRange { min: 1, max: 1 },
+        client_nonce: "client-nonce".into(),
+        authorized_client_id: Id::new("018f0000-0000-7000-8000-000000000099").unwrap(),
+        authorized_client_credential: None,
+    };
+    client.write_all(&encode_frame(&hello).unwrap()).unwrap();
+
+    serve_next_macos_attach_with_reader(&listener, &reader, "1.0.0").unwrap();
+
+    let mut prefix = [0_u8; 4];
+    client.read_exact(&mut prefix).unwrap();
+    let mut response = vec![0_u8; 4 + u32::from_be_bytes(prefix) as usize];
+    response[..4].copy_from_slice(&prefix);
+    client.read_exact(&mut response[4..]).unwrap();
+    let welcome: Welcome = decode_frame(&response).unwrap().unwrap().0;
+    assert_eq!(welcome.selected, 1);
+    assert_eq!(reader.reads.get(), 1);
+
+    drop(listener);
+    std::fs::remove_file(path).unwrap();
 }
