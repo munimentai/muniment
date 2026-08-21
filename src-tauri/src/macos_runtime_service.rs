@@ -1,6 +1,6 @@
 use std::fmt;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 const RUNTIME_AGENT_PLIST: &str = "ai.muniment.runtime.plist";
@@ -9,6 +9,29 @@ const RUNTIME_SERVICE_NOT_FOUND_RECORD: &[u8] =
     b"event=runtime_service_not_found message=runtime service not found\n";
 const RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD: &[u8] =
     b"event=runtime_service_registration_failed message=runtime service registration failed\n";
+const RUNTIME_SERVICE_START_FAILED_RECORD: &[u8] =
+    b"event=runtime_service_start_failed message=runtime service start failed\n";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeStartOutcome {
+    SkippedActivation,
+    EndpointPresent,
+    Requested,
+    EndpointCheckFailed,
+    RequestFailed,
+}
+
+impl fmt::Display for RuntimeStartOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::SkippedActivation => "skippedActivation",
+            Self::EndpointPresent => "endpointPresent",
+            Self::Requested => "requested",
+            Self::EndpointCheckFailed => "endpointCheckFailed",
+            Self::RequestFailed => "requestFailed",
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +87,28 @@ enum RegistrationError {
 trait RuntimeServiceAdapter {
     fn status(&self) -> Result<ServiceStatus, ()>;
     fn register(&self) -> Result<(), RegistrationError>;
+}
+
+trait RuntimeStartAdapter {
+    fn endpoint_exists(&self) -> Result<bool, ()>;
+    fn request_start(&self) -> Result<(), ()>;
+}
+
+fn request_enabled_runtime_start(
+    activation: RuntimeServiceActivation,
+    adapter: &impl RuntimeStartAdapter,
+) -> RuntimeStartOutcome {
+    if activation != RuntimeServiceActivation::Enabled {
+        return RuntimeStartOutcome::SkippedActivation;
+    }
+    match adapter.endpoint_exists() {
+        Ok(true) => RuntimeStartOutcome::EndpointPresent,
+        Ok(false) => match adapter.request_start() {
+            Ok(()) => RuntimeStartOutcome::Requested,
+            Err(()) => RuntimeStartOutcome::RequestFailed,
+        },
+        Err(()) => RuntimeStartOutcome::EndpointCheckFailed,
+    }
 }
 
 fn activate_runtime_service(adapter: &impl RuntimeServiceAdapter) -> RuntimeServiceActivation {
@@ -129,6 +174,21 @@ fn write_activation_diagnostic(
     )
 }
 
+fn write_start_diagnostic(log_directory: &Path, outcome: RuntimeStartOutcome) -> io::Result<()> {
+    if !matches!(
+        outcome,
+        RuntimeStartOutcome::EndpointCheckFailed | RuntimeStartOutcome::RequestFailed
+    ) {
+        return Ok(());
+    }
+    muniment_core::user_diagnostics::append_owner_only_record(
+        log_directory,
+        c"runtime.log",
+        MACOS_RUNTIME_LOG_MAX_BYTES,
+        RUNTIME_SERVICE_START_FAILED_RECORD,
+    )
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn activate_bundled_runtime_service() -> RuntimeServiceActivation {
     let activation = activate_runtime_service_at_startup(&MacosRuntimeServiceAdapter::new())
@@ -136,8 +196,54 @@ pub(crate) fn activate_bundled_runtime_service() -> RuntimeServiceActivation {
     if let Ok(home) = muniment_core::user_diagnostics::effective_user_home() {
         let log_directory = home.join("Library/Logs/Muniment");
         let _ = write_activation_diagnostic(&log_directory, activation);
+        if let Ok(profile_directory) = muniment_runtime::profile_directory() {
+            let start_adapter = MacosRuntimeStartAdapter::new(profile_directory);
+            let outcome = request_enabled_runtime_start(activation, &start_adapter);
+            let _ = write_start_diagnostic(&log_directory, outcome);
+        }
     }
     activation
+}
+
+struct MacosRuntimeStartAdapter {
+    endpoint: PathBuf,
+}
+
+impl MacosRuntimeStartAdapter {
+    fn new(profile_directory: PathBuf) -> Self {
+        Self {
+            endpoint: profile_directory.join("muniment/attach-v1.sock"),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
+    fn endpoint_exists(&self) -> Result<bool, ()> {
+        match std::fs::symlink_metadata(&self.endpoint) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(()),
+        }
+    }
+
+    fn request_start(&self) -> Result<(), ()> {
+        use std::process::{Command, Stdio};
+
+        // SAFETY: geteuid reads the effective user ID without dereferencing memory.
+        let effective_uid = unsafe { libc::geteuid() };
+        let target = format!("gui/{effective_uid}/ai.muniment.runtime");
+        Command::new("/bin/launchctl")
+            .args(["kickstart", target.as_str()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| ())?
+            .success()
+            .then_some(())
+            .ok_or(())
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -205,6 +311,36 @@ mod tests {
         registration_calls: Cell<usize>,
     }
 
+    struct FakeStartAdapter {
+        endpoint: Result<bool, ()>,
+        request: Result<(), ()>,
+        endpoint_calls: Cell<usize>,
+        request_calls: Cell<usize>,
+    }
+
+    impl FakeStartAdapter {
+        fn new(endpoint: Result<bool, ()>, request: Result<(), ()>) -> Self {
+            Self {
+                endpoint,
+                request,
+                endpoint_calls: Cell::new(0),
+                request_calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl RuntimeStartAdapter for FakeStartAdapter {
+        fn endpoint_exists(&self) -> Result<bool, ()> {
+            self.endpoint_calls.set(self.endpoint_calls.get() + 1);
+            self.endpoint
+        }
+
+        fn request_start(&self) -> Result<(), ()> {
+            self.request_calls.set(self.request_calls.get() + 1);
+            self.request
+        }
+    }
+
     impl FakeAdapter {
         fn new(
             statuses: impl IntoIterator<Item = Result<ServiceStatus, ()>>,
@@ -256,6 +392,73 @@ mod tests {
             assert_eq!(adapter.status_calls.get(), 1);
             assert_eq!(adapter.registration_calls.get(), 0);
         }
+    }
+
+    #[test]
+    fn skips_start_request_unless_activation_is_enabled() {
+        for activation in [
+            RuntimeServiceActivation::RequiresApproval,
+            RuntimeServiceActivation::NotFound,
+            RuntimeServiceActivation::Failed,
+        ] {
+            let adapter = FakeStartAdapter::new(Ok(false), Ok(()));
+            assert_eq!(
+                request_enabled_runtime_start(activation, &adapter),
+                RuntimeStartOutcome::SkippedActivation
+            );
+            assert_eq!(adapter.endpoint_calls.get(), 0);
+            assert_eq!(adapter.request_calls.get(), 0);
+        }
+    }
+
+    #[test]
+    fn start_adapter_checks_the_canonical_profile_endpoint() {
+        let profile_directory = PathBuf::from("/profiles/current");
+        let adapter = MacosRuntimeStartAdapter::new(profile_directory);
+
+        assert_eq!(
+            adapter.endpoint,
+            PathBuf::from("/profiles/current/muniment/attach-v1.sock")
+        );
+    }
+
+    #[test]
+    fn skips_start_request_when_the_endpoint_exists() {
+        let adapter = FakeStartAdapter::new(Ok(true), Ok(()));
+        assert_eq!(
+            request_enabled_runtime_start(RuntimeServiceActivation::Enabled, &adapter),
+            RuntimeStartOutcome::EndpointPresent
+        );
+        assert_eq!(adapter.endpoint_calls.get(), 1);
+        assert_eq!(adapter.request_calls.get(), 0);
+    }
+
+    #[test]
+    fn requests_one_start_when_enabled_endpoint_is_absent() {
+        let adapter = FakeStartAdapter::new(Ok(false), Ok(()));
+        assert_eq!(
+            request_enabled_runtime_start(RuntimeServiceActivation::Enabled, &adapter),
+            RuntimeStartOutcome::Requested
+        );
+        assert_eq!(adapter.endpoint_calls.get(), 1);
+        assert_eq!(adapter.request_calls.get(), 1);
+    }
+
+    #[test]
+    fn returns_redacted_typed_start_failures() {
+        let endpoint_failure = FakeStartAdapter::new(Err(()), Ok(()));
+        assert_eq!(
+            request_enabled_runtime_start(RuntimeServiceActivation::Enabled, &endpoint_failure),
+            RuntimeStartOutcome::EndpointCheckFailed
+        );
+        assert_eq!(endpoint_failure.request_calls.get(), 0);
+
+        let request_failure = FakeStartAdapter::new(Ok(false), Err(()));
+        let outcome =
+            request_enabled_runtime_start(RuntimeServiceActivation::Enabled, &request_failure);
+        assert_eq!(outcome, RuntimeStartOutcome::RequestFailed);
+        assert_eq!(outcome.to_string(), "requestFailed");
+        assert_eq!(request_failure.request_calls.get(), 1);
     }
 
     #[test]
@@ -369,11 +572,14 @@ mod tests {
 
         write_activation_diagnostic(&logs, RuntimeServiceActivation::NotFound).unwrap();
         write_activation_diagnostic(&logs, RuntimeServiceActivation::Failed).unwrap();
+        write_start_diagnostic(&logs, RuntimeStartOutcome::Requested).unwrap();
+        write_start_diagnostic(&logs, RuntimeStartOutcome::RequestFailed).unwrap();
         assert_eq!(
             fs::read(logs.join("runtime.log")).unwrap(),
             [
                 RUNTIME_SERVICE_NOT_FOUND_RECORD,
                 RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD,
+                RUNTIME_SERVICE_START_FAILED_RECORD,
             ]
             .concat()
         );
