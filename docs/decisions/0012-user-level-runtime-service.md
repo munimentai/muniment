@@ -869,12 +869,24 @@ The plist runs the runtime in the foreground and labels the job
 `ai.muniment.runtime`.
 
 Each user registers that bundled LaunchAgent in their login domain with
-`SMAppService.agent(plistName: "ai.muniment.runtime.plist").register()`.
-Registration immediately bootstraps the job. `launchd` bootstraps it again at
-later logins. A surface that finds no attach endpoint asks the `gui/<uid>`
-domain to kick-start `ai.muniment.runtime`, then uses the existing bounded
-readiness retry. Registration and activation never use a system LaunchDaemon
-or elevated helper.
+`SMAppService.agent(plistName: "ai.muniment.runtime.plist").register()` while
+that user runs the desktop app. The app checks `status` at every launch. It
+calls `register()` once for `notRegistered`, then rechecks the status. A system
+package installs the bundle but cannot register it for absent users.
+
+An `enabled` status permits activation. A `requiresApproval` status or a
+`kSMErrorLaunchDeniedByUser` result leaves the runtime inactive. The app shows
+that approval is required. It offers a button that calls
+`SMAppService.openSystemSettingsLoginItems()`. A `notFound` status or another
+registration error also leaves the runtime inactive and records a redacted
+diagnostic. The app never kick-starts or privately spawns the runtime unless
+the status is `enabled`.
+
+Successful registration immediately bootstraps the job. `launchd` bootstraps
+it again at later logins. A surface with an `enabled` status and no attach
+endpoint asks the `gui/<uid>` domain to kick-start `ai.muniment.runtime`, then
+uses the existing bounded readiness retry. Registration and activation never
+use a system LaunchDaemon or elevated helper.
 
 The job uses `KeepAlive` only for unsuccessful exits and sets
 `ThrottleInterval` to five seconds. The runtime records starts in its per-user
@@ -890,8 +902,15 @@ Package replacement follows the installed-payload refresh amendment. The
 installer verifies and atomically replaces the signed app bundle without
 changing the registered label or payload path. The old runtime drains durable
 work and exits with status 75 after it detects replacement. `launchd` then
-starts the new payload. A failed readiness check restores the old verified
-bundle and kick-starts the same job. The per-user install lock serializes
+starts the new payload. A failed readiness check creates an owner-only rollback
+marker. The marker makes every new payload exit successfully before it opens
+state. The installer requests a graceful stop and waits for the bounded stop
+deadline. It then sends `SIGTERM` and waits again. It sends `SIGKILL` if the
+same job remains active. The installer verifies that no runtime holds the
+instance lock before it restores the old verified bundle. It removes the
+marker, kick-starts the same job, and verifies old-payload readiness. Any stop
+or old-readiness failure leaves the marker and signed bundle in place. The
+installer reports the failure. The per-user install lock serializes
 replacement, rollback, and concurrent surface installers.
 
 At logout, `launchd` sends `SIGTERM`. The runtime stops accepting new work,
@@ -899,13 +918,16 @@ uses the existing bounded graceful-stop deadline, commits recoverable state,
 and exits. If the deadline expires, launchd may kill it. The journal remains
 the only recovery authority at the next login.
 
-Managed uninstall calls `unregister()` in every registered user context and
-waits for each bounded completion. Unregistration stops each job and prevents
-later login activation. The package removes the app bundle only after every
-runtime stops. Any unregister or stop failure leaves the signed payload in
-place and reports the failure. Uninstall never removes a running payload or
-user journals, credentials, CAS data, or diagnostics. Service Management
-registration remains per-user.
+Managed uninstall calls `unregister()` in each logged-in registered user
+context and waits for each bounded completion. It cannot unregister an absent
+user. Removal stays pending until each absent registered user logs in and the
+app completes unregistration in that user's context. Unregistration stops
+each job and prevents later login activation. The package removes the app
+bundle only after every registration clears and every runtime stops. Any
+unregister or stop failure leaves the signed payload in place and reports the
+failure. Uninstall never removes a running payload or user journals,
+credentials, CAS data, or diagnostics. Service Management registration
+remains per-user.
 
 ### Peer admission and diagnostics
 
@@ -919,10 +941,12 @@ checks remain unchanged. A claimed client kind, PID, path, or UID grants no
 authority. This check rejects other OS users but does not defend against a
 compromised process running as the current user.
 
-The runtime writes only redacted, bounded diagnostics to
-`~/Library/Logs/Muniment/runtime.log`. The LaunchAgent sends stdout and stderr
-to that file, and structured records use the macOS unified log subsystem
-`ai.muniment.desktop` with category `runtime`. Diagnostics omit tokens,
-credentials, prompts, model output, local paths, workspace values, connection
-nonces, and peer identifiers. Rotation and retention use the existing bounded
-diagnostic policy.
+The LaunchAgent sends stdout and stderr to the absolute path `/dev/null`. The
+runtime resolves the effective user's home through the OS user record. It
+opens the resulting absolute
+`/Users/<user>/Library/Logs/Muniment/runtime.log` path itself and writes only
+redacted, bounded diagnostics there. Structured records use the macOS unified
+log subsystem `ai.muniment.desktop` with category `runtime`. Diagnostics omit
+tokens, credentials, prompts, model output, local paths, workspace values,
+connection nonces, and peer identifiers. Rotation and retention use the
+existing bounded diagnostic policy.

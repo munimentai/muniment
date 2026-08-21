@@ -109,10 +109,15 @@ OS user, but it does not distinguish hostile processes under the same account.
 
 The macOS user-domain LaunchAgent runs the bundled, signed runtime from
 `/Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime`.
-It writes redacted, bounded diagnostics to
-`~/Library/Logs/Muniment/runtime.log` and the `ai.muniment.desktop` unified log
-subsystem. Diagnostics contain no secrets, content, local paths, workspace
-values, connection nonces, or peer identifiers.
+Each user must run the app once to request `SMAppService` registration. Denial
+or missing approval prevents activation and grants no alternate runtime path.
+The app directs that user to System Settings > General > Login Items. The
+LaunchAgent sends standard streams to `/dev/null`. The runtime resolves the
+effective user's home through the OS user record. It writes redacted, bounded
+diagnostics to the resulting absolute
+`/Users/<user>/Library/Logs/Muniment/runtime.log` path and the
+`ai.muniment.desktop` unified log subsystem. Diagnostics contain no secrets,
+content, local paths, workspace values, connection nonces, or peer identifiers.
 
 ## Prompt injection
 
