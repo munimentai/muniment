@@ -39,6 +39,8 @@ fn main() {
         Ok(false) => {}
         Err(error) => {
             eprintln!("muniment-runtime: {error}");
+            #[cfg(target_os = "macos")]
+            record_macos_diagnostic(muniment_runtime::MacosDiagnosticEvent::ArgumentsInvalid);
             std::process::exit(1);
         }
     }
@@ -82,21 +84,26 @@ enum MacosActivationExit {
 fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit) -> i32 {
     use muniment_runtime::{
         profile_directory, record_macos_failed_exit, record_macos_orderly_exit, record_macos_start,
-        MacosStartDecision,
+        MacosDiagnosticEvent, MacosStartDecision,
     };
 
     let state_directory = match profile_directory() {
         Ok(directory) => directory,
         Err(error) => {
             eprintln!("muniment-runtime: {error}");
+            record_macos_diagnostic(MacosDiagnosticEvent::StartRecordFailed);
             return FAILURE_EXIT_STATUS;
         }
     };
     let start = match record_macos_start(&state_directory) {
-        Ok((MacosStartDecision::StopRestartLoop, _)) => return SUCCESS_EXIT_STATUS,
+        Ok((MacosStartDecision::StopRestartLoop, _)) => {
+            record_macos_diagnostic(MacosDiagnosticEvent::RestartLoopStopped);
+            return SUCCESS_EXIT_STATUS;
+        }
         Ok((MacosStartDecision::Run, start)) => start,
         Err(error) => {
             eprintln!("muniment-runtime: start record failed: {error}");
+            record_macos_diagnostic(MacosDiagnosticEvent::StartRecordFailed);
             return FAILURE_EXIT_STATUS;
         }
     };
@@ -104,22 +111,40 @@ fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit)
         MacosActivationExit::Orderly(status) => {
             if let Err(error) = record_macos_orderly_exit(state_directory, start) {
                 eprintln!("muniment-runtime: start record failed: {error}");
+                record_macos_diagnostic(MacosDiagnosticEvent::StartRecordFailed);
                 return FAILURE_EXIT_STATUS;
             }
             status
         }
         MacosActivationExit::Failed(status) => {
             match record_macos_failed_exit(state_directory, start) {
-                Ok(MacosStartDecision::StopRestartLoop) => SUCCESS_EXIT_STATUS,
-                Ok(MacosStartDecision::Run) => status,
+                Ok(MacosStartDecision::StopRestartLoop) => {
+                    record_macos_diagnostic(MacosDiagnosticEvent::RestartLoopStopped);
+                    SUCCESS_EXIT_STATUS
+                }
+                Ok(MacosStartDecision::Run) => {
+                    record_macos_diagnostic(MacosDiagnosticEvent::ActivationFailed);
+                    status
+                }
                 Err(error) => {
                     eprintln!("muniment-runtime: start record failed: {error}");
+                    record_macos_diagnostic(MacosDiagnosticEvent::StartRecordFailed);
                     FAILURE_EXIT_STATUS
                 }
             }
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+fn record_macos_diagnostic(event: muniment_runtime::MacosDiagnosticEvent) {
+    if let Ok(directory) = muniment_runtime::effective_user_macos_log_directory() {
+        let _ = muniment_runtime::write_macos_diagnostic(directory, event);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn record_macos_diagnostic(_event: muniment_runtime::MacosDiagnosticEvent) {}
 
 fn test_macos_activation_exit() -> Option<impl FnOnce() -> MacosActivationExit> {
     let exit = match std::env::var_os(MACOS_TEST_EXIT_ENV)?.to_str()? {
@@ -220,6 +245,10 @@ fn wait_for_instance_lock(wait_timeout: Option<Duration>) -> Result<(), String> 
             Err(InstanceLockError::AlreadyHeld) => {
                 if !reported_wait {
                     eprintln!("muniment-runtime: waiting for the instance lock");
+                    #[cfg(target_os = "macos")]
+                    record_macos_diagnostic(
+                        muniment_runtime::MacosDiagnosticEvent::InstanceLockWait,
+                    );
                     reported_wait = true;
                 }
                 let sleep_duration = match wait_timeout {
