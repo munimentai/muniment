@@ -34,6 +34,10 @@ impl std::error::Error for MacosRollbackMarkerError {}
 pub fn macos_rollback_pending(
     profile_directory: impl AsRef<Path>,
 ) -> Result<bool, MacosRollbackMarkerError> {
+    let profile_missing = !profile_directory
+        .as_ref()
+        .try_exists()
+        .map_err(|_| MacosRollbackMarkerError::Check)?;
     match fs::create_dir_all(profile_directory.as_ref()) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -44,6 +48,9 @@ pub fn macos_rollback_pending(
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
         .open(profile_directory)
         .map_err(|_| MacosRollbackMarkerError::Check)?;
+    if profile_missing && unsafe { libc::fchmod(profile.as_raw_fd(), 0o700) } != 0 {
+        return Err(MacosRollbackMarkerError::Check);
+    }
     let marker_name = c"rollback-pending";
     // SAFETY: openat receives a valid directory descriptor and a static C string.
     let descriptor = unsafe {

@@ -6742,7 +6742,7 @@ fn artifact_window_expires_a_transfer_that_exceeds_the_retained_byte_budget() {
             server,
             credentials(),
             "0.1.0",
-            Duration::from_secs(1),
+            Duration::from_secs(10),
             AuthorizationSessionDependencies {
                 fill_random: |bytes: &mut [u8]| {
                     bytes.fill(9);
