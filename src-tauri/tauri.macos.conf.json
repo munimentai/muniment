@@ -2,7 +2,7 @@
   "bundle": {
     "macOS": {
       "files": {
-        "Library/LaunchServices/muniment-runtime": "target/release/muniment-runtime",
+        "Library/LaunchServices/muniment-runtime": "target/universal-apple-darwin/release/muniment-runtime",
         "Library/LaunchAgents/ai.muniment.runtime.plist": "packaging/ai.muniment.runtime.plist"
       }
     },

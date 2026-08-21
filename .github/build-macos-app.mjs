@@ -64,6 +64,7 @@ if (signing && signingConfig === null) {
 
 // Always build the universal .app first; signing (when enabled) operates on the
 // finished bundle so the unsigned and signed paths build identical bits.
+mustRun("build universal runtime", process.execPath, [join(".github", "build-macos-runtime.mjs")]);
 tauri("build", "--target", "universal-apple-darwin", "--bundles", "app");
 
 if (!signing) {
