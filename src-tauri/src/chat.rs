@@ -179,7 +179,12 @@ where
     F: std::future::Future<Output = Result<SubmitResult, String>>,
 {
     match session {
-        RunCommandSession::NoSupervisor => local(files).await,
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local(files).await
+        }
         RunCommandSession::Connected(client) => {
             let thread_id = state.session_thread.current(subject);
             let file_paths = files
@@ -216,7 +221,12 @@ where
     F: std::future::Future<Output = Result<SubmitResult, String>>,
 {
     match session {
-        RunCommandSession::NoSupervisor => local().await,
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local().await
+        }
         RunCommandSession::Connected(client) => client
             .run_resume(run_id)
             .map(resume_result)
@@ -262,7 +272,12 @@ fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     local: L,
 ) -> Result<(), String> {
     match session {
-        RunCommandSession::NoSupervisor => local(),
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local()
+        }
         RunCommandSession::Connected(client) => match delivery {
             ChatDelivery::Steer => client.run_steer(run_id, message),
             ChatDelivery::FollowUp => client.run_follow_up(run_id, message),
@@ -280,7 +295,12 @@ fn handle_run_cancel<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     local: L,
 ) -> Result<(), String> {
     match session {
-        RunCommandSession::NoSupervisor => local(),
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local()
+        }
         RunCommandSession::Connected(client) => client
             .run_cancel(run_id)
             .map(|_| ())
@@ -298,7 +318,12 @@ fn handle_run_permission_answer<C: RunCommandClient, L: FnOnce() -> Result<(), S
     local: L,
 ) -> Result<(), String> {
     match session {
-        RunCommandSession::NoSupervisor => local(),
+        RunCommandSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            local()
+        }
         RunCommandSession::Connected(client) => client
             .run_permission_answer(run_id, gate_id, answer)
             .map(|_| ())
@@ -410,17 +435,20 @@ impl DeferredStorage {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) struct TauriRunStartBoundaries<R: tauri::Runtime> {
     pub(crate) app: tauri::AppHandle<R>,
     pub(crate) continue_session_thread: bool,
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
     fn state(&self) -> tauri::State<'_, ChatState> {
         self.app.state::<ChatState>()
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
     #[cfg(target_os = "linux")]
     fn queue_attach_message(
@@ -546,6 +574,7 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     fn mark_active_run(&self) -> RuntimeActivityGuard {
         self.state().runtime_activity.mark_active_run()
@@ -955,6 +984,7 @@ pub async fn chat_submit(
             None
         };
         let selected_files = files.unwrap_or_default();
+        #[cfg(target_os = "linux")]
         let local_prompt = prompt.clone();
         return handle_run_submit(
             session,
@@ -962,7 +992,10 @@ pub async fn chat_submit(
             subject.as_deref(),
             &prompt,
             selected_files,
+            #[cfg(target_os = "linux")]
             |local_files| local_chat_submit(app, local_prompt, local_files),
+            #[cfg(target_os = "macos")]
+            |_| async { Err(auth::background_service_error()) },
         )
         .await;
     }
@@ -971,6 +1004,7 @@ pub async fn chat_submit(
     return local_chat_submit(app, prompt, files.unwrap_or_default()).await;
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 async fn local_chat_submit(
     app: tauri::AppHandle,
     prompt: String,
@@ -1009,9 +1043,14 @@ pub async fn chat_resume(
             .state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
             .into();
+        #[cfg(target_os = "linux")]
         let local_state = state.clone();
+        #[cfg(target_os = "linux")]
         let local_run_id = run_id.clone();
         return handle_run_resume(session, &state, &run_id, || {
+            #[cfg(target_os = "macos")]
+            return async { Err(auth::background_service_error()) };
+            #[cfg(target_os = "linux")]
             local_chat_resume(app, auth_state, local_state, local_run_id)
         })
         .await;
@@ -1021,6 +1060,7 @@ pub async fn chat_resume(
     return local_chat_resume(app, auth_state, state, run_id).await;
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 async fn local_chat_resume(
     app: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,

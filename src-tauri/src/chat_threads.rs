@@ -16,11 +16,11 @@ use muniment_core::thread_ownership::{subject_owns_first_run, ThreadOwnershipErr
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 use crate::auth;
 use crate::chat::{state_session_root, ChatState};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use muniment_core::attach::ClientError;
 use muniment_core::run_events::SharedStorage;
 use muniment_core::session_thread::SessionThread;
@@ -44,7 +44,17 @@ fn thread_ownership_error_message(_error: ThreadOwnershipError) -> String {
     "Conversation history is unavailable.".into()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+fn require_runtime(attach_state: &AttachCompanionState) -> Result<(), String> {
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::Connected(_) => Ok(()),
+        DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
+    }
+}
+
+#[cfg(unix)]
 fn rename_thread_command(
     storage: Option<&SharedStorage>,
     attach_state: &AttachCompanionState,
@@ -54,11 +64,16 @@ fn rename_thread_command(
 ) -> Result<(), String> {
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
-            let mut storage = storage
-                .ok_or_else(auth::background_service_error)?
-                .lock()
-                .map_err(|_| "Conversation history is unavailable.".to_string())?;
-            rename_thread(&mut storage.journal, subject, thread_id, title)
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            {
+                let mut storage = storage
+                    .ok_or_else(auth::background_service_error)?
+                    .lock()
+                    .map_err(|_| "Conversation history is unavailable.".to_string())?;
+                rename_thread(&mut storage.journal, subject, thread_id, title)
+            }
         }
         DesktopClientSession::Connected(client) => client
             .rename_thread(thread_id, title)
@@ -69,7 +84,7 @@ fn rename_thread_command(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn delete_thread_command(
     storage: Option<&SharedStorage>,
     session_thread: &SessionThread,
@@ -79,11 +94,16 @@ fn delete_thread_command(
 ) -> Result<(), String> {
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
-            let mut storage = storage
-                .ok_or_else(auth::background_service_error)?
-                .lock()
-                .map_err(|_| "Conversation history is unavailable.".to_string())?;
-            delete_thread(&mut storage.journal, session_thread, subject, thread_id)
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            {
+                let mut storage = storage
+                    .ok_or_else(auth::background_service_error)?
+                    .lock()
+                    .map_err(|_| "Conversation history is unavailable.".to_string())?;
+                delete_thread(&mut storage.journal, session_thread, subject, thread_id)
+            }
         }
         DesktopClientSession::Connected(client) => client
             .delete_thread(thread_id)
@@ -94,26 +114,26 @@ fn delete_thread_command(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 trait ThreadSelectClient {
     fn thread_select(&self, thread_id: &str) -> Result<(), ClientError>;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl ThreadSelectClient for muniment_core::attach::DesktopClientHolder {
     fn thread_select(&self, thread_id: &str) -> Result<(), ClientError> {
         muniment_core::attach::DesktopClientHolder::thread_select(self, thread_id)
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 enum ThreadSelectSession<C> {
     NoSupervisor,
     Connected(C),
     Disconnected,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl From<DesktopClientSession>
     for ThreadSelectSession<muniment_core::attach::DesktopClientHolder>
 {
@@ -126,7 +146,7 @@ impl From<DesktopClientSession>
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn select_thread_command<C: ThreadSelectClient>(
     session: ThreadSelectSession<C>,
     storage: Option<&SharedStorage>,
@@ -136,11 +156,16 @@ fn select_thread_command<C: ThreadSelectClient>(
 ) -> Result<(), String> {
     match session {
         ThreadSelectSession::NoSupervisor => {
-            let mut storage = storage
-                .ok_or_else(auth::background_service_error)?
-                .lock()
-                .map_err(|_| "Conversation history is unavailable.".to_string())?;
-            select_session_thread(&mut storage.journal, session_thread, subject, thread_id)
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            {
+                let mut storage = storage
+                    .ok_or_else(auth::background_service_error)?
+                    .lock()
+                    .map_err(|_| "Conversation history is unavailable.".to_string())?;
+                select_session_thread(&mut storage.journal, session_thread, subject, thread_id)
+            }
         }
         ThreadSelectSession::Connected(client) => {
             client
@@ -194,7 +219,7 @@ fn owned_threads_error_message(_error: OwnedThreadsError) -> String {
     "Conversation history is unavailable.".into()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn desktop_thread_history_error(error: ClientError) -> String {
     match error {
         ClientError::DesktopBusy => auth::desktop_client_error(error),
@@ -202,7 +227,7 @@ fn desktop_thread_history_error(error: ClientError) -> String {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn chat_thread_summaries_command(
     storage: Option<&SharedStorage>,
     attach_state: &AttachCompanionState,
@@ -212,17 +237,22 @@ fn chat_thread_summaries_command(
 ) -> Result<serde_json::Value, String> {
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
-            let mut storage = storage
-                .ok_or_else(auth::background_service_error)?
-                .lock()
-                .map_err(|_| "Conversation history is unavailable.".to_string())?;
-            serde_json::to_value(chat_thread_summaries_page(
-                &mut storage.journal,
-                subject,
-                limit,
-                cursor,
-            )?)
-            .map_err(|_| "Conversation history is unavailable.".to_string())
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            {
+                let mut storage = storage
+                    .ok_or_else(auth::background_service_error)?
+                    .lock()
+                    .map_err(|_| "Conversation history is unavailable.".to_string())?;
+                serde_json::to_value(chat_thread_summaries_page(
+                    &mut storage.journal,
+                    subject,
+                    limit,
+                    cursor,
+                )?)
+                .map_err(|_| "Conversation history is unavailable.".to_string())
+            }
         }
         DesktopClientSession::Connected(client) => client
             .thread_summaries(
@@ -260,7 +290,7 @@ fn thread_history_error_message(_error: ThreadHistoryError) -> String {
     "Conversation history is unavailable.".into()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn chat_thread_open_command(
     storage: Option<&SharedStorage>,
     attach_state: &AttachCompanionState,
@@ -272,24 +302,29 @@ fn chat_thread_open_command(
 ) -> Result<serde_json::Value, String> {
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
-            let mut storage = storage
-                .ok_or_else(auth::background_service_error)?
-                .lock()
-                .map_err(|_| "Conversation history is unavailable.".to_string())?;
-            let muniment_core::run_events::ChatStorage { journal, cas } = &mut *storage;
-            serde_json::to_value(
-                core_chat_thread_open_page(
-                    journal,
-                    Some(cas),
-                    subject,
-                    session_root,
-                    thread_id,
-                    limit,
-                    cursor,
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            {
+                let mut storage = storage
+                    .ok_or_else(auth::background_service_error)?
+                    .lock()
+                    .map_err(|_| "Conversation history is unavailable.".to_string())?;
+                let muniment_core::run_events::ChatStorage { journal, cas } = &mut *storage;
+                serde_json::to_value(
+                    core_chat_thread_open_page(
+                        journal,
+                        Some(cas),
+                        subject,
+                        session_root,
+                        thread_id,
+                        limit,
+                        cursor,
+                    )
+                    .map_err(thread_history_error_message)?,
                 )
-                .map_err(thread_history_error_message)?,
-            )
-            .map_err(|_| "Conversation history is unavailable.".to_string())
+                .map_err(|_| "Conversation history is unavailable.".to_string())
+            }
         }
         DesktopClientSession::Connected(client) => client
             .thread_history(
@@ -392,7 +427,7 @@ pub async fn chat_current_thread(
     Ok(state.session_thread.current(tokens.subject.as_deref()))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tauri::command]
 pub async fn chat_thread_summaries(
     app_handle: tauri::AppHandle,
@@ -402,6 +437,8 @@ pub async fn chat_thread_summaries(
     limit: usize,
     cursor: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    require_runtime(&attach_state)?;
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     chat_thread_summaries_command(
         state.storage().ok(),
@@ -412,7 +449,7 @@ pub async fn chat_thread_summaries(
     )
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn chat_thread_summaries(
     app_handle: tauri::AppHandle,
@@ -434,7 +471,7 @@ pub async fn chat_thread_summaries(
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tauri::command]
 pub async fn chat_select_thread(
     app_handle: tauri::AppHandle,
@@ -447,6 +484,10 @@ pub async fn chat_select_thread(
     if matches!(&session, ThreadSelectSession::Disconnected) {
         return Err(auth::background_service_error());
     }
+    #[cfg(target_os = "macos")]
+    if matches!(&session, ThreadSelectSession::NoSupervisor) {
+        return Err(auth::background_service_error());
+    }
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     select_thread_command(
         session,
@@ -457,7 +498,7 @@ pub async fn chat_select_thread(
     )
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn chat_select_thread(
     app_handle: tauri::AppHandle,
@@ -478,7 +519,7 @@ pub async fn chat_select_thread(
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tauri::command]
 pub async fn chat_rename_thread(
     app_handle: tauri::AppHandle,
@@ -488,6 +529,8 @@ pub async fn chat_rename_thread(
     thread_id: String,
     title: String,
 ) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    require_runtime(&attach_state)?;
     chat_rename_thread_with_state(
         app_handle,
         auth_state,
@@ -499,7 +542,7 @@ pub async fn chat_rename_thread(
     .await
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn chat_rename_thread(
     app_handle: tauri::AppHandle,
@@ -515,12 +558,12 @@ async fn chat_rename_thread_with_state<R: tauri::Runtime>(
     app_handle: tauri::AppHandle<R>,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
-    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    #[cfg(unix)] attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
     title: String,
 ) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     return rename_thread_command(
         state.storage().ok(),
         &attach_state,
@@ -528,12 +571,12 @@ async fn chat_rename_thread_with_state<R: tauri::Runtime>(
         &thread_id,
         &title,
     );
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     let mut storage = state
         .storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     return rename_thread(
         &mut storage.journal,
         tokens.subject.as_deref(),
@@ -542,7 +585,7 @@ async fn chat_rename_thread_with_state<R: tauri::Runtime>(
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tauri::command]
 pub async fn chat_delete_thread(
     app_handle: tauri::AppHandle,
@@ -551,10 +594,12 @@ pub async fn chat_delete_thread(
     attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
 ) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    require_runtime(&attach_state)?;
     chat_delete_thread_with_state(app_handle, auth_state, state, attach_state, thread_id).await
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn chat_delete_thread(
     app_handle: tauri::AppHandle,
@@ -569,11 +614,11 @@ async fn chat_delete_thread_with_state<R: tauri::Runtime>(
     app_handle: tauri::AppHandle<R>,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
-    #[cfg(target_os = "linux")] attach_state: tauri::State<'_, AttachCompanionState>,
+    #[cfg(unix)] attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
 ) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     return delete_thread_command(
         state.storage().ok(),
         &state.session_thread,
@@ -581,12 +626,12 @@ async fn chat_delete_thread_with_state<R: tauri::Runtime>(
         tokens.subject.as_deref(),
         &thread_id,
     );
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     let mut storage = state
         .storage
         .lock()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     return delete_thread(
         &mut storage.journal,
         &state.session_thread,
@@ -595,6 +640,42 @@ async fn chat_delete_thread_with_state<R: tauri::Runtime>(
     );
 }
 
+#[cfg(unix)]
+#[tauri::command]
+pub async fn chat_new_thread(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    state: tauri::State<'_, ChatState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+) -> Result<(), String> {
+    let session = attach_state.desktop_client_session();
+    #[cfg(target_os = "macos")]
+    if !matches!(&session, DesktopClientSession::Connected(_)) {
+        return Err(auth::background_service_error());
+    }
+    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    match session {
+        DesktopClientSession::Connected(_) => {
+            state.session_thread.fresh(tokens.subject.as_deref());
+            Ok(())
+        }
+        DesktopClientSession::NoSupervisor => {
+            #[cfg(target_os = "macos")]
+            return Err(auth::background_service_error());
+            #[cfg(target_os = "linux")]
+            {
+                fresh_session_thread(
+                    state.storage()?,
+                    &state.session_thread,
+                    tokens.subject.as_deref(),
+                )
+            }
+        }
+        DesktopClientSession::Disconnected => Err(auth::background_service_error()),
+    }
+}
+
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn chat_new_thread(
     app_handle: tauri::AppHandle,
@@ -602,14 +683,14 @@ pub async fn chat_new_thread(
     state: tauri::State<'_, ChatState>,
 ) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    #[cfg(unix)]
-    let storage = state.storage()?;
-    #[cfg(target_os = "windows")]
-    let storage = &state.storage;
-    fresh_session_thread(storage, &state.session_thread, tokens.subject.as_deref())
+    fresh_session_thread(
+        &state.storage,
+        &state.session_thread,
+        tokens.subject.as_deref(),
+    )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tauri::command]
 pub async fn chat_thread_open(
     app_handle: tauri::AppHandle,
@@ -620,6 +701,8 @@ pub async fn chat_thread_open(
     limit: usize,
     cursor: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    require_runtime(&attach_state)?;
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     let session_root = state_session_root(&app_handle)?;
     chat_thread_open_command(
@@ -633,7 +716,7 @@ pub async fn chat_thread_open(
     )
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn chat_thread_open(
     app_handle: tauri::AppHandle,
