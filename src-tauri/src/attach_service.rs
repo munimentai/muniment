@@ -1181,8 +1181,8 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                                 let status = event_status_app
                                     .state::<AttachCompanionState>()
                                     .listener_status();
-                                let _ = event_status_app
-                                    .emit("desktop-client-status-changed", status);
+                                let _ =
+                                    event_status_app.emit("desktop-client-status-changed", status);
                             }
                         },
                         move |event| {
@@ -1453,8 +1453,7 @@ mod tests {
     #[test]
     fn macos_starts_both_desktop_supervisors_without_a_listener() {
         let state = AttachCompanionState::default();
-        let endpoint =
-            std::env::temp_dir().join(format!("mt-macos-client-{}", std::process::id()));
+        let endpoint = std::env::temp_dir().join(format!("mt-macos-client-{}", std::process::id()));
         let _ = std::fs::remove_file(&endpoint);
         assert!(!endpoint.exists());
         let client_endpoint = endpoint.clone();

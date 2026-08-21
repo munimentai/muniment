@@ -1933,8 +1933,8 @@ mod linux {
                 0xc67178f2,
             ];
             let mut words = [0_u32; 64];
-            for (word, bytes) in words.iter_mut().zip(self.block.chunks_exact(4)) {
-                *word = u32::from_be_bytes(bytes.try_into().expect("four-byte SHA-256 word"));
+            for (word, bytes) in words.iter_mut().zip(self.block.as_chunks::<4>().0) {
+                *word = u32::from_be_bytes(*bytes);
             }
             for index in 16..64 {
                 let s0 = words[index - 15].rotate_right(7)
@@ -3350,10 +3350,8 @@ mod linux {
         S: InterruptibleConnectState,
     {
         let path = endpoint.as_os_str().as_bytes();
-        let path_capacity = std::mem::size_of_val(&unsafe {
-            std::mem::zeroed::<libc::sockaddr_un>()
-        }
-        .sun_path);
+        let path_capacity =
+            std::mem::size_of_val(&unsafe { std::mem::zeroed::<libc::sockaddr_un>() }.sun_path);
         if path.is_empty() || path.len() >= path_capacity || path.contains(&0) {
             return None;
         }
@@ -3387,9 +3385,8 @@ mod linux {
         for (target, source) in address.sun_path.iter_mut().zip(path) {
             *target = *source as libc::c_char;
         }
-        let address_length = (std::mem::offset_of!(libc::sockaddr_un, sun_path)
-            + path.len()
-            + 1) as libc::socklen_t;
+        let address_length =
+            (std::mem::offset_of!(libc::sockaddr_un, sun_path) + path.len() + 1) as libc::socklen_t;
         #[cfg(target_os = "macos")]
         {
             address.sun_len = address_length as u8;
@@ -4008,7 +4005,7 @@ mod linux {
             return None;
         }
         let mut output = Vec::with_capacity(value.len() / 4 * 3);
-        for (group_index, group) in value.as_bytes().chunks_exact(4).enumerate() {
+        for (group_index, group) in value.as_bytes().as_chunks::<4>().0.iter().enumerate() {
             let last = group_index + 1 == value.len() / 4;
             let padding = usize::from(group[3] == b'=') + usize::from(group[2] == b'=');
             if padding > 2 || (!last && padding != 0) || (group[2] == b'=' && group[3] != b'=') {
@@ -4079,10 +4076,10 @@ mod linux {
         }
         padded.extend_from_slice(&bit_length.to_be_bytes());
         let mut hash = INITIAL;
-        for chunk in padded.chunks_exact(64) {
+        for chunk in padded.as_chunks::<64>().0 {
             let mut words = [0_u32; 64];
-            for (word, bytes) in words.iter_mut().zip(chunk.chunks_exact(4)) {
-                *word = u32::from_be_bytes(bytes.try_into().expect("four-byte word"));
+            for (word, bytes) in words.iter_mut().zip(chunk.as_chunks::<4>().0) {
+                *word = u32::from_be_bytes(*bytes);
             }
             for index in 16..64 {
                 let s0 = words[index - 15].rotate_right(7)
@@ -4563,8 +4560,7 @@ mod tests {
             }
         }
 
-        let endpoint =
-            std::env::temp_dir().join(format!("mt-connect-{}.sock", std::process::id()));
+        let endpoint = std::env::temp_dir().join(format!("mt-connect-{}.sock", std::process::id()));
         let listener = UnixListener::bind(&endpoint).unwrap();
         let stop = Arc::new((Mutex::new(StopState { stream: None }), Condvar::new()));
 
