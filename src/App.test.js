@@ -411,6 +411,45 @@ describe('pairing decisions', () => {
 })
 
 describe('workspace composer entry', () => {
+  it.each([
+    ['enabled', false],
+    ['requiresApproval', true],
+    ['notFound', false],
+    ['failed', false],
+    ['requires_approval', false],
+    [null, false],
+  ])('shows the macOS approval notice for the %s state', async (activation, visible) => {
+    vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue('Macintosh')
+    invoke.mockImplementation(async (command) => {
+      if (command === 'runtime_service_activation') return activation
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'attach_listener_status') return { connected: true, supervisor_running: true }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'open_login_items') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByRole('textbox', { name: 'Message' })
+
+    const button = screen.queryByRole('button', { name: 'Open Login Items' })
+    expect(Boolean(button)).toBe(visible)
+    if (button) {
+      await fireEvent.click(button)
+      expect(invoke).toHaveBeenCalledWith('open_login_items')
+    }
+  })
+
+  it('does not read the runtime activation state outside macOS', async () => {
+    render(App)
+    await screen.findByRole('textbox', { name: 'Message' })
+
+    expect(invoke).not.toHaveBeenCalledWith('runtime_service_activation')
+    expect(screen.queryByRole('button', { name: 'Open Login Items' })).not.toBeInTheDocument()
+  })
+
   it('shows the background service notice after the boot status read fails and reads status after recovery', async () => {
     let statusReads = 0
     invoke.mockImplementation(async (command) => {
