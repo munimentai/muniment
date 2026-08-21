@@ -2,16 +2,17 @@
 use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ClientError;
-#[cfg(unix)]
-use muniment_core::attach::{
-    answer_presented_approval, handshake_desktop_client_stream, interruptible_connect_with_state,
-    serve_approval_presenter_at, serve_desktop_client_at, ApprovalPresenterStopHandle,
-    DesktopClientHolder, DesktopClientStopHandle, InterruptibleConnectState,
-};
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
-    bounded_claim, load_client_credentials, save_client_credentials as persist_client_credentials,
-    ClientCredential, CompanionRegistry, WorkspaceContextMap, COMPANION_CREDENTIAL_FILE_NAME,
+    answer_presented_approval, bounded_claim, load_client_credentials,
+    save_client_credentials as persist_client_credentials, serve_approval_presenter_at,
+    ApprovalPresenterStopHandle, ClientCredential, CompanionRegistry, WorkspaceContextMap,
+    COMPANION_CREDENTIAL_FILE_NAME,
+};
+#[cfg(unix)]
+use muniment_core::attach::{
+    handshake_desktop_client_stream, interruptible_connect_with_state, serve_desktop_client_at,
+    DesktopClientHolder, DesktopClientStopHandle, InterruptibleConnectState,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 use std::collections::HashMap;
