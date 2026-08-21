@@ -28,6 +28,32 @@ source test/e2e/support/cleanup-ledger.sh
 cleanup_absent() { [[ ! -e $1 ]]; }
 process_absent() { [[ -z $process_name ]] || ! pgrep -x "$process_name" >/dev/null; }
 
+payload_failure() {
+  printf '%s\n' "$1" | tee -a "$raw/payload.log" >&2
+  return 1
+}
+
+verify_installed_payload() {
+  local runtime="$installed_bundle/Contents/Library/LaunchServices/muniment-runtime"
+  local agent="$installed_bundle/Contents/Library/LaunchAgents/ai.muniment.runtime.plist"
+  local plist_buddy=${MUNIMENT_E2E_PLIST_BUDDY:-/usr/libexec/PlistBuddy}
+  local runtime_version label bundle_program throttle unsuccessful_exit
+
+  [[ -x $runtime ]] || payload_failure 'installed runtime is unavailable or not executable' || return
+  runtime_version=$("$runtime" --version 2>>"$raw/payload.log") || payload_failure 'installed runtime version probe failed' || return
+  [[ -n ${runtime_version//[[:space:]]/} ]] || payload_failure 'installed runtime version is empty' || return
+  [[ -f $agent ]] || payload_failure 'installed runtime LaunchAgent is unavailable' || return
+  label=$("$plist_buddy" -c 'Print :Label' "$agent" 2>>"$raw/payload.log") || payload_failure 'installed runtime LaunchAgent label is unavailable' || return
+  [[ $label == ai.muniment.runtime ]] || payload_failure 'installed runtime LaunchAgent label is invalid' || return
+  bundle_program=$("$plist_buddy" -c 'Print :BundleProgram' "$agent" 2>>"$raw/payload.log") || payload_failure 'installed runtime LaunchAgent executable path is unavailable' || return
+  [[ $bundle_program == Contents/Library/LaunchServices/muniment-runtime ]] || payload_failure 'installed runtime LaunchAgent executable path is invalid' || return
+  throttle=$("$plist_buddy" -c 'Print :ThrottleInterval' "$agent" 2>>"$raw/payload.log") || payload_failure 'installed runtime LaunchAgent throttle is unavailable' || return
+  [[ $throttle == 5 ]] || payload_failure 'installed runtime LaunchAgent throttle is invalid' || return
+  unsuccessful_exit=$("$plist_buddy" -c 'Print :KeepAlive:SuccessfulExit' "$agent" 2>>"$raw/payload.log") || payload_failure 'installed runtime LaunchAgent unsuccessful-exit policy is unavailable' || return
+  [[ $unsuccessful_exit == false ]] || payload_failure 'installed runtime LaunchAgent unsuccessful-exit policy is invalid' || return
+  printf 'runtime_version=%s\npayload=verified\n' "$runtime_version" >"$raw/payload.log"
+}
+
 stop_app() {
   if [[ -n $app_pid ]]; then kill "$app_pid" 2>/dev/null || true; fi
   if [[ -n $process_name ]]; then pkill -x "$process_name" 2>/dev/null || true; fi
@@ -88,7 +114,7 @@ finalize() {
   cleanup_step safe-gone cleanup_absent "$safe"
   cleanup_step remove-cleanup-log rm -f -- "$cleanup_log"
   rm -f -- "$cleanup_status_ledger" "$redaction_report"
-  if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} != 1 ]]; then
+  if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} != 1 && ${MUNIMENT_E2E_PAYLOAD_TEST_MODE:-0} != 1 ]]; then
     rmdir "$run_root" 2>/dev/null || cleanup_status=1
   fi
   if (( status != 0 || cleanup_status != 0 || redaction_status != 0 )); then exit 1; fi
@@ -116,6 +142,13 @@ if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} == 1 ]]; then
   exit
 fi
 
+if [[ ${MUNIMENT_E2E_PAYLOAD_TEST_MODE:-0} == 1 ]]; then
+  installed_bundle=${MUNIMENT_E2E_PAYLOAD_TEST_BUNDLE:?test bundle is required}
+  installed=1
+  verify_installed_payload || status=1
+  exit
+fi
+
 sha=${MUNIMENT_E2E_SOURCE_SHA:-}
 [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid source SHA' >&2; status=1; exit; }
 [[ -n ${GH_TOKEN:-} && -n ${GITHUB_REPOSITORY:-} ]] || { echo 'required injected environment is unavailable' >&2; status=1; exit; }
@@ -139,6 +172,7 @@ process_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2
 
 installed=1
 ditto "$source_bundle" "$installed_bundle" >>"$raw/install.log" 2>&1 || { status=1; exit; }
+verify_installed_payload || { status=1; exit; }
 mkdir -p "$state_root/home" "$state_root/tmp"
 
 # The window probe reads CoreGraphics window metadata, which macOS grants with

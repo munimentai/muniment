@@ -97,6 +97,8 @@ describe('macOS runtime bundle paths', () => {
     expect(plistValue('BundleProgram')).toBe('Contents/Library/LaunchServices/muniment-runtime')
     expect(isAbsolute(plistValue('BundleProgram'))).toBe(false)
     expect(launchAgent).not.toMatch(/<key>Program(?:Arguments)?<\/key>/)
+    expect(launchAgent).toMatch(/<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/)
+    expect(launchAgent).toMatch(/<key>ThrottleInterval<\/key>\s*<integer>5<\/integer>/)
     expect(plistValue('StandardOutPath')).toBe('/dev/null')
     expect(plistValue('StandardErrorPath')).toBe('/dev/null')
   })
