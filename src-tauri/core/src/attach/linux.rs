@@ -2572,7 +2572,10 @@ where
             &mut None,
             &mut registries,
         );
-        let deadline = Instant::now() + HELLO_TIMEOUT;
+        let authorization_remaining = authorization.remaining_lifetime().unwrap_or_default();
+        let deadline = Instant::now()
+            .checked_add(timeout.min(authorization_remaining))
+            .ok_or(AttachSessionError::Timeout)?;
         match dispatched {
             Ok(dispatched) => {
                 let response = Response {

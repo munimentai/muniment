@@ -306,6 +306,7 @@ struct StartService {
     artifact_ids: Vec<(String, Id)>,
     artifact_read_failures: usize,
     artifact_fetch_result: Option<ArtifactFetchResult>,
+    artifact_fetch_clock: Option<Arc<AtomicU64>>,
 }
 
 #[derive(Default)]
@@ -770,6 +771,9 @@ impl ThreadListService for StartService {
         workspace: &str,
         artifact_id: &Id,
     ) -> Result<ArtifactFetchResult, muniment_core::attach::ProtocolError> {
+        if let Some(clock) = &self.artifact_fetch_clock {
+            clock.store(3_601, Ordering::SeqCst);
+        }
         self.artifact_ids
             .push((workspace.to_owned(), artifact_id.clone()));
         Ok(self
@@ -5158,30 +5162,50 @@ fn malformed_post_authorization_request_is_redacted_and_terminal() {
 #[test]
 fn authorization_is_rechecked_before_every_dispatch() {
     let (mut client, server) = UnixStream::pair().unwrap();
+    let now = Arc::new(AtomicU64::new(0));
+    let worker_now = Arc::clone(&now);
+    let worker = thread::spawn(move || {
+        let mut service = |_: &str, _: ThreadListRequest| {
+            Ok(ThreadListPage {
+                threads: vec![],
+                next_cursor: None,
+            })
+        };
+        run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(1),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: SharedTestClock(worker_now),
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
+            },
+            &mut service,
+        )
+    });
     client.write_all(&hello(1, 1)).unwrap();
+    let _: Welcome = read_frame(&mut client);
+    let _: Authorized = read_frame(&mut client);
     client
         .write_all(&request(20, Operation::ThreadList, json!({"limit": 1})))
         .unwrap();
+    let _: Response = read_frame(&mut client);
+    now.store(3_601, Ordering::SeqCst);
     client
         .write_all(&request(21, Operation::ThreadList, json!({"limit": 1})))
         .unwrap();
-    client.shutdown(Shutdown::Write).unwrap();
-    let now = Rc::new(Cell::new(Duration::ZERO));
-    let advance = now.clone();
-    let calls = Cell::new(0);
-    let mut service = move |_: &str, _: ThreadListRequest| {
-        calls.set(calls.get() + 1);
-        advance.set(Duration::from_secs(3601));
-        Ok(ThreadListPage {
-            threads: vec![],
-            next_cursor: None,
-        })
-    };
+
     assert_eq!(
-        dispatch_session(&mut client, server, TestClock(now), &mut service),
+        worker.join().unwrap(),
         Err(AttachSessionError::Authorization)
     );
-    let _: Response = read_frame(&mut client);
     let error: ErrorEnvelope = read_frame(&mut client);
     assert_eq!(
         error.request_id,
@@ -6391,6 +6415,51 @@ fn artifact_fetch_returns_metadata_and_rejects_the_sixty_fifth_live_transfer() {
 }
 
 #[test]
+fn authorization_expiry_during_dispatch_prevents_the_response() {
+    let clock = Arc::new(AtomicU64::new(0));
+    let worker_clock = Arc::clone(&clock);
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        let mut service = StartService {
+            artifact_fetch_clock: Some(worker_clock.clone()),
+            ..StartService::default()
+        };
+        run_authenticated_session_with_authorization(
+            server,
+            credentials(),
+            "0.1.0",
+            Duration::from_secs(60),
+            AuthorizationSessionDependencies {
+                fill_random: |bytes: &mut [u8]| {
+                    bytes.fill(9);
+                    Ok(())
+                },
+                clock: SharedTestClock(worker_clock),
+                tokens: TestTokens(1),
+                approvals: |_: &muniment_core::attach::PairingChallenge, _: Duration| {
+                    Some(ApprovalDecision::Approve(approval()))
+                },
+            },
+            &mut service,
+        )
+    });
+    client.write_all(&hello(1, 1)).unwrap();
+    let _: Welcome = read_frame(&mut client);
+    let _: Authorized = read_frame(&mut client);
+    client
+        .write_all(&request(
+            965,
+            Operation::ArtifactFetch,
+            json!({"artifact_id": "0190a100-0000-7000-8000-000000000079"}),
+        ))
+        .unwrap();
+
+    let mut response = [0_u8; 1];
+    assert_eq!(client.read(&mut response).unwrap(), 0);
+    assert_eq!(worker.join().unwrap(), Err(AttachSessionError::Timeout));
+}
+
+#[test]
 fn artifact_window_grants_chunks_on_the_named_session_transfer() {
     let artifact_id = "0190a100-0000-7000-8000-000000000079";
     let (mut client, server) = UnixStream::pair().unwrap();
@@ -6742,7 +6811,7 @@ fn artifact_window_expires_a_transfer_that_exceeds_the_retained_byte_budget() {
             server,
             credentials(),
             "0.1.0",
-            Duration::from_secs(60),
+            Duration::from_secs(1),
             AuthorizationSessionDependencies {
                 fill_random: |bytes: &mut [u8]| {
                     bytes.fill(9);
