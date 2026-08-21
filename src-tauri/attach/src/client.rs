@@ -494,7 +494,7 @@ impl fmt::Debug for ThreadListPage {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod linux {
     use super::{
         ApprovalDecision, ApprovalPresentRequest, ApprovalPresenterServeOutcome, ArtifactChunk,
@@ -518,13 +518,73 @@ mod linux {
     use std::env;
     use std::fs::File;
     use std::io::{self, Read, Write};
+    #[cfg(target_os = "linux")]
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::io::{AsRawFd, FromRawFd};
+    use std::os::unix::io::AsRawFd;
+    #[cfg(target_os = "linux")]
+    use std::os::unix::io::FromRawFd;
     use std::os::unix::net::UnixStream;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+    #[cfg(target_os = "macos")]
+    pub trait MacosPeerReader {
+        fn peer_effective_uid(&self, socket: i32) -> Result<libc::uid_t, ()>;
+        fn local_effective_uid(&self) -> libc::uid_t;
+    }
+
+    #[cfg(target_os = "macos")]
+    struct NativeMacosPeerReader;
+
+    #[cfg(target_os = "macos")]
+    impl MacosPeerReader for NativeMacosPeerReader {
+        fn peer_effective_uid(&self, socket: i32) -> Result<libc::uid_t, ()> {
+            let mut uid = 0;
+            let mut gid = 0;
+            if unsafe { libc::getpeereid(socket, &mut uid, &mut gid) } == 0 {
+                Ok(uid)
+            } else {
+                Err(())
+            }
+        }
+
+        fn local_effective_uid(&self) -> libc::uid_t {
+            unsafe { libc::geteuid() }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn verify_macos_peer(stream: &UnixStream) -> Result<(), ClientError> {
+        verify_macos_peer_with_reader(stream, &NativeMacosPeerReader)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[doc(hidden)]
+    pub fn verify_macos_peer_with_reader(
+        stream: &UnixStream,
+        reader: &impl MacosPeerReader,
+    ) -> Result<(), ClientError> {
+        let peer_uid = reader
+            .peer_effective_uid(stream.as_raw_fd())
+            .map_err(|_| ClientError::ConnectionClosed)?;
+        if peer_uid != reader.local_effective_uid() {
+            return Err(ClientError::ConnectionClosed);
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn verify_connected_peer(stream: &UnixStream) -> Result<(), ClientError> {
+        verify_macos_peer(stream)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn verify_connected_peer(_stream: &UnixStream) -> Result<(), ClientError> {
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
     #[repr(C)]
     struct PollFd {
         fd: i32,
@@ -532,6 +592,7 @@ mod linux {
         revents: i16,
     }
 
+    #[cfg(target_os = "linux")]
     unsafe extern "C" {
         fn poll(descriptors: *mut PollFd, count: usize, timeout: i32) -> i32;
         fn socket(domain: i32, socket_type: i32, protocol: i32) -> i32;
@@ -545,9 +606,12 @@ mod linux {
         ) -> i32;
     }
 
+    #[cfg(target_os = "linux")]
     const POLLIN: i16 = 0x001;
+    #[cfg(target_os = "linux")]
     const POLLOUT: i16 = 0x004;
 
+    #[cfg(target_os = "linux")]
     #[repr(C)]
     struct UnixSocketAddress {
         family: u16,
@@ -3357,6 +3421,7 @@ mod linux {
         interruptible_connect_with_state(endpoint, &stop.inner)
     }
 
+    #[cfg(target_os = "linux")]
     pub fn interruptible_connect_with_state<S>(
         endpoint: &Path,
         stop: &Arc<(Mutex<S>, Condvar)>,
@@ -3444,6 +3509,25 @@ mod linux {
         Some(stream)
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn interruptible_connect_with_state<S>(
+        endpoint: &Path,
+        stop: &Arc<(Mutex<S>, Condvar)>,
+    ) -> Option<UnixStream>
+    where
+        S: InterruptibleConnectState,
+    {
+        let stream = UnixStream::connect(endpoint).ok()?;
+        let interrupt = stream.try_clone().ok()?;
+        let (state, _) = &**stop;
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.stopped() {
+            return None;
+        }
+        state.set_stream(Some(interrupt));
+        Some(stream)
+    }
+
     pub trait InterruptibleConnectState {
         fn stopped(&self) -> bool;
         fn set_stream(&mut self, stream: Option<UnixStream>);
@@ -3480,13 +3564,28 @@ mod linux {
     }
 
     fn endpoint_from_environment() -> Result<PathBuf, ClientError> {
-        let runtime = env::var_os("XDG_RUNTIME_DIR")
-            .ok_or(ClientError::RuntimeDirectoryMissing)
-            .map(PathBuf::from)?;
-        if !runtime.is_absolute() {
-            return Err(ClientError::RuntimeDirectoryRelative);
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = env::var_os("XDG_RUNTIME_DIR")
+                .ok_or(ClientError::RuntimeDirectoryMissing)
+                .map(PathBuf::from)?;
+            if !runtime.is_absolute() {
+                return Err(ClientError::RuntimeDirectoryRelative);
+            }
+            Ok(runtime.join("muniment").join("attach-v1.sock"))
         }
-        Ok(runtime.join("muniment").join("attach-v1.sock"))
+        #[cfg(target_os = "macos")]
+        {
+            let home = env::var_os("HOME")
+                .ok_or(ClientError::RuntimeDirectoryMissing)
+                .map(PathBuf::from)?;
+            if !home.is_absolute() {
+                return Err(ClientError::RuntimeDirectoryRelative);
+            }
+            Ok(home
+                .join("Library/Application Support/Muniment/runtime")
+                .join("attach-v1.sock"))
+        }
     }
 
     #[doc(hidden)]
@@ -3502,6 +3601,26 @@ mod linux {
             stream,
             client_version,
             identity.as_str(),
+            io_timeout,
+            approval_timeout,
+            pairing_pending,
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    #[doc(hidden)]
+    pub fn handshake_stream_with_peer_reader(
+        stream: UnixStream,
+        reader: &impl MacosPeerReader,
+        client_version: &str,
+        io_timeout: Duration,
+        approval_timeout: Duration,
+        pairing_pending: impl FnOnce(),
+    ) -> Result<AuthorizedClient, ClientError> {
+        verify_macos_peer_with_reader(&stream, reader)?;
+        handshake_stream(
+            stream,
+            client_version,
             io_timeout,
             approval_timeout,
             pairing_pending,
@@ -3558,6 +3677,7 @@ mod linux {
         client_version: &str,
         io_timeout: Duration,
     ) -> Result<MigrationControlClient, ClientError> {
+        verify_connected_peer(&stream)?;
         let hello = Hello {
             protocol: Protocol,
             client: Client {
@@ -3617,6 +3737,7 @@ mod linux {
         client_version: &str,
         io_timeout: Duration,
     ) -> Result<DesktopClient, ClientError> {
+        verify_connected_peer(&stream)?;
         let hello = Hello {
             protocol: Protocol,
             client: Client {
@@ -3682,6 +3803,7 @@ mod linux {
         client_version: &str,
         io_timeout: Duration,
     ) -> Result<ApprovalPresenterClient, ClientError> {
+        verify_connected_peer(&stream)?;
         let hello = Hello {
             protocol: Protocol,
             client: Client {
@@ -3743,6 +3865,7 @@ mod linux {
         approval_timeout: Duration,
         pairing_pending: impl FnOnce(),
     ) -> Result<AuthorizedClient, ClientError> {
+        verify_connected_peer(&stream)?;
         let authorized_client_id =
             Id::new(identity.id).map_err(|_| ClientError::UnexpectedMessage)?;
         let hello = Hello {
@@ -4216,7 +4339,7 @@ mod linux {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use linux::{
     connect_approval_presenter, connect_approval_presenter_at, connect_desktop_client,
     connect_desktop_client_at, handshake_approval_presenter_stream,
@@ -4227,15 +4350,21 @@ pub use linux::{
     DesktopClientStopHandle, InterruptibleConnectState, MigrationControlClient,
 };
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub use linux::{
+    handshake_stream_with_peer_reader, verify_macos_peer_with_reader, MacosPeerReader,
+};
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 #[derive(Debug)]
 pub struct AuthorizedClient;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 #[derive(Debug)]
 pub struct DesktopClient;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl DesktopClient {
     pub fn run_submit(
         &mut self,
@@ -4276,11 +4405,11 @@ impl DesktopClient {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 #[derive(Clone, Debug, Default)]
 pub struct DesktopClientHolder;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl DesktopClientHolder {
     pub fn new() -> Self {
         Self
@@ -4329,7 +4458,7 @@ impl DesktopClientHolder {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl AuthorizedClient {
     pub fn onboard_workspace(
         &mut self,
@@ -4455,7 +4584,7 @@ impl AuthorizedClient {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn handshake(
     client_version: &str,
     client_kind: &str,
@@ -4464,7 +4593,7 @@ pub fn handshake(
     linux::handshake(client_version, client_kind, pairing_pending)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn handshake_as(
     client_version: &str,
     client_kind: &str,
@@ -4479,7 +4608,7 @@ pub fn handshake_as(
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn handshake_as_with_credential(
     client_version: &str,
     client_kind: &str,
@@ -4518,7 +4647,7 @@ mod tests {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn handshake_as(
     _client_version: &str,
     _client_kind: &str,
@@ -4528,7 +4657,7 @@ pub fn handshake_as(
     Err(ClientError::UnsupportedPlatform)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn handshake(
     _client_version: &str,
     _client_kind: &str,
@@ -4537,7 +4666,7 @@ pub fn handshake(
     Err(ClientError::UnsupportedPlatform)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn handshake_as_with_credential(
     _client_version: &str,
     _client_kind: &str,

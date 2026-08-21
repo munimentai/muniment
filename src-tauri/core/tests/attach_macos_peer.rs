@@ -1,12 +1,13 @@
 #![cfg(target_os = "macos")]
 
 use muniment_core::attach::{
-    verify_macos_attach_peer_with_reader, MacosPeerError, MacosPeerReadError, MacosPeerReader,
+    accept_macos_attach_with_reader, verify_macos_attach_peer_with_reader, MacosAttachAcceptError,
+    MacosPeerError, MacosPeerReadError, MacosPeerReader,
 };
 use std::cell::Cell;
 use std::io::{self, Read};
 use std::os::fd::RawFd;
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 
 struct FakePeerReader {
     peer_uid: Result<libc::uid_t, MacosPeerReadError>,
@@ -41,6 +42,26 @@ fn verify_and_assert_no_response(reader: &FakePeerReader) -> Result<(), MacosPee
     result
 }
 
+fn accept_and_assert_no_response(reader: &FakePeerReader) {
+    let path = std::env::temp_dir().join(format!(
+        "muniment-attach-peer-{}-{}.sock",
+        std::process::id(),
+        reader as *const FakePeerReader as usize
+    ));
+    let listener = UnixListener::bind(&path).unwrap();
+    let mut client = UnixStream::connect(&path).unwrap();
+
+    assert_eq!(
+        accept_macos_attach_with_reader(&listener, reader).unwrap_err(),
+        MacosAttachAcceptError::PeerRejected
+    );
+    client.set_nonblocking(true).unwrap();
+    assert_eq!(client.read(&mut [0]).unwrap(), 0);
+
+    drop(listener);
+    std::fs::remove_file(path).unwrap();
+}
+
 #[test]
 fn accepts_a_matching_effective_uid() {
     let reader = FakePeerReader {
@@ -66,6 +87,7 @@ fn rejects_a_mismatched_effective_uid() {
         Err(MacosPeerError::WrongUid)
     );
     assert_eq!(reader.reads.get(), 1);
+    accept_and_assert_no_response(&reader);
 }
 
 #[test]
@@ -81,4 +103,5 @@ fn rejects_a_peer_identity_syscall_failure() {
         Err(MacosPeerError::IdentityUnavailable)
     );
     assert_eq!(reader.reads.get(), 1);
+    accept_and_assert_no_response(&reader);
 }
