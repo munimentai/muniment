@@ -534,25 +534,10 @@ mod linux {
 
     unsafe extern "C" {
         fn poll(descriptors: *mut PollFd, count: usize, timeout: i32) -> i32;
-        fn socket(domain: i32, socket_type: i32, protocol: i32) -> i32;
-        fn connect(socket: i32, address: *const UnixSocketAddress, length: u32) -> i32;
-        fn getsockopt(
-            socket: i32,
-            level: i32,
-            option: i32,
-            value: *mut i32,
-            length: *mut u32,
-        ) -> i32;
     }
 
     const POLLIN: i16 = 0x001;
     const POLLOUT: i16 = 0x004;
-
-    #[repr(C)]
-    struct UnixSocketAddress {
-        family: u16,
-        path: [u8; 108],
-    }
 
     const IO_TIMEOUT: Duration = Duration::from_secs(5);
     const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -3365,22 +3350,50 @@ mod linux {
         S: InterruptibleConnectState,
     {
         let path = endpoint.as_os_str().as_bytes();
-        if path.is_empty() || path.len() >= 108 || path.contains(&0) {
+        let path_capacity = std::mem::size_of_val(&unsafe {
+            std::mem::zeroed::<libc::sockaddr_un>()
+        }
+        .sun_path);
+        if path.is_empty() || path.len() >= path_capacity || path.contains(&0) {
             return None;
         }
-        // SAFETY: The constants and arguments match Linux's socket(2) interface.
-        let descriptor = unsafe { socket(1, 1 | 0x800 | 0x80000, 0) };
+        // SAFETY: The constants and arguments match the platform socket(2) interface.
+        let descriptor = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
         if descriptor < 0 {
             return None;
         }
         // SAFETY: `descriptor` is a new owned descriptor from socket(2).
         let stream = unsafe { UnixStream::from_raw_fd(descriptor) };
+        // SAFETY: `descriptor` remains open and F_SETFD accepts the returned flags.
+        let descriptor_flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+        if descriptor_flags < 0
+            || unsafe {
+                libc::fcntl(
+                    descriptor,
+                    libc::F_SETFD,
+                    descriptor_flags | libc::FD_CLOEXEC,
+                )
+            } < 0
+        {
+            return None;
+        }
         let interrupt = stream.try_clone().ok()?;
-        let mut address = UnixSocketAddress {
-            family: 1,
-            path: [0; 108],
-        };
-        address.path[..path.len()].copy_from_slice(path);
+        if stream.set_nonblocking(true).is_err() {
+            return None;
+        }
+        // SAFETY: A zeroed sockaddr_un is valid after its family and path are set.
+        let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
+        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        for (target, source) in address.sun_path.iter_mut().zip(path) {
+            *target = *source as libc::c_char;
+        }
+        let address_length = (std::mem::offset_of!(libc::sockaddr_un, sun_path)
+            + path.len()
+            + 1) as libc::socklen_t;
+        #[cfg(target_os = "macos")]
+        {
+            address.sun_len = address_length as u8;
+        }
 
         let connect_result = {
             let (state, _) = &**stop;
@@ -3391,14 +3404,16 @@ mod linux {
             state.set_stream(Some(interrupt));
             // SAFETY: `address` has a valid AF_UNIX family and a terminated pathname.
             unsafe {
-                connect(
+                libc::connect(
                     descriptor,
-                    &address,
-                    (std::mem::size_of::<u16>() + path.len() + 1) as u32,
+                    std::ptr::from_ref(&address).cast::<libc::sockaddr>(),
+                    address_length,
                 )
             }
         };
-        if connect_result < 0 && io::Error::last_os_error().raw_os_error() != Some(115) {
+        if connect_result < 0
+            && io::Error::last_os_error().raw_os_error() != Some(libc::EINPROGRESS)
+        {
             clear_interruptible_stream(stop);
             return None;
         }
@@ -3430,9 +3445,19 @@ mod linux {
                 }
             }
             let mut error = 0;
-            let mut length = std::mem::size_of::<i32>() as u32;
+            let mut length = std::mem::size_of::<i32>() as libc::socklen_t;
             // SAFETY: `error` and `length` are valid output pointers for SO_ERROR.
-            if unsafe { getsockopt(descriptor, 1, 4, &mut error, &mut length) } < 0 || error != 0 {
+            if unsafe {
+                libc::getsockopt(
+                    descriptor,
+                    libc::SOL_SOCKET,
+                    libc::SO_ERROR,
+                    std::ptr::from_mut(&mut error).cast(),
+                    &mut length,
+                )
+            } < 0
+                || error != 0
+            {
                 clear_interruptible_stream(stop);
                 return None;
             }
@@ -4515,6 +4540,41 @@ mod tests {
             "extra": true
         }))
         .is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn interruptible_connect_uses_the_macos_unix_socket_abi() {
+        use super::{interruptible_connect_with_state, InterruptibleConnectState};
+        use std::os::unix::net::{UnixListener, UnixStream};
+        use std::sync::{Arc, Condvar, Mutex};
+
+        struct StopState {
+            stream: Option<UnixStream>,
+        }
+
+        impl InterruptibleConnectState for StopState {
+            fn stopped(&self) -> bool {
+                false
+            }
+
+            fn set_stream(&mut self, stream: Option<UnixStream>) {
+                self.stream = stream;
+            }
+        }
+
+        let endpoint =
+            std::env::temp_dir().join(format!("mt-connect-{}.sock", std::process::id()));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        let stop = Arc::new((Mutex::new(StopState { stream: None }), Condvar::new()));
+
+        let connected = interruptible_connect_with_state(&endpoint, &stop).unwrap();
+        let accepted = listener.accept().unwrap().0;
+
+        drop(connected);
+        drop(accepted);
+        drop(listener);
+        std::fs::remove_file(endpoint).unwrap();
     }
 }
 

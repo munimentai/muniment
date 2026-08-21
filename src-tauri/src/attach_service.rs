@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 #[cfg(unix)]
@@ -58,8 +58,10 @@ use muniment_core::journal::Provenance;
 #[cfg(target_os = "linux")]
 use muniment_core::permission_gate::ChatPermissionAnswer;
 #[cfg(target_os = "linux")]
-use serde_json::{json, Value};
-#[cfg(target_os = "linux")]
+use serde_json::json;
+#[cfg(unix)]
+use serde_json::Value;
+#[cfg(unix)]
 use tauri::{Emitter, Manager};
 #[cfg(target_os = "linux")]
 use uuid::Uuid;
@@ -1110,12 +1112,27 @@ fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 #[cfg(target_os = "linux")]
-fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+fn runtime_profile_endpoint() -> Option<PathBuf> {
     let Ok(filesystem) = AttachFilesystem::from_environment() else {
         eprintln!("desktop client filesystem lookup failed");
+        return None;
+    };
+    Some(filesystem.endpoint_path().to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn runtime_profile_endpoint() -> Option<PathBuf> {
+    muniment_runtime::profile_directory()
+        .ok()
+        .map(|profile| profile.join("muniment/attach-v1.sock"))
+}
+
+#[cfg(unix)]
+pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(endpoint) = runtime_profile_endpoint() else {
+        eprintln!("desktop client profile lookup failed");
         return;
     };
-    let endpoint = filesystem.endpoint_path().to_owned();
     let client_endpoint = endpoint.clone();
     let client_app = app.clone();
     let event_app = app.clone();
@@ -1136,10 +1153,13 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                             observer_app
                                 .state::<AttachCompanionState>()
                                 .record_connected(connected);
-                            let status = observer_app
-                                .state::<AttachCompanionState>()
-                                .listener_status();
-                            let _ = observer_app.emit("desktop-client-status-changed", status);
+                            #[cfg(target_os = "linux")]
+                            {
+                                let status = observer_app
+                                    .state::<AttachCompanionState>()
+                                    .listener_status();
+                                let _ = observer_app.emit("desktop-client-status-changed", status);
+                            }
                         },
                     );
                 })
@@ -1156,10 +1176,14 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                             event_status_app
                                 .state::<AttachCompanionState>()
                                 .record_chat_events_connected(connected);
-                            let status = event_status_app
-                                .state::<AttachCompanionState>()
-                                .listener_status();
-                            let _ = event_status_app.emit("desktop-client-status-changed", status);
+                            #[cfg(target_os = "linux")]
+                            {
+                                let status = event_status_app
+                                    .state::<AttachCompanionState>()
+                                    .listener_status();
+                                let _ = event_status_app
+                                    .emit("desktop-client-status-changed", status);
+                            }
                         },
                         move |event| {
                             let _ = event_app.emit("chat-event", event);
@@ -1168,11 +1192,14 @@ fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 })
             },
         );
-    let status = app.state::<AttachCompanionState>().listener_status();
-    let _ = app.emit("desktop-client-status-changed", status);
+    #[cfg(target_os = "linux")]
+    {
+        let status = app.state::<AttachCompanionState>().listener_status();
+        let _ = app.emit("desktop-client-status-changed", status);
+    }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn serve_chat_events_at(
     endpoint: &Path,
     client_version: &str,
@@ -1424,15 +1451,49 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_creates_desktop_client_state_without_a_listener() {
+    fn macos_starts_both_desktop_supervisors_without_a_listener() {
         let state = AttachCompanionState::default();
+        let endpoint =
+            std::env::temp_dir().join(format!("mt-macos-client-{}", std::process::id()));
+        let _ = std::fs::remove_file(&endpoint);
+        assert!(!endpoint.exists());
+        let client_endpoint = endpoint.clone();
+        state.start_desktop_supervisors(
+            move |stop, holder| {
+                std::thread::spawn(move || {
+                    serve_desktop_client_at(
+                        &client_endpoint,
+                        "0.0.1",
+                        Duration::from_millis(10),
+                        Duration::from_secs(30),
+                        stop,
+                        holder,
+                        |_| {},
+                    );
+                })
+            },
+            move |stop| {
+                std::thread::spawn(move || {
+                    serve_chat_events_at(
+                        &endpoint,
+                        "0.0.1",
+                        Duration::from_millis(10),
+                        Duration::from_secs(30),
+                        stop,
+                        |_| {},
+                        |_| {},
+                    );
+                })
+            },
+        );
 
         assert!(matches!(
             state.desktop_client_session(),
-            DesktopClientSession::NoSupervisor
+            DesktopClientSession::Disconnected
         ));
-        assert!(state.desktop_client.lock().unwrap().is_none());
-        assert!(state.chat_events.lock().unwrap().is_none());
+        assert!(state.desktop_client.lock().unwrap().is_some());
+        assert!(state.chat_events.lock().unwrap().is_some());
+        state.stop_desktop_client();
     }
 
     #[cfg(target_os = "linux")]
