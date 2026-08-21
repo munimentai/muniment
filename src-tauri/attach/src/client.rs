@@ -532,12 +532,54 @@ mod linux {
         revents: i16,
     }
 
+    #[cfg(target_os = "linux")]
+    #[repr(C)]
+    struct UnixSocketAddress {
+        family: u16,
+        path: [i8; 108],
+    }
+
+    #[cfg(target_os = "macos")]
+    #[repr(C)]
+    struct UnixSocketAddress {
+        length: u8,
+        family: u8,
+        path: [i8; 104],
+    }
+
     unsafe extern "C" {
         fn poll(descriptors: *mut PollFd, count: usize, timeout: i32) -> i32;
+        fn socket(domain: i32, kind: i32, protocol: i32) -> i32;
+        fn connect(descriptor: i32, address: *const UnixSocketAddress, length: u32) -> i32;
+        fn fcntl(descriptor: i32, command: i32, argument: i32) -> i32;
+        fn getsockopt(
+            descriptor: i32,
+            level: i32,
+            option: i32,
+            value: *mut std::ffi::c_void,
+            length: *mut u32,
+        ) -> i32;
     }
 
     const POLLIN: i16 = 0x001;
     const POLLOUT: i16 = 0x004;
+    const AF_UNIX: i32 = 1;
+    const SOCK_STREAM: i32 = 1;
+    const F_GETFD: i32 = 1;
+    const F_SETFD: i32 = 2;
+    const FD_CLOEXEC: i32 = 1;
+    #[cfg(target_os = "linux")]
+    const EINPROGRESS: i32 = 115;
+    #[cfg(target_os = "macos")]
+    const EINPROGRESS: i32 = 36;
+    #[cfg(target_os = "linux")]
+    const SOL_SOCKET: i32 = 1;
+    #[cfg(target_os = "macos")]
+    const SOL_SOCKET: i32 = 0xffff;
+    #[cfg(target_os = "linux")]
+    const SO_ERROR: i32 = 4;
+    #[cfg(target_os = "macos")]
+    const SO_ERROR: i32 = 0x1007;
 
     const IO_TIMEOUT: Duration = Duration::from_secs(5);
     const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -3351,27 +3393,21 @@ mod linux {
     {
         let path = endpoint.as_os_str().as_bytes();
         let path_capacity =
-            std::mem::size_of_val(&unsafe { std::mem::zeroed::<libc::sockaddr_un>() }.sun_path);
+            std::mem::size_of_val(&unsafe { std::mem::zeroed::<UnixSocketAddress>() }.path);
         if path.is_empty() || path.len() >= path_capacity || path.contains(&0) {
             return None;
         }
         // SAFETY: The constants and arguments match the platform socket(2) interface.
-        let descriptor = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+        let descriptor = unsafe { socket(AF_UNIX, SOCK_STREAM, 0) };
         if descriptor < 0 {
             return None;
         }
         // SAFETY: `descriptor` is a new owned descriptor from socket(2).
         let stream = unsafe { UnixStream::from_raw_fd(descriptor) };
         // SAFETY: `descriptor` remains open and F_SETFD accepts the returned flags.
-        let descriptor_flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+        let descriptor_flags = unsafe { fcntl(descriptor, F_GETFD, 0) };
         if descriptor_flags < 0
-            || unsafe {
-                libc::fcntl(
-                    descriptor,
-                    libc::F_SETFD,
-                    descriptor_flags | libc::FD_CLOEXEC,
-                )
-            } < 0
+            || unsafe { fcntl(descriptor, F_SETFD, descriptor_flags | FD_CLOEXEC) } < 0
         {
             return None;
         }
@@ -3380,16 +3416,16 @@ mod linux {
             return None;
         }
         // SAFETY: A zeroed sockaddr_un is valid after its family and path are set.
-        let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
-        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
-        for (target, source) in address.sun_path.iter_mut().zip(path) {
-            *target = *source as libc::c_char;
+        let mut address = unsafe { std::mem::zeroed::<UnixSocketAddress>() };
+        address.family = AF_UNIX as _;
+        for (target, source) in address.path.iter_mut().zip(path) {
+            *target = *source as i8;
         }
         let address_length =
-            (std::mem::offset_of!(libc::sockaddr_un, sun_path) + path.len() + 1) as libc::socklen_t;
+            (std::mem::offset_of!(UnixSocketAddress, path) + path.len() + 1) as u32;
         #[cfg(target_os = "macos")]
         {
-            address.sun_len = address_length as u8;
+            address.length = address_length as u8;
         }
 
         let connect_result = {
@@ -3400,17 +3436,9 @@ mod linux {
             }
             state.set_stream(Some(interrupt));
             // SAFETY: `address` has a valid AF_UNIX family and a terminated pathname.
-            unsafe {
-                libc::connect(
-                    descriptor,
-                    std::ptr::from_ref(&address).cast::<libc::sockaddr>(),
-                    address_length,
-                )
-            }
+            unsafe { connect(descriptor, std::ptr::from_ref(&address), address_length) }
         };
-        if connect_result < 0
-            && io::Error::last_os_error().raw_os_error() != Some(libc::EINPROGRESS)
-        {
+        if connect_result < 0 && io::Error::last_os_error().raw_os_error() != Some(EINPROGRESS) {
             clear_interruptible_stream(stop);
             return None;
         }
@@ -3442,13 +3470,13 @@ mod linux {
                 }
             }
             let mut error = 0;
-            let mut length = std::mem::size_of::<i32>() as libc::socklen_t;
+            let mut length = std::mem::size_of::<i32>() as u32;
             // SAFETY: `error` and `length` are valid output pointers for SO_ERROR.
             if unsafe {
-                libc::getsockopt(
+                getsockopt(
                     descriptor,
-                    libc::SOL_SOCKET,
-                    libc::SO_ERROR,
+                    SOL_SOCKET,
+                    SO_ERROR,
                     std::ptr::from_mut(&mut error).cast(),
                     &mut length,
                 )
@@ -4574,7 +4602,7 @@ mod tests {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub fn handshake_as(
     _client_version: &str,
     _client_kind: &str,
@@ -4584,7 +4612,7 @@ pub fn handshake_as(
     Err(ClientError::UnsupportedPlatform)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub fn handshake(
     _client_version: &str,
     _client_kind: &str,
@@ -4593,7 +4621,7 @@ pub fn handshake(
     Err(ClientError::UnsupportedPlatform)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub fn handshake_as_with_credential(
     _client_version: &str,
     _client_kind: &str,
