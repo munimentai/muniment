@@ -126,7 +126,7 @@ impl RuntimeServiceAdapter for MacosRuntimeServiceAdapter {
 
         // SAFETY: The service comes from agentServiceWithPlistName and remains retained.
         unsafe { self.service.registerAndReturnError() }.map_err(|error| {
-            if error.code() == i64::from(kSMErrorLaunchDeniedByUser) {
+            if error.code() == kSMErrorLaunchDeniedByUser {
                 RegistrationError::Denied
             } else {
                 RegistrationError::Failed
