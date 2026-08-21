@@ -1446,7 +1446,7 @@ mod tests {
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[derive(Clone, Debug, Eq, PartialEq)]
     enum RunClientCall {
         Submit(String, Vec<String>, Option<String>),
@@ -1457,11 +1457,11 @@ mod tests {
         PermissionAnswer(String, String, AttachChatPermissionAnswer),
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[derive(Clone, Default)]
     struct FakeRunClient(Arc<Mutex<Vec<RunClientCall>>>, bool);
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     impl FakeRunClient {
         fn calls(&self) -> Vec<RunClientCall> {
             self.0.lock().unwrap().clone()
@@ -1472,7 +1472,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     impl RunCommandClient for FakeRunClient {
         fn run_submit(
             &self,
@@ -1577,7 +1577,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn assert_disconnected<T>(result: Result<T, String>) {
         assert_eq!(
             result.err().unwrap(),
@@ -1585,7 +1585,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn assert_runtime_update_pending<T>(result: Result<T, String>) {
         assert_eq!(
             result.err().unwrap(),
@@ -1593,16 +1593,20 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn command_test_state() -> (PathBuf, ChatState) {
         let directory =
             std::env::temp_dir().join(format!("muniment-run-command-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&directory).unwrap();
+        let storage = Arc::new(Mutex::new(ChatStorage {
+            journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
+            cas: LocalCas::open(&directory.join("cas")).unwrap(),
+        }));
         let state = ChatState {
-            storage: DeferredStorage(OnceLock::from(Arc::new(Mutex::new(ChatStorage {
-                journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
-                cas: LocalCas::open(&directory.join("cas")).unwrap(),
-            })))),
+            #[cfg(target_os = "linux")]
+            storage: DeferredStorage(OnceLock::from(storage)),
+            #[cfg(target_os = "macos")]
+            storage,
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
@@ -1612,15 +1616,21 @@ mod tests {
         (directory, state)
     }
 
-    #[cfg(target_os = "linux")]
-    fn deferred_command_test_state() -> ChatState {
-        ChatState::new(RuntimeActivityRegistry::new())
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn deferred_command_test_state() -> (Option<PathBuf>, ChatState) {
+        #[cfg(target_os = "linux")]
+        return (None, ChatState::new(RuntimeActivityRegistry::new()));
+        #[cfg(target_os = "macos")]
+        {
+            let (directory, state) = command_test_state();
+            (Some(directory), state)
+        }
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_chat_storage_starts_deferred() {
-        let state = deferred_command_test_state();
+        let (_, state) = deferred_command_test_state();
 
         assert!(state.storage.get().is_none());
         assert!(matches!(
@@ -1629,7 +1639,7 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_submit_routes_all_states_and_connected_stops_before_local_run() {
         let (directory, state) = command_test_state();
@@ -1654,7 +1664,7 @@ mod tests {
         assert_eq!(local.unwrap().run_id, "local-run");
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
 
-        let deferred_state = deferred_command_test_state();
+        let (deferred_directory, deferred_state) = deferred_command_test_state();
         deferred_state
             .session_thread
             .select("selected-thread".into(), Some("subject-1"));
@@ -1719,10 +1729,13 @@ mod tests {
             vec![],
             |_| async { panic!("disconnected submit called the local operation") },
         )));
+        if let Some(directory) = deferred_directory {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_resume_routes_all_states_and_connected_stops_before_local_run() {
         let (directory, state) = command_test_state();
@@ -1745,7 +1758,7 @@ mod tests {
         assert_eq!(local.unwrap().run_id, "local-run");
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
         let client = FakeRunClient::default();
-        let deferred_state = deferred_command_test_state();
+        let (deferred_directory, deferred_state) = deferred_command_test_state();
         let connected = tauri::async_runtime::block_on(handle_run_resume(
             RunCommandSession::Connected(client.clone()),
             &deferred_state,
@@ -1772,10 +1785,13 @@ mod tests {
             "run-1",
             || async { panic!("disconnected resume called the local operation") },
         )));
+        if let Some(directory) = deferred_directory {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_queue_routes_all_desktop_client_states_and_deliveries() {
         let local_called = AtomicBool::new(false);
@@ -1831,7 +1847,7 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_cancel_routes_all_desktop_client_states() {
         let local_called = AtomicBool::new(false);
@@ -1860,7 +1876,7 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn chat_answer_permission_routes_all_desktop_client_states() {
         let answer = AttachChatPermissionAnswer::Confirm(true);
