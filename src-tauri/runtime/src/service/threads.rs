@@ -1,9 +1,9 @@
 //! Thread and run stream service operations.
 
-#[cfg(target_os = "linux")]
 use super::runtime_provenance;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::RunStreamPage;
+#[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::journal::retention::{
@@ -13,7 +13,6 @@ use muniment_core::journal::thread_mutation::{
     append_thread_delete_now, append_thread_rename_now, create_thread_now,
 };
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
-#[cfg(target_os = "linux")]
 use muniment_core::owned_threads::chat_thread_summaries_page;
 use muniment_core::run_events::{ChatStorage, SharedStorage};
 use muniment_core::thread_history::{chat_thread_open_page, ChatThreadOpenPage};

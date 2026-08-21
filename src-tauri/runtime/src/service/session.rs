@@ -1,6 +1,6 @@
 //! Native session service operations.
 
-pub use muniment_core::attach::linux::EntitlementSnapshotResult;
+pub use muniment_core::attach::EntitlementSnapshotResult;
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{
     api_base_url, ensure_native_session as ensure_core_native_session, list_native_devices,
