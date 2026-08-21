@@ -131,6 +131,7 @@
   let desktopClientStatus = $state(null)
   let desktopClientStatusVersion = 0
   let backgroundServiceNoticeVisible = $state(false)
+  let runtimeServiceActivation = $state(null)
   let authRequestVersion = 0
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
@@ -677,6 +678,10 @@
     void run('sign-in')
   }
 
+  function openLoginItems() {
+    void tauri.invoke('open_login_items').catch(() => console.error('Login Items failed to open.'))
+  }
+
   onMount(() => {
     let pairingUnlisten
     let registrationRetryUnlisten
@@ -742,6 +747,11 @@
     })
     if (tauri) {
       void startDesktopClientStatus()
+      if (navigator.userAgent.includes('Macintosh')) {
+        void tauri.invoke('runtime_service_activation').then((activation) => {
+          runtimeServiceActivation = activation
+        }).catch(() => console.error('Runtime service activation failed.'))
+      }
       run('status')
       chatController.start()
       entitlementToast.start()
@@ -1120,6 +1130,12 @@
         <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
         </div>
         <div class="composer">
+          {#if runtimeServiceActivation === 'requiresApproval'}
+            <section class="update-notice approval-notice" aria-live="polite">
+              <p class="record error-record">Muniment needs approval to run in the background.</p>
+              <button type="button" class="quiet" onclick={openLoginItems}>Open Login Items</button>
+            </section>
+          {/if}
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
@@ -1499,6 +1515,7 @@
      A 15px support line would compete with the draft text. */
   .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
   .update-notice .support { font-size: var(--text-12); }
+  .approval-notice { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .composer:focus-within { border-color: var(--muted); }

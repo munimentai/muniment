@@ -3,12 +3,30 @@ use std::fmt;
 #[cfg(target_os = "macos")]
 const RUNTIME_AGENT_PLIST: &str = "ai.muniment.runtime.plist";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) enum RuntimeServiceActivation {
     Enabled,
     RequiresApproval,
     NotFound,
     Failed,
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub(crate) fn runtime_service_activation(
+    activation: tauri::State<'_, RuntimeServiceActivation>,
+) -> RuntimeServiceActivation {
+    *activation
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub(crate) fn open_login_items() {
+    use objc2_service_management::SMAppService;
+
+    // SAFETY: This class method only asks System Settings to show Login Items.
+    unsafe { SMAppService::openSystemSettingsLoginItems() };
 }
 
 impl fmt::Display for RuntimeServiceActivation {
@@ -190,6 +208,28 @@ mod tests {
             assert_eq!(adapter.status_calls.get(), 1);
             assert_eq!(adapter.registration_calls.get(), 0);
         }
+    }
+
+    #[test]
+    fn serializes_each_activation_state_for_the_shell() {
+        for (activation, expected) in [
+            (RuntimeServiceActivation::Enabled, "\"enabled\""),
+            (
+                RuntimeServiceActivation::RequiresApproval,
+                "\"requiresApproval\"",
+            ),
+            (RuntimeServiceActivation::NotFound, "\"notFound\""),
+            (RuntimeServiceActivation::Failed, "\"failed\""),
+        ] {
+            assert_eq!(serde_json::to_string(&activation).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn main_registers_runtime_service_commands() {
+        let main = include_str!("main.rs");
+        assert!(main.contains("macos_runtime_service::runtime_service_activation"));
+        assert!(main.contains("macos_runtime_service::open_login_items"));
     }
 
     #[test]
