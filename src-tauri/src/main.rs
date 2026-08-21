@@ -113,7 +113,11 @@ fn main() {
             model_install::parakeet_install_cancel,
             dictation::dictation_start,
             dictation::dictation_stop,
-            dictation::dictation_status
+            dictation::dictation_status,
+            #[cfg(target_os = "macos")]
+            macos_runtime_service::runtime_service_activation,
+            #[cfg(target_os = "macos")]
+            macos_runtime_service::open_login_items
         ])
         .run(tauri::generate_context!())
         .expect("error while running muniment");
