@@ -43,10 +43,10 @@ fn maps_macos_activation_outcomes_to_process_statuses() {
 }
 
 #[test]
-fn missing_profile_directory_allows_normal_activation() {
+fn missing_data_directory_allows_normal_activation() {
     let directory = directory();
     let profile = directory.join(muniment_runtime::APPLICATION_IDENTIFIER);
-    fs::remove_dir(&profile).unwrap();
+    fs::remove_dir_all(&directory).unwrap();
 
     assert!(runtime(&directory, "orderly").status.success());
     assert!(profile.join("macos-starts").is_file());
