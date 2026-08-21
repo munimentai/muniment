@@ -1,27 +1,30 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, TerminationSignalWait};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use muniment_runtime::{
     config_directory, profile_directory, run_runtime_activation, RuntimeActivationExit,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::PathBuf;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::mpsc;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const INITIAL_WAIT_INTERVAL: Duration = Duration::from_millis(25);
 // Limit lock polling to one wakeup every two seconds during long waits.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const MAX_WAIT_INTERVAL: Duration = Duration::from_secs(2);
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const UPGRADE_REFRESH_EXIT_STATUS: i32 = 75;
+const FAILURE_EXIT_STATUS: i32 = 1;
+const SUCCESS_EXIT_STATUS: i32 = 0;
+const MACOS_TEST_EXIT_ENV: &str = "MUNIMENT_RUNTIME_TEST_MACOS_ACTIVATION_EXIT";
 
 const HELP: &str = "\
 Usage: muniment-runtime [OPTIONS]
@@ -40,8 +43,16 @@ fn main() {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if let Some(exit) = test_macos_activation_exit() {
+        std::process::exit(run_recorded_macos_activation(|| match macos_activation() {
+            MacosActivationExit::Orderly(_) => exit(),
+            failed => failed,
+        }));
+    }
+
     #[cfg(target_os = "linux")]
-    match run() {
+    match run(RuntimeDirectorySource::Environment) {
         Ok(RuntimeActivationExit::ManagerStop) => {}
         Ok(RuntimeActivationExit::UpgradeRefresh) => {
             std::process::exit(UPGRADE_REFRESH_EXIT_STATUS)
@@ -52,11 +63,92 @@ fn main() {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    std::process::exit(run_recorded_macos_activation(macos_activation));
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         eprintln!("muniment-runtime: Linux is the only supported platform");
         std::process::exit(1);
     }
+}
+
+#[derive(Clone, Copy)]
+enum MacosActivationExit {
+    Orderly(i32),
+    Failed(i32),
+}
+
+fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit) -> i32 {
+    use muniment_runtime::{
+        profile_directory, record_macos_failed_exit, record_macos_orderly_exit, record_macos_start,
+        MacosStartDecision,
+    };
+
+    let state_directory = match profile_directory() {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            return FAILURE_EXIT_STATUS;
+        }
+    };
+    let start = match record_macos_start(&state_directory) {
+        Ok((MacosStartDecision::StopRestartLoop, _)) => return SUCCESS_EXIT_STATUS,
+        Ok((MacosStartDecision::Run, start)) => start,
+        Err(error) => {
+            eprintln!("muniment-runtime: start record failed: {error}");
+            return FAILURE_EXIT_STATUS;
+        }
+    };
+    match activate() {
+        MacosActivationExit::Orderly(status) => {
+            if let Err(error) = record_macos_orderly_exit(state_directory, start) {
+                eprintln!("muniment-runtime: start record failed: {error}");
+                return FAILURE_EXIT_STATUS;
+            }
+            status
+        }
+        MacosActivationExit::Failed(status) => {
+            match record_macos_failed_exit(state_directory, start) {
+                Ok(MacosStartDecision::StopRestartLoop) => SUCCESS_EXIT_STATUS,
+                Ok(MacosStartDecision::Run) => status,
+                Err(error) => {
+                    eprintln!("muniment-runtime: start record failed: {error}");
+                    FAILURE_EXIT_STATUS
+                }
+            }
+        }
+    }
+}
+
+fn test_macos_activation_exit() -> Option<impl FnOnce() -> MacosActivationExit> {
+    let exit = match std::env::var_os(MACOS_TEST_EXIT_ENV)?.to_str()? {
+        "orderly" => MacosActivationExit::Orderly(SUCCESS_EXIT_STATUS),
+        "failed" => MacosActivationExit::Failed(FAILURE_EXIT_STATUS),
+        _ => return None,
+    };
+    Some(move || exit)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn macos_activation() -> MacosActivationExit {
+    match run(RuntimeDirectorySource::Profile) {
+        Ok(RuntimeActivationExit::ManagerStop) => MacosActivationExit::Orderly(SUCCESS_EXIT_STATUS),
+        Ok(RuntimeActivationExit::UpgradeRefresh) => {
+            MacosActivationExit::Orderly(UPGRADE_REFRESH_EXIT_STATUS)
+        }
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            MacosActivationExit::Failed(FAILURE_EXIT_STATUS)
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Clone, Copy)]
+enum RuntimeDirectorySource {
+    Environment,
+    Profile,
 }
 
 fn handle_arguments() -> Result<bool, String> {
@@ -78,22 +170,28 @@ fn handle_arguments() -> Result<bool, String> {
     Ok(true)
 }
 
-#[cfg(target_os = "linux")]
-fn run() -> Result<RuntimeActivationExit, String> {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn run(runtime_directory_source: RuntimeDirectorySource) -> Result<RuntimeActivationExit, String> {
     let termination_signal = TerminationSignalWait::new().map_err(|error| error.to_string())?;
     let wait_timeout = test_wait_timeout()?;
     if std::env::var_os(EXIT_AFTER_LOCK_ENV).is_some() {
         return wait_for_instance_lock(wait_timeout).map(|_| RuntimeActivationExit::ManagerStop);
     }
-    let runtime_directory = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_owned())?;
     let profile_directory = profile_directory().map_err(|error| error.to_string())?;
+    let runtime_directory = match runtime_directory_source {
+        RuntimeDirectorySource::Environment => std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_owned())?,
+        RuntimeDirectorySource::Profile => profile_directory.clone(),
+    };
     let config_directory = config_directory().map_err(|error| error.to_string())?;
     let takeover_deadline = wait_timeout
         .and_then(|timeout| Instant::now().checked_add(timeout))
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(100 * 365 * 24 * 60 * 60));
     let (stop_tx, stop_rx) = mpsc::channel();
+    if std::env::var_os(MACOS_TEST_EXIT_ENV).is_some() {
+        let _ = stop_tx.send(());
+    }
     std::thread::spawn(move || {
         if termination_signal.wait().is_ok() {
             let _ = stop_tx.send(());
@@ -109,7 +207,7 @@ fn run() -> Result<RuntimeActivationExit, String> {
     .map_err(|error| error.to_string())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_for_instance_lock(wait_timeout: Option<Duration>) -> Result<(), String> {
     let filesystem = AttachFilesystem::from_environment().map_err(|error| error.to_string())?;
     let started = Instant::now();
@@ -141,7 +239,7 @@ fn wait_for_instance_lock(wait_timeout: Option<Duration>) -> Result<(), String> 
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn test_wait_timeout() -> Result<Option<Duration>, String> {
     let Some(value) = std::env::var_os(WAIT_TIMEOUT_ENV) else {
         return Ok(None);
