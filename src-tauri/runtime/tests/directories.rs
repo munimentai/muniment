@@ -2,8 +2,8 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use muniment_runtime::{
-    installed_desktop_executable, installed_desktop_executable_from, resolve_directory,
-    DirectoryUnavailableError, APPLICATION_IDENTIFIER,
+    installed_desktop_executable, installed_desktop_executable_from, macos_log_directory_from_home,
+    resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
 };
 
 #[test]
@@ -112,4 +112,16 @@ fn tauri_identifier_matches_the_runtime_identifier() {
     let identifier = format!("\"identifier\": \"{APPLICATION_IDENTIFIER}\"");
 
     assert!(config.contains(&identifier));
+}
+
+#[test]
+fn maps_an_absolute_home_to_the_macos_log_directory() {
+    assert_eq!(
+        macos_log_directory_from_home(Path::new("/Users/person")).unwrap(),
+        Path::new("/Users/person/Library/Logs/Muniment")
+    );
+    assert_eq!(
+        macos_log_directory_from_home(Path::new("relative/home")),
+        Err(DirectoryUnavailableError)
+    );
 }

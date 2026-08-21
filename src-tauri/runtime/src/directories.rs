@@ -69,3 +69,18 @@ pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
     let home_value = std::env::var_os("HOME");
     resolve_directory(xdg_value.as_deref(), home_value.as_deref(), ".config")
 }
+
+pub fn macos_log_directory_from_home(home: &Path) -> Result<PathBuf, DirectoryUnavailableError> {
+    if !home.is_absolute() {
+        return Err(DirectoryUnavailableError);
+    }
+    Ok(home.join("Library/Logs/Muniment"))
+}
+
+/// Resolves the effective user's home from the macOS user database.
+#[cfg(target_os = "macos")]
+pub fn effective_user_macos_log_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    let home = muniment_core::user_diagnostics::effective_user_home()
+        .map_err(|_| DirectoryUnavailableError)?;
+    macos_log_directory_from_home(&home)
+}
