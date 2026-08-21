@@ -3,8 +3,8 @@
 use muniment_core::attach::{
     accept_macos_attach_with_reader, decode_frame, encode_frame,
     serve_next_macos_attach_with_reader, verify_macos_attach_peer_with_reader, Client, Hello, Id,
-    MacosAttachAcceptError, MacosPeerError, MacosPeerReadError, MacosPeerReader, Protocol,
-    VersionRange, Welcome,
+    MacosAttachAcceptError, MacosAttachListener, MacosPeerError, MacosPeerReadError,
+    MacosPeerReader, Protocol, VersionRange, Welcome,
 };
 use std::cell::Cell;
 use std::io::{self, Read};
@@ -15,6 +15,56 @@ struct FakePeerReader {
     peer_uid: Result<libc::uid_t, MacosPeerReadError>,
     local_uid: libc::uid_t,
     reads: Cell<usize>,
+}
+
+#[test]
+fn listener_removes_its_endpoint_and_restarts_at_the_same_path() {
+    let path = std::env::temp_dir().join(format!(
+        "muniment-attach-restart-{}.sock",
+        std::process::id()
+    ));
+    {
+        let listener = MacosAttachListener::bind(&path).unwrap();
+        assert!(path.exists());
+        drop(listener);
+    }
+    assert!(!path.exists());
+    let listener = MacosAttachListener::bind(&path).unwrap();
+    assert!(path.exists());
+    drop(listener);
+    assert!(!path.exists());
+}
+
+#[test]
+fn listener_recovers_an_owned_stale_endpoint() {
+    let path = std::env::temp_dir().join(format!(
+        "muniment-attach-stale-{}.sock",
+        std::process::id()
+    ));
+    drop(UnixListener::bind(&path).unwrap());
+
+    let listener = MacosAttachListener::bind(&path).unwrap();
+    assert!(path.exists());
+    drop(listener);
+    assert!(!path.exists());
+}
+
+#[test]
+fn listener_preserves_a_live_endpoint() {
+    let path = std::env::temp_dir().join(format!(
+        "muniment-attach-live-{}.sock",
+        std::process::id()
+    ));
+    let live = UnixListener::bind(&path).unwrap();
+
+    assert_eq!(
+        MacosAttachListener::bind(&path).unwrap_err().kind(),
+        io::ErrorKind::AddrInUse
+    );
+    assert!(path.exists());
+
+    drop(live);
+    std::fs::remove_file(path).unwrap();
 }
 
 impl MacosPeerReader for FakePeerReader {

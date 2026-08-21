@@ -16,7 +16,8 @@ use muniment_core::attach::{
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 #[cfg(target_os = "macos")]
 use muniment_core::attach::{
-    serve_next_macos_attach, MacosAttachAcceptError, MacosAttachListenerError,
+    serve_next_macos_attach, MacosAttachAcceptError, MacosAttachListener,
+    MacosAttachListenerError,
 };
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
@@ -1249,11 +1250,11 @@ pub fn start_attach_listener<R: tauri::Runtime>(_app: tauri::AppHandle<R>) {
             return;
         }
         let endpoint = runtime.join("attach-v1.sock");
-        let Ok(listener) = std::os::unix::net::UnixListener::bind(endpoint) else {
+        let Ok(listener) = MacosAttachListener::bind(endpoint) else {
             return;
         };
         loop {
-            match serve_next_macos_attach(&listener, env!("CARGO_PKG_VERSION")) {
+            match serve_next_macos_attach(listener.listener(), env!("CARGO_PKG_VERSION")) {
                 Ok(()) => {}
                 Err(MacosAttachListenerError::Accept(MacosAttachAcceptError::PeerRejected)) => {
                     continue;

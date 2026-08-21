@@ -1,7 +1,10 @@
 //! macOS attach listener admission.
 
-use std::io::{Read, Write};
+use std::fs;
+use std::io::{self, Read, Write};
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 
 use super::{
     decode_frame, encode_frame, negotiate_first, verify_macos_attach_peer,
@@ -27,6 +30,57 @@ pub enum MacosAttachSessionError {
 pub enum MacosAttachListenerError {
     Accept(MacosAttachAcceptError),
     Session(MacosAttachSessionError),
+}
+
+/// An owned macOS attach endpoint.
+#[derive(Debug)]
+pub struct MacosAttachListener {
+    listener: UnixListener,
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+}
+
+impl MacosAttachListener {
+    /// Removes a closed endpoint and binds its path.
+    pub fn bind(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref();
+        match UnixStream::connect(path) {
+            Ok(_) => return Err(io::Error::from(io::ErrorKind::AddrInUse)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+                let metadata = fs::symlink_metadata(path)?;
+                if !metadata.file_type().is_socket() || metadata.uid() != unsafe { libc::geteuid() }
+                {
+                    return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+                }
+                fs::remove_file(path)?;
+            }
+            Err(error) => return Err(error),
+        }
+        let listener = UnixListener::bind(path)?;
+        let metadata = fs::symlink_metadata(path)?;
+        Ok(Self {
+            listener,
+            path: path.to_owned(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+
+    pub fn listener(&self) -> &UnixListener {
+        &self.listener
+    }
+}
+
+impl Drop for MacosAttachListener {
+    fn drop(&mut self) {
+        if fs::symlink_metadata(&self.path)
+            .is_ok_and(|metadata| metadata.dev() == self.device && metadata.ino() == self.inode)
+        {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 /// Serves the attach opening frame after peer admission.
