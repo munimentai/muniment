@@ -21,6 +21,7 @@ pub enum ClientError {
     ProtocolIncompatible,
     RuntimeUpgradePending,
     RandomnessUnavailable,
+    WriterFailed,
 }
 
 impl fmt::Display for ClientError {
@@ -44,6 +45,7 @@ impl fmt::Display for ClientError {
             Self::ProtocolIncompatible => "the desktop and CLI attach protocols are incompatible",
             Self::RuntimeUpgradePending => "a runtime update is pending",
             Self::RandomnessUnavailable => "secure randomness is unavailable",
+            Self::WriterFailed => "the artifact writer failed",
         })
     }
 }
@@ -512,6 +514,7 @@ mod linux {
     };
     use serde::de::DeserializeOwned;
     use serde_json::Value;
+    use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
     use std::env;
     use std::fs::File;
@@ -943,6 +946,74 @@ mod linux {
                 || metadata.chunk_count != expected_chunks
                 || metadata.max_unacknowledged_bytes != 8 * 1024 * 1024
                 || metadata.acknowledgement_timeout_ms != 30_000
+            {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            Ok(metadata)
+        }
+
+        pub fn download_artifact<W: Write>(
+            &mut self,
+            artifact_id: &str,
+            writer: &mut W,
+        ) -> Result<ArtifactTransferMetadata, ClientError> {
+            let metadata = self.fetch_artifact(artifact_id)?;
+            let mut next_chunk = 0_u64;
+            let mut written_bytes = 0_u64;
+            let mut digest = Sha256::new();
+
+            loop {
+                let acknowledged = i64::try_from(next_chunk)
+                    .ok()
+                    .and_then(|next| next.checked_sub(1))
+                    .ok_or(ClientError::UnexpectedMessage)?;
+                let remaining = metadata.chunk_count.saturating_sub(next_chunk);
+                let byte_window = metadata.max_unacknowledged_bytes / metadata.chunk_bytes;
+                let requested = u32::try_from(remaining.min(byte_window).min(1_024))
+                    .unwrap_or(1_024)
+                    .max(1);
+                let grant =
+                    self.grant_artifact_window(&metadata.transfer_id, acknowledged, requested)?;
+                if grant.ack_through_chunk != acknowledged
+                    || grant.granted_chunks == 0
+                    || grant.granted_chunks > requested
+                {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+
+                let expected_chunks = remaining.min(u64::from(grant.granted_chunks));
+                for _ in 0..expected_chunks {
+                    let ArtifactTransferEvent::Chunk(chunk) =
+                        self.read_artifact_event(&metadata)?
+                    else {
+                        return Err(ClientError::UnexpectedMessage);
+                    };
+                    if chunk.chunk_index != next_chunk || chunk.offset != written_bytes {
+                        return Err(ClientError::UnexpectedMessage);
+                    }
+                    writer
+                        .write_all(&chunk.bytes)
+                        .map_err(|_| ClientError::WriterFailed)?;
+                    digest.update(&chunk.bytes);
+                    written_bytes = written_bytes
+                        .checked_add(chunk.bytes.len() as u64)
+                        .ok_or(ClientError::UnexpectedMessage)?;
+                    next_chunk += 1;
+                }
+
+                if next_chunk == metadata.chunk_count {
+                    if remaining != 0 {
+                        continue;
+                    }
+                    if self.read_artifact_event(&metadata)? != ArtifactTransferEvent::Complete {
+                        return Err(ClientError::UnexpectedMessage);
+                    }
+                    break;
+                }
+            }
+
+            if written_bytes != metadata.total_bytes
+                || format!("{:x}", digest.finalize()) != metadata.sha256
             {
                 return Err(ClientError::UnexpectedMessage);
             }
@@ -4189,6 +4260,14 @@ impl AuthorizedClient {
         &mut self,
         _metadata: &ArtifactTransferMetadata,
     ) -> Result<ArtifactTransferEvent, ClientError> {
+        Err(ClientError::UnsupportedPlatform)
+    }
+
+    pub fn download_artifact<W: std::io::Write>(
+        &mut self,
+        _artifact_id: &str,
+        _writer: &mut W,
+    ) -> Result<ArtifactTransferMetadata, ClientError> {
         Err(ClientError::UnsupportedPlatform)
     }
 
