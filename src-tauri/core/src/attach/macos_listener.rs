@@ -134,7 +134,8 @@ pub fn serve_next_macos_attach(
     desktop_version: &str,
 ) -> Result<(), MacosAttachListenerError> {
     let stream = accept_macos_attach(listener).map_err(MacosAttachListenerError::Accept)?;
-    serve_macos_attach_session(stream, desktop_version).map_err(MacosAttachListenerError::Session)
+    spawn_macos_attach_session(stream, desktop_version);
+    Ok(())
 }
 
 /// Testable listener path through an injected peer identity boundary.
@@ -146,7 +147,15 @@ pub fn serve_next_macos_attach_with_reader(
 ) -> Result<(), MacosAttachListenerError> {
     let stream = accept_macos_attach_with_reader(listener, reader)
         .map_err(MacosAttachListenerError::Accept)?;
-    serve_macos_attach_session(stream, desktop_version).map_err(MacosAttachListenerError::Session)
+    spawn_macos_attach_session(stream, desktop_version);
+    Ok(())
+}
+
+fn spawn_macos_attach_session(stream: UnixStream, desktop_version: &str) {
+    let desktop_version = desktop_version.to_owned();
+    std::thread::spawn(move || {
+        let _ = serve_macos_attach_session(stream, &desktop_version);
+    });
 }
 
 /// Accepts a stream and verifies its owner before any frame read.
