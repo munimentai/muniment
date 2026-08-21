@@ -34,6 +34,11 @@ impl std::error::Error for MacosRollbackMarkerError {}
 pub fn macos_rollback_pending(
     profile_directory: impl AsRef<Path>,
 ) -> Result<bool, MacosRollbackMarkerError> {
+    match fs::create_dir(profile_directory.as_ref()) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err(MacosRollbackMarkerError::Check),
+    }
     let profile = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
