@@ -1,11 +1,14 @@
 $ErrorActionPreference = "Stop"
 
 $bundleRoot = Join-Path $PSScriptRoot "..\src-tauri\target\release\bundle"
-$nsis = Get-ChildItem (Join-Path $bundleRoot "nsis") -Filter "*-setup.exe" -File
-$machineMsi = Get-ChildItem (Join-Path $bundleRoot "msi") -Filter "*-machine.msi" -File
+$nsis = @(Get-ChildItem (Join-Path $bundleRoot "nsis") -Filter "*-setup.exe" -File)
+$machineMsi = @(Get-ChildItem (Join-Path $bundleRoot "msi") -Filter "*-machine.msi" -File)
+$regularMsi = @(Get-ChildItem (Join-Path $bundleRoot "msi") -Filter "*.msi" -File |
+  Where-Object { $_.Name -notlike "*-machine.msi" })
 $upgradeBaseMsi = Join-Path $bundleRoot "machine-upgrade-base.msi"
-if ($nsis.Count -ne 1 -or $machineMsi.Count -ne 1 -or -not (Test-Path $upgradeBaseMsi)) {
-  throw "Expected exactly one NSIS installer, one per-machine MSI, and an upgrade-base MSI"
+if ($nsis.Count -ne 1 -or $machineMsi.Count -ne 1 -or $regularMsi.Count -ne 1 -or
+    -not (Test-Path $upgradeBaseMsi)) {
+  throw "Expected one NSIS installer, one regular MSI, one machine MSI, and one upgrade-base MSI"
 }
 
 function Invoke-Msi($Action, $Package, $Description) {
@@ -44,6 +47,10 @@ if ($uninstallRoots | ForEach-Object { Join-Path $_ $oldProductCode } | Where-Ob
 if ((Get-ItemPropertyValue $machineKey InstallDir) -notlike "$env:ProgramFiles\*") {
   throw "Per-machine MSI did not register a Program Files install in HKLM"
 }
+$machineRuntime = Join-Path $env:ProgramFiles "muniment\muniment-runtime.exe"
+if (-not (Test-Path $machineRuntime)) {
+  throw "Machine MSI runtime not found at $machineRuntime"
+}
 if (Test-Path "HKCU:\Software\Muniment\muniment") {
   throw "Per-machine MSI wrote application registration under HKCU"
 }
@@ -59,9 +66,16 @@ Remove-Item $upgradeBaseMsi -Force
 # assertions so its expected HKCU registration cannot be attributed to the MSI.
 $nsisProcess = Start-Process $nsis.FullName -ArgumentList "/S" -Wait -PassThru
 if ($nsisProcess.ExitCode -ne 0) { throw "Silent NSIS install failed: $($nsisProcess.ExitCode)" }
+$userRuntime = Join-Path $env:LOCALAPPDATA "muniment\muniment-runtime.exe"
+if (-not (Test-Path $userRuntime)) { throw "NSIS runtime not found at $userRuntime" }
 $nsisUninstaller = Join-Path $env:LOCALAPPDATA "muniment\uninstall.exe"
 if (-not (Test-Path $nsisUninstaller)) { throw "NSIS uninstaller not found at $nsisUninstaller" }
 $nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassThru
 if ($nsisUninstall.ExitCode -ne 0) { throw "Silent NSIS uninstall failed: $($nsisUninstall.ExitCode)" }
+if (Test-Path $userRuntime) { throw "NSIS runtime remains after uninstall at $userRuntime" }
+
+Invoke-Msi "/i" $regularMsi[0].FullName "Silent regular MSI install"
+if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
+Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
 
 Write-Host "Windows silent installer verification OK"
