@@ -4,6 +4,31 @@ muniment ships two Windows installer formats. The NSIS executable is intended
 for an individual user. The per-machine MSI is intended for managed deployment
 with Microsoft Intune, Group Policy, or another software-management system.
 
+## Planned runtime task contract
+
+[ADR 0012](decisions/0012-user-level-runtime-service.md) defines the Windows
+runtime registration contract. Implementation has not activated this contract.
+
+Each user gets one `\Muniment\Runtime-{user-sid}` Scheduled Task. It runs as
+that interactive user with least privilege. It starts at logon, and surfaces
+request an idempotent start through Task Scheduler.
+
+The NSIS installer registers the task for its current user. The MSI installs
+the machine payload, and the desktop registers each user at that user's first
+launch. The MSI never creates a `SYSTEM` runtime task.
+
+The task action follows the installer scope. NSIS resolves its action under
+`%LocalAppData%\muniment`. MSI resolves its action under
+`%ProgramFiles%\muniment`. The task stores the resolved absolute path.
+
+Removal deletes only tasks owned by the removed installer scope. An uninstaller
+keeps its payload when a task does not stop or unregister. It keeps user data
+in all cases.
+
+Attach activation remains gated until the Windows peer-identity amendment
+lands. A task may start, but the runtime must exit before it publishes its
+attach named pipe.
+
 ## Per-machine MSI
 
 Choose the file whose name ends in `-machine.msi`. It requires administrator
