@@ -499,6 +499,33 @@ impl AttachCompanionState {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn listener_status(&self) -> AttachListenerStatus {
+        let connected = *self
+            .connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        AttachListenerStatus {
+            started: true,
+            failure: None,
+            pending: false,
+            stopped: false,
+            presenting: false,
+            supervisor_running: self
+                .desktop_client
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some(),
+            connected,
+            chat_events_connected: *self
+                .chat_events_connected
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            runtime_upgrade_pending: connected
+                && runtime_upgrade_pending(&self.desktop_client_holder),
+        }
+    }
+
     #[cfg(unix)]
     fn start_approval_presenter(&self, start: impl FnOnce(ApprovalPresenterStopHandle)) {
         let mut presenter = self
@@ -825,10 +852,10 @@ pub fn attach_companions(
 pub fn attach_listener_status(
     state: tauri::State<'_, AttachCompanionState>,
 ) -> AttachListenerStatus {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     return state.listener_status();
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         let _ = state;
         AttachListenerStatus {
@@ -843,6 +870,25 @@ pub fn attach_listener_status(
             runtime_upgrade_pending: false,
         }
     }
+}
+
+#[cfg(unix)]
+fn observe_desktop_client_connection<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    connected: bool,
+) {
+    app.state::<AttachCompanionState>()
+        .record_connected(connected);
+    let status = app.state::<AttachCompanionState>().listener_status();
+    let _ = app.emit("desktop-client-status-changed", status);
+}
+
+#[cfg(unix)]
+fn observe_chat_event_subscription<R: tauri::Runtime>(app: &tauri::AppHandle<R>, connected: bool) {
+    app.state::<AttachCompanionState>()
+        .record_chat_events_connected(connected);
+    let status = app.state::<AttachCompanionState>().listener_status();
+    let _ = app.emit("desktop-client-status-changed", status);
 }
 
 #[tauri::command]
@@ -1167,16 +1213,7 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                         stop,
                         holder,
                         move |connected| {
-                            observer_app
-                                .state::<AttachCompanionState>()
-                                .record_connected(connected);
-                            #[cfg(target_os = "linux")]
-                            {
-                                let status = observer_app
-                                    .state::<AttachCompanionState>()
-                                    .listener_status();
-                                let _ = observer_app.emit("desktop-client-status-changed", status);
-                            }
+                            observe_desktop_client_connection(&observer_app, connected);
                         },
                     );
                 })
@@ -1190,17 +1227,7 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                         Duration::from_millis(250),
                         stop,
                         move |connected| {
-                            event_status_app
-                                .state::<AttachCompanionState>()
-                                .record_chat_events_connected(connected);
-                            #[cfg(target_os = "linux")]
-                            {
-                                let status = event_status_app
-                                    .state::<AttachCompanionState>()
-                                    .listener_status();
-                                let _ =
-                                    event_status_app.emit("desktop-client-status-changed", status);
-                            }
+                            observe_chat_event_subscription(&event_status_app, connected);
                         },
                         move |event| {
                             let _ = event_app.emit("chat-event", event);
@@ -1490,6 +1517,42 @@ mod tests {
     };
     use muniment_core::journal::reducer::reduce;
     use muniment_core::journal::RunJournal;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_observers_publish_each_connection_transition() {
+        use std::sync::mpsc;
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        let (status_tx, status_rx) = mpsc::channel();
+        app.handle()
+            .listen("desktop-client-status-changed", move |event| {
+                let status: Value = serde_json::from_str(event.payload()).unwrap();
+                status_tx.send(status).unwrap();
+            });
+
+        observe_desktop_client_connection(app.handle(), true);
+        let connected = status_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(connected["connected"], true);
+        assert_eq!(connected["chat_events_connected"], false);
+
+        observe_desktop_client_connection(app.handle(), false);
+        let disconnected = status_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(disconnected["connected"], false);
+        assert_eq!(disconnected["chat_events_connected"], false);
+
+        observe_chat_event_subscription(app.handle(), true);
+        let subscribed = status_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(subscribed["connected"], false);
+        assert_eq!(subscribed["chat_events_connected"], true);
+
+        observe_chat_event_subscription(app.handle(), false);
+        let unsubscribed = status_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(unsubscribed["connected"], false);
+        assert_eq!(unsubscribed["chat_events_connected"], false);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
