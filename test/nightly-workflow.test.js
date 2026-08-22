@@ -13,6 +13,7 @@ const runReportFallback = (directory, suite, runStatus, extractStatus, createSuc
   const result = spawnSync('bash', [ensureJunitReport, directory, suite, String(runStatus), String(extractStatus), createSuccessReport ? '1' : '0'], { encoding: 'utf8' })
   expect(result.status, result.stderr).toBe(0)
 }
+const linuxRunner = fs.readFileSync('test/e2e/runner/linux.sh', 'utf8')
 const publish = workflow.slice(workflow.indexOf('  publish:'), workflow.indexOf('  linux-e2e:'))
 const linuxE2e = workflow.slice(workflow.indexOf('  linux-e2e:'), workflow.indexOf('  windows-e2e:'))
 const job = (name, nextName) => workflow.slice(
@@ -30,11 +31,10 @@ const evaluateCondition = (condition, { eventName, platform, prepare = 'success'
     .replaceAll('github.event.inputs.platform', JSON.stringify(platform))})`,
 )()
 const jobCondition = linuxE2e.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
-const conditionResult = ({ eventName, platform, build, publish }) => {
+const conditionResult = ({ eventName, platform, prepare = 'success' }) => {
   const expression = jobCondition
     .replace('always()', 'true')
-    .replaceAll('needs.build.result', JSON.stringify(build))
-    .replaceAll('needs.publish.result', JSON.stringify(publish))
+    .replaceAll('needs.prepare.result', JSON.stringify(prepare))
     .replaceAll('github.event_name', JSON.stringify(eventName))
     .replaceAll('github.event.inputs.platform', JSON.stringify(platform))
   return Function(`"use strict"; return (${expression})`)()
@@ -58,26 +58,29 @@ describe('nightly Linux E2E workflow', () => {
   })
 
   it('runs after a successful full-nightly publish', () => {
-    expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'success' })).toBe(true)
+    expect(conditionResult({ eventName: 'schedule', platform: '' })).toBe(true)
   })
 
   it('runs after a failed full-nightly publish', () => {
-    expect(linuxE2e).toContain('# Publishing is distribution and must never gate testing.')
     expect(jobCondition).not.toContain('needs.publish.result')
     expect(publish).not.toContain('continue-on-error')
-    expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'failure' })).toBe(true)
+    expect(conditionResult({ eventName: 'schedule', platform: '' })).toBe(true)
   })
 
-  it('runs a Linux-only dispatch after its package build and validates its asset', () => {
-    expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', build: 'success', publish: 'skipped' })).toBe(true)
-    expect(linuxE2e).toContain("if: github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux'")
+  it('runs a Linux-only dispatch and validates its asset in the report-producing runner', () => {
+    expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux' })).toBe(true)
     expect(linuxE2e).not.toContain('github.rest.git.updateRef')
-    expect(linuxE2e).toContain('`nightly-${sha}-linux-muniment.deb`')
+    expect(linuxRunner).toContain('asset-identity.mjs "$sha"')
   })
 
-  it('does not run for another targeted platform or an unsuccessful package build', () => {
-    expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'windows', build: 'success', publish: 'skipped' })).toBe(false)
-    expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', build: 'failure', publish: 'skipped' })).toBe(false)
+  it('runs after another matrix build fails', () => {
+    expect(jobCondition).not.toContain('needs.build.result')
+    expect(conditionResult({ eventName: 'schedule', platform: '' })).toBe(true)
+  })
+
+  it('does not run for another targeted platform or a failed prepare job', () => {
+    expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'windows' })).toBe(false)
+    expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', prepare: 'failure' })).toBe(false)
   })
 
   it('publishes only generated JUnit XML to the CI artifact store', () => {
@@ -303,7 +306,7 @@ describe('nightly installed-E2E failure reporting', () => {
   })
 
   it('remains reachable after publish fails', () => {
-    expect(conditionResult({ eventName: 'schedule', platform: '', build: 'success', publish: 'failure' })).toBe(true)
+    expect(conditionResult({ eventName: 'schedule', platform: '' })).toBe(true)
     expect(report).not.toMatch(/needs: \[[^\]]*publish/)
     expect(reportCondition).toContain('always()')
     expect(shouldReport({ linux: 'failure', windows: 'success', macos: 'success' })).toBe(true)
