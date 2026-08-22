@@ -103,6 +103,15 @@ const signFile = (file) => {
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
 
+const runtime = join("src-tauri", "target", "release", "muniment-runtime.exe");
+const runtimeBuild = spawnSync("cargo", [
+  "build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime",
+  "--release", "--locked",
+], { stdio: "inherit" });
+if (runtimeBuild.error) throw runtimeBuild.error;
+if (runtimeBuild.status !== 0) process.exit(runtimeBuild.status ?? 1);
+signFile(runtime);
+
 // Tauri signs bundled DLL resources in place. Keep the pinned, hash-checked
 // inputs so later bundling passes validate and package the same upstream bits.
 const runtimeDirectory = join("src-tauri", "third-party", "sherpa-onnx-v1.13.2", "windows-x86_64");
