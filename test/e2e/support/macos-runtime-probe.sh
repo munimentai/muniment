@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+probe_macos_runtime() {
+  local target=$1 app_pid=$2 app_log=$3 endpoint=$4 diagnostic=$5
+  local launchctl_command=${MUNIMENT_E2E_LAUNCHCTL:-/bin/launchctl}
+  local wait_seconds=${MUNIMENT_E2E_RUNTIME_WAIT_SECONDS:-60}
+  local deadline=$((SECONDS + wait_seconds)) job_active=false endpoint_present=false client_connected=false job_status connection_status
+
+  while (( SECONDS < deadline )); do
+    job_active=false
+    job_status=$("$launchctl_command" print "$target" 2>/dev/null || true)
+    if grep -Eq 'state = running' <<<"$job_status" && grep -Eq 'pid = [1-9][0-9]*' <<<"$job_status"; then
+      job_active=true
+    fi
+    if [[ -S $endpoint ]]; then endpoint_present=true; else endpoint_present=false; fi
+    connection_status=$(grep -F 'desktop runtime client connected=' "$app_log" 2>/dev/null | tail -n 1 || true)
+    if [[ $connection_status == 'desktop runtime client connected=true' ]]; then
+      client_connected=true
+    else
+      client_connected=false
+    fi
+    if [[ $job_active == true && $endpoint_present == true && $client_connected == true ]]; then
+      printf 'job_active=true\nendpoint_present=true\nclient_connected=true\n' >"$diagnostic"
+      return 0
+    fi
+    kill -0 "$app_pid" 2>/dev/null || break
+    sleep 1
+  done
+
+  {
+    printf 'wait_seconds=%s\n' "$wait_seconds"
+    printf 'job_active=%s\n' "$job_active"
+    printf 'endpoint_present=%s\n' "$endpoint_present"
+    printf 'client_connected=%s\n' "$client_connected"
+    printf 'application_alive='
+    if kill -0 "$app_pid" 2>/dev/null; then printf 'true\n'; else printf 'false\n'; fi
+  } >"$diagnostic"
+  printf 'installed runtime connection was unavailable within %s seconds\n' "$wait_seconds" >&2
+  return 1
+}

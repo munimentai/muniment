@@ -879,6 +879,8 @@ fn observe_desktop_client_connection<R: tauri::Runtime>(
 ) {
     app.state::<AttachCompanionState>()
         .record_connected(connected);
+    #[cfg(target_os = "macos")]
+    eprintln!("desktop runtime client connected={connected}");
     let status = app.state::<AttachCompanionState>().listener_status();
     let _ = app.emit("desktop-client-status-changed", status);
 }
