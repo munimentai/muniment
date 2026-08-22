@@ -301,7 +301,7 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
 
   const macosFixture = (failed = '', extraEnv = {}) => {
     const directory = temp(); const ledger = path.join(directory, 'ledger'); const statusLedger = path.join(directory, 'status-ledger'); const artifacts = path.join(directory, 'artifacts')
-    const env = { ...process.env, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv }
+    const env = { ...process.env, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_RUNTIME_STATE: path.join(directory, 'runtime-state'), MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_FINALIZER_TEST_LEDGER: ledger, MUNIMENT_E2E_FINALIZER_TEST_STATUS_LEDGER: statusLedger, MUNIMENT_E2E_FINALIZER_TEST_FAIL: failed, ...extraEnv }
     const read = (file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean) : []
     const outcome = (result) => ({ result, artifacts, invoked: read(ledger).map((line) => line.split('\t')[0]), statuses: Object.fromEntries(read(statusLedger).map((line) => line.split('\t'))) })
     return { directory, env, outcome }
@@ -380,13 +380,46 @@ esac
     expect(runner).toContain('screendump=requested-by-desktop-ci')
   })
 
+  it('waits for the LaunchAgent and the desktop runtime connection', () => {
+    const probe = fs.readFileSync(path.join(root, 'test/e2e/support/macos-runtime-probe.sh'), 'utf8')
+    const attachService = fs.readFileSync(path.join(root, 'src-tauri/src/attach_service.rs'), 'utf8')
+    expect(runner).toContain('probe_macos_runtime "$runtime_target" "$app_pid"')
+    expect(runner).toContain('runtime_target="gui/$(id -u)/ai.muniment.runtime"')
+    expect(probe).toContain("grep -Eq 'state = running'")
+    expect(probe).toContain("grep -Eq 'pid = [1-9][0-9]*'")
+    expect(probe).toContain("connection_status == 'desktop runtime client connected=true'")
+    expect(probe).toContain('MUNIMENT_E2E_RUNTIME_WAIT_SECONDS:-60')
+    expect(probe).toContain('if [[ -S $endpoint ]]')
+    expect(attachService).toContain('eprintln!("desktop runtime client connected={connected}")')
+  })
+
+  it.each([
+    ['inactive job', 'inactive', 'desktop runtime client connected=true\n', 'job_active=false', 'client_connected=true'],
+    ['disconnected client', 'active', 'desktop runtime client connected=true\ndesktop runtime client connected=false\n', 'job_active=true', 'client_connected=false'],
+  ])('fails the runtime probe for an %s with fixed diagnostics', (_name, job, appOutput, jobResult, clientResult) => {
+    const directory = temp(); const launchctl = path.join(directory, 'launchctl'); const appLog = path.join(directory, 'app.log')
+    const diagnostic = path.join(directory, 'diagnostic.log'); const endpoint = path.join(directory, 'missing.sock')
+    fs.writeFileSync(launchctl, job === 'active' ? '#!/bin/sh\nprintf "state = running\\npid = 42\\n"\n' : '#!/bin/sh\nexit 1\n')
+    fs.chmodSync(launchctl, 0o700); fs.writeFileSync(appLog, appOutput)
+    const result = spawnSync('bash', ['-c', 'source "$1"; probe_macos_runtime test "$2" "$3" "$4" "$5"', 'bash', path.join(root, 'test/e2e/support/macos-runtime-probe.sh'), String(process.pid), appLog, endpoint, diagnostic], {
+      encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_LAUNCHCTL: launchctl, MUNIMENT_E2E_RUNTIME_WAIT_SECONDS: '1' },
+    })
+    expect(result.status).not.toBe(0)
+    const report = fs.readFileSync(diagnostic, 'utf8')
+    expect(report).toContain(jobResult)
+    expect(report).toContain(clientResult)
+    expect(report).toContain('endpoint_present=false')
+    expect(report).not.toContain(directory)
+  })
+
   it('verifies the installed runtime and LaunchAgent without registering the agent', () => {
     const { result, artifacts } = runMacosPayload()
     const payloadLog = fs.existsSync(path.join(artifacts, 'payload.log')) ? fs.readFileSync(path.join(artifacts, 'payload.log'), 'utf8') : ''
     const cleanupLog = fs.existsSync(path.join(artifacts, 'cleanup.log')) ? fs.readFileSync(path.join(artifacts, 'cleanup.log'), 'utf8') : ''
     expect(result.status, `${result.stderr}\n${payloadLog}\n${cleanupLog}`).toBe(0)
     expect(fs.readFileSync(path.join(artifacts, 'payload.log'), 'utf8')).toContain('payload=verified')
-    expect(runner).not.toMatch(/launchctl|SMAppService/)
+    const payloadVerifier = runner.slice(runner.indexOf('verify_installed_payload()'), runner.indexOf('\nstop_app()'))
+    expect(payloadVerifier).not.toMatch(/launchctl|SMAppService/)
   })
 
   it.each([
@@ -446,7 +479,7 @@ esac
 
   it('cleans processes, the installed bundle, and state before redaction and publication', () => {
     const phases = finalizerPhases
-    expect(phases.slice(0, 6)).toEqual(['stop-app', 'remove-bundle', 'remove-state', 'bundle-gone', 'processes-gone', 'state-gone'])
+    expect(phases.slice(0, 12)).toEqual(['stop-app', 'stop-runtime', 'remove-bundle', 'remove-runtime-state', 'remove-state', 'bundle-gone', 'processes-gone', 'runtime-process-gone', 'runtime-job-stopped', 'runtime-state-gone', 'state-gone', 'stage-cleanup-log'])
     expect(phases.indexOf('processes-gone')).toBeLessThan(phases.indexOf('redact-artifacts'))
     expect(phases.indexOf('redact-artifacts')).toBeLessThan(phases.indexOf('publish-artifacts'))
     expect(finalizer).toContain('suppress-artifacts')
