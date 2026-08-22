@@ -108,10 +108,10 @@ mod windows_file {
         SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateDirectoryW, CreateFileW, LockFileEx, CREATE_NEW, FILE_ALL_ACCESS,
-        FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, LOCKFILE_EXCLUSIVE_LOCK,
-        OPEN_EXISTING, READ_CONTROL,
+        CreateDirectoryW, CreateFileW, GetFileInformationByHandle, LockFileEx,
+        BY_HANDLE_FILE_INFORMATION, CREATE_NEW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, LOCKFILE_EXCLUSIVE_LOCK, OPEN_EXISTING, READ_CONTROL,
     };
     use windows_sys::Win32::System::SystemServices::{
         ACCESS_ALLOWED_ACE_TYPE, SECURITY_DESCRIPTOR_REVISION,
@@ -377,6 +377,16 @@ mod windows_file {
         if handle_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
             || handle_metadata.is_dir() != directory
         {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "diagnostic path is unsafe",
+            ));
+        }
+        let mut information = unsafe { zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+        if unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &mut information) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if !directory && information.nNumberOfLinks != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "diagnostic path is unsafe",

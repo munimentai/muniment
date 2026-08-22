@@ -81,6 +81,21 @@ fn rejects_relative_roots_and_unsafe_native_access_lists() {
 }
 
 #[test]
+fn rejects_hard_linked_log_files() {
+    let root = local_app_data();
+    write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).unwrap();
+    let log = root.join("muniment/logs/runtime.log");
+    let outside_link = root.join("outside.log");
+    fs::hard_link(&log, &outside_link).unwrap();
+    let contents = fs::read(&log).unwrap();
+
+    assert!(write_windows_diagnostic(&root, WindowsDiagnosticEvent::RestartLoopStopped).is_err());
+    assert_eq!(fs::read(&log).unwrap(), contents);
+    assert_eq!(fs::read(&outside_link).unwrap(), contents);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rejects_reparse_points_in_the_managed_path() {
     let root = local_app_data();
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).unwrap();
