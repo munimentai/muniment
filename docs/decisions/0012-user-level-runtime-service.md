@@ -974,8 +974,10 @@ The action passes no shell command and runs the signed executable directly.
 
 A surface requests a start through `IRegisteredTask::Run` after it validates
 the task URI, principal, and action. `AllowStartOnDemand` is true, and
-`MultipleInstancesPolicy` is `IgnoreNew`. Concurrent requests therefore return
-the existing task instance instead of starting another runtime.
+`MultipleInstancesPolicy` is `IgnoreNew`. A successful `Run` call creates a new
+task instance. `SCHED_E_ALREADY_RUNNING` is also a successful start result.
+After either result, the surface uses discovery and bounded readiness checks to
+find the runtime that holds the profile instance lock.
 
 The task has no execution time limit. It starts without network or AC-power
 conditions and does not stop when power changes. `StartWhenAvailable` is true.
@@ -984,9 +986,10 @@ runtime.
 
 ### Restarts, stops, and diagnostics
 
-The task sets `RestartOnFailure` to four retries at one-minute intervals. The
-initial start and four retries allow at most five starts for one task run.
-Task Scheduler makes no more retries after that bound.
+The task sets `RestartCount` to four and `RestartInterval` to `PT1M`. The
+interval defines the period during which Task Scheduler attempts those
+restarts. The initial start and four retries allow at most five starts for one
+task run. Task Scheduler makes no more retries after that bound.
 
 The runtime also records starts in its owner-only per-user state. Five failed
 starts within five minutes record a needs-attention diagnostic and make the
@@ -1021,10 +1024,13 @@ The per-machine MSI installs the signed runtime under `%ProgramFiles%\muniment`.
 It does not create a task for an absent user. The installed desktop creates or
 updates the stable task when each user first launches it.
 
-Registration always runs in the task principal's user context. The elevated
-MSI never changes the principal to `SYSTEM` or an administrator. A machine
-installation takes precedence while present, so a later NSIS launch cannot
-redirect the task from the machine payload.
+Initial registration and desktop-led updates always run in the task principal's
+user context. During MSI removal, the elevated uninstaller may update or delete
+a matching task through Task Scheduler. An update preserves the user's SID
+principal, `TASK_LOGON_INTERACTIVE_TOKEN`, and least-privilege run level. It
+never runs the runtime as `SYSTEM` or an administrator. A machine installation
+takes precedence while present, so a later NSIS launch cannot redirect the task
+from the machine payload.
 
 Both scopes serialize registration and replacement with the per-user install
 lock. They update the existing task in place and never register a second task.
