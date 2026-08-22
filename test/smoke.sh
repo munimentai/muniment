@@ -155,7 +155,7 @@ grep -Fq 'tauri' "$boundary_output"
 restore_dependency_probe
 trap - EXIT
 test -x test/runtime-dependency-boundary.sh
-test/runtime-dependency-boundary.sh muniment-runtime muniment-core muniment-attach windows-sys
+test/runtime-dependency-boundary.sh muniment-runtime muniment-core muniment-attach
 for forbidden in muniment-desktop muniment-cli muniment-acp tauri tauri-plugin-dialog; do
   ! test/runtime-dependency-boundary.sh muniment-runtime muniment-core "$forbidden" \
     >/dev/null 2>&1

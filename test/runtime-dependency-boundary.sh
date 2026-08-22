@@ -14,7 +14,7 @@ else
 fi
 
 unexpected=$(printf '%s\n' "$direct_packages" | grep -Ev \
-  '^(muniment-runtime|muniment-core|muniment-attach|windows-sys)$' || true)
+  '^(muniment-runtime|muniment-core|muniment-attach)$' || true)
 forbidden=$(printf '%s\n' "$all_packages" | grep -E \
   '^(muniment-desktop|muniment-cli|muniment-acp|tauri|tauri-.*)$' || true)
 if [ -n "$unexpected" ] || [ -n "$forbidden" ]; then

@@ -2880,7 +2880,6 @@ version = "0.0.1"
 dependencies = [
  "muniment-attach",
  "muniment-core",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
