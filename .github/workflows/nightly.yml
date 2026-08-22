@@ -253,10 +253,11 @@ jobs:
           git push origin HEAD:main
 
   linux-e2e:
-    # Publishing is distribution and must never gate testing.
+    # Each matrix build uploads its own package. Linux tests its package even
+    # when another platform fails. The runner reports a missing Linux package.
     needs: [prepare, build, publish]
     if: >-
-      always() && needs.build.result == 'success' &&
+      always() && needs.prepare.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'linux')
     runs-on: self-hosted
@@ -276,24 +277,6 @@ jobs:
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
-
-      - name: Validate targeted Linux pre-release asset
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.platform == 'linux'
-        uses: actions/github-script@v8
-        env:
-          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        with:
-          script: |
-            const sha = process.env.SOURCE_SHA;
-            const { data: release } = await github.rest.repos.getReleaseByTag({
-              ...context.repo,
-              tag: "nightly",
-            });
-            const assetName = `nightly-${sha}-linux-muniment.deb`;
-            if (release.assets.filter((asset) => asset.name === assetName).length !== 1) {
-              core.setFailed(`expected one ${assetName} asset before Linux E2E`);
-              return;
-            }
 
       - name: Run installed Linux sign-in via desktop-ci
         id: e2e
