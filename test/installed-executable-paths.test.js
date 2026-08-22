@@ -10,6 +10,12 @@ const macosConfigPath = 'src-tauri/tauri.macos.conf.json'
 const launchAgentPath = 'src-tauri/packaging/ai.muniment.runtime.plist'
 const macosBuildPath = '.github/build-macos-runtime.mjs'
 const macosAppBuildPath = '.github/build-macos-app.mjs'
+const windowsConfigPath = 'src-tauri/tauri.windows.conf.json'
+const userTemplatePath = 'src-tauri/windows/per-user.wxs'
+const machineConfigPath = 'src-tauri/tauri.machine.conf.json'
+const machineTemplatePath = 'src-tauri/windows/per-machine.wxs'
+const windowsBuildPath = '.github/build-windows-installers.mjs'
+const windowsInstallerTestPath = 'test/windows-installers.ps1'
 const ciPath = '.github/workflows/ci.yml'
 
 const config = JSON.parse(readFileSync(configPath, 'utf8'))
@@ -20,6 +26,12 @@ const macosConfig = JSON.parse(readFileSync(macosConfigPath, 'utf8'))
 const launchAgent = readFileSync(launchAgentPath, 'utf8')
 const macosBuild = readFileSync(macosBuildPath, 'utf8')
 const macosAppBuild = readFileSync(macosAppBuildPath, 'utf8')
+const windowsConfig = JSON.parse(readFileSync(windowsConfigPath, 'utf8'))
+const userTemplate = readFileSync(userTemplatePath, 'utf8')
+const machineConfig = JSON.parse(readFileSync(machineConfigPath, 'utf8'))
+const machineTemplate = readFileSync(machineTemplatePath, 'utf8')
+const windowsBuild = readFileSync(windowsBuildPath, 'utf8')
+const windowsInstallerTest = readFileSync(windowsInstallerTestPath, 'utf8')
 const ci = readFileSync(ciPath, 'utf8')
 const resolverFunction = resolver.match(
   /pub fn installed_desktop_executable_from[\s\S]*?\n}\n/,
@@ -64,6 +76,46 @@ describe('installed desktop executable paths', () => {
     expect(postInstall, `${postInstallPath} does not install ${installedDesktop}`)
       .toContain(`ln -sfn muniment-desktop ${installedDesktop}`)
     expect(runner).toContain('[[ -f $installed_desktop ]]')
+  })
+})
+
+describe('Windows runtime bundle paths', () => {
+  const runtimeResource = {
+    'target/release/muniment-runtime.exe': 'muniment-runtime.exe',
+  }
+
+  it('configures the regular MSI for the per-user install root', () => {
+    expect(windowsConfig.bundle.resources).toMatchObject(runtimeResource)
+    expect(windowsConfig.bundle.windows.wix.template).toBe('./windows/per-user.wxs')
+    expect(userTemplate).toContain('InstallScope="perUser"')
+    expect(userTemplate).toContain('<Directory Id="LocalAppDataFolder">')
+    expect(userTemplate).toContain('<Directory Id="INSTALLDIR" Name="{{product_name}}"/>')
+    expect(userTemplate).toContain('{{resources}}')
+  })
+
+  it('configures the machine MSI for the Program Files install root', () => {
+    expect(machineConfig.bundle.resources).toMatchObject(runtimeResource)
+    expect(machineTemplate).toContain('<Directory Id="$(var.PlatformProgramFilesFolder)" Name="PFiles">')
+    expect(machineTemplate).toContain('<Directory Id="INSTALLDIR" Name="{{product_name}}"/>')
+    expect(machineTemplate).toContain('{{resources}}')
+  })
+
+  it('checks each installed runtime path', () => {
+    expect(windowsInstallerTest).toContain('Join-Path $env:LOCALAPPDATA "muniment\\muniment-runtime.exe"')
+    expect(windowsInstallerTest).toContain('throw "NSIS runtime not found at $userRuntime"')
+    expect(windowsInstallerTest).toContain('throw "Regular MSI runtime not found at $userRuntime"')
+    expect(windowsInstallerTest).toContain('Join-Path $env:ProgramFiles "muniment\\muniment-runtime.exe"')
+    expect(windowsInstallerTest).toContain('throw "Machine MSI runtime not found at $machineRuntime"')
+  })
+
+  it('builds and signs the runtime before the first installer pass', () => {
+    const runtimeBuild = windowsBuild.indexOf('"--package", "muniment-runtime"')
+    const runtimeSigning = windowsBuild.indexOf('signFile(runtime)')
+    const installerBuild = windowsBuild.indexOf('run("build"')
+
+    expect(runtimeBuild).toBeGreaterThan(-1)
+    expect(runtimeSigning).toBeGreaterThan(runtimeBuild)
+    expect(installerBuild).toBeGreaterThan(runtimeSigning)
   })
 })
 
