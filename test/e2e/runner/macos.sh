@@ -10,6 +10,7 @@ safe="$run_root/safe"
 archive="$run_root/muniment-nightly.app.zip"
 expanded="$run_root/expanded"
 state_root="$run_root/state"
+runtime_state=${MUNIMENT_E2E_RUNTIME_STATE:-"$HOME/.local/share/ai.muniment.desktop"}
 cleanup_log="$run_root/cleanup.log"
 cleanup_status_ledger="$run_root/cleanup-status.log"
 redaction_report="$run_root/redaction-failure.txt"
@@ -18,6 +19,7 @@ installed_bundle=/Applications/muniment.app
 status=0
 cleanup_status=0
 installed=0
+runtime_touched=${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0}
 app_pid=
 process_name=
 finalized=0
@@ -27,6 +29,30 @@ source test/e2e/support/cleanup-ledger.sh
 
 cleanup_absent() { [[ ! -e $1 ]]; }
 process_absent() { [[ -z $process_name ]] || ! pgrep -x "$process_name" >/dev/null; }
+runtime_process_absent() {
+  local escaped_bundle=${installed_bundle//./[.]}
+  ! pgrep -f "^$escaped_bundle/Contents/Library/LaunchServices/muniment-runtime$" >/dev/null
+}
+runtime_job_stopped() {
+  local target="gui/$(id -u)/ai.muniment.runtime" job_status
+  job_status=$(/bin/launchctl print "$target" 2>/dev/null || true)
+  ! grep -Eq 'state = running|pid = [1-9][0-9]*' <<<"$job_status"
+}
+
+# shellcheck source=../support/macos-runtime-probe.sh
+source test/e2e/support/macos-runtime-probe.sh
+
+stop_runtime() {
+  local target="gui/$(id -u)/ai.muniment.runtime"
+  /bin/launchctl kill SIGTERM "$target" 2>/dev/null || true
+  for _ in {1..20}; do
+    if runtime_process_absent && runtime_job_stopped; then return; fi
+    sleep 0.25
+  done
+  local escaped_bundle=${installed_bundle//./[.]}
+  pkill -f "^$escaped_bundle/Contents/Library/LaunchServices/muniment-runtime$" 2>/dev/null || true
+  runtime_process_absent && runtime_job_stopped
+}
 
 payload_failure() {
   printf '%s\n' "$1" | tee -a "$raw/payload.log" >&2
@@ -72,10 +98,15 @@ finalize() {
   finalized=1
   trap - EXIT INT TERM
   cleanup_step stop-app stop_app
+  if (( runtime_touched )); then cleanup_step stop-runtime stop_runtime; fi
   if (( installed )); then cleanup_step remove-bundle rm -rf -- "$installed_bundle"; fi
+  if (( runtime_touched )); then cleanup_step remove-runtime-state rm -rf -- "$runtime_state"; fi
   cleanup_step remove-state rm -rf -- "$state_root"
   cleanup_step bundle-gone cleanup_absent "$installed_bundle"
   cleanup_step processes-gone process_absent
+  if (( runtime_touched )); then cleanup_step runtime-process-gone runtime_process_absent; fi
+  if (( runtime_touched )); then cleanup_step runtime-job-stopped runtime_job_stopped; fi
+  if (( runtime_touched )); then cleanup_step runtime-state-gone cleanup_absent "$runtime_state"; fi
   cleanup_step state-gone cleanup_absent "$state_root"
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"
@@ -173,7 +204,7 @@ process_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2
 installed=1
 ditto "$source_bundle" "$installed_bundle" >>"$raw/install.log" 2>&1 || { status=1; exit; }
 verify_installed_payload || { status=1; exit; }
-mkdir -p "$state_root/home" "$state_root/tmp"
+mkdir -p "$state_root/tmp"
 
 # The window probe reads CoreGraphics window metadata, which macOS grants with
 # no privacy consent. The build runs before the launch, so a broken toolchain
@@ -184,8 +215,15 @@ clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations \
   echo 'window probe did not compile' >&2; status=1; exit;
 }
 
-HOME="$state_root/home" TMPDIR="$state_root/tmp" "$installed_bundle/Contents/MacOS/$process_name" >"$raw/app.log" 2>&1 &
+TMPDIR="$state_root/tmp" "$installed_bundle/Contents/MacOS/$process_name" >"$raw/app.log" 2>&1 &
 app_pid=$!
+runtime_touched=1
+
+runtime_endpoint="$runtime_state/muniment/attach-v1.sock"
+runtime_target="gui/$(id -u)/ai.muniment.runtime"
+probe_macos_runtime "$runtime_target" "$app_pid" "$raw/app.log" "$runtime_endpoint" "$raw/runtime-connection.log" || {
+  status=1
+}
 
 window_ready=0
 window_wait_seconds=120
