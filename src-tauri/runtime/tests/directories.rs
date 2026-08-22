@@ -3,7 +3,8 @@ use std::path::Path;
 
 use muniment_runtime::{
     installed_desktop_executable, installed_desktop_executable_from, macos_log_directory_from_home,
-    resolve_directory, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
+    resolve_directory, windows_log_directory_from_local_app_data, DirectoryUnavailableError,
+    APPLICATION_IDENTIFIER,
 };
 
 #[test]
@@ -112,6 +113,19 @@ fn tauri_identifier_matches_the_runtime_identifier() {
     let identifier = format!("\"identifier\": \"{APPLICATION_IDENTIFIER}\"");
 
     assert!(config.contains(&identifier));
+}
+
+#[test]
+fn maps_an_absolute_local_app_data_path_to_the_windows_log_directory() {
+    assert_eq!(
+        windows_log_directory_from_local_app_data(Path::new("/Users/person/AppData/Local"))
+            .unwrap(),
+        Path::new("/Users/person/AppData/Local/muniment/logs")
+    );
+    assert_eq!(
+        windows_log_directory_from_local_app_data(Path::new("relative/AppData/Local")),
+        Err(DirectoryUnavailableError)
+    );
 }
 
 #[test]
