@@ -950,3 +950,130 @@ log subsystem `ai.muniment.desktop` with category `runtime`. Diagnostics omit
 tokens, credentials, prompts, model output, local paths, workspace values,
 connection nonces, and peer identifiers. Rotation and retention use the
 existing bounded diagnostic policy.
+
+## Amendment – 2026-08-21: Windows activation registration and startup
+
+- Status: accepted
+
+### Task identity and activation
+
+Windows registers one Task Scheduler task at
+`\Muniment\Runtime-{user-sid}`. The suffix is the current user's canonical
+SID. The task URI and principal use that SID. Its DACL grants that user task
+control and grants administrators their standard control.
+
+The principal uses `TASK_LOGON_INTERACTIVE_TOKEN` with least privilege and no
+stored password. The task runs only while that user has an interactive session.
+Its logon trigger starts the runtime at each login.
+
+The per-user NSIS payload is
+`%LocalAppData%\muniment\muniment-runtime.exe`. The per-machine MSI payload is
+`%ProgramFiles%\muniment\muniment-runtime.exe`. The registrar resolves the
+applicable known folder and writes that absolute path as the task action.
+The action passes no shell command and runs the signed executable directly.
+
+A surface requests a start through `IRegisteredTask::Run` after it validates
+the task URI, principal, and action. `AllowStartOnDemand` is true, and
+`MultipleInstancesPolicy` is `IgnoreNew`. Concurrent requests therefore return
+the existing task instance instead of starting another runtime.
+
+The task has no execution time limit. It starts without network or AC-power
+conditions and does not stop when power changes. `StartWhenAvailable` is true.
+The existing profile instance lock remains the final authority against a second
+runtime.
+
+### Restarts, stops, and diagnostics
+
+The task sets `RestartOnFailure` to four retries at one-minute intervals. The
+initial start and four retries allow at most five starts for one task run.
+Task Scheduler makes no more retries after that bound.
+
+The runtime also records starts in its owner-only per-user state. Five failed
+starts within five minutes record a needs-attention diagnostic and make the
+fifth process exit with status zero. If no instance or retry remains, an
+explicit surface start clears that crash window before it calls `Run`. This
+permits one new bounded task run. Concurrent requests clear it once under the
+per-user install lock. A request for a running task does not clear the window.
+
+Status zero means normal idle, logoff, OS shutdown, an installer stop, or the
+pre-admission gate below. Task Scheduler does not restart those stops. Status
+75 means installed-payload refresh. Any other nonzero status means failure.
+Task Scheduler applies the same four-retry bound to status 75 and failed exits.
+
+The runtime writes redacted, bounded diagnostics to
+`%LocalAppData%\muniment\logs\runtime.log`. Task registration and launch
+failures also appear in the Task Scheduler operational log when enabled.
+Diagnostics omit tokens, credentials, prompts, model output, local paths,
+workspace values, connection nonces, and peer identifiers.
+
+### Installer ownership and replacement
+
+This Windows scope split supersedes the base decision's unelevated-install rule
+for the MSI payload only. The MSI needs elevation, but every task and runtime
+process remains per-user.
+
+The NSIS installer runs in the target user's session. It installs the signed
+runtime under `%LocalAppData%\muniment`, then creates or updates that user's
+stable task. A registration failure rolls back the new files and keeps the
+previous verified payload when one exists.
+
+The per-machine MSI installs the signed runtime under `%ProgramFiles%\muniment`.
+It does not create a task for an absent user. The installed desktop creates or
+updates the stable task when each user first launches it.
+
+Registration always runs in the task principal's user context. The elevated
+MSI never changes the principal to `SYSTEM` or an administrator. A machine
+installation takes precedence while present, so a later NSIS launch cannot
+redirect the task from the machine payload.
+
+Both scopes serialize registration and replacement with the per-user install
+lock. They update the existing task in place and never register a second task.
+The registrar re-reads the task after locking and leaves an equal or newer
+compatible registration unchanged.
+
+Replacement follows the installed-payload refresh amendment. The installer
+stages and verifies the signed payload, then atomically replaces the payload at
+that path without changing the task URI. The old runtime drains durable work and
+exits with status 75, so the same task starts the new payload.
+
+A failed readiness check restores the previous verified payload. The installer
+first writes an owner-only rollback marker, which makes the new payload exit
+successfully before opening state. It stops the task, confirms release of the
+instance lock, restores the payload, removes the marker, and calls `Run`.
+Any stop, restore, or old-readiness failure leaves the marker and signed payload
+in place and reports the failure.
+
+### Removal
+
+The NSIS uninstaller acts only when the current user's URI, principal, and
+action match that installation. If a machine installation remains, it repoints
+the stable task to that verified payload. Otherwise, it stops and deletes the
+task. It removes the NSIS payload only after no running task references it.
+
+The elevated MSI uninstaller enumerates `\Muniment\Runtime-*` tasks. It acts
+only when the URI, SID principal, no-argument action, and MSI path all match.
+If that user has a verified NSIS payload, it repoints the task to that payload.
+Otherwise, it stops and deletes the task. It leaves NSIS-owned tasks unchanged.
+
+Each uninstaller waits for the bounded graceful-stop deadline before it ends a
+remaining process. A stop or task-removal failure aborts payload removal and
+reports the failure. Removal keeps journals, credentials, CAS data, and
+diagnostics.
+
+### Attach admission gate
+
+This amendment grants startup authority only. It grants no Windows attach peer
+identity or session authority. Windows activation must not publish the named
+pipe attach endpoint before a later peer-identity amendment lands.
+
+Until that amendment lands, surfaces do not call `Run`. An accidental logon or
+manual start exits successfully before it opens the instance lock, journal,
+CAS, Pi, or attach endpoint. Registration can therefore ship without activating
+an unsafe listener.
+
+The Windows contract uses the documented
+[`RestartOnFailure`](https://learn.microsoft.com/windows/win32/taskschd/taskschedulerschema-restartonfailure-settingstype-element),
+[`TASK_INSTANCES_IGNORE_NEW`](https://learn.microsoft.com/windows/win32/api/taskschd/ne-taskschd-task_instances_policy),
+and
+[`TASK_LOGON_INTERACTIVE_TOKEN`](https://learn.microsoft.com/windows/win32/api/taskschd/ne-taskschd-task_logon_type)
+Task Scheduler settings.
