@@ -45,6 +45,9 @@ fn main() {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    return;
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(exit) = test_macos_activation_exit() {
         std::process::exit(run_recorded_macos_activation(|| match macos_activation() {
@@ -68,7 +71,11 @@ fn main() {
     #[cfg(target_os = "macos")]
     std::process::exit(run_recorded_macos_activation(macos_activation));
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    )))]
     {
         eprintln!("muniment-runtime: Linux is the only supported platform");
         std::process::exit(1);

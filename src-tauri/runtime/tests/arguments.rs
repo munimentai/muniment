@@ -10,6 +10,19 @@ fn runtime(argument: &str) -> Output {
         .unwrap()
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_stops_before_runtime_admission() {
+    let output = Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
+        .env(INVALID_WAIT_TIMEOUT.0, INVALID_WAIT_TIMEOUT.1)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
 #[test]
 fn prints_the_version_without_starting_the_runtime() {
     let output = runtime("--version");
