@@ -22,6 +22,52 @@ async function shellState() {
   return `desktop client status: ${connection}. shell: ${rendered}`
 }
 
+const hostedLogin = 'button[name="action"][value="login"]'
+const hostedSelect = 'button[name="action"][value="select"]'
+const hostedApprove = 'button[name="action"][value="approve"]'
+
+async function hostedDisplayed(driver, selector) {
+  try {
+    return await (await driver.$(selector)).isDisplayed()
+  } catch {
+    return false
+  }
+}
+
+async function hostedLocation(driver) {
+  try {
+    return await driver.getUrl()
+  } catch {
+    return ''
+  }
+}
+
+async function activateHosted(driver, selector) {
+  if (process.platform === 'linux') {
+    // WebKitWebDriver holds the session when a click starts a navigation.
+    // Activate the control from inside the page instead.
+    let clicked = false
+    try {
+      clicked = await driver.execute((sel) => {
+        const el = document.querySelector(sel)
+        if (!el) return false
+        el.click()
+        return true
+      }, selector)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      if (!/timeout/i.test(message)) throw error
+      // A page-load timeout after the click is not a failed click.
+      clicked = true
+    }
+    if (!clicked) throw new Error(`production control ${selector} was not found`)
+    return
+  }
+  const control = await driver.$(selector)
+  await control.waitForDisplayed()
+  await control.click()
+}
+
 describe('installed nightly', () => {
   afterEach(async () => {
     const profile = await $('.profile-button')
@@ -123,19 +169,73 @@ describe('installed nightly', () => {
             ? { browserName: 'MiniBrowser', pageLoadStrategy: 'none', 'wdio:enforceWebDriverClassic': true }
             : { browserName: 'chrome', 'goog:chromeOptions': { args: ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage'] } },
       })
-      await signInBrowser.url(authUrl)
+      if (process.platform === 'linux') {
+        // WebKitWebDriver never finishes Navigate on the continuation.
+        // Assign the URL from the blank page so the session stays responsive.
+        try {
+          await signInBrowser.setTimeout({ pageLoad: 15000, implicit: 0 })
+        } catch {}
+        try {
+          await signInBrowser.execute((target) => {
+            window.location.assign(target)
+          }, authUrl)
+        } catch {
+          // A page-load timeout is not a failed open if the login page appears.
+        }
+      } else {
+        await signInBrowser.url(authUrl)
+      }
+      await (await signInBrowser.$('main[data-native-authorization="pending"]')).waitForDisplayed({
+        timeout: 60000,
+        timeoutMsg: 'production authorization login page did not appear',
+      })
       const userField = await signInBrowser.$('input[type="email"], input[autocomplete="username"]')
-      await userField.waitForDisplayed()
+      await userField.waitForDisplayed({
+        timeout: 30000,
+        timeoutMsg: 'production authorization email field did not appear',
+      })
       await userField.setValue(username)
       let passwordField = await signInBrowser.$('input[type="password"], input[autocomplete="current-password"]')
       if (!await passwordField.isExisting()) {
-        await signInBrowser.keys('Enter')
+        await activateHosted(signInBrowser, hostedLogin)
         passwordField = await signInBrowser.$('input[type="password"], input[autocomplete="current-password"]')
       }
-      await passwordField.waitForDisplayed()
+      await passwordField.waitForDisplayed({
+        timeout: 30000,
+        timeoutMsg: 'production authorization password field did not appear',
+      })
       await passwordField.setValue(password)
-      await signInBrowser.keys('Enter')
-      await signInBrowser.waitUntil(async () => (await signInBrowser.getUrl()).startsWith('http://127.0.0.1:'), { timeout: 120000 })
+      await activateHosted(signInBrowser, hostedLogin)
+      await signInBrowser.waitUntil(async () => (
+        (await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:')
+        || await hostedDisplayed(signInBrowser, hostedSelect)
+        || await hostedDisplayed(signInBrowser, hostedApprove)
+      ), {
+        timeout: 60000,
+        timeoutMsg: 'production authorization did not continue after local sign-in',
+      })
+      if (!(await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:')
+        && await hostedDisplayed(signInBrowser, hostedSelect)) {
+        await activateHosted(signInBrowser, hostedSelect)
+        await signInBrowser.waitUntil(async () => (
+          (await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:')
+          || await hostedDisplayed(signInBrowser, hostedApprove)
+        ), {
+          timeout: 30000,
+          timeoutMsg: 'production authorization did not continue after organization choice',
+        })
+      }
+      if (!(await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:')) {
+        await (await signInBrowser.$(hostedApprove)).waitForDisplayed({
+          timeout: 15000,
+          timeoutMsg: 'production authorization did not ask for approval',
+        })
+        await activateHosted(signInBrowser, hostedApprove)
+      }
+      await signInBrowser.waitUntil(async () => (await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:'), {
+        timeout: 120000,
+        timeoutMsg: 'production sign-in did not return to the desktop callback',
+      })
     } finally {
       try {
         if (signInBrowser) await signInBrowser.deleteSession()
