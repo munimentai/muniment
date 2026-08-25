@@ -77,6 +77,15 @@ pub fn macos_log_directory_from_home(home: &Path) -> Result<PathBuf, DirectoryUn
     Ok(home.join("Library/Logs/Muniment"))
 }
 
+pub fn windows_log_directory_from_local_app_data(
+    local_app_data: &Path,
+) -> Result<PathBuf, DirectoryUnavailableError> {
+    if !local_app_data.is_absolute() {
+        return Err(DirectoryUnavailableError);
+    }
+    Ok(local_app_data.join("muniment/logs"))
+}
+
 /// Resolves the effective user's home from the macOS user database.
 #[cfg(target_os = "macos")]
 pub fn effective_user_macos_log_directory() -> Result<PathBuf, DirectoryUnavailableError> {

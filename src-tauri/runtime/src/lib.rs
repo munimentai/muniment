@@ -16,6 +16,8 @@ pub mod service;
 mod sink;
 #[cfg(target_os = "linux")]
 mod upgrade_watch;
+#[cfg(any(unix, target_os = "windows"))]
+mod windows_activation;
 
 #[cfg(target_os = "linux")]
 pub use activation::{
@@ -38,8 +40,8 @@ pub use attach_state::RuntimeAttachState;
 pub use directories::effective_user_macos_log_directory;
 pub use directories::{
     config_directory, installed_desktop_executable, installed_desktop_executable_from,
-    macos_log_directory_from_home, profile_directory, resolve_directory, DirectoryUnavailableError,
-    APPLICATION_IDENTIFIER,
+    macos_log_directory_from_home, profile_directory, resolve_directory,
+    windows_log_directory_from_local_app_data, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
 };
 pub use macos_activation::{
     emit_macos_unified_log, emit_macos_unified_log_with, record_macos_failed_exit,
@@ -66,4 +68,8 @@ pub use service::{
 pub use sink::{
     RuntimeChatEventBroadcast, RuntimeChatEventSink, RuntimeChatEventTarget,
     CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY,
+};
+#[cfg(any(unix, target_os = "windows"))]
+pub use windows_activation::{
+    write_windows_diagnostic, WindowsDiagnosticEvent, WINDOWS_RUNTIME_LOG_MAX_BYTES,
 };
