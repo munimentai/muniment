@@ -3,8 +3,8 @@
 use muniment_core::attach::{
     accept_macos_attach_with_reader, decode_frame, encode_frame,
     serve_next_macos_attach_with_reader, verify_macos_attach_peer_with_reader, Client, Hello, Id,
-    MacosAttachAcceptError, MacosAttachListener, MacosPeerError, MacosPeerReadError,
-    MacosPeerReader, Protocol, VersionRange, Welcome,
+    MacosAttachAcceptError, MacosAttachListener, MacosAttachPeerReader, MacosPeerError,
+    MacosPeerReadError, Protocol, VersionRange, Welcome,
 };
 use std::cell::Cell;
 use std::io::{self, Read};
@@ -63,7 +63,7 @@ fn listener_preserves_a_live_endpoint() {
     std::fs::remove_file(path).unwrap();
 }
 
-impl MacosPeerReader for FakePeerReader {
+impl MacosAttachPeerReader for FakePeerReader {
     fn peer_effective_uid(&self, _socket: RawFd) -> Result<libc::uid_t, MacosPeerReadError> {
         self.reads.set(self.reads.get() + 1);
         self.peer_uid

@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 pub struct MacosPeerReadError;
 
 /// Injected boundary around `getpeereid` and `geteuid`.
-pub trait MacosPeerReader {
+pub trait MacosAttachPeerReader {
     fn peer_effective_uid(&self, socket: RawFd) -> Result<libc::uid_t, MacosPeerReadError>;
     fn local_effective_uid(&self) -> libc::uid_t;
 }
@@ -17,7 +17,7 @@ pub trait MacosPeerReader {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MacosNativePeerReader;
 
-impl MacosPeerReader for MacosNativePeerReader {
+impl MacosAttachPeerReader for MacosNativePeerReader {
     fn peer_effective_uid(&self, socket: RawFd) -> Result<libc::uid_t, MacosPeerReadError> {
         let mut uid = 0;
         let mut gid = 0;
@@ -59,7 +59,7 @@ pub fn verify_macos_attach_peer(stream: &UnixStream) -> Result<(), MacosPeerErro
 #[doc(hidden)]
 pub fn verify_macos_attach_peer_with_reader(
     stream: &UnixStream,
-    reader: &impl MacosPeerReader,
+    reader: &impl MacosAttachPeerReader,
 ) -> Result<(), MacosPeerError> {
     let peer_uid = reader
         .peer_effective_uid(stream.as_raw_fd())

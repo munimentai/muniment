@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use super::{
     decode_frame, encode_frame, negotiate_first, verify_macos_attach_peer,
-    verify_macos_attach_peer_with_reader, welcome, FirstMessage, MacosPeerReader, VersionRange,
-    MAX_FRAME_LENGTH,
+    verify_macos_attach_peer_with_reader, welcome, FirstMessage, MacosAttachPeerReader,
+    VersionRange, MAX_FRAME_LENGTH,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,7 +138,7 @@ pub fn serve_next_macos_attach(
 #[doc(hidden)]
 pub fn serve_next_macos_attach_with_reader(
     listener: &UnixListener,
-    reader: &impl MacosPeerReader,
+    reader: &impl MacosAttachPeerReader,
     desktop_version: &str,
 ) -> Result<(), MacosAttachListenerError> {
     let stream = accept_macos_attach_with_reader(listener, reader)
@@ -167,7 +167,7 @@ pub fn accept_macos_attach(listener: &UnixListener) -> Result<UnixStream, MacosA
 #[doc(hidden)]
 pub fn accept_macos_attach_with_reader(
     listener: &UnixListener,
-    reader: &impl MacosPeerReader,
+    reader: &impl MacosAttachPeerReader,
 ) -> Result<UnixStream, MacosAttachAcceptError> {
     let (stream, _) = listener
         .accept()
