@@ -112,9 +112,10 @@ fn rejects_reparse_points_in_the_managed_path() {
     let target = root.join("target");
     fs::create_dir(&target).unwrap();
     let link = root.join("muniment/logs");
-    let command = format!("mklink /J \"{}\" \"{}\"", link.display(), target.display());
     let status = Command::new("cmd")
-        .args(["/d", "/c", &command])
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&link)
+        .arg(&target)
         .status()
         .unwrap();
     assert!(status.success());
@@ -127,9 +128,10 @@ fn rejects_reparse_points_in_the_managed_path() {
     let nested_root = target.join("local");
     fs::create_dir_all(&nested_root).unwrap();
     let link = base.join("link");
-    let command = format!("mklink /J \"{}\" \"{}\"", link.display(), target.display());
     let status = Command::new("cmd")
-        .args(["/d", "/c", &command])
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&link)
+        .arg(&target)
         .status()
         .unwrap();
     assert!(status.success());
