@@ -1,20 +1,18 @@
 #![cfg(all(target_os = "macos", feature = "client"))]
 
-use muniment_attach::{
-    handshake_stream_with_peer_reader, ClientError, MacosPeerReader,
-};
+use muniment_attach::{handshake_stream_with_peer_reader, ClientError, MacosPeerReader};
 use std::io::{self, Read};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-struct FakePeerReader(Result<libc::uid_t, ()>, libc::uid_t);
+struct FakePeerReader(Result<u32, ()>, u32);
 
 impl MacosPeerReader for FakePeerReader {
-    fn peer_effective_uid(&self, _socket: i32) -> Result<libc::uid_t, ()> {
+    fn peer_effective_uid(&self, _socket: i32) -> Result<u32, ()> {
         self.0
     }
 
-    fn local_effective_uid(&self) -> libc::uid_t {
+    fn local_effective_uid(&self) -> u32 {
         self.1
     }
 }

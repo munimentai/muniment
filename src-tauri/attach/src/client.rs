@@ -527,8 +527,14 @@ mod linux {
 
     #[cfg(target_os = "macos")]
     pub trait MacosPeerReader {
-        fn peer_effective_uid(&self, socket: i32) -> Result<libc::uid_t, ()>;
-        fn local_effective_uid(&self) -> libc::uid_t;
+        fn peer_effective_uid(&self, socket: i32) -> Result<u32, ()>;
+        fn local_effective_uid(&self) -> u32;
+    }
+
+    #[cfg(target_os = "macos")]
+    unsafe extern "C" {
+        fn getpeereid(socket: i32, effective_uid: *mut u32, effective_gid: *mut u32) -> i32;
+        fn geteuid() -> u32;
     }
 
     #[cfg(target_os = "macos")]
@@ -536,18 +542,18 @@ mod linux {
 
     #[cfg(target_os = "macos")]
     impl MacosPeerReader for NativeMacosPeerReader {
-        fn peer_effective_uid(&self, socket: i32) -> Result<libc::uid_t, ()> {
+        fn peer_effective_uid(&self, socket: i32) -> Result<u32, ()> {
             let mut uid = 0;
             let mut gid = 0;
-            if unsafe { libc::getpeereid(socket, &mut uid, &mut gid) } == 0 {
+            if unsafe { getpeereid(socket, &mut uid, &mut gid) } == 0 {
                 Ok(uid)
             } else {
                 Err(())
             }
         }
 
-        fn local_effective_uid(&self) -> libc::uid_t {
-            unsafe { libc::geteuid() }
+        fn local_effective_uid(&self) -> u32 {
+            unsafe { geteuid() }
         }
     }
 
