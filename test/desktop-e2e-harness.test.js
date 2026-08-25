@@ -110,6 +110,16 @@ describe('installed production chat contract', () => {
   it('does not capture the rendered production conversation', () => {
     expect(spec.slice(spec.indexOf('const prompt ='))).not.toContain('saveScreenshot')
   })
+
+  it('drives hosted native authorization through Continue and Approve', () => {
+    expect(spec).toContain('main[data-native-authorization="pending"]')
+    expect(spec).toContain('button[name="action"][value="login"]')
+    expect(spec).toContain('button[name="action"][value="select"]')
+    expect(spec).toContain('button[name="action"][value="approve"]')
+    expect(spec).toContain('window.location.assign(target)')
+    expect(spec).toContain("timeoutMsg: 'production authorization did not ask for approval'")
+    expect(spec).toContain("timeoutMsg: 'production sign-in did not return to the desktop callback'")
+  })
 })
 
 describe('WDIO Tauri driver contract', () => {
