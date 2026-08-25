@@ -257,7 +257,7 @@ jobs:
     # when another platform fails. The runner reports a missing Linux package.
     needs: [prepare, build, publish]
     if: >-
-      always() && needs.prepare.result == 'success' &&
+      !cancelled() && needs.prepare.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'linux')
     runs-on: self-hosted
@@ -380,7 +380,7 @@ jobs:
     # The shared real-auth fixture is exclusive: Windows starts only after the
     # Linux case has completely finished, including its finalizer.
     if: >-
-      always() && needs.prepare.result == 'success' &&
+      !cancelled() && needs.prepare.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'windows') &&
       (github.event.inputs.platform == 'windows' || needs.linux-e2e.result != 'skipped')
@@ -496,7 +496,7 @@ jobs:
     # pve01 permits one desktop VM at a time. macOS starts only after the
     # Windows case has completely finished, including its finalizer.
     if: >-
-      always() && needs.prepare.result == 'success' &&
+      !cancelled() && needs.prepare.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'macos') &&
       (github.event.inputs.platform == 'macos' || needs.windows-e2e.result != 'skipped')
