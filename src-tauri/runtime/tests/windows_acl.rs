@@ -111,7 +111,7 @@ fn rejects_reparse_points_in_the_managed_path() {
     fs::remove_dir_all(root.join("muniment/logs")).unwrap();
     let target = root.join("target");
     fs::create_dir(&target).unwrap();
-    let link = root.join("muniment/logs");
+    let link = root.join("muniment").join("logs");
     let status = Command::new("cmd")
         .args(["/d", "/c", "mklink", "/J"])
         .arg(&link)
