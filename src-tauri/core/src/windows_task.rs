@@ -141,15 +141,15 @@ pub fn registration_verdict(
     expected: &TaskDefinition,
     observed: &ObservedRegistration,
 ) -> RegistrationVerdict {
-    if observed.uri != expected.uri || observed.principal_sid != expected.principal_sid {
+    if observed.uri != expected.uri
+        || observed.principal_sid != expected.principal_sid
+        || observed.action_path != expected.action.path
+        || observed.action_arguments != expected.action.arguments
+    {
         return RegistrationVerdict::Foreign;
     }
 
-    if observed.logon_type == expected.logon_type
-        && observed.run_level == expected.run_level
-        && observed.action_path == expected.action.path
-        && observed.action_arguments == expected.action.arguments
-    {
+    if observed.logon_type == expected.logon_type && observed.run_level == expected.run_level {
         RegistrationVerdict::Equal
     } else {
         RegistrationVerdict::Different
@@ -182,7 +182,10 @@ fn is_absolute_windows_path(path: &str, segments: &[&str]) -> bool {
         && matches!(path.as_bytes().get(2), Some(b'\\' | b'/'));
     let unc_absolute = (path.starts_with(r"\\") || path.starts_with("//"))
         && segments.get(2).is_some_and(|server| !server.is_empty())
-        && segments.get(3).is_some_and(|share| !share.is_empty());
+        && segments.get(3).is_some_and(|share| !share.is_empty())
+        && segments
+            .get(4)
+            .is_some_and(|component| !component.is_empty());
     drive_absolute || unc_absolute
 }
 
@@ -194,15 +197,30 @@ fn is_canonical_sid(sid: &str) -> bool {
     let Some(authority) = parts.next() else {
         return false;
     };
-    if parse_canonical_decimal(authority, MAX_SID_AUTHORITY).is_none() {
+    if !is_canonical_authority(authority) {
         return false;
     }
 
     let sub_authorities: Vec<_> = parts.collect();
-    sub_authorities.len() <= MAX_SID_SUB_AUTHORITIES
+    !sub_authorities.is_empty()
+        && sub_authorities.len() <= MAX_SID_SUB_AUTHORITIES
         && sub_authorities
             .iter()
             .all(|part| parse_canonical_decimal(part, u32::MAX as u64).is_some())
+}
+
+fn is_canonical_authority(authority: &str) -> bool {
+    const HEX_PREFIX: &str = "0x";
+    const HEX_DIGITS: usize = 12;
+    const DECIMAL_LIMIT: u64 = 1 << 32;
+
+    if let Some(hex) = authority.strip_prefix(HEX_PREFIX) {
+        return hex.len() == HEX_DIGITS
+            && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && u64::from_str_radix(hex, 16).is_ok_and(|value| value >= DECIMAL_LIMIT);
+    }
+
+    parse_canonical_decimal(authority, MAX_SID_AUTHORITY).is_some_and(|value| value < DECIMAL_LIMIT)
 }
 
 fn parse_canonical_decimal(value: &str, maximum: u64) -> Option<u64> {

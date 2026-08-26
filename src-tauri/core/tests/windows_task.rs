@@ -16,13 +16,29 @@ fn builds_the_stable_uri_only_for_canonical_sids() {
     );
 
     for sid in [
+        "S-1-4294967295-1",
+        "S-1-0x000100000000-1",
+        "S-1-0xffffffffffff-4294967295",
+    ] {
+        assert!(task_uri(sid).is_ok(), "{sid}");
+    }
+
+    for sid in [
         "",
         "s-1-5-21-1",
         "S-2-5-21-1",
         "S-1-",
+        "S-1-5",
+        "S-1-5-",
+        "S-1-5-1--2",
         "S-1-05-21-1",
         "S-1-5-021-1",
         "S-1-5-a",
+        "S-1-4294967296-1",
+        "S-1-0x0000ffffffff-1",
+        "S-1-0x100000000-1",
+        "S-1-0x1000000000000-1",
+        "S-1-281474976710655-1",
         "S-1-281474976710656-1",
         "S-1-5-4294967296",
         "S-1-5-1-2-3-4-5-6-7-8-9-10-11-12-13-14-15-16",
@@ -45,6 +61,11 @@ fn rejects_unsafe_or_wrong_payload_paths() {
         build_task_definition(SID, r"C:\muniment\desktop.exe"),
         Err(TaskDefinitionError::WrongPayloadFileName)
     );
+    assert_eq!(
+        build_task_definition(SID, r"\\server\muniment-runtime.exe"),
+        Err(TaskDefinitionError::RelativePayloadPath)
+    );
+    assert!(build_task_definition(SID, r"\\server\share\muniment-runtime.exe").is_ok());
 }
 
 #[test]
@@ -86,7 +107,7 @@ fn classifies_equal_different_and_foreign_registrations() {
     observed.action_arguments = Some("--unexpected".to_owned());
     assert_eq!(
         registration_verdict(&definition, &observed),
-        RegistrationVerdict::Different
+        RegistrationVerdict::Foreign
     );
     observed = observed_registration(&definition.uri);
     observed.logon_type = LogonType::Other(1);
@@ -105,7 +126,7 @@ fn classifies_equal_different_and_foreign_registrations() {
     observed.action_path = PathBuf::from(r"C:\other\muniment-runtime.exe");
     assert_eq!(
         registration_verdict(&definition, &observed),
-        RegistrationVerdict::Different
+        RegistrationVerdict::Foreign
     );
 
     observed = observed_registration(&definition.uri);
