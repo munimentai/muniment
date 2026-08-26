@@ -40,7 +40,8 @@ them must exercise the real contracts. It must add no mocked production path.
 > held product consumption for its real event contract. The forty-fifth
 > (2026-08-25) folded the passive-delivery and read-contract chains into two
 > entries, recorded the macOS cutover, and recorded the Windows activation
-> groundwork. It grows every wave, so it stays the next compaction target.
+> groundwork. The forty-sixth (2026-08-26) folded the twelve Windows slices
+> into two entries. It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -455,51 +456,59 @@ start activates no unsafe listener. `write_windows_diagnostic`
 under `%LocalAppData%\muniment\logs`, and its `cfg(unix)` twin lets
 `src-tauri/runtime/tests/windows_status.rs` run in the Linux loop.
 
-DONE 2026-08-25 through 2026-08-26 — nine Windows slices landed (MUNIDESK-1457
-through 1461, 1464, 1465, 1466, and 1468). They cover the three registration
-slices, the peer-identity decision, the state-directory decision, the first two
-pure attach halves, and the Task Scheduler XML renderer. ADR 0012 carries the
+DONE 2026-08-25 through 2026-08-26 — twelve Windows slices landed
+(MUNIDESK-1457 through 1461, 1464, 1465, 1466, 1468, 1469, 1471, and 1472).
+They cover the three registration slices, the peer-identity decision, the
+state-directory decision, and every pure core half. ADR 0012 carries the
 Windows attach peer-identity amendment
 (`docs/decisions/0012-user-level-runtime-service.md:1087`) and the Windows
-runtime state directory amendment (`:1130`). Together they name the per-user pipe
-path and the protected owner-only DACL. They name the impersonation check each
-peer runs before the first frame. They name the state directory
-`%APPDATA%\ai.muniment.desktop`. They change no runtime code, so the attach
-admission gate still holds. `start_record`
-(`src-tauri/runtime/src/start_record.rs`) owns the shared start record, and
-`windows_activation` (`src-tauri/runtime/src/windows_activation.rs`) adds the
-`windows-starts` twin. `windows_state_directory_from_app_data`
-(`src-tauri/runtime/src/directories.rs:60`) resolves that state root from an
+runtime state directory amendment (`:1130`). Together they name the per-user
+pipe path, the protected owner-only DACL, the impersonation check each peer runs
+before the first frame, and the state directory `%APPDATA%\ai.muniment.desktop`.
+They change no runtime code, so the attach admission gate still holds.
+`start_record` (`src-tauri/runtime/src/start_record.rs`) owns the shared start
+record, and `windows_activation`
+(`src-tauri/runtime/src/windows_activation.rs`) adds the `windows-starts` twin.
+`windows_state_directory_from_app_data`
+(`src-tauri/runtime/src/directories.rs:61`) resolves the state root from an
 injected `%APPDATA%` value. On Windows both `profile_directory` and
-`config_directory` read it. `muniment-core` holds the typed task registration
-model (`src-tauri/core/src/windows_task.rs`), the installed payload resolver with
-machine precedence (`src-tauri/core/src/windows_payload.rs`),
-`windows_attach_pipe_path` (`src-tauri/core/src/attach/windows_pipe.rs`), and
-`verify_windows_attach_peer_with_reader`
-(`src-tauri/core/src/attach/windows_peer.rs`). `render_task_definition_xml`
-(`src-tauri/core/src/windows_task.rs:148`) renders the registration model as a
-Task Scheduler XML document. `THREAT_MODEL.md` records the Windows activation
+`config_directory` read it. `THREAT_MODEL.md` records the Windows activation
 boundary.
 
-NEXT — the Windows lane finishes the pure halves, then builds the registrar and
-the listener. Every pure half comes first, because no agent checkout compiles
-Windows code (`AGENTS.md`). The XML renderer landed, so three core halves
-remain. `muniment-core` needs the registration action that keeps machine
-precedence. It needs the listener endpoint security verdict over an injected
-reader. It needs the removal action the two uninstallers share. The runtime
-needs two halves. It needs the per-user install lock that serializes
-registration, and it needs the explicit-start crash-window clear the ADR
-requires before a `Run` call. The runtime dependency boundary bars a third
-direct package, so a runtime half composes from `muniment-core` and the
-standard library alone (`test/runtime-dependency-boundary.sh`). The named-pipe
-listener and client, the Task Scheduler COM adapter, installer registration,
-and the two uninstallers follow in that order.
+DONE 2026-08-26 — every pure core half is built. `muniment-core` holds the typed
+task registration model with its Task Scheduler XML renderer
+(`src-tauri/core/src/windows_task.rs:182`), `plan_task_registration` (`:362`)
+with machine precedence, `plan_task_removal` (`:399`) for the two uninstallers,
+the installed payload resolver (`src-tauri/core/src/windows_payload.rs:29`),
+`windows_attach_pipe_path` (`src-tauri/core/src/attach/windows_pipe.rs:16`),
+`verify_windows_attach_peer_with_reader`
+(`src-tauri/core/src/attach/windows_peer.rs:34`), and
+`verify_windows_pipe_security_with_reader`
+(`src-tauri/core/src/attach/windows_pipe_security.rs:51`).
 
-NOT BUILT — the Windows attach peer-identity implementation. MUNIDESK-1466
-landed the pure model alone. `verify_windows_attach_peer_with_reader`
-(`src-tauri/core/src/attach/windows_peer.rs:38`) compares two injected SIDs,
-and no Windows attach code calls `ImpersonateNamedPipeClient` or
-`GetSecurityInfo` yet. The ADR 0012 attach admission gate therefore still holds. `main`
+NEXT — the Windows lane finishes the two runtime pure halves, then builds the
+registrar and the listener. Every pure half comes first, because no agent
+checkout compiles Windows code (`AGENTS.md`). The runtime needs the per-user
+install lock that serializes registration and replacement. It needs the
+explicit-start crash-window clear the ADR requires before a `Run` call. The
+runtime dependency boundary bars a third direct package, so a runtime half
+composes from `muniment-core` and the standard library alone
+(`test/runtime-dependency-boundary.sh`). Two seams block the Windows-only work
+that follows. No public helper reads this process's own user SID, and
+`OwnerSecurity` (`src-tauri/core/src/windows_user_diagnostics.rs:35`) keeps that
+read private behind a raw `PSID`, so the pipe path, the task URI, and both peer
+checks have no source for it. `deadline_io`
+(`src-tauri/core/src/attach/deadline_io.rs`) is `cfg(unix)` and types both
+helpers against `UnixStream`, so no named-pipe transport can reuse the bounded
+frame reads. The named-pipe listener and client, the Task Scheduler COM adapter,
+installer registration, and the two uninstallers follow in that order.
+
+NOT BUILT — the Windows attach peer-identity implementation. MUNIDESK-1466 and
+MUNIDESK-1469 landed the pure models alone.
+`verify_windows_attach_peer_with_reader`
+(`src-tauri/core/src/attach/windows_peer.rs:34`) compares two injected SIDs, and
+no Windows attach code calls `ImpersonateNamedPipeClient` or `GetSecurityInfo`
+yet. The ADR 0012 attach admission gate therefore still holds. `main`
 (`src-tauri/runtime/src/main.rs:49`) returns on Windows before it opens the
 instance lock, and no surface calls `IRegisteredTask::Run`.
 
