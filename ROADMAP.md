@@ -479,29 +479,41 @@ DONE 2026-08-26 — every pure core half is built. `muniment-core` holds the typ
 task registration model with its Task Scheduler XML renderer
 (`src-tauri/core/src/windows_task.rs:182`), `plan_task_registration` (`:362`)
 with machine precedence, `plan_task_removal` (`:399`) for the two uninstallers,
-the installed payload resolver (`src-tauri/core/src/windows_payload.rs:29`),
-`windows_attach_pipe_path` (`src-tauri/core/src/attach/windows_pipe.rs:16`),
+the installed payload resolver and its two removal scopes
+(`src-tauri/core/src/windows_payload.rs:29`), `windows_attach_pipe_path`
+(`src-tauri/core/src/attach/windows_pipe.rs:16`),
 `verify_windows_attach_peer_with_reader`
 (`src-tauri/core/src/attach/windows_peer.rs:34`), and
 `verify_windows_pipe_security_with_reader`
 (`src-tauri/core/src/attach/windows_pipe_security.rs:51`).
 
-NEXT — the Windows lane finishes the two runtime pure halves, then builds the
-registrar and the listener. Every pure half comes first, because no agent
-checkout compiles Windows code (`AGENTS.md`). The runtime needs the per-user
-install lock that serializes registration and replacement. It needs the
-explicit-start crash-window clear the ADR requires before a `Run` call. The
-runtime dependency boundary bars a third direct package, so a runtime half
-composes from `muniment-core` and the standard library alone
-(`test/runtime-dependency-boundary.sh`). Two seams block the Windows-only work
-that follows. No public helper reads this process's own user SID, and
-`OwnerSecurity` (`src-tauri/core/src/windows_user_diagnostics.rs:35`) keeps that
-read private behind a raw `PSID`, so the pipe path, the task URI, and both peer
-checks have no source for it. `deadline_io`
-(`src-tauri/core/src/attach/deadline_io.rs`) is `cfg(unix)` and types both
-helpers against `UnixStream`, so no named-pipe transport can reuse the bounded
-frame reads. The named-pipe listener and client, the Task Scheduler COM adapter,
-installer registration, and the two uninstallers follow in that order.
+DONE 2026-08-26 — the first runtime pure half and both blocking seams landed
+(MUNIDESK-1474, 1475, 1476, and 1477). `install_lock::acquire`
+(`src-tauri/runtime/src/install_lock.rs:34`) takes the per-user install lock
+within a bounded wait, so registration and replacement serialize. It has no
+caller yet. `current_process_user_sid`
+(`src-tauri/core/src/windows_sid.rs:65`) returns this process's own user SID as
+owned bytes and a canonical string, so the pipe path, the task URI, and both
+peer checks now have a source. `deadline_io`
+(`src-tauri/core/src/attach/deadline_io.rs:6`) types `read_exact_before` and
+`write_all_before` against a `DeadlineStream` trait rather than `UnixStream`, so
+a named-pipe transport can reuse the bounded frame reads.
+
+NEXT — one runtime pure half remains, and the Windows-only work starts beside
+it. The runtime still needs the explicit-start crash-window clear that ADR 0012
+requires before a `Run` call
+(`docs/decisions/0012-user-level-runtime-service.md:993`). Nothing reads a live
+task either, so `plan_task_registration` and `plan_task_removal` have no source
+for an `ObservedRegistration`. `IRegisteredTask::get_Xml` returns the whole
+document in one call, so that parse is a platform-independent half. The runtime
+dependency boundary bars a third direct package, so a runtime half composes from
+`muniment-core` and the standard library alone
+(`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs real
+Windows tests rather than a compile alone (`.github/workflows/ci.yml:345`), so
+each Windows-only slice adds its own test target there. The pipe endpoint, the
+impersonation peer check, and the bounded named-pipe stream come first. The
+accept loop, the Task Scheduler COM adapter, installer registration, and the two
+uninstallers follow in that order.
 
 NOT BUILT — the Windows attach peer-identity implementation. MUNIDESK-1466 and
 MUNIDESK-1469 landed the pure models alone.
