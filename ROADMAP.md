@@ -510,16 +510,26 @@ with a protected owner-only DACL, then reads the owner and the DACL back through
 of the Windows lane is now built. The listener has no caller, so the ADR 0012
 attach admission gate still holds.
 
-NEXT — five slices remain before the Windows accept loop. The Task Scheduler XML
-parse is the one platform-independent half left, because
-`plan_task_registration` and `plan_task_removal` still have no source for an
-`ObservedRegistration`, and `IRegisteredTask::get_Xml` returns the whole document
-in one call. The four Windows-only slices are the impersonation peer check, the
-bounded overlapped named-pipe stream, the client endpoint owner check, and the
-per-profile attach instance lock. The accept loop, the Task Scheduler COM
-adapter, installer registration, and the two uninstallers follow in that order.
-The runtime dependency boundary bars a third direct package, so a runtime half
-composes from `muniment-core` and the standard library alone
+DONE 2026-08-26 — the task-XML parse and the impersonation peer reader landed
+(MUNIDESK-1482 and 1483). `parse_observed_registration`
+(`src-tauri/core/src/windows_task.rs:346`) turns one Task Scheduler XML document
+into an `ObservedRegistration`, so `registration_verdict`,
+`plan_task_registration`, and `plan_task_removal` now have a source.
+`NativeWindowsAttachPeerReader`
+(`src-tauri/core/src/attach/windows_peer_native.rs:20`) calls
+`ImpersonateNamedPipeClient`, `OpenThreadToken`, and `GetTokenInformation` with
+`TokenUser`, copies the client SID, and calls `RevertToSelf`. It reads identity
+alone and no listener calls it, so the ADR 0012 attach admission gate still
+holds. `main` (`src-tauri/runtime/src/main.rs:49`) still returns on Windows
+before it opens the instance lock, and no surface calls `IRegisteredTask::Run`.
+
+NEXT — three slices remain before the Windows accept loop. They are the bounded
+overlapped named-pipe stream, the client endpoint owner check, and the per-profile
+attach instance lock. The accept loop also needs the read-order amendment below,
+because the peer reader cannot run before the listener's first read. The Task
+Scheduler COM adapter, installer registration, and the two uninstallers follow
+the accept loop. The runtime dependency boundary bars a third direct package, so
+a runtime half composes from `muniment-core` and the standard library alone
 (`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs real
 Windows tests rather than a compile alone (`.github/workflows/ci.yml:345`), so
 each Windows-only slice adds its own test target there.
@@ -532,25 +542,28 @@ endpoint. Core cannot read `%APPDATA%` itself, because `windows_state_directory`
 lives in the runtime crate (`src-tauri/runtime/src/directories.rs:71`). The
 caller therefore injects the state directory.
 
-MEASURED 2026-08-26 (planner, read the Microsoft named-pipe impersonation
-reference) — `ImpersonateNamedPipeClient` fails with `ERROR_CANNOT_IMPERSONATE`
-on a byte-mode pipe until the server reads from that pipe. The call adopts the
-security context of the last message read. ADR 0012 says the peer check
-completes before the listener reads or writes any `muniment.attach/1` frame
-(`docs/decisions/0012-user-level-runtime-service.md:1116`), so the two rules
-collide. The accept-loop slice needs an ADR 0012 amendment that names what the
-listener reads first. Reading the four-byte frame-length prefix before the check
-is the smallest candidate. The peer-check slice therefore lands the identity
-reader alone and leaves the ordering to that amendment.
+DECIDED 2026-08-26 (planner, read the Microsoft named-pipe impersonation
+reference against the byte-mode endpoint the listener creates) — the Windows
+listener reads the four-byte frame-length prefix before it verifies the peer.
+`ImpersonateNamedPipeClient` fails with `ERROR_CANNOT_IMPERSONATE` on a byte-mode
+pipe until the server reads from that pipe. The call adopts the security context
+of the last message read. The 2026-08-22 amendment orders the peer check before
+any frame read (`docs/decisions/0012-user-level-runtime-service.md:1116`), so the
+two rules collide. The prefix carries no protocol authority. The protected DACL
+already bars another OS user from opening the pipe, so a four-byte read before
+the check grants nothing. The listener therefore reads the prefix, verifies the
+peer, and only then reads the frame body. It writes no byte before the check. An
+ADR 0012 amendment slice records this order, and the accept loop follows it.
 
-NOT BUILT — the Windows attach peer-identity implementation. MUNIDESK-1466,
-MUNIDESK-1469, and MUNIDESK-1480 landed the pure models and the endpoint alone.
-`verify_windows_attach_peer_with_reader`
-(`src-tauri/core/src/attach/windows_peer.rs:34`) compares two injected SIDs, and
-no Windows attach code calls `ImpersonateNamedPipeClient` yet. The ADR 0012
-attach admission gate therefore still holds. `main`
-(`src-tauri/runtime/src/main.rs:49`) returns on Windows before it opens the
-instance lock, and no surface calls `IRegisteredTask::Run`.
+DECIDED 2026-08-26 (planner, read `windows-sys` 0.61.2 beside `Cargo.lock`) — the
+Task Scheduler COM adapter uses the `windows` crate rather than `windows-sys`.
+`windows-sys` 0.61 exposes functions, constants, and structs alone, so it
+declares no `ITaskService`, `ITaskFolder`, or `IRegisteredTask` interface.
+`Cargo.lock` already pins `windows` 0.61.3 for the desktop tree, and
+`THIRD_PARTY_RUST_NOTICES.md:538` already records it, so a Windows-target
+dependency on it in `muniment-core` adds no package and changes no notice. The
+runtime dependency boundary reads the runtime's direct packages alone, so it
+stays green (`test/runtime-dependency-boundary.sh`).
 
 DONE 2026-08-04 through 2026-08-17 — phase one is built and the Linux cutover
 is complete (MUNIDESK-863, 868 through 1067, 1103, 1150 through 1191, 1188
