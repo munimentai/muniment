@@ -140,6 +140,7 @@ fn write_record(path: &Path, record: &StartRecord) -> io::Result<()> {
         writeln!(file, "failure={timestamp}")?;
     }
     file.sync_all()?;
+    drop(file);
     muniment_core::atomic_file::replace(&temporary_path, path)
 }
 
