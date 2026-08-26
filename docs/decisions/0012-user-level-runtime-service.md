@@ -1096,8 +1096,9 @@ slice and changes no runtime code.
 
 The per-user pipe path is
 `\\.\pipe\Muniment\attach-v1-<user-hash>`. `user-hash` is the first 128 bits
-of SHA-256 over the current user SID's canonical bytes, hex encoded. Each
-surface reads its own process token user SID and derives the path directly. The
+of SHA-256 over the current user SID's canonical bytes, hex encoded. The hashed
+input is the uppercase canonical SID string encoded as UTF-8. Each surface reads
+its own process token user SID and derives the path directly. The
 hash supports discovery and grants no authority.
 
 The listener acquires the existing profile instance lock before it creates the
