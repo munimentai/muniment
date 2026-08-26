@@ -37,8 +37,10 @@ them must exercise the real contracts. It must add no mocked production path.
 > landings. The forty-third (2026-08-20) recorded the run.open dispatch,
 > artifact identity, and artifact client landings. The forty-fourth
 > (2026-08-20) recorded the completed ADR 0009 artifact-transfer chain and
-> held product consumption for its real event contract. It grows every wave,
-> so it stays the next compaction target.
+> held product consumption for its real event contract. The forty-fifth
+> (2026-08-25) folded the passive-delivery and read-contract chains into two
+> entries, recorded the macOS cutover, and recorded the Windows activation
+> groundwork. It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -413,7 +415,62 @@ restored the control and its tests.
 
 ### ADR 0012 runtime-service extraction
 
-DONE 2026-08-20 through 2026-08-21 — the macOS activation amendment and its first implementation slices landed (MUNIDESK-1417, 1418, 1420, 1421, 1423, 1424, and 1426). The app bundle carries the universal runtime and LaunchAgent payload. The desktop checks and registers the per-user service through `SMAppService`. The runtime bounds failed starts, writes owner-only bounded diagnostics, and mirrors fixed records into unified logging. The installed macOS smoke verifies the bundled payload. The approval action, enabled-service kick-start, and desktop client cutover remain open. Rollback-marker admission and both-endpoint peer identity remain in Needs Human.
+DONE 2026-08-20 through 2026-08-25 — the macOS activation amendment and the whole
+macOS cutover landed (MUNIDESK-1417, 1418, 1420, 1421, 1423, 1424, 1426 through
+1438, and 1451). The app bundle carries the universal runtime and the LaunchAgent
+payload. `src-tauri/src/macos_runtime_service.rs` checks and registers the
+per-user service through `SMAppService`, reports the approval state, opens Login
+Items, and kick-starts an enabled service whose endpoint is absent. The runtime
+bounds failed starts, writes owner-only bounded diagnostics, and mirrors fixed
+records into unified logging. Run commands, native auth, retention rechecks,
+chat storage, approval presentation, and desktop client status all ride the
+runtime client on macOS. The installed macOS smoke verifies the bundled payload
+and proves the installed desktop connects to the LaunchAgent runtime.
+
+DONE 2026-08-25 — both macOS attach peers verify the connected socket
+(MUNIDESK-1419, 1455). `peer_effective_uid`
+(`src-tauri/core/src/attach/macos_peer.rs:13`) and the client half
+(`src-tauri/attach/src/client.rs:530`) each call `getpeereid` and require the
+kernel-supplied effective UID to equal their own before any `muniment.attach/1`
+frame.
+
+IN FLIGHT — macOS rollback-marker admission sits on pull request 1406
+(MUNIDESK-1422). The runtime tree holds no marker path yet. The lane files no
+second ticket for it.
+
+DONE 2026-08-21 through 2026-08-25 — the Windows activation groundwork is built
+(MUNIDESK-1439, 1440, 1441, 1442, and 1452). ADR 0012 carries the Windows
+activation amendment
+(`docs/decisions/0012-user-level-runtime-service.md:954`). It names the stable
+per-user task `\Muniment\Runtime-{user-sid}`, the interactive-token principal,
+the four-restart bound, the two installer scopes, removal, and the attach
+admission gate. Both installer scopes bundle the signed `muniment-runtime.exe`,
+the NSIS and per-user MSI payload under `%LocalAppData%\muniment` and the
+machine MSI payload under `%ProgramFiles%\muniment`, and
+`test/windows-installers.ps1` checks each installed path. `main`
+(`src-tauri/runtime/src/main.rs:48`) returns before it opens the instance lock,
+the journal, CAS, Pi, or the attach endpoint on Windows, so a logon or a manual
+start activates no unsafe listener. `write_windows_diagnostic`
+(`src-tauri/runtime/src/windows_activation.rs`) appends fixed owner-only records
+under `%LocalAppData%\muniment\logs`, and its `cfg(unix)` twin lets
+`src-tauri/runtime/tests/windows_status.rs` run in the Linux loop.
+
+NEXT — the Windows lane runs three registration slices and one decision. The
+runtime start record moves to a shared module and gains its `windows-starts`
+twin. `muniment-core` gains the typed task registration model and the installed
+payload resolver with machine precedence, because the desktop crate depends on
+`muniment-core` on Windows and on `muniment-runtime` only on macOS
+(`src-tauri/Cargo.toml:34`). A new ADR 0012 amendment must define Windows attach
+peer identity and the named-pipe endpoint before any surface calls
+`IRegisteredTask::Run`. The Task Scheduler adapter, installer registration, and
+the two uninstallers follow in that order.
+
+OPEN QUESTION — the Windows runtime profile directory is undecided.
+`profile_directory` (`src-tauri/runtime/src/directories.rs:60`) reads
+`XDG_DATA_HOME` and `HOME`, which no Windows session sets. The runtime must open
+the same journal and CAS the desktop opens through Tauri's `app_data_dir`. The
+lane names that path in the peer-identity amendment or in a slice of its own. It
+files no activation code that guesses.
 
 DONE 2026-08-04 through 2026-08-17 — phase one is built and the Linux cutover
 is complete (MUNIDESK-863, 868 through 1067, 1103, 1150 through 1191, 1188
@@ -550,89 +607,28 @@ service start would exceed that parity and spend a network call on every
 login. After a runtime restart, companion pairing waits for one run, which is
 the behavior the desktop has today.
 
-DONE 2026-08-18 — the eighty-sixth-wave chain is built (MUNIDESK-1359 through
-1364, 1366, 1369). The ADR 0012 desktop-run-rejoin amendment states the rule.
-`projection_phase` (`src-tauri/core/src/chat_view.rs:112`) answers `streaming`,
-`thinking`, or `pending-permission` for an unsettled run, `unsettledRun`
-(`src/lib/chat-state.js:165`) names the newest such run in a loaded transcript,
-and `openThread` (`src/lib/chat-controller.js:210`) applies the buffered events
-to it and publishes it through `onActive`. `handleEvent` (`:92`) holds an
-unknown run id only while a call waits for its run, so the buffer no longer
-keeps every foreign run for the life of the window. `loadHistory` (`:162`)
-reopens the thread the user has open, rather than moving the user to the newest
-thread on every reconnect. The desktop keeps its own selection in
-`SessionThread`, and `handle_run_submit` sends `session_thread.current` as the
-run's thread (`src-tauri/src/chat.rs:184`). `deliver`
-(`src-tauri/runtime/src/sink.rs:62`) prints one line per subscriber it drops for
-a full queue, under the `muniment-runtime: ` prefix `main.rs` already uses.
-`test/probe/in-flight.html` renders the rejoined state.
+DONE 2026-08-18 through 2026-08-19 — the ADR 0012 passive chat-event delivery
+chain is complete on Linux (MUNIDESK-1359 through 1384). The amendment states
+what a passive run owes the open thread. The runtime stamps each broadcast event
+with its run's thread id, withholds an event whose workspace does not match the
+recorded `SignedWorkspaceApproval`, and prints one line per subscriber it drops
+for a full queue (`src-tauri/runtime/src/sink.rs`). A run the desktop starts
+reaches that broadcast. In the shell, `openThread`, `refreshOpenThread`,
+`signalRun`, and `refreshThreads` (`src/lib/chat-controller.js`) rejoin an
+unsettled run, re-read the open thread in place, re-read once for an unknown run
+id, and refresh both the open thread and the thread list when
+`chat_events_connected` recovers. The signaled-run and signaled-thread sets are
+bounded. `test/probe/in-flight.html` renders the rejoined state.
 
-DONE 2026-08-18 — a run the desktop starts reaches the chat-event broadcast
-(MUNIDESK-1371). `submit_run`
-(`src-tauri/runtime/src/attach_boundaries.rs:446`) and `resume_run` (`:500`)
-both pass `RuntimeChatEventTarget::Broadcast(self.chat_events.clone())`, so a
-desktop-started run streams into the window on Linux. The eighty-seventh wave
-had measured both boundaries passing an absent subscriber, which sent every
-event of such a run to nobody.
-
-DONE 2026-08-18 — the shell re-reads an open thread in place (MUNIDESK-1372).
-`refreshOpenThread` (`src/lib/chat-controller.js:322`) reads the pages
-`openThread` reads, selects no thread, and applies the events `handleEvent`
-buffered during the read. It drops its pages when another call publishes first,
-and a run in flight keeps running across the re-read.
-
-DONE 2026-08-19 — the eighty-eighth-wave reconnect, thread-id, and amendment
-slices landed (MUNIDESK-1374, 1375, 1376). `applyDesktopClientStatus`
-(`src/App.svelte:239`) calls `refreshOpenThread` when `chat_events_connected`
-recovers. `RuntimeChatEventSink::deliver` (`src-tauri/runtime/src/sink.rs:175`)
-stamps the run thread id onto every event. ADR 0012 names what a passive run
-owes the open thread
-(`docs/decisions/0012-user-level-runtime-service.md:791`).
-
-DONE 2026-08-19 — the signed-workspace filter and the sidebar signal landed
-(MUNIDESK-1379, 1380). `RuntimeChatEventBroadcast::deliver`
-(`src-tauri/runtime/src/sink.rs:71`) withholds an event whose workspace does
-not match the recorded `SignedWorkspaceApproval`. `handleEvent`
-(`src/lib/chat-controller.js:139`) holds the bounded signaled-thread set and
-refreshes the newest page once per new thread id.
-
-DONE 2026-08-19 — the open-thread passive-run consumer landed (MUNIDESK-1382).
-`signalRun` (`src/lib/chat-controller.js:159`) re-reads the open thread once
-for a run id the transcript does not hold. The signaled-run set is bounded
-at 256 entries. Signals that arrive during a re-read collapse into one
-follow-up.
-
-DONE 2026-08-19 — a chat-event reconnect refreshes the thread list
-(MUNIDESK-1384). `applyDesktopClientStatus` (`src/App.svelte:234`) calls
-`refreshOpenThread` and `refreshThreads` when `chat_events_connected`
-recovers. `refreshThreads` (`src/lib/chat-controller.js:96`) is exported.
-The first status still re-reads nothing. The ADR 0012 passive-delivery
-chain is complete on Linux.
-
-DONE 2026-08-19 — a companion may cancel a `run.stream` subscription
-(MUNIDESK-1385). `request.cancel` with a subscription target removes that
-stream. It records the id and emits `request.cancelled` then `stream.closed
-{code:"cancelled", resumable:true}`. A second cancel of the same id returns
-`already_completed`. The `request` kind still returns
-`unsupported_operation`.
-
-DONE 2026-08-19 — ADR 0009 names the `run.open` contract (MUNIDESK-1387).
-The attach client sends it and returns the first page (MUNIDESK-1390).
-`Client::open_run` (`src-tauri/attach/src/client.rs:817`) writes
-`{run_id}` and decodes `RunOpenPage`.
-
-DONE 2026-08-19 — attach `run.open` dispatch reuses `stream_run` from
-sequence 0 (MUNIDESK-1392). `dispatch_request`
-(`src-tauri/core/src/attach/linux.rs:3700`) returns the redacted page
-with no `subscription_id` and emits no events.
-`authorized_run_open_returns_stream_run_page_without_subscription`
-(`src-tauri/core/tests/attach_linux_session.rs:5411`) pins that shape.
-A missing, foreign, or inaccessible run maps to `invalid_request`.
-
-DONE 2026-08-19 — ADR 0009 names how `artifact.fetch` resolves
-`artifact_id` (MUNIDESK-1393). The id is `EventEnvelope.event_id`.
-The attach client sends `artifact.fetch` and `artifact.window`
-(MUNIDESK-1394, 1395).
+DONE 2026-08-19 — the ADR 0009 read and cancellation contracts landed
+(MUNIDESK-1385 through 1395). A companion may cancel a `run.stream`
+subscription. The cancel records the id and emits `request.cancelled` then
+`stream.closed {code:"cancelled", resumable:true}`, and a second cancel of the
+same id returns `already_completed`. `run.open` returns the redacted first page
+through `stream_run` from sequence 0, with no `subscription_id` and no events,
+and a missing, foreign, or inaccessible run maps to `invalid_request`. ADR 0009
+names `EventEnvelope.event_id` as the `artifact.fetch` `artifact_id`, and the
+attach client sends `run.open`, `artifact.fetch`, and `artifact.window`.
 
 DONE 2026-08-20 — the ADR 0009 artifact-transfer chain is complete
 (MUNIDESK-1397, 1399, and 1404 through 1415). Each attach session holds a
@@ -655,7 +651,8 @@ Harness-spec §14.1 puts the relay leg on an outbound HTTPS session to
 `api.muniment.ai`. No muniment-cloud relay contract has published. The
 desktop states stay pending owner mockup confirmation
 (`docs/design-reference/remote-control-ux.md`). Windows Scheduled Task
-registration still needs a later ADR 0012 amendment.
+registration has its ADR 0012 amendment now, and every registration slice
+remains unbuilt.
 
 DONE — all three slices of the ADR 0009 attach workspace namespace amendment are
 built (MUNIDESK-883, 887, 893, 896, 905). The signed `grant.workspace` value is
@@ -1150,6 +1147,16 @@ skipped, plus 3 browser tests. Start cargo from `src-tauri`, because the
 repository root holds no `Cargo.toml`. A run started from the root dies with
 `could not find Cargo.toml`, which reads as a broken harness. This entry
 replaces the earlier ledger.
+
+MEASURED 2026-08-25 (this wave, planner, read two consecutive red pushes on
+`main`, then reran the binary under CPU load) — the smoke job fails under load
+in `src-tauri/core/tests/sidecar_supervisor.rs`. Run 32915107904 failed
+`shutdown_is_not_stalled_by_in_flight_json_rpc_call` at `:881`. Run
+32918331449 failed `failed_json_rpc_probe_restarts_child_and_recovers` at
+`:722`. Both assertions are wall-clock deadlines around a spawned stub child.
+One of three local runs failed the same way under 120 busy loops on 40 cores,
+and four idle runs each passed in about two seconds. The desktop-ci VM
+serializes its `cargo test` for this reason. The smoke job does not.
 
 MEASURED 2026-08-13 (fifty-eighth wave, planner, counted each path with
 `git log --name-only --since=2026-08-01 -- <path>`) — `src-tauri/src/chat.rs` is
