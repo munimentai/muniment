@@ -1083,3 +1083,45 @@ The Windows contract uses the documented
 and
 [`TASK_LOGON_INTERACTIVE_TOKEN`](https://learn.microsoft.com/windows/win32/api/taskschd/ne-taskschd-task_logon_type)
 Task Scheduler settings.
+
+## Amendment – 2026-08-22: Windows attach peer identity
+
+- Status: accepted
+
+The 2026-08-21 attach admission gate remains in force until the **Windows
+attach peer identity implementation** slice lands. This amendment defines that
+slice and changes no runtime code.
+
+### Endpoint ownership and discovery
+
+The per-user pipe path is
+`\\.\pipe\Muniment\attach-v1-<user-hash>`. `user-hash` is the first 128 bits
+of SHA-256 over the current user SID's canonical bytes, hex encoded. Each
+surface reads its own process token user SID and derives the path directly. The
+hash supports discovery and grants no authority.
+
+The listener acquires the existing profile instance lock before it creates the
+pipe. That lock remains the final authority against a second listener. The
+listener uses a protected DACL that grants access to the creating user's exact
+SID alone. It creates a byte-mode pipe with `PIPE_REJECT_REMOTE_CLIENTS` and
+claims the first pipe instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`. It reads
+back the owner and DACL before it publishes the endpoint.
+
+### Peer admission
+
+For every connection, the listener calls `ImpersonateNamedPipeClient`,
+`OpenThreadToken`, and `GetTokenInformation` with `TokenUser`. It copies the
+client SID, calls `RevertToSelf`, and compares that SID with its own process
+token user SID. It completes this check before it reads or writes any
+`muniment.attach/1` frame.
+
+The connecting client opens the pipe with `SECURITY_SQOS_PRESENT` and
+`SECURITY_IDENTIFICATION`. Before it reads or writes the first frame, it calls
+`GetSecurityInfo` with `OWNER_SECURITY_INFORMATION` on the pipe handle. It
+compares the returned owner SID with its own process token user SID.
+
+A failed identity or security call, a result that changes during validation,
+or any SID mismatch closes the pipe handle without a protocol response. This
+rule includes a failed `RevertToSelf`. A claimed client kind, PID, path, SID,
+or pipe name grants no authority. The checks reject other OS users. They do not
+defend against a compromised process running as the same user.
