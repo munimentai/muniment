@@ -702,10 +702,10 @@ describe('Windows nightly workflow gate', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/nightly.yml'), 'utf8')
   const job = workflow.slice(workflow.indexOf('\n  windows-e2e:'), workflow.indexOf('\n    runs-on:', workflow.indexOf('\n  windows-e2e:')))
   const condition = job.match(/\n    if: >-\n([\s\S]+)$/)?.[1].trim().replace(/\n\s*/g, ' ')
-  const evaluate = ({ eventName, platform, prepare = 'success', linux = 'success' }) => Function(
-    'always', 'needs', 'github',
+  const evaluate = ({ eventName, platform, cancelled = false, prepare = 'success', linux = 'success' }) => Function(
+    'always', 'cancelled', 'needs', 'github',
     `return ${condition.replaceAll('needs.linux-e2e', 'needs.linuxE2e')}`,
-  )(() => true, { prepare: { result: prepare }, linuxE2e: { result: linux } }, { event_name: eventName, event: { inputs: { platform } } })
+  )(() => true, () => cancelled, { prepare: { result: prepare }, linuxE2e: { result: linux } }, { event_name: eventName, event: { inputs: { platform } } })
 
   it.each([
     ['schedule', undefined],

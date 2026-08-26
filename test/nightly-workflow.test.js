@@ -21,8 +21,9 @@ const job = (name, nextName) => workflow.slice(
   nextName ? workflow.indexOf(`  ${nextName}:`) : workflow.length,
 )
 const conditionFor = (jobText) => jobText.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
-const evaluateCondition = (condition, { eventName, platform, prepare = 'success', previous = {} }) => Function(
+const evaluateCondition = (condition, { eventName, platform, cancelled = false, prepare = 'success', previous = {} }) => Function(
   `"use strict"; return (${condition
+    .replace('cancelled()', JSON.stringify(cancelled))
     .replace('always()', 'true')
     .replaceAll('needs.prepare.result', JSON.stringify(prepare))
     .replaceAll('needs.linux-e2e.result', JSON.stringify(previous.linux))
@@ -31,8 +32,9 @@ const evaluateCondition = (condition, { eventName, platform, prepare = 'success'
     .replaceAll('github.event.inputs.platform', JSON.stringify(platform))})`,
 )()
 const jobCondition = linuxE2e.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
-const conditionResult = ({ eventName, platform, prepare = 'success' }) => {
+const conditionResult = ({ eventName, platform, cancelled = false, prepare = 'success' }) => {
   const expression = jobCondition
+    .replace('cancelled()', JSON.stringify(cancelled))
     .replace('always()', 'true')
     .replaceAll('needs.prepare.result', JSON.stringify(prepare))
     .replaceAll('github.event_name', JSON.stringify(eventName))
@@ -205,6 +207,13 @@ describe('nightly targeted E2E dispatch', () => {
     expect(evaluateCondition(conditionFor(lanes[2][1]), {
       eventName: 'workflow_dispatch', platform: 'macos', previous: { windows: 'skipped' },
     })).toBe(true)
+  })
+
+  it.each(lanes)('does not run the %s lane after the workflow is cancelled', (_platform, lane) => {
+    expect(evaluateCondition(conditionFor(lane), {
+      eventName: 'schedule', platform: '', cancelled: true,
+      previous: { linux: 'success', windows: 'success' },
+    })).toBe(false)
   })
 
   it('keeps all-platform jobs ordered through their dependencies and skip checks', () => {
