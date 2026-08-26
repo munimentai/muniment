@@ -49,6 +49,26 @@ fn contention_times_out_and_release_allows_a_later_acquire() {
 }
 
 #[test]
+fn release_after_the_bounded_wait_still_times_out() {
+    let state_directory = absent_directory();
+    let guard = acquire(&state_directory, Duration::ZERO).unwrap();
+    let wait = Duration::from_millis(100);
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(wait + Duration::from_millis(25));
+        drop(guard);
+    });
+
+    assert!(matches!(
+        acquire(&state_directory, wait),
+        Err(InstallLockAcquireError::TimedOut)
+    ));
+
+    releaser.join().unwrap();
+    acquire(&state_directory, Duration::ZERO).unwrap();
+    fs::remove_dir_all(state_directory).unwrap();
+}
+
+#[test]
 fn a_waiter_acquires_after_the_contended_guard_releases() {
     let state_directory = absent_directory();
     let guard = acquire(&state_directory, Duration::ZERO).unwrap();
