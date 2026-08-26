@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 muniment-attach = { path = "../attach", features = ["client"] }
 muniment-core = { path = "../core", features = ["keyring"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
