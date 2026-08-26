@@ -14,9 +14,9 @@ mod macos_activation;
 mod migration;
 pub mod service;
 mod sink;
+mod start_record;
 #[cfg(target_os = "linux")]
 mod upgrade_watch;
-#[cfg(any(unix, target_os = "windows"))]
 mod windows_activation;
 
 #[cfg(target_os = "linux")]
@@ -70,6 +70,8 @@ pub use sink::{
     CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY,
 };
 #[cfg(any(unix, target_os = "windows"))]
+pub use windows_activation::write_windows_diagnostic;
 pub use windows_activation::{
-    write_windows_diagnostic, WindowsDiagnosticEvent, WINDOWS_RUNTIME_LOG_MAX_BYTES,
+    record_windows_failed_exit, record_windows_orderly_exit, record_windows_start,
+    WindowsDiagnosticEvent, WindowsStart, WindowsStartDecision, WINDOWS_RUNTIME_LOG_MAX_BYTES,
 };
