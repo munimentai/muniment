@@ -239,6 +239,8 @@ describe('installed nightly', () => {
     } finally {
       try {
         if (signInBrowser) await signInBrowser.deleteSession()
+      } catch (error) {
+        console.error('Failed to delete hosted sign-in session.', error)
       } finally {
         if (authDriver) authDriver.kill()
       }
