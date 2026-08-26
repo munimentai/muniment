@@ -58,12 +58,39 @@ pub fn resolve_directory(
         .ok_or(DirectoryUnavailableError)
 }
 
+pub fn windows_state_directory_from_app_data(
+    app_data: &Path,
+) -> Result<PathBuf, DirectoryUnavailableError> {
+    if !app_data.is_absolute() {
+        return Err(DirectoryUnavailableError);
+    }
+    Ok(app_data.join(APPLICATION_IDENTIFIER))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_state_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    let app_data = std::env::var_os("APPDATA").ok_or(DirectoryUnavailableError)?;
+    windows_state_directory_from_app_data(Path::new(&app_data))
+}
+
+#[cfg(target_os = "windows")]
+pub fn profile_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    windows_state_directory()
+}
+
+#[cfg(not(target_os = "windows"))]
 pub fn profile_directory() -> Result<PathBuf, DirectoryUnavailableError> {
     let xdg_value = std::env::var_os("XDG_DATA_HOME");
     let home_value = std::env::var_os("HOME");
     resolve_directory(xdg_value.as_deref(), home_value.as_deref(), ".local/share")
 }
 
+#[cfg(target_os = "windows")]
+pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    windows_state_directory()
+}
+
+#[cfg(not(target_os = "windows"))]
 pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
     let xdg_value = std::env::var_os("XDG_CONFIG_HOME");
     let home_value = std::env::var_os("HOME");
