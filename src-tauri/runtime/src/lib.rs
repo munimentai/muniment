@@ -9,6 +9,7 @@ mod attach_service;
 #[cfg(target_os = "linux")]
 mod attach_state;
 mod directories;
+pub mod install_lock;
 mod macos_activation;
 #[cfg(target_os = "linux")]
 mod migration;
