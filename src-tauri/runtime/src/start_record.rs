@@ -32,6 +32,14 @@ pub(crate) fn record_start(
     record_start_at(state_directory.as_ref(), record_name, SystemTime::now())
 }
 
+pub(crate) fn clear(state_directory: impl AsRef<Path>, record_name: &str) -> io::Result<()> {
+    match fs::remove_file(state_directory.as_ref().join(record_name)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) fn record_orderly_exit(
     state_directory: impl AsRef<Path>,
     record_name: &str,

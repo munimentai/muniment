@@ -1,6 +1,8 @@
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
+use crate::install_lock::{self, InstallLockAcquireError};
 use crate::start_record::{self, Start, StartDecision};
 use crate::windows_log_directory_from_local_app_data;
 
@@ -9,6 +11,42 @@ pub const WINDOWS_RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
 
 pub type WindowsStartDecision = StartDecision;
 pub type WindowsStart = Start;
+
+#[derive(Debug)]
+pub enum ClearWindowsCrashWindowError {
+    Lock(InstallLockAcquireError),
+    Record(io::Error),
+}
+
+impl std::fmt::Display for ClearWindowsCrashWindowError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lock(error) => write!(formatter, "install lock failed: {error}"),
+            Self::Record(error) => write!(formatter, "start record clear failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ClearWindowsCrashWindowError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Lock(error) => Some(error),
+            Self::Record(error) => Some(error),
+        }
+    }
+}
+
+/// Clears the Windows crash window under the per-user install lock.
+pub fn clear_windows_crash_window(
+    state_directory: impl AsRef<Path>,
+    bounded_wait: Duration,
+) -> Result<(), ClearWindowsCrashWindowError> {
+    let state_directory = state_directory.as_ref();
+    let _guard = install_lock::acquire(state_directory, bounded_wait)
+        .map_err(ClearWindowsCrashWindowError::Lock)?;
+    start_record::clear(state_directory, RECORD_NAME)
+        .map_err(ClearWindowsCrashWindowError::Record)
+}
 
 /// Records a Windows runtime start before activation opens runtime state.
 pub fn record_windows_start(

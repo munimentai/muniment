@@ -4,9 +4,13 @@ use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
+use std::time::Duration;
 
 use muniment_runtime::{
-    write_windows_diagnostic, WindowsDiagnosticEvent, WINDOWS_RUNTIME_LOG_MAX_BYTES,
+    clear_windows_crash_window, record_windows_failed_exit, record_windows_start,
+    write_windows_diagnostic, ClearWindowsCrashWindowError, WindowsDiagnosticEvent,
+    WindowsStartDecision, WINDOWS_RUNTIME_LOG_MAX_BYTES,
 };
 
 fn directory() -> PathBuf {
@@ -20,6 +24,85 @@ fn directory() -> PathBuf {
     fs::create_dir(&path).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
     path
+}
+
+#[test]
+fn clear_restores_five_windows_starts() {
+    let state_directory = directory();
+    for failure in 0..5 {
+        let (_, start) = record_windows_start(&state_directory).unwrap();
+        let expected = if failure == 4 {
+            WindowsStartDecision::StopRestartLoop
+        } else {
+            WindowsStartDecision::Run
+        };
+        assert_eq!(
+            record_windows_failed_exit(&state_directory, start).unwrap(),
+            expected
+        );
+    }
+
+    clear_windows_crash_window(&state_directory, Duration::ZERO).unwrap();
+
+    for _ in 0..5 {
+        assert_eq!(
+            record_windows_start(&state_directory).unwrap().0,
+            WindowsStartDecision::Run
+        );
+    }
+    fs::remove_dir_all(state_directory).unwrap();
+}
+
+#[test]
+fn clear_succeeds_without_a_windows_start_record() {
+    let state_directory = directory();
+
+    clear_windows_crash_window(&state_directory, Duration::ZERO).unwrap();
+
+    fs::remove_dir_all(state_directory).unwrap();
+}
+
+#[test]
+fn two_concurrent_windows_crash_window_clears_succeed() {
+    let state_directory = directory();
+    record_windows_start(&state_directory).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let callers: Vec<_> = (0..2)
+        .map(|_| {
+            let state_directory = state_directory.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                clear_windows_crash_window(state_directory, Duration::from_secs(1))
+            })
+        })
+        .collect();
+
+    for caller in callers {
+        caller.join().unwrap().unwrap();
+    }
+    assert!(!state_directory.join("windows-starts").exists());
+    fs::remove_dir_all(state_directory).unwrap();
+}
+
+#[test]
+fn clear_reports_lock_and_record_failures_separately() {
+    let unavailable_state_directory = directory().join("state-file");
+    fs::write(&unavailable_state_directory, []).unwrap();
+    assert!(matches!(
+        clear_windows_crash_window(&unavailable_state_directory, Duration::ZERO),
+        Err(ClearWindowsCrashWindowError::Lock(_))
+    ));
+
+    let invalid_record_directory = directory();
+    fs::create_dir(invalid_record_directory.join("windows-starts")).unwrap();
+    assert!(matches!(
+        clear_windows_crash_window(&invalid_record_directory, Duration::ZERO),
+        Err(ClearWindowsCrashWindowError::Record(_))
+    ));
+
+    fs::remove_dir_all(unavailable_state_directory.parent().unwrap()).unwrap();
+    fs::remove_dir_all(invalid_record_directory).unwrap();
 }
 
 #[test]

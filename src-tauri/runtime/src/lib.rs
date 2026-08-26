@@ -74,6 +74,7 @@ pub use sink::{
 #[cfg(any(unix, target_os = "windows"))]
 pub use windows_activation::write_windows_diagnostic;
 pub use windows_activation::{
-    record_windows_failed_exit, record_windows_orderly_exit, record_windows_start,
-    WindowsDiagnosticEvent, WindowsStart, WindowsStartDecision, WINDOWS_RUNTIME_LOG_MAX_BYTES,
+    clear_windows_crash_window, record_windows_failed_exit, record_windows_orderly_exit,
+    record_windows_start, ClearWindowsCrashWindowError, WindowsDiagnosticEvent, WindowsStart,
+    WindowsStartDecision, WINDOWS_RUNTIME_LOG_MAX_BYTES,
 };
