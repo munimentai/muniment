@@ -45,13 +45,13 @@ async function hostedLocation(driver) {
 async function activateHosted(driver, selector) {
   if (process.platform === 'linux') {
     // WebKitWebDriver holds the session when a click starts a navigation.
-    // Activate the control from inside the page instead.
+    // Schedule the click after Execute Script returns.
     let clicked = false
     try {
       clicked = await driver.execute((sel) => {
         const el = document.querySelector(sel)
         if (!el) return false
-        el.click()
+        setTimeout(() => el.click(), 0)
         return true
       }, selector)
     } catch (error) {
