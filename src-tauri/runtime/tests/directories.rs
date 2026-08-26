@@ -3,8 +3,8 @@ use std::path::Path;
 
 use muniment_runtime::{
     installed_desktop_executable, installed_desktop_executable_from, macos_log_directory_from_home,
-    resolve_directory, windows_log_directory_from_local_app_data, DirectoryUnavailableError,
-    APPLICATION_IDENTIFIER,
+    resolve_directory, windows_log_directory_from_local_app_data,
+    windows_state_directory_from_app_data, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
 };
 
 #[test]
@@ -113,6 +113,33 @@ fn tauri_identifier_matches_the_runtime_identifier() {
     let identifier = format!("\"identifier\": \"{APPLICATION_IDENTIFIER}\"");
 
     assert!(config.contains(&identifier));
+}
+
+#[test]
+fn maps_an_absolute_app_data_root_to_the_windows_state_directory() {
+    assert_eq!(
+        windows_state_directory_from_app_data(Path::new("/Users/person/AppData/Roaming")).unwrap(),
+        Path::new("/Users/person/AppData/Roaming/ai.muniment.desktop")
+    );
+}
+
+#[test]
+fn rejects_a_relative_windows_app_data_root() {
+    assert_eq!(
+        windows_state_directory_from_app_data(Path::new("AppData/Roaming")),
+        Err(DirectoryUnavailableError)
+    );
+}
+
+#[test]
+fn preserves_a_parent_segment_in_the_windows_app_data_root() {
+    assert_eq!(
+        windows_state_directory_from_app_data(Path::new(
+            "/Users/person/AppData/Local/../Roaming"
+        ))
+        .unwrap(),
+        Path::new("/Users/person/AppData/Local/../Roaming/ai.muniment.desktop")
+    );
 }
 
 #[test]
