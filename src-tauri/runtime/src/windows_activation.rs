@@ -44,8 +44,7 @@ pub fn clear_windows_crash_window(
     let state_directory = state_directory.as_ref();
     let _guard = install_lock::acquire(state_directory, bounded_wait)
         .map_err(ClearWindowsCrashWindowError::Lock)?;
-    start_record::clear(state_directory, RECORD_NAME)
-        .map_err(ClearWindowsCrashWindowError::Record)
+    start_record::clear(state_directory, RECORD_NAME).map_err(ClearWindowsCrashWindowError::Record)
 }
 
 /// Records a Windows runtime start before activation opens runtime state.
