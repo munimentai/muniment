@@ -455,22 +455,39 @@ start activates no unsafe listener. `write_windows_diagnostic`
 under `%LocalAppData%\muniment\logs`, and its `cfg(unix)` twin lets
 `src-tauri/runtime/tests/windows_status.rs` run in the Linux loop.
 
-NEXT — the Windows lane runs three registration slices and one decision. The
-runtime start record moves to a shared module and gains its `windows-starts`
-twin. `muniment-core` gains the typed task registration model and the installed
-payload resolver with machine precedence, because the desktop crate depends on
-`muniment-core` on Windows and on `muniment-runtime` only on macOS
-(`src-tauri/Cargo.toml:34`). A new ADR 0012 amendment must define Windows attach
-peer identity and the named-pipe endpoint before any surface calls
-`IRegisteredTask::Run`. The Task Scheduler adapter, installer registration, and
-the two uninstallers follow in that order.
+DONE 2026-08-25 through 2026-08-26 — the three registration slices and the
+peer-identity decision landed (MUNIDESK-1457 through 1461). ADR 0012 carries the
+Windows attach peer-identity amendment
+(`docs/decisions/0012-user-level-runtime-service.md:1087`). It names the per-user
+pipe path `\\.\pipe\Muniment\attach-v1-<user-hash>`, the protected owner-only
+DACL, and the impersonation check each peer runs before the first frame. It
+changes no runtime code, so the attach admission gate still holds.
+`start_record` (`src-tauri/runtime/src/start_record.rs`) now owns the shared
+start record, and `windows_activation`
+(`src-tauri/runtime/src/windows_activation.rs`) adds the `windows-starts` twin.
+`muniment-core` holds the typed task registration model
+(`src-tauri/core/src/windows_task.rs`) and the installed payload resolver with
+machine precedence (`src-tauri/core/src/windows_payload.rs`). `THREAT_MODEL.md`
+records the Windows activation boundary.
 
-OPEN QUESTION — the Windows runtime profile directory is undecided.
-`profile_directory` (`src-tauri/runtime/src/directories.rs:60`) reads
-`XDG_DATA_HOME` and `HOME`, which no Windows session sets. The runtime must open
-the same journal and CAS the desktop opens through Tauri's `app_data_dir`. The
-lane names that path in the peer-identity amendment or in a slice of its own. It
-files no activation code that guesses.
+NEXT — the Windows lane builds the peer-identity implementation slice and the
+registrar. Every pure half comes first, because no agent checkout compiles
+Windows code (`AGENTS.md`). `muniment-core` gains the pipe-path derivation, the
+peer admission model over an injected identity reader, the Task Scheduler XML
+rendering of `TaskDefinition`, and the registration action that keeps machine
+precedence. The named-pipe listener and client, the Task Scheduler COM adapter,
+installer registration, and the two uninstallers follow in that order. No
+surface calls `IRegisteredTask::Run` until the peer-identity implementation
+lands.
+
+OPEN QUESTION — the Windows runtime state directory is still undecided, and it
+is the first slice of the next batch. The peer-identity amendment named the pipe
+path and no state path. `profile_directory`
+(`src-tauri/runtime/src/directories.rs:60`) reads `XDG_DATA_HOME` and `HOME`,
+which no Windows session sets. The runtime must open the same journal and CAS the
+desktop opens through Tauri's `app_data_dir` (`src-tauri/src/main.rs:51`). That
+slice names the path in an ADR 0012 amendment and resolves it from an injected
+root. The lane files no activation code that guesses.
 
 DONE 2026-08-04 through 2026-08-17 — phase one is built and the Linux cutover
 is complete (MUNIDESK-863, 868 through 1067, 1103, 1150 through 1191, 1188
