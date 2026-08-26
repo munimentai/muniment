@@ -134,10 +134,8 @@ fn rejects_a_relative_windows_app_data_root() {
 #[test]
 fn preserves_a_parent_segment_in_the_windows_app_data_root() {
     assert_eq!(
-        windows_state_directory_from_app_data(Path::new(
-            "/Users/person/AppData/Local/../Roaming"
-        ))
-        .unwrap(),
+        windows_state_directory_from_app_data(Path::new("/Users/person/AppData/Local/../Roaming"))
+            .unwrap(),
         Path::new("/Users/person/AppData/Local/../Roaming/ai.muniment.desktop")
     );
 }
