@@ -119,6 +119,20 @@ diagnostics to the resulting absolute
 `ai.muniment.desktop` unified log subsystem. Diagnostics contain no secrets,
 content, local paths, workspace values, connection nonces, or peer identifiers.
 
+On Windows, the [ADR 0012 Windows activation amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-21-windows-activation-registration-and-startup)
+registers one per-user Scheduled Task named `\Muniment\Runtime-{user-sid}`.
+The task principal uses the user's canonical SID, an interactive token, and
+least privilege. Its action runs the signed payload directly, with no arguments
+or shell command. It uses either
+`%ProgramFiles%\muniment\muniment-runtime.exe` for the machine installation or
+`%LocalAppData%\muniment\muniment-runtime.exe` for the per-user installation.
+Windows activation exits before it opens the instance lock, journal, CAS, Pi,
+or attach endpoint. It publishes no attach peer identity. The runtime writes
+owner-only, redacted, bounded diagnostics to
+`%LocalAppData%\muniment\logs\runtime.log`. These records omit tokens,
+credentials, prompts, model output, local paths, workspace values, connection
+nonces, and peer identifiers.
+
 ## Prompt injection
 
 Pi assembles model context for prompts sent through
