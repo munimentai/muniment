@@ -109,6 +109,7 @@ pub enum TaskRegistrationPlan {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RemovalScope {
     PerUser {
+        user_sid: String,
         payload_path: PathBuf,
         machine_payload_path: Option<PathBuf>,
     },
@@ -396,18 +397,21 @@ pub fn plan_task_registration(
 
 /// Plans how an uninstaller handles an observed runtime task.
 pub fn plan_task_removal(scope: &RemovalScope, observed: &ObservedRegistration) -> TaskRemovalPlan {
-    let (payload_path, replacement_path) = match scope {
+    let (payload_path, replacement_path, user_sid) = match scope {
         RemovalScope::PerUser {
+            user_sid,
             payload_path,
             machine_payload_path,
-        } => (payload_path, machine_payload_path),
+        } => (payload_path, machine_payload_path, Some(user_sid.as_str())),
         RemovalScope::Machine {
             payload_path,
             per_user_payload_path,
-        } => (payload_path, per_user_payload_path),
+        } => (payload_path, per_user_payload_path, None),
     };
 
-    if sid_from_task_uri(&observed.uri) != Some(observed.principal_sid.as_str())
+    let observed_sid = sid_from_task_uri(&observed.uri);
+    if observed_sid != Some(observed.principal_sid.as_str())
+        || user_sid.is_some_and(|user_sid| observed_sid != Some(user_sid))
         || observed.action_arguments.is_some()
         || observed.action_path != *payload_path
     {
