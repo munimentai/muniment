@@ -455,7 +455,7 @@ start activates no unsafe listener. `write_windows_diagnostic`
 under `%LocalAppData%\muniment\logs`, and its `cfg(unix)` twin lets
 `src-tauri/runtime/tests/windows_status.rs` run in the Linux loop.
 
-DONE 2026-08-25 through 2026-08-26 — six Windows slices landed (MUNIDESK-1457
+DONE 2026-08-25 through 2026-08-26 — eight Windows slices landed (MUNIDESK-1457
 through 1461, 1464, 1465, and 1466). They cover the three registration slices,
 the peer-identity decision, the state-directory decision, and the first two pure
 attach halves. ADR 0012 carries the Windows attach peer-identity amendment
