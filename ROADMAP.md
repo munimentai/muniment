@@ -498,8 +498,8 @@ and the two uninstallers follow in that order.
 NOT BUILT — the Windows attach peer-identity implementation. MUNIDESK-1466
 landed the pure model alone. `verify_windows_attach_peer_with_reader`
 (`src-tauri/core/src/attach/windows_peer.rs:38`) compares two injected SIDs,
-and no Windows code calls `ImpersonateNamedPipeClient` or `GetSecurityInfo`
-yet. The ADR 0012 attach admission gate therefore still holds. `main`
+and no Windows attach code calls `ImpersonateNamedPipeClient` or
+`GetSecurityInfo` yet. The ADR 0012 attach admission gate therefore still holds. `main`
 (`src-tauri/runtime/src/main.rs:49`) returns on Windows before it opens the
 instance lock, and no surface calls `IRegisteredTask::Run`.
 
