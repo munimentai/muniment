@@ -98,12 +98,46 @@ pub enum RegistrationVerdict {
     Foreign,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaskRegistrationPlan {
+    Register,
+    Update,
+    LeaveUnchanged,
+    Refuse,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RemovalScope {
+    PerUser {
+        user_sid: String,
+        payload_path: PathBuf,
+        machine_payload_path: Option<PathBuf>,
+    },
+    Machine {
+        payload_path: PathBuf,
+        per_user_payload_path: Option<PathBuf>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TaskRemovalPlan {
+    RepointTo(PathBuf),
+    StopAndDelete,
+    LeaveUnchanged,
+}
+
 /// Returns the stable Task Scheduler URI for a canonical SID string.
 pub fn task_uri(sid: &str) -> Result<String, SidError> {
     if !is_canonical_sid(sid) {
         return Err(SidError::NotCanonical);
     }
     Ok(format!(r"\Muniment\Runtime-{sid}"))
+}
+
+/// Returns the canonical SID suffix from a stable runtime task URI.
+pub fn sid_from_task_uri(uri: &str) -> Option<&str> {
+    let sid = uri.strip_prefix(r"\Muniment\Runtime-")?;
+    is_canonical_sid(sid).then_some(sid)
 }
 
 impl TaskDefinition {
@@ -322,6 +356,104 @@ pub fn registration_verdict(
     } else {
         RegistrationVerdict::Different
     }
+}
+
+/// Plans how to register the task while preserving an existing machine payload action.
+pub fn plan_task_registration(
+    expected: &TaskDefinition,
+    observed: Option<&ObservedRegistration>,
+    machine_payload_root: impl AsRef<Path>,
+    user_payload_root: impl AsRef<Path>,
+) -> TaskRegistrationPlan {
+    let Some(observed) = observed else {
+        return TaskRegistrationPlan::Register;
+    };
+
+    if observed.uri != expected.uri
+        || observed.principal_sid != expected.principal_sid
+        || observed.action_arguments.is_some()
+        || (!is_path_under(&observed.action_path, machine_payload_root.as_ref())
+            && !is_path_under(&observed.action_path, user_payload_root.as_ref()))
+    {
+        return TaskRegistrationPlan::Refuse;
+    }
+
+    if observed.logon_type == expected.logon_type
+        && observed.run_level == expected.run_level
+        && observed.action_path == expected.action.path
+        && observed.action_arguments == expected.action.arguments
+    {
+        return TaskRegistrationPlan::LeaveUnchanged;
+    }
+
+    if is_path_under(&observed.action_path, machine_payload_root.as_ref())
+        && is_path_under(&expected.action.path, user_payload_root.as_ref())
+    {
+        TaskRegistrationPlan::LeaveUnchanged
+    } else {
+        TaskRegistrationPlan::Update
+    }
+}
+
+/// Plans how an uninstaller handles an observed runtime task.
+pub fn plan_task_removal(scope: &RemovalScope, observed: &ObservedRegistration) -> TaskRemovalPlan {
+    let (payload_path, replacement_path, user_sid) = match scope {
+        RemovalScope::PerUser {
+            user_sid,
+            payload_path,
+            machine_payload_path,
+        } => (payload_path, machine_payload_path, Some(user_sid.as_str())),
+        RemovalScope::Machine {
+            payload_path,
+            per_user_payload_path,
+        } => (payload_path, per_user_payload_path, None),
+    };
+
+    let observed_sid = sid_from_task_uri(&observed.uri);
+    if observed_sid != Some(observed.principal_sid.as_str())
+        || user_sid.is_some_and(|user_sid| observed_sid != Some(user_sid))
+        || observed.action_arguments.is_some()
+        || observed.action_path != *payload_path
+    {
+        return TaskRemovalPlan::LeaveUnchanged;
+    }
+
+    replacement_path
+        .clone()
+        .map_or(TaskRemovalPlan::StopAndDelete, TaskRemovalPlan::RepointTo)
+}
+
+fn is_path_under(path: &Path, root: &Path) -> bool {
+    let (Some(path), Some(root)) = (path.to_str(), root.to_str()) else {
+        return false;
+    };
+    let root_segments: Vec<_> = root.split(['\\', '/']).collect();
+    if path
+        .split(['\\', '/'])
+        .any(|part| matches!(part, "." | ".."))
+        || root_segments.iter().any(|part| matches!(*part, "." | ".."))
+        || !is_absolute_windows_root(root, &root_segments)
+    {
+        return false;
+    }
+
+    let path = path.replace('/', "\\").to_ascii_lowercase();
+    let root = root
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase();
+    path.strip_prefix(&root)
+        .is_some_and(|suffix| suffix.starts_with('\\'))
+}
+
+fn is_absolute_windows_root(path: &str, segments: &[&str]) -> bool {
+    let drive_absolute = path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && matches!(path.as_bytes().get(2), Some(b'\\' | b'/'));
+    let unc_absolute = (path.starts_with(r"\\") || path.starts_with("//"))
+        && segments.get(2).is_some_and(|server| !server.is_empty())
+        && segments.get(3).is_some_and(|share| !share.is_empty());
+    drive_absolute || unc_absolute
 }
 
 fn validate_payload_path(path: &Path) -> Result<(), TaskDefinitionError> {
