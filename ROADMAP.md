@@ -455,10 +455,11 @@ start activates no unsafe listener. `write_windows_diagnostic`
 under `%LocalAppData%\muniment\logs`, and its `cfg(unix)` twin lets
 `src-tauri/runtime/tests/windows_status.rs` run in the Linux loop.
 
-DONE 2026-08-25 through 2026-08-26 — eight Windows slices landed (MUNIDESK-1457
-through 1461, 1464, 1465, and 1466). They cover the three registration slices,
-the peer-identity decision, the state-directory decision, and the first two pure
-attach halves. ADR 0012 carries the Windows attach peer-identity amendment
+DONE 2026-08-25 through 2026-08-26 — nine Windows slices landed (MUNIDESK-1457
+through 1461, 1464, 1465, 1466, and 1468). They cover the three registration
+slices, the peer-identity decision, the state-directory decision, the first two
+pure attach halves, and the Task Scheduler XML renderer. ADR 0012 carries the
+Windows attach peer-identity amendment
 (`docs/decisions/0012-user-level-runtime-service.md:1087`) and the Windows
 runtime state directory amendment (`:1130`). Together they name the per-user pipe
 path and the protected owner-only DACL. They name the impersonation check each
@@ -475,20 +476,32 @@ model (`src-tauri/core/src/windows_task.rs`), the installed payload resolver wit
 machine precedence (`src-tauri/core/src/windows_payload.rs`),
 `windows_attach_pipe_path` (`src-tauri/core/src/attach/windows_pipe.rs`), and
 `verify_windows_attach_peer_with_reader`
-(`src-tauri/core/src/attach/windows_peer.rs`). `THREAT_MODEL.md` records the
-Windows activation boundary.
+(`src-tauri/core/src/attach/windows_peer.rs`). `render_task_definition_xml`
+(`src-tauri/core/src/windows_task.rs:148`) renders the registration model as a
+Task Scheduler XML document. `THREAT_MODEL.md` records the Windows activation
+boundary.
 
 NEXT — the Windows lane finishes the pure halves, then builds the registrar and
 the listener. Every pure half comes first, because no agent checkout compiles
-Windows code (`AGENTS.md`). `muniment-core` gains four more pure halves. It needs
-the Task Scheduler XML rendering of `TaskDefinition` and the registration action
-that keeps machine precedence. It needs the listener endpoint security verdict
-over an injected reader. It needs the removal action the two uninstallers share.
-The runtime gains the per-user install lock that serializes registration. It also
-gains the explicit-start crash-window clear the ADR requires before a `Run` call.
-The named-pipe listener and client, the Task Scheduler COM adapter, installer
-registration, and the two uninstallers follow in that order. No surface calls
-`IRegisteredTask::Run` until the peer-identity implementation lands.
+Windows code (`AGENTS.md`). The XML renderer landed, so three core halves
+remain. `muniment-core` needs the registration action that keeps machine
+precedence. It needs the listener endpoint security verdict over an injected
+reader. It needs the removal action the two uninstallers share. The runtime
+needs two halves. It needs the per-user install lock that serializes
+registration, and it needs the explicit-start crash-window clear the ADR
+requires before a `Run` call. The runtime dependency boundary bars a third
+direct package, so a runtime half composes from `muniment-core` and the
+standard library alone (`test/runtime-dependency-boundary.sh`). The named-pipe
+listener and client, the Task Scheduler COM adapter, installer registration,
+and the two uninstallers follow in that order.
+
+NOT BUILT — the Windows attach peer-identity implementation. MUNIDESK-1466
+landed the pure model alone. `verify_windows_attach_peer_with_reader`
+(`src-tauri/core/src/attach/windows_peer.rs:38`) compares two injected SIDs,
+and no Windows attach code calls `ImpersonateNamedPipeClient` or
+`GetSecurityInfo` yet. The ADR 0012 attach admission gate therefore still holds. `main`
+(`src-tauri/runtime/src/main.rs:49`) returns on Windows before it opens the
+instance lock, and no surface calls `IRegisteredTask::Run`.
 
 DONE 2026-08-04 through 2026-08-17 — phase one is built and the Linux cutover
 is complete (MUNIDESK-863, 868 through 1067, 1103, 1150 through 1191, 1188
