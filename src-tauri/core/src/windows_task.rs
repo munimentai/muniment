@@ -106,12 +106,37 @@ pub enum TaskRegistrationPlan {
     Refuse,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RemovalScope {
+    PerUser {
+        payload_path: PathBuf,
+        machine_payload_path: Option<PathBuf>,
+    },
+    Machine {
+        payload_path: PathBuf,
+        per_user_payload_path: Option<PathBuf>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TaskRemovalPlan {
+    RepointTo(PathBuf),
+    StopAndDelete,
+    LeaveUnchanged,
+}
+
 /// Returns the stable Task Scheduler URI for a canonical SID string.
 pub fn task_uri(sid: &str) -> Result<String, SidError> {
     if !is_canonical_sid(sid) {
         return Err(SidError::NotCanonical);
     }
     Ok(format!(r"\Muniment\Runtime-{sid}"))
+}
+
+/// Returns the canonical SID suffix from a stable runtime task URI.
+pub fn sid_from_task_uri(uri: &str) -> Option<&str> {
+    let sid = uri.strip_prefix(r"\Muniment\Runtime-")?;
+    is_canonical_sid(sid).then_some(sid)
 }
 
 impl TaskDefinition {
@@ -367,6 +392,31 @@ pub fn plan_task_registration(
     } else {
         TaskRegistrationPlan::Update
     }
+}
+
+/// Plans how an uninstaller handles an observed runtime task.
+pub fn plan_task_removal(scope: &RemovalScope, observed: &ObservedRegistration) -> TaskRemovalPlan {
+    let (payload_path, replacement_path) = match scope {
+        RemovalScope::PerUser {
+            payload_path,
+            machine_payload_path,
+        } => (payload_path, machine_payload_path),
+        RemovalScope::Machine {
+            payload_path,
+            per_user_payload_path,
+        } => (payload_path, per_user_payload_path),
+    };
+
+    if sid_from_task_uri(&observed.uri) != Some(observed.principal_sid.as_str())
+        || observed.action_arguments.is_some()
+        || observed.action_path != *payload_path
+    {
+        return TaskRemovalPlan::LeaveUnchanged;
+    }
+
+    replacement_path
+        .clone()
+        .map_or(TaskRemovalPlan::StopAndDelete, TaskRemovalPlan::RepointTo)
 }
 
 fn is_path_under(path: &Path, root: &Path) -> bool {
