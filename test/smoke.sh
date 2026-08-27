@@ -21,6 +21,35 @@ grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
 grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'" "$ci"
 grep -Fq 'platform: [linux, windows, macos]' "$ci"
 grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
+windows_preflight=$(
+  awk '
+    index($0, "- name: Check (${{ matrix.platform }}) via desktop-ci") { in_check = 1 }
+    in_check && index($0, "if [ \"$PLATFORM\" = \"windows\" ]; then") {
+      in_windows = 1
+      next
+    }
+    in_windows && /cmd=/ { print; exit }
+  ' "$ci"
+)
+test -n "$windows_preflight"
+windows_preflight_targets=$(
+  awk '{
+    for (field = 1; field <= NF; field++) {
+      if ($field == "--test") print $(field + 1)
+    }
+  }' <<<"$windows_preflight"
+)
+while IFS= read -r windows_test; do
+  target=${windows_test##*/}
+  target=${target%.rs}
+  if ! grep -Fxq "$target" <<<"$windows_preflight_targets"; then
+    printf 'Windows preflight omits test target: %s\n' "$windows_test" >&2
+    exit 1
+  fi
+done < <(
+  grep -RlF '#![cfg(target_os = "windows")]' \
+    src-tauri/core/tests src-tauri/runtime/tests | sort
+)
 test "$(grep -Fc 'apt-get install -y -qq --no-install-recommends libasound2-dev' "$ci")" -eq 2
 # Shared-host and guest setup failures can close SSH before desktop-ci returns
 # infrastructure status 3; keep the all-platform one-time retry covering 255.
