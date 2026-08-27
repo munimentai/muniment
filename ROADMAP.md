@@ -562,24 +562,28 @@ reads `SCHED_E_ALREADY_RUNNING` as a start. `copy_sid_bytes`
 four native SID reads. No surface calls `Run` and no listener accepts a
 connection, so the ADR 0012 attach admission gate still holds.
 
-NEXT — two slices remain before the Windows accept loop composes. They are the
-accept half over `ConnectNamedPipe` and the session half that answers one
-Welcome frame. The session half follows the read-order amendment, so it reads
+DONE 2026-08-27 — the listener accept half and the bounded readiness wait
+landed (MUNIDESK-1499 and 1500). `WindowsAttachListener::accept`
+(`src-tauri/core/src/attach/windows_listener.rs:131`) waits on
+`ConnectNamedPipe` until its deadline and returns the connected pipe stream.
+`wait_for_windows_attach_endpoint`
+(`src-tauri/core/src/attach/windows_connect.rs:66`) retries an absent endpoint
+until its deadline and fails immediately on every other connection error.
+
+NEXT — one slice remains before the Windows accept loop composes. The session
+half answers one Welcome frame. It follows the read-order amendment, so it reads
 the prefix, verifies the peer, reads the body, and writes Welcome. Its shape is
 `serve_macos_attach_session` (`src-tauri/core/src/attach/macos_listener.rs:88`).
-The loop then binds under the instance lock and joins the two. Two supporting
-slices ride beside them. The listener needs more than one pipe instance, and the
-explicit start surface needs the bounded readiness check ADR 0012 asks for.
-Installer registration and the two uninstallers follow. The removal write half
-sits in Needs Human, so the lane files nothing for it. The runtime dependency
-boundary bars a third direct package, so a runtime half composes from
-`muniment-core` and the standard library alone
-(`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs real
-Windows tests rather than a compile alone (`.github/workflows/ci.yml:345`), so
-each Windows-only slice adds its own test target there. That enumeration has no
-guard, and `src-tauri/core/tests/browser_control_windows_identity.rs` shows the
-cost. It carries `#![cfg(target_os = "windows")]`, so the final
-`cargo check --all-targets` compiles this test target but does not run it.
+The loop then binds under the instance lock and joins the accept and session
+halves. One supporting slice rides beside it. The listener needs more than one
+pipe instance. Installer registration and the two uninstallers follow. The
+removal write half sits in Needs Human, so the lane files nothing for it. The
+runtime dependency boundary bars a third direct package, so a runtime half
+composes from `muniment-core` and the standard library alone
+(`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs every
+Windows-only test target, including `browser_control_windows_identity`
+(`.github/workflows/ci.yml:345`). `test/smoke.sh` guards the target list against
+every Windows-only test target.
 
 DECIDED 2026-08-27 (planner, read `WindowsAttachListener::bind` beside the macOS
 accept loop) — the Windows attach pipe carries more than one instance. `bind`
