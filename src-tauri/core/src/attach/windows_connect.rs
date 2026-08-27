@@ -117,22 +117,42 @@ pub fn connect_windows_attach_endpoint(
 }
 
 fn wait_for_pipe(wide: &[u16], deadline: Instant) -> Result<(), WindowsAttachConnectError> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    let milliseconds = remaining.as_millis().min(u128::from(u32::MAX - 1)) as u32;
-    if milliseconds == 0 {
-        return Err(WindowsAttachConnectError::DeadlineExpired);
-    }
-    if unsafe { WaitNamedPipeW(wide.as_ptr(), milliseconds) } != 0 {
-        return Ok(());
-    }
-
-    let error = unsafe { GetLastError() };
-    match error {
-        ERROR_SEM_TIMEOUT => Err(WindowsAttachConnectError::DeadlineExpired),
-        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => {
-            Err(WindowsAttachConnectError::EndpointAbsent)
+    wait_for_windows_attach_pipe_with(deadline, Instant::now, |milliseconds| {
+        if unsafe { WaitNamedPipeW(wide.as_ptr(), milliseconds) } != 0 {
+            Ok(())
+        } else {
+            Err(unsafe { GetLastError() })
         }
-        _ => Err(WindowsAttachConnectError::Wait(error)),
+    })
+}
+
+#[doc(hidden)]
+pub fn wait_for_windows_attach_pipe_with<N, W>(
+    deadline: Instant,
+    mut now: N,
+    mut wait: W,
+) -> Result<(), WindowsAttachConnectError>
+where
+    N: FnMut() -> Instant,
+    W: FnMut(u32) -> Result<(), u32>,
+{
+    loop {
+        let remaining = deadline.saturating_duration_since(now());
+        if remaining.is_zero() {
+            return Err(WindowsAttachConnectError::DeadlineExpired);
+        }
+        let milliseconds = (remaining.as_millis()
+            + u128::from(remaining.subsec_nanos() % 1_000_000 != 0))
+        .min(u128::from(u32::MAX - 1)) as u32;
+
+        match wait(milliseconds) {
+            Ok(()) => return Ok(()),
+            Err(ERROR_SEM_TIMEOUT) => continue,
+            Err(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => {
+                return Err(WindowsAttachConnectError::EndpointAbsent)
+            }
+            Err(error) => return Err(WindowsAttachConnectError::Wait(error)),
+        }
     }
 }
 
