@@ -570,16 +570,17 @@ landed (MUNIDESK-1499 and 1500). `WindowsAttachListener::accept`
 (`src-tauri/core/src/attach/windows_connect.rs:66`) retries an absent endpoint
 until its deadline and fails immediately on every other connection error.
 
-NEXT — one slice remains before the Windows accept loop composes. The session
+NEXT — two slices remain before the Windows accept loop composes. The session
 half answers one Welcome frame. It follows the read-order amendment, so it reads
 the prefix, verifies the peer, reads the body, and writes Welcome. Its shape is
 `serve_macos_attach_session` (`src-tauri/core/src/attach/macos_listener.rs:88`).
-The loop then binds under the instance lock and joins the accept and session
-halves. One supporting slice rides beside it. The listener needs more than one
-pipe instance. Installer registration and the two uninstallers follow. The
-removal write half sits in Needs Human, so the lane files nothing for it. The
-runtime dependency boundary bars a third direct package, so a runtime half
-composes from `muniment-core` and the standard library alone
+The supporting slice gives the listener more than one pipe instance. The loop
+then binds under the instance lock and joins the accept and session halves. The
+installer band runs beside those two slices. Its first slice resolves the live
+payload roots, and its second lists the removal candidates. The removal write
+half sits in Needs Human, so the lane files nothing for it. The runtime
+dependency boundary bars a third direct package, so a runtime half composes from
+`muniment-core` and the standard library alone
 (`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs every
 Windows-only test target, including `browser_control_windows_identity`
 (`.github/workflows/ci.yml:345`). `test/smoke.sh` guards the target list against
@@ -597,6 +598,30 @@ therefore passes `PIPE_UNLIMITED_INSTANCES`, claims the first instance with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, and creates each later instance without that
 flag. It reads back the owner and the DACL of every instance it creates. The
 accept loop creates the next instance before it serves the connected one.
+
+DECIDED 2026-08-27 (planner, read `ensure_task_registration` beside
+`resolve_windows_payload_scopes`) — the Windows registrar reads its payload
+roots from the Shell known folders. `ensure_task_registration`
+(`src-tauri/core/src/windows_task_service.rs:274`) takes a payload path and both
+payload roots, and nothing resolves those values on a live system.
+`resolve_windows_payload_scopes` (`src-tauri/core/src/windows_payload.rs:63`)
+takes both roots as arguments on purpose. A child process inherits
+`%ProgramFiles%` and `%LocalAppData%` from its parent, so an environment read
+lets a caller move the task action. `SHGetKnownFolderPath` with
+`FOLDERID_ProgramFiles` and `FOLDERID_LocalAppData` reads the shell registration
+instead. The resolver calls it, and the registration caller follows in a later
+slice.
+
+DECIDED 2026-08-27 (planner, read the ADR 0012 removal rules against the Needs
+Human item) — the removal read half is fileable while the write half waits. The
+elevated MSI uninstaller enumerates `\Muniment\Runtime-*` and acts only on a
+task whose URI, principal, and action match its own payload
+(`docs/decisions/0012-user-level-runtime-service.md:1059`).
+`read_observed_registration` (`src-tauri/core/src/windows_task_service.rs:236`)
+reads one named task alone, so no code lists the removal candidates. Enumeration
+is a read, and `plan_task_removal` (`src-tauri/core/src/windows_task.rs:668`)
+already consumes each observed registration. The repoint and delete calls stay
+unfiled.
 
 DECIDED 2026-08-26 (planner) — the Windows attach instance lock is
 `<state directory>\attach\instance.lock` below `%APPDATA%\ai.muniment.desktop`.
