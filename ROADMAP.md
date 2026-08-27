@@ -549,22 +549,54 @@ composes `read_observed_registration` with `plan_task_registration` and
 listener accepts a connection, so the ADR 0012 attach admission gate still
 holds.
 
-NEXT — three slices remain before the Windows accept loop composes. They are the
-per-profile attach instance lock, the accept half over `ConnectNamedPipe`, and
-the session half that answers one Welcome frame. The session half follows the
-read-order amendment, so it reads the prefix, verifies the peer, reads the body,
-and writes Welcome. Its shape is `serve_macos_attach_session`
-(`src-tauri/core/src/attach/macos_listener.rs:88`). The loop then binds under
-the instance lock and joins the three. Beside them, `start_registered_task`
-gives ADR 0012 its explicit `IRegisteredTask::Run` surface. That surface
-validates the URI, principal, and action through `registration_verdict` before
-it starts anything. The removal write half sits in Needs Human, so the lane
-files nothing for it. Installer registration and the two uninstallers follow.
-The runtime dependency boundary bars a third direct package, so a runtime half
+DONE 2026-08-27 — the attach instance lock, the explicit task start, and the
+shared SID copy landed (MUNIDESK-1494, 1495, and 1496).
+`acquire_windows_attach_instance_lock`
+(`src-tauri/core/src/attach/windows_instance_lock.rs:47`) takes
+`<state directory>\attach\instance.lock` within a bounded wait, and its caller
+injects the state directory. `start_registered_task`
+(`src-tauri/core/src/windows_task_service.rs:176`) validates the URI, principal,
+and action through `registration_verdict`, then calls `IRegisteredTask::Run` and
+reads `SCHED_E_ALREADY_RUNNING` as a start. `copy_sid_bytes`
+(`src-tauri/core/src/windows_sid.rs`) is the one pointer-copy helper behind the
+four native SID reads. No surface calls `Run` and no listener accepts a
+connection, so the ADR 0012 attach admission gate still holds.
+
+DONE 2026-08-27 — the listener accept half and the bounded readiness wait
+landed (MUNIDESK-1499 and 1500). `WindowsAttachListener::accept`
+(`src-tauri/core/src/attach/windows_listener.rs:131`) waits on
+`ConnectNamedPipe` until its deadline and returns the connected pipe stream.
+`wait_for_windows_attach_endpoint`
+(`src-tauri/core/src/attach/windows_connect.rs:66`) retries an absent endpoint
+until its deadline and fails immediately on every other connection error.
+
+NEXT — one slice remains before the Windows accept loop composes. The session
+half answers one Welcome frame. It follows the read-order amendment, so it reads
+the prefix, verifies the peer, reads the body, and writes Welcome. Its shape is
+`serve_macos_attach_session` (`src-tauri/core/src/attach/macos_listener.rs:88`).
+The loop then binds under the instance lock and joins the accept and session
+halves. One supporting slice rides beside it. The listener needs more than one
+pipe instance. Installer registration and the two uninstallers follow. The
+removal write half sits in Needs Human, so the lane files nothing for it. The
+runtime dependency boundary bars a third direct package, so a runtime half
 composes from `muniment-core` and the standard library alone
-(`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs real
-Windows tests rather than a compile alone (`.github/workflows/ci.yml:345`), so
-each Windows-only slice adds its own test target there.
+(`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs every
+Windows-only test target, including `browser_control_windows_identity`
+(`.github/workflows/ci.yml:345`). `test/smoke.sh` guards the target list against
+every Windows-only test target.
+
+DECIDED 2026-08-27 (planner, read `WindowsAttachListener::bind` beside the macOS
+accept loop) — the Windows attach pipe carries more than one instance. `bind`
+(`src-tauri/core/src/attach/windows_listener.rs:41`) passes `nMaxInstances` as
+one, so a second client meets `ERROR_PIPE_BUSY` while the first connection
+lives. Closing the served handle and creating a replacement also leaves a window
+where the path resolves to nothing, and a client in that window reads
+`EndpointAbsent` rather than a busy endpoint. The Linux and macOS listeners each
+serve concurrent companions, so the Windows endpoint must too. The listener
+therefore passes `PIPE_UNLIMITED_INSTANCES`, claims the first instance with
+`FILE_FLAG_FIRST_PIPE_INSTANCE`, and creates each later instance without that
+flag. It reads back the owner and the DACL of every instance it creates. The
+accept loop creates the next instance before it serves the connected one.
 
 DECIDED 2026-08-26 (planner) — the Windows attach instance lock is
 `<state directory>\attach\instance.lock` below `%APPDATA%\ai.muniment.desktop`.
