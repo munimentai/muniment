@@ -278,6 +278,11 @@ impl SchedulerFixture {
         let principal = unsafe { task.Principal() }.unwrap();
         unsafe { principal.SetLogonType(logon_type) }.unwrap();
         let empty = VARIANT::default();
+        let user_id = if logon_type == TASK_LOGON_SERVICE_ACCOUNT {
+            VARIANT::from("SYSTEM")
+        } else {
+            VARIANT::default()
+        };
         let folder = match unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) } {
             Ok(folder) => folder,
             Err(_) => {
@@ -290,7 +295,7 @@ impl SchedulerFixture {
                 &BSTR::from(self.task_name.as_str()),
                 &task,
                 TASK_CREATE_OR_UPDATE.0,
-                &empty,
+                &user_id,
                 &empty,
                 logon_type,
                 &empty,
