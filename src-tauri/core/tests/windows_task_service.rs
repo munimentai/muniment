@@ -11,8 +11,9 @@ use muniment_core::windows_task_service::{
 };
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::core::BSTR;
+use windows::Win32::Foundation::SCHED_E_TASK_NOT_RUNNING;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
@@ -105,7 +106,10 @@ fn writes_registration_and_applies_each_removal_plan() {
         apply_task_removal(sid.as_str(), &machine_scope).unwrap(),
         TaskRemovalPlan::StopAndDelete
     );
-    assert!(unsafe { running_task.State() }.unwrap() != TASK_STATE_RUNNING);
+    match unsafe { running_task.State() } {
+        Ok(state) => assert_ne!(state, TASK_STATE_RUNNING),
+        Err(error) => assert_eq!(error.code(), SCHED_E_TASK_NOT_RUNNING),
+    }
     assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
     assert!(unsafe { fixture.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.is_err());
 
@@ -224,13 +228,20 @@ impl SchedulerFixture {
         let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
         let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
         let running = unsafe { task.Run(&VARIANT::default()) }.unwrap();
-        for _ in 0..50 {
-            if unsafe { running.State() }.unwrap() == TASK_STATE_RUNNING {
-                return running;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match unsafe { running.State() } {
+                Ok(state) if state == TASK_STATE_RUNNING => return running,
+                Ok(_) => {}
+                Err(error) if error.code() == SCHED_E_TASK_NOT_RUNNING => {}
+                Err(error) => panic!("could not read the controlled task state: {error}"),
             }
+            assert!(
+                Instant::now() < deadline,
+                "the controlled task did not start"
+            );
             thread::sleep(Duration::from_millis(100));
         }
-        panic!("the controlled task did not start");
     }
 }
 
