@@ -523,13 +523,33 @@ alone and no listener calls it, so the ADR 0012 attach admission gate still
 holds. `main` (`src-tauri/runtime/src/main.rs:49`) still returns on Windows
 before it opens the instance lock, and no surface calls `IRegisteredTask::Run`.
 
-NEXT — three slices remain before the Windows accept loop. They are the bounded
-overlapped named-pipe stream, the client endpoint owner check, and the per-profile
-attach instance lock. The accept loop also needs the read-order amendment below,
-because the peer reader cannot run before the listener's first read. The Task
-Scheduler COM adapter, installer registration, and the two uninstallers follow
-the accept loop. The runtime dependency boundary bars a third direct package, so
-a runtime half composes from `muniment-core` and the standard library alone
+DONE 2026-08-26 — the bounded pipe stream, the read-order amendment, and the
+registration read landed (MUNIDESK-1485, 1486, and 1487). `WindowsAttachStream`
+(`src-tauri/core/src/attach/windows_stream.rs:18`) wraps a connected overlapped
+pipe handle, cancels a timed-out operation through `CancelIoEx`, and implements
+`DeadlineStream`, so `read_exact_before` and `write_all_before` now work over a
+named pipe. ADR 0012 carries the Windows attach peer check read-order amendment
+(`docs/decisions/0012-user-level-runtime-service.md:1142`). It names the
+four-byte frame-length prefix as the sole read that precedes
+`ImpersonateNamedPipeClient`. `read_observed_registration`
+(`src-tauri/core/src/windows_task_service.rs:55`) opens the Task Scheduler
+through COM, reads the runtime task XML, and returns the parsed
+`ObservedRegistration`, so the registration planners now have a live source. It
+reads alone. No surface writes a registration and no listener accepts a
+connection, so the ADR 0012 attach admission gate still holds.
+
+NEXT — two slices remain before the Windows accept loop. They are the client
+endpoint owner check and the per-profile attach instance lock. The accept loop
+then binds under that lock, reads the prefix, verifies the peer, and answers one
+Welcome frame, which is the shape `serve_macos_attach_session`
+(`src-tauri/core/src/attach/macos_listener.rs:88`) already has. The Task
+Scheduler COM write half splits in two, because registration and removal are
+separate callers. Registration composes `read_observed_registration` with
+`plan_task_registration` and `ITaskFolder::RegisterTaskDefinition`. Removal
+composes it with `plan_task_removal`, `IRegisteredTask::Stop`, and
+`ITaskFolder::DeleteTask`. Installer registration and the two uninstallers
+follow both. The runtime dependency boundary bars a third direct package, so a
+runtime half composes from `muniment-core` and the standard library alone
 (`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs real
 Windows tests rather than a compile alone (`.github/workflows/ci.yml:345`), so
 each Windows-only slice adds its own test target there.
@@ -552,8 +572,8 @@ any frame read (`docs/decisions/0012-user-level-runtime-service.md:1116`), so th
 two rules collide. The prefix carries no protocol authority. The protected DACL
 already bars another OS user from opening the pipe, so a four-byte read before
 the check grants nothing. The listener therefore reads the prefix, verifies the
-peer, and only then reads the frame body. It writes no byte before the check. An
-ADR 0012 amendment slice records this order, and the accept loop follows it.
+peer, and only then reads the frame body. It writes no byte before the check.
+The ADR 0012 amendment records this order, and the accept loop follows it.
 
 DECIDED 2026-08-26 (planner, read `windows-sys` 0.61.2 beside `Cargo.lock`) — the
 Task Scheduler COM adapter uses the `windows` crate rather than `windows-sys`.
@@ -563,7 +583,8 @@ declares no `ITaskService`, `ITaskFolder`, or `IRegisteredTask` interface.
 `THIRD_PARTY_RUST_NOTICES.md:538` already records it, so a Windows-target
 dependency on it in `muniment-core` adds no package and changes no notice. The
 runtime dependency boundary reads the runtime's direct packages alone, so it
-stays green (`test/runtime-dependency-boundary.sh`).
+stays green (`test/runtime-dependency-boundary.sh`). The registration read
+proved this out, and the write half uses the same binding.
 
 DONE 2026-08-04 through 2026-08-17 — phase one is built and the Linux cutover
 is complete (MUNIDESK-863, 868 through 1067, 1103, 1150 through 1191, 1188
