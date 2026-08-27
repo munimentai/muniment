@@ -578,8 +578,8 @@ boundary bars a third direct package, so a runtime half composes from
 Windows tests rather than a compile alone (`.github/workflows/ci.yml:345`), so
 each Windows-only slice adds its own test target there. That enumeration has no
 guard, and `src-tauri/core/tests/browser_control_windows_identity.rs` shows the
-cost. It carries `#![cfg(target_os = "windows")]` and no job names it, so it
-compiles nowhere and runs nowhere.
+cost. It carries `#![cfg(target_os = "windows")]`, so the final
+`cargo check --all-targets` compiles this test target but does not run it.
 
 DECIDED 2026-08-27 (planner, read `WindowsAttachListener::bind` beside the macOS
 accept loop) — the Windows attach pipe carries more than one instance. `bind`
