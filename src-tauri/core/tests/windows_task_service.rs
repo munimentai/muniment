@@ -21,11 +21,12 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::TaskScheduler::{
     IRunningTask, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
-    TASK_LOGON_S4U, TASK_LOGON_TYPE, TASK_STATE_RUNNING,
+    TASK_LOGON_SERVICE_ACCOUNT, TASK_LOGON_TYPE, TASK_STATE_RUNNING,
 };
 use windows::Win32::System::Variant::VARIANT;
 
 const TASK_FOLDER: &str = r"\Muniment";
+const SERVICE_ACCOUNT_SID: &str = "S-1-5-18";
 const TEST_ROOT: &str = r"C:\MunimentTaskPreflight";
 const MACHINE_ROOT: &str = r"C:\MunimentTaskPreflight\Machine";
 const USER_ROOT: &str = r"C:\MunimentTaskPreflight\User";
@@ -100,7 +101,7 @@ fn writes_registration_and_applies_each_removal_plan() {
     let repointed_xml = fixture.task_xml();
     assert!(repointed_xml.contains(COM_HANDLER_CLASS_ID));
     assert!(repointed_xml.contains(COM_HANDLER_DATA));
-    fixture.register_machine_task(sid.as_str());
+    fixture.register_machine_task();
 
     let machine_scope = RemovalScope::Machine {
         payload_path: PathBuf::from(MACHINE_PAYLOAD),
@@ -108,16 +109,20 @@ fn writes_registration_and_applies_each_removal_plan() {
     };
     let running_task = fixture.start_controlled_task();
     assert_eq!(
-        apply_task_removal(sid.as_str(), &machine_scope).unwrap(),
+        apply_task_removal(SERVICE_ACCOUNT_SID, &machine_scope).unwrap(),
         TaskRemovalPlan::StopAndDelete
     );
     match unsafe { running_task.State() } {
         Ok(state) => assert_ne!(state, TASK_STATE_RUNNING),
         Err(error) => assert_eq!(error.code(), SCHED_E_TASK_NOT_RUNNING),
     }
-    assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
+    assert_eq!(
+        read_observed_registration(SERVICE_ACCOUNT_SID).unwrap(),
+        None
+    );
     assert!(unsafe { fixture.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.is_err());
 
+    fixture.task_name = format!("Runtime-{sid}");
     assert_eq!(
         ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT).unwrap(),
         TaskRegistrationPlan::Register
@@ -257,13 +262,17 @@ impl SchedulerFixture {
         self.register_xml(xml, TASK_LOGON_INTERACTIVE_TOKEN);
     }
 
-    fn register_machine_task(&self, sid: &str) {
-        let definition = TaskDefinition::new(sid, MACHINE_PAYLOAD).unwrap();
+    fn register_machine_task(&mut self) {
+        let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
+        unsafe { folder.DeleteTask(&BSTR::from(self.task_name.as_str()), 0) }.unwrap();
+        self.task_name = format!("Runtime-{SERVICE_ACCOUNT_SID}");
+
+        let definition = TaskDefinition::new(SERVICE_ACCOUNT_SID, MACHINE_PAYLOAD).unwrap();
         let xml = render_task_definition_xml(&definition).unwrap().replace(
             "<LogonType>InteractiveToken</LogonType>",
-            "<LogonType>S4U</LogonType>",
+            "<LogonType>ServiceAccount</LogonType>",
         );
-        self.register_xml(xml, TASK_LOGON_S4U);
+        self.register_xml(xml, TASK_LOGON_SERVICE_ACCOUNT);
     }
 
     fn register_xml(&self, xml: String, logon_type: TASK_LOGON_TYPE) {
