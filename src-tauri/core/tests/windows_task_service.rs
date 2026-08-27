@@ -122,7 +122,7 @@ fn writes_registration_and_applies_each_removal_plan() {
     );
     assert!(unsafe { fixture.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.is_err());
 
-    fixture.task_name = format!("Runtime-{sid}");
+    fixture.task_name = format!("Runtime-{}", sid.as_str());
     assert_eq!(
         ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT).unwrap(),
         TaskRegistrationPlan::Register
