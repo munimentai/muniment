@@ -2,37 +2,56 @@
 
 use muniment_core::windows_sid::current_process_user_sid;
 use muniment_core::windows_task::{
-    render_task_definition_xml, SidError, TaskDefinition, TaskRegistrationPlan,
+    render_task_definition_xml, RemovalScope, SidError, TaskDefinition, TaskRegistrationPlan,
+    TaskRemovalPlan,
 };
 use muniment_core::windows_task_service::{
-    ensure_task_registration, read_observed_registration, start_registered_task,
-    EnsureTaskRegistrationError, ReadObservedRegistrationError, StartRegisteredTaskError,
-    StartRegisteredTaskResult,
+    apply_task_removal, ensure_task_registration, read_observed_registration,
+    start_registered_task, EnsureTaskRegistrationError, ReadObservedRegistrationError,
+    StartRegisteredTaskError, StartRegisteredTaskResult,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, Instant};
 use windows::core::BSTR;
+use windows::Win32::Foundation::SCHED_E_TASK_NOT_RUNNING;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::TaskScheduler::{
-    ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
+    IRunningTask, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
+    TASK_LOGON_S4U, TASK_LOGON_TYPE, TASK_STATE_RUNNING,
 };
 use windows::Win32::System::Variant::VARIANT;
 
 const TASK_FOLDER: &str = r"\Muniment";
+const TEST_ROOT: &str = r"C:\MunimentTaskPreflight";
 const MACHINE_ROOT: &str = r"C:\MunimentTaskPreflight\Machine";
 const USER_ROOT: &str = r"C:\MunimentTaskPreflight\User";
 const PAYLOAD: &str = r"C:\MunimentTaskPreflight\User\muniment-runtime.exe";
+const MACHINE_PAYLOAD: &str = r"C:\MunimentTaskPreflight\Machine\muniment-runtime.exe";
 const FOREIGN_PAYLOAD: &str = r"C:\MunimentTaskPreflight\Foreign\muniment-runtime.exe";
+const COM_HANDLER_CLASS_ID: &str = "{00000000-0000-0000-0000-000000000001}";
+const COM_HANDLER_DATA: &str = "preserve-this-action";
 static SCHEDULER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
-fn absent_runtime_task_returns_none() {
-    let observed = read_observed_registration("S-1-5-999999999").unwrap();
+fn absent_runtime_task_returns_none_without_a_write() {
+    let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
+    let sid = "S-1-5-999999999";
+    let observed = read_observed_registration(sid).unwrap();
+    let scope = RemovalScope::PerUser {
+        user_sid: sid.to_owned(),
+        payload_path: PathBuf::from(PAYLOAD),
+        machine_payload_path: None,
+    };
 
     assert_eq!(observed, None);
+    assert_eq!(
+        apply_task_removal(sid, &scope).unwrap(),
+        TaskRemovalPlan::LeaveUnchanged
+    );
 }
 
 #[test]
@@ -46,7 +65,7 @@ fn non_canonical_sid_is_rejected_before_scheduler_access() {
 }
 
 #[test]
-fn registers_leaves_unchanged_and_refuses_a_foreign_task() {
+fn writes_registration_and_applies_each_removal_plan() {
     let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
     let sid = current_process_user_sid().unwrap();
     let mut fixture = SchedulerFixture::new(sid.as_str());
@@ -61,23 +80,68 @@ fn registers_leaves_unchanged_and_refuses_a_foreign_task() {
         ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT).unwrap(),
         TaskRegistrationPlan::LeaveUnchanged
     );
+    fixture.register_mixed_task(sid.as_str());
 
+    let per_user_scope = RemovalScope::PerUser {
+        user_sid: sid.as_str().to_owned(),
+        payload_path: PathBuf::from(PAYLOAD),
+        machine_payload_path: Some(PathBuf::from(MACHINE_PAYLOAD)),
+    };
+    let mut expected_repointed = read_observed_registration(sid.as_str()).unwrap().unwrap();
+    expected_repointed.action_path = PathBuf::from(MACHINE_PAYLOAD);
+    assert_eq!(
+        apply_task_removal(sid.as_str(), &per_user_scope).unwrap(),
+        TaskRemovalPlan::RepointTo(PathBuf::from(MACHINE_PAYLOAD))
+    );
+    assert_eq!(
+        read_observed_registration(sid.as_str()).unwrap().unwrap(),
+        expected_repointed
+    );
+    let repointed_xml = fixture.task_xml();
+    assert!(repointed_xml.contains(COM_HANDLER_CLASS_ID));
+    assert!(repointed_xml.contains(COM_HANDLER_DATA));
+    fixture.register_machine_task(sid.as_str());
+
+    let machine_scope = RemovalScope::Machine {
+        payload_path: PathBuf::from(MACHINE_PAYLOAD),
+        per_user_payload_path: None,
+    };
+    let running_task = fixture.start_controlled_task();
+    assert_eq!(
+        apply_task_removal(sid.as_str(), &machine_scope).unwrap(),
+        TaskRemovalPlan::StopAndDelete
+    );
+    match unsafe { running_task.State() } {
+        Ok(state) => assert_ne!(state, TASK_STATE_RUNNING),
+        Err(error) => assert_eq!(error.code(), SCHED_E_TASK_NOT_RUNNING),
+    }
+    assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
+    assert!(unsafe { fixture.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.is_err());
+
+    assert_eq!(
+        ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT).unwrap(),
+        TaskRegistrationPlan::Register
+    );
     fixture.register_foreign_task(sid.as_str());
+    let foreign = read_observed_registration(sid.as_str()).unwrap().unwrap();
+    assert_eq!(foreign.action_path, PathBuf::from(FOREIGN_PAYLOAD));
     assert_eq!(
         ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT),
         Err(EnsureTaskRegistrationError::Refused)
     );
     assert_eq!(
-        read_observed_registration(sid.as_str())
-            .unwrap()
-            .unwrap()
-            .action_path,
-        PathBuf::from(FOREIGN_PAYLOAD)
+        apply_task_removal(sid.as_str(), &per_user_scope).unwrap(),
+        TaskRemovalPlan::LeaveUnchanged
+    );
+    assert_eq!(
+        read_observed_registration(sid.as_str()).unwrap().unwrap(),
+        foreign
     );
 }
 
 #[test]
 fn starting_an_absent_task_does_not_clear_the_crash_window() {
+    let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
     let mut cleared = false;
     let result = start_registered_task("S-1-5-999999999", || {
         cleared = true;
@@ -140,6 +204,9 @@ struct SchedulerFixture {
     task_name: String,
     owns_task: bool,
     remove_folder: bool,
+    remove_test_root: bool,
+    remove_machine_root: bool,
+    remove_machine_payload: bool,
     payload: Option<PathBuf>,
     _apartment: TestComApartment,
 }
@@ -158,6 +225,9 @@ impl SchedulerFixture {
             task_name: format!("Runtime-{sid}"),
             owns_task: false,
             remove_folder,
+            remove_test_root: false,
+            remove_machine_root: false,
+            remove_machine_payload: false,
             payload: None,
             _apartment: apartment,
         }
@@ -169,7 +239,34 @@ impl SchedulerFixture {
 
     fn register_task(&self, sid: &str, payload: &Path) {
         let definition = TaskDefinition::new(sid, payload).unwrap();
+        self.register_xml(
+            render_task_definition_xml(&definition).unwrap(),
+            TASK_LOGON_INTERACTIVE_TOKEN,
+        );
+    }
+
+    fn register_mixed_task(&self, sid: &str) {
+        let definition = TaskDefinition::new(sid, PAYLOAD).unwrap();
         let xml = render_task_definition_xml(&definition).unwrap();
+        let exec_start = "  <Actions Context=\"Author\">\n    <Exec>";
+        let mixed_start = format!(
+            "  <Actions Context=\"Author\">\n    <ComHandler>\n      <ClassId>{COM_HANDLER_CLASS_ID}</ClassId>\n      <Data>{COM_HANDLER_DATA}</Data>\n    </ComHandler>\n    <Exec>"
+        );
+        let xml = xml.replacen(exec_start, &mixed_start, 1);
+        assert_ne!(xml, render_task_definition_xml(&definition).unwrap());
+        self.register_xml(xml, TASK_LOGON_INTERACTIVE_TOKEN);
+    }
+
+    fn register_machine_task(&self, sid: &str) {
+        let definition = TaskDefinition::new(sid, MACHINE_PAYLOAD).unwrap();
+        let xml = render_task_definition_xml(&definition).unwrap().replace(
+            "<LogonType>InteractiveToken</LogonType>",
+            "<LogonType>S4U</LogonType>",
+        );
+        self.register_xml(xml, TASK_LOGON_S4U);
+    }
+
+    fn register_xml(&self, xml: String, logon_type: TASK_LOGON_TYPE) {
         let task = unsafe { self.service.NewTask(0) }.unwrap();
         unsafe { task.SetXmlText(&BSTR::from(xml)) }.unwrap();
         let empty = VARIANT::default();
@@ -187,11 +284,52 @@ impl SchedulerFixture {
                 TASK_CREATE_OR_UPDATE.0,
                 &empty,
                 &empty,
-                TASK_LOGON_INTERACTIVE_TOKEN,
+                logon_type,
                 &empty,
             )
         }
         .unwrap();
+    }
+
+    fn task_xml(&self) -> String {
+        let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
+        let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
+        String::try_from(&unsafe { task.Xml() }.unwrap()).unwrap()
+    }
+
+    fn start_controlled_task(&mut self) -> IRunningTask {
+        self.remove_test_root = !Path::new(TEST_ROOT).exists();
+        self.remove_machine_root = !Path::new(MACHINE_ROOT).exists();
+        std::fs::create_dir_all(MACHINE_ROOT).unwrap();
+        assert!(!Path::new(MACHINE_PAYLOAD).exists());
+        self.remove_machine_payload = true;
+        std::fs::copy(
+            env!("CARGO_BIN_EXE_windows-task-test-helper"),
+            MACHINE_PAYLOAD,
+        )
+        .unwrap();
+
+        let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
+        let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
+        let running = unsafe { task.Run(&VARIANT::default()) }.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match unsafe { running.State() } {
+                Ok(state) if state == TASK_STATE_RUNNING => return running,
+                Ok(_) => {}
+                Err(error) if error.code() == SCHED_E_TASK_NOT_RUNNING => {}
+                Err(error) => panic!("could not read the controlled task state: {error}"),
+            }
+            if Instant::now() >= deadline {
+                let state = unsafe { task.State() };
+                let last_task_result = unsafe { task.LastTaskResult() };
+                let last_run_time = unsafe { task.LastRunTime() };
+                panic!(
+                    "the controlled task did not start: State={state:?}, LastTaskResult={last_task_result:?}, LastRunTime={last_run_time:?}"
+                );
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn wait_until_task_stops(&self) {
@@ -199,13 +337,11 @@ impl SchedulerFixture {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
-            if unsafe { task.State() }.unwrap()
-                != windows::Win32::System::TaskScheduler::TASK_STATE_RUNNING
-            {
+            if unsafe { task.State() }.unwrap() != TASK_STATE_RUNNING {
                 return;
             }
             assert!(Instant::now() < deadline, "the test task did not stop");
-            std::thread::sleep(Duration::from_millis(20));
+            thread::sleep(Duration::from_millis(20));
         }
     }
 }
@@ -214,8 +350,20 @@ impl Drop for SchedulerFixture {
     fn drop(&mut self) {
         if self.owns_task {
             if let Ok(folder) = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) } {
+                if let Ok(task) = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) } {
+                    let _ = unsafe { task.Stop(0) };
+                }
                 let _ = unsafe { folder.DeleteTask(&BSTR::from(self.task_name.as_str()), 0) };
             }
+        }
+        if self.remove_machine_payload {
+            let _ = std::fs::remove_file(MACHINE_PAYLOAD);
+        }
+        if self.remove_machine_root {
+            let _ = std::fs::remove_dir(MACHINE_ROOT);
+        }
+        if self.remove_test_root {
+            let _ = std::fs::remove_dir(TEST_ROOT);
         }
         if self.remove_folder {
             if let Ok(root) = unsafe { self.service.GetFolder(&BSTR::from(r"\")) } {
