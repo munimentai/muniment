@@ -1138,3 +1138,35 @@ Tauri's `app_data_dir` uses `dirs::data_dir`, which resolves to
 `FOLDERID_RoamingAppData`. Tauri's `app_config_dir` uses `dirs::config_dir`,
 which also resolves to `FOLDERID_RoamingAppData`. Tauri appends the application
 identifier to each known-folder path.
+
+## Amendment – 2026-08-24: Windows attach peer check read order
+
+- Status: accepted
+
+This amendment refines the 2026-08-22 Windows attach peer identity amendment.
+It changes no runtime code. The ADR 0012 attach admission gate remains in force
+until the Windows attach peer identity implementation slice lands.
+
+### Listener read order
+
+For every connection, the listener reads exactly the unsigned four-byte
+frame-length prefix before it calls
+[`ImpersonateNamedPipeClient`](https://learn.microsoft.com/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient).
+This prefix is the sole exception to the earlier rule that the peer check
+precedes every `muniment.attach/1` frame read.
+
+Microsoft documents
+[`ERROR_CANNOT_IMPERSONATE`](https://learn.microsoft.com/windows/win32/debug/system-error-codes--1300-1699-)
+when a named-pipe server tries to impersonate before it reads from the pipe.
+`ImpersonateNamedPipeClient` uses the security context of the last message that
+the server read. Reading the prefix supplies that required read for the
+byte-mode pipe.
+
+The prefix carries no protocol authority. The protected owner-only DACL bars
+another OS user from opening the pipe, so this read grants no admission or
+session authority.
+
+The listener completes the peer check before it reads any frame body or writes
+any byte. A rejected peer closes the pipe handle without a protocol response.
+A prefix above `MAX_FRAME_LENGTH` also closes the pipe handle without a
+frame-body read, byte write, or protocol response.
