@@ -25,6 +25,8 @@ const USER_ROOT: &str = r"C:\MunimentTaskPreflight\User";
 const PAYLOAD: &str = r"C:\MunimentTaskPreflight\User\muniment-runtime.exe";
 const MACHINE_PAYLOAD: &str = r"C:\MunimentTaskPreflight\Machine\muniment-runtime.exe";
 const FOREIGN_PAYLOAD: &str = r"C:\MunimentTaskPreflight\Foreign\muniment-runtime.exe";
+const COM_HANDLER_CLASS_ID: &str = "{00000000-0000-0000-0000-000000000001}";
+const COM_HANDLER_DATA: &str = "preserve-this-action";
 
 #[test]
 fn absent_runtime_task_returns_none_without_a_write() {
@@ -68,6 +70,7 @@ fn writes_registration_and_applies_each_removal_plan() {
         ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT).unwrap(),
         TaskRegistrationPlan::LeaveUnchanged
     );
+    fixture.register_mixed_task(sid.as_str());
 
     let per_user_scope = RemovalScope::PerUser {
         user_sid: sid.as_str().to_owned(),
@@ -84,6 +87,9 @@ fn writes_registration_and_applies_each_removal_plan() {
         read_observed_registration(sid.as_str()).unwrap().unwrap(),
         expected_repointed
     );
+    let repointed_xml = fixture.task_xml();
+    assert!(repointed_xml.contains(COM_HANDLER_CLASS_ID));
+    assert!(repointed_xml.contains(COM_HANDLER_DATA));
 
     let machine_scope = RemovalScope::Machine {
         payload_path: PathBuf::from(MACHINE_PAYLOAD),
@@ -144,7 +150,22 @@ impl SchedulerFixture {
 
     fn register_foreign_task(&self, sid: &str) {
         let definition = TaskDefinition::new(sid, FOREIGN_PAYLOAD).unwrap();
+        self.register_xml(render_task_definition_xml(&definition).unwrap());
+    }
+
+    fn register_mixed_task(&self, sid: &str) {
+        let definition = TaskDefinition::new(sid, PAYLOAD).unwrap();
         let xml = render_task_definition_xml(&definition).unwrap();
+        let exec_start = "  <Actions Context=\"Author\">\n    <Exec>";
+        let mixed_start = format!(
+            "  <Actions Context=\"Author\">\n    <ComHandler>\n      <ClassId>{COM_HANDLER_CLASS_ID}</ClassId>\n      <Data>{COM_HANDLER_DATA}</Data>\n    </ComHandler>\n    <Exec>"
+        );
+        let xml = xml.replacen(exec_start, &mixed_start, 1);
+        assert_ne!(xml, render_task_definition_xml(&definition).unwrap());
+        self.register_xml(xml);
+    }
+
+    fn register_xml(&self, xml: String) {
         let task = unsafe { self.service.NewTask(0) }.unwrap();
         unsafe { task.SetXmlText(&BSTR::from(xml)) }.unwrap();
         let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
@@ -161,6 +182,12 @@ impl SchedulerFixture {
             )
         }
         .unwrap();
+    }
+
+    fn task_xml(&self) -> String {
+        let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
+        let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
+        String::try_from(&unsafe { task.Xml() }.unwrap()).unwrap()
     }
 }
 
