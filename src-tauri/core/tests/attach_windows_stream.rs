@@ -24,6 +24,7 @@ fn moves_frames_times_out_cleanly_and_reports_peer_close() {
     let expected_response = response.clone();
     let path = listener.path().to_owned();
     let (connected_sender, connected_receiver) = mpsc::channel();
+    let (timed_out_sender, timed_out_receiver) = mpsc::channel();
 
     let client = thread::spawn(move || {
         let mut pipe = OpenOptions::new()
@@ -36,7 +37,7 @@ fn moves_frames_times_out_cleanly_and_reports_peer_close() {
         let mut received = vec![0; response.len()];
         pipe.read_exact(&mut received).unwrap();
         assert_eq!(received, response);
-        thread::sleep(Duration::from_millis(100));
+        timed_out_receiver.recv().unwrap();
         pipe.write_all(b"next").unwrap();
     });
 
@@ -69,6 +70,7 @@ fn moves_frames_times_out_cleanly_and_reports_peer_close() {
     )
     .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    timed_out_sender.send(()).unwrap();
     read_exact_before(
         &mut stream,
         &mut later,
