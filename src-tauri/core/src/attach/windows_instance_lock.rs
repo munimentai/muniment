@@ -73,7 +73,7 @@ pub fn acquire_windows_attach_instance_lock(
             .map_err(|_| WindowsAttachInstanceLockError::Unavailable)?;
         match file.try_lock_exclusive() {
             Ok(()) => return Ok(WindowsAttachInstanceLock { _file: file }),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {}
             Err(_) => return Err(WindowsAttachInstanceLockError::Unavailable),
         }
 
