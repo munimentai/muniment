@@ -268,16 +268,15 @@ impl SchedulerFixture {
         self.task_name = format!("Runtime-{SERVICE_ACCOUNT_SID}");
 
         let definition = TaskDefinition::new(SERVICE_ACCOUNT_SID, MACHINE_PAYLOAD).unwrap();
-        let xml = render_task_definition_xml(&definition).unwrap().replace(
-            "<LogonType>InteractiveToken</LogonType>",
-            "<LogonType>ServiceAccount</LogonType>",
-        );
+        let xml = render_task_definition_xml(&definition).unwrap();
         self.register_xml(xml, TASK_LOGON_SERVICE_ACCOUNT);
     }
 
     fn register_xml(&self, xml: String, logon_type: TASK_LOGON_TYPE) {
         let task = unsafe { self.service.NewTask(0) }.unwrap();
         unsafe { task.SetXmlText(&BSTR::from(xml)) }.unwrap();
+        let principal = unsafe { task.Principal() }.unwrap();
+        unsafe { principal.SetLogonType(logon_type) }.unwrap();
         let empty = VARIANT::default();
         let folder = match unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) } {
             Ok(folder) => folder,
