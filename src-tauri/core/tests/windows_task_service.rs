@@ -94,17 +94,20 @@ fn writes_registration_and_applies_each_removal_plan() {
     let repointed_xml = fixture.task_xml();
     assert!(repointed_xml.contains(COM_HANDLER_CLASS_ID));
     assert!(repointed_xml.contains(COM_HANDLER_DATA));
+    fixture.register_machine_task(sid.as_str());
 
     let machine_scope = RemovalScope::Machine {
         payload_path: PathBuf::from(MACHINE_PAYLOAD),
         per_user_payload_path: None,
     };
-    let _running_task = fixture.start_controlled_task();
+    let running_task = fixture.start_controlled_task();
     assert_eq!(
         apply_task_removal(sid.as_str(), &machine_scope).unwrap(),
         TaskRemovalPlan::StopAndDelete
     );
+    assert!(unsafe { running_task.State() }.unwrap() != TASK_STATE_RUNNING);
     assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
+    assert!(unsafe { fixture.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.is_err());
 
     assert_eq!(
         ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT).unwrap(),
@@ -174,6 +177,11 @@ impl SchedulerFixture {
         let xml = xml.replacen(exec_start, &mixed_start, 1);
         assert_ne!(xml, render_task_definition_xml(&definition).unwrap());
         self.register_xml(xml);
+    }
+
+    fn register_machine_task(&self, sid: &str) {
+        let definition = TaskDefinition::new(sid, MACHINE_PAYLOAD).unwrap();
+        self.register_xml(render_task_definition_xml(&definition).unwrap());
     }
 
     fn register_xml(&self, xml: String) {
