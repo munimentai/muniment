@@ -538,18 +538,30 @@ through COM, reads the runtime task XML, and returns the parsed
 reads alone. No surface writes a registration and no listener accepts a
 connection, so the ADR 0012 attach admission gate still holds.
 
-NEXT — two slices remain before the Windows accept loop. They are the client
-endpoint owner check and the per-profile attach instance lock. The accept loop
-then binds under that lock, reads the prefix, verifies the peer, and answers one
-Welcome frame, which is the shape `serve_macos_attach_session`
-(`src-tauri/core/src/attach/macos_listener.rs:88`) already has. The Task
-Scheduler COM write half splits in two, because registration and removal are
-separate callers. Registration composes `read_observed_registration` with
-`plan_task_registration` and `ITaskFolder::RegisterTaskDefinition`. Removal
-composes it with `plan_task_removal`, `IRegisteredTask::Stop`, and
-`ITaskFolder::DeleteTask`. Installer registration and the two uninstallers
-follow both. The runtime dependency boundary bars a third direct package, so a
-runtime half composes from `muniment-core` and the standard library alone
+DONE 2026-08-27 — the client endpoint owner check and the registration write
+landed (MUNIDESK-1489 and 1490). `connect_windows_attach_endpoint`
+(`src-tauri/core/src/attach/windows_connect.rs:64`) opens the per-user pipe with
+`SECURITY_IDENTIFICATION` and waits out `ERROR_PIPE_BUSY` within a deadline. It
+then compares the endpoint owner SID with its own before any protocol byte.
+`ensure_task_registration` (`src-tauri/core/src/windows_task_service.rs:147`)
+composes `read_observed_registration` with `plan_task_registration` and
+`ITaskFolder::RegisterTaskDefinition`, so the runtime task has a writer now. No
+listener accepts a connection, so the ADR 0012 attach admission gate still
+holds.
+
+NEXT — three slices remain before the Windows accept loop composes. They are the
+per-profile attach instance lock, the accept half over `ConnectNamedPipe`, and
+the session half that answers one Welcome frame. The session half follows the
+read-order amendment, so it reads the prefix, verifies the peer, reads the body,
+and writes Welcome. Its shape is `serve_macos_attach_session`
+(`src-tauri/core/src/attach/macos_listener.rs:88`). The loop then binds under
+the instance lock and joins the three. Beside them, `start_registered_task`
+gives ADR 0012 its explicit `IRegisteredTask::Run` surface. That surface
+validates the URI, principal, and action through `registration_verdict` before
+it starts anything. The removal write half sits in Needs Human, so the lane
+files nothing for it. Installer registration and the two uninstallers follow.
+The runtime dependency boundary bars a third direct package, so a runtime half
+composes from `muniment-core` and the standard library alone
 (`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs real
 Windows tests rather than a compile alone (`.github/workflows/ci.yml:345`), so
 each Windows-only slice adds its own test target there.
