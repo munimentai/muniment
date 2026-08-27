@@ -215,10 +215,11 @@ impl SchedulerFixture {
         std::fs::create_dir_all(MACHINE_ROOT).unwrap();
         assert!(!Path::new(MACHINE_PAYLOAD).exists());
         self.remove_machine_payload = true;
-        let notepad = PathBuf::from(std::env::var_os("WINDIR").unwrap())
-            .join("System32")
-            .join("notepad.exe");
-        std::fs::copy(notepad, MACHINE_PAYLOAD).unwrap();
+        std::fs::copy(
+            env!("CARGO_BIN_EXE_windows-task-test-helper"),
+            MACHINE_PAYLOAD,
+        )
+        .unwrap();
 
         let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
         let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
