@@ -42,6 +42,27 @@ async function hostedLocation(driver) {
   }
 }
 
+async function signInCompleted(driver) {
+  if (process.platform === 'linux') {
+    try {
+      return await (await $('textarea[placeholder="Ask anything"]')).isDisplayed()
+    } catch {
+      return false
+    }
+  }
+  return (await hostedLocation(driver)).startsWith('http://127.0.0.1:')
+}
+
+async function waitForLinuxSignIn(driver) {
+  if (process.platform !== 'linux') return false
+  try {
+    await browser.waitUntil(async () => await signInCompleted(driver), { timeout: 10000 })
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function activateHosted(driver, selector) {
   if (process.platform === 'linux') {
     // WebKitWebDriver holds the session when a click starts a navigation.
@@ -206,33 +227,37 @@ describe('installed nightly', () => {
       })
       await passwordField.setValue(password)
       await activateHosted(signInBrowser, hostedLogin)
-      await signInBrowser.waitUntil(async () => (
-        (await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:')
-        || await hostedDisplayed(signInBrowser, hostedSelect)
-        || await hostedDisplayed(signInBrowser, hostedApprove)
-      ), {
-        timeout: 60000,
-        timeoutMsg: 'production authorization did not continue after local sign-in',
-      })
-      if (!(await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:')
-        && await hostedDisplayed(signInBrowser, hostedSelect)) {
-        await activateHosted(signInBrowser, hostedSelect)
+      if (!(await waitForLinuxSignIn(signInBrowser))) {
         await signInBrowser.waitUntil(async () => (
-          (await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:')
+          await signInCompleted(signInBrowser)
+          || await hostedDisplayed(signInBrowser, hostedSelect)
           || await hostedDisplayed(signInBrowser, hostedApprove)
         ), {
-          timeout: 30000,
-          timeoutMsg: 'production authorization did not continue after organization choice',
+          timeout: 60000,
+          timeoutMsg: 'production authorization did not continue after local sign-in',
         })
       }
-      if (!(await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:')) {
+      if (!(await signInCompleted(signInBrowser))
+        && await hostedDisplayed(signInBrowser, hostedSelect)) {
+        await activateHosted(signInBrowser, hostedSelect)
+        if (!(await waitForLinuxSignIn(signInBrowser))) {
+          await signInBrowser.waitUntil(async () => (
+            await signInCompleted(signInBrowser)
+            || await hostedDisplayed(signInBrowser, hostedApprove)
+          ), {
+            timeout: 30000,
+            timeoutMsg: 'production authorization did not continue after organization choice',
+          })
+        }
+      }
+      if (!(await signInCompleted(signInBrowser))) {
         await (await signInBrowser.$(hostedApprove)).waitForDisplayed({
           timeout: 15000,
           timeoutMsg: 'production authorization did not ask for approval',
         })
         await activateHosted(signInBrowser, hostedApprove)
       }
-      await signInBrowser.waitUntil(async () => (await hostedLocation(signInBrowser)).startsWith('http://127.0.0.1:'), {
+      await signInBrowser.waitUntil(async () => await signInCompleted(signInBrowser), {
         timeout: 120000,
         timeoutMsg: 'production sign-in did not return to the desktop callback',
       })
