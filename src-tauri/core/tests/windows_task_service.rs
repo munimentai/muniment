@@ -2,11 +2,12 @@
 
 use muniment_core::windows_sid::current_process_user_sid;
 use muniment_core::windows_task::{
-    render_task_definition_xml, SidError, TaskDefinition, TaskRegistrationPlan,
+    render_task_definition_xml, RemovalScope, SidError, TaskDefinition, TaskRegistrationPlan,
+    TaskRemovalPlan,
 };
 use muniment_core::windows_task_service::{
-    ensure_task_registration, read_observed_registration, EnsureTaskRegistrationError,
-    ReadObservedRegistrationError,
+    apply_task_removal, ensure_task_registration, read_observed_registration,
+    EnsureTaskRegistrationError, ReadObservedRegistrationError,
 };
 use std::path::PathBuf;
 use windows::core::BSTR;
@@ -22,13 +23,24 @@ const TASK_FOLDER: &str = r"\Muniment";
 const MACHINE_ROOT: &str = r"C:\MunimentTaskPreflight\Machine";
 const USER_ROOT: &str = r"C:\MunimentTaskPreflight\User";
 const PAYLOAD: &str = r"C:\MunimentTaskPreflight\User\muniment-runtime.exe";
+const MACHINE_PAYLOAD: &str = r"C:\MunimentTaskPreflight\Machine\muniment-runtime.exe";
 const FOREIGN_PAYLOAD: &str = r"C:\MunimentTaskPreflight\Foreign\muniment-runtime.exe";
 
 #[test]
-fn absent_runtime_task_returns_none() {
-    let observed = read_observed_registration("S-1-5-999999999").unwrap();
+fn absent_runtime_task_returns_none_without_a_write() {
+    let sid = "S-1-5-999999999";
+    let observed = read_observed_registration(sid).unwrap();
+    let scope = RemovalScope::PerUser {
+        user_sid: sid.to_owned(),
+        payload_path: PathBuf::from(PAYLOAD),
+        machine_payload_path: None,
+    };
 
     assert_eq!(observed, None);
+    assert_eq!(
+        apply_task_removal(sid, &scope).unwrap(),
+        TaskRemovalPlan::LeaveUnchanged
+    );
 }
 
 #[test]
@@ -42,7 +54,7 @@ fn non_canonical_sid_is_rejected_before_scheduler_access() {
 }
 
 #[test]
-fn registers_leaves_unchanged_and_refuses_a_foreign_task() {
+fn writes_registration_and_applies_each_removal_plan() {
     let sid = current_process_user_sid().unwrap();
     let mut fixture = SchedulerFixture::new(sid.as_str());
     assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
@@ -57,17 +69,50 @@ fn registers_leaves_unchanged_and_refuses_a_foreign_task() {
         TaskRegistrationPlan::LeaveUnchanged
     );
 
+    let per_user_scope = RemovalScope::PerUser {
+        user_sid: sid.as_str().to_owned(),
+        payload_path: PathBuf::from(PAYLOAD),
+        machine_payload_path: Some(PathBuf::from(MACHINE_PAYLOAD)),
+    };
+    let mut expected_repointed = read_observed_registration(sid.as_str()).unwrap().unwrap();
+    expected_repointed.action_path = PathBuf::from(MACHINE_PAYLOAD);
+    assert_eq!(
+        apply_task_removal(sid.as_str(), &per_user_scope).unwrap(),
+        TaskRemovalPlan::RepointTo(PathBuf::from(MACHINE_PAYLOAD))
+    );
+    assert_eq!(
+        read_observed_registration(sid.as_str()).unwrap().unwrap(),
+        expected_repointed
+    );
+
+    let machine_scope = RemovalScope::Machine {
+        payload_path: PathBuf::from(MACHINE_PAYLOAD),
+        per_user_payload_path: None,
+    };
+    assert_eq!(
+        apply_task_removal(sid.as_str(), &machine_scope).unwrap(),
+        TaskRemovalPlan::StopAndDelete
+    );
+    assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
+
+    assert_eq!(
+        ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT).unwrap(),
+        TaskRegistrationPlan::Register
+    );
     fixture.register_foreign_task(sid.as_str());
+    let foreign = read_observed_registration(sid.as_str()).unwrap().unwrap();
+    assert_eq!(foreign.action_path, PathBuf::from(FOREIGN_PAYLOAD));
     assert_eq!(
         ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT),
         Err(EnsureTaskRegistrationError::Refused)
     );
     assert_eq!(
-        read_observed_registration(sid.as_str())
-            .unwrap()
-            .unwrap()
-            .action_path,
-        PathBuf::from(FOREIGN_PAYLOAD)
+        apply_task_removal(sid.as_str(), &per_user_scope).unwrap(),
+        TaskRemovalPlan::LeaveUnchanged
+    );
+    assert_eq!(
+        read_observed_registration(sid.as_str()).unwrap().unwrap(),
+        foreign
     );
 }
 

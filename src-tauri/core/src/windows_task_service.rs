@@ -1,19 +1,22 @@
 //! Live registration access through the Windows Task Scheduler.
 
 use crate::windows_task::{
-    parse_observed_registration, plan_task_registration, render_task_definition_xml, task_uri,
-    ObservedRegistration, ParseObservedRegistrationError, RenderTaskDefinitionError, SidError,
-    TaskDefinition, TaskDefinitionError, TaskRegistrationPlan,
+    parse_observed_registration, plan_task_registration, plan_task_removal,
+    render_task_definition_xml, task_uri, ObservedRegistration, ParseObservedRegistrationError,
+    RemovalScope, RenderTaskDefinitionError, SidError, TaskDefinition, TaskDefinitionError,
+    TaskRegistrationPlan, TaskRemovalPlan,
 };
 use std::fmt;
+use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use windows::core::{BSTR, HRESULT};
+use windows::core::{Interface, BSTR, HRESULT};
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::TaskScheduler::{
-    ITaskFolder, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
+    IExecAction, ITaskDefinition, ITaskFolder, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE,
+    TASK_ENUM_HIDDEN, TASK_LOGON_INTERACTIVE_TOKEN, TASK_LOGON_NONE, TASK_LOGON_TYPE, TASK_UPDATE,
 };
 use windows::Win32::System::Variant::VARIANT;
 
@@ -105,6 +108,63 @@ impl fmt::Display for EnsureTaskRegistrationError {
 
 impl std::error::Error for EnsureTaskRegistrationError {}
 
+/// A failure while removing or repointing a runtime task registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApplyTaskRemovalError {
+    InvalidSid(SidError),
+    InitializeCom(HRESULT),
+    CreateTaskService(HRESULT),
+    ConnectTaskService(HRESULT),
+    OpenTaskFolder(HRESULT),
+    OpenTask(HRESULT),
+    ReadTaskXml(HRESULT),
+    InvalidTaskXmlText,
+    ParseTaskXml(ParseObservedRegistrationError),
+    StopTask(HRESULT),
+    DeleteTask(HRESULT),
+    ReadRemainingTasks(HRESULT),
+    CountRemainingTasks(HRESULT),
+    OpenRootFolder(HRESULT),
+    DeleteTaskFolder(HRESULT),
+    ReadTaskDefinition(HRESULT),
+    ReadTaskActions(HRESULT),
+    ReadTaskAction(HRESULT),
+    ReadExecAction(HRESULT),
+    SetActionPath(HRESULT),
+    RegisterTaskDefinition(HRESULT),
+}
+
+impl fmt::Display for ApplyTaskRemovalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::InvalidSid(_) => "the task SID is not canonical",
+            Self::InitializeCom(_) => "could not initialize COM",
+            Self::CreateTaskService(_) => "could not create the Task Scheduler service",
+            Self::ConnectTaskService(_) => "could not connect to the local Task Scheduler",
+            Self::OpenTaskFolder(_) => "could not open the Muniment task folder",
+            Self::OpenTask(_) => "could not open the runtime task",
+            Self::ReadTaskXml(_) => "could not read the runtime task XML",
+            Self::InvalidTaskXmlText => "the runtime task XML contains invalid text",
+            Self::ParseTaskXml(_) => "could not parse the runtime task XML",
+            Self::StopTask(_) => "could not stop the runtime task",
+            Self::DeleteTask(_) => "could not delete the runtime task",
+            Self::ReadRemainingTasks(_) => "could not read the remaining Muniment tasks",
+            Self::CountRemainingTasks(_) => "could not count the remaining Muniment tasks",
+            Self::OpenRootFolder(_) => "could not open the Task Scheduler root folder",
+            Self::DeleteTaskFolder(_) => "could not delete the Muniment task folder",
+            Self::ReadTaskDefinition(_) => "could not read the runtime task definition",
+            Self::ReadTaskActions(_) => "could not read the runtime task actions",
+            Self::ReadTaskAction(_) => "could not read the runtime task action",
+            Self::ReadExecAction(_) => "the runtime task action is not executable",
+            Self::SetActionPath(_) => "could not set the runtime task action path",
+            Self::RegisterTaskDefinition(_) => "could not register the runtime task",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for ApplyTaskRemovalError {}
+
 /// Reads the runtime task registration for a canonical user SID.
 pub fn read_observed_registration(
     sid: &str,
@@ -190,20 +250,116 @@ pub fn ensure_task_registration(
         .map_err(|error| EnsureTaskRegistrationError::CreateTaskDefinition(error.code()))?;
     unsafe { definition.SetXmlText(&BSTR::from(xml)) }
         .map_err(|error| EnsureTaskRegistrationError::SetTaskXml(error.code()))?;
+    register_task_definition(
+        &folder,
+        task_name,
+        &definition,
+        TASK_CREATE_OR_UPDATE.0,
+        TASK_LOGON_INTERACTIVE_TOKEN,
+        &empty,
+    )
+    .map_err(EnsureTaskRegistrationError::RegisterTaskDefinition)?;
+
+    Ok(plan)
+}
+
+/// Makes the planned runtime task removal change and returns its plan.
+pub fn apply_task_removal(
+    sid: &str,
+    scope: &RemovalScope,
+) -> Result<TaskRemovalPlan, ApplyTaskRemovalError> {
+    let Some(observed) = read_observed_registration(sid).map_err(map_removal_read_error)? else {
+        return Ok(TaskRemovalPlan::LeaveUnchanged);
+    };
+    let plan = plan_task_removal(scope, &observed);
+    if plan == TaskRemovalPlan::LeaveUnchanged {
+        return Ok(plan);
+    }
+
+    let task_name = observed
+        .uri
+        .strip_prefix(r"\Muniment\")
+        .expect("read_observed_registration uses a Muniment task URI");
+    let _apartment = ComApartment::initialize_for_removal()?;
+    let service: ITaskService = unsafe {
+        CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| ApplyTaskRemovalError::CreateTaskService(error.code()))?
+    };
+    let empty = VARIANT::default();
+    unsafe { service.Connect(&empty, &empty, &empty, &empty) }
+        .map_err(|error| ApplyTaskRemovalError::ConnectTaskService(error.code()))?;
+    let folder = unsafe { service.GetFolder(&BSTR::from(TASK_FOLDER)) }
+        .map_err(|error| ApplyTaskRemovalError::OpenTaskFolder(error.code()))?;
+    let task = unsafe { folder.GetTask(&BSTR::from(task_name)) }
+        .map_err(|error| ApplyTaskRemovalError::OpenTask(error.code()))?;
+
+    match &plan {
+        TaskRemovalPlan::StopAndDelete => {
+            unsafe { task.Stop(0) }
+                .map_err(|error| ApplyTaskRemovalError::StopTask(error.code()))?;
+            unsafe { folder.DeleteTask(&BSTR::from(task_name), 0) }
+                .map_err(|error| ApplyTaskRemovalError::DeleteTask(error.code()))?;
+            let tasks = unsafe { folder.GetTasks(TASK_ENUM_HIDDEN.0) }
+                .map_err(|error| ApplyTaskRemovalError::ReadRemainingTasks(error.code()))?;
+            let count = unsafe { tasks.Count() }
+                .map_err(|error| ApplyTaskRemovalError::CountRemainingTasks(error.code()))?;
+            if count == 0 {
+                let root = unsafe { service.GetFolder(&BSTR::from(r"\")) }
+                    .map_err(|error| ApplyTaskRemovalError::OpenRootFolder(error.code()))?;
+                unsafe { root.DeleteFolder(&BSTR::from("Muniment"), 0) }
+                    .map_err(|error| ApplyTaskRemovalError::DeleteTaskFolder(error.code()))?;
+            }
+        }
+        TaskRemovalPlan::RepointTo(payload_path) => {
+            let definition = unsafe { task.Definition() }
+                .map_err(|error| ApplyTaskRemovalError::ReadTaskDefinition(error.code()))?;
+            let actions = unsafe { definition.Actions() }
+                .map_err(|error| ApplyTaskRemovalError::ReadTaskActions(error.code()))?;
+            let action = unsafe { actions.get_Item(1) }
+                .map_err(|error| ApplyTaskRemovalError::ReadTaskAction(error.code()))?;
+            let action: IExecAction = action
+                .cast()
+                .map_err(|error| ApplyTaskRemovalError::ReadExecAction(error.code()))?;
+            let payload_path: Vec<_> = payload_path.as_os_str().encode_wide().collect();
+            unsafe { action.SetPath(&BSTR::from_wide(&payload_path)) }
+                .map_err(|error| ApplyTaskRemovalError::SetActionPath(error.code()))?;
+            register_task_definition(
+                &folder,
+                task_name,
+                &definition,
+                TASK_UPDATE.0,
+                TASK_LOGON_NONE,
+                &empty,
+            )
+            .map_err(ApplyTaskRemovalError::RegisterTaskDefinition)?;
+        }
+        TaskRemovalPlan::LeaveUnchanged => unreachable!(),
+    }
+
+    Ok(plan)
+}
+
+fn register_task_definition(
+    folder: &ITaskFolder,
+    task_name: &str,
+    definition: &ITaskDefinition,
+    flags: i32,
+    logon_type: TASK_LOGON_TYPE,
+    empty: &VARIANT,
+) -> Result<(), HRESULT> {
     unsafe {
         folder.RegisterTaskDefinition(
             &BSTR::from(task_name),
-            &definition,
-            TASK_CREATE_OR_UPDATE.0,
-            &empty,
-            &empty,
-            TASK_LOGON_INTERACTIVE_TOKEN,
-            &empty,
+            definition,
+            flags,
+            empty,
+            empty,
+            logon_type,
+            empty,
         )
     }
-    .map_err(|error| EnsureTaskRegistrationError::RegisterTaskDefinition(error.code()))?;
-
-    Ok(plan)
+    .map(|_| ())
+    .map_err(|error| error.code())
 }
 
 fn open_or_create_task_folder(
@@ -260,6 +416,36 @@ fn map_read_error(error: ReadObservedRegistrationError) -> EnsureTaskRegistratio
     }
 }
 
+fn map_removal_read_error(error: ReadObservedRegistrationError) -> ApplyTaskRemovalError {
+    match error {
+        ReadObservedRegistrationError::InvalidSid(error) => {
+            ApplyTaskRemovalError::InvalidSid(error)
+        }
+        ReadObservedRegistrationError::InitializeCom(code) => {
+            ApplyTaskRemovalError::InitializeCom(code)
+        }
+        ReadObservedRegistrationError::CreateTaskService(code) => {
+            ApplyTaskRemovalError::CreateTaskService(code)
+        }
+        ReadObservedRegistrationError::ConnectTaskService(code) => {
+            ApplyTaskRemovalError::ConnectTaskService(code)
+        }
+        ReadObservedRegistrationError::OpenTaskFolder(code) => {
+            ApplyTaskRemovalError::OpenTaskFolder(code)
+        }
+        ReadObservedRegistrationError::OpenTask(code) => ApplyTaskRemovalError::OpenTask(code),
+        ReadObservedRegistrationError::ReadTaskXml(code) => {
+            ApplyTaskRemovalError::ReadTaskXml(code)
+        }
+        ReadObservedRegistrationError::InvalidTaskXmlText => {
+            ApplyTaskRemovalError::InvalidTaskXmlText
+        }
+        ReadObservedRegistrationError::ParseTaskXml(error) => {
+            ApplyTaskRemovalError::ParseTaskXml(error)
+        }
+    }
+}
+
 fn is_absent(code: HRESULT) -> bool {
     matches!(
         code,
@@ -278,6 +464,10 @@ impl ComApartment {
 
     fn initialize_for_write() -> Result<Self, EnsureTaskRegistrationError> {
         Self::initialize_inner().map_err(EnsureTaskRegistrationError::InitializeCom)
+    }
+
+    fn initialize_for_removal() -> Result<Self, ApplyTaskRemovalError> {
+        Self::initialize_inner().map_err(ApplyTaskRemovalError::InitializeCom)
     }
 
     fn initialize_inner() -> Result<Self, HRESULT> {
