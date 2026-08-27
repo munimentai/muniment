@@ -9,17 +9,21 @@ use muniment_core::windows_task_service::{
     apply_task_removal, ensure_task_registration, read_observed_registration,
     EnsureTaskRegistrationError, ReadObservedRegistrationError,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 use windows::core::BSTR;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::TaskScheduler::{
-    ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
+    IRunningTask, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
+    TASK_STATE_RUNNING,
 };
 use windows::Win32::System::Variant::VARIANT;
 
 const TASK_FOLDER: &str = r"\Muniment";
+const TEST_ROOT: &str = r"C:\MunimentTaskPreflight";
 const MACHINE_ROOT: &str = r"C:\MunimentTaskPreflight\Machine";
 const USER_ROOT: &str = r"C:\MunimentTaskPreflight\User";
 const PAYLOAD: &str = r"C:\MunimentTaskPreflight\User\muniment-runtime.exe";
@@ -95,6 +99,7 @@ fn writes_registration_and_applies_each_removal_plan() {
         payload_path: PathBuf::from(MACHINE_PAYLOAD),
         per_user_payload_path: None,
     };
+    let _running_task = fixture.start_controlled_task();
     assert_eq!(
         apply_task_removal(sid.as_str(), &machine_scope).unwrap(),
         TaskRemovalPlan::StopAndDelete
@@ -127,6 +132,9 @@ struct SchedulerFixture {
     task_name: String,
     owns_task: bool,
     remove_folder: bool,
+    remove_test_root: bool,
+    remove_machine_root: bool,
+    remove_machine_payload: bool,
     _apartment: TestComApartment,
 }
 
@@ -144,6 +152,9 @@ impl SchedulerFixture {
             task_name: format!("Runtime-{sid}"),
             owns_task: false,
             remove_folder,
+            remove_test_root: false,
+            remove_machine_root: false,
+            remove_machine_payload: false,
             _apartment: apartment,
         }
     }
@@ -189,14 +200,49 @@ impl SchedulerFixture {
         let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
         String::try_from(&unsafe { task.Xml() }.unwrap()).unwrap()
     }
+
+    fn start_controlled_task(&mut self) -> IRunningTask {
+        self.remove_test_root = !Path::new(TEST_ROOT).exists();
+        self.remove_machine_root = !Path::new(MACHINE_ROOT).exists();
+        std::fs::create_dir_all(MACHINE_ROOT).unwrap();
+        assert!(!Path::new(MACHINE_PAYLOAD).exists());
+        self.remove_machine_payload = true;
+        let notepad = PathBuf::from(std::env::var_os("WINDIR").unwrap())
+            .join("System32")
+            .join("notepad.exe");
+        std::fs::copy(notepad, MACHINE_PAYLOAD).unwrap();
+
+        let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
+        let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
+        let running = unsafe { task.Run(&VARIANT::default()) }.unwrap();
+        for _ in 0..50 {
+            if unsafe { running.State() }.unwrap() == TASK_STATE_RUNNING {
+                return running;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        panic!("the controlled task did not start");
+    }
 }
 
 impl Drop for SchedulerFixture {
     fn drop(&mut self) {
         if self.owns_task {
             if let Ok(folder) = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) } {
+                if let Ok(task) = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) } {
+                    let _ = unsafe { task.Stop(0) };
+                }
                 let _ = unsafe { folder.DeleteTask(&BSTR::from(self.task_name.as_str()), 0) };
             }
+        }
+        if self.remove_machine_payload {
+            let _ = std::fs::remove_file(MACHINE_PAYLOAD);
+        }
+        if self.remove_machine_root {
+            let _ = std::fs::remove_dir(MACHINE_ROOT);
+        }
+        if self.remove_test_root {
+            let _ = std::fs::remove_dir(TEST_ROOT);
         }
         if self.remove_folder {
             if let Ok(root) = unsafe { self.service.GetFolder(&BSTR::from(r"\")) } {
