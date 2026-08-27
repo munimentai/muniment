@@ -257,7 +257,8 @@ describe('installed nightly', () => {
         })
         await activateHosted(signInBrowser, hostedApprove)
       }
-      await signInBrowser.waitUntil(async () => await signInCompleted(signInBrowser), {
+      const completionDriver = process.platform === 'linux' ? browser : signInBrowser
+      await completionDriver.waitUntil(async () => await signInCompleted(signInBrowser), {
         timeout: 120000,
         timeoutMsg: 'production sign-in did not return to the desktop callback',
       })
