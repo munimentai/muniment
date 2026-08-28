@@ -1105,8 +1105,11 @@ The listener acquires the existing profile instance lock before it creates the
 pipe. That lock remains the final authority against a second listener. The
 listener uses a protected DACL that grants access to the creating user's exact
 SID alone. It creates a byte-mode pipe with `PIPE_REJECT_REMOTE_CLIENTS` and
-claims the first pipe instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`. It reads
-back the owner and DACL before it publishes the endpoint.
+claims the first pipe instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`. Every
+instance uses `PIPE_UNLIMITED_INSTANCES` as the instance count. After each
+connection, the listener creates an unconnected instance without
+`FILE_FLAG_FIRST_PIPE_INSTANCE` before it returns the connected stream. It
+reads back the owner and DACL of every instance before it uses that instance.
 
 ### Peer admission
 
