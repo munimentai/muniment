@@ -208,9 +208,7 @@ pub(crate) struct WindowsAttachEndpointAdapter;
 #[cfg(target_os = "windows")]
 impl AttachEndpointAdapter for WindowsAttachEndpointAdapter {
     fn endpoint_exists(&self) -> Result<bool, ()> {
-        use muniment_core::attach::{
-            connect_windows_attach_endpoint, WindowsAttachConnectError,
-        };
+        use muniment_core::attach::{connect_windows_attach_endpoint, WindowsAttachConnectError};
         use std::time::Instant;
 
         match connect_windows_attach_endpoint(Instant::now() + ATTACH_ENDPOINT_CHECK_WAIT) {
