@@ -49,7 +49,8 @@ requests converge through the service manager and the existing per-profile
 instance lock. The process that cannot acquire the lock does not open an
 endpoint, journal, or Pi process; it exits successfully only after confirming
 the lock owner is healthy. There is no fallback that spawns a private Pi or a
-second journal.
+second journal. On Windows, a held attach instance lock records an
+`instance_lock_wait` diagnostic and exits with status 0.
 
 Normal idle policy may stop an inactive service only when it has no attached
 surface, active or recoverable run, pending permission gate, Remote Control
