@@ -597,28 +597,41 @@ payload and both roots through the Shell known folders. On Windows
 accepts a connection and no surface calls `Run`, so the ADR 0012 attach
 admission gate still holds.
 
-NEXT — the Windows accept loop composes now, and it needs two halves. The
-listener must bind under the per-profile instance lock.
-`acquire_windows_attach_instance_lock`
-(`src-tauri/core/src/attach/windows_instance_lock.rs:47`) already takes that
-lock, and `WindowsAttachListener::bind`
-(`src-tauri/core/src/attach/windows_listener.rs:95`) does not call it. The loop
-must then join `accept` (`:121`) with `serve_windows_attach_session`
-(`src-tauri/core/src/attach/windows_session.rs:66`). Its shape is
-`serve_next_macos_attach` (`src-tauri/core/src/attach/macos_listener.rs:128`),
-and its session deadline matches `HELLO_TIMEOUT`
-(`src-tauri/core/src/attach/linux.rs:84`). The installer band runs beside those
-halves. Its next slice gives `ensure_live_task_registration` its first caller in
-the Windows desktop, under the per-user install lock
-(`src-tauri/runtime/src/install_lock.rs:35`). That caller registers the task and
-calls no `Run`, so the admission gate holds. The runtime band's next slice gives
-`write_windows_diagnostic`
-(`src-tauri/runtime/src/windows_activation.rs:149`) its first Windows caller.
-The removal write half sits in Needs Human, so the lane files the read and
-planning halves alone for it. The runtime dependency boundary bars a third
-direct package, so a runtime half composes from `muniment-core` and the standard
-library alone (`test/runtime-dependency-boundary.sh`). The Windows preflight on
-CI runs every Windows-only test target, including
+DONE 2026-08-28 — the accept-and-serve join, the desktop registration caller,
+and the first Windows diagnostic caller landed (MUNIDESK-1514, 1515, and 1516).
+`serve_next_windows_attach` (`src-tauri/core/src/attach/windows_listener.rs:95`)
+accepts one connection within its deadline. It then serves the Welcome session
+on a worker thread under a five-second session deadline.
+`register_runtime_task_at_startup`
+(`src-tauri/src/windows_runtime_service.rs:76`) runs in the Tauri setup hook
+(`src-tauri/src/main.rs:55`). It calls `ensure_live_task_registration` under the
+per-user install lock. `record_windows_diagnostic`
+(`src-tauri/runtime/src/main.rs:153`) records the invalid-arguments exit through
+`write_windows_diagnostic`. No listener binds under the instance lock and no
+surface calls `Run`, so the ADR 0012 attach admission gate still holds.
+
+DONE 2026-08-28 — the locked bind, registration diagnostics, and Windows
+runtime start record landed (MUNIDESK-1518, 1519, and 1520).
+`WindowsAttachListener::bind`
+(`src-tauri/core/src/attach/windows_listener.rs:147`) acquires the per-profile
+instance lock before it creates the first pipe instance. The listener holds the
+lock for its lifetime, so the ADR 0012 attach admission gate is open.
+`register_runtime_task` (`src-tauri/src/windows_runtime_service.rs:62`) records
+both unavailable and timed-out install locks as
+`event=install_lock_unavailable message=install lock unavailable`. It records
+`NoInstalledPayload`, refused, and failed outcomes as
+`event=runtime_task_registration_failed message=runtime task registration failed`.
+Registered, updated, and unchanged outcomes write nothing. Windows `main`
+(`src-tauri/runtime/src/main.rs:74`) now calls `run_recorded_windows_activation`,
+which records each start and exit. It stops the restart loop at the failure
+threshold.
+
+NEXT — the installer band plans removal from the enumerated registrations.
+`list_observed_registrations`
+(`src-tauri/core/src/windows_task_service.rs:357`) and `plan_task_removal`
+(`src-tauri/core/src/windows_task.rs:668`) still have no composition. The removal
+write half sits in Needs Human, so the lane files the read and planning halves
+alone. The Windows preflight on CI runs every Windows-only test target, including
 `browser_control_windows_identity` (`.github/workflows/ci.yml:345`).
 `test/smoke.sh` guards the target list against every Windows-only test target.
 
@@ -647,9 +660,9 @@ roots can differ and the runtime can open a journal the desktop never reads. The
 runtime therefore reads `FOLDERID_RoamingAppData` for its state root, and it
 resolves its diagnostic root from `FOLDERID_LocalAppData` the same way.
 `windows_log_directory` (`src-tauri/runtime/src/directories.rs:118`) now
-resolves that diagnostic root, and `write_windows_diagnostic`
-(`src-tauri/runtime/src/windows_activation.rs:149`) still has no caller on
-Windows.
+resolves that diagnostic root, and `record_windows_diagnostic`
+(`src-tauri/runtime/src/main.rs`) calls `write_windows_diagnostic` for an
+invalid-arguments exit.
 
 DECIDED 2026-08-27 (planner, read `WindowsAttachListener::bind` beside the macOS
 accept loop) — the Windows attach pipe carries more than one instance. `bind`
