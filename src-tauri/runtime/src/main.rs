@@ -48,7 +48,35 @@ fn main() {
     }
 
     #[cfg(target_os = "windows")]
-    return;
+    {
+        use muniment_runtime::{
+            profile_directory, run_recorded_windows_activation, windows_local_app_data,
+            WindowsActivationExit,
+        };
+
+        let state_directory = match profile_directory() {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("muniment-runtime: {error}");
+                record_windows_diagnostic(
+                    muniment_runtime::WindowsDiagnosticEvent::StartRecordFailed,
+                );
+                std::process::exit(FAILURE_EXIT_STATUS);
+            }
+        };
+        let local_app_data = match windows_local_app_data() {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("muniment-runtime: {error}");
+                std::process::exit(FAILURE_EXIT_STATUS);
+            }
+        };
+        std::process::exit(run_recorded_windows_activation(
+            state_directory,
+            local_app_data,
+            || WindowsActivationExit::Orderly(SUCCESS_EXIT_STATUS),
+        ));
+    }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(exit) = test_macos_activation_exit() {
