@@ -159,6 +159,8 @@ pub enum WindowsDiagnosticEvent {
     ActivationFailed,
     ArgumentsInvalid,
     InstanceLockWait,
+    InstallLockUnavailable,
+    RuntimeTaskRegistrationFailed,
     StartRecordFailed,
     RestartLoopStopped,
 }
@@ -174,6 +176,12 @@ impl WindowsDiagnosticEvent {
             }
             Self::InstanceLockWait => {
                 b"event=instance_lock_wait message=runtime instance lock is held\n"
+            }
+            Self::InstallLockUnavailable => {
+                b"event=install_lock_unavailable message=install lock unavailable\n"
+            }
+            Self::RuntimeTaskRegistrationFailed => {
+                b"event=runtime_task_registration_failed message=runtime task registration failed\n"
             }
             Self::StartRecordFailed => {
                 b"event=start_record_failed message=start record update failed\n"
