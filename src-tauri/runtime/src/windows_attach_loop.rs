@@ -3,6 +3,14 @@
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "windows")]
+use muniment_core::attach::{
+    serve_next_windows_attach, WindowsAttachAcceptError, WindowsAttachBindError,
+    WindowsAttachListener,
+};
+#[cfg(target_os = "windows")]
+use std::path::Path;
+
 const ACCEPT_TIMEOUT: Duration = Duration::from_millis(100);
 const FAILED_ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(50);
 
@@ -19,6 +27,47 @@ pub trait WindowsAttachAcceptBoundary {
     fn serve_next(&mut self, accept_deadline: Instant) -> WindowsAttachAcceptOutcome;
 }
 
+/// A bound Windows attach acceptor.
+#[cfg(target_os = "windows")]
+pub struct WindowsAttachAcceptor {
+    listener: WindowsAttachListener,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsAttachAcceptor {
+    /// Binds the current user's attach pipe within the supplied wait.
+    pub fn bind(
+        state_directory: impl AsRef<Path>,
+        bounded_wait: Duration,
+    ) -> Result<Self, WindowsAttachBindError> {
+        Ok(Self {
+            listener: WindowsAttachListener::bind(state_directory, bounded_wait)?,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsAttachAcceptBoundary for WindowsAttachAcceptor {
+    fn serve_next(&mut self, accept_deadline: Instant) -> WindowsAttachAcceptOutcome {
+        windows_attach_accept_outcome(serve_next_windows_attach(
+            &mut self.listener,
+            env!("CARGO_PKG_VERSION"),
+            accept_deadline,
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_attach_accept_outcome(
+    result: Result<(), WindowsAttachAcceptError>,
+) -> WindowsAttachAcceptOutcome {
+    match result {
+        Ok(()) => WindowsAttachAcceptOutcome::Served,
+        Err(WindowsAttachAcceptError::DeadlineExpired) => WindowsAttachAcceptOutcome::Idle,
+        Err(_) => WindowsAttachAcceptOutcome::Failed,
+    }
+}
+
 /// Serves Windows attach sessions until the stop channel fires or disconnects.
 pub fn run_windows_attach_accept_loop(
     acceptor: &mut impl WindowsAttachAcceptBoundary,
@@ -33,6 +82,36 @@ pub fn run_windows_attach_accept_loop(
         let outcome = acceptor.serve_next(Instant::now() + ACCEPT_TIMEOUT);
         if outcome == WindowsAttachAcceptOutcome::Failed {
             std::thread::sleep(FAILED_ACCEPT_RETRY_DELAY);
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_each_accept_result() {
+        assert_eq!(
+            windows_attach_accept_outcome(Ok(())),
+            WindowsAttachAcceptOutcome::Served
+        );
+        assert_eq!(
+            windows_attach_accept_outcome(Err(WindowsAttachAcceptError::DeadlineExpired)),
+            WindowsAttachAcceptOutcome::Idle
+        );
+        for error in [
+            WindowsAttachAcceptError::CreateEvent(1),
+            WindowsAttachAcceptError::CreateInstance(1),
+            WindowsAttachAcceptError::VerifyInstanceSecurity,
+            WindowsAttachAcceptError::Connect(1),
+            WindowsAttachAcceptError::Wait(1),
+            WindowsAttachAcceptError::Cancel(1),
+        ] {
+            assert_eq!(
+                windows_attach_accept_outcome(Err(error)),
+                WindowsAttachAcceptOutcome::Failed
+            );
         }
     }
 }
