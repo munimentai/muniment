@@ -41,6 +41,8 @@ fn main() {
             eprintln!("muniment-runtime: {error}");
             #[cfg(target_os = "macos")]
             record_macos_diagnostic(muniment_runtime::MacosDiagnosticEvent::ArgumentsInvalid);
+            #[cfg(target_os = "windows")]
+            record_windows_diagnostic(muniment_runtime::WindowsDiagnosticEvent::ArgumentsInvalid);
             std::process::exit(1);
         }
     }
@@ -145,6 +147,13 @@ fn record_macos_diagnostic(event: muniment_runtime::MacosDiagnosticEvent) {
         let _ = muniment_runtime::write_macos_diagnostic(directory, event);
     } else {
         muniment_runtime::emit_macos_unified_log(event);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn record_windows_diagnostic(event: muniment_runtime::WindowsDiagnosticEvent) {
+    if let Ok(local_app_data) = muniment_runtime::windows_local_app_data() {
+        let _ = muniment_runtime::write_windows_diagnostic(local_app_data, event);
     }
 }
 
