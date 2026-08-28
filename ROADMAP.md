@@ -660,9 +660,9 @@ roots can differ and the runtime can open a journal the desktop never reads. The
 runtime therefore reads `FOLDERID_RoamingAppData` for its state root, and it
 resolves its diagnostic root from `FOLDERID_LocalAppData` the same way.
 `windows_log_directory` (`src-tauri/runtime/src/directories.rs:118`) now
-resolves that diagnostic root, and `write_windows_diagnostic`
-(`src-tauri/runtime/src/windows_activation.rs:149`) still has no caller on
-Windows.
+resolves that diagnostic root, and `record_windows_diagnostic`
+(`src-tauri/runtime/src/main.rs`) calls `write_windows_diagnostic` for an
+invalid-arguments exit.
 
 DECIDED 2026-08-27 (planner, read `WindowsAttachListener::bind` beside the macOS
 accept loop) — the Windows attach pipe carries more than one instance. `bind`
