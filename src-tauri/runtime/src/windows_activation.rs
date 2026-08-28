@@ -161,6 +161,7 @@ pub enum WindowsDiagnosticEvent {
     InstanceLockWait,
     InstallLockUnavailable,
     RuntimeTaskRegistrationFailed,
+    RuntimeTaskStartFailed,
     StartRecordFailed,
     RestartLoopStopped,
 }
@@ -182,6 +183,9 @@ impl WindowsDiagnosticEvent {
             }
             Self::RuntimeTaskRegistrationFailed => {
                 b"event=runtime_task_registration_failed message=runtime task registration failed\n"
+            }
+            Self::RuntimeTaskStartFailed => {
+                b"event=runtime_task_start_failed message=runtime task start failed\n"
             }
             Self::StartRecordFailed => {
                 b"event=start_record_failed message=start record update failed\n"

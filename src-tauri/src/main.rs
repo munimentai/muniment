@@ -52,7 +52,10 @@ fn main() {
             }
             let app_data = app.path().app_data_dir()?;
             #[cfg(target_os = "windows")]
-            windows_runtime_service::register_runtime_task_at_startup(&app_data);
+            {
+                windows_runtime_service::register_runtime_task_at_startup(&app_data);
+                windows_runtime_service::start_runtime_task_at_startup(&app_data);
+            }
             let app_config = app.path().app_config_dir()?;
             let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
                 app_config,
