@@ -69,8 +69,9 @@ pub fn windows_state_directory_from_app_data(
 
 #[cfg(target_os = "windows")]
 fn windows_state_directory() -> Result<PathBuf, DirectoryUnavailableError> {
-    let app_data = std::env::var_os("APPDATA").ok_or(DirectoryUnavailableError)?;
-    windows_state_directory_from_app_data(Path::new(&app_data))
+    let app_data = muniment_core::windows_known_folders::windows_roaming_app_data()
+        .map_err(|_| DirectoryUnavailableError)?;
+    windows_state_directory_from_app_data(&app_data)
 }
 
 #[cfg(target_os = "windows")]
@@ -113,10 +114,33 @@ pub fn windows_log_directory_from_local_app_data(
     Ok(local_app_data.join("muniment/logs"))
 }
 
+#[cfg(target_os = "windows")]
+pub fn windows_log_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    let local_app_data = muniment_core::windows_known_folders::windows_local_app_data()
+        .map_err(|_| DirectoryUnavailableError)?;
+    windows_log_directory_from_local_app_data(&local_app_data)
+}
+
 /// Resolves the effective user's home from the macOS user database.
 #[cfg(target_os = "macos")]
 pub fn effective_user_macos_log_directory() -> Result<PathBuf, DirectoryUnavailableError> {
     let home = muniment_core::user_diagnostics::effective_user_home()
         .map_err(|_| DirectoryUnavailableError)?;
     macos_log_directory_from_home(&home)
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn profile_directory_uses_the_roaming_known_folder() {
+        let roaming_app_data = muniment_core::windows_known_folders::windows_roaming_app_data()
+            .expect("roaming application data should resolve");
+
+        assert_eq!(
+            profile_directory(),
+            Ok(roaming_app_data.join(APPLICATION_IDENTIFIER))
+        );
+    }
 }

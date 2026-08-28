@@ -39,6 +39,8 @@ pub use attach_service::compose_attach_service;
 pub use attach_state::RuntimeAttachState;
 #[cfg(target_os = "macos")]
 pub use directories::effective_user_macos_log_directory;
+#[cfg(target_os = "windows")]
+pub use directories::windows_log_directory;
 pub use directories::{
     config_directory, installed_desktop_executable, installed_desktop_executable_from,
     macos_log_directory_from_home, profile_directory, resolve_directory,
