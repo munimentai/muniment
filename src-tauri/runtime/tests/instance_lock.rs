@@ -134,7 +134,7 @@ fn sigterm_releases_the_instance_lock_and_exits_successfully() {
         .output()
         .unwrap();
     assert!(signal.status.success());
-    let output = wait_for_exit(child, Duration::from_secs(10));
+    let output = wait_for_exit(child, Duration::from_secs(3));
     assert!(output.status.success());
 
     let second = runtime.exit_after_lock_command(2_000).output().unwrap();
