@@ -38,6 +38,8 @@ fn creates_the_managed_tree_and_writes_fixed_records() {
         WindowsDiagnosticEvent::ActivationFailed,
         WindowsDiagnosticEvent::ArgumentsInvalid,
         WindowsDiagnosticEvent::InstanceLockWait,
+        WindowsDiagnosticEvent::InstallLockUnavailable,
+        WindowsDiagnosticEvent::RuntimeTaskRegistrationFailed,
         WindowsDiagnosticEvent::StartRecordFailed,
         WindowsDiagnosticEvent::RestartLoopStopped,
     ] {
