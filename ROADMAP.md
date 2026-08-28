@@ -597,30 +597,65 @@ payload and both roots through the Shell known folders. On Windows
 accepts a connection and no surface calls `Run`, so the ADR 0012 attach
 admission gate still holds.
 
-NEXT — the Windows accept loop composes now, and it needs two halves. The
-listener must bind under the per-profile instance lock.
+DONE 2026-08-28 — the accept-and-serve join, the desktop registration caller,
+and the first Windows diagnostic caller landed (MUNIDESK-1514, 1515, and 1516).
+`serve_next_windows_attach` (`src-tauri/core/src/attach/windows_listener.rs:95`)
+accepts one connection within its deadline. It then serves the Welcome session
+on a worker thread under a five-second session deadline.
+`register_runtime_task_at_startup`
+(`src-tauri/src/windows_runtime_service.rs:76`) runs in the Tauri setup hook
+(`src-tauri/src/main.rs:55`). It calls `ensure_live_task_registration` under the
+per-user install lock. `record_windows_diagnostic`
+(`src-tauri/runtime/src/main.rs:153`) records the invalid-arguments exit through
+`write_windows_diagnostic`. No listener binds under the instance lock and no
+surface calls `Run`, so the ADR 0012 attach admission gate still holds.
+
+NEXT — one half of the Windows accept loop is left. `WindowsAttachListener::bind`
+(`src-tauri/core/src/attach/windows_listener.rs:111`) creates the first pipe
+instance without the per-profile instance lock.
 `acquire_windows_attach_instance_lock`
-(`src-tauri/core/src/attach/windows_instance_lock.rs:47`) already takes that
-lock, and `WindowsAttachListener::bind`
-(`src-tauri/core/src/attach/windows_listener.rs:95`) does not call it. The loop
-must then join `accept` (`:121`) with `serve_windows_attach_session`
-(`src-tauri/core/src/attach/windows_session.rs:66`). Its shape is
-`serve_next_macos_attach` (`src-tauri/core/src/attach/macos_listener.rs:128`),
-and its session deadline matches `HELLO_TIMEOUT`
-(`src-tauri/core/src/attach/linux.rs:84`). The installer band runs beside those
-halves. Its next slice gives `ensure_live_task_registration` its first caller in
-the Windows desktop, under the per-user install lock
-(`src-tauri/runtime/src/install_lock.rs:35`). That caller registers the task and
-calls no `Run`, so the admission gate holds. The runtime band's next slice gives
-`write_windows_diagnostic`
-(`src-tauri/runtime/src/windows_activation.rs:149`) its first Windows caller.
-The removal write half sits in Needs Human, so the lane files the read and
-planning halves alone for it. The runtime dependency boundary bars a third
-direct package, so a runtime half composes from `muniment-core` and the standard
-library alone (`test/runtime-dependency-boundary.sh`). The Windows preflight on
-CI runs every Windows-only test target, including
-`browser_control_windows_identity` (`.github/workflows/ci.yml:345`).
-`test/smoke.sh` guards the target list against every Windows-only test target.
+(`src-tauri/core/src/attach/windows_instance_lock.rs:47`) is the helper that
+takes that lock. ADR 0012 requires the lock before the listener creates the pipe
+(`docs/decisions/0012-user-level-runtime-service.md:1104`). Core cannot read
+`%APPDATA%`, so the caller injects the state directory. That bind is the last
+core half of the Windows attach peer identity implementation slice. The ADR 0012
+attach admission gate lifts when it lands. The runtime band's next slice wraps
+the Windows activation in a start record. Its shape is
+`run_recorded_macos_activation` (`src-tauri/runtime/src/main.rs:89`). The
+installer band's next slice plans removal from the enumerated registrations,
+because `list_observed_registrations`
+(`src-tauri/core/src/windows_task_service.rs:357`) and `plan_task_removal`
+(`src-tauri/core/src/windows_task.rs:668`) have no composition yet. The removal
+write half sits in Needs Human, so the lane files the read and planning halves
+alone for it. The runtime dependency boundary bars a third direct package, so a
+runtime half composes from `muniment-core` and the standard library alone
+(`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs every
+Windows-only test target, including `browser_control_windows_identity`
+(`.github/workflows/ci.yml:345`). `test/smoke.sh` guards the target list against
+every Windows-only test target.
+
+DECIDED 2026-08-28 (planner, read `register_runtime_task` beside the macOS
+activation records) — the Windows desktop records a failed task registration.
+`register_runtime_task_at_startup`
+(`src-tauri/src/windows_runtime_service.rs:76`) drops every outcome. A refused,
+failed, or lock-blocked registration therefore leaves no trace, and the runtime
+never starts at the next logon. The macOS twin writes three fixed records for
+the same class of failure (`src-tauri/src/macos_runtime_service.rs:8`). The
+Windows desktop therefore writes one fixed owner-only record per failing
+outcome through `write_windows_diagnostic`, below the `FOLDERID_LocalAppData`
+log root. A registered, updated, or unchanged outcome writes nothing, because
+the bounded diagnostic log carries failures alone.
+
+DECIDED 2026-08-28 (planner, read the Windows path in `main` beside
+`run_recorded_macos_activation`) — the Windows runtime records its starts before
+activation opens state. `record_windows_start`
+(`src-tauri/runtime/src/windows_activation.rs:51`) and its two exit recorders
+have no caller. The four-restart bound that ADR 0012 requires therefore cannot
+fire. `main` (`src-tauri/runtime/src/main.rs:48`) returns on Windows before it
+records anything. A start record is neither the instance lock, the journal, CAS,
+Pi, nor the attach endpoint, so recording one keeps the admission gate. The
+wrapper takes its state root, its log root, and its activation as arguments, so
+the Linux loop tests every branch through the `cfg(unix)` twin.
 
 DECIDED 2026-08-28 (planner, read the desktop manifest beside
 `macos_runtime_service`) — the Windows desktop takes the runtime crate as a
