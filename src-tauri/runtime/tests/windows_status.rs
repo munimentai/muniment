@@ -3,14 +3,15 @@
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
 use muniment_runtime::{
     clear_windows_crash_window, record_windows_failed_exit, record_windows_start,
-    write_windows_diagnostic, ClearWindowsCrashWindowError, WindowsDiagnosticEvent,
-    WindowsStartDecision, WINDOWS_RUNTIME_LOG_MAX_BYTES,
+    run_recorded_windows_activation, write_windows_diagnostic, ClearWindowsCrashWindowError,
+    WindowsActivationExit, WindowsDiagnosticEvent, WindowsStartDecision,
+    WINDOWS_RUNTIME_LOG_MAX_BYTES,
 };
 
 fn directory() -> PathBuf {
@@ -24,6 +25,160 @@ fn directory() -> PathBuf {
     fs::create_dir(&path).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
     path
+}
+
+#[test]
+fn an_orderly_windows_activation_removes_its_start() {
+    let root = directory();
+    let state = root.join("state");
+
+    assert_eq!(
+        run_recorded_windows_activation(&state, &root, || WindowsActivationExit::Orderly(75)),
+        75
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("windows-starts")).unwrap(),
+        ""
+    );
+    assert!(!root.join("muniment/logs/runtime.log").exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_failed_windows_activation_records_the_failure() {
+    let root = directory();
+    let state = root.join("state");
+
+    assert_eq!(
+        run_recorded_windows_activation(&state, &root, || WindowsActivationExit::Failed(23)),
+        23
+    );
+    assert!(fs::read_to_string(state.join("windows-starts"))
+        .unwrap()
+        .starts_with("failure="));
+    assert_eq!(
+        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        "event=activation_failed message=runtime activation failed\n"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn the_fifth_failed_windows_activation_stops_the_restart_loop() {
+    let root = directory();
+    let state = root.join("state");
+
+    for _ in 0..4 {
+        assert_eq!(
+            run_recorded_windows_activation(&state, &root, || WindowsActivationExit::Failed(1)),
+            1
+        );
+    }
+    assert_eq!(
+        run_recorded_windows_activation(&state, &root, || WindowsActivationExit::Failed(1)),
+        0
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("windows-starts")).unwrap(),
+        "needs_attention=true\n"
+    );
+    let log = fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap();
+    assert_eq!(log.matches("event=activation_failed").count(), 4);
+    assert_eq!(log.matches("event=restart_loop_stopped").count(), 1);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_stop_decision_skips_windows_activation() {
+    let root = directory();
+    let state = root.join("state");
+    for _ in 0..5 {
+        record_windows_start(&state).unwrap();
+    }
+    let activated = AtomicBool::new(false);
+
+    assert_eq!(
+        run_recorded_windows_activation(&state, &root, || {
+            activated.store(true, Ordering::Relaxed);
+            WindowsActivationExit::Orderly(0)
+        }),
+        0
+    );
+    assert!(!activated.load(Ordering::Relaxed));
+    assert_eq!(
+        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        "event=restart_loop_stopped message=runtime restart limit reached\n"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn an_orderly_windows_exit_record_failure_returns_failure() {
+    let root = directory();
+    let state = root.join("state");
+
+    assert_eq!(
+        run_recorded_windows_activation(&state, &root, || {
+            fs::remove_file(state.join("windows-starts")).unwrap();
+            fs::create_dir(state.join("windows-starts")).unwrap();
+            WindowsActivationExit::Orderly(0)
+        }),
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        "event=start_record_failed message=start record update failed\n"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_failed_windows_exit_record_failure_returns_failure() {
+    let root = directory();
+    let state = root.join("state");
+
+    assert_eq!(
+        run_recorded_windows_activation(&state, &root, || {
+            fs::remove_file(state.join("windows-starts")).unwrap();
+            fs::create_dir(state.join("windows-starts")).unwrap();
+            WindowsActivationExit::Failed(23)
+        }),
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        "event=start_record_failed message=start record update failed\n"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_windows_start_record_failure_returns_failure() {
+    let root = directory();
+    let state = root.join("state");
+    fs::write(&state, []).unwrap();
+    let activated = AtomicBool::new(false);
+
+    assert_eq!(
+        run_recorded_windows_activation(&state, &root, || {
+            activated.store(true, Ordering::Relaxed);
+            WindowsActivationExit::Orderly(0)
+        }),
+        1
+    );
+    assert!(!activated.load(Ordering::Relaxed));
+    assert_eq!(
+        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        "event=start_record_failed message=start record update failed\n"
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -114,6 +269,8 @@ fn creates_owner_only_windows_logs_with_fixed_records() {
         WindowsDiagnosticEvent::ActivationFailed,
         WindowsDiagnosticEvent::ArgumentsInvalid,
         WindowsDiagnosticEvent::InstanceLockWait,
+        WindowsDiagnosticEvent::InstallLockUnavailable,
+        WindowsDiagnosticEvent::RuntimeTaskRegistrationFailed,
         WindowsDiagnosticEvent::StartRecordFailed,
         WindowsDiagnosticEvent::RestartLoopStopped,
     ] {
@@ -135,6 +292,8 @@ fn creates_owner_only_windows_logs_with_fixed_records() {
             "event=activation_failed message=runtime activation failed\n",
             "event=arguments_invalid message=runtime arguments invalid\n",
             "event=instance_lock_wait message=runtime instance lock is held\n",
+            "event=install_lock_unavailable message=install lock unavailable\n",
+            "event=runtime_task_registration_failed message=runtime task registration failed\n",
             "event=start_record_failed message=start record update failed\n",
             "event=restart_loop_stopped message=runtime restart limit reached\n"
         )

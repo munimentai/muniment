@@ -49,18 +49,35 @@ trait RuntimeTaskAdapter {
     fn ensure_registration(&self) -> Result<RegistrationResult, RegistrationError>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiagnosticEvent {
+    InstallLockUnavailable,
+    RuntimeTaskRegistrationFailed,
+}
+
+trait DiagnosticSink {
+    fn write(&self, event: DiagnosticEvent);
+}
+
 fn register_runtime_task(
     state_directory: &Path,
     lock_adapter: &impl InstallLockAdapter,
     task_adapter: &impl RuntimeTaskAdapter,
+    diagnostic_sink: &impl DiagnosticSink,
 ) -> RuntimeTaskRegistrationOutcome {
     let _guard = match lock_adapter.acquire(state_directory, INSTALL_LOCK_WAIT) {
         Ok(guard) => guard,
-        Err(LockError::Unavailable) => return RuntimeTaskRegistrationOutcome::LockUnavailable,
-        Err(LockError::TimedOut) => return RuntimeTaskRegistrationOutcome::LockTimedOut,
+        Err(LockError::Unavailable) => {
+            diagnostic_sink.write(DiagnosticEvent::InstallLockUnavailable);
+            return RuntimeTaskRegistrationOutcome::LockUnavailable;
+        }
+        Err(LockError::TimedOut) => {
+            diagnostic_sink.write(DiagnosticEvent::InstallLockUnavailable);
+            return RuntimeTaskRegistrationOutcome::LockTimedOut;
+        }
     };
 
-    match task_adapter.ensure_registration() {
+    let outcome = match task_adapter.ensure_registration() {
         Ok(RegistrationResult::Registered) => RuntimeTaskRegistrationOutcome::Registered,
         Ok(RegistrationResult::Updated) => RuntimeTaskRegistrationOutcome::Updated,
         Ok(RegistrationResult::Unchanged) => RuntimeTaskRegistrationOutcome::Unchanged,
@@ -69,7 +86,16 @@ fn register_runtime_task(
         }
         Err(RegistrationError::Refused) => RuntimeTaskRegistrationOutcome::Refused,
         Err(RegistrationError::Failed) => RuntimeTaskRegistrationOutcome::Failed,
+    };
+    if matches!(
+        outcome,
+        RuntimeTaskRegistrationOutcome::NoInstalledPayload
+            | RuntimeTaskRegistrationOutcome::Refused
+            | RuntimeTaskRegistrationOutcome::Failed
+    ) {
+        diagnostic_sink.write(DiagnosticEvent::RuntimeTaskRegistrationFailed);
     }
+    outcome
 }
 
 #[cfg(target_os = "windows")]
@@ -78,7 +104,28 @@ pub(crate) fn register_runtime_task_at_startup(state_directory: &Path) {
         state_directory,
         &WindowsInstallLockAdapter,
         &WindowsRuntimeTaskAdapter,
+        &WindowsDiagnosticSink,
     );
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsDiagnosticSink;
+
+#[cfg(target_os = "windows")]
+impl DiagnosticSink for WindowsDiagnosticSink {
+    fn write(&self, event: DiagnosticEvent) {
+        let event = match event {
+            DiagnosticEvent::InstallLockUnavailable => {
+                muniment_runtime::WindowsDiagnosticEvent::InstallLockUnavailable
+            }
+            DiagnosticEvent::RuntimeTaskRegistrationFailed => {
+                muniment_runtime::WindowsDiagnosticEvent::RuntimeTaskRegistrationFailed
+            }
+        };
+        if let Ok(local_app_data) = muniment_runtime::windows_local_app_data() {
+            let _ = muniment_runtime::write_windows_diagnostic(local_app_data, event);
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -138,7 +185,7 @@ impl RuntimeTaskAdapter for WindowsRuntimeTaskAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     struct FakeGuard {
@@ -225,6 +272,17 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeDiagnosticSink {
+        events: RefCell<Vec<DiagnosticEvent>>,
+    }
+
+    impl DiagnosticSink for FakeDiagnosticSink {
+        fn write(&self, event: DiagnosticEvent) {
+            self.events.borrow_mut().push(event);
+        }
+    }
+
     #[test]
     fn maps_each_registration_result_while_holding_the_lock() {
         for (result, expected) in [
@@ -255,33 +313,54 @@ mod tests {
         ] {
             let lock = FakeLockAdapter::new(Ok(()));
             let task = FakeTaskAdapter::with_lock(result, Rc::clone(&lock.held));
+            let diagnostics = FakeDiagnosticSink::default();
 
             assert_eq!(
-                register_runtime_task(Path::new("state"), &lock, &task),
+                register_runtime_task(Path::new("state"), &lock, &task, &diagnostics),
                 expected
             );
             assert_eq!(lock.calls.get(), 1);
             assert_eq!(lock.wait.get(), Some(INSTALL_LOCK_WAIT));
             assert_eq!(task.calls.get(), 1);
             assert!(!lock.held.get());
+            let expected_events = match expected {
+                RuntimeTaskRegistrationOutcome::NoInstalledPayload
+                | RuntimeTaskRegistrationOutcome::Refused
+                | RuntimeTaskRegistrationOutcome::Failed => {
+                    vec![DiagnosticEvent::RuntimeTaskRegistrationFailed]
+                }
+                _ => Vec::new(),
+            };
+            assert_eq!(*diagnostics.events.borrow(), expected_events);
         }
     }
 
     #[test]
     fn maps_lock_failures_without_attempting_registration() {
         for (error, expected) in [
-            (LockError::Unavailable, RuntimeTaskRegistrationOutcome::LockUnavailable),
-            (LockError::TimedOut, RuntimeTaskRegistrationOutcome::LockTimedOut),
+            (
+                LockError::Unavailable,
+                RuntimeTaskRegistrationOutcome::LockUnavailable,
+            ),
+            (
+                LockError::TimedOut,
+                RuntimeTaskRegistrationOutcome::LockTimedOut,
+            ),
         ] {
             let lock = FakeLockAdapter::new(Err(error));
             let task = FakeTaskAdapter::new(Ok(RegistrationResult::Registered));
+            let diagnostics = FakeDiagnosticSink::default();
 
             assert_eq!(
-                register_runtime_task(Path::new("state"), &lock, &task),
+                register_runtime_task(Path::new("state"), &lock, &task, &diagnostics),
                 expected
             );
             assert_eq!(lock.calls.get(), 1);
             assert_eq!(task.calls.get(), 0);
+            assert_eq!(
+                *diagnostics.events.borrow(),
+                vec![DiagnosticEvent::InstallLockUnavailable]
+            );
         }
     }
 }
