@@ -12,6 +12,12 @@ pub const WINDOWS_RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
 pub type WindowsStartDecision = StartDecision;
 pub type WindowsStart = Start;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowsActivationExit {
+    Orderly(i32),
+    Failed(i32),
+}
+
 #[derive(Debug)]
 pub enum ClearWindowsCrashWindowError {
     Lock(InstallLockAcquireError),
@@ -68,6 +74,76 @@ pub fn record_windows_failed_exit(
     start: WindowsStart,
 ) -> io::Result<WindowsStartDecision> {
     start_record::record_failed_exit(state_directory, RECORD_NAME, start)
+}
+
+/// Records a Windows activation and maps its outcome to a process exit status.
+#[cfg(any(unix, target_os = "windows"))]
+pub fn run_recorded_windows_activation(
+    state_directory: impl AsRef<Path>,
+    local_app_data: impl AsRef<Path>,
+    activate: impl FnOnce() -> WindowsActivationExit,
+) -> i32 {
+    const FAILURE_EXIT_STATUS: i32 = 1;
+    const SUCCESS_EXIT_STATUS: i32 = 0;
+
+    let state_directory = state_directory.as_ref();
+    let local_app_data = local_app_data.as_ref();
+    let start = match record_windows_start(state_directory) {
+        Ok((WindowsStartDecision::StopRestartLoop, _)) => {
+            let _ = write_windows_diagnostic(
+                local_app_data,
+                WindowsDiagnosticEvent::RestartLoopStopped,
+            );
+            return SUCCESS_EXIT_STATUS;
+        }
+        Ok((WindowsStartDecision::Run, start)) => start,
+        Err(error) => {
+            eprintln!("muniment-runtime: start record failed: {error}");
+            let _ =
+                write_windows_diagnostic(local_app_data, WindowsDiagnosticEvent::StartRecordFailed);
+            return FAILURE_EXIT_STATUS;
+        }
+    };
+
+    match activate() {
+        WindowsActivationExit::Orderly(status) => {
+            if let Err(error) = record_windows_orderly_exit(state_directory, start) {
+                eprintln!("muniment-runtime: start record failed: {error}");
+                let _ = write_windows_diagnostic(
+                    local_app_data,
+                    WindowsDiagnosticEvent::StartRecordFailed,
+                );
+                return FAILURE_EXIT_STATUS;
+            }
+            status
+        }
+        WindowsActivationExit::Failed(status) => {
+            match record_windows_failed_exit(state_directory, start) {
+                Ok(WindowsStartDecision::StopRestartLoop) => {
+                    let _ = write_windows_diagnostic(
+                        local_app_data,
+                        WindowsDiagnosticEvent::RestartLoopStopped,
+                    );
+                    SUCCESS_EXIT_STATUS
+                }
+                Ok(WindowsStartDecision::Run) => {
+                    let _ = write_windows_diagnostic(
+                        local_app_data,
+                        WindowsDiagnosticEvent::ActivationFailed,
+                    );
+                    status
+                }
+                Err(error) => {
+                    eprintln!("muniment-runtime: start record failed: {error}");
+                    let _ = write_windows_diagnostic(
+                        local_app_data,
+                        WindowsDiagnosticEvent::StartRecordFailed,
+                    );
+                    FAILURE_EXIT_STATUS
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
