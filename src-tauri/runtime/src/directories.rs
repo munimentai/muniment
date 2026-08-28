@@ -115,10 +115,14 @@ pub fn windows_log_directory_from_local_app_data(
 }
 
 #[cfg(target_os = "windows")]
+pub fn windows_local_app_data() -> Result<PathBuf, DirectoryUnavailableError> {
+    muniment_core::windows_known_folders::windows_local_app_data()
+        .map_err(|_| DirectoryUnavailableError)
+}
+
+#[cfg(target_os = "windows")]
 pub fn windows_log_directory() -> Result<PathBuf, DirectoryUnavailableError> {
-    let local_app_data = muniment_core::windows_known_folders::windows_local_app_data()
-        .map_err(|_| DirectoryUnavailableError)?;
-    windows_log_directory_from_local_app_data(&local_app_data)
+    windows_log_directory_from_local_app_data(&windows_local_app_data()?)
 }
 
 /// Resolves the effective user's home from the macOS user database.
@@ -141,6 +145,18 @@ mod windows_tests {
         assert_eq!(
             profile_directory(),
             Ok(roaming_app_data.join(APPLICATION_IDENTIFIER))
+        );
+    }
+
+    #[test]
+    fn log_directory_uses_the_local_application_data_root() {
+        let local_app_data = muniment_core::windows_known_folders::windows_local_app_data()
+            .expect("local application data should resolve");
+
+        assert_eq!(windows_local_app_data(), Ok(local_app_data.clone()));
+        assert_eq!(
+            windows_log_directory(),
+            Ok(local_app_data.join("muniment/logs"))
         );
     }
 }
