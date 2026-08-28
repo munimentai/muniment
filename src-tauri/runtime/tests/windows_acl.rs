@@ -52,6 +52,8 @@ fn creates_the_managed_tree_and_writes_fixed_records() {
             "event=activation_failed message=runtime activation failed\n",
             "event=arguments_invalid message=runtime arguments invalid\n",
             "event=instance_lock_wait message=runtime instance lock is held\n",
+            "event=install_lock_unavailable message=install lock unavailable\n",
+            "event=runtime_task_registration_failed message=runtime task registration failed\n",
             "event=start_record_failed message=start record update failed\n",
             "event=restart_loop_stopped message=runtime restart limit reached\n"
         )
