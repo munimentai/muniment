@@ -671,9 +671,13 @@ DECIDED 2026-08-28 (planner, read `resolve_live_windows_payload_scopes` beside
 `WindowsPayloadScopes::per_user_removal_scope` and `machine_removal_scope`
 (`src-tauri/core/src/windows_payload.rs:55`, `:70`) build the two `RemovalScope`
 values, and `resolve_live_windows_payload_scopes` (`:103`) reads both roots
-through the Shell known folders with no caller. Each uninstaller owns one scope
-and reads nothing about the other. The planner therefore exposes one entry per
-uninstaller, and each entry pairs every enumerated registration with its plan.
+through the Shell known folders with no caller. Each scope owns one installed
+payload and carries the other payload path. `per_user_removal_scope` carries
+`machine_payload_path`, while `machine_removal_scope` carries
+`per_user_payload_path`. `plan_task_removal` needs that other path to choose
+`RepointTo`. Without it, the plan is `StopAndDelete`. The planner therefore
+exposes one entry per uninstaller, and each entry pairs every enumerated
+registration with its plan.
 
 DECIDED 2026-08-28 (planner, read the attach client against
 `WindowsAttachStream`) — the Windows client handshake stays unfiled.
