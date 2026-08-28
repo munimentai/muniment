@@ -126,9 +126,15 @@ least privilege. Its action runs the signed payload directly, with no arguments
 or shell command. It uses either
 `%ProgramFiles%\muniment\muniment-runtime.exe` for the machine installation or
 `%LocalAppData%\muniment\muniment-runtime.exe` for the per-user installation.
-Windows activation exits before it opens the instance lock, journal, CAS, Pi,
-or attach endpoint. It publishes no attach peer identity. The runtime writes
-owner-only, redacted, bounded diagnostics to
+A Windows runtime start with invalid arguments exits before it opens the
+instance lock, journal, CAS, Pi, or attach endpoint. The served Windows attach
+endpoint is `\\.\pipe\Muniment\attach-v1-<user-hash>`. The listener holds the
+per-profile instance lock and reads back each pipe instance's owner and
+owner-only DACL.
+For each connection, it reads the four-byte length prefix, verifies the peer
+through impersonation, and then reads the frame body. This boundary rejects
+another OS user, but it does not distinguish hostile processes under the same
+account. The runtime writes owner-only, redacted, bounded diagnostics to
 `%LocalAppData%\muniment\logs\runtime.log`. These records omit tokens,
 credentials, prompts, model output, local paths, workspace values, connection
 nonces, and peer identifiers.
