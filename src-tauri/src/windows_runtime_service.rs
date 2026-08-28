@@ -244,13 +244,19 @@ impl RuntimeTaskStartAdapter for WindowsRuntimeTaskStartAdapter {
         &self,
         crash_window_adapter: &impl CrashWindowAdapter,
     ) -> Result<(), RuntimeTaskStartError> {
+        use muniment_core::windows_payload::resolve_live_windows_payload;
         use muniment_core::windows_sid::current_process_user_sid;
         use muniment_core::windows_task_service::{
             start_registered_task, StartRegisteredTaskError,
         };
 
         let sid = current_process_user_sid().map_err(|_| RuntimeTaskStartError::StartFailed)?;
-        match start_registered_task(sid.as_str(), || crash_window_adapter.clear()) {
+        let payload = resolve_live_windows_payload()
+            .map_err(|_| RuntimeTaskStartError::StartFailed)?
+            .ok_or(RuntimeTaskStartError::StartFailed)?;
+        match start_registered_task(sid.as_str(), payload.payload_path, || {
+            crash_window_adapter.clear()
+        }) {
             Ok(_) => Ok(()),
             Err(StartRegisteredTaskError::ClearCrashWindow(())) => {
                 Err(RuntimeTaskStartError::ClearFailed)
