@@ -101,10 +101,29 @@ trait RuntimeTaskAdapter {
 enum DiagnosticEvent {
     InstallLockUnavailable,
     RuntimeTaskRegistrationFailed,
+    RuntimeTaskStartFailed,
 }
 
 trait DiagnosticSink {
     fn write(&self, event: DiagnosticEvent);
+}
+
+fn start_runtime_task_with_diagnostic(
+    endpoint_adapter: &impl AttachEndpointAdapter,
+    crash_window_adapter: &impl CrashWindowAdapter,
+    task_adapter: &impl RuntimeTaskStartAdapter,
+    diagnostic_sink: &impl DiagnosticSink,
+) -> RuntimeTaskStartOutcome {
+    let outcome = start_runtime_task(endpoint_adapter, crash_window_adapter, task_adapter);
+    if matches!(
+        outcome,
+        RuntimeTaskStartOutcome::EndpointCheckFailed
+            | RuntimeTaskStartOutcome::ClearFailed
+            | RuntimeTaskStartOutcome::StartFailed
+    ) {
+        diagnostic_sink.write(DiagnosticEvent::RuntimeTaskStartFailed);
+    }
+    outcome
 }
 
 fn register_runtime_task(
@@ -147,6 +166,16 @@ fn register_runtime_task(
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) fn start_runtime_task_at_startup(state_directory: &Path) {
+    let _ = start_runtime_task_with_diagnostic(
+        &WindowsAttachEndpointAdapter,
+        &WindowsCrashWindowAdapter { state_directory },
+        &WindowsRuntimeTaskStartAdapter,
+        &WindowsDiagnosticSink,
+    );
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn register_runtime_task_at_startup(state_directory: &Path) {
     let _ = register_runtime_task(
         state_directory,
@@ -168,6 +197,9 @@ impl DiagnosticSink for WindowsDiagnosticSink {
             }
             DiagnosticEvent::RuntimeTaskRegistrationFailed => {
                 muniment_runtime::WindowsDiagnosticEvent::RuntimeTaskRegistrationFailed
+            }
+            DiagnosticEvent::RuntimeTaskStartFailed => {
+                muniment_runtime::WindowsDiagnosticEvent::RuntimeTaskStartFailed
             }
         };
         if let Ok(local_app_data) = muniment_runtime::windows_local_app_data() {
@@ -561,6 +593,52 @@ mod tests {
         assert_eq!(crash_window.calls.get(), 1);
         assert_eq!(task.run_calls.get(), 1);
         assert_eq!(*order.borrow(), vec!["endpoint", "clear", "start"]);
+    }
+
+    #[test]
+    fn writes_a_diagnostic_only_for_failed_start_outcomes() {
+        for (endpoint_result, clear_result, start_result, expected_outcome, expected_events) in [
+            (Ok(true), Ok(()), Ok(()), RuntimeTaskStartOutcome::EndpointPresent, vec![]),
+            (Ok(false), Ok(()), Ok(()), RuntimeTaskStartOutcome::Requested, vec![]),
+            (
+                Err(()),
+                Ok(()),
+                Ok(()),
+                RuntimeTaskStartOutcome::EndpointCheckFailed,
+                vec![DiagnosticEvent::RuntimeTaskStartFailed],
+            ),
+            (
+                Ok(false),
+                Err(()),
+                Ok(()),
+                RuntimeTaskStartOutcome::ClearFailed,
+                vec![DiagnosticEvent::RuntimeTaskStartFailed],
+            ),
+            (
+                Ok(false),
+                Ok(()),
+                Err(RuntimeTaskStartError::StartFailed),
+                RuntimeTaskStartOutcome::StartFailed,
+                vec![DiagnosticEvent::RuntimeTaskStartFailed],
+            ),
+        ] {
+            let order = Rc::new(RefCell::new(Vec::new()));
+            let endpoint = FakeEndpointAdapter::new(endpoint_result, Rc::clone(&order));
+            let crash_window = FakeCrashWindowAdapter::new(clear_result, Rc::clone(&order));
+            let task = FakeRuntimeTaskStartAdapter::new(start_result, order);
+            let diagnostics = FakeDiagnosticSink::default();
+
+            assert_eq!(
+                start_runtime_task_with_diagnostic(
+                    &endpoint,
+                    &crash_window,
+                    &task,
+                    &diagnostics,
+                ),
+                expected_outcome
+            );
+            assert_eq!(*diagnostics.events.borrow(), expected_events);
+        }
     }
 
     #[test]

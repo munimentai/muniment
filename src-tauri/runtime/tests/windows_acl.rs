@@ -40,6 +40,7 @@ fn creates_the_managed_tree_and_writes_fixed_records() {
         WindowsDiagnosticEvent::InstanceLockWait,
         WindowsDiagnosticEvent::InstallLockUnavailable,
         WindowsDiagnosticEvent::RuntimeTaskRegistrationFailed,
+        WindowsDiagnosticEvent::RuntimeTaskStartFailed,
         WindowsDiagnosticEvent::StartRecordFailed,
         WindowsDiagnosticEvent::RestartLoopStopped,
     ] {
@@ -54,6 +55,7 @@ fn creates_the_managed_tree_and_writes_fixed_records() {
             "event=instance_lock_wait message=runtime instance lock is held\n",
             "event=install_lock_unavailable message=install lock unavailable\n",
             "event=runtime_task_registration_failed message=runtime task registration failed\n",
+            "event=runtime_task_start_failed message=runtime task start failed\n",
             "event=start_record_failed message=start record update failed\n",
             "event=restart_loop_stopped message=runtime restart limit reached\n"
         )
