@@ -582,22 +582,57 @@ follows the read-order amendment. `resolve_live_windows_payload_scopes`
 connection and no surface calls `Run`, so the ADR 0012 attach admission gate
 still holds.
 
-NEXT — one slice remains before the Windows accept loop composes. The listener
-must serve more than one pipe instance. `bind`
-(`src-tauri/core/src/attach/windows_listener.rs:84`) still passes `nMaxInstances`
-as one, and `accept` (`:131`) takes the only handle, so the bound path resolves
-to nothing after it returns. The loop then binds under the instance lock and
-joins the accept and session halves. Its shape is `serve_next_macos_attach`
-(`src-tauri/core/src/attach/macos_listener.rs:128`). The installer band runs
-beside that slice. Both of its read slices landed, so its next slice resolves the
-live payload and both roots for `ensure_task_registration`
-(`src-tauri/core/src/windows_task_service.rs:384`). The removal write half sits
-in Needs Human, so the lane files nothing for it. The runtime dependency boundary
-bars a third direct package, so a runtime half composes from `muniment-core` and
-the standard library alone (`test/runtime-dependency-boundary.sh`). The Windows
-preflight on CI runs every Windows-only test target, including
+DONE 2026-08-28 — the multi-instance pipe, the live registration, and both
+known-folder runtime roots landed (MUNIDESK-1509, 1510, and 1511).
+`create_pipe_instance` (`src-tauri/core/src/attach/windows_listener.rs:232`)
+passes `PIPE_UNLIMITED_INSTANCES` and claims the first instance alone, and
+`accept` (`:121`) creates the next instance before it returns the connected
+stream, so the bound path never resolves to nothing.
+`ensure_live_task_registration`
+(`src-tauri/core/src/windows_task_service.rs:411`) resolves the installed
+payload and both roots through the Shell known folders. On Windows
+`profile_directory` and `config_directory`
+(`src-tauri/runtime/src/directories.rs:71`) read `FOLDERID_RoamingAppData`, and
+`windows_log_directory` (`:118`) reads `FOLDERID_LocalAppData`. No listener
+accepts a connection and no surface calls `Run`, so the ADR 0012 attach
+admission gate still holds.
+
+NEXT — the Windows accept loop composes now, and it needs two halves. The
+listener must bind under the per-profile instance lock.
+`acquire_windows_attach_instance_lock`
+(`src-tauri/core/src/attach/windows_instance_lock.rs:47`) already takes that
+lock, and `WindowsAttachListener::bind`
+(`src-tauri/core/src/attach/windows_listener.rs:95`) does not call it. The loop
+must then join `accept` (`:121`) with `serve_windows_attach_session`
+(`src-tauri/core/src/attach/windows_session.rs:66`). Its shape is
+`serve_next_macos_attach` (`src-tauri/core/src/attach/macos_listener.rs:128`),
+and its session deadline matches `HELLO_TIMEOUT`
+(`src-tauri/core/src/attach/linux.rs:84`). The installer band runs beside those
+halves. Its next slice gives `ensure_live_task_registration` its first caller in
+the Windows desktop, under the per-user install lock
+(`src-tauri/runtime/src/install_lock.rs:35`). That caller registers the task and
+calls no `Run`, so the admission gate holds. The runtime band's next slice gives
+`write_windows_diagnostic`
+(`src-tauri/runtime/src/windows_activation.rs:149`) its first Windows caller.
+The removal write half sits in Needs Human, so the lane files the read and
+planning halves alone for it. The runtime dependency boundary bars a third
+direct package, so a runtime half composes from `muniment-core` and the standard
+library alone (`test/runtime-dependency-boundary.sh`). The Windows preflight on
+CI runs every Windows-only test target, including
 `browser_control_windows_identity` (`.github/workflows/ci.yml:345`).
 `test/smoke.sh` guards the target list against every Windows-only test target.
+
+DECIDED 2026-08-28 (planner, read the desktop manifest beside
+`macos_runtime_service`) — the Windows desktop takes the runtime crate as a
+target dependency. `ensure_live_task_registration` requires its caller to hold
+the per-user install lock, and `install_lock::acquire`
+(`src-tauri/runtime/src/install_lock.rs:35`) is the one helper that takes it.
+`src-tauri/Cargo.toml` already lists `muniment-runtime` under the macOS target,
+because `macos_runtime_service` needs the same kind of seam. A second copy of
+the lock helper in the desktop tree would let the two paths disagree on the lock
+file name. The desktop therefore lists `muniment-runtime` under the Windows
+target as well. The runtime dependency boundary reads the runtime's own direct
+packages, so it stays green.
 
 DECIDED 2026-08-27 (planner, read `windows_state_directory` beside `dirs-sys`
 0.5.0) — the Windows runtime resolves its state root through the Shell known
@@ -610,9 +645,11 @@ Tauri reaches it through `dirs::data_dir`. `dirs-sys` 0.5.0 calls
 environment. A child process inherits `%APPDATA%` from its parent, so the two
 roots can differ and the runtime can open a journal the desktop never reads. The
 runtime therefore reads `FOLDERID_RoamingAppData` for its state root, and it
-resolves its diagnostic root from `FOLDERID_LocalAppData` the same way. That
-diagnostic root has no live resolver today, so `write_windows_diagnostic`
-(`src-tauri/runtime/src/windows_activation.rs:148`) has no caller on Windows.
+resolves its diagnostic root from `FOLDERID_LocalAppData` the same way.
+`windows_log_directory` (`src-tauri/runtime/src/directories.rs:118`) now
+resolves that diagnostic root, and `write_windows_diagnostic`
+(`src-tauri/runtime/src/windows_activation.rs:149`) still has no caller on
+Windows.
 
 DECIDED 2026-08-27 (planner, read `WindowsAttachListener::bind` beside the macOS
 accept loop) — the Windows attach pipe carries more than one instance. `bind`
