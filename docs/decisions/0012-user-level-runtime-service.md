@@ -1173,3 +1173,23 @@ The listener completes the peer check before it reads any frame body or writes
 any byte. A rejected peer closes the pipe handle without a protocol response.
 A prefix above `MAX_FRAME_LENGTH` also closes the pipe handle without a
 frame-body read, byte write, or protocol response.
+
+## Amendment – 2026-08-28: Windows attach admission gate lifted
+
+- Status: accepted
+
+The Windows attach admission gate from the 2026-08-21 Windows activation
+amendment is lifted. The two conditions that lifted it are the 2026-08-22
+**Windows attach peer identity** amendment and the 2026-08-24 **Windows attach
+peer check read order** amendment.
+
+Three checks now guard the endpoint. The listener takes the per-profile
+instance lock before it publishes the pipe path. After it creates each pipe
+instance, it reads back the owner and owner-only DACL. For each connection, it
+reads only the four-byte length prefix, runs the impersonation peer check, and
+then reads the frame body.
+
+A surface may now call `IRegisteredTask::Run` after it validates the task URI,
+principal, and action. A runtime start with invalid arguments still exits before
+it opens runtime state, including the instance lock, journal, CAS, Pi, or attach
+endpoint.
