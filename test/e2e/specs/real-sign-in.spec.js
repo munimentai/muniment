@@ -264,7 +264,9 @@ describe('installed nightly', () => {
       })
     } finally {
       try {
-        if (signInBrowser) await signInBrowser.deleteSession()
+        // WebKitWebDriver can hold Delete Session after the callback navigation.
+        // Stopping its process releases the session without blocking the test.
+        if (signInBrowser && process.platform !== 'linux') await signInBrowser.deleteSession()
       } catch (error) {
         console.error('Failed to delete hosted sign-in session.', error)
       } finally {
