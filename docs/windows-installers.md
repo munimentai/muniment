@@ -4,18 +4,30 @@ muniment ships two Windows installer formats. The NSIS executable is intended
 for an individual user. The per-machine MSI is intended for managed deployment
 with Microsoft Intune, Group Policy, or another software-management system.
 
+## Shipped runtime task behavior
+
+At each launch, the installed desktop registers
+`\Muniment\Runtime-{user-sid}` for the current user. This happens for both the
+per-user NSIS and per-machine MSI scopes. Registration runs under the per-user
+install lock and leaves a matching task unchanged.
+
+Neither installer registers the task yet. Neither uninstaller removes it yet.
+
+A started runtime exits at once and publishes no attach endpoint. It does not
+open the instance lock, journal, CAS, Pi, or attach endpoint. The runtime writes
+bounded diagnostics to `%LocalAppData%\muniment\logs\runtime.log`.
+
 ## Planned runtime task contract
 
-[ADR 0012](decisions/0012-user-level-runtime-service.md) defines the Windows
-runtime registration contract. Implementation has not activated this contract.
+[ADR 0012](decisions/0012-user-level-runtime-service.md) defines the planned
+Windows runtime contract. Each user gets one
+`\Muniment\Runtime-{user-sid}` Scheduled Task. It runs as that interactive user
+with least privilege. It starts at logon, and surfaces request an idempotent
+start through Task Scheduler.
 
-Each user gets one `\Muniment\Runtime-{user-sid}` Scheduled Task. It runs as
-that interactive user with least privilege. It starts at logon, and surfaces
-request an idempotent start through Task Scheduler.
-
-The NSIS installer registers the task for its current user. The MSI installs
-the machine payload, and the desktop registers each user at that user's first
-launch. The MSI never creates a `SYSTEM` runtime task.
+Under this plan, the NSIS installer registers the task for its current user.
+The MSI installs the machine payload. The desktop registers each MSI user at
+that user's first launch. The MSI never creates a `SYSTEM` runtime task.
 
 The task action follows the installer scope. NSIS resolves its action under
 `%LocalAppData%\muniment`. MSI resolves its action under
