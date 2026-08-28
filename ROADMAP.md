@@ -626,19 +626,58 @@ Registered, updated, and unchanged outcomes write nothing. Windows `main`
 which records each start and exit. It stops the restart loop at the failure
 threshold.
 
-NEXT — the Windows runtime serves its attach endpoint, and the installer band
-plans removal. Four slices carry that work. The first composes
-`list_observed_registrations`
+DONE 2026-08-28 — the lifted admission gate, the desktop start path, and the
+Windows install page landed (MUNIDESK-1521, 1523, and 1524). The ADR 0012
+**Windows attach admission gate lifted** amendment
+(`docs/decisions/0012-user-level-runtime-service.md:1177`) names the three checks
+that guard the endpoint, and it permits `IRegisteredTask::Run`.
+`THREAT_MODEL.md:130` records the served endpoint boundary. `start_runtime_task`
+(`src-tauri/src/windows_runtime_service.rs:38`) checks the attach endpoint,
+clears the crash window, and starts the registered task through
+`start_registered_task`. `docs/windows-installers.md` describes the runtime task
+as the shipped build behaves.
+
+NEXT — the Windows runtime serves its attach endpoint, the desktop starts the
+task, and the installer band plans removal. Four slices carry that work. The
+first composes `list_observed_registrations`
 (`src-tauri/core/src/windows_task_service.rs:357`) with `plan_task_removal`
 (`src-tauri/core/src/windows_task.rs:668`) for both live uninstaller scopes. The
-second adds a runtime accept loop that binds the listener once and serves until a
-stop arrives. The third records the lifted attach admission gate in ADR 0012. The
-fourth clears the crash window and calls `IRegisteredTask::Run` from the desktop.
-The removal write half sits in Needs Human, so the lane still files the read and
-planning halves alone. The Windows preflight on CI runs every Windows-only test
-target, including `browser_control_windows_identity`
+second adds a runtime accept loop that serves until a stop arrives, behind an
+injected accept boundary that Linux tests drive. The third calls
+`start_runtime_task` from the desktop startup hook and records its failing
+outcomes. The fourth takes the expected payload out of `std::env::current_exe`.
+`serve_next_windows_attach`
+(`src-tauri/core/src/attach/windows_listener.rs:95`) and `start_runtime_task`
+(`src-tauri/src/windows_runtime_service.rs:38`) each carry tests and no
+production caller today. The removal write half sits in Needs Human, so the lane
+still files the read and planning halves alone. The Windows preflight on CI runs
+every Windows-only test target, including `browser_control_windows_identity`
 (`.github/workflows/ci.yml:345`). `test/smoke.sh` guards the target list against
 every Windows-only test target.
+
+DECIDED 2026-08-28 (planner, read `start_registered_task` beside
+`ensure_live_task_registration`) — the task start takes its expected payload from
+the caller. `start_registered_task`
+(`src-tauri/core/src/windows_task_service.rs:259`) derives the expected payload
+from `std::env::current_exe`, and it then refuses any task whose action path
+differs. `ensure_live_task_registration` (`:411`) resolves the payload through
+`resolve_live_windows_payload`, which prefers the machine payload, and
+`plan_task_registration` (`src-tauri/core/src/windows_task.rs:631`) leaves a
+machine action in place while the desktop runs per-user. A per-user desktop
+beside a machine registration therefore derives a per-user path, reads a machine
+action, and refuses to start its own task. The two paths take one resolution
+rule. The start function accepts the expected payload as a parameter, and the
+desktop resolves it exactly as the registrar does.
+
+DECIDED 2026-08-28 (planner, read `windows_status.rs` beside the Windows-only
+test targets) — the Windows accept loop keeps its policy on the Linux test lane.
+`src-tauri/runtime/tests/windows_status.rs` opens with `#![cfg(unix)]`, so the
+Windows start-record policy runs on every Linux CI job, and the Windows
+preflight adds nothing for it. The accept loop takes the same shape. A trait
+names one bounded accept attempt, and the loop calls it between stop-channel
+polls. The Windows adapter that binds `WindowsAttachListener` and calls
+`serve_next_windows_attach` follows in a later slice, so no new Windows-only
+test target joins `.github/workflows/ci.yml` yet.
 
 DECIDED 2026-08-28 (planner, read the ADR 0012 admission gate against the landed
 listener) — the Windows attach admission gate is lifted. The gate paragraph
