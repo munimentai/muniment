@@ -41,7 +41,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > (2026-08-25) folded the passive-delivery and read-contract chains into two
 > entries, recorded the macOS cutover, and recorded the Windows activation
 > groundwork. The forty-sixth (2026-08-26) folded the twelve Windows slices
-> into two entries. It grows every wave, so it stays the next compaction target.
+> into two entries. The forty-seventh (2026-08-28) dropped eight settled Windows
+> rulings and folded three landed slices into one entry. It grows every wave, so
+> it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -637,61 +639,33 @@ clears the crash window, and starts the registered task through
 `start_registered_task`. `docs/windows-installers.md` describes the runtime task
 as the shipped build behaves.
 
-NEXT — the Windows runtime serves its attach endpoint, the desktop starts the
-task, and the installer band plans removal. Four slices carry that work. The
-first composes `list_observed_registrations`
-(`src-tauri/core/src/windows_task_service.rs:357`) with `plan_task_removal`
-(`src-tauri/core/src/windows_task.rs:668`) for both live uninstaller scopes. The
-second adds a runtime accept loop that serves until a stop arrives, behind an
-injected accept boundary that Linux tests drive. The third calls
-`start_runtime_task` from the desktop startup hook and records its failing
-outcomes. The fourth takes the expected payload out of `std::env::current_exe`.
-`serve_next_windows_attach`
-(`src-tauri/core/src/attach/windows_listener.rs:95`) and `start_runtime_task`
-(`src-tauri/src/windows_runtime_service.rs:38`) each carry tests and no
-production caller today. The removal write half sits in Needs Human, so the lane
-still files the read and planning halves alone. The Windows preflight on CI runs
-every Windows-only test target, including `browser_control_windows_identity`
-(`.github/workflows/ci.yml:345`). `test/smoke.sh` guards the target list against
-every Windows-only test target.
+DONE 2026-08-28 — the expected start payload, the runtime accept loop, and the
+desktop start caller landed (MUNIDESK-1526, 1527, and 1528).
+`start_registered_task` (`src-tauri/core/src/windows_task_service.rs:257`) takes
+the expected payload as a parameter, so the desktop and the registrar resolve it
+the same way. `run_windows_attach_accept_loop`
+(`src-tauri/runtime/src/windows_attach_loop.rs:23`) polls a `Receiver<()>`
+between bounded accept attempts, and it backs off after a failed attempt.
+`src-tauri/runtime/tests/windows_attach_loop.rs` drives that loop on Linux
+through the `WindowsAttachAcceptBoundary` trait. `start_runtime_task_at_startup`
+(`src-tauri/src/windows_runtime_service.rs:167`) runs in the Tauri setup hook
+(`src-tauri/src/main.rs:57`), and it records every failed start as
+`event=runtime_task_start_failed`.
 
-DECIDED 2026-08-28 (planner, read `start_registered_task` beside
-`ensure_live_task_registration`) — the task start takes its expected payload from
-the caller. `start_registered_task`
-(`src-tauri/core/src/windows_task_service.rs:259`) derives the expected payload
-from `std::env::current_exe`, and it then refuses any task whose action path
-differs. `ensure_live_task_registration` (`:411`) resolves the payload through
-`resolve_live_windows_payload`, which prefers the machine payload, and
-`plan_task_registration` (`src-tauri/core/src/windows_task.rs:631`) leaves a
-machine action in place while the desktop runs per-user. A per-user desktop
-beside a machine registration therefore derives a per-user path, reads a machine
-action, and refuses to start its own task. The two paths take one resolution
-rule. The start function accepts the expected payload as a parameter, and the
-desktop resolves it exactly as the registrar does.
-
-DECIDED 2026-08-28 (planner, read `windows_status.rs` beside the Windows-only
-test targets) — the Windows accept loop keeps its policy on the Linux test lane.
-`src-tauri/runtime/tests/windows_status.rs` opens with `#![cfg(unix)]`, so the
-Windows start-record policy runs on every Linux CI job, and the Windows
-preflight adds nothing for it. The accept loop takes the same shape. A trait
-names one bounded accept attempt, and the loop calls it between stop-channel
-polls. The Windows adapter that binds `WindowsAttachListener` and calls
-`serve_next_windows_attach` follows in a later slice, so no new Windows-only
-test target joins `.github/workflows/ci.yml` yet.
-
-DECIDED 2026-08-28 (planner, read the ADR 0012 admission gate against the landed
-listener) — the Windows attach admission gate is lifted. The gate paragraph
-(`docs/decisions/0012-user-level-runtime-service.md:1069`) bars a published pipe
-and an explicit `Run` until a peer-identity amendment lands. That amendment
-landed on 2026-08-22 (`:1087`), and the read-order amendment followed (`:1145`).
-`WindowsAttachListener::bind`
-(`src-tauri/core/src/attach/windows_listener.rs:147`) takes the per-profile
-instance lock, creates the protected pipe, and reads the owner and the DACL back.
-`serve_windows_attach_session_with_reader`
-(`src-tauri/core/src/attach/windows_session.rs:21`) verifies the peer before it
-reads a frame body. The gate holds nothing back now, and its text contradicts the
-next two slices. A new amendment therefore records the lifted gate, and
-`THREAT_MODEL.md` records the served endpoint boundary.
+NEXT — the Windows runtime serves its attach endpoint, and the installer band
+plans removal. Five slices carry that work. The first pairs every enumerated
+registration with `plan_task_removal` for both live uninstaller scopes. The
+second adds the Windows acceptor that binds `WindowsAttachListener` and calls
+`serve_next_windows_attach`. The third adds a bind-and-serve activation step that
+maps a bind failure to a failed exit. The fourth waits for the attach endpoint
+after the desktop requests a task start. The fifth moves the `muniment-attach`
+frame reads and writes out of `mod linux`. A later slice joins the acceptor, the
+activation step, and Windows `main`. Windows `main`
+(`src-tauri/runtime/src/main.rs:74`) still exits orderly without opening the
+endpoint. The removal write half sits in Needs Human, so the lane still files the
+read and planning halves alone. The Windows preflight on CI runs every
+Windows-only test target (`.github/workflows/ci.yml:345`), and `test/smoke.sh`
+guards that list.
 
 DECIDED 2026-08-28 (planner, read `run_recorded_windows_activation` beside the
 Linux termination-signal wait) — the Windows accept loop takes a stop channel
@@ -704,6 +678,28 @@ pending start once the five-minute failure window passes. A runtime that lives
 longer than that window leaves no counted failure behind. The loop therefore
 polls a `Receiver<()>` between bounded accepts. The `main` wiring and a shutdown
 handler follow in later slices.
+
+DECIDED 2026-08-28 (planner, read `windows_attach_loop.rs` beside
+`run_recorded_windows_activation`) — the Windows serve path lands in two halves
+before `main` joins them. `run_windows_attach_accept_loop` already takes a
+`WindowsAttachAcceptBoundary` and a stop channel. One half is the Windows
+acceptor that binds the listener and maps each `WindowsAttachAcceptError` to an
+outcome. `windows_listener` is `cfg(target_os = "windows")`, so no Linux test
+reaches that half. The other half is an activation step that takes an acceptor
+factory and returns a `WindowsActivationExit`. It carries the bind-failure
+policy, and a Linux test drives it with a fake factory. The two halves therefore
+ship as separate slices.
+
+DECIDED 2026-08-28 (planner, read `start_runtime_task` beside
+`wait_for_windows_attach_endpoint`) — the desktop waits for the endpoint after it
+requests a start. `start_runtime_task`
+(`src-tauri/src/windows_runtime_service.rs:38`) returns `Requested` as soon as
+`IRegisteredTask::Run` accepts the call. Task Scheduler starts the process
+asynchronously, so the endpoint stays absent for a while.
+`wait_for_windows_attach_endpoint`
+(`src-tauri/core/src/attach/windows_connect.rs:66`) retries an absent endpoint
+until its deadline, and it has no caller. The desktop start path therefore waits
+on it, and it records a timed-out wait as a failed start.
 
 DECIDED 2026-08-28 (planner, read `resolve_live_windows_payload_scopes` beside
 `plan_task_removal`) — the removal planner resolves both live scopes itself.
@@ -719,78 +715,15 @@ exposes one entry per uninstaller, and each entry pairs every enumerated
 registration with its plan.
 
 DECIDED 2026-08-28 (planner, read the attach client against
-`WindowsAttachStream`) — the Windows client handshake stays unfiled.
-`Client::connect` (`src-tauri/attach/src/client.rs:497`) is `cfg(unix)` and types
-every operation against `UnixStream`. A second handshake in `muniment-core` would
-let the two copies disagree on frame order. The client half therefore waits for a
-stream abstraction in `muniment-attach`, and the lane files no core-side client
-session.
-
-DECIDED 2026-08-28 (planner, read the desktop manifest beside
-`macos_runtime_service`) — the Windows desktop takes the runtime crate as a
-target dependency. `ensure_live_task_registration` requires its caller to hold
-the per-user install lock, and `install_lock::acquire`
-(`src-tauri/runtime/src/install_lock.rs:35`) is the one helper that takes it.
-`src-tauri/Cargo.toml` already lists `muniment-runtime` under the macOS target,
-because `macos_runtime_service` needs the same kind of seam. A second copy of
-the lock helper in the desktop tree would let the two paths disagree on the lock
-file name. The desktop therefore lists `muniment-runtime` under the Windows
-target as well. The runtime dependency boundary reads the runtime's own direct
-packages, so it stays green.
-
-DECIDED 2026-08-27 (planner, read `windows_state_directory` beside `dirs-sys`
-0.5.0) — the Windows runtime resolves its state root through the Shell known
-folders. `windows_state_directory` (`src-tauri/runtime/src/directories.rs:71`)
-reads `%APPDATA%` from the environment. The ADR 0012 Windows runtime state
-directory amendment (`docs/decisions/0012-user-level-runtime-service.md:1130`)
-requires that path to equal the directory the desktop opens through Tauri, and
-Tauri reaches it through `dirs::data_dir`. `dirs-sys` 0.5.0 calls
-`SHGetKnownFolderPath` with `FOLDERID_RoamingAppData` rather than the
-environment. A child process inherits `%APPDATA%` from its parent, so the two
-roots can differ and the runtime can open a journal the desktop never reads. The
-runtime therefore reads `FOLDERID_RoamingAppData` for its state root, and it
-resolves its diagnostic root from `FOLDERID_LocalAppData` the same way.
-`windows_log_directory` (`src-tauri/runtime/src/directories.rs:118`) now
-resolves that diagnostic root, and `record_windows_diagnostic`
-(`src-tauri/runtime/src/main.rs`) calls `write_windows_diagnostic` for an
-invalid-arguments exit.
-
-DECIDED 2026-08-27 (planner, read `WindowsAttachListener::bind` beside the macOS
-accept loop) — the Windows attach pipe carries more than one instance. `bind`
-(`src-tauri/core/src/attach/windows_listener.rs:41`) passes `nMaxInstances` as
-one, so a second client meets `ERROR_PIPE_BUSY` while the first connection
-lives. Closing the served handle and creating a replacement also leaves a window
-where the path resolves to nothing, and a client in that window reads
-`EndpointAbsent` rather than a busy endpoint. The Linux and macOS listeners each
-serve concurrent companions, so the Windows endpoint must too. The listener
-therefore passes `PIPE_UNLIMITED_INSTANCES`, claims the first instance with
-`FILE_FLAG_FIRST_PIPE_INSTANCE`, and creates each later instance without that
-flag. It reads back the owner and the DACL of every instance it creates. The
-accept loop creates the next instance before it serves the connected one.
-
-DECIDED 2026-08-27 (planner, read `ensure_task_registration` beside
-`resolve_windows_payload_scopes`) — the Windows registrar reads its payload
-roots from the Shell known folders. `ensure_task_registration`
-(`src-tauri/core/src/windows_task_service.rs:274`) takes a payload path and both
-payload roots, and nothing resolves those values on a live system.
-`resolve_windows_payload_scopes` (`src-tauri/core/src/windows_payload.rs:63`)
-takes both roots as arguments on purpose. A child process inherits
-`%ProgramFiles%` and `%LocalAppData%` from its parent, so an environment read
-lets a caller move the task action. `SHGetKnownFolderPath` with
-`FOLDERID_ProgramFiles` and `FOLDERID_LocalAppData` reads the shell registration
-instead. The resolver calls it, and the registration caller follows in a later
-slice.
-
-DECIDED 2026-08-27 (planner, read the ADR 0012 removal rules against the Needs
-Human item) — the removal read half is fileable while the write half waits. The
-elevated MSI uninstaller enumerates `\Muniment\Runtime-*` and acts only on a
-task whose URI, principal, and action match its own payload
-(`docs/decisions/0012-user-level-runtime-service.md:1059`).
-`read_observed_registration` (`src-tauri/core/src/windows_task_service.rs:236`)
-reads one named task alone, so no code lists the removal candidates. Enumeration
-is a read, and `plan_task_removal` (`src-tauri/core/src/windows_task.rs:668`)
-already consumes each observed registration. The repoint and delete calls stay
-unfiled.
+`WindowsAttachStream`) — the Windows client handshake waits for a
+platform-neutral frame reader. `mod linux` (`src-tauri/attach/src/client.rs:497`)
+is `cfg(unix)`, and it holds `read_exact_before`, `write_all_before`,
+`read_value`, and both approval readers. Every one of them types its stream as
+`UnixStream`. A second handshake in `muniment-core` would let the two copies
+disagree on frame order. The lane therefore moves those helpers into a
+platform-neutral module typed against a `ClientStream` trait, with one
+`UnixStream` implementation. The Windows transport and the client session follow
+in later slices.
 
 DECIDED 2026-08-26 (planner) — the Windows attach instance lock is
 `<state directory>\attach\instance.lock` below `%APPDATA%\ai.muniment.desktop`.
