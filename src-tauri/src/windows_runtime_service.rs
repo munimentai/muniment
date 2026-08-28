@@ -598,8 +598,20 @@ mod tests {
     #[test]
     fn writes_a_diagnostic_only_for_failed_start_outcomes() {
         for (endpoint_result, clear_result, start_result, expected_outcome, expected_events) in [
-            (Ok(true), Ok(()), Ok(()), RuntimeTaskStartOutcome::EndpointPresent, vec![]),
-            (Ok(false), Ok(()), Ok(()), RuntimeTaskStartOutcome::Requested, vec![]),
+            (
+                Ok(true),
+                Ok(()),
+                Ok(()),
+                RuntimeTaskStartOutcome::EndpointPresent,
+                vec![],
+            ),
+            (
+                Ok(false),
+                Ok(()),
+                Ok(()),
+                RuntimeTaskStartOutcome::Requested,
+                vec![],
+            ),
             (
                 Err(()),
                 Ok(()),
@@ -629,12 +641,7 @@ mod tests {
             let diagnostics = FakeDiagnosticSink::default();
 
             assert_eq!(
-                start_runtime_task_with_diagnostic(
-                    &endpoint,
-                    &crash_window,
-                    &task,
-                    &diagnostics,
-                ),
+                start_runtime_task_with_diagnostic(&endpoint, &crash_window, &task, &diagnostics,),
                 expected_outcome
             );
             assert_eq!(*diagnostics.events.borrow(), expected_events);
