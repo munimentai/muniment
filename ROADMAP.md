@@ -626,14 +626,66 @@ Registered, updated, and unchanged outcomes write nothing. Windows `main`
 which records each start and exit. It stops the restart loop at the failure
 threshold.
 
-NEXT — the installer band plans removal from the enumerated registrations.
+NEXT — the Windows runtime serves its attach endpoint, and the installer band
+plans removal. Four slices carry that work. The first composes
 `list_observed_registrations`
-(`src-tauri/core/src/windows_task_service.rs:357`) and `plan_task_removal`
-(`src-tauri/core/src/windows_task.rs:668`) still have no composition. The removal
-write half sits in Needs Human, so the lane files the read and planning halves
-alone. The Windows preflight on CI runs every Windows-only test target, including
-`browser_control_windows_identity` (`.github/workflows/ci.yml:345`).
-`test/smoke.sh` guards the target list against every Windows-only test target.
+(`src-tauri/core/src/windows_task_service.rs:357`) with `plan_task_removal`
+(`src-tauri/core/src/windows_task.rs:668`) for both live uninstaller scopes. The
+second adds a runtime accept loop that binds the listener once and serves until a
+stop arrives. The third records the lifted attach admission gate in ADR 0012. The
+fourth clears the crash window and calls `IRegisteredTask::Run` from the desktop.
+The removal write half sits in Needs Human, so the lane still files the read and
+planning halves alone. The Windows preflight on CI runs every Windows-only test
+target, including `browser_control_windows_identity`
+(`.github/workflows/ci.yml:345`). `test/smoke.sh` guards the target list against
+every Windows-only test target.
+
+DECIDED 2026-08-28 (planner, read the ADR 0012 admission gate against the landed
+listener) — the Windows attach admission gate is lifted. The gate paragraph
+(`docs/decisions/0012-user-level-runtime-service.md:1069`) bars a published pipe
+and an explicit `Run` until a peer-identity amendment lands. That amendment
+landed on 2026-08-22 (`:1087`), and the read-order amendment followed (`:1145`).
+`WindowsAttachListener::bind`
+(`src-tauri/core/src/attach/windows_listener.rs:147`) takes the per-profile
+instance lock, creates the protected pipe, and reads the owner and the DACL back.
+`serve_windows_attach_session_with_reader`
+(`src-tauri/core/src/attach/windows_session.rs:21`) verifies the peer before it
+reads a frame body. The gate holds nothing back now, and its text contradicts the
+next two slices. A new amendment therefore records the lifted gate, and
+`THREAT_MODEL.md` records the served endpoint boundary.
+
+DECIDED 2026-08-28 (planner, read `run_recorded_windows_activation` beside the
+Linux termination-signal wait) — the Windows accept loop takes a stop channel
+rather than a signal wait. `TerminationSignalWait`
+(`src-tauri/core/src/attach/linux.rs`) is a Unix construct, and the runtime crate
+may add no third direct package (`test/runtime-dependency-boundary.sh`). Task
+Scheduler ends a task by terminating the process, so no orderly exit runs there.
+`record_start_millis` (`src-tauri/runtime/src/start_record.rs:92`) drops a
+pending start once the five-minute failure window passes. A runtime that lives
+longer than that window leaves no counted failure behind. The loop therefore
+polls a `Receiver<()>` between bounded accepts. The `main` wiring and a shutdown
+handler follow in later slices.
+
+DECIDED 2026-08-28 (planner, read `resolve_live_windows_payload_scopes` beside
+`plan_task_removal`) — the removal planner resolves both live scopes itself.
+`WindowsPayloadScopes::per_user_removal_scope` and `machine_removal_scope`
+(`src-tauri/core/src/windows_payload.rs:55`, `:70`) build the two `RemovalScope`
+values, and `resolve_live_windows_payload_scopes` (`:103`) reads both roots
+through the Shell known folders with no caller. Each scope owns one installed
+payload and carries the other payload path. `per_user_removal_scope` carries
+`machine_payload_path`, while `machine_removal_scope` carries
+`per_user_payload_path`. `plan_task_removal` needs that other path to choose
+`RepointTo`. Without it, the plan is `StopAndDelete`. The planner therefore
+exposes one entry per uninstaller, and each entry pairs every enumerated
+registration with its plan.
+
+DECIDED 2026-08-28 (planner, read the attach client against
+`WindowsAttachStream`) — the Windows client handshake stays unfiled.
+`Client::connect` (`src-tauri/attach/src/client.rs:497`) is `cfg(unix)` and types
+every operation against `UnixStream`. A second handshake in `muniment-core` would
+let the two copies disagree on frame order. The client half therefore waits for a
+stream abstraction in `muniment-attach`, and the lane files no core-side client
+session.
 
 DECIDED 2026-08-28 (planner, read the desktop manifest beside
 `macos_runtime_service`) — the Windows desktop takes the runtime crate as a
