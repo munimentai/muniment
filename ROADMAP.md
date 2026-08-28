@@ -652,20 +652,86 @@ through the `WindowsAttachAcceptBoundary` trait. `start_runtime_task_at_startup`
 (`src-tauri/src/main.rs:57`), and it records every failed start as
 `event=runtime_task_start_failed`.
 
-NEXT — the Windows runtime serves its attach endpoint, and the installer band
-plans removal. Five slices carry that work. The first pairs every enumerated
-registration with `plan_task_removal` for both live uninstaller scopes. The
-second adds the Windows acceptor that binds `WindowsAttachListener` and calls
-`serve_next_windows_attach`. The third adds a bind-and-serve activation step that
-maps a bind failure to a failed exit. The fourth waits for the attach endpoint
-after the desktop requests a task start. The fifth moves the `muniment-attach`
-frame reads and writes out of `mod linux`. A later slice joins the acceptor, the
-activation step, and Windows `main`. Windows `main`
-(`src-tauri/runtime/src/main.rs:74`) still exits orderly without opening the
-endpoint. The removal write half sits in Needs Human, so the lane still files the
-read and planning halves alone. The Windows preflight on CI runs every
-Windows-only test target (`.github/workflows/ci.yml:345`), and `test/smoke.sh`
-guards that list.
+DONE 2026-08-28 — the removal planner join, the Windows acceptor, the endpoint
+readiness wait, and the attach frame extraction landed (MUNIDESK-1530, 1531,
+1532, and 1533). `plan_live_task_removals`
+(`src-tauri/core/src/windows_task_service.rs:431`) pairs every enumerated
+registration with its `plan_task_removal` result for both live uninstaller
+scopes. `WindowsAttachAcceptor`
+(`src-tauri/runtime/src/windows_attach_loop.rs:32`) binds `WindowsAttachListener`
+and maps each `WindowsAttachAcceptError` to an outcome. `start_runtime_task`
+(`src-tauri/src/windows_runtime_service.rs:51`) waits for the attach endpoint
+after `IRegisteredTask::Run` accepts the call. It records a timed-out wait as a
+failed start. `client_stream` (`src-tauri/attach/src/client_stream.rs`) types
+`read_exact_before`, `write_all_before`, `read_value`, and both approval readers
+against a `ClientStream` trait with one `UnixStream` implementation.
+
+NEXT — the Windows runtime serves its attach endpoint, and the desktop client
+reaches it. Four slices carry that work. The first adds the bind-and-serve
+activation step behind an acceptor factory. The second gives `DesktopClient` a
+boxed `ClientStream` and implements that trait for `WindowsAttachStream`. The
+third moves both Windows startup calls off the Tauri setup hook. The fourth
+amends ADR 0012 with the Windows attach connection route. A later slice joins the
+acceptor, the activation step, and Windows `main`. Two slices then follow that
+join. One replaces the idle accept poll. The other reads the peer image path and
+names the route. Windows `main` (`src-tauri/runtime/src/main.rs:74`) still exits
+orderly without opening the endpoint. The removal write half sits in Needs Human,
+so the lane still files the read and planning halves alone. The Windows preflight
+on CI runs every Windows-only test target (`.github/workflows/ci.yml:345`), and
+`test/smoke.sh` guards that list.
+
+DECIDED 2026-08-28 (planner, read `run_recorded_windows_activation` beside
+`acquire_windows_attach_instance_lock`) — a Windows runtime that meets a held
+attach instance lock exits orderly with status zero. ADR 0012 makes the profile
+instance lock the final authority against a second runtime. A failed exit would
+spend one of the four Task Scheduler restarts on a correct refusal. Five such
+starts inside five minutes would then record a needs-attention diagnostic. The
+activation step therefore maps `WindowsAttachInstanceLockError::Contended` to
+`WindowsActivationExit::Orderly(0)` with the `InstanceLockWait` diagnostic, which
+has no caller today. It maps every other bind failure to
+`WindowsActivationExit::Failed(1)` with the `ActivationFailed` diagnostic. ADR
+0012 records the rule.
+
+DECIDED 2026-08-28 (planner, read `DesktopClient` beside `WindowsAttachStream`)
+— the desktop client reads and writes through a boxed `ClientStream` rather than
+a `UnixStream`. `DesktopClient` (`src-tauri/attach/src/client.rs:2155`) names
+`UnixStream` in its stream field alone, and every operation already calls the
+neutral helpers in `client_stream`. `muniment-core` depends on `muniment-attach`,
+so core owns the `WindowsAttachStream` implementation and the orphan rule holds.
+`verify_connected_peer` stays on the Unix entry point, because `getpeereid` takes
+a socket descriptor. `DesktopClient::into_stream` has no caller, and it leaves
+with the field.
+
+DECIDED 2026-08-28 (planner, read the Windows setup hook against the macOS one)
+— the Windows runtime task registration and start move off the Tauri setup hook.
+`main` (`src-tauri/src/main.rs:56`) calls `register_runtime_task_at_startup` and
+`start_runtime_task_at_startup` inline, so the first window waits for both. The
+worst case adds a two-second install lock wait, a one-second endpoint check, a
+second two-second install lock wait inside the crash-window clear, and a
+five-second readiness wait. That is about ten seconds with no window on screen.
+On macOS `start_desktop_client` (`src-tauri/src/attach_service.rs:1191`) spawns
+worker threads from the same hook, and no later setup statement reads either
+Windows result. One worker thread therefore runs both calls in order.
+
+MEASURED 2026-08-28 (planner, read `run_windows_attach_accept_loop` against the
+Linux stop thread) — the idle Windows accept loop wakes ten times a second for
+the whole logon session. `ACCEPT_TIMEOUT`
+(`src-tauri/runtime/src/windows_attach_loop.rs:14`) is 100 milliseconds. Each
+pass creates an event, issues an overlapped `ConnectNamedPipe`, waits it out, and
+cancels it. The Linux listener instead blocks in `accept` and keeps its stop poll
+on a separate thread (`src-tauri/runtime/src/attach_listener.rs:103`). A
+background service that polls at ten hertz defeats Windows timer coalescing and
+costs battery on an idle laptop. The lane files that slice after the `main` join,
+because the join owns the stop sender.
+
+MEASURED 2026-08-28 (planner, read `WindowsAttachEndpointAdapter` against
+`operation_error`) — the desktop readiness probe strands no runtime session. The
+probe connects and drops the stream, and the runtime session then reads a closed
+pipe. `operation_error` (`src-tauri/core/src/attach/windows_stream.rs:178`) maps
+`ERROR_BROKEN_PIPE` to a zero-byte read, so `read_exact_before` fails at once
+rather than at the five-second session deadline. The probe also verifies the
+endpoint owner SID before it answers, which a bare `WaitNamedPipeW` check would
+drop. The lane files no slice against it.
 
 DECIDED 2026-08-28 (planner, read `run_recorded_windows_activation` beside the
 Linux termination-signal wait) — the Windows accept loop takes a stop channel
@@ -1482,10 +1548,11 @@ PLANNER PROCEDURE — pick an unused port for the capture server. Port 8899 was
 already bound by another workspace in this container, and the stale server
 answered 404 for every probe path until the planner moved to 8944. The
 fifty-third wave used 8951, the fifty-fourth used 8962, the fifty-fifth used
-8975, the fifty-sixth used 8988, the fifty-eighth used 8993, and the
-sixty-seventh used 9014. The fifty-seventh, the fifty-ninth, the sixtieth, the
-sixty-first, the sixty-fifth, the sixty-sixth, the sixty-eighth, the sixty-ninth,
-and the seventy-first waves each ran no capture, because each read code alone. A
+8975, the fifty-sixth used 8988, the fifty-eighth used 8993, the sixty-seventh
+used 9014, and the 2026-08-28 wave used 4173. The fifty-seventh, the
+fifty-ninth, the sixtieth, the sixty-first, the sixty-fifth, the sixty-sixth,
+the sixty-eighth, the sixty-ninth, and the seventy-first waves each ran no
+capture, because each read code alone. A
 server started from `src-tauri` answers 404 for every `test/probe/` path, so start
 it from the repository root.
 
