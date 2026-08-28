@@ -2,16 +2,19 @@ use std::path::Path;
 use std::time::Duration;
 
 const INSTALL_LOCK_WAIT: Duration = Duration::from_secs(2);
+const ATTACH_ENDPOINT_READINESS_WAIT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "windows")]
 const ATTACH_ENDPOINT_CHECK_WAIT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeTaskStartOutcome {
     EndpointPresent,
-    Requested,
+    Ready,
     EndpointCheckFailed,
     ClearFailed,
     StartFailed,
+    ReadinessTimedOut,
+    ReadinessFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,12 +23,22 @@ enum RuntimeTaskStartError {
     StartFailed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeReadinessError {
+    TimedOut,
+    Failed,
+}
+
 trait AttachEndpointAdapter {
     fn endpoint_exists(&self) -> Result<bool, ()>;
 }
 
 trait CrashWindowAdapter {
     fn clear(&self) -> Result<(), ()>;
+}
+
+trait RuntimeReadinessAdapter {
+    fn wait_until_ready(&self, bounded_wait: Duration) -> Result<(), RuntimeReadinessError>;
 }
 
 trait RuntimeTaskStartAdapter {
@@ -39,11 +52,16 @@ fn start_runtime_task(
     endpoint_adapter: &impl AttachEndpointAdapter,
     crash_window_adapter: &impl CrashWindowAdapter,
     task_adapter: &impl RuntimeTaskStartAdapter,
+    readiness_adapter: &impl RuntimeReadinessAdapter,
 ) -> RuntimeTaskStartOutcome {
     match endpoint_adapter.endpoint_exists() {
         Ok(true) => RuntimeTaskStartOutcome::EndpointPresent,
         Ok(false) => match task_adapter.start(crash_window_adapter) {
-            Ok(()) => RuntimeTaskStartOutcome::Requested,
+            Ok(()) => match readiness_adapter.wait_until_ready(ATTACH_ENDPOINT_READINESS_WAIT) {
+                Ok(()) => RuntimeTaskStartOutcome::Ready,
+                Err(RuntimeReadinessError::TimedOut) => RuntimeTaskStartOutcome::ReadinessTimedOut,
+                Err(RuntimeReadinessError::Failed) => RuntimeTaskStartOutcome::ReadinessFailed,
+            },
             Err(RuntimeTaskStartError::ClearFailed) => RuntimeTaskStartOutcome::ClearFailed,
             Err(RuntimeTaskStartError::StartFailed) => RuntimeTaskStartOutcome::StartFailed,
         },
@@ -112,14 +130,22 @@ fn start_runtime_task_with_diagnostic(
     endpoint_adapter: &impl AttachEndpointAdapter,
     crash_window_adapter: &impl CrashWindowAdapter,
     task_adapter: &impl RuntimeTaskStartAdapter,
+    readiness_adapter: &impl RuntimeReadinessAdapter,
     diagnostic_sink: &impl DiagnosticSink,
 ) -> RuntimeTaskStartOutcome {
-    let outcome = start_runtime_task(endpoint_adapter, crash_window_adapter, task_adapter);
+    let outcome = start_runtime_task(
+        endpoint_adapter,
+        crash_window_adapter,
+        task_adapter,
+        readiness_adapter,
+    );
     if matches!(
         outcome,
         RuntimeTaskStartOutcome::EndpointCheckFailed
             | RuntimeTaskStartOutcome::ClearFailed
             | RuntimeTaskStartOutcome::StartFailed
+            | RuntimeTaskStartOutcome::ReadinessTimedOut
+            | RuntimeTaskStartOutcome::ReadinessFailed
     ) {
         diagnostic_sink.write(DiagnosticEvent::RuntimeTaskStartFailed);
     }
@@ -171,6 +197,7 @@ pub(crate) fn start_runtime_task_at_startup(state_directory: &Path) {
         &WindowsAttachEndpointAdapter,
         &WindowsCrashWindowAdapter { state_directory },
         &WindowsRuntimeTaskStartAdapter,
+        &WindowsRuntimeReadinessAdapter,
         &WindowsDiagnosticSink,
     );
 }
@@ -250,6 +277,26 @@ impl AttachEndpointAdapter for WindowsAttachEndpointAdapter {
             }
             Err(WindowsAttachConnectError::EndpointAbsent) => Ok(false),
             Err(_) => Err(()),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsRuntimeReadinessAdapter;
+
+#[cfg(target_os = "windows")]
+impl RuntimeReadinessAdapter for WindowsRuntimeReadinessAdapter {
+    fn wait_until_ready(&self, bounded_wait: Duration) -> Result<(), RuntimeReadinessError> {
+        use muniment_core::attach::{wait_for_windows_attach_endpoint, WindowsAttachConnectError};
+        use std::time::Instant;
+
+        match wait_for_windows_attach_endpoint(Instant::now() + bounded_wait) {
+            Ok(stream) => {
+                drop(stream);
+                Ok(())
+            }
+            Err(WindowsAttachConnectError::DeadlineExpired) => Err(RuntimeReadinessError::TimedOut),
+            Err(_) => Err(RuntimeReadinessError::Failed),
         }
     }
 }
@@ -352,6 +399,36 @@ mod tests {
         fn endpoint_exists(&self) -> Result<bool, ()> {
             self.calls.set(self.calls.get() + 1);
             self.order.borrow_mut().push("endpoint");
+            self.result
+        }
+    }
+
+    struct FakeRuntimeReadinessAdapter {
+        result: Result<(), RuntimeReadinessError>,
+        calls: Cell<usize>,
+        bounded_wait: Cell<Option<Duration>>,
+        order: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl FakeRuntimeReadinessAdapter {
+        fn new(
+            result: Result<(), RuntimeReadinessError>,
+            order: Rc<RefCell<Vec<&'static str>>>,
+        ) -> Self {
+            Self {
+                result,
+                calls: Cell::new(0),
+                bounded_wait: Cell::new(None),
+                order,
+            }
+        }
+    }
+
+    impl RuntimeReadinessAdapter for FakeRuntimeReadinessAdapter {
+        fn wait_until_ready(&self, bounded_wait: Duration) -> Result<(), RuntimeReadinessError> {
+            self.calls.set(self.calls.get() + 1);
+            self.bounded_wait.set(Some(bounded_wait));
+            self.order.borrow_mut().push("readiness");
             self.result
         }
     }
@@ -512,36 +589,69 @@ mod tests {
     }
 
     #[test]
-    fn present_endpoint_skips_the_crash_window_and_task() {
+    fn present_endpoint_skips_the_crash_window_task_and_readiness_wait() {
         let order = Rc::new(RefCell::new(Vec::new()));
         let endpoint = FakeEndpointAdapter::new(Ok(true), Rc::clone(&order));
         let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
         let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
+        let readiness = FakeRuntimeReadinessAdapter::new(Ok(()), Rc::clone(&order));
 
         assert_eq!(
-            start_runtime_task(&endpoint, &crash_window, &task),
+            start_runtime_task(&endpoint, &crash_window, &task, &readiness),
             RuntimeTaskStartOutcome::EndpointPresent
         );
         assert_eq!(endpoint.calls.get(), 1);
         assert_eq!(crash_window.calls.get(), 0);
         assert_eq!(task.calls.get(), 0);
+        assert_eq!(readiness.calls.get(), 0);
         assert_eq!(*order.borrow(), vec!["endpoint"]);
     }
 
     #[test]
-    fn absent_endpoint_clears_the_crash_window_before_requesting_start() {
+    fn requested_start_waits_for_the_endpoint_to_become_ready() {
         let order = Rc::new(RefCell::new(Vec::new()));
         let endpoint = FakeEndpointAdapter::new(Ok(false), Rc::clone(&order));
         let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
         let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
+        let readiness = FakeRuntimeReadinessAdapter::new(Ok(()), Rc::clone(&order));
 
         assert_eq!(
-            start_runtime_task(&endpoint, &crash_window, &task),
-            RuntimeTaskStartOutcome::Requested
+            start_runtime_task(&endpoint, &crash_window, &task, &readiness),
+            RuntimeTaskStartOutcome::Ready
         );
         assert_eq!(crash_window.calls.get(), 1);
         assert_eq!(task.run_calls.get(), 1);
-        assert_eq!(*order.borrow(), vec!["endpoint", "clear", "start"]);
+        assert_eq!(readiness.calls.get(), 1);
+        assert_eq!(
+            readiness.bounded_wait.get(),
+            Some(ATTACH_ENDPOINT_READINESS_WAIT)
+        );
+        assert_eq!(
+            *order.borrow(),
+            vec!["endpoint", "clear", "start", "readiness"]
+        );
+    }
+
+    #[test]
+    fn requested_start_reports_a_readiness_timeout() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let endpoint = FakeEndpointAdapter::new(Ok(false), Rc::clone(&order));
+        let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
+        let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
+        let readiness = FakeRuntimeReadinessAdapter::new(
+            Err(RuntimeReadinessError::TimedOut),
+            Rc::clone(&order),
+        );
+
+        assert_eq!(
+            start_runtime_task(&endpoint, &crash_window, &task, &readiness),
+            RuntimeTaskStartOutcome::ReadinessTimedOut
+        );
+        assert_eq!(readiness.calls.get(), 1);
+        assert_eq!(
+            *order.borrow(),
+            vec!["endpoint", "clear", "start", "readiness"]
+        );
     }
 
     #[test]
@@ -550,13 +660,15 @@ mod tests {
         let endpoint = FakeEndpointAdapter::new(Err(()), Rc::clone(&order));
         let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
         let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
+        let readiness = FakeRuntimeReadinessAdapter::new(Ok(()), Rc::clone(&order));
 
         assert_eq!(
-            start_runtime_task(&endpoint, &crash_window, &task),
+            start_runtime_task(&endpoint, &crash_window, &task, &readiness),
             RuntimeTaskStartOutcome::EndpointCheckFailed
         );
         assert_eq!(crash_window.calls.get(), 0);
         assert_eq!(task.calls.get(), 0);
+        assert_eq!(readiness.calls.get(), 0);
         assert_eq!(*order.borrow(), vec!["endpoint"]);
     }
 
@@ -566,13 +678,15 @@ mod tests {
         let endpoint = FakeEndpointAdapter::new(Ok(false), Rc::clone(&order));
         let crash_window = FakeCrashWindowAdapter::new(Err(()), Rc::clone(&order));
         let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
+        let readiness = FakeRuntimeReadinessAdapter::new(Ok(()), Rc::clone(&order));
 
         assert_eq!(
-            start_runtime_task(&endpoint, &crash_window, &task),
+            start_runtime_task(&endpoint, &crash_window, &task, &readiness),
             RuntimeTaskStartOutcome::ClearFailed
         );
         assert_eq!(crash_window.calls.get(), 1);
         assert_eq!(task.run_calls.get(), 0);
+        assert_eq!(readiness.calls.get(), 0);
         assert_eq!(*order.borrow(), vec!["endpoint", "clear"]);
     }
 
@@ -585,21 +699,31 @@ mod tests {
             Err(RuntimeTaskStartError::StartFailed),
             Rc::clone(&order),
         );
+        let readiness = FakeRuntimeReadinessAdapter::new(Ok(()), Rc::clone(&order));
 
         assert_eq!(
-            start_runtime_task(&endpoint, &crash_window, &task),
+            start_runtime_task(&endpoint, &crash_window, &task, &readiness),
             RuntimeTaskStartOutcome::StartFailed
         );
         assert_eq!(crash_window.calls.get(), 1);
         assert_eq!(task.run_calls.get(), 1);
+        assert_eq!(readiness.calls.get(), 0);
         assert_eq!(*order.borrow(), vec!["endpoint", "clear", "start"]);
     }
 
     #[test]
     fn writes_a_diagnostic_only_for_failed_start_outcomes() {
-        for (endpoint_result, clear_result, start_result, expected_outcome, expected_events) in [
+        for (
+            endpoint_result,
+            clear_result,
+            start_result,
+            readiness_result,
+            expected_outcome,
+            expected_events,
+        ) in [
             (
                 Ok(true),
+                Ok(()),
                 Ok(()),
                 Ok(()),
                 RuntimeTaskStartOutcome::EndpointPresent,
@@ -609,11 +733,13 @@ mod tests {
                 Ok(false),
                 Ok(()),
                 Ok(()),
-                RuntimeTaskStartOutcome::Requested,
+                Ok(()),
+                RuntimeTaskStartOutcome::Ready,
                 vec![],
             ),
             (
                 Err(()),
+                Ok(()),
                 Ok(()),
                 Ok(()),
                 RuntimeTaskStartOutcome::EndpointCheckFailed,
@@ -623,6 +749,7 @@ mod tests {
                 Ok(false),
                 Err(()),
                 Ok(()),
+                Ok(()),
                 RuntimeTaskStartOutcome::ClearFailed,
                 vec![DiagnosticEvent::RuntimeTaskStartFailed],
             ),
@@ -630,18 +757,42 @@ mod tests {
                 Ok(false),
                 Ok(()),
                 Err(RuntimeTaskStartError::StartFailed),
+                Ok(()),
                 RuntimeTaskStartOutcome::StartFailed,
+                vec![DiagnosticEvent::RuntimeTaskStartFailed],
+            ),
+            (
+                Ok(false),
+                Ok(()),
+                Ok(()),
+                Err(RuntimeReadinessError::TimedOut),
+                RuntimeTaskStartOutcome::ReadinessTimedOut,
+                vec![DiagnosticEvent::RuntimeTaskStartFailed],
+            ),
+            (
+                Ok(false),
+                Ok(()),
+                Ok(()),
+                Err(RuntimeReadinessError::Failed),
+                RuntimeTaskStartOutcome::ReadinessFailed,
                 vec![DiagnosticEvent::RuntimeTaskStartFailed],
             ),
         ] {
             let order = Rc::new(RefCell::new(Vec::new()));
             let endpoint = FakeEndpointAdapter::new(endpoint_result, Rc::clone(&order));
             let crash_window = FakeCrashWindowAdapter::new(clear_result, Rc::clone(&order));
-            let task = FakeRuntimeTaskStartAdapter::new(start_result, order);
+            let task = FakeRuntimeTaskStartAdapter::new(start_result, Rc::clone(&order));
+            let readiness = FakeRuntimeReadinessAdapter::new(readiness_result, order);
             let diagnostics = FakeDiagnosticSink::default();
 
             assert_eq!(
-                start_runtime_task_with_diagnostic(&endpoint, &crash_window, &task, &diagnostics,),
+                start_runtime_task_with_diagnostic(
+                    &endpoint,
+                    &crash_window,
+                    &task,
+                    &readiness,
+                    &diagnostics,
+                ),
                 expected_outcome
             );
             assert_eq!(*diagnostics.events.borrow(), expected_events);
