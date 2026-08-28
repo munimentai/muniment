@@ -79,8 +79,8 @@ pub use windows_activation::{
     record_windows_start, ClearWindowsCrashWindowError, WindowsActivationExit,
     WindowsDiagnosticEvent, WindowsStart, WindowsStartDecision, WINDOWS_RUNTIME_LOG_MAX_BYTES,
 };
+#[cfg(any(unix, target_os = "windows"))]
+pub use windows_activation::{run_recorded_windows_activation, write_windows_diagnostic};
 pub use windows_attach_loop::{
     run_windows_attach_accept_loop, WindowsAttachAcceptBoundary, WindowsAttachAcceptOutcome,
 };
-#[cfg(any(unix, target_os = "windows"))]
-pub use windows_activation::{run_recorded_windows_activation, write_windows_diagnostic};
