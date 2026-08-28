@@ -267,7 +267,19 @@ impl SchedulerFixture {
         unsafe { folder.DeleteTask(&BSTR::from(self.task_name.as_str()), 0) }.unwrap();
         self.task_name = format!("Runtime-{SERVICE_ACCOUNT_SID}");
 
-        let definition = TaskDefinition::new(SERVICE_ACCOUNT_SID, MACHINE_PAYLOAD).unwrap();
+        self.remove_test_root = !Path::new(TEST_ROOT).exists();
+        self.remove_machine_root = !Path::new(MACHINE_ROOT).exists();
+        std::fs::create_dir_all(MACHINE_ROOT).unwrap();
+        assert!(!Path::new(MACHINE_PAYLOAD).exists());
+        self.remove_machine_payload = true;
+        std::fs::copy(
+            env!("CARGO_BIN_EXE_windows-task-test-helper"),
+            MACHINE_PAYLOAD,
+        )
+        .unwrap();
+
+        let mut definition = TaskDefinition::new(SERVICE_ACCOUNT_SID, MACHINE_PAYLOAD).unwrap();
+        definition.triggers.clear();
         let xml = render_task_definition_xml(&definition).unwrap();
         self.register_xml(xml, TASK_LOGON_SERVICE_ACCOUNT);
     }
@@ -311,17 +323,6 @@ impl SchedulerFixture {
     }
 
     fn start_controlled_task(&mut self) -> IRunningTask {
-        self.remove_test_root = !Path::new(TEST_ROOT).exists();
-        self.remove_machine_root = !Path::new(MACHINE_ROOT).exists();
-        std::fs::create_dir_all(MACHINE_ROOT).unwrap();
-        assert!(!Path::new(MACHINE_PAYLOAD).exists());
-        self.remove_machine_payload = true;
-        std::fs::copy(
-            env!("CARGO_BIN_EXE_windows-task-test-helper"),
-            MACHINE_PAYLOAD,
-        )
-        .unwrap();
-
         let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
         let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
         let running = unsafe { task.Run(&VARIANT::default()) }.unwrap();
