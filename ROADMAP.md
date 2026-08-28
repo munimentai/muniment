@@ -643,8 +643,11 @@ never starts at the next logon. The macOS twin writes three fixed records for
 the same class of failure (`src-tauri/src/macos_runtime_service.rs:8`). The
 Windows desktop therefore writes one fixed owner-only record per failing
 outcome through `write_windows_diagnostic`, below the `FOLDERID_LocalAppData`
-log root. A registered, updated, or unchanged outcome writes nothing, because
-the bounded diagnostic log carries failures alone.
+log root. The `NoInstalledPayload` error writes the fixed
+`event=runtime_task_registration_failed message=runtime task registration failed`
+record, because no task can start without the payload. A registered, updated,
+or unchanged outcome writes nothing, because the bounded diagnostic log carries
+failures alone.
 
 DECIDED 2026-08-28 (planner, read the Windows path in `main` beside
 `run_recorded_macos_activation`) — the Windows runtime records its starts before
