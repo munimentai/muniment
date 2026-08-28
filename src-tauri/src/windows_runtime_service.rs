@@ -2,6 +2,54 @@ use std::path::Path;
 use std::time::Duration;
 
 const INSTALL_LOCK_WAIT: Duration = Duration::from_secs(2);
+#[cfg(target_os = "windows")]
+const ATTACH_ENDPOINT_CHECK_WAIT: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeTaskStartOutcome {
+    EndpointPresent,
+    Requested,
+    EndpointCheckFailed,
+    ClearFailed,
+    StartFailed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeTaskStartError {
+    ClearFailed,
+    StartFailed,
+}
+
+trait AttachEndpointAdapter {
+    fn endpoint_exists(&self) -> Result<bool, ()>;
+}
+
+trait CrashWindowAdapter {
+    fn clear(&self) -> Result<(), ()>;
+}
+
+trait RuntimeTaskStartAdapter {
+    fn start(
+        &self,
+        crash_window_adapter: &impl CrashWindowAdapter,
+    ) -> Result<(), RuntimeTaskStartError>;
+}
+
+fn start_runtime_task(
+    endpoint_adapter: &impl AttachEndpointAdapter,
+    crash_window_adapter: &impl CrashWindowAdapter,
+    task_adapter: &impl RuntimeTaskStartAdapter,
+) -> RuntimeTaskStartOutcome {
+    match endpoint_adapter.endpoint_exists() {
+        Ok(true) => RuntimeTaskStartOutcome::EndpointPresent,
+        Ok(false) => match task_adapter.start(crash_window_adapter) {
+            Ok(()) => RuntimeTaskStartOutcome::Requested,
+            Err(RuntimeTaskStartError::ClearFailed) => RuntimeTaskStartOutcome::ClearFailed,
+            Err(RuntimeTaskStartError::StartFailed) => RuntimeTaskStartOutcome::StartFailed,
+        },
+        Err(()) => RuntimeTaskStartOutcome::EndpointCheckFailed,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeTaskRegistrationOutcome {
@@ -155,6 +203,64 @@ impl InstallLockAdapter for WindowsInstallLockAdapter {
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) struct WindowsAttachEndpointAdapter;
+
+#[cfg(target_os = "windows")]
+impl AttachEndpointAdapter for WindowsAttachEndpointAdapter {
+    fn endpoint_exists(&self) -> Result<bool, ()> {
+        use muniment_core::attach::{connect_windows_attach_endpoint, WindowsAttachConnectError};
+        use std::time::Instant;
+
+        match connect_windows_attach_endpoint(Instant::now() + ATTACH_ENDPOINT_CHECK_WAIT) {
+            Ok(stream) => {
+                drop(stream);
+                Ok(true)
+            }
+            Err(WindowsAttachConnectError::EndpointAbsent) => Ok(false),
+            Err(_) => Err(()),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) struct WindowsCrashWindowAdapter<'a> {
+    state_directory: &'a Path,
+}
+
+#[cfg(target_os = "windows")]
+impl CrashWindowAdapter for WindowsCrashWindowAdapter<'_> {
+    fn clear(&self) -> Result<(), ()> {
+        muniment_runtime::clear_windows_crash_window(self.state_directory, INSTALL_LOCK_WAIT)
+            .map_err(|_| ())
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) struct WindowsRuntimeTaskStartAdapter;
+
+#[cfg(target_os = "windows")]
+impl RuntimeTaskStartAdapter for WindowsRuntimeTaskStartAdapter {
+    fn start(
+        &self,
+        crash_window_adapter: &impl CrashWindowAdapter,
+    ) -> Result<(), RuntimeTaskStartError> {
+        use muniment_core::windows_sid::current_process_user_sid;
+        use muniment_core::windows_task_service::{
+            start_registered_task, StartRegisteredTaskError,
+        };
+
+        let sid = current_process_user_sid().map_err(|_| RuntimeTaskStartError::StartFailed)?;
+        match start_registered_task(sid.as_str(), || crash_window_adapter.clear()) {
+            Ok(_) => Ok(()),
+            Err(StartRegisteredTaskError::ClearCrashWindow(())) => {
+                Err(RuntimeTaskStartError::ClearFailed)
+            }
+            Err(_) => Err(RuntimeTaskStartError::StartFailed),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 struct WindowsRuntimeTaskAdapter;
 
 #[cfg(target_os = "windows")]
@@ -187,6 +293,90 @@ mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+
+    struct FakeEndpointAdapter {
+        result: Result<bool, ()>,
+        calls: Cell<usize>,
+        order: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl FakeEndpointAdapter {
+        fn new(result: Result<bool, ()>, order: Rc<RefCell<Vec<&'static str>>>) -> Self {
+            Self {
+                result,
+                calls: Cell::new(0),
+                order,
+            }
+        }
+    }
+
+    impl AttachEndpointAdapter for FakeEndpointAdapter {
+        fn endpoint_exists(&self) -> Result<bool, ()> {
+            self.calls.set(self.calls.get() + 1);
+            self.order.borrow_mut().push("endpoint");
+            self.result
+        }
+    }
+
+    struct FakeCrashWindowAdapter {
+        result: Result<(), ()>,
+        calls: Cell<usize>,
+        order: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl FakeCrashWindowAdapter {
+        fn new(result: Result<(), ()>, order: Rc<RefCell<Vec<&'static str>>>) -> Self {
+            Self {
+                result,
+                calls: Cell::new(0),
+                order,
+            }
+        }
+    }
+
+    impl CrashWindowAdapter for FakeCrashWindowAdapter {
+        fn clear(&self) -> Result<(), ()> {
+            self.calls.set(self.calls.get() + 1);
+            self.order.borrow_mut().push("clear");
+            self.result
+        }
+    }
+
+    struct FakeRuntimeTaskStartAdapter {
+        result: Result<(), RuntimeTaskStartError>,
+        calls: Cell<usize>,
+        run_calls: Cell<usize>,
+        order: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl FakeRuntimeTaskStartAdapter {
+        fn new(
+            result: Result<(), RuntimeTaskStartError>,
+            order: Rc<RefCell<Vec<&'static str>>>,
+        ) -> Self {
+            Self {
+                result,
+                calls: Cell::new(0),
+                run_calls: Cell::new(0),
+                order,
+            }
+        }
+    }
+
+    impl RuntimeTaskStartAdapter for FakeRuntimeTaskStartAdapter {
+        fn start(
+            &self,
+            crash_window_adapter: &impl CrashWindowAdapter,
+        ) -> Result<(), RuntimeTaskStartError> {
+            self.calls.set(self.calls.get() + 1);
+            crash_window_adapter
+                .clear()
+                .map_err(|()| RuntimeTaskStartError::ClearFailed)?;
+            self.run_calls.set(self.run_calls.get() + 1);
+            self.order.borrow_mut().push("start");
+            self.result
+        }
+    }
 
     struct FakeGuard {
         held: Rc<Cell<bool>>,
@@ -281,6 +471,90 @@ mod tests {
         fn write(&self, event: DiagnosticEvent) {
             self.events.borrow_mut().push(event);
         }
+    }
+
+    #[test]
+    fn present_endpoint_skips_the_crash_window_and_task() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let endpoint = FakeEndpointAdapter::new(Ok(true), Rc::clone(&order));
+        let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
+        let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
+
+        assert_eq!(
+            start_runtime_task(&endpoint, &crash_window, &task),
+            RuntimeTaskStartOutcome::EndpointPresent
+        );
+        assert_eq!(endpoint.calls.get(), 1);
+        assert_eq!(crash_window.calls.get(), 0);
+        assert_eq!(task.calls.get(), 0);
+        assert_eq!(*order.borrow(), vec!["endpoint"]);
+    }
+
+    #[test]
+    fn absent_endpoint_clears_the_crash_window_before_requesting_start() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let endpoint = FakeEndpointAdapter::new(Ok(false), Rc::clone(&order));
+        let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
+        let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
+
+        assert_eq!(
+            start_runtime_task(&endpoint, &crash_window, &task),
+            RuntimeTaskStartOutcome::Requested
+        );
+        assert_eq!(crash_window.calls.get(), 1);
+        assert_eq!(task.run_calls.get(), 1);
+        assert_eq!(*order.borrow(), vec!["endpoint", "clear", "start"]);
+    }
+
+    #[test]
+    fn endpoint_check_failure_skips_the_crash_window_and_task() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let endpoint = FakeEndpointAdapter::new(Err(()), Rc::clone(&order));
+        let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
+        let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
+
+        assert_eq!(
+            start_runtime_task(&endpoint, &crash_window, &task),
+            RuntimeTaskStartOutcome::EndpointCheckFailed
+        );
+        assert_eq!(crash_window.calls.get(), 0);
+        assert_eq!(task.calls.get(), 0);
+        assert_eq!(*order.borrow(), vec!["endpoint"]);
+    }
+
+    #[test]
+    fn crash_window_failure_skips_the_task_start() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let endpoint = FakeEndpointAdapter::new(Ok(false), Rc::clone(&order));
+        let crash_window = FakeCrashWindowAdapter::new(Err(()), Rc::clone(&order));
+        let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
+
+        assert_eq!(
+            start_runtime_task(&endpoint, &crash_window, &task),
+            RuntimeTaskStartOutcome::ClearFailed
+        );
+        assert_eq!(crash_window.calls.get(), 1);
+        assert_eq!(task.run_calls.get(), 0);
+        assert_eq!(*order.borrow(), vec!["endpoint", "clear"]);
+    }
+
+    #[test]
+    fn task_start_failure_has_its_own_outcome() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let endpoint = FakeEndpointAdapter::new(Ok(false), Rc::clone(&order));
+        let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
+        let task = FakeRuntimeTaskStartAdapter::new(
+            Err(RuntimeTaskStartError::StartFailed),
+            Rc::clone(&order),
+        );
+
+        assert_eq!(
+            start_runtime_task(&endpoint, &crash_window, &task),
+            RuntimeTaskStartOutcome::StartFailed
+        );
+        assert_eq!(crash_window.calls.get(), 1);
+        assert_eq!(task.run_calls.get(), 1);
+        assert_eq!(*order.borrow(), vec!["endpoint", "clear", "start"]);
     }
 
     #[test]
