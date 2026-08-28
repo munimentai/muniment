@@ -570,21 +570,49 @@ landed (MUNIDESK-1499 and 1500). `WindowsAttachListener::accept`
 (`src-tauri/core/src/attach/windows_connect.rs:66`) retries an absent endpoint
 until its deadline and fails immediately on every other connection error.
 
-NEXT — two slices remain before the Windows accept loop composes. The session
-half answers one Welcome frame. It follows the read-order amendment, so it reads
-the prefix, verifies the peer, reads the body, and writes Welcome. Its shape is
-`serve_macos_attach_session` (`src-tauri/core/src/attach/macos_listener.rs:88`).
-The supporting slice gives the listener more than one pipe instance. The loop
-then binds under the instance lock and joins the accept and session halves. The
-installer band runs beside those two slices. Its first slice resolves the live
-payload roots, and its second lists the removal candidates. The removal write
-half sits in Needs Human, so the lane files nothing for it. The runtime
-dependency boundary bars a third direct package, so a runtime half composes from
-`muniment-core` and the standard library alone
-(`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs every
-Windows-only test target, including `browser_control_windows_identity`
-(`.github/workflows/ci.yml:345`). `test/smoke.sh` guards the target list against
-every Windows-only test target.
+DONE 2026-08-27 — the Welcome session half and both installer read slices landed
+(MUNIDESK-1504, 1505, and 1506). `serve_windows_attach_session_with_reader`
+(`src-tauri/core/src/attach/windows_session.rs:21`) reads the four-byte prefix,
+verifies the peer, reads the frame body, and writes one Welcome frame, so it
+follows the read-order amendment. `resolve_live_windows_payload_scopes`
+(`src-tauri/core/src/windows_payload.rs:74`) resolves both payload roots through
+`SHGetKnownFolderPath`. `list_observed_registrations`
+(`src-tauri/core/src/windows_task_service.rs:332`) enumerates the
+`\Muniment\Runtime-*` tasks for the two uninstallers. No listener accepts a
+connection and no surface calls `Run`, so the ADR 0012 attach admission gate
+still holds.
+
+NEXT — one slice remains before the Windows accept loop composes. The listener
+must serve more than one pipe instance. `bind`
+(`src-tauri/core/src/attach/windows_listener.rs:84`) still passes `nMaxInstances`
+as one, and `accept` (`:131`) takes the only handle, so the bound path resolves
+to nothing after it returns. The loop then binds under the instance lock and
+joins the accept and session halves. Its shape is `serve_next_macos_attach`
+(`src-tauri/core/src/attach/macos_listener.rs:128`). The installer band runs
+beside that slice. Both of its read slices landed, so its next slice resolves the
+live payload and both roots for `ensure_task_registration`
+(`src-tauri/core/src/windows_task_service.rs:384`). The removal write half sits
+in Needs Human, so the lane files nothing for it. The runtime dependency boundary
+bars a third direct package, so a runtime half composes from `muniment-core` and
+the standard library alone (`test/runtime-dependency-boundary.sh`). The Windows
+preflight on CI runs every Windows-only test target, including
+`browser_control_windows_identity` (`.github/workflows/ci.yml:345`).
+`test/smoke.sh` guards the target list against every Windows-only test target.
+
+DECIDED 2026-08-27 (planner, read `windows_state_directory` beside `dirs-sys`
+0.5.0) — the Windows runtime resolves its state root through the Shell known
+folders. `windows_state_directory` (`src-tauri/runtime/src/directories.rs:71`)
+reads `%APPDATA%` from the environment. The ADR 0012 Windows runtime state
+directory amendment (`docs/decisions/0012-user-level-runtime-service.md:1130`)
+requires that path to equal the directory the desktop opens through Tauri, and
+Tauri reaches it through `dirs::data_dir`. `dirs-sys` 0.5.0 calls
+`SHGetKnownFolderPath` with `FOLDERID_RoamingAppData` rather than the
+environment. A child process inherits `%APPDATA%` from its parent, so the two
+roots can differ and the runtime can open a journal the desktop never reads. The
+runtime therefore reads `FOLDERID_RoamingAppData` for its state root, and it
+resolves its diagnostic root from `FOLDERID_LocalAppData` the same way. That
+diagnostic root has no live resolver today, so `write_windows_diagnostic`
+(`src-tauri/runtime/src/windows_activation.rs:148`) has no caller on Windows.
 
 DECIDED 2026-08-27 (planner, read `WindowsAttachListener::bind` beside the macOS
 accept loop) — the Windows attach pipe carries more than one instance. `bind`
