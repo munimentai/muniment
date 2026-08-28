@@ -80,7 +80,7 @@ fn registers_leaves_unchanged_and_refuses_a_foreign_task() {
 fn lists_a_registered_runtime_task_until_it_is_removed() {
     let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
     let sid = current_process_user_sid().unwrap();
-    let uri = format!(r"\Muniment\Runtime-{sid}");
+    let uri = format!(r"\Muniment\Runtime-{}", sid.as_str());
 
     {
         let mut fixture = SchedulerFixture::new(sid.as_str());
