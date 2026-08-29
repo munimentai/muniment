@@ -76,11 +76,7 @@ impl DesktopClientHolder {
         self.with_client(DesktopClient::sign_in)
     }
 
-    pub fn thread_summaries(
-        &self,
-        limit: u8,
-        cursor: Option<&str>,
-    ) -> Result<Value, ClientError> {
+    pub fn thread_summaries(&self, limit: u8, cursor: Option<&str>) -> Result<Value, ClientError> {
         self.with_client(|client| client.thread_summaries(limit, cursor))
     }
 
@@ -147,11 +143,7 @@ impl DesktopClientHolder {
         self.with_client(|client| client.run_permission_answer(run_id, gate_id, answer))
     }
 
-    pub fn run_steer(
-        &self,
-        run_id: &str,
-        text: &str,
-    ) -> Result<RunMessageAccepted, ClientError> {
+    pub fn run_steer(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError> {
         self.with_client(|client| client.run_steer(run_id, text))
     }
 

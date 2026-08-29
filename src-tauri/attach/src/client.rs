@@ -502,8 +502,7 @@ mod linux {
         ArtifactWindowGrant, AuthorizationSummary, ClientError, MigrationControlFailure,
         MigrationControlOutcome, PendingPermission, PermissionAnswerAccepted, PermissionDecision,
         RedactedRunEvent, RunCancelAccepted, RunOpenPage, RunStartAccepted, RunStreamMessage,
-        RunStreamSubscription,
-        ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
+        RunStreamSubscription, ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
     };
     use crate::client_stream::{
         read_approval_value, read_approval_value_with_prefix, read_exact_before, read_value,
