@@ -92,5 +92,6 @@ pub use windows_attach_activation::{
 #[cfg(target_os = "windows")]
 pub use windows_attach_loop::WindowsAttachAcceptor;
 pub use windows_attach_loop::{
-    run_windows_attach_accept_loop, WindowsAttachAcceptBoundary, WindowsAttachAcceptOutcome,
+    run_windows_attach_accept_loop, WindowsAttachAcceptBoundary, WindowsAttachAcceptLoopExit,
+    WindowsAttachAcceptOutcome, MAX_CONSECUTIVE_FAILED_ACCEPTS,
 };

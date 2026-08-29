@@ -13,6 +13,8 @@ use std::path::Path;
 
 const ACCEPT_TIMEOUT: Duration = Duration::from_millis(100);
 const FAILED_ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(50);
+/// The consecutive failed accept limit for one activation.
+pub const MAX_CONSECUTIVE_FAILED_ACCEPTS: usize = 5;
 
 /// The result of one bounded attach accept and serve attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,20 +70,38 @@ fn windows_attach_accept_outcome(
     }
 }
 
-/// Serves Windows attach sessions until the stop channel fires or disconnects.
+/// The reason the Windows attach accept loop ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowsAttachAcceptLoopExit {
+    Stopped,
+    Failed,
+}
+
+/// Serves Windows attach sessions until the stop channel fires or accepts keep failing.
 pub fn run_windows_attach_accept_loop(
     acceptor: &mut impl WindowsAttachAcceptBoundary,
     stop: Receiver<()>,
-) {
+) -> WindowsAttachAcceptLoopExit {
+    let mut consecutive_failed_accepts = 0;
     loop {
         match stop.try_recv() {
-            Ok(()) | Err(TryRecvError::Disconnected) => return,
+            Ok(()) | Err(TryRecvError::Disconnected) => {
+                return WindowsAttachAcceptLoopExit::Stopped
+            }
             Err(TryRecvError::Empty) => {}
         }
 
-        let outcome = acceptor.serve_next(Instant::now() + ACCEPT_TIMEOUT);
-        if outcome == WindowsAttachAcceptOutcome::Failed {
-            std::thread::sleep(FAILED_ACCEPT_RETRY_DELAY);
+        match acceptor.serve_next(Instant::now() + ACCEPT_TIMEOUT) {
+            WindowsAttachAcceptOutcome::Failed => {
+                consecutive_failed_accepts += 1;
+                if consecutive_failed_accepts == MAX_CONSECUTIVE_FAILED_ACCEPTS {
+                    return WindowsAttachAcceptLoopExit::Failed;
+                }
+                std::thread::sleep(FAILED_ACCEPT_RETRY_DELAY);
+            }
+            WindowsAttachAcceptOutcome::Served | WindowsAttachAcceptOutcome::Idle => {
+                consecutive_failed_accepts = 0;
+            }
         }
     }
 }
