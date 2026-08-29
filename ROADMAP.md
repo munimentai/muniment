@@ -42,8 +42,10 @@ them must exercise the real contracts. It must add no mocked production path.
 > entries, recorded the macOS cutover, and recorded the Windows activation
 > groundwork. The forty-sixth (2026-08-26) folded the twelve Windows slices
 > into two entries. The forty-seventh (2026-08-28) dropped eight settled Windows
-> rulings and folded three landed slices into one entry. It grows every wave, so
-> it stays the next compaction target.
+> rulings and folded three landed slices into one entry. The forty-eighth
+> (2026-08-29) folded the three served-endpoint slices into one entry and dropped
+> two settled route rulings. It grows every wave, so it stays the next compaction
+> target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -684,39 +686,59 @@ the Windows attach connection route amendment
 `GetNamedPipeClientProcessId` and `QueryFullProcessImageNameW` as the route
 source, and it puts that query after the peer SID check.
 
-NEXT — the Windows runtime serves its attach endpoint, and the desktop client
-reaches it. Five slices carry that work. The first joins the acceptor factory,
-the activation step, and Windows `main`. The second resolves the installed
-Windows desktop executable beside the runtime payload. The third names the
-attach route from a peer image path through an injected reader. The fourth
-reads that image path from a connected pipe. The fifth moves the attach client's
-protocol helpers into a platform-neutral module. Two slices then follow. One
-replaces the idle accept poll. The other joins the route reader to the Windows
-session. Windows `main` (`src-tauri/runtime/src/main.rs:74`) still exits orderly
-without opening the endpoint. The removal write half sits in Needs Human, so the
-lane still files the read and planning halves alone. The Windows preflight on CI
-runs every Windows-only test target (`.github/workflows/ci.yml:345`), and
-`test/smoke.sh` guards that list.
+DONE 2026-08-29 — the served Windows endpoint, the installed desktop resolver,
+and the route decision landed (MUNIDESK-1541, 1542, and 1543). The Windows block
+of `main` (`src-tauri/runtime/src/main.rs:50`) resolves the state directory and
+`%LocalAppData%`, builds `SystemWindowsAttachFactory`, holds the stop sender in a
+local, and runs `run_windows_attach_activation` inside
+`run_recorded_windows_activation`. The Windows runtime therefore serves its
+attach endpoint. `resolve_live_windows_desktop_executable`
+(`src-tauri/core/src/windows_payload.rs:158`) names `muniment.exe` beside the
+installed runtime payload. `name_windows_attach_connection_route`
+(`src-tauri/core/src/attach/windows_route.rs:20`) takes an injected
+`WindowsAttachRouteReader` and an expected desktop path. It routes a
+case-insensitive absolute match to the desktop client. Every other peer,
+including one whose image path cannot be read, takes the companion route.
 
-DECIDED 2026-08-29 (planner, read `run_windows_attach_accept_loop` beside the
-Windows block of `main`) — Windows `main` holds the stop sender for the whole
-activation. `run_windows_attach_accept_loop`
-(`src-tauri/runtime/src/windows_attach_loop.rs:72`) returns on
-`TryRecvError::Disconnected` as well as on a stop message. A `main` that drops
-the sender therefore ends the loop on its first pass, and the endpoint would
-close at once. The join binds the sender to a local variable that outlives the
-`run_recorded_windows_activation` call.
+NEXT — the desktop client reaches the served Windows endpoint. Four slices carry
+that work. The first reads the peer image path from a connected pipe, so the
+route decision gets its live source. The second gives the listener a stop event
+and a blocking accept, which retires the ten hertz idle poll. The third moves the
+attach client's protocol helpers into a platform-neutral module. The fourth keeps
+a listening pipe instance when the replacement instance fails. Three slices then
+follow. One joins the stop event to the runtime accept loop. One joins the route
+reader to the Windows session. One moves `DesktopClient` off its Unix helpers.
+The removal write half sits in Needs Human, so the lane still files the read and
+planning halves alone. The Windows preflight on CI runs every Windows-only test
+target (`.github/workflows/ci.yml:345`), and `test/smoke.sh` guards that list.
 
-DECIDED 2026-08-29 (planner, read the connection-route amendment beside
-`resolve_live_windows_payload`) — the Windows route lands in three slices before
-the session join. The expected desktop image is one pure resolver over the
-installed runtime payload path, because `LiveWindowsPayload` already carries
-that path. The route decision is a second pure half. It takes the expected path
-and an injected image-path reader, which mirrors `name_attach_connection_route`
-(`src-tauri/core/src/attach/connection_route.rs:26`). The native pipe read is the
-third slice, and `src-tauri/core/tests/attach_windows_peer_native.rs` already
-binds a real listener for it. The route comparison ignores ASCII case, because
-Windows file names ignore case.
+DECIDED 2026-08-29 (planner, read `WindowsAttachListener::accept` beside the
+Linux stop thread) — the Windows accept loop stops polling through a stop event
+rather than a cancel call. `take_stream_and_replace`
+(`src-tauri/core/src/attach/windows_listener.rs:265`) swaps the listening handle
+after every accepted connection, so a handle cached for `CancelIoEx` goes stale.
+A manual-reset event does not. The listener therefore gains an `accept_until`
+that waits on the connect event and the stop event together. The runtime loop
+join follows in its own slice, because that loop owns the stop channel.
+
+MEASURED 2026-08-29 (planner, read `take_stream_and_replace` against
+`create_pipe_instance`) — a failed replacement instance leaves the listener with
+no listening pipe. `take_stream_and_replace`
+(`src-tauri/core/src/attach/windows_listener.rs:265`) creates the next instance
+before it hands over the connected one. On failure it returns the error and keeps
+the connected handle in `self.handle`, so the published path has no instance to
+open. The next accept reads `ERROR_PIPE_CONNECTED` from that same connected
+handle and returns the same stale peer. A client that dials in between gets a
+missing endpoint, and the desktop readiness wait then times out.
+
+MEASURED 2026-08-29 (planner, read the Windows block of `main` against
+`run_recorded_windows_activation`) — the runtime skips its start record when
+`%LocalAppData%` cannot resolve. `main` (`src-tauri/runtime/src/main.rs:67`)
+prints to standard error and exits 1 before `run_recorded_windows_activation`
+runs, and a Scheduled Task has no console. Nothing reaches `windows-starts`, so
+neither the five-failure bound nor the `needs_attention` flag sees that failure.
+`record_windows_start` and `record_windows_failed_exit` both take the state
+directory alone, which that branch already holds.
 
 DECIDED 2026-08-29 (planner, read `mod linux` against the `cfg(not(unix))`
 stubs) — the Windows desktop client waits on a helper extraction. `DesktopClient`
@@ -739,8 +761,8 @@ pass creates an event, issues an overlapped `ConnectNamedPipe`, waits it out, an
 cancels it. The Linux listener instead blocks in `accept` and keeps its stop poll
 on a separate thread (`src-tauri/runtime/src/attach_listener.rs:103`). A
 background service that polls at ten hertz defeats Windows timer coalescing and
-costs battery on an idle laptop. The lane files that slice after the `main` join,
-because the join owns the stop sender.
+costs battery on an idle laptop. The `main` join landed, so the lane files the
+listener half of that slice now.
 
 MEASURED 2026-08-28 (planner, read `WindowsAttachEndpointAdapter` against
 `operation_error`) — the desktop readiness probe strands no runtime session. The
@@ -760,8 +782,8 @@ Scheduler ends a task by terminating the process, so no orderly exit runs there.
 `record_start_millis` (`src-tauri/runtime/src/start_record.rs:92`) drops a
 pending start once the five-minute failure window passes. A runtime that lives
 longer than that window leaves no counted failure behind. The loop therefore
-polls a `Receiver<()>` between bounded accepts. The `main` wiring and a shutdown
-handler follow in later slices.
+polls a `Receiver<()>` between bounded accepts. The `main` wiring landed on
+2026-08-29, and the stop event replaces the poll.
 
 DECIDED 2026-08-26 (planner) — the Windows attach instance lock is
 `<state directory>\attach\instance.lock` below `%APPDATA%\ai.muniment.desktop`.
