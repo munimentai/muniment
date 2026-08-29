@@ -131,10 +131,15 @@ instance lock, journal, CAS, Pi, or attach endpoint. The served Windows attach
 endpoint is `\\.\pipe\Muniment\attach-v1-<user-hash>`. The listener holds the
 per-profile instance lock and reads back each pipe instance's owner and
 owner-only DACL.
-For each connection, it reads the four-byte length prefix, verifies the peer
-through impersonation, and then reads the frame body. This boundary rejects
-another OS user, but it does not distinguish hostile processes under the same
-account. The runtime writes owner-only, redacted, bounded diagnostics to
+For each connection, it reads the four-byte length prefix and verifies the peer
+through impersonation. It then gets the peer process ID with
+`GetNamedPipeClientProcessId` and gets that process's image path with
+`QueryFullProcessImageNameW` before it reads the frame body. A path matching the
+installed desktop executable takes the desktop-client route. Every other path
+takes the companion route. The OS-supplied path proves which installed path
+served the connection at the check. It does not prove binary integrity, defend
+against compromise under the same account, or make a claimed Hello client kind
+authoritative. The runtime writes owner-only, redacted, bounded diagnostics to
 `%LocalAppData%\muniment\logs\runtime.log`. These records omit tokens,
 credentials, prompts, model output, local paths, workspace values, connection
 nonces, and peer identifiers.
