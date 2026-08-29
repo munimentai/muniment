@@ -26,14 +26,17 @@ impl WindowsAttachFactory for FakeFactory {
 #[derive(Clone)]
 struct FakeAcceptor {
     calls: Rc<Cell<usize>>,
-    stop: Sender<()>,
+    outcome: WindowsAttachAcceptOutcome,
+    stop: Option<Sender<()>>,
 }
 
 impl WindowsAttachAcceptBoundary for FakeAcceptor {
     fn serve_next(&mut self, _accept_deadline: Instant) -> WindowsAttachAcceptOutcome {
         self.calls.set(self.calls.get() + 1);
-        self.stop.send(()).unwrap();
-        WindowsAttachAcceptOutcome::Served
+        if let Some(stop) = self.stop.take() {
+            stop.send(()).unwrap();
+        }
+        self.outcome
     }
 }
 
@@ -89,7 +92,8 @@ fn a_bound_acceptor_serves_until_stop_and_exits_orderly() {
     let (stop_tx, stop_rx) = mpsc::channel();
     let acceptor = FakeAcceptor {
         calls: Rc::new(Cell::new(0)),
-        stop: stop_tx,
+        outcome: WindowsAttachAcceptOutcome::Served,
+        stop: Some(stop_tx),
     };
     let observed_acceptor = acceptor.clone();
     let factory = FakeFactory {
@@ -103,4 +107,32 @@ fn a_bound_acceptor_serves_until_stop_and_exits_orderly() {
     );
     assert_eq!(observed_acceptor.calls.get(), 1);
     assert!(diagnostics.events.borrow().is_empty());
+}
+
+#[test]
+fn repeated_accept_failures_exit_failed_and_record_the_failure() {
+    let (_stop_tx, stop_rx) = mpsc::channel();
+    let acceptor = FakeAcceptor {
+        calls: Rc::new(Cell::new(0)),
+        outcome: WindowsAttachAcceptOutcome::Failed,
+        stop: None,
+    };
+    let observed_acceptor = acceptor.clone();
+    let factory = FakeFactory {
+        result: Ok(acceptor),
+    };
+    let diagnostics = FakeDiagnostics::default();
+
+    assert_eq!(
+        run_windows_attach_activation(&factory, stop_rx, &diagnostics),
+        WindowsActivationExit::Failed(1)
+    );
+    assert_eq!(
+        observed_acceptor.calls.get(),
+        muniment_runtime::MAX_CONSECUTIVE_FAILED_ACCEPTS
+    );
+    assert_eq!(
+        *diagnostics.events.borrow(),
+        [WindowsDiagnosticEvent::ActivationFailed]
+    );
 }
