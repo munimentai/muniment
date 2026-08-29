@@ -44,8 +44,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > into two entries. The forty-seventh (2026-08-28) dropped eight settled Windows
 > rulings and folded three landed slices into one entry. The forty-eighth
 > (2026-08-29) folded the three served-endpoint slices into one entry and dropped
-> two settled route rulings. It grows every wave, so it stays the next compaction
-> target.
+> two settled route rulings. The forty-ninth (2026-08-29) folded sixteen Windows
+> entries into three and dropped one settled runtime ruling. It grows every wave,
+> so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -491,226 +492,70 @@ the installed payload resolver and its two removal scopes
 `verify_windows_pipe_security_with_reader`
 (`src-tauri/core/src/attach/windows_pipe_security.rs:51`).
 
-DONE 2026-08-26 — the first runtime pure half and both blocking seams landed
-(MUNIDESK-1474, 1475, 1476, and 1477). `install_lock::acquire`
-(`src-tauri/runtime/src/install_lock.rs:34`) takes the per-user install lock
-within a bounded wait, so registration and replacement serialize. It has no
-caller yet. `current_process_user_sid`
-(`src-tauri/core/src/windows_sid.rs:65`) returns this process's own user SID as
-owned bytes and a canonical string, so the pipe path, the task URI, and both
-peer checks now have a source. `deadline_io`
-(`src-tauri/core/src/attach/deadline_io.rs:6`) types `read_exact_before` and
-`write_all_before` against a `DeadlineStream` trait rather than `UnixStream`, so
-a named-pipe transport can reuse the bounded frame reads.
+DONE 2026-08-26 through 2026-08-29 — the whole Windows attach chain below the
+desktop client is built (MUNIDESK-1474 through 1543). `muniment-core` owns the
+per-user pipe. `WindowsAttachListener::bind`
+(`src-tauri/core/src/attach/windows_listener.rs:147`) takes the per-profile
+instance lock, creates the protected owner-only pipe, and reads the owner and
+the DACL back before it publishes the path. `accept` (`:182`) waits out
+`ConnectNamedPipe` within a deadline, and `take_stream_and_replace` (`:265`)
+swaps in the next instance. `serve_next_windows_attach` (`:131`) serves the
+connection on a worker thread, and `serve_windows_attach_session_with_reader`
+(`src-tauri/core/src/attach/windows_session.rs:23`) reads the four-byte prefix,
+verifies the peer, and writes one Welcome frame. `WindowsAttachStream`
+(`src-tauri/core/src/attach/windows_stream.rs:18`) carries the bounded frame
+reads. `connect_windows_attach_endpoint`
+(`src-tauri/core/src/attach/windows_connect.rs:64`) and
+`wait_for_windows_attach_endpoint` (`:66`) are the client halves.
+`name_windows_attach_connection_route`
+(`src-tauri/core/src/attach/windows_route.rs:20`) names the route, and
+`NativeWindowsAttachRouteReader`
+(`src-tauri/core/src/attach/windows_route_native.rs:15`) reads the live peer
+image path through `GetNamedPipeClientProcessId` and
+`QueryFullProcessImageNameW` (MUNIDESK-1546). It has no caller yet.
+`src-tauri/core/src/windows_task_service.rs` reads, plans, writes, enumerates,
+and starts the runtime task. `src-tauri/core/src/windows_payload.rs` resolves
+the installed payload, both removal scopes, and the desktop executable beside
+it.
 
-DONE 2026-08-26 — the last runtime pure half and the pipe endpoint landed
-(MUNIDESK-1479 and 1480). `clear_windows_crash_window`
-(`src-tauri/runtime/src/windows_activation.rs:40`) clears the crash window under
-the per-user install lock, which ADR 0012 requires before an explicit `Run`
-call. `WindowsAttachListener::bind`
-(`src-tauri/core/src/attach/windows_listener.rs:41`) creates the per-user pipe
-with a protected owner-only DACL, then reads the owner and the DACL back through
-`NativeWindowsPipeSecurityReader` before it publishes the path. Every pure half
-of the Windows lane is now built. The listener has no caller, so the ADR 0012
-attach admission gate still holds.
+DONE 2026-08-28 through 2026-08-29 — the runtime and the desktop both drive that
+chain (MUNIDESK-1514 through 1547). Windows `main`
+(`src-tauri/runtime/src/main.rs:50`) resolves the state directory and
+`%LocalAppData%`. A state-directory lookup failure attempts the
+`StartRecordFailed` diagnostic. A `%LocalAppData%` lookup failure records a
+failed start in `windows-starts`. Windows `main` runs
+`run_windows_attach_activation`
+(`src-tauri/runtime/src/windows_attach_activation.rs:35`) inside
+`run_recorded_windows_activation`. That step binds an acceptor through
+`SystemWindowsAttachFactory` (`:58`), then runs
+`run_windows_attach_accept_loop`
+(`src-tauri/runtime/src/windows_attach_loop.rs:70`). The Windows runtime
+therefore serves its attach endpoint. A Tauri setup-hook worker thread
+(`src-tauri/src/main.rs:57`) registers and starts the runtime task through
+`src-tauri/src/windows_runtime_service.rs`, and it records every failed
+registration and start. ADR 0012 carries the admission-gate-lifted amendment
+(`docs/decisions/0012-user-level-runtime-service.md:1177`) and the connection
+route amendment (`:1198`). `THREAT_MODEL.md:130` records the served endpoint
+boundary, and `docs/windows-installers.md` describes the runtime task.
 
-DONE 2026-08-26 — the task-XML parse and the impersonation peer reader landed
-(MUNIDESK-1482 and 1483). `parse_observed_registration`
-(`src-tauri/core/src/windows_task.rs:346`) turns one Task Scheduler XML document
-into an `ObservedRegistration`, so `registration_verdict`,
-`plan_task_registration`, and `plan_task_removal` now have a source.
-`NativeWindowsAttachPeerReader`
-(`src-tauri/core/src/attach/windows_peer_native.rs:20`) calls
-`ImpersonateNamedPipeClient`, `OpenThreadToken`, and `GetTokenInformation` with
-`TokenUser`, copies the client SID, and calls `RevertToSelf`. It reads identity
-alone and no listener calls it, so the ADR 0012 attach admission gate still
-holds. `main` (`src-tauri/runtime/src/main.rs:49`) still returns on Windows
-before it opens the instance lock, and no surface calls `IRegisteredTask::Run`.
+DONE 2026-08-29 — the attach client's protocol helpers are platform-neutral
+(MUNIDESK-1544). `src-tauri/attach/src/protocol_helpers.rs` holds `deadline`,
+`fresh_request_id`, `fresh_nonce`, `is_hex_secret`, `map_frame_error`,
+`map_protocol_error`, `parse_message`, and `reject_protocol_error`. It takes
+randomness from `getrandom` rather than from `/dev/urandom`.
+`src-tauri/attach/src/client_stream.rs` holds the platform-neutral
+`ClientStream` trait, and `muniment-core` implements it for
+`WindowsAttachStream`.
 
-DONE 2026-08-26 — the bounded pipe stream, the read-order amendment, and the
-registration read landed (MUNIDESK-1485, 1486, and 1487). `WindowsAttachStream`
-(`src-tauri/core/src/attach/windows_stream.rs:18`) wraps a connected overlapped
-pipe handle, cancels a timed-out operation through `CancelIoEx`, and implements
-`DeadlineStream`, so `read_exact_before` and `write_all_before` now work over a
-named pipe. ADR 0012 carries the Windows attach peer check read-order amendment
-(`docs/decisions/0012-user-level-runtime-service.md:1142`). It names the
-four-byte frame-length prefix as the sole read that precedes
-`ImpersonateNamedPipeClient`. `read_observed_registration`
-(`src-tauri/core/src/windows_task_service.rs:55`) opens the Task Scheduler
-through COM, reads the runtime task XML, and returns the parsed
-`ObservedRegistration`, so the registration planners now have a live source. It
-reads alone. No surface writes a registration and no listener accepts a
-connection, so the ADR 0012 attach admission gate still holds.
-
-DONE 2026-08-27 — the client endpoint owner check and the registration write
-landed (MUNIDESK-1489 and 1490). `connect_windows_attach_endpoint`
-(`src-tauri/core/src/attach/windows_connect.rs:64`) opens the per-user pipe with
-`SECURITY_IDENTIFICATION` and waits out `ERROR_PIPE_BUSY` within a deadline. It
-then compares the endpoint owner SID with its own before any protocol byte.
-`ensure_task_registration` (`src-tauri/core/src/windows_task_service.rs:147`)
-composes `read_observed_registration` with `plan_task_registration` and
-`ITaskFolder::RegisterTaskDefinition`, so the runtime task has a writer now. No
-listener accepts a connection, so the ADR 0012 attach admission gate still
-holds.
-
-DONE 2026-08-27 — the attach instance lock, the explicit task start, and the
-shared SID copy landed (MUNIDESK-1494, 1495, and 1496).
-`acquire_windows_attach_instance_lock`
-(`src-tauri/core/src/attach/windows_instance_lock.rs:47`) takes
-`<state directory>\attach\instance.lock` within a bounded wait, and its caller
-injects the state directory. `start_registered_task`
-(`src-tauri/core/src/windows_task_service.rs:176`) validates the URI, principal,
-and action through `registration_verdict`, then calls `IRegisteredTask::Run` and
-reads `SCHED_E_ALREADY_RUNNING` as a start. `copy_sid_bytes`
-(`src-tauri/core/src/windows_sid.rs`) is the one pointer-copy helper behind the
-four native SID reads. No surface calls `Run` and no listener accepts a
-connection, so the ADR 0012 attach admission gate still holds.
-
-DONE 2026-08-27 — the listener accept half and the bounded readiness wait
-landed (MUNIDESK-1499 and 1500). `WindowsAttachListener::accept`
-(`src-tauri/core/src/attach/windows_listener.rs:131`) waits on
-`ConnectNamedPipe` until its deadline and returns the connected pipe stream.
-`wait_for_windows_attach_endpoint`
-(`src-tauri/core/src/attach/windows_connect.rs:66`) retries an absent endpoint
-until its deadline and fails immediately on every other connection error.
-
-DONE 2026-08-27 — the Welcome session half and both installer read slices landed
-(MUNIDESK-1504, 1505, and 1506). `serve_windows_attach_session_with_reader`
-(`src-tauri/core/src/attach/windows_session.rs:21`) reads the four-byte prefix,
-verifies the peer, reads the frame body, and writes one Welcome frame, so it
-follows the read-order amendment. `resolve_live_windows_payload_scopes`
-(`src-tauri/core/src/windows_payload.rs:74`) resolves both payload roots through
-`SHGetKnownFolderPath`. `list_observed_registrations`
-(`src-tauri/core/src/windows_task_service.rs:332`) enumerates the
-`\Muniment\Runtime-*` tasks for the two uninstallers. No listener accepts a
-connection and no surface calls `Run`, so the ADR 0012 attach admission gate
-still holds.
-
-DONE 2026-08-28 — the multi-instance pipe, the live registration, and both
-known-folder runtime roots landed (MUNIDESK-1509, 1510, and 1511).
-`create_pipe_instance` (`src-tauri/core/src/attach/windows_listener.rs:232`)
-passes `PIPE_UNLIMITED_INSTANCES` and claims the first instance alone, and
-`accept` (`:121`) creates the next instance before it returns the connected
-stream, so the bound path never resolves to nothing.
-`ensure_live_task_registration`
-(`src-tauri/core/src/windows_task_service.rs:411`) resolves the installed
-payload and both roots through the Shell known folders. On Windows
-`profile_directory` and `config_directory`
-(`src-tauri/runtime/src/directories.rs:71`) read `FOLDERID_RoamingAppData`, and
-`windows_log_directory` (`:118`) reads `FOLDERID_LocalAppData`. No listener
-accepts a connection and no surface calls `Run`, so the ADR 0012 attach
-admission gate still holds.
-
-DONE 2026-08-28 — the accept-and-serve join, the desktop registration caller,
-and the first Windows diagnostic caller landed (MUNIDESK-1514, 1515, and 1516).
-`serve_next_windows_attach` (`src-tauri/core/src/attach/windows_listener.rs:95`)
-accepts one connection within its deadline. It then serves the Welcome session
-on a worker thread under a five-second session deadline.
-`register_runtime_task_at_startup`
-(`src-tauri/src/windows_runtime_service.rs:76`) runs in the Tauri setup hook
-(`src-tauri/src/main.rs:55`). It calls `ensure_live_task_registration` under the
-per-user install lock. `record_windows_diagnostic`
-(`src-tauri/runtime/src/main.rs:153`) records the invalid-arguments exit through
-`write_windows_diagnostic`. No listener binds under the instance lock and no
-surface calls `Run`, so the ADR 0012 attach admission gate still holds.
-
-DONE 2026-08-28 — the locked bind, registration diagnostics, and Windows
-runtime start record landed (MUNIDESK-1518, 1519, and 1520).
-`WindowsAttachListener::bind`
-(`src-tauri/core/src/attach/windows_listener.rs:147`) acquires the per-profile
-instance lock before it creates the first pipe instance. The listener holds the
-lock for its lifetime, so the ADR 0012 attach admission gate is open.
-`register_runtime_task` (`src-tauri/src/windows_runtime_service.rs:62`) records
-both unavailable and timed-out install locks as
-`event=install_lock_unavailable message=install lock unavailable`. It records
-`NoInstalledPayload`, refused, and failed outcomes as
-`event=runtime_task_registration_failed message=runtime task registration failed`.
-Registered, updated, and unchanged outcomes write nothing. Windows `main`
-(`src-tauri/runtime/src/main.rs:74`) now calls `run_recorded_windows_activation`,
-which records each start and exit. It stops the restart loop at the failure
-threshold.
-
-DONE 2026-08-28 — the lifted admission gate, the desktop start path, and the
-Windows install page landed (MUNIDESK-1521, 1523, and 1524). The ADR 0012
-**Windows attach admission gate lifted** amendment
-(`docs/decisions/0012-user-level-runtime-service.md:1177`) names the three checks
-that guard the endpoint, and it permits `IRegisteredTask::Run`.
-`THREAT_MODEL.md:130` records the served endpoint boundary. `start_runtime_task`
-(`src-tauri/src/windows_runtime_service.rs:38`) checks the attach endpoint,
-clears the crash window, and starts the registered task through
-`start_registered_task`. `docs/windows-installers.md` describes the runtime task
-as the shipped build behaves.
-
-DONE 2026-08-28 — the expected start payload, the runtime accept loop, and the
-desktop start caller landed (MUNIDESK-1526, 1527, and 1528).
-`start_registered_task` (`src-tauri/core/src/windows_task_service.rs:257`) takes
-the expected payload as a parameter, so the desktop and the registrar resolve it
-the same way. `run_windows_attach_accept_loop`
-(`src-tauri/runtime/src/windows_attach_loop.rs:23`) polls a `Receiver<()>`
-between bounded accept attempts, and it backs off after a failed attempt.
-`src-tauri/runtime/tests/windows_attach_loop.rs` drives that loop on Linux
-through the `WindowsAttachAcceptBoundary` trait. `start_runtime_task_at_startup`
-(`src-tauri/src/windows_runtime_service.rs:167`) runs in the Tauri setup hook
-(`src-tauri/src/main.rs:57`), and it records every failed start as
-`event=runtime_task_start_failed`.
-
-DONE 2026-08-28 — the removal planner join, the Windows acceptor, the endpoint
-readiness wait, and the attach frame extraction landed (MUNIDESK-1530, 1531,
-1532, and 1533). `plan_live_task_removals`
-(`src-tauri/core/src/windows_task_service.rs:431`) pairs every enumerated
-registration with its `plan_task_removal` result for both live uninstaller
-scopes. `WindowsAttachAcceptor`
-(`src-tauri/runtime/src/windows_attach_loop.rs:32`) binds `WindowsAttachListener`
-and maps each `WindowsAttachAcceptError` to an outcome. `start_runtime_task`
-(`src-tauri/src/windows_runtime_service.rs:51`) waits for the attach endpoint
-after `IRegisteredTask::Run` accepts the call. It records a timed-out wait as a
-failed start. `client_stream` (`src-tauri/attach/src/client_stream.rs`) types
-`read_exact_before`, `write_all_before`, `read_value`, and both approval readers
-against a `ClientStream` trait with one `UnixStream` implementation.
-
-DONE 2026-08-29 — the bind-and-serve activation step, the platform-neutral
-client stream, the startup worker thread, and the connection-route amendment
-landed (MUNIDESK-1536, 1537, 1538, and 1539). `run_windows_attach_activation`
-(`src-tauri/runtime/src/windows_attach_activation.rs:35`) binds an acceptor
-through a factory. It maps a contended instance lock to `Orderly(0)` with the
-`InstanceLockWait` diagnostic, and it maps every other bind failure to
-`Failed(1)` with the `ActivationFailed` diagnostic. `SystemWindowsAttachFactory`
-(`:58`) is the production factory, and it has no caller. `DesktopClient`
-(`src-tauri/attach/src/client.rs:2155`) holds a boxed `ClientStream`, and
-`muniment-core` implements that trait for `WindowsAttachStream`
-(`src-tauri/core/src/attach/windows_stream.rs:162`). The Tauri setup hook
-(`src-tauri/src/main.rs:57`) spawns one worker thread for the Windows
-registration and start, so the first window waits for neither. ADR 0012 carries
-the Windows attach connection route amendment
-(`docs/decisions/0012-user-level-runtime-service.md:1198`). It names
-`GetNamedPipeClientProcessId` and `QueryFullProcessImageNameW` as the route
-source, and it puts that query after the peer SID check.
-
-DONE 2026-08-29 — the served Windows endpoint, the installed desktop resolver,
-and the route decision landed (MUNIDESK-1541, 1542, and 1543). The Windows block
-of `main` (`src-tauri/runtime/src/main.rs:50`) resolves the state directory and
-`%LocalAppData%`, builds `SystemWindowsAttachFactory`, holds the stop sender in a
-local, and runs `run_windows_attach_activation` inside
-`run_recorded_windows_activation`. The Windows runtime therefore serves its
-attach endpoint. `resolve_live_windows_desktop_executable`
-(`src-tauri/core/src/windows_payload.rs:158`) names `muniment.exe` beside the
-installed runtime payload. `name_windows_attach_connection_route`
-(`src-tauri/core/src/attach/windows_route.rs:20`) takes an injected
-`WindowsAttachRouteReader` and an expected desktop path. It routes a
-case-insensitive absolute match to the desktop client. Every other peer,
-including one whose image path cannot be read, takes the companion route.
-
-NEXT — the desktop client reaches the served Windows endpoint. Four slices carry
-that work. The first reads the peer image path from a connected pipe, so the
-route decision gets its live source. The second gives the listener a stop event
-and a blocking accept, which retires the ten hertz idle poll. The third moves the
-attach client's protocol helpers into a platform-neutral module. The fourth keeps
-a listening pipe instance when the replacement instance fails. Three slices then
-follow. One joins the stop event to the runtime accept loop. One joins the route
-reader to the Windows session. One moves `DesktopClient` off its Unix helpers.
-The removal write half sits in Needs Human, so the lane still files the read and
-planning halves alone. The Windows preflight on CI runs every Windows-only test
-target (`.github/workflows/ci.yml:345`), and `test/smoke.sh` guards that list.
+NEXT — the desktop client reaches the served Windows endpoint. Two independent
+slices carry that work. The first gives the listener a stop event and a blocking
+`accept_until`, which retires the ten hertz idle poll. The second joins the route
+reader to the Windows session. Two slices then follow. One joins the stop event
+to the runtime accept loop. One opens a `DesktopClient` over the per-user pipe
+from the desktop. The removal write half sits in Needs Human, so the lane still
+files the read and planning halves alone.
+The Windows preflight on CI runs every Windows-only test target
+(`.github/workflows/ci.yml:345`), and `test/smoke.sh` guards that list.
 
 DECIDED 2026-08-29 (planner, read `WindowsAttachListener::accept` beside the
 Linux stop thread) — the Windows accept loop stops polling through a stop event
@@ -721,37 +566,27 @@ A manual-reset event does not. The listener therefore gains an `accept_until`
 that waits on the connect event and the stop event together. The runtime loop
 join follows in its own slice, because that loop owns the stop channel.
 
-MEASURED 2026-08-29 (planner, read `take_stream_and_replace` against
-`create_pipe_instance`) — a failed replacement instance leaves the listener with
-no listening pipe. `take_stream_and_replace`
-(`src-tauri/core/src/attach/windows_listener.rs:265`) creates the next instance
-before it hands over the connected one. On failure it returns the error and keeps
-the connected handle in `self.handle`, so the published path has no instance to
-open. The next accept reads `ERROR_PIPE_CONNECTED` from that same connected
-handle and returns the same stale peer. A client that dials in between gets a
-missing endpoint, and the desktop readiness wait then times out.
+DONE 2026-08-29 — the listener recovers when replacement creation fails
+(MUNIDESK-1549). `take_stream_and_replace`
+(`src-tauri/core/src/attach/windows_listener.rs:275`) returns the connected
+stream and leaves the listening handle empty when it cannot create a replacement.
+If replacement creation fails, each later `WindowsAttachListener::accept` call
+(`:189`) retries it once. The endpoint accepts a new client after a retry succeeds.
 
-MEASURED 2026-08-29 (planner, read the Windows block of `main` against
-`run_recorded_windows_activation`) — the runtime skips its start record when
-`%LocalAppData%` cannot resolve. `main` (`src-tauri/runtime/src/main.rs:67`)
-prints to standard error and exits 1 before `run_recorded_windows_activation`
-runs, and a Scheduled Task has no console. Nothing reaches `windows-starts`, so
-neither the five-failure bound nor the `needs_attention` flag sees that failure.
-`record_windows_start` and `record_windows_failed_exit` both take the state
-directory alone, which that branch already holds.
+DONE 2026-08-29 — the runtime bounds consecutive failed accepts
+(MUNIDESK-1551). `run_windows_attach_accept_loop`
+(`src-tauri/runtime/src/windows_attach_loop.rs:81`) returns `Failed` after five
+consecutive `WindowsAttachAcceptOutcome::Failed` results. A served connection or
+an idle accept resets the count. `run_windows_attach_activation`
+(`src-tauri/runtime/src/windows_attach_activation.rs:35`) records an
+`ActivationFailed` diagnostic and returns `Failed(1)` when the loop fails.
 
-DECIDED 2026-08-29 (planner, read `mod linux` against the `cfg(not(unix))`
-stubs) — the Windows desktop client waits on a helper extraction. `DesktopClient`
-(`src-tauri/attach/src/client.rs:2155`) and its whole impl block name no
-`UnixStream`, so the type itself is portable. Its handshake and request path
-still call `deadline`, `fresh_request_id`, `fresh_nonce`, `is_hex_secret`,
-`map_frame_error`, `map_protocol_error`, `parse_message`, and
-`reject_protocol_error`. All eight live inside `#[cfg(unix)] mod linux` (`:497`),
-so Windows gets the `UnsupportedPlatform` stub (`:4307`). `random_bytes`
-(`:3990`) also reads `/dev/urandom`, which Windows does not have. The lane
-therefore moves those helpers into a platform-neutral module and takes
-randomness from `getrandom`, which `muniment-core` already depends on. The
-`DesktopClient` move follows in a later slice.
+DONE 2026-08-29 — the desktop client and its handshake are platform-neutral
+(MUNIDESK-1550). `src-tauri/attach/src/desktop_client.rs` holds `DesktopClient`,
+its impl block, and `handshake_desktop_client`. The client uses the
+platform-neutral `ClientStream` trait. `src-tauri/attach/src/lib.rs` exports the
+client and handshake when the `client` feature is active. The Windows connect
+follows in a later slice.
 
 MEASURED 2026-08-28 (planner, read `run_windows_attach_accept_loop` against the
 Linux stop thread) — the idle Windows accept loop wakes ten times a second for
