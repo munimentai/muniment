@@ -547,16 +547,13 @@ randomness from `getrandom` rather than from `/dev/urandom`.
 `ClientStream` trait, and `muniment-core` implements it for
 `WindowsAttachStream`.
 
-NEXT — the desktop client reaches the served Windows endpoint. Five slices carry
-that work, and none of them depends on another. The first keeps a listening pipe
-instance when the replacement instance fails. The second gives the listener a
-stop event and a blocking `accept_until`, which retires the ten hertz idle poll.
-The third joins the route reader to the Windows session. The fourth moves
-`DesktopClient` and its handshake into a platform-neutral module. The fifth
-bounds the consecutive failed accepts in the runtime accept loop. Two slices
-then follow. One joins the stop event to the runtime accept loop. One opens a
-`DesktopClient` over the per-user pipe from the desktop. The removal write half
-sits in Needs Human, so the lane still files the read and planning halves alone.
+NEXT — the desktop client reaches the served Windows endpoint. Two independent
+slices carry that work. The first gives the listener a stop event and a blocking
+`accept_until`, which retires the ten hertz idle poll. The second joins the route
+reader to the Windows session. Two slices then follow. One joins the stop event
+to the runtime accept loop. One opens a `DesktopClient` over the per-user pipe
+from the desktop. The removal write half sits in Needs Human, so the lane still
+files the read and planning halves alone.
 The Windows preflight on CI runs every Windows-only test target
 (`.github/workflows/ci.yml:345`), and `test/smoke.sh` guards that list.
 
@@ -569,38 +566,27 @@ A manual-reset event does not. The listener therefore gains an `accept_until`
 that waits on the connect event and the stop event together. The runtime loop
 join follows in its own slice, because that loop owns the stop channel.
 
-MEASURED 2026-08-29 (planner, read `take_stream_and_replace` against
-`create_pipe_instance`) — a failed replacement instance leaves the listener with
-no listening pipe. `take_stream_and_replace`
-(`src-tauri/core/src/attach/windows_listener.rs:265`) creates the next instance
-before it hands over the connected one. On failure it returns the error and keeps
-the connected handle in `self.handle`, so the published path has no instance to
-open. The next accept reads `ERROR_PIPE_CONNECTED` from that same connected
-handle and returns the same stale peer. A client that dials in between gets a
-missing endpoint, and the desktop readiness wait then times out.
+DONE 2026-08-29 — the listener recovers when replacement creation fails
+(MUNIDESK-1549). `take_stream_and_replace`
+(`src-tauri/core/src/attach/windows_listener.rs:275`) returns the connected
+stream and leaves the listening handle empty when it cannot create a replacement.
+If replacement creation fails, each later `WindowsAttachListener::accept` call
+(`:189`) retries it once. The endpoint accepts a new client after a retry succeeds.
 
-MEASURED 2026-08-29 (planner, read `run_windows_attach_accept_loop` against
-`run_windows_attach_activation`) — a Windows accept loop that keeps failing
-spins for the whole logon session. The loop
-(`src-tauri/runtime/src/windows_attach_loop.rs:70`) sleeps 50 milliseconds after
-a `Failed` outcome and retries with no bound. It returns `()`, so
-`run_windows_attach_activation` answers `Orderly(0)` however the loop ends.
-Repeated accept-event creation errors map to `WindowsAttachAcceptOutcome::Failed`,
-yet they write no diagnostic and reach no exit. The five-failure bound in
-`run_recorded_windows_activation` counts process starts alone, so it never sees
-an in-process spin.
+DONE 2026-08-29 — the runtime bounds consecutive failed accepts
+(MUNIDESK-1551). `run_windows_attach_accept_loop`
+(`src-tauri/runtime/src/windows_attach_loop.rs:81`) returns `Failed` after five
+consecutive `WindowsAttachAcceptOutcome::Failed` results. A served connection or
+an idle accept resets the count. `run_windows_attach_activation`
+(`src-tauri/runtime/src/windows_attach_activation.rs:35`) records an
+`ActivationFailed` diagnostic and returns `Failed(1)` when the loop fails.
 
-DECIDED 2026-08-29 (planner, read `impl DesktopClient` against the
-`cfg(not(unix))` stub) — `DesktopClient` moves into a platform-neutral module.
-Its eight protocol helpers already left `mod linux` (MUNIDESK-1544), and the
-struct holds a boxed `ClientStream` (`src-tauri/attach/src/client.rs:2156`), so
-neither the type nor its impl block names `UnixStream`.
-`handshake_desktop_client` (`:3758`) is portable for the same reason. Both still
-sit inside `#[cfg(unix)] mod linux` (`:497`), so Windows gets the
-`UnsupportedPlatform` stub (`:4219`). The lane therefore moves the struct, its
-impl block, and that handshake into their own module, and it deletes the stub.
-`mod linux` reads `runtime_version` directly, so that field takes a `pub(crate)`
-visibility or an accessor. The Windows connect follows in a later slice.
+DONE 2026-08-29 — the desktop client and its handshake are platform-neutral
+(MUNIDESK-1550). `src-tauri/attach/src/desktop_client.rs` holds `DesktopClient`,
+its impl block, and `handshake_desktop_client`. The client uses the
+platform-neutral `ClientStream` trait. `src-tauri/attach/src/lib.rs` exports the
+client and handshake when the `client` feature is active. The Windows connect
+follows in a later slice.
 
 MEASURED 2026-08-28 (planner, read `run_windows_attach_accept_loop` against the
 Linux stop thread) — the idle Windows accept loop wakes ten times a second for
