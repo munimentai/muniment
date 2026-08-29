@@ -76,15 +76,13 @@ impl WindowsAttachFactory for SystemWindowsAttachFactory {
     type Acceptor = crate::WindowsAttachAcceptor;
 
     fn bind(&self) -> Result<Self::Acceptor, WindowsAttachBindFailure> {
-        use muniment_core::attach::{
-            WindowsAttachBindError, WindowsAttachInstanceLockError,
-        };
+        use muniment_core::attach::{WindowsAttachBindError, WindowsAttachInstanceLockError};
 
         crate::WindowsAttachAcceptor::bind(&self.state_directory, self.bounded_wait).map_err(
             |error| match error {
-                WindowsAttachBindError::InstanceLock(
-                    WindowsAttachInstanceLockError::Contended,
-                ) => WindowsAttachBindFailure::Contended,
+                WindowsAttachBindError::InstanceLock(WindowsAttachInstanceLockError::Contended) => {
+                    WindowsAttachBindFailure::Contended
+                }
                 WindowsAttachBindError::InstanceLock(
                     WindowsAttachInstanceLockError::Unavailable,
                 )

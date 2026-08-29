@@ -82,12 +82,12 @@ pub use windows_activation::{
 };
 #[cfg(any(unix, target_os = "windows"))]
 pub use windows_activation::{run_recorded_windows_activation, write_windows_diagnostic};
+#[cfg(target_os = "windows")]
+pub use windows_attach_activation::SystemWindowsAttachFactory;
 pub use windows_attach_activation::{
     run_windows_attach_activation, WindowsAttachBindFailure, WindowsAttachFactory,
     WindowsDiagnosticSink,
 };
-#[cfg(target_os = "windows")]
-pub use windows_attach_activation::SystemWindowsAttachFactory;
 #[cfg(target_os = "windows")]
 pub use windows_attach_loop::WindowsAttachAcceptor;
 pub use windows_attach_loop::{
