@@ -50,8 +50,8 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         use muniment_runtime::{
-            profile_directory, run_recorded_windows_activation, windows_local_app_data,
-            WindowsActivationExit,
+            profile_directory, run_recorded_windows_activation, run_windows_attach_activation,
+            windows_local_app_data, SystemWindowsAttachFactory,
         };
 
         let state_directory = match profile_directory() {
@@ -71,10 +71,16 @@ fn main() {
                 std::process::exit(FAILURE_EXIT_STATUS);
             }
         };
+        let factory =
+            SystemWindowsAttachFactory::new(&state_directory, std::time::Duration::from_secs(2));
+        let diagnostics = MainWindowsDiagnosticSink {
+            local_app_data: &local_app_data,
+        };
+        let (_stop_sender, stop_receiver) = std::sync::mpsc::channel();
         std::process::exit(run_recorded_windows_activation(
-            state_directory,
-            local_app_data,
-            || WindowsActivationExit::Orderly(SUCCESS_EXIT_STATUS),
+            &state_directory,
+            &local_app_data,
+            || run_windows_attach_activation(&factory, stop_receiver, &diagnostics),
         ));
     }
 
@@ -175,6 +181,18 @@ fn record_macos_diagnostic(event: muniment_runtime::MacosDiagnosticEvent) {
         let _ = muniment_runtime::write_macos_diagnostic(directory, event);
     } else {
         muniment_runtime::emit_macos_unified_log(event);
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct MainWindowsDiagnosticSink<'a> {
+    local_app_data: &'a std::path::Path,
+}
+
+#[cfg(target_os = "windows")]
+impl muniment_runtime::WindowsDiagnosticSink for MainWindowsDiagnosticSink<'_> {
+    fn record(&self, event: muniment_runtime::WindowsDiagnosticEvent) {
+        let _ = muniment_runtime::write_windows_diagnostic(self.local_app_data, event);
     }
 }
 
