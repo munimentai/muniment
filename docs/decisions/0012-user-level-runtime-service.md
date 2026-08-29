@@ -1220,3 +1220,25 @@ path cannot be read, takes the companion route.
 
 The route check reads no Hello frame field. A claimed client kind in the Hello
 frame grants no route authority.
+
+## Amendment – 2026-08-29: Windows attach accept loop wake and stop
+
+- Status: accepted
+
+This amendment defines how the Windows attach accept loop waits and stops. It
+changes no runtime code.
+
+### Wait and stop
+
+The loop waits on the pipe connect event and a manual-reset stop event together.
+An idle loop wakes only when a connection arrives or the stop event signals. It
+never wakes on a timer.
+
+When the stop event signals, the listener cancels the pending pipe connect and
+then ends the loop.
+
+### Failed accept bound
+
+Five consecutive failed accepts end the loop with failure, as
+`MAX_CONSECUTIVE_FAILED_ACCEPTS` already enforces. A successful accept resets
+the consecutive failure count.
