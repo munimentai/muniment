@@ -49,7 +49,8 @@ requests converge through the service manager and the existing per-profile
 instance lock. The process that cannot acquire the lock does not open an
 endpoint, journal, or Pi process; it exits successfully only after confirming
 the lock owner is healthy. There is no fallback that spawns a private Pi or a
-second journal.
+second journal. On Windows, a held attach instance lock records an
+`instance_lock_wait` diagnostic and exits with status 0.
 
 Normal idle policy may stop an inactive service only when it has no attached
 surface, active or recoverable run, pending permission gate, Remote Control
@@ -1193,3 +1194,29 @@ A surface may now call `IRegisteredTask::Run` after it validates the task URI,
 principal, and action. A runtime start with invalid arguments still exits before
 it opens runtime state, including the instance lock, journal, CAS, Pi, or attach
 endpoint.
+
+## Amendment – 2026-08-29: Windows attach connection route
+
+- Status: accepted
+
+This amendment names the route served by a Windows attach connection. It
+changes no runtime code.
+
+### Route identity and read order
+
+After the peer SID check succeeds, the listener calls
+`GetNamedPipeClientProcessId` to get the peer process ID. It opens that process
+for limited query access and calls `QueryFullProcessImageNameW` to get the peer
+image path. This query occurs before the listener reads the frame body, so the
+2026-08-24 Windows attach peer check read order still holds.
+
+The expected desktop image is `muniment.exe` beside the installed
+`muniment-runtime.exe`. It resolves to
+`%LocalAppData%\muniment\muniment.exe` for a per-user installation or
+`%ProgramFiles%\muniment\muniment.exe` for a machine installation. A peer image
+path that matches the expected installed desktop executable takes the
+desktop-client route. Every other peer, including one whose process ID or image
+path cannot be read, takes the companion route.
+
+The route check reads no Hello frame field. A claimed client kind in the Hello
+frame grants no route authority.

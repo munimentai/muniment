@@ -53,8 +53,11 @@ fn main() {
             let app_data = app.path().app_data_dir()?;
             #[cfg(target_os = "windows")]
             {
-                windows_runtime_service::register_runtime_task_at_startup(&app_data);
-                windows_runtime_service::start_runtime_task_at_startup(&app_data);
+                let state_directory = app_data.clone();
+                std::thread::spawn(move || {
+                    windows_runtime_service::register_runtime_task_at_startup(&state_directory);
+                    windows_runtime_service::start_runtime_task_at_startup(&state_directory);
+                });
             }
             let app_config = app.path().app_config_dir()?;
             let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
