@@ -696,8 +696,9 @@ DECIDED 2026-08-28 (planner, read `DesktopClient` beside `WindowsAttachStream`)
 — the desktop client reads and writes through a boxed `ClientStream` rather than
 a `UnixStream`. `DesktopClient` (`src-tauri/attach/src/client.rs:2155`) names
 `UnixStream` in its stream field alone, and every operation already calls the
-neutral helpers in `client_stream`. `muniment-core` depends on `muniment-attach`,
-so core owns the `WindowsAttachStream` implementation and the orphan rule holds.
+neutral helpers in `client_stream`. `ClientStream` becomes a public
+`muniment-attach` API, so `muniment-core` can name it. Core implements the trait
+for its local `WindowsAttachStream`, so the orphan rule holds.
 `verify_connected_peer` stays on the Unix entry point, because `getpeereid` takes
 a socket descriptor. `DesktopClient::into_stream` has no caller, and it leaves
 with the field.
