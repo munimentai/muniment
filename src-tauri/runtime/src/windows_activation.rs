@@ -76,6 +76,27 @@ pub fn record_windows_failed_exit(
     start_record::record_failed_exit(state_directory, RECORD_NAME, start)
 }
 
+/// Records a Windows start and its failed activation without writing a diagnostic.
+pub fn record_windows_failed_activation(state_directory: impl AsRef<Path>) -> i32 {
+    let state_directory = state_directory.as_ref();
+    let start = match record_windows_start(state_directory) {
+        Ok((WindowsStartDecision::StopRestartLoop, _)) => return 0,
+        Ok((WindowsStartDecision::Run, start)) => start,
+        Err(error) => {
+            eprintln!("muniment-runtime: start record failed: {error}");
+            return 1;
+        }
+    };
+    match record_windows_failed_exit(state_directory, start) {
+        Ok(WindowsStartDecision::StopRestartLoop) => 0,
+        Ok(WindowsStartDecision::Run) => 1,
+        Err(error) => {
+            eprintln!("muniment-runtime: start record failed: {error}");
+            1
+        }
+    }
+}
+
 /// Records a Windows activation and maps its outcome to a process exit status.
 #[cfg(any(unix, target_os = "windows"))]
 pub fn run_recorded_windows_activation(
