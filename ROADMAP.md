@@ -44,7 +44,7 @@ them must exercise the real contracts. It must add no mocked production path.
 > into two entries. The forty-seventh (2026-08-28) dropped eight settled Windows
 > rulings and folded three landed slices into one entry. The forty-eighth
 > (2026-08-29) folded the three served-endpoint slices into one entry and dropped
-> two settled route rulings. The forty-ninth (2026-08-29) folded eleven Windows
+> two settled route rulings. The forty-ninth (2026-08-29) folded sixteen Windows
 > entries into three and dropped one settled runtime ruling. It grows every wave,
 > so it stays the next compaction target.
 
@@ -521,8 +521,10 @@ it.
 DONE 2026-08-28 through 2026-08-29 — the runtime and the desktop both drive that
 chain (MUNIDESK-1514 through 1547). Windows `main`
 (`src-tauri/runtime/src/main.rs:50`) resolves the state directory and
-`%LocalAppData%`, records a failed start when either one cannot resolve, and
-runs `run_windows_attach_activation`
+`%LocalAppData%`. A state-directory lookup failure attempts the
+`StartRecordFailed` diagnostic. A `%LocalAppData%` lookup failure records a
+failed start in `windows-starts`. Windows `main` runs
+`run_windows_attach_activation`
 (`src-tauri/runtime/src/windows_attach_activation.rs:35`) inside
 `run_recorded_windows_activation`. That step binds an acceptor through
 `SystemWindowsAttachFactory` (`:58`), then runs
@@ -582,10 +584,11 @@ MEASURED 2026-08-29 (planner, read `run_windows_attach_accept_loop` against
 spins for the whole logon session. The loop
 (`src-tauri/runtime/src/windows_attach_loop.rs:70`) sleeps 50 milliseconds after
 a `Failed` outcome and retries with no bound. It returns `()`, so
-`run_windows_attach_activation` answers `Orderly(0)` however the loop ends. A
-broken pipe therefore writes no diagnostic and reaches no exit. The five-failure
-bound in `run_recorded_windows_activation` counts process starts alone, so it
-never sees an in-process spin.
+`run_windows_attach_activation` answers `Orderly(0)` however the loop ends.
+Repeated accept-event creation errors map to `WindowsAttachAcceptOutcome::Failed`,
+yet they write no diagnostic and reach no exit. The five-failure bound in
+`run_recorded_windows_activation` counts process starts alone, so it never sees
+an in-process spin.
 
 DECIDED 2026-08-29 (planner, read `impl DesktopClient` against the
 `cfg(not(unix))` stub) — `DesktopClient` moves into a platform-neutral module.
