@@ -8,10 +8,10 @@ use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
 use muniment_runtime::{
-    clear_windows_crash_window, record_windows_failed_exit, record_windows_start,
-    run_recorded_windows_activation, write_windows_diagnostic, ClearWindowsCrashWindowError,
-    WindowsActivationExit, WindowsDiagnosticEvent, WindowsStartDecision,
-    WINDOWS_RUNTIME_LOG_MAX_BYTES,
+    clear_windows_crash_window, record_windows_failed_activation, record_windows_failed_exit,
+    record_windows_start, run_recorded_windows_activation, write_windows_diagnostic,
+    ClearWindowsCrashWindowError, WindowsActivationExit, WindowsDiagnosticEvent,
+    WindowsStartDecision, WINDOWS_RUNTIME_LOG_MAX_BYTES,
 };
 
 fn directory() -> PathBuf {
@@ -25,6 +25,36 @@ fn directory() -> PathBuf {
     fs::create_dir(&path).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
     path
+}
+
+#[test]
+fn a_failed_windows_activation_without_local_app_data_returns_failure() {
+    let state = directory();
+
+    assert_eq!(record_windows_failed_activation(&state), 1);
+    assert!(fs::read_to_string(state.join("windows-starts"))
+        .unwrap()
+        .starts_with("failure="));
+    assert_eq!(fs::read_dir(&state).unwrap().count(), 1);
+
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn the_fifth_failed_windows_activation_without_local_app_data_stops_restarts() {
+    let state = directory();
+
+    for _ in 0..4 {
+        assert_eq!(record_windows_failed_activation(&state), 1);
+    }
+    assert_eq!(record_windows_failed_activation(&state), 0);
+    assert_eq!(
+        fs::read_to_string(state.join("windows-starts")).unwrap(),
+        "needs_attention=true\n"
+    );
+    assert_eq!(fs::read_dir(&state).unwrap().count(), 1);
+
+    fs::remove_dir_all(state).unwrap();
 }
 
 #[test]

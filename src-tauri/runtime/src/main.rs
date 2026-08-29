@@ -50,8 +50,8 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         use muniment_runtime::{
-            profile_directory, run_recorded_windows_activation, run_windows_attach_activation,
-            windows_local_app_data, SystemWindowsAttachFactory,
+            profile_directory, record_windows_failed_activation, run_recorded_windows_activation,
+            run_windows_attach_activation, windows_local_app_data, SystemWindowsAttachFactory,
         };
 
         let state_directory = match profile_directory() {
@@ -68,7 +68,7 @@ fn main() {
             Ok(directory) => directory,
             Err(error) => {
                 eprintln!("muniment-runtime: {error}");
-                std::process::exit(FAILURE_EXIT_STATUS);
+                std::process::exit(record_windows_failed_activation(&state_directory));
             }
         };
         let factory =
