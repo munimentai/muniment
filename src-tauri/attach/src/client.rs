@@ -510,9 +510,9 @@ mod linux {
         read_approval_value, read_approval_value_with_prefix, read_exact_before, read_value,
         write_all_before,
     };
-    use crate::desktop_client::{handshake_desktop_client, DesktopClient};
     #[cfg(test)]
     use crate::desktop_client::desktop_client_for_test;
+    use crate::desktop_client::{handshake_desktop_client, DesktopClient};
     use crate::protocol_helpers::{
         deadline, fresh_nonce, fresh_request_id, is_hex_secret, is_rfc3339, map_frame_error,
         map_protocol_error, parse_message, reject_protocol_error, validate_capability_revocation,
