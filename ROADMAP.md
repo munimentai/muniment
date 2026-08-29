@@ -736,7 +736,7 @@ MEASURED 2026-08-29 (planner, read the Windows block of `main` against
 `%LocalAppData%` cannot resolve. `main` (`src-tauri/runtime/src/main.rs:67`)
 prints to standard error and exits 1 before `run_recorded_windows_activation`
 runs, and a Scheduled Task has no console. Nothing reaches `windows-starts`, so
-neither the four-failure bound nor the `needs_attention` flag sees that failure.
+neither the five-failure bound nor the `needs_attention` flag sees that failure.
 `record_windows_start` and `record_windows_failed_exit` both take the state
 directory alone, which that branch already holds.
 
