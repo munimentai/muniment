@@ -3,6 +3,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,6 +13,8 @@ use muniment_runtime::{
     WindowsAttachAcceptBoundary, WindowsAttachAcceptOutcome, WindowsAttachAcceptor,
     WindowsAttachStopSignal,
 };
+
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn state_directory() -> PathBuf {
     let timestamp = SystemTime::now()
@@ -45,6 +48,7 @@ fn read_welcome(client: &mut File) -> Welcome {
 
 #[test]
 fn binds_and_serves_with_the_runtime_version() {
+    let _test_guard = TEST_LOCK.lock().unwrap();
     let state_directory = state_directory();
     let mut acceptor = WindowsAttachAcceptor::bind(&state_directory, Duration::ZERO).unwrap();
 
@@ -67,6 +71,7 @@ fn binds_and_serves_with_the_runtime_version() {
 
 #[test]
 fn a_stop_signal_wakes_the_bound_acceptor() {
+    let _test_guard = TEST_LOCK.lock().unwrap();
     let state_directory = state_directory();
     let mut acceptor = WindowsAttachAcceptor::bind(&state_directory, Duration::ZERO).unwrap();
     let stop = acceptor.stop_signal();
