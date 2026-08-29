@@ -545,15 +545,58 @@ DONE 2026-08-29 — the attach client's protocol helpers are platform-neutral
 randomness from `getrandom` rather than from `/dev/urandom`.
 `src-tauri/attach/src/client_stream.rs` holds the platform-neutral
 `ClientStream` trait, and `muniment-core` implements it for
-`WindowsAttachStream`.
+`WindowsAttachStream`. `src-tauri/attach/src/desktop_client_holder.rs` holds
+`DesktopClientHolder` (MUNIDESK-1556).
 
-NEXT — the desktop client reaches the served Windows endpoint. Two independent
-slices carry that work. The first gives the listener a stop event and a blocking
-`accept_until`, which retires the ten hertz idle poll. The second joins the route
-reader to the Windows session. Two slices then follow. One joins the stop event
-to the runtime accept loop. One opens a `DesktopClient` over the per-user pipe
-from the desktop. The removal write half sits in Needs Human, so the lane still
-files the read and planning halves alone.
+DONE 2026-08-29 — the listener stops without a timer, and the session names the
+route it serves (MUNIDESK-1554, 1555). `WindowsAttachStopEvent`
+(`src-tauri/core/src/attach/windows_listener.rs:139`) is a manual-reset event.
+`accept_until` (`:249`) waits on the pipe connect event and the stop event
+together, and it cancels the pending connect when the stop wins.
+`serve_windows_attach_session_with_reader`
+(`src-tauri/core/src/attach/windows_session.rs:23`) takes a
+`WindowsAttachRouteReader` and the expected desktop executable, and it returns the
+named route. `serve_windows_attach_session` (`:75`) supplies
+`NativeWindowsAttachRouteReader` and `resolve_live_windows_desktop_executable`.
+
+DONE 2026-08-29 — `muniment-core` opens a desktop client over the Windows pipe
+(MUNIDESK-1557). `connect_windows_desktop_client`
+(`src-tauri/core/src/attach/windows_desktop_client.rs:47`) waits for the current
+user's endpoint and hands the stream to `handshake_desktop_client`. It has no
+desktop caller yet.
+
+MEASURED 2026-08-29 (planner, read `run_windows_attach_accept_loop` against
+`WindowsAttachListener::accept_until`) — the ten hertz idle poll is still live.
+`ACCEPT_TIMEOUT` (`src-tauri/runtime/src/windows_attach_loop.rs:14`) is 100
+milliseconds, and `WindowsAttachAcceptBoundary::serve_next` still takes an accept
+deadline. The listener gained `accept_until`, and nothing calls it. The loop join
+is the first slice below.
+
+DECIDED 2026-08-29 (planner, read `serve_windows_attach_session_with_reader`
+beside `admit_desktop_client` and `run_bound_attach_listener`) — the Windows
+desktop-client route needs two platform-neutral extractions before it can serve a
+session. The Windows session writes one plain `welcome` frame and closes. Linux
+instead admits that route through `admit_desktop_client`
+(`src-tauri/core/src/attach/desktop_client_admission.rs:47`), which writes a
+`reconnect_welcome` frame and a `DesktopClientAuthorizedGrant` frame, and then
+serves requests through `serve_desktop_client_session`
+(`src-tauri/core/src/attach/linux.rs:2140`). Both are `UnixStream`-bound, and
+`DeadlineStream` already covers `UnixStream` and `WindowsAttachStream`. The
+admission body below the peer check reads and writes through that trait alone, so
+it extracts first. The desktop half needs the same treatment, because
+`serve_desktop_client_at` (`src-tauri/attach/src/client.rs:2538`) binds its retry
+supervisor to `UnixStream`.
+
+NEXT — the desktop client reaches the served Windows endpoint. Four slices carry
+that work. The first joins the stop event to the runtime accept loop, which
+retires the ten hertz idle poll. The second extracts the platform-neutral desktop
+client admission core in `muniment-core`. The third extracts the platform-neutral
+desktop client supervisor loop in `muniment-attach`. The fourth amends ADR 0012
+with the Windows desktop-client route handling and with the service gap behind it.
+The Windows runtime composes no journal, CAS, Pi, or attach service yet, so an
+admitted Windows session answers no operation. That composition is the lane after
+these four. The removal write half sits in Needs Human, so the lane still files
+the read and planning halves alone.
 The Windows preflight on CI runs every Windows-only test target
 (`.github/workflows/ci.yml:345`), and `test/smoke.sh` guards that list.
 
