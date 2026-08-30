@@ -349,7 +349,7 @@ jobs:
           # nightly compiles it on the test VM, so build it here as well. A
           # broken helper then fails this PR instead of the nightly smoke gate.
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin && clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations -framework CoreFoundation -framework CoreGraphics -o /tmp/macos-window-count test/e2e/support/macos-window-count.c'
+            cmd='rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --bins --target aarch64-apple-darwin && clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations -framework CoreFoundation -framework CoreGraphics -o /tmp/macos-window-count test/e2e/support/macos-window-count.c'
           fi
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"
 
