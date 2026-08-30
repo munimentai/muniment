@@ -644,24 +644,33 @@ model, the version and legacy decode, and the validation predicate.
 `credential.rs` keeps the `O_NOFOLLOW` open and the `0o600` create, and it stays
 Linux-gated.
 
-NEXT — three slices run in parallel, and this wave filed all three. The seam
-slice moves `CompanionRecord`
-(`src-tauri/core/src/attach/companion_registry.rs:17`), `ThreadListService`
-(`src-tauri/core/src/attach/linux.rs:711`), its two impls (`linux.rs:1001` and
-`:1014`), and the seven thread request and page types (`linux.rs:661` through
-`:708`) into one platform-neutral attach module, with `linux.rs` re-exports
-under the old paths. The transport slice puts a readable wait on
-`DeadlineStream`. The Unix impl takes the `libc::poll` body from
-`wait_until_readable` (`linux.rs:2391`), `WindowsAttachStream` implements it,
-and both session loops call through the trait. The credential slice builds the
-Windows `load_client_credentials` and `save_client_credentials` twins under the
-RULING below.
+DONE 2026-08-30 — the seam slice landed (MUNIDESK-1579).
+`src-tauri/core/src/attach/thread_service.rs` holds `CompanionRecord`,
+`ThreadListService`, its two impls, and the seven thread request and page
+types, and `linux.rs` re-exports them under the old paths.
 
-The service chain continues behind the seam. `companion_registry.rs` drops its
-Linux gate once `CompanionRecord` moves, with its persist operation injected and
-the `save_client_credentials` default kept Unix. `desktop_service.rs` drops its
-gate after that. The stream-neutral desktop client session loop follows the
-`DeadlineStream` wait.
+MEASURED 2026-08-30 (planner, read the merge log against the last cut) — the
+transport slice and the credential slice both drained without a pull request.
+Under the 2026-08-11 drained-slice rule the lane re-files them in strict
+priority order, with the transport slice first.
+
+NEXT — three slices run in parallel, and this wave filed all three. The
+transport slice puts a readable wait on `DeadlineStream`
+(`src-tauri/core/src/attach/deadline_io.rs:7`). The Unix impl takes the
+`libc::poll` body from `wait_until_readable` (`linux.rs:1822`),
+`WindowsAttachStream` implements it without consuming stream bytes, and both
+`linux.rs` session loops (`:1363` and `:1589`) call through the trait. The
+credential slice builds the Windows `load_client_credentials` and
+`save_client_credentials` twins under the RULING below, with the owner-only
+file security built through `OwnerSecurity`
+(`src-tauri/core/src/windows_security.rs:19`). The registry slice drops the
+`companion_registry.rs` Linux gate, imports `LiveConnectionRegistry` from
+`live_connections`, and keeps the `save_client_credentials` default
+constructor Unix.
+
+The service chain continues behind those slices. `desktop_service.rs` drops
+its gate after the registry slice. The stream-neutral desktop client session
+loop follows the `DeadlineStream` wait.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
