@@ -661,27 +661,32 @@ DONE 2026-08-30 — the Windows credential twins landed (MUNIDESK-1583).
 companion credential store with an owner-only DACL, and both carry the
 signatures of their Linux twins. The RULING below is applied.
 
+DONE 2026-08-30 — the registry gate drop landed (MUNIDESK-1585).
+`companion_registry.rs` carries no Linux gate. It imports
+`LiveConnectionRegistry` from `live_connections` and `CompanionRecord` from
+`thread_service`, and its default constructor gates on Linux and Windows
+together.
+
 MEASURED 2026-08-30 (planner, read the merge log against the last cut) — the
-credential slice merged on its third filing. The registry slice drained its
-second filing, and the session slice drained its first. Neither reached a pull
-request. Under the 2026-08-11 drained-slice rule the lane re-files both in
-strict priority order, with the registry slice first.
+registry slice merged on its third filing. The session slice drained its
+second filing without reaching a pull request. Under the 2026-08-11
+drained-slice rule the lane re-files it in the first position.
 
-NEXT — two slices run in parallel, and this wave filed both. The registry
-slice drops the `companion_registry.rs` Linux gate and imports
-`LiveConnectionRegistry` from `live_connections`. Its default constructor now
-gates on Linux and Windows together, because the credential twins give both
-platforms a `save_client_credentials` with one signature, and macOS keeps the
-test constructor alone. The session slice extracts the desktop client request
-loop (`linux.rs:1332`) into a platform-neutral module generic over
-`DeadlineStream`. That loop reaches `dispatch_request`, `poll_run_streams`,
-and `drain_chat_events` through a seam that `linux.rs` implements, and
-`AttachSessionError` moves with it under a `linux.rs` re-export.
+NEXT — two slices run in parallel, and this wave filed both. The session
+slice extracts the desktop client request loop (`linux.rs:1332`) into a
+platform-neutral module generic over `DeadlineStream`. That loop reaches
+`dispatch_request`, `poll_run_streams`, and `drain_chat_events` through a
+seam that `linux.rs` implements, and `AttachSessionError` moves with it under
+a `linux.rs` re-export. The gate slice drops the `desktop_service.rs` Linux
+gate. Its imports move from `super::linux` to `thread_service`,
+`desktop_service_message`, and the module root. The pre-staged inner gates
+widen where their dependencies are platform-neutral, and the
+`ThreadListService` impl may keep its Linux gate until the run boundaries
+widen.
 
-The service chain continues behind those slices. `desktop_service.rs` drops
-its gate after the registry slice. The dispatch machinery follows the
-extracted session loop in its own slice, because `dispatch_request`
-(`linux.rs:2157`) spans about 1,400 lines.
+The service chain continues behind those slices. The dispatch machinery
+follows the extracted session loop in its own slice, because
+`dispatch_request` (`linux.rs:2157`) spans about 1,400 lines.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
@@ -1500,6 +1505,14 @@ MEASURED 2026-08-14 (seventy-second wave, planner, re-counted the same paths) �
 files, `src-tauri/core/src/attach/linux.rs` is the largest at 3,636 lines and
 has 26 touches. The planning clone compiles it, so a pure-move split is provable
 here. The lane files no split this wave.
+
+MEASURED 2026-08-30 (planner, counted lines) — `src-tauri/src/attach_service.rs`
+now spans 3,516 lines and `src-tauri/src/chat.rs` spans 3,678. The 2026-08-29
+measurement above gives the planning clone a compiling desktop crate with a
+runnable bin suite, which retires the provability blocker both split notes
+named. This wave files the `attach_service.rs` pure-move split as structural
+work. The `chat.rs` split waits for that landing, so the two moves never merge
+across each other.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
 all 31 skipped frontend tests are Windows-only cases. Every one sits behind
