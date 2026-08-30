@@ -638,27 +638,30 @@ DONE 2026-08-30 — the live connection registry is platform-neutral
 (MUNIDESK-1573). `src-tauri/core/src/attach/live_connections.rs` holds
 `LiveConnectionRegistry`, and `linux.rs:29` re-exports it under the old path.
 
-NEXT — three slices reach the served Windows endpoint, and they run in parallel.
-No two of them share a file.
+DONE 2026-08-30 — the companion credential store has a platform-neutral half
+(MUNIDESK-1576). `src-tauri/core/src/attach/credential_store.rs` holds the store
+model, the version and legacy decode, and the validation predicate.
+`credential.rs` keeps the `O_NOFOLLOW` open and the `0o600` create, and it stays
+Linux-gated.
 
-The service chain makes `DesktopAttachService` compile on Windows. Its first
-slice splits `credential.rs`. The store shape, the version and legacy decode, and
-the validation predicate are neutral. The `O_NOFOLLOW` open and the `0o600`
-create stay Unix. `companion_registry.rs` follows that split, then
-`desktop_service.rs`.
+NEXT — three slices run in parallel, and this wave filed all three. The seam
+slice moves `CompanionRecord`
+(`src-tauri/core/src/attach/companion_registry.rs:17`), `ThreadListService`
+(`src-tauri/core/src/attach/linux.rs:711`), its two impls (`linux.rs:1001` and
+`:1014`), and the seven thread request and page types (`linux.rs:661` through
+`:708`) into one platform-neutral attach module, with `linux.rs` re-exports
+under the old paths. The transport slice puts a readable wait on
+`DeadlineStream`. The Unix impl takes the `libc::poll` body from
+`wait_until_readable` (`linux.rs:2391`), `WindowsAttachStream` implements it,
+and both session loops call through the trait. The credential slice builds the
+Windows `load_client_credentials` and `save_client_credentials` twins under the
+RULING below.
 
-The seam slice runs beside the split. `CompanionRecord`
-(`src-tauri/core/src/attach/companion_registry.rs:16`) is a four-field record, and
-`ThreadListService` (`src-tauri/core/src/attach/linux.rs:711`) names it. Every
-other type that trait names already compiles on Windows, so both move into
-platform-neutral modules without waiting for the credential split.
-`CompanionRegistry` itself stays Linux, because it persists through
-`save_client_credentials`.
-
-The transport chain makes the desktop client session loop stream-neutral. Its
-first slice moves the readable wait onto `DeadlineStream`. `wait_until_readable`
-(`src-tauri/core/src/attach/linux.rs:2391`) polls a raw Unix descriptor, and two
-session loops call it.
+The service chain continues behind the seam. `companion_registry.rs` drops its
+Linux gate once `CompanionRecord` moves, with its persist operation injected and
+the `save_client_credentials` default kept Unix. `desktop_service.rs` drops its
+gate after that. The stream-neutral desktop client session loop follows the
+`DeadlineStream` wait.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
@@ -1528,7 +1531,7 @@ No design slice came out of the pass, so the wave spent its whole budget on the
 ADR 0012 extraction lane. The fifty-sixth wave read the same result from the
 access, onboarding, and signed-out fixtures.
 
-## Build gate repair (opened 2026-08-29)
+## Build gate repair (opened 2026-08-29, closed 2026-08-30)
 
 MEASURED 2026-08-29 (planner, read the `desktop-build` step against three CI job
 logs) — the `desktop-build` job reports success when the platform build fails.
@@ -1560,10 +1563,10 @@ scopes, and passes the silent installer verification. macOS reports BUILD GREEN
 and bundles `muniment.app`. The 2026-08-30 failure measurement is settled, and
 the nightly channel can ship again.
 
-NEXT — one slice turns the gate on. It sets `pipefail` on the `desktop-build`
-step and runs `test/desktop-build-retry.sh` under the shell flags CI uses. Judge
-that slice from the raw `desktop-build` job log of its own pull request, because
-the step keeps swallowing its own failure until the slice lands.
+DONE 2026-08-30 — the gate is on (MUNIDESK-1575). The `desktop-build` step runs
+under `set -uo pipefail` (`.github/workflows/ci.yml:397`), so a failed platform
+build now fails its job, and `test/desktop-build-retry.sh` runs under the same
+shell flags. With the all-green measurement above, this section is closed.
 
 ## Stable release and distribution
 
