@@ -6,10 +6,10 @@ mod unix_tests {
     use std::time::{Duration, Instant};
 
     use muniment_core::attach::{
-        decode_frame, serve_windows_attach_session_with_reader, DesktopClientAdmissionError,
-        DesktopClientAuthorizedGrant, ErrorCode, ErrorEnvelope, Welcome, WindowsAttachPeerReader,
-        WindowsAttachRouteReader, WindowsAttachSessionError, WindowsAttachSessionOutcome,
-        WindowsPeerError, WindowsPeerReadError, MAX_FRAME_LENGTH,
+        decode_frame, serve_windows_attach_session_with_reader, Authorization,
+        DesktopClientAdmissionError, DesktopClientAuthorizedGrant, ErrorCode, ErrorEnvelope,
+        Welcome, WindowsAttachPeerReader, WindowsAttachRouteReader, WindowsAttachSessionError,
+        WindowsAttachSessionOutcome, WindowsPeerError, WindowsPeerReadError, MAX_FRAME_LENGTH,
     };
 
     struct FakePeerReader {
@@ -100,6 +100,7 @@ mod unix_tests {
         assert_eq!(welcome.selected, 1);
         assert_eq!(welcome.desktop_version, "1.2.3");
         assert_eq!(welcome.server_nonce.len(), 32);
+        assert_eq!(welcome.authorization, Authorization::Authorized);
         assert!(welcome.approval_challenge.is_empty());
 
         let (grant, grant_length) =
@@ -136,6 +137,7 @@ mod unix_tests {
         assert_eq!(welcome.selected, 1);
         assert_eq!(welcome.desktop_version, "1.2.3");
         assert_eq!(welcome.server_nonce.len(), 32);
+        assert_eq!(welcome.authorization, Authorization::PairingRequired);
         assert_eq!(welcome.approval_challenge.len(), 32);
     }
 
