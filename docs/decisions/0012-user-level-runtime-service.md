@@ -1221,6 +1221,28 @@ path cannot be read, takes the companion route.
 The route check reads no Hello frame field. A claimed client kind in the Hello
 frame grants no route authority.
 
+## Amendment – 2026-08-29: Windows desktop-client route handling
+
+- Status: accepted
+
+This amendment defines the exchange for each Windows attach connection route.
+It changes no runtime code.
+
+### Route exchanges
+
+The desktop-client route runs the desktop-client admission exchange. It writes
+a `reconnect_welcome` frame and then a `DesktopClientAuthorizedGrant` frame.
+The companion route keeps the plain `welcome` frame.
+
+The route check reads no Hello frame field. The peer check and the read order
+from the 2026-08-24 amendment still run first, before any admission byte.
+
+### Service gap and following lane
+
+The Windows runtime composes no journal, CAS, Pi, or attach service. An admitted
+session therefore answers no operation today. Composing those services is the
+lane that follows this amendment.
+
 ## Amendment – 2026-08-29: Windows attach accept loop wake and stop
 
 - Status: accepted
