@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::{
     run_windows_attach_accept_loop, WindowsActivationExit, WindowsAttachAcceptBoundary,
-    WindowsAttachAcceptLoopExit, WindowsDiagnosticEvent,
+    WindowsAttachAcceptLoopExit, WindowsAttachStopSignal, WindowsDiagnosticEvent,
 };
 
 /// A runtime-owned attach bind failure.
@@ -49,7 +49,13 @@ pub fn run_windows_attach_activation(
         }
     };
 
-    match run_windows_attach_accept_loop(&mut acceptor, stop) {
+    let stop_signal = acceptor.stop_signal();
+    std::thread::spawn(move || {
+        let _ = stop.recv();
+        stop_signal.signal();
+    });
+
+    match run_windows_attach_accept_loop(&mut acceptor) {
         WindowsAttachAcceptLoopExit::Stopped => WindowsActivationExit::Orderly(0),
         WindowsAttachAcceptLoopExit::Failed => {
             diagnostics.record(WindowsDiagnosticEvent::ActivationFailed);
