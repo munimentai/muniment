@@ -2994,6 +2994,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("muniment-attach-home-{}", Uuid::now_v7()));
         let config = root.join("config");
         let recorded_home = root.join("recorded-home");
+        std::fs::create_dir(&root).unwrap();
         muniment_core::home::confirm_home(&config, &recorded_home).unwrap();
 
         assert_eq!(
