@@ -184,10 +184,10 @@ describe('installed nightly', () => {
       }
       signInBrowser = await remote({
         hostname: '127.0.0.1', port: 9515, logLevel: 'silent',
-        // A WebKit navigation can hold one command until WebdriverIO's default
-        // retries outlive this test. The helpers below handle that timeout.
+        // A WebKit navigation can hold each command while the page changes.
+        // Keep those expected timeouts below the surrounding sign-in waits.
         ...(process.platform === 'linux'
-          ? { connectionRetryTimeout: 20000, connectionRetryCount: 0 }
+          ? { connectionRetryTimeout: 5000, connectionRetryCount: 0 }
           : {}),
         capabilities: process.platform === 'win32'
           ? { browserName: 'MicrosoftEdge', 'ms:edgeOptions': { args: ['--headless=new', '--disable-gpu'] } }
