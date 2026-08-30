@@ -257,6 +257,14 @@ already holds the assistant text, `receipt_projection` holds the receipt, and
 fields those projections own is a contract call rather than a query rewrite, and
 carrying it out would add columns, so it waits behind the same owner ruling.
 
+MEASURED 2026-08-30 (planner, read the Linux `desktop-build` release log of CI
+run 33307389806) — `chat_thread_open_page` has no production caller. The release
+build of the desktop bin reports it, `newest_owned_workspace_thread`,
+`prepare_new_run_with_session_thread`, `prepare_opened_run`, `event_envelope`,
+and `AttachListenerState::load` as never used. Tests are their only callers, so
+the projection cost above is unpaid today. Whether each one gains a caller or
+leaves the tree is an owner call, so the lane files no slice for it.
+
 ### Capability vocabulary and provenance
 
 DONE — user surfaces say "capabilities". Receipts render only server-supplied
@@ -626,22 +634,31 @@ requests. `serve_desktop_client_session`
 (`src-tauri/core/src/attach/linux.rs:2012`) is `UnixStream`-bound, and
 `desktop_service.rs` still carries `#![cfg(target_os = "linux")]`.
 
-NEXT — two extraction chains reach the served Windows endpoint. The lane files
-the first slice of each, because the two chains share no file.
+DONE 2026-08-30 — the live connection registry is platform-neutral
+(MUNIDESK-1573). `src-tauri/core/src/attach/live_connections.rs` holds
+`LiveConnectionRegistry`, and `linux.rs:29` re-exports it under the old path.
 
-The service chain makes `DesktopAttachService` compile on Windows. Two Linux-only
-roots block it. `LiveConnectionRegistry`
-(`src-tauri/core/src/attach/linux.rs:593`) holds a `HashMap` behind a `Mutex` and
-nothing else, so it moves as it stands. `credential.rs` splits instead. The store
-shape, the version and legacy decode, and the validation predicate are neutral.
-The `O_NOFOLLOW` open and the `0o600` create stay Unix. `companion_registry.rs`
-follows both, then `ThreadListService`
-(`src-tauri/core/src/attach/linux.rs:833`), then `desktop_service.rs`.
+NEXT — three slices reach the served Windows endpoint, and they run in parallel.
+No two of them share a file.
+
+The service chain makes `DesktopAttachService` compile on Windows. Its first
+slice splits `credential.rs`. The store shape, the version and legacy decode, and
+the validation predicate are neutral. The `O_NOFOLLOW` open and the `0o600`
+create stay Unix. `companion_registry.rs` follows that split, then
+`desktop_service.rs`.
+
+The seam slice runs beside the split. `CompanionRecord`
+(`src-tauri/core/src/attach/companion_registry.rs:16`) is a four-field record, and
+`ThreadListService` (`src-tauri/core/src/attach/linux.rs:711`) names it. Every
+other type that trait names already compiles on Windows, so both move into
+platform-neutral modules without waiting for the credential split.
+`CompanionRegistry` itself stays Linux, because it persists through
+`save_client_credentials`.
 
 The transport chain makes the desktop client session loop stream-neutral. Its
 first slice moves the readable wait onto `DeadlineStream`. `wait_until_readable`
-(`src-tauri/core/src/attach/linux.rs:2513`) polls a raw Unix descriptor, and the
-session loop calls it twice.
+(`src-tauri/core/src/attach/linux.rs:2391`) polls a raw Unix descriptor, and two
+session loops call it.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
@@ -1523,52 +1540,30 @@ branch never runs. `test/desktop-build-retry.sh` extracts the same loop but runs
 it under `bash -e -o pipefail`, so the test passes while CI does not. The pipe
 landed on 2026-08-08 with MUNIDESK-1001.
 
-DONE 2026-08-30 — the four repair slices landed (MUNIDESK-1564, 1565, 1566,
-1567). The macOS runtime binary compiles, and the macOS compile preflight builds
-it. The three `chat` tests pass. `attach_home_uses_recorded_home` creates its own
-temporary root. `.github/build-windows-installers.mjs` prints the WiX tool output
-when a bundling pass fails.
+DONE 2026-08-30 — the six repair slices landed (MUNIDESK-1564 through 1567,
+1571, 1572). The macOS runtime binary compiles, and the macOS compile preflight
+builds it. The three `chat` tests pass, and `attach_home_uses_recorded_home`
+creates its own temporary root. `.github/build-windows-installers.mjs` prints the
+WiX tool output when a bundling pass fails. The three racing `attach_service`
+tests now wait on a real event instead of spinning on a short deadline.
+`src-tauri/windows/per-user.wxs` roots `INSTALLDIR` under `TARGETDIR` and sets
+its path at run time. The per-user MSI therefore declares no profile folder, and
+it clears ICE38 and ICE64. The installed location stays `%LOCALAPPDATA%\muniment`, which
+`test/windows-installers.ps1` asserts. `per-machine.wxs` kept its Program Files
+root. The per-user template had arrived on 2026-08-22 with MUNIDESK-1440, and the
+swallowed gate let it merge.
 
-MEASURED 2026-08-30 (planner, read the three `desktop-build` job logs of CI run
-33297926184) — one platform is repaired and two still fail. macOS reports BUILD
-GREEN and bundles `muniment.app`. Linux fails three `attach_service` tests in the
-`muniment-desktop` bin suite. Windows fails `light.exe` on the per-user MSI.
+MEASURED 2026-08-30 (planner, read all three raw `desktop-build` job logs of CI
+run 33307389806) — every platform builds. Linux reports BUILD GREEN and bundles
+the `.deb` and the AppImage. Windows reports BUILD GREEN, bundles both MSI
+scopes, and passes the silent installer verification. macOS reports BUILD GREEN
+and bundles `muniment.app`. The 2026-08-30 failure measurement is settled, and
+the nightly channel can ship again.
 
-MEASURED 2026-08-30 (planner, ran the bin suite five times in the planning clone)
-— the three Linux failures are races rather than fixed breaks.
-`chat_event_supervisor_stops_while_connect_is_pending` failed three of five local
-runs. `desktop_client_stop_finishes_before_restart` failed three of five.
-`release_step_confirms_a_runtime_listener_after_desktop_release` passed all five
-local runs and failed both CI runs. Each one spins on a short deadline, or
-samples a lock that another thread holds for a brief window.
-
-MEASURED 2026-08-30 (planner, read the WiX output the fourth repair slice
-printed) — the per-user MSI fails ICE validation. `light.exe` raises `LGHT0204`
-for ICE38 on the `Path` component and on every `{{resources}}` component. It
-raises `LGHT0204` for ICE64 on the two generated resource directories.
-`src-tauri/windows/per-user.wxs:122` roots `INSTALLDIR` under
-`LocalAppDataFolder`, so every component installs into the user profile. The
-template arrived on 2026-08-22 with MUNIDESK-1440, and the swallowed gate let it
-merge. The 2026-08-21 nightly was the last green Windows build, so the nightly
-channel has shipped nothing since.
-
-RULING 2026-08-30 (planner, read the Tauri MSI bundler beside the WiX ICE
-reference) — the per-user template stops declaring a profile folder. Tauri emits
-`<Component ... KeyPath="yes"><File .../></Component>` for every `{{resources}}`
-entry, so the documented per-component HKCU key path cannot reach those
-components. Tauri also passes no `-sice` and no `-sval` to `light.exe`, and it
-exposes no configuration key for extra light arguments. The template therefore
-roots `INSTALLDIR` under `TARGETDIR` and sets its path at run time. The installed
-location stays `%LOCALAPPDATA%\muniment`, which `test/windows-installers.ps1`
-asserts. `per-machine.wxs` keeps its Program Files root and changes nothing.
-
-NEXT — two repair slices, then the gate turns on. The first makes the three
-`attach_service` tests deterministic. The second makes the per-user MSI pass ICE
-validation. The gate slice comes last, because a working gate over a failing
-build stops every merge. That slice sets `pipefail` on the `desktop-build` step
-and runs `test/desktop-build-retry.sh` under the shell flags CI uses. Judge
-either repair from the raw `desktop-build` job log, because the step still
-swallows its own failure.
+NEXT — one slice turns the gate on. It sets `pipefail` on the `desktop-build`
+step and runs `test/desktop-build-retry.sh` under the shell flags CI uses. Judge
+that slice from the raw `desktop-build` job log of its own pull request, because
+the step keeps swallowing its own failure until the slice lands.
 
 ## Stable release and distribution
 
