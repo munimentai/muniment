@@ -1487,6 +1487,7 @@ mod tests {
     use crate::test_support::append_test_event;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use muniment_core::journal::reducer::reduce;
+    use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
     use muniment_core::sidecar::validate_pi_session;
 
     static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -2005,15 +2006,55 @@ mod tests {
         ));
     }
 
+    const TEST_PI_ARCHIVE: &[u8] = b"muniment-sidecar-test-stub\n";
+    const TEST_PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+        version: PI_ARTIFACT.version,
+        archive: PI_ARTIFACT.archive,
+        byte_size: TEST_PI_ARCHIVE.len() as u64,
+        sha256: "758b0db8f6304639edfca2b779e886f3006afeb006417e49dd6bce53ff2a65ab",
+        executable: PI_ARTIFACT.executable,
+    };
+
     struct FakeCoordinateSink {
         session_root: PathBuf,
+        memory_agent_extension_path: Option<PathBuf>,
+        pi_artifact: PiArtifactDescriptor,
     }
 
     impl FakeCoordinateSink {
         fn new(app_data_dir: &std::path::Path) -> Self {
             Self {
                 session_root: ChatProfile::new(app_data_dir.to_owned()).pi_session_root(),
+                memory_agent_extension_path: None,
+                pi_artifact: PI_ARTIFACT,
             }
+        }
+
+        fn with_pi_stub(
+            app_data_dir: &std::path::Path,
+            pi_root: &std::path::Path,
+            stub: &std::path::Path,
+        ) -> Self {
+            let revision = pi_root.join("revisions").join(TEST_PI_ARTIFACT.version);
+            let executable = revision.join(TEST_PI_ARTIFACT.executable);
+            std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+            std::fs::copy(stub, executable).unwrap();
+            std::fs::write(revision.join(TEST_PI_ARTIFACT.archive), TEST_PI_ARCHIVE).unwrap();
+            std::fs::write(
+                pi_root.join("current"),
+                format!("muniment-pi-pointer-v1\n{}\n", TEST_PI_ARTIFACT.version),
+            )
+            .unwrap();
+            Self {
+                session_root: ChatProfile::new(app_data_dir.to_owned()).pi_session_root(),
+                memory_agent_extension_path: None,
+                pi_artifact: TEST_PI_ARTIFACT,
+            }
+        }
+
+        fn with_memory_agent_extension(mut self, path: PathBuf) -> Self {
+            self.memory_agent_extension_path = Some(path);
+            self
         }
     }
 
@@ -2033,7 +2074,11 @@ mod tests {
         }
 
         fn memory_agent_extension_path(&self) -> Option<PathBuf> {
-            None
+            self.memory_agent_extension_path.clone()
+        }
+
+        fn pi_artifact(&self) -> PiArtifactDescriptor {
+            self.pi_artifact
         }
     }
 
@@ -2745,10 +2790,9 @@ mod tests {
                 }
             });
             std::env::set_var("MUNIMENT_PI_ROOT", &directory);
-            std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
             std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
             coordinate(
-                FakeCoordinateSink::new(&directory),
+                FakeCoordinateSink::with_pi_stub(&directory, &directory, &stub),
                 Arc::clone(&storage),
                 Arc::new(Mutex::new(None)),
                 RuntimeActivityRegistry::new(),
@@ -2778,11 +2822,7 @@ mod tests {
             );
             let _ = stop_receipt_server.send(());
             receipt_server.join().unwrap();
-            for key in [
-                "MUNIMENT_PI_ROOT",
-                "MUNIMENT_PI_TEST_EXECUTABLE",
-                "PI_RESUME_STUB_REQUESTS",
-            ] {
+            for key in ["MUNIMENT_PI_ROOT", "PI_RESUME_STUB_REQUESTS"] {
                 std::env::remove_var(key);
             }
 
@@ -3272,13 +3312,12 @@ mod tests {
         }));
 
         std::env::set_var("MUNIMENT_PI_ROOT", &directory);
-        std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
         std::env::set_var("PI_RESUME_STUB_ARGS", &args_log);
         std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_log);
         std::env::set_var("PI_RESUME_STUB_REQUESTS", &request_log);
         let (sender, receiver) = std::sync::mpsc::channel();
         coordinate(
-            FakeCoordinateSink::new(&directory),
+            FakeCoordinateSink::with_pi_stub(&directory, &directory, &stub),
             Arc::clone(&shared),
             Arc::new(Mutex::new(None)),
             RuntimeActivityRegistry::new(),
@@ -3313,7 +3352,6 @@ mod tests {
         receipt_server.join().unwrap();
         for key in [
             "MUNIMENT_PI_ROOT",
-            "MUNIMENT_PI_TEST_EXECUTABLE",
             "PI_RESUME_STUB_ARGS",
             "PI_RESUME_STUB_PROMPTS",
             "PI_RESUME_STUB_REQUESTS",
@@ -3468,16 +3506,17 @@ mod tests {
         )
         .unwrap();
         std::env::set_var("MUNIMENT_PI_ROOT", &directory);
-        std::env::set_var("MUNIMENT_PI_TEST_EXECUTABLE", &stub);
         std::env::set_var("PI_RESUME_STUB_MEMORY_QUERY", "saffron");
         let (sender, receiver) = std::sync::mpsc::channel();
         run_resume(ResumeLaunch {
-            sink: TauriChatEventSink::new(
-                app.handle().clone(),
-                Arc::clone(
-                    app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
-                        .inner(),
-                ),
+            sink: FakeCoordinateSink::with_pi_stub(
+                &app.path().app_data_dir().unwrap(),
+                &directory,
+                &stub,
+            )
+            .with_memory_agent_extension(
+                app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
+                    .agent_extension_path(),
             ),
             storage: Arc::clone(&shared),
             runtime: Arc::new(Mutex::new(None)),
@@ -3514,11 +3553,7 @@ mod tests {
         });
         assert_eq!(receiver.recv().unwrap(), Ok(()));
         receipt_server.join().unwrap();
-        for key in [
-            "MUNIMENT_PI_ROOT",
-            "MUNIMENT_PI_TEST_EXECUTABLE",
-            "PI_RESUME_STUB_MEMORY_QUERY",
-        ] {
+        for key in ["MUNIMENT_PI_ROOT", "PI_RESUME_STUB_MEMORY_QUERY"] {
             std::env::remove_var(key);
         }
 
