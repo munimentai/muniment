@@ -3,14 +3,18 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::attach::{decode_frame, windows_attach_pipe_path, Welcome};
 use muniment_core::windows_sid::current_process_user_sid;
 use muniment_runtime::{
     WindowsAttachAcceptBoundary, WindowsAttachAcceptOutcome, WindowsAttachAcceptor,
+    WindowsAttachStopSignal,
 };
+
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn state_directory() -> PathBuf {
     let timestamp = SystemTime::now()
@@ -44,13 +48,9 @@ fn read_welcome(client: &mut File) -> Welcome {
 
 #[test]
 fn binds_and_serves_with_the_runtime_version() {
+    let _test_guard = TEST_LOCK.lock().unwrap();
     let state_directory = state_directory();
     let mut acceptor = WindowsAttachAcceptor::bind(&state_directory, Duration::ZERO).unwrap();
-
-    assert_eq!(
-        acceptor.serve_next(Instant::now()),
-        WindowsAttachAcceptOutcome::Idle
-    );
 
     let path = windows_attach_pipe_path(current_process_user_sid().unwrap().as_str()).unwrap();
     let client = thread::spawn(move || {
@@ -60,13 +60,25 @@ fn binds_and_serves_with_the_runtime_version() {
             .open(path)
             .unwrap()
     });
-    assert_eq!(
-        acceptor.serve_next(Instant::now() + Duration::from_secs(1)),
-        WindowsAttachAcceptOutcome::Served
-    );
+    assert_eq!(acceptor.serve_next(), WindowsAttachAcceptOutcome::Served);
 
     let welcome = read_welcome(&mut client.join().unwrap());
     assert_eq!(welcome.desktop_version, env!("CARGO_PKG_VERSION"));
+
+    drop(acceptor);
+    fs::remove_dir_all(state_directory).unwrap();
+}
+
+#[test]
+fn a_stop_signal_wakes_the_bound_acceptor() {
+    let _test_guard = TEST_LOCK.lock().unwrap();
+    let state_directory = state_directory();
+    let mut acceptor = WindowsAttachAcceptor::bind(&state_directory, Duration::ZERO).unwrap();
+    let stop = acceptor.stop_signal();
+    let signaler = thread::spawn(move || stop.signal());
+
+    assert_eq!(acceptor.serve_next(), WindowsAttachAcceptOutcome::Stopped);
+    signaler.join().unwrap();
 
     drop(acceptor);
     fs::remove_dir_all(state_directory).unwrap();

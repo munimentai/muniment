@@ -93,5 +93,5 @@ pub use windows_attach_activation::{
 pub use windows_attach_loop::WindowsAttachAcceptor;
 pub use windows_attach_loop::{
     run_windows_attach_accept_loop, WindowsAttachAcceptBoundary, WindowsAttachAcceptLoopExit,
-    WindowsAttachAcceptOutcome, MAX_CONSECUTIVE_FAILED_ACCEPTS,
+    WindowsAttachAcceptOutcome, WindowsAttachStopSignal, MAX_CONSECUTIVE_FAILED_ACCEPTS,
 };
