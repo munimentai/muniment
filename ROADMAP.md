@@ -433,10 +433,12 @@ chat storage, approval presentation, and desktop client status all ride the
 runtime client on macOS. The installed macOS smoke verifies the bundled payload
 and proves the installed desktop connects to the LaunchAgent runtime.
 
-MEASURED 2026-08-29 (planner, reproduced the macOS module set on Linux) — the
-entry above overstates the macOS lane. The `muniment-runtime` binary does not
-compile for macOS, so no macOS bundle has carried a runtime since 2026-08-21.
-The build gate repair section below holds the measurement and the repair slices.
+DONE 2026-08-30 — the macOS runtime binary compiles again (MUNIDESK-1564).
+Between 2026-08-21 and 2026-08-29 it did not, so no macOS bundle carried a
+runtime across that window. `src-tauri/runtime/src/main.rs` now gates the Linux
+activation imports to Linux, and the macOS branch records a failed activation and
+exits. The macOS compile preflight builds the runtime binary, so the hole cannot
+reopen. The macOS `desktop-build` job reported BUILD GREEN on 2026-08-30.
 
 DONE 2026-08-25 — both macOS attach peers verify the connected socket
 (MUNIDESK-1419, 1455). `peer_effective_uid`
@@ -606,19 +608,49 @@ supervisor loop. ADR 0012 carries the Windows desktop-client route handling and
 the service gap behind it
 (`docs/decisions/0012-user-level-runtime-service.md:1224`).
 
-NEXT — the Windows desktop route serves a desktop client, and the runtime
-composes the services behind it. The first slice runs the desktop-client
-admission exchange on the Windows desktop route. It needs an admission entry
-point that takes the four-byte prefix the session already read, because
+DONE 2026-08-30 — the Windows desktop route runs the admission exchange, and the
+service message types are platform-neutral (MUNIDESK-1568, 1569).
 `serve_windows_attach_session_with_reader`
-(`src-tauri/core/src/attach/windows_session.rs:23`) reads that prefix before the
-peer check. The second slice moves the desktop attach service message types out
-of `attach::linux` into a platform-neutral module, because `desktop_service.rs`
-imports twenty of them from a Linux-only module
-(`src-tauri/core/src/attach/desktop_service.rs:5`). The Windows runtime still
-composes no journal, CAS, Pi, or attach service, so an admitted Windows session
-answers no operation. The removal write half sits in Needs Human, so the lane
-still files the read and planning halves alone.
+(`src-tauri/core/src/attach/windows_session.rs:32`) hands the desktop route to
+`admit_desktop_client_over_stream_with_prefix`. It returns
+`WindowsAttachSessionOutcome::DesktopClient`.
+`src-tauri/core/src/attach/desktop_service_message.rs` holds the message types,
+and `desktop_service.rs` imports them from there.
+
+MEASURED 2026-08-30 (planner, read `serve_windows_attach_on_worker` against
+`serve_desktop_client_session`) — an admitted Windows desktop client is dropped.
+`serve_windows_attach_on_worker`
+(`src-tauri/core/src/attach/windows_listener.rs:199`) discards the session
+result, so the pipe closes right after the grant frame. Nothing serves its
+requests. `serve_desktop_client_session`
+(`src-tauri/core/src/attach/linux.rs:2012`) is `UnixStream`-bound, and
+`desktop_service.rs` still carries `#![cfg(target_os = "linux")]`.
+
+NEXT — two extraction chains reach the served Windows endpoint. The lane files
+the first slice of each, because the two chains share no file.
+
+The service chain makes `DesktopAttachService` compile on Windows. Two Linux-only
+roots block it. `LiveConnectionRegistry`
+(`src-tauri/core/src/attach/linux.rs:593`) holds a `HashMap` behind a `Mutex` and
+nothing else, so it moves as it stands. `credential.rs` splits instead. The store
+shape, the version and legacy decode, and the validation predicate are neutral.
+The `O_NOFOLLOW` open and the `0o600` create stay Unix. `companion_registry.rs`
+follows both, then `ThreadListService`
+(`src-tauri/core/src/attach/linux.rs:833`), then `desktop_service.rs`.
+
+The transport chain makes the desktop client session loop stream-neutral. Its
+first slice moves the readable wait onto `DeadlineStream`. `wait_until_readable`
+(`src-tauri/core/src/attach/linux.rs:2513`) polls a raw Unix descriptor, and the
+session loop calls it twice.
+
+RULING 2026-08-30 (planner) — the Windows companion credential file carries a
+DACL that grants the current user alone. It is built the way
+`src-tauri/core/src/attach/windows_pipe_security.rs` builds the pipe DACL. That
+slice follows the neutral split rather than riding inside it.
+
+The Windows runtime still composes no journal, CAS, Pi, or attach service, so an
+admitted Windows session answers no operation. The removal write half sits in
+Needs Human, so the lane still files the read and planning halves alone.
 The Windows preflight on CI runs every Windows-only test target
 (`.github/workflows/ci.yml:345`), and `test/smoke.sh` guards that list.
 
@@ -1491,38 +1523,52 @@ branch never runs. `test/desktop-build-retry.sh` extracts the same loop but runs
 it under `bash -e -o pipefail`, so the test passes while CI does not. The pipe
 landed on 2026-08-08 with MUNIDESK-1001.
 
-MEASURED 2026-08-29 (planner, read CI run 33278637546) — all three
-`desktop-build` platforms fail today and all three report success. Linux fails
-five tests in the `muniment-desktop` bin suite. Windows fails when the WiX
-`light.exe` runs, and tauri prints no tool output. macOS fails to compile the
-`muniment-runtime` binary. Nightly run 33250122127 reports the same macOS and
-Windows failures honestly, so the nightly has been red since at least 2026-08-27.
+DONE 2026-08-30 — the four repair slices landed (MUNIDESK-1564, 1565, 1566,
+1567). The macOS runtime binary compiles, and the macOS compile preflight builds
+it. The three `chat` tests pass. `attach_home_uses_recorded_home` creates its own
+temporary root. `.github/build-windows-installers.mjs` prints the WiX tool output
+when a bundling pass fails.
 
-MEASURED 2026-08-29 (planner, reproduced with the Linux cfg gates flipped off) —
-the `muniment-runtime` binary has not compiled for macOS since 2026-08-21
-(MUNIDESK-1420). `main.rs` imports `muniment_core::attach::linux` and
-`muniment_runtime::run_runtime_activation` under `cfg(any(target_os = "linux",
-target_os = "macos"))`, and both items are gated to Linux
-(`src-tauri/core/src/attach/mod.rs:24`, `src-tauri/runtime/src/lib.rs:25`). The
-macOS compile preflight misses it, because `cargo check --manifest-path
-src-tauri/Cargo.toml` builds the desktop package alone and reaches the runtime
-lib as a dependency, never its binary. The Linux and Windows preflights each
-build the `muniment-runtime` package, so only macOS carries the hole.
+MEASURED 2026-08-30 (planner, read the three `desktop-build` job logs of CI run
+33297926184) — one platform is repaired and two still fail. macOS reports BUILD
+GREEN and bundles `muniment.app`. Linux fails three `attach_service` tests in the
+`muniment-desktop` bin suite. Windows fails `light.exe` on the per-user MSI.
 
-RULING 2026-08-29 (planner) — the macOS runtime binary compiles before it serves.
-The Linux activation stack stays Linux-gated. The macOS branch of `main` records
-a failed activation and exits until the macOS attach composition lands, and the
-LaunchAgent restart bound already stops that loop at the fifth start. Widening
-the whole Linux activation stack to macOS is a lane, not a repair slice.
+MEASURED 2026-08-30 (planner, ran the bin suite five times in the planning clone)
+— the three Linux failures are races rather than fixed breaks.
+`chat_event_supervisor_stops_while_connect_is_pending` failed three of five local
+runs. `desktop_client_stop_finishes_before_restart` failed three of five.
+`release_step_confirms_a_runtime_listener_after_desktop_release` passed all five
+local runs and failed both CI runs. Each one spins on a short deadline, or
+samples a lock that another thread holds for a brief window.
 
-NEXT — four repair slices, then the gate turns on. The first makes the macOS
-runtime binary compile and adds the runtime binary to the macOS compile
-preflight. The second restores the three failing `chat` tests. The third makes
-`attach_home_uses_recorded_home` create its temporary root. The fourth prints the
-WiX tool output, so the Windows bundling failure names a cause. The gate slice
-comes last, because a working gate over three failing builds stops every merge.
-That slice sets `pipefail` on the `desktop-build` step and runs
-`test/desktop-build-retry.sh` under the shell flags CI uses.
+MEASURED 2026-08-30 (planner, read the WiX output the fourth repair slice
+printed) — the per-user MSI fails ICE validation. `light.exe` raises `LGHT0204`
+for ICE38 on the `Path` component and on every `{{resources}}` component. It
+raises `LGHT0204` for ICE64 on the two generated resource directories.
+`src-tauri/windows/per-user.wxs:122` roots `INSTALLDIR` under
+`LocalAppDataFolder`, so every component installs into the user profile. The
+template arrived on 2026-08-22 with MUNIDESK-1440, and the swallowed gate let it
+merge. The 2026-08-21 nightly was the last green Windows build, so the nightly
+channel has shipped nothing since.
+
+RULING 2026-08-30 (planner, read the Tauri MSI bundler beside the WiX ICE
+reference) — the per-user template stops declaring a profile folder. Tauri emits
+`<Component ... KeyPath="yes"><File .../></Component>` for every `{{resources}}`
+entry, so the documented per-component HKCU key path cannot reach those
+components. Tauri also passes no `-sice` and no `-sval` to `light.exe`, and it
+exposes no configuration key for extra light arguments. The template therefore
+roots `INSTALLDIR` under `TARGETDIR` and sets its path at run time. The installed
+location stays `%LOCALAPPDATA%\muniment`, which `test/windows-installers.ps1`
+asserts. `per-machine.wxs` keeps its Program Files root and changes nothing.
+
+NEXT — two repair slices, then the gate turns on. The first makes the three
+`attach_service` tests deterministic. The second makes the per-user MSI pass ICE
+validation. The gate slice comes last, because a working gate over a failing
+build stops every merge. That slice sets `pipefail` on the `desktop-build` step
+and runs `test/desktop-build-retry.sh` under the shell flags CI uses. Judge
+either repair from the raw `desktop-build` job log, because the step still
+swallows its own failure.
 
 ## Stable release and distribution
 
