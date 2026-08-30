@@ -392,7 +392,7 @@ esac
 
   it('waits for the LaunchAgent and the desktop runtime connection', () => {
     const probe = fs.readFileSync(path.join(root, 'test/e2e/support/macos-runtime-probe.sh'), 'utf8')
-    const attachService = fs.readFileSync(path.join(root, 'src-tauri/src/attach_service.rs'), 'utf8')
+    const attachService = fs.readFileSync(path.join(root, 'src-tauri/src/attach_service/commands.rs'), 'utf8')
     expect(runner).toContain('probe_macos_runtime "$runtime_target" "$app_pid"')
     expect(runner).toContain('runtime_target="gui/$(id -u)/ai.muniment.runtime"')
     expect(probe).toContain("grep -Eq 'state = running'")
