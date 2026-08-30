@@ -655,25 +655,28 @@ The Unix impl holds the `libc::poll` body, `WindowsAttachStream` implements it
 without consuming stream bytes (`windows_stream.rs:153`), and both `linux.rs`
 session loops (`:1363` and `:1588`) call through the trait.
 
-MEASURED 2026-08-30 (planner, read the merge log against the last cut) — the
-credential slice drained a second time, and the registry slice drained its
-first filing. Neither reached a pull request, and the transport slice merged
-from the same batch. Under the 2026-08-11 drained-slice rule the lane re-files
-both in strict priority order, with the credential slice first.
+DONE 2026-08-30 — the Windows credential twins landed (MUNIDESK-1583).
+`load_client_credentials` and `save_client_credentials`
+(`src-tauri/core/src/attach/windows_credential.rs`) read and write the
+companion credential store with an owner-only DACL, and both carry the
+signatures of their Linux twins. The RULING below is applied.
 
-NEXT — three slices run in parallel, and this wave filed all three. The
-credential slice builds the Windows `load_client_credentials` and
-`save_client_credentials` twins under the RULING below, with the owner-only
-file security built through `OwnerSecurity`
-(`src-tauri/core/src/windows_security.rs:19`) and the create-with-security
-pattern in `src-tauri/core/src/windows_user_diagnostics.rs`. The registry
-slice drops the `companion_registry.rs` Linux gate, imports
-`LiveConnectionRegistry` from `live_connections`, and keeps the
-`save_client_credentials` default constructor behind the Linux gate. The
-session slice extracts the desktop client request loop (`linux.rs:1332`) into
-a platform-neutral module generic over `DeadlineStream`. That loop reaches
-`dispatch_request`, `poll_run_streams`, and `drain_chat_events` through a seam
-that `linux.rs` implements.
+MEASURED 2026-08-30 (planner, read the merge log against the last cut) — the
+credential slice merged on its third filing. The registry slice drained its
+second filing, and the session slice drained its first. Neither reached a pull
+request. Under the 2026-08-11 drained-slice rule the lane re-files both in
+strict priority order, with the registry slice first.
+
+NEXT — two slices run in parallel, and this wave filed both. The registry
+slice drops the `companion_registry.rs` Linux gate and imports
+`LiveConnectionRegistry` from `live_connections`. Its default constructor now
+gates on Linux and Windows together, because the credential twins give both
+platforms a `save_client_credentials` with one signature, and macOS keeps the
+test constructor alone. The session slice extracts the desktop client request
+loop (`linux.rs:1332`) into a platform-neutral module generic over
+`DeadlineStream`. That loop reaches `dispatch_request`, `poll_run_streams`,
+and `drain_chat_events` through a seam that `linux.rs` implements, and
+`AttachSessionError` moves with it under a `linux.rs` re-export.
 
 The service chain continues behind those slices. `desktop_service.rs` drops
 its gate after the registry slice. The dispatch machinery follows the
@@ -682,8 +685,8 @@ extracted session loop in its own slice, because `dispatch_request`
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
-`src-tauri/core/src/attach/windows_pipe_security.rs` builds the pipe DACL. That
-slice follows the neutral split rather than riding inside it.
+`src-tauri/core/src/attach/windows_pipe_security.rs` builds the pipe DACL.
+MUNIDESK-1583 applied this ruling.
 
 The Windows runtime still composes no journal, CAS, Pi, or attach service, so an
 admitted Windows session answers no operation. The removal write half sits in
@@ -1476,7 +1479,9 @@ in `src-tauri/core/tests/sidecar_supervisor.rs`. Run 32915107904 failed
 `:722`. Both assertions are wall-clock deadlines around a spawned stub child.
 One of three local runs failed the same way under 120 busy loops on 40 cores,
 and four idle runs each passed in about two seconds. The desktop-ci VM
-serializes its `cargo test` for this reason. The smoke job does not.
+serializes its `cargo test` for this reason. SETTLED 2026-08-25 —
+MUNIDESK-1456 serialized the smoke job's core test run the same day
+(`.github/workflows/ci.yml:197`), so this failure mode is closed.
 
 MEASURED 2026-08-13 (fifty-eighth wave, planner, counted each path with
 `git log --name-only --since=2026-08-01 -- <path>`) — `src-tauri/src/chat.rs` is
