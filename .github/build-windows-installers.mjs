@@ -10,11 +10,19 @@ import {
   tauriSignCommand,
 } from "./lib/windows-signing.mjs";
 
-const run = (...args) => {
+const run = (command, pass, ...args) => {
   const cli = join("node_modules", "@tauri-apps", "cli", "tauri.js");
-  const result = spawnSync(process.execPath, [cli, ...args], { stdio: "inherit" });
-  if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  console.log(`Starting the ${pass} bundling pass.`);
+  const result = spawnSync(process.execPath, [cli, command, ...args], { stdio: "inherit" });
+  const status = result.status ?? 1;
+  if (result.error) {
+    console.error(`The ${pass} bundling pass failed with exit status ${status}.`);
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    console.error(`The ${pass} bundling pass failed with exit status ${status}.`);
+    process.exit(status);
+  }
 };
 
 const msiDirectory = join("src-tauri", "target", "release", "bundle", "msi");
@@ -125,7 +133,7 @@ const restoreRuntime = () => {
 
 // Preserve the normal MSI while the second bundling pass writes the fleet variant.
 // signArgs makes tauri sign the app .exe (before packaging) and the NSIS installer.
-run("build", ...signArgs);
+run("build", "per-user installer", "--verbose", ...signArgs);
 restoreRuntime();
 const userMsi = await soleMsi();
 const savedUserMsi = join(dirname(userMsi), `.${basename(userMsi)}.per-user`);
@@ -136,9 +144,9 @@ await rename(userMsi, savedUserMsi);
 // release artifact and is the only machine MSI uploaded.
 const upgradeBaseMsi = join(dirname(msiDirectory), "machine-upgrade-base.msi");
 // The upgrade-base is a throwaway fixture for the in-place-upgrade test — unsigned.
-run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
+run("build", "machine upgrade-base MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
 await rename(await soleMsi(), upgradeBaseMsi);
-run("build", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", ...signArgs);
+run("build", "machine MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", ...signArgs);
 restoreRuntime();
 rmSync(pristineRuntime, { recursive: true });
 const generatedMachineMsi = await soleMsi();
