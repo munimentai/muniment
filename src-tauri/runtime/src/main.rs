@@ -1,26 +1,26 @@
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, TerminationSignalWait};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use muniment_runtime::{
     config_directory, profile_directory, run_runtime_activation, RuntimeActivationExit,
 };
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use std::sync::mpsc;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const INITIAL_WAIT_INTERVAL: Duration = Duration::from_millis(25);
 // Limit lock polling to one wakeup every two seconds during long waits.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const MAX_WAIT_INTERVAL: Duration = Duration::from_secs(2);
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const UPGRADE_REFRESH_EXIT_STATUS: i32 = 75;
 const FAILURE_EXIT_STATUS: i32 = 1;
 const SUCCESS_EXIT_STATUS: i32 = 0;
@@ -215,7 +215,7 @@ fn test_macos_activation_exit() -> Option<impl FnOnce() -> MacosActivationExit> 
     Some(move || exit)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn macos_activation() -> MacosActivationExit {
     match run(RuntimeDirectorySource::Profile) {
         Ok(RuntimeActivationExit::ManagerStop) => MacosActivationExit::Orderly(SUCCESS_EXIT_STATUS),
@@ -229,7 +229,12 @@ fn macos_activation() -> MacosActivationExit {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "macos")]
+fn macos_activation() -> MacosActivationExit {
+    MacosActivationExit::Failed(FAILURE_EXIT_STATUS)
+}
+
+#[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 enum RuntimeDirectorySource {
     Environment,
@@ -255,7 +260,7 @@ fn handle_arguments() -> Result<bool, String> {
     Ok(true)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn run(runtime_directory_source: RuntimeDirectorySource) -> Result<RuntimeActivationExit, String> {
     let termination_signal = TerminationSignalWait::new().map_err(|error| error.to_string())?;
     let wait_timeout = test_wait_timeout()?;
@@ -292,7 +297,7 @@ fn run(runtime_directory_source: RuntimeDirectorySource) -> Result<RuntimeActiva
     .map_err(|error| error.to_string())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn wait_for_instance_lock(wait_timeout: Option<Duration>) -> Result<(), String> {
     let filesystem = AttachFilesystem::from_environment().map_err(|error| error.to_string())?;
     let started = Instant::now();
@@ -328,7 +333,7 @@ fn wait_for_instance_lock(wait_timeout: Option<Duration>) -> Result<(), String> 
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn test_wait_timeout() -> Result<Option<Duration>, String> {
     let Some(value) = std::env::var_os(WAIT_TIMEOUT_ENV) else {
         return Ok(None);
