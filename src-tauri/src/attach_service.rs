@@ -239,6 +239,8 @@ pub struct AttachCompanionState {
     presenting: Mutex<bool>,
     #[cfg(unix)]
     desktop_supervisor_lifecycle: Mutex<()>,
+    #[cfg(all(test, target_os = "linux"))]
+    desktop_stop_started: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     #[cfg(unix)]
     desktop_client: Mutex<Option<DesktopClientSupervisor>>,
     #[cfg(unix)]
@@ -294,6 +296,8 @@ struct ChatEventStopHandle {
 struct ChatEventStopState {
     stopped: bool,
     stream: Option<UnixStream>,
+    #[cfg(test)]
+    connect_started: Option<std::sync::mpsc::Sender<()>>,
 }
 
 #[cfg(unix)]
@@ -303,12 +307,33 @@ impl InterruptibleConnectState for ChatEventStopState {
     }
 
     fn set_stream(&mut self, stream: Option<UnixStream>) {
+        #[cfg(test)]
+        if stream.is_some() {
+            if let Some(started) = self.connect_started.take() {
+                let _ = started.send(());
+            }
+        }
         self.stream = stream;
     }
 }
 
 #[cfg(unix)]
 impl ChatEventStopHandle {
+    #[cfg(test)]
+    fn for_test() -> (Self, std::sync::mpsc::Receiver<()>) {
+        let (connect_started, started) = std::sync::mpsc::channel();
+        let stop = Self {
+            inner: Arc::new((
+                Mutex::new(ChatEventStopState {
+                    connect_started: Some(connect_started),
+                    ..ChatEventStopState::default()
+                }),
+                Condvar::new(),
+            )),
+        };
+        (stop, started)
+    }
+
     fn stop(&self) {
         let (state, wake) = &*self.inner;
         let mut state = state
@@ -344,6 +369,8 @@ impl AttachCompanionState {
             approval_presenter: Mutex::new(None),
             presenting: Mutex::new(false),
             desktop_supervisor_lifecycle: Mutex::new(()),
+            #[cfg(all(test, target_os = "linux"))]
+            desktop_stop_started: Mutex::new(None),
             desktop_client: Mutex::new(None),
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
@@ -629,6 +656,15 @@ impl AttachCompanionState {
             .desktop_supervisor_lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(all(test, target_os = "linux"))]
+        if let Some(started) = self
+            .desktop_stop_started
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = started.send(());
+        }
         self.stop_chat_events_locked();
         let supervisor = self
             .desktop_client
@@ -711,6 +747,16 @@ impl AttachCompanionState {
         self.stop_desktop_client();
     }
 
+    #[cfg(all(test, target_os = "linux"))]
+    fn observe_desktop_stop_start(&self) -> std::sync::mpsc::Receiver<()> {
+        let (started, receiver) = std::sync::mpsc::channel();
+        *self
+            .desktop_stop_started
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(started);
+        receiver
+    }
+
     #[cfg(target_os = "linux")]
     fn record_presenting(&self, presenting: bool) {
         *self
@@ -749,6 +795,8 @@ impl Default for AttachCompanionState {
             approval_presenter: Mutex::new(None),
             presenting: Mutex::new(false),
             desktop_supervisor_lifecycle: Mutex::new(()),
+            #[cfg(all(test, target_os = "linux"))]
+            desktop_stop_started: Mutex::new(None),
             desktop_client: Mutex::new(None),
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
@@ -1742,16 +1790,10 @@ mod tests {
         old_started_rx.recv().unwrap();
         state.record_connected(true);
 
+        let stop_started = state.observe_desktop_stop_start();
         let stop_state = state.clone();
         let stopper = std::thread::spawn(move || stop_state.record_listener_started());
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while state.desktop_client.try_lock().is_ok() {
-            assert!(
-                Instant::now() < deadline,
-                "desktop client stop did not start"
-            );
-            std::thread::yield_now();
-        }
+        stop_started.recv().unwrap();
         let (new_started, new_started_rx) = mpsc::channel();
         let restart_state = state.clone();
         let restarter = std::thread::spawn(move || {
@@ -1933,7 +1975,7 @@ mod tests {
         // SAFETY: `listener` owns a valid Unix socket descriptor.
         assert_eq!(unsafe { listen(listener.as_raw_fd(), 0) }, 0);
         let queued_stream = UnixStream::connect(&endpoint).unwrap();
-        let stop = ChatEventStopHandle::default();
+        let (stop, connect_started) = ChatEventStopHandle::for_test();
         let worker_stop = stop.clone();
         let worker_endpoint = endpoint.clone();
         let (finished, finished_rx) = mpsc::channel();
@@ -1950,15 +1992,7 @@ mod tests {
             finished.send(()).unwrap();
         });
 
-        let deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            let (state, _) = &*stop.inner;
-            if state.lock().unwrap().stream.is_some() {
-                break;
-            }
-            assert!(Instant::now() < deadline, "connect did not remain pending");
-            std::thread::yield_now();
-        }
+        connect_started.recv().unwrap();
         stop.stop();
         finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         worker.join().unwrap();
@@ -2121,6 +2155,7 @@ mod tests {
         .is_ok());
         desktop.join().unwrap();
         runtime_service.join().unwrap();
+        app.state::<AttachCompanionState>().stop_desktop_client();
         assert_eq!(
             app.state::<AttachCompanionState>().listener_status(),
             AttachListenerStatus {
