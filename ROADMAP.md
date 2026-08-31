@@ -727,17 +727,24 @@ platform-neutral imports (`src-tauri/core/src/run_start.rs:98`). The
 Linux-gated because Windows has no takeover protocol. The item gates and the
 runtime impl gate are the two that remain.
 
-NEXT — four slices, re-filed 2026-08-31 in order. The `ThreadListService`
-item gates on `DesktopAttachService` widen to Windows, with
-`reconnect_approval` and `control_migration` left Linux-gated. The
-`RunAttachBoundaries` impl on `RuntimeAttachBoundaries` widens behind the
-trait, together with the Linux-gated imports its body uses.
-`WindowsAttachAcceptor::bind` then opens one `RuntimeAttachState` per
-activation and serves `attach_service()`, which retires the per-connection
-journal open and the bare-journal service. Last, the Windows desktop-client
-provenance records the live peer process id, which stamps zero today
-(`src-tauri/core/src/attach/windows_session.rs:113`). The desktop client
-cutover follows in a later wave, after the composed service answers.
+DONE 2026-08-31 — the item gates fell (MUNIDESK-1604). Every
+`ThreadListService` method on `DesktopAttachService` compiles for Windows
+(`src-tauri/core/src/attach/desktop_service.rs`), and `reconnect_approval`
+and `control_migration` keep their Linux gates. The runtime impl gate
+(`src-tauri/runtime/src/attach_boundaries.rs:451`) is the last one.
+
+NEXT — three slices, re-cut 2026-08-31 in order. The `RunAttachBoundaries`
+impl on `RuntimeAttachBoundaries` widens to Windows together with the
+Linux-gated imports its body uses, and every `service` function the body
+calls already compiles on every platform. `WindowsAttachAcceptor::bind`
+then widens the `attach_state` and `attach_service` module gates
+(`src-tauri/runtime/src/lib.rs:6`), opens one `RuntimeAttachState` per
+activation, and serves `attach_service()`, which retires the
+per-connection journal open and the bare-journal service. Last, the
+Windows desktop-client provenance records the live peer process id, which
+stamps zero today (`src-tauri/core/src/attach/windows_session.rs:113`).
+The desktop client cutover follows in a later wave, after the composed
+service answers.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
