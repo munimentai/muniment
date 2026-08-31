@@ -683,42 +683,28 @@ MEASURED 2026-08-31 (planner, read the merge log against the last cut) — the
 gate slice re-file merged on its second filing, and the `chat.rs` split
 merged beside it. The dispatch extraction drained its first filing without
 reaching a pull request. Under the 2026-08-11 drained-slice rule the lane
-re-files it in the first position.
+re-filed it in the first position.
 
-MEASURED 2026-08-31 (planner, read the runtime service exports against the
-moved core modules) — five runtime service exports keep Linux gates their
-dependencies no longer need. `stream_run` and `subscribe_run_commits`
-(`src-tauri/runtime/src/service/threads.rs:56`, `:74`) import
-`ThreadListService` and `RunStreamPage` from `attach::linux`, and both types
-live in platform-neutral public modules, `thread_service` and
-`desktop_service_message`. `open_companion_registry`, `list_companions`, and
-`revoke_companion` (`src-tauri/runtime/src/service/workspace.rs:55`, `:71`,
-`:79`) gate the same way for `LiveConnectionRegistry`, which lives in the
-public `live_connections` module. The credential twins share their names, so
-`muniment_core::attach::load_client_credentials` resolves on Linux and on
-Windows. The widening therefore switches the runtime imports and widens the
-gates, and it changes no core file.
+DONE 2026-08-31 — the dispatch extraction landed (MUNIDESK-1593).
+`src-tauri/core/src/attach/desktop_dispatch.rs` holds `dispatch_request` and
+its stream-free machinery, and `linux.rs` re-exports the public constants
+under their old paths.
 
-NEXT — three slices, and this wave filed all three. The dispatch slice moves
-`dispatch_request` (`linux.rs:2097`) and the stream-free machinery around it
-(`linux.rs:1697` through `:3461`) into a platform-neutral module, with
-`linux.rs` re-exports under the old paths. That block covers `DispatchResult`,
-`SessionRegistries`, `DispatchFailure`, `ActiveRunStream`,
-`ActiveChatSubscription`, `DesktopSessionState`, the blanket
-`DesktopSessionService` impl, `drain_chat_events`, `poll_run_streams`,
-`append_run_stream_page`, `drain_run_stream`, `response_only`,
-`bounded_response`, `redacted_run_open_event`, and the two bound constants.
-The widening slice drops the five runtime service gates above. The serve
-slice runs after the dispatch slice merges.
-`serve_windows_attach_session_with_reader` takes a supplied session service,
-runs `serve_desktop_client_requests` after a desktop-client admission, and
-`serve_windows_attach_on_worker` threads the service through.
+DONE 2026-08-31 — the five runtime service gates widened (MUNIDESK-1594).
+`stream_run` and `subscribe_run_commits` import their platform-neutral types
+from `thread_service` and `desktop_service_message`. The runtime now exports
+those functions, `open_companion_registry`, `list_companions`, and
+`revoke_companion` on Windows.
 
-The service chain continues behind those slices. The Windows runtime
-composition of the journal and CAS follows, and the `attach_boundaries.rs`
-widening follows the runtime import switch, because its `attach::linux`
-imports (`src-tauri/runtime/src/attach_boundaries.rs:10`) all have
-platform-neutral homes.
+NEXT — one unfinished slice. `serve_windows_attach_session_with_reader` takes
+a supplied session service, runs `serve_desktop_client_requests` after a
+desktop-client admission, and `serve_windows_attach_on_worker` threads the
+service through.
+
+The service chain continues behind that slice. The Windows runtime composition
+of the journal and CAS follows. The `attach_boundaries.rs` widening can now
+follow because its `attach::linux` imports
+(`src-tauri/runtime/src/attach_boundaries.rs:10`) have platform-neutral homes.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
