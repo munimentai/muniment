@@ -84,6 +84,7 @@ pub use state::{AttachCompanionState, AttachListenerStatus, AuthorizedCompanion}
 
 #[cfg(target_os = "linux")]
 use crate::chat::TauriRunStartBoundaries;
+#[cfg(unix)]
 pub(crate) use migration::{runtime_upgrade_pending, runtime_version_compatible};
 #[cfg(target_os = "linux")]
 #[allow(unused_imports)]
