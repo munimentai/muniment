@@ -10,13 +10,15 @@ use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer, queue_permission_answer_with_commit,
     ChatDelivery, ChatQueueRequest,
 };
-#[cfg(target_os = "linux")]
-use muniment_core::attach::linux::{
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use muniment_core::attach::thread_service::{
     ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use muniment_core::attach::ProtocolError;
 #[cfg(unix)]
 use muniment_core::attach::{
-    ClientError, DesktopClientHolder, ProtocolError, RunCancelAccepted, RunMessageAccepted,
+    ClientError, DesktopClientHolder, RunCancelAccepted, RunMessageAccepted,
     RunPermissionAnswerAccepted, RunResumeAccepted, RunSubmitAccepted,
 };
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
