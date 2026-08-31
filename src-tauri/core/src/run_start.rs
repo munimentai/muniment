@@ -323,7 +323,6 @@ pub enum RunStartError {
 }
 
 impl RunStartError {
-    #[cfg(target_os = "linux")]
     pub fn protocol_error(&self) -> ProtocolError {
         match self {
             Self::Unauthorized(_) => ProtocolError::unauthorized(),
