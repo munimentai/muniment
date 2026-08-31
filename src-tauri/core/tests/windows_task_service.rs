@@ -114,9 +114,11 @@ fn writes_registration_and_applies_each_removal_plan() {
     );
     // IRegisteredTask::Stop returns once the stop request is accepted and the
     // instance tears down asynchronously, so the stop is observed by deadline.
+    // IRunningTask properties are snapshots, so each read needs a Refresh,
+    // and Refresh on a torn-down instance reports SCHED_E_TASK_NOT_RUNNING.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match unsafe { running_task.State() } {
+        match unsafe { running_task.Refresh() }.and_then(|()| unsafe { running_task.State() }) {
             Ok(state) if state != TASK_STATE_RUNNING => break,
             Ok(_) => {}
             Err(error) => {
@@ -354,7 +356,7 @@ impl SchedulerFixture {
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            match unsafe { running.State() } {
+            match unsafe { running.Refresh() }.and_then(|()| unsafe { running.State() }) {
                 Ok(state) if state == TASK_STATE_RUNNING => return running,
                 Ok(_) => {}
                 Err(error) if error.code() == SCHED_E_TASK_NOT_RUNNING => {}
