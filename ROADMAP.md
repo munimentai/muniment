@@ -721,11 +721,11 @@ those signatures has a platform-neutral home, so each widening is mechanical.
 `desktop_dispatch.rs` and `thread_service.rs` carry no gate at all.
 
 DONE 2026-08-31 — the trait gate fell (MUNIDESK-1599). Every
-`RunAttachBoundaries` method outside `attach_approval` and
-`control_migration` compiles for Windows through its platform-neutral
-imports (`src-tauri/core/src/run_start.rs:280`). Those two stay Linux-gated,
-because Windows has no takeover protocol. The item gates and the runtime
-impl gate are the two that remain.
+`RunAttachBoundaries` method now compiles for Windows through its
+platform-neutral imports (`src-tauri/core/src/run_start.rs:98`). The
+`RunStartBoundaries` methods `attach_approval` and `control_migration` stay
+Linux-gated because Windows has no takeover protocol. The item gates and the
+runtime impl gate are the two that remain.
 
 NEXT — four slices, re-filed 2026-08-31 in order. The `ThreadListService`
 item gates on `DesktopAttachService` widen to Windows, with
@@ -736,7 +736,7 @@ trait, together with the Linux-gated imports its body uses.
 activation and serves `attach_service()`, which retires the per-connection
 journal open and the bare-journal service. Last, the Windows desktop-client
 provenance records the live peer process id, which stamps zero today
-(`src-tauri/core/src/attach/windows_session.rs:98`). The desktop client
+(`src-tauri/core/src/attach/windows_session.rs:113`). The desktop client
 cutover follows in a later wave, after the composed service answers.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
