@@ -21,7 +21,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::TaskScheduler::{
     IRunningTask, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
-    TASK_LOGON_SERVICE_ACCOUNT, TASK_LOGON_TYPE, TASK_STATE_RUNNING,
+    TASK_LOGON_SERVICE_ACCOUNT, TASK_LOGON_TYPE, TASK_RUN_IGNORE_CONSTRAINTS, TASK_STATE_RUNNING,
 };
 use windows::Win32::System::Variant::VARIANT;
 
@@ -325,7 +325,19 @@ impl SchedulerFixture {
     fn start_controlled_task(&mut self) -> IRunningTask {
         let folder = unsafe { self.service.GetFolder(&BSTR::from(TASK_FOLDER)) }.unwrap();
         let task = unsafe { folder.GetTask(&BSTR::from(self.task_name.as_str())) }.unwrap();
-        let running = unsafe { task.Run(&VARIANT::default()) }.unwrap();
+        // The CI image never satisfies the scheduler's launch-condition
+        // evaluation (a plain Run and even trigger firings park every task
+        // instance in TASK_STATE_QUEUED), so the controlled start must tell
+        // the engine to skip that evaluation.
+        let running = unsafe {
+            task.RunEx(
+                &VARIANT::default(),
+                TASK_RUN_IGNORE_CONSTRAINTS.0,
+                0,
+                &BSTR::new(),
+            )
+        }
+        .unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             match unsafe { running.State() } {
