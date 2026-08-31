@@ -7,14 +7,14 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
-use muniment_core::attach::linux::{
-    ArtifactFetchResult, EntitlementSnapshotResult, RunStreamPage, ThreadListPage,
-    ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
+use muniment_core::attach::desktop_service_message::{ArtifactFetchResult, RunStreamPage};
+use muniment_core::attach::thread_service::{
+    ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{
-    CompanionRecord, CompanionRegistry, RuntimeActivityGuard, RuntimeActivityRegistry,
-    SignedWorkspaceApproval,
+    CompanionRecord, CompanionRegistry, EntitlementSnapshotResult, RuntimeActivityGuard,
+    RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
 use muniment_core::auth::{
     BrowserOpenError, BrowserOpener, EntitlementSnapshotTracker, NativeDeviceListError, TokenSet,

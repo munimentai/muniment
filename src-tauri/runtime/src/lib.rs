@@ -1,6 +1,5 @@
 #[cfg(target_os = "linux")]
 mod activation;
-#[cfg(target_os = "linux")]
 mod attach_boundaries;
 #[cfg(target_os = "linux")]
 mod attach_listener;
@@ -29,7 +28,6 @@ pub use activation::{
     RetentionScheduleTestControl, RuntimeActivationError, RuntimeActivationExit,
     UpgradeWatchTestControl,
 };
-#[cfg(target_os = "linux")]
 pub use attach_boundaries::RuntimeAttachBoundaries;
 #[cfg(target_os = "linux")]
 pub use attach_listener::{
