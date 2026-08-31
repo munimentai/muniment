@@ -625,14 +625,9 @@ service message types are platform-neutral (MUNIDESK-1568, 1569).
 `src-tauri/core/src/attach/desktop_service_message.rs` holds the message types,
 and `desktop_service.rs` imports them from there.
 
-MEASURED 2026-08-30 (planner, read `serve_windows_attach_on_worker` against
-`serve_desktop_client_session`) — an admitted Windows desktop client is dropped.
-`serve_windows_attach_on_worker`
-(`src-tauri/core/src/attach/windows_listener.rs:199`) discards the session
-result, so the pipe closes right after the grant frame. Nothing serves its
-requests. `serve_desktop_client_session`
-(`src-tauri/core/src/attach/linux.rs:1298`) is `UnixStream`-bound, and the
-dispatch machinery behind it still lives in `linux.rs`.
+SETTLED 2026-08-31 — the 2026-08-30 dropped-client measurement closed.
+MUNIDESK-1596 serves an admitted Windows desktop client through a supplied
+session service, and MUNIDESK-1598 supplies the profile journal.
 
 DONE 2026-08-30 — the live connection registry is platform-neutral
 (MUNIDESK-1573). `src-tauri/core/src/attach/live_connections.rs` holds
@@ -696,24 +691,56 @@ from `thread_service` and `desktop_service_message`. The runtime now exports
 those functions, `open_companion_registry`, `list_companions`, and
 `revoke_companion` on Windows.
 
-NEXT — one unfinished slice. `serve_windows_attach_session_with_reader` takes
-a supplied session service, runs `serve_desktop_client_requests` after a
-desktop-client admission, and `serve_windows_attach_on_worker` threads the
-service through.
+DONE 2026-08-31 — the served session, the boundary widening, and the
+journal-backed service all landed (MUNIDESK-1596, 1597, 1598).
+`serve_windows_attach_session_with_reader`
+(`src-tauri/core/src/attach/windows_session.rs:122`) takes a supplied session
+service, runs `serve_desktop_client_requests` after a desktop-client
+admission, and the worker threads the service through.
+`attach_boundaries.rs` compiles on Windows through its platform-neutral
+imports. `WindowsAttachAcceptor::bind`
+(`src-tauri/runtime/src/windows_attach_loop.rs:67`) supplies each admitted
+desktop client a profile-journal service, so `thread.list` and `thread.open`
+answer on Windows.
 
-The service chain continues behind that slice. The Windows runtime composition
-of the journal and CAS follows. The `attach_boundaries.rs` widening can now
-follow because its `attach::linux` imports
-(`src-tauri/runtime/src/attach_boundaries.rs:10`) have platform-neutral homes.
+MEASURED 2026-08-31 (planner, read `run_start.rs:90` beside
+`attach_state.rs:99`) — the journal-backed service is a stopgap. The factory
+opens the profile storage once per accepted connection, serves a bare
+`RunJournal`, and every operation outside the two thread reads answers
+`unsupported_operation`. `RuntimeAttachState` and `compose_attach_service`
+are already platform-neutral, and `RuntimeAttachState::attach_service`
+composes the full `DesktopAttachService<RuntimeAttachBoundaries>`. Three
+gates stand between the Windows loop and that service. Every
+`RunAttachBoundaries` trait method is declared under
+`cfg(target_os = "linux")` (`src-tauri/core/src/run_start.rs:90`), the
+`ThreadListService` impl on `DesktopAttachService` carries matching item
+gates (`src-tauri/core/src/attach/desktop_service.rs:198`), and the
+`RunAttachBoundaries` impl on `RuntimeAttachBoundaries` carries the file's
+last gate (`src-tauri/runtime/src/attach_boundaries.rs:452`). Every type in
+those signatures has a platform-neutral home, so each widening is mechanical.
+`desktop_dispatch.rs` and `thread_service.rs` carry no gate at all.
+
+NEXT — five slices, filed 2026-08-31 in order. The `RunAttachBoundaries`
+trait widens to Windows through its platform-neutral imports, with
+`attach_approval` and `control_migration` left Linux-gated because Windows
+has no takeover protocol. The `ThreadListService` item gates on
+`DesktopAttachService` widen the same way. The runtime impl widens behind
+the trait. `WindowsAttachAcceptor::bind` then opens one `RuntimeAttachState`
+per activation and serves `attach_service()`, which retires the
+per-connection journal open and the bare-journal service. Last, the Windows
+desktop-client provenance records the live peer process id, which stamps
+zero today (`src-tauri/core/src/attach/windows_session.rs:98`). The desktop
+client cutover follows in a later wave, after the composed service answers.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
 `src-tauri/core/src/attach/windows_pipe_security.rs` builds the pipe DACL.
 MUNIDESK-1583 applied this ruling.
 
-The Windows runtime still composes no journal, CAS, Pi, or attach service, so an
-admitted Windows session answers no operation. The removal write half sits in
-Needs Human, so the lane still files the read and planning halves alone.
+The Windows runtime serves thread reads from the profile journal, and it
+composes no Pi, chat broadcast, or companion service yet. The removal write
+half sits in Needs Human, so the lane still files the read and planning
+halves alone.
 The Windows preflight on CI runs every Windows-only test target
 (`.github/workflows/ci.yml:345`), and `test/smoke.sh` guards that list.
 
