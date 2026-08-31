@@ -163,15 +163,19 @@ pub trait RunAttachBoundaries {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn list_threads(
         &self,
-        workspace: &str,
-        request: ThreadListRequest,
-    ) -> Result<ThreadListPage, ProtocolError>;
+        _workspace: &str,
+        _request: ThreadListRequest,
+    ) -> Result<ThreadListPage, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn open_thread(
         &self,
-        workspace: &str,
-        request: ThreadOpenRequest,
-    ) -> Result<ThreadOpenPage, ProtocolError>;
+        _workspace: &str,
+        _request: ThreadOpenRequest,
+    ) -> Result<ThreadOpenPage, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn thread_summaries(
         &self,
@@ -222,10 +226,12 @@ pub trait RunAttachBoundaries {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn stream_run(
         &self,
-        workspace: &str,
-        run_id: &str,
-        after_run_seq: u64,
-    ) -> Result<RunStreamPage, ProtocolError>;
+        _workspace: &str,
+        _run_id: &str,
+        _after_run_seq: u64,
+    ) -> Result<RunStreamPage, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn fetch_artifact(
         &self,
@@ -247,8 +253,10 @@ pub trait RunAttachBoundaries {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn subscribe_run_commits(
         &self,
-        run_id: &str,
-    ) -> Result<crate::journal::CommitSubscription, ProtocolError>;
+        _run_id: &str,
+    ) -> Result<crate::journal::CommitSubscription, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn subscribe_chat_events(
         &self,
@@ -258,11 +266,15 @@ pub trait RunAttachBoundaries {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn queue_attach_permission_answer(
         &self,
-        workspace: &str,
-        run_id: &str,
-        gate_id: &str,
-        answer: ChatPermissionAnswer,
-    ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError>;
+        _workspace: &str,
+        _run_id: &str,
+        _gate_id: &str,
+        _answer: ChatPermissionAnswer,
+    ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError> {
+        Err(RunStartError::InvalidRequest(
+            "That permission request is no longer active.".into(),
+        ))
+    }
 }
 
 pub trait RunStartBoundaries {
