@@ -631,8 +631,8 @@ MEASURED 2026-08-30 (planner, read `serve_windows_attach_on_worker` against
 (`src-tauri/core/src/attach/windows_listener.rs:199`) discards the session
 result, so the pipe closes right after the grant frame. Nothing serves its
 requests. `serve_desktop_client_session`
-(`src-tauri/core/src/attach/linux.rs:2012`) is `UnixStream`-bound, and
-`desktop_service.rs` still carries `#![cfg(target_os = "linux")]`.
+(`src-tauri/core/src/attach/linux.rs:1298`) is `UnixStream`-bound, and the
+dispatch machinery behind it still lives in `linux.rs`.
 
 DONE 2026-08-30 — the live connection registry is platform-neutral
 (MUNIDESK-1573). `src-tauri/core/src/attach/live_connections.rs` holds
@@ -674,30 +674,37 @@ desktop client request loop, generic over `DeadlineStream`, with the
 `serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:1298`)
 keeps the `UnixStream` wrapper and binds the authorized client.
 
-MEASURED 2026-08-30 (planner, read the merge log against the last cut) — the
-session slice merged on its third filing, and the attach_service split merged
-beside it. The `desktop_service.rs` gate drop drained its first filing without
+DONE 2026-08-30 — the gate slice landed (MUNIDESK-1590). `desktop_service.rs`
+carries no module gate. Its imports come from `thread_service`,
+`desktop_service_message`, and the module root, and an impl bound to a
+Linux-only run boundary keeps its item gate.
+
+MEASURED 2026-08-31 (planner, read the merge log against the last cut) — the
+gate slice re-file merged on its second filing, and the `chat.rs` split
+merged beside it. The dispatch extraction drained its first filing without
 reaching a pull request. Under the 2026-08-11 drained-slice rule the lane
-re-files it in the first position.
+re-filed it in the first position.
 
-NEXT — two slices run in parallel, and this wave filed both. The gate slice
-drops the `desktop_service.rs` Linux gate. Its imports move from
-`super::linux` to `thread_service`, `desktop_service_message`, and the module
-root. The pre-staged inner gates widen where their dependencies are
-platform-neutral, and an impl bound to a Linux-only run boundary may keep its
-gate. The dispatch slice moves `dispatch_request` (`linux.rs:2097`) and the
-stream-free machinery around it into a platform-neutral module, with
-`linux.rs` re-exports under the old paths. That block covers `DispatchResult`
-(`:1697`), `SessionRegistries` (`:1703`), `DispatchFailure` (`:1709`),
-`ActiveRunStream` (`:1726`), `ActiveChatSubscription` (`:1737`),
-`DesktopSessionState` (`:1742`), the blanket `DesktopSessionService` impl
-(`:1748`), `drain_chat_events` (`:1805`), and `poll_run_streams` (`:1827`).
-`dispatch_request` is generic over `ThreadListService` and touches no
-`UnixStream`, so the move is pure.
+DONE 2026-08-31 — the dispatch extraction landed (MUNIDESK-1593).
+`src-tauri/core/src/attach/desktop_dispatch.rs` holds `dispatch_request` and
+its stream-free machinery, and `linux.rs` re-exports the public constants
+under their old paths.
 
-The service chain continues behind those slices. Serving an admitted Windows
-desktop client through the extracted loop follows, and the Windows runtime
-composition of the journal and CAS follows that.
+DONE 2026-08-31 — the five runtime service gates widened (MUNIDESK-1594).
+`stream_run` and `subscribe_run_commits` import their platform-neutral types
+from `thread_service` and `desktop_service_message`. The runtime now exports
+those functions, `open_companion_registry`, `list_companions`, and
+`revoke_companion` on Windows.
+
+NEXT — one unfinished slice. `serve_windows_attach_session_with_reader` takes
+a supplied session service, runs `serve_desktop_client_requests` after a
+desktop-client admission, and `serve_windows_attach_on_worker` threads the
+service through.
+
+The service chain continues behind that slice. The Windows runtime composition
+of the journal and CAS follows. The `attach_boundaries.rs` widening can now
+follow because its `attach::linux` imports
+(`src-tauri/runtime/src/attach_boundaries.rs:10`) have platform-neutral homes.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
@@ -1521,9 +1528,11 @@ DONE 2026-08-30 — the `attach_service.rs` pure-move split landed
 (MUNIDESK-1588). The root file spans 99 lines, declares `commands.rs`,
 `listener.rs`, `migration.rs`, `state.rs`, and `tests.rs` under
 `src-tauri/src/attach_service/`, and re-exports the public names.
-`src-tauri/src/chat.rs` spans 3,678 lines and is now the last oversized
-desktop bin file, so this wave files its pure-move split as structural work.
-The 2026-08-29 measurement above keeps the bin suite as the local proof.
+`src-tauri/src/chat.rs` split the same way on 2026-08-30 (MUNIDESK-1591).
+The largest production Rust file is now `src-tauri/core/src/attach/linux.rs`
+at 4,016 lines, and the filed dispatch extraction moves about 1,760 of those
+lines, so the lane files no separate split. The 2026-08-29 measurement above
+keeps the bin suite as the local proof.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
 all 31 skipped frontend tests are Windows-only cases. Every one sits behind
