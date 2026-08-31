@@ -1,9 +1,8 @@
 //! Thread and run stream service operations.
 
 use super::runtime_provenance;
-#[cfg(target_os = "linux")]
-use muniment_core::attach::linux::RunStreamPage;
-#[cfg(target_os = "linux")]
+use muniment_core::attach::desktop_service_message::RunStreamPage;
+use muniment_core::attach::thread_service::ThreadListService;
 use muniment_core::attach::ProtocolError;
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::journal::retention::{
@@ -52,15 +51,12 @@ pub fn select_thread(
 }
 
 /// Reads one page of a run stream.
-#[cfg(target_os = "linux")]
 pub fn stream_run(
     storage: SharedStorage,
     workspace: String,
     run_id: String,
     after_run_seq: u64,
 ) -> Result<RunStreamPage, ProtocolError> {
-    use muniment_core::attach::linux::ThreadListService;
-
     let mut storage = storage
         .lock()
         .map_err(|_| ProtocolError::persistence_failed())?;
@@ -70,13 +66,10 @@ pub fn stream_run(
 }
 
 /// Subscribes to commits for one run.
-#[cfg(target_os = "linux")]
 pub fn subscribe_run_commits(
     storage: SharedStorage,
     run_id: String,
 ) -> Result<Option<muniment_core::journal::CommitSubscription>, ProtocolError> {
-    use muniment_core::attach::linux::ThreadListService;
-
     let mut storage = storage
         .lock()
         .map_err(|_| ProtocolError::persistence_failed())?;
