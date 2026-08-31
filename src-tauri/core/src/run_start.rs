@@ -8,7 +8,6 @@ use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
 use crate::attach::linux::{ThreadListPage, ThreadListRequest, ThreadOpenPage, ThreadOpenRequest};
-#[cfg(target_os = "linux")]
 use crate::attach::ProtocolError;
 use crate::attach::RuntimeActivityGuard;
 use crate::auth::TokenSet;
