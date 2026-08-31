@@ -4,13 +4,13 @@ use std::time::Duration;
 
 #[cfg(test)]
 use muniment_core::attach::thread_service::ThreadListService;
-#[cfg(any(test, target_os = "windows"))]
-use muniment_core::attach::{DesktopAttachService, ProtocolError};
 #[cfg(target_os = "windows")]
 use muniment_core::attach::{
     serve_next_windows_attach_until, WindowsAttachAcceptError, WindowsAttachBindError,
     WindowsAttachListener, WindowsAttachServeOutcome, WindowsAttachStopEvent,
 };
+#[cfg(any(test, target_os = "windows"))]
+use muniment_core::attach::{DesktopAttachService, ProtocolError};
 #[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(any(test, target_os = "windows"))]
@@ -55,7 +55,8 @@ pub struct WindowsAttachAcceptor {
 #[cfg(any(test, target_os = "windows"))]
 fn runtime_attach_service_factory(
     state: Arc<RuntimeAttachState>,
-) -> impl Fn() -> Result<DesktopAttachService<RuntimeAttachBoundaries>, ProtocolError> + Send + Sync {
+) -> impl Fn() -> Result<DesktopAttachService<RuntimeAttachBoundaries>, ProtocolError> + Send + Sync
+{
     move || state.attach_service()
 }
 
