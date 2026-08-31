@@ -3,9 +3,9 @@ mod activation;
 mod attach_boundaries;
 #[cfg(target_os = "linux")]
 mod attach_listener;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod attach_service;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod attach_state;
 mod directories;
 pub mod install_lock;
@@ -33,9 +33,9 @@ pub use attach_boundaries::RuntimeAttachBoundaries;
 pub use attach_listener::{
     run_attach_listener, run_bound_attach_listener, AttachListenerError, AttachListenerInputs,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use attach_service::compose_attach_service;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use attach_state::RuntimeAttachState;
 #[cfg(target_os = "macos")]
 pub use directories::effective_user_macos_log_directory;

@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_os = "linux")]
+use muniment_core::attach::ApprovalCoordinator;
 use muniment_core::attach::{
-    ApprovalCoordinator, CompanionRegistry, DesktopAttachService, DrainState, ProtocolError,
-    RuntimeActivityRegistry, SignedWorkspaceApproval,
+    CompanionRegistry, DesktopAttachService, DrainState, ProtocolError, RuntimeActivityRegistry,
+    SignedWorkspaceApproval,
 };
 use muniment_core::auth::EntitlementSnapshotTracker;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
@@ -15,10 +17,9 @@ use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 
 use crate::service::{open_companion_registry, open_profile_storage};
-use crate::{
-    compose_attach_service, installed_desktop_executable, AttachListenerInputs,
-    RuntimeAttachBoundaries, RuntimeChatEventBroadcast,
-};
+use crate::{compose_attach_service, RuntimeAttachBoundaries, RuntimeChatEventBroadcast};
+#[cfg(target_os = "linux")]
+use crate::{installed_desktop_executable, AttachListenerInputs};
 
 /// Owns the state shared by all runtime attach connections.
 pub struct RuntimeAttachState {
@@ -34,6 +35,7 @@ pub struct RuntimeAttachState {
     approval: SignedWorkspaceApproval,
     session_thread: Arc<SessionThread>,
     companion_registry: CompanionRegistry,
+    #[cfg(target_os = "linux")]
     approvals: ApprovalCoordinator,
     sign_in_running: Arc<AtomicBool>,
     chat_events: RuntimeChatEventBroadcast,
@@ -70,6 +72,7 @@ impl RuntimeAttachState {
             approval: approval.clone(),
             session_thread: Arc::new(SessionThread::default()),
             companion_registry,
+            #[cfg(target_os = "linux")]
             approvals: ApprovalCoordinator::default(),
             sign_in_running: Arc::new(AtomicBool::new(false)),
             chat_events: RuntimeChatEventBroadcast::new(approval),
@@ -110,6 +113,7 @@ impl RuntimeAttachState {
     }
 
     /// Builds listener inputs that share the runtime attach state.
+    #[cfg(target_os = "linux")]
     pub fn attach_listener_inputs(&self) -> AttachListenerInputs<'_> {
         AttachListenerInputs {
             companion_registry: &self.companion_registry,
