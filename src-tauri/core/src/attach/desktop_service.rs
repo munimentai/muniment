@@ -1358,6 +1358,7 @@ mod tests {
             .map_err(|_| ProtocolError::thread_not_found())
         }
 
+        #[cfg(target_os = "linux")]
         fn submit_run(
             &self,
             _workspace: &str,
@@ -1383,6 +1384,7 @@ mod tests {
             })
         }
 
+        #[cfg(target_os = "linux")]
         fn resume_run(
             &self,
             _workspace: &str,
@@ -2010,6 +2012,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn attach_submit_replays_and_rejects_conflicting_input_without_second_boundary_call() {
         let mut service = DesktopAttachService {
@@ -2072,6 +2075,7 @@ mod tests {
         assert_eq!(service.boundaries.submit_calls.load(Ordering::SeqCst), 1);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn attach_resume_replays_and_rejects_conflicting_input_without_second_boundary_call() {
         let mut service = DesktopAttachService {
