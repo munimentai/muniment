@@ -6,6 +6,9 @@ mod unix_tests {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
+    use muniment_core::attach::desktop_service_message::{
+        CompanionProvenance, ThreadCreateAccepted,
+    };
     use muniment_core::attach::thread_service::{
         ThreadListPage, ThreadListRequest, ThreadListService,
     };
@@ -21,10 +24,13 @@ mod unix_tests {
 
     impl ThreadListService for EmptyService {}
 
+    const CREATED_THREAD_ID: &str = "018f0000-0000-7000-8000-000000000200";
+
     #[derive(Default)]
     struct ListService {
         bound_identity: Option<String>,
         listed_workspace: Option<String>,
+        create_provenance: Option<CompanionProvenance>,
     }
 
     impl ThreadListService for ListService {
@@ -41,6 +47,19 @@ mod unix_tests {
             Ok(ThreadListPage {
                 threads: Vec::new(),
                 next_cursor: None,
+            })
+        }
+
+        fn create_thread(
+            &mut self,
+            _workspace: &str,
+            _request_id: &Id,
+            _idempotency_key: &Id,
+            provenance: CompanionProvenance,
+        ) -> Result<ThreadCreateAccepted, ProtocolError> {
+            self.create_provenance = Some(provenance);
+            Ok(ThreadCreateAccepted {
+                thread_id: CREATED_THREAD_ID.to_owned(),
             })
         }
     }
@@ -120,8 +139,11 @@ mod unix_tests {
     }
 
     #[test]
-    fn matching_desktop_peer_serves_an_admitted_request() {
+    fn matching_desktop_peer_serves_admitted_requests() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         let session = std::thread::spawn(move || {
             let mut service = ListService::default();
             let outcome = serve_windows_attach_session_with_reader(
@@ -161,7 +183,7 @@ mod unix_tests {
                     protocol: Protocol,
                     request_id: request_id.clone(),
                     operation: Operation::ThreadList,
-                    capability: grant.capability,
+                    capability: grant.capability.clone(),
                     idempotency_key: None,
                     body: serde_json::json!({"limit": 20}),
                 })
@@ -178,11 +200,50 @@ mod unix_tests {
         assert_eq!(response.request_id, request_id);
         assert_eq!(response.body, serde_json::json!({"threads": []}));
 
+        let create_request_id = Id::new("018f0000-0000-7000-8000-000000000101").unwrap();
+        client
+            .write_all(
+                &encode_frame(&Request {
+                    protocol: Protocol,
+                    request_id: create_request_id.clone(),
+                    operation: Operation::ThreadCreate,
+                    capability: grant.capability,
+                    idempotency_key: Some(Id::new("018f0000-0000-7000-8000-000000000102").unwrap()),
+                    body: serde_json::json!({}),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let created_frame = read_frame(&mut client);
+        let (Envelope::Response(created), consumed) =
+            decode_frame::<Envelope>(&created_frame).unwrap().unwrap()
+        else {
+            panic!("expected a service response");
+        };
+        assert_eq!(consumed, created_frame.len());
+        assert_eq!(created.request_id, create_request_id);
+        assert_eq!(
+            created.body,
+            serde_json::json!({"thread_id": CREATED_THREAD_ID})
+        );
+
         client.shutdown(Shutdown::Write).unwrap();
         let (outcome, service) = session.join().unwrap();
         let WindowsAttachSessionOutcome::DesktopClient(admitted) = outcome.unwrap() else {
             panic!("expected the desktop-client route");
         };
+        assert_eq!(admitted.companion_kind, "editor-extension");
+        assert_eq!(admitted.companion_version, "0.0.1");
+        assert_eq!(
+            service.create_provenance,
+            Some(CompanionProvenance {
+                profile: "desktop-owner".into(),
+                companion_kind: admitted.companion_kind,
+                companion_version: admitted.companion_version,
+                peer_uid: 0,
+                peer_pid: 0,
+            })
+        );
         assert_eq!(service.bound_identity, Some(admitted.client_identity));
         assert_eq!(service.listed_workspace, Some(admitted.workspace));
     }

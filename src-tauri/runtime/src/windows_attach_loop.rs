@@ -53,8 +53,7 @@ pub struct WindowsAttachAcceptor {
 struct WindowsDesktopSessionService;
 
 #[cfg(target_os = "windows")]
-type WindowsDesktopSessionServiceFactory =
-    fn() -> Result<WindowsDesktopSessionService, Infallible>;
+type WindowsDesktopSessionServiceFactory = fn() -> Result<WindowsDesktopSessionService, Infallible>;
 
 #[cfg(target_os = "windows")]
 impl ThreadListService for WindowsDesktopSessionService {}
