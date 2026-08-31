@@ -112,9 +112,23 @@ fn writes_registration_and_applies_each_removal_plan() {
         apply_task_removal(SERVICE_ACCOUNT_SID, &machine_scope).unwrap(),
         TaskRemovalPlan::StopAndDelete
     );
-    match unsafe { running_task.State() } {
-        Ok(state) => assert_ne!(state, TASK_STATE_RUNNING),
-        Err(error) => assert_eq!(error.code(), SCHED_E_TASK_NOT_RUNNING),
+    // IRegisteredTask::Stop returns once the stop request is accepted and the
+    // instance tears down asynchronously, so the stop is observed by deadline.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match unsafe { running_task.State() } {
+            Ok(state) if state != TASK_STATE_RUNNING => break,
+            Ok(_) => {}
+            Err(error) => {
+                assert_eq!(error.code(), SCHED_E_TASK_NOT_RUNNING);
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the controlled task did not stop"
+        );
+        thread::sleep(Duration::from_millis(100));
     }
     assert_eq!(
         read_observed_registration(SERVICE_ACCOUNT_SID).unwrap(),
