@@ -56,7 +56,8 @@ async function signInCompleted(driver) {
 async function waitForLinuxSignIn(driver) {
   if (process.platform !== 'linux') return false
   try {
-    await browser.waitUntil(async () => await signInCompleted(driver), { timeout: 10000 })
+    // Give the callback its full budget before another command can block on WebKitWebDriver.
+    await browser.waitUntil(async () => await signInCompleted(driver), { timeout: 120000 })
     return true
   } catch {
     return false
