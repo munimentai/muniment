@@ -184,6 +184,7 @@ mod tests {
         );
         assert!(profile.journal_path().is_file());
         assert!(profile.cas_directory().join("objects").is_dir());
+        drop(service);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
