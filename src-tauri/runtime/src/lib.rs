@@ -1,6 +1,5 @@
 #[cfg(target_os = "linux")]
 mod activation;
-#[cfg(target_os = "linux")]
 mod attach_boundaries;
 #[cfg(target_os = "linux")]
 mod attach_listener;
@@ -19,6 +18,8 @@ mod start_record;
 #[cfg(target_os = "linux")]
 mod upgrade_watch;
 mod windows_activation;
+mod windows_attach_activation;
+mod windows_attach_loop;
 
 #[cfg(target_os = "linux")]
 pub use activation::{
@@ -27,7 +28,6 @@ pub use activation::{
     RetentionScheduleTestControl, RuntimeActivationError, RuntimeActivationExit,
     UpgradeWatchTestControl,
 };
-#[cfg(target_os = "linux")]
 pub use attach_boundaries::RuntimeAttachBoundaries;
 #[cfg(target_os = "linux")]
 pub use attach_listener::{
@@ -45,6 +45,8 @@ pub use directories::{
     windows_log_directory_from_local_app_data, windows_state_directory_from_app_data,
     DirectoryUnavailableError, APPLICATION_IDENTIFIER,
 };
+#[cfg(target_os = "windows")]
+pub use directories::{windows_local_app_data, windows_log_directory};
 pub use macos_activation::{
     emit_macos_unified_log, emit_macos_unified_log_with, record_macos_failed_exit,
     record_macos_orderly_exit, record_macos_start, MacosDiagnosticEvent, MacosStart,
@@ -55,26 +57,38 @@ pub use macos_activation::{
 pub use macos_activation::{write_macos_diagnostic, write_macos_diagnostic_with};
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use service::open_companion_registry;
 pub use service::{
     accept_prompt, answer_permission, apply_retention, cancel_run, configure_run, create_thread,
     delete_thread, drive_prompt, ensure_home, ensure_native_session, entitlement_snapshot,
-    list_devices, onboard_workspace, open_profile_storage, queue_run_message, rename_thread,
-    resume_run, run_prompt, select_thread, session_status, sign_in, sign_out, thread_page,
-    thread_summaries, ConfigureRunError, EntitlementSnapshotError, EntitlementSnapshotResult,
-    PromptAcceptance, PromptLaunch, SignOutError,
-};
-#[cfg(target_os = "linux")]
-pub use service::{
-    list_companions, open_companion_registry, revoke_companion, stream_run, subscribe_run_commits,
+    list_companions, list_devices, onboard_workspace, open_profile_storage, queue_run_message,
+    rename_thread, resume_run, revoke_companion, run_prompt, select_thread, session_status,
+    sign_in, sign_out, stream_run, subscribe_run_commits, thread_page, thread_summaries,
+    ConfigureRunError, EntitlementSnapshotError, EntitlementSnapshotResult, PromptAcceptance,
+    PromptLaunch, SignOutError,
 };
 pub use sink::{
     RuntimeChatEventBroadcast, RuntimeChatEventSink, RuntimeChatEventTarget,
     CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY,
 };
-#[cfg(any(unix, target_os = "windows"))]
-pub use windows_activation::write_windows_diagnostic;
 pub use windows_activation::{
-    clear_windows_crash_window, record_windows_failed_exit, record_windows_orderly_exit,
-    record_windows_start, ClearWindowsCrashWindowError, WindowsDiagnosticEvent, WindowsStart,
-    WindowsStartDecision, WINDOWS_RUNTIME_LOG_MAX_BYTES,
+    clear_windows_crash_window, record_windows_failed_activation, record_windows_failed_exit,
+    record_windows_orderly_exit, record_windows_start, ClearWindowsCrashWindowError,
+    WindowsActivationExit, WindowsDiagnosticEvent, WindowsStart, WindowsStartDecision,
+    WINDOWS_RUNTIME_LOG_MAX_BYTES,
+};
+#[cfg(any(unix, target_os = "windows"))]
+pub use windows_activation::{run_recorded_windows_activation, write_windows_diagnostic};
+#[cfg(target_os = "windows")]
+pub use windows_attach_activation::SystemWindowsAttachFactory;
+pub use windows_attach_activation::{
+    run_windows_attach_activation, WindowsAttachBindFailure, WindowsAttachFactory,
+    WindowsDiagnosticSink,
+};
+#[cfg(target_os = "windows")]
+pub use windows_attach_loop::WindowsAttachAcceptor;
+pub use windows_attach_loop::{
+    run_windows_attach_accept_loop, WindowsAttachAcceptBoundary, WindowsAttachAcceptLoopExit,
+    WindowsAttachAcceptOutcome, WindowsAttachStopSignal, MAX_CONSECUTIVE_FAILED_ACCEPTS,
 };

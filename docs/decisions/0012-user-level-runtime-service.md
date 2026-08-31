@@ -49,7 +49,8 @@ requests converge through the service manager and the existing per-profile
 instance lock. The process that cannot acquire the lock does not open an
 endpoint, journal, or Pi process; it exits successfully only after confirming
 the lock owner is healthy. There is no fallback that spawns a private Pi or a
-second journal.
+second journal. On Windows, a held attach instance lock records an
+`instance_lock_wait` diagnostic and exits with status 0.
 
 Normal idle policy may stop an inactive service only when it has no attached
 surface, active or recoverable run, pending permission gate, Remote Control
@@ -1105,8 +1106,11 @@ The listener acquires the existing profile instance lock before it creates the
 pipe. That lock remains the final authority against a second listener. The
 listener uses a protected DACL that grants access to the creating user's exact
 SID alone. It creates a byte-mode pipe with `PIPE_REJECT_REMOTE_CLIENTS` and
-claims the first pipe instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`. It reads
-back the owner and DACL before it publishes the endpoint.
+claims the first pipe instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`. Every
+instance uses `PIPE_UNLIMITED_INSTANCES` as the instance count. After each
+connection, the listener creates an unconnected instance without
+`FILE_FLAG_FIRST_PIPE_INSTANCE` before it returns the connected stream. It
+reads back the owner and DACL of every instance before it uses that instance.
 
 ### Peer admission
 
@@ -1170,3 +1174,93 @@ The listener completes the peer check before it reads any frame body or writes
 any byte. A rejected peer closes the pipe handle without a protocol response.
 A prefix above `MAX_FRAME_LENGTH` also closes the pipe handle without a
 frame-body read, byte write, or protocol response.
+
+## Amendment – 2026-08-28: Windows attach admission gate lifted
+
+- Status: accepted
+
+The Windows attach admission gate from the 2026-08-21 Windows activation
+amendment is lifted. The two conditions that lifted it are the 2026-08-22
+**Windows attach peer identity** amendment and the 2026-08-24 **Windows attach
+peer check read order** amendment.
+
+Three checks now guard the endpoint. The listener takes the per-profile
+instance lock before it publishes the pipe path. After it creates each pipe
+instance, it reads back the owner and owner-only DACL. For each connection, it
+reads only the four-byte length prefix, runs the impersonation peer check, and
+then reads the frame body.
+
+A surface may now call `IRegisteredTask::Run` after it validates the task URI,
+principal, and action. A runtime start with invalid arguments still exits before
+it opens runtime state, including the instance lock, journal, CAS, Pi, or attach
+endpoint.
+
+## Amendment – 2026-08-29: Windows attach connection route
+
+- Status: accepted
+
+This amendment names the route served by a Windows attach connection. It
+changes no runtime code.
+
+### Route identity and read order
+
+After the peer SID check succeeds, the listener calls
+`GetNamedPipeClientProcessId` to get the peer process ID. It opens that process
+for limited query access and calls `QueryFullProcessImageNameW` to get the peer
+image path. This query occurs before the listener reads the frame body, so the
+2026-08-24 Windows attach peer check read order still holds.
+
+The expected desktop image is `muniment.exe` beside the installed
+`muniment-runtime.exe`. It resolves to
+`%LocalAppData%\muniment\muniment.exe` for a per-user installation or
+`%ProgramFiles%\muniment\muniment.exe` for a machine installation. A peer image
+path that matches the expected installed desktop executable takes the
+desktop-client route. Every other peer, including one whose process ID or image
+path cannot be read, takes the companion route.
+
+The route check reads no Hello frame field. A claimed client kind in the Hello
+frame grants no route authority.
+
+## Amendment – 2026-08-29: Windows desktop-client route handling
+
+- Status: accepted
+
+This amendment defines the exchange for each Windows attach connection route.
+It changes no runtime code.
+
+### Route exchanges
+
+The desktop-client route runs the desktop-client admission exchange. It writes
+a `reconnect_welcome` frame and then a `DesktopClientAuthorizedGrant` frame.
+The companion route keeps the plain `welcome` frame.
+
+The route check reads no Hello frame field. The peer check and the read order
+from the 2026-08-24 amendment still run first, before any admission byte.
+
+### Service gap and following lane
+
+The Windows runtime composes no journal, CAS, Pi, or attach service. An admitted
+session therefore answers no operation today. Composing those services is the
+lane that follows this amendment.
+
+## Amendment – 2026-08-29: Windows attach accept loop wake and stop
+
+- Status: accepted
+
+This amendment defines how the Windows attach accept loop waits and stops. It
+changes no runtime code.
+
+### Wait and stop
+
+The loop waits on the pipe connect event and a manual-reset stop event together.
+An idle loop wakes only when a connection arrives or the stop event signals. It
+never wakes on a timer.
+
+When the stop event signals, the listener cancels the pending pipe connect and
+then ends the loop.
+
+### Failed accept bound
+
+Five consecutive failed accepts end the loop with failure, as
+`MAX_CONSECUTIVE_FAILED_ACCEPTS` already enforces. A successful accept resets
+the consecutive failure count.

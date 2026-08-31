@@ -1,13 +1,16 @@
 #![cfg(target_os = "windows")]
 
+use muniment_core::windows_known_folders::windows_payload_roots;
+use muniment_core::windows_payload::resolve_live_windows_payload;
 use muniment_core::windows_sid::current_process_user_sid;
 use muniment_core::windows_task::{
     render_task_definition_xml, RemovalScope, SidError, TaskDefinition, TaskRegistrationPlan,
     TaskRemovalPlan,
 };
 use muniment_core::windows_task_service::{
-    apply_task_removal, ensure_task_registration, read_observed_registration,
-    start_registered_task, EnsureTaskRegistrationError, ReadObservedRegistrationError,
+    apply_task_removal, ensure_live_task_registration, ensure_task_registration,
+    list_observed_registrations, read_observed_registration, start_registered_task,
+    EnsureLiveTaskRegistrationError, EnsureTaskRegistrationError, ReadObservedRegistrationError,
     StartRegisteredTaskError, StartRegisteredTaskResult,
 };
 use std::path::{Path, PathBuf};
@@ -39,7 +42,6 @@ static SCHEDULER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn absent_runtime_task_returns_none_without_a_write() {
-    let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
     let sid = "S-1-5-999999999";
     let observed = read_observed_registration(sid).unwrap();
     let scope = RemovalScope::PerUser {
@@ -66,7 +68,65 @@ fn non_canonical_sid_is_rejected_before_scheduler_access() {
 }
 
 #[test]
-fn writes_registration_and_applies_each_removal_plan() {
+fn live_registration_rejects_an_absent_payload_without_writing_a_task() {
+    let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
+    let sid = current_process_user_sid().unwrap();
+    let mut fixture = SchedulerFixture::new(sid.as_str());
+    fixture.owns_task = true;
+    assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
+
+    let result = ensure_live_task_registration();
+
+    assert_eq!(
+        result,
+        Err(EnsureLiveTaskRegistrationError::NoInstalledPayload)
+    );
+    assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
+}
+
+#[test]
+fn live_registration_uses_the_resolved_payload() {
+    let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
+    let sid = current_process_user_sid().unwrap();
+    let mut fixture = SchedulerFixture::new(sid.as_str());
+    fixture.owns_task = true;
+    assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
+
+    let roots = windows_payload_roots().unwrap();
+    let payload = roots
+        .local_app_data
+        .join("muniment")
+        .join("muniment-runtime.exe");
+    let payload_directory = payload.parent().unwrap();
+    if !payload_directory.exists() {
+        std::fs::create_dir_all(payload_directory).unwrap();
+        fixture.payload_directory = Some(payload_directory.to_owned());
+    }
+    if std::fs::symlink_metadata(&payload)
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&payload)
+            .unwrap();
+        fixture.payload = Some(payload);
+    }
+    let resolved = resolve_live_windows_payload().unwrap().unwrap();
+
+    ensure_live_task_registration().unwrap();
+
+    assert_eq!(
+        read_observed_registration(sid.as_str())
+            .unwrap()
+            .unwrap()
+            .action_path,
+        resolved.payload_path
+    );
+}
+
+#[test]
+fn registers_leaves_unchanged_and_refuses_a_foreign_task() {
     let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
     let sid = current_process_user_sid().unwrap();
     let mut fixture = SchedulerFixture::new(sid.as_str());
@@ -80,6 +140,33 @@ fn writes_registration_and_applies_each_removal_plan() {
     assert_eq!(
         ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT).unwrap(),
         TaskRegistrationPlan::LeaveUnchanged
+    );
+
+    fixture.register_foreign_task(sid.as_str());
+    assert_eq!(
+        ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT),
+        Err(EnsureTaskRegistrationError::Refused)
+    );
+    assert_eq!(
+        read_observed_registration(sid.as_str())
+            .unwrap()
+            .unwrap()
+            .action_path,
+        PathBuf::from(FOREIGN_PAYLOAD)
+    );
+}
+
+#[test]
+fn writes_registration_and_applies_each_removal_plan() {
+    let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
+    let sid = current_process_user_sid().unwrap();
+    let mut fixture = SchedulerFixture::new(sid.as_str());
+    assert_eq!(read_observed_registration(sid.as_str()).unwrap(), None);
+
+    fixture.owns_task = true;
+    assert_eq!(
+        ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT).unwrap(),
+        TaskRegistrationPlan::Register
     );
     fixture.register_mixed_task(sid.as_str());
 
@@ -147,10 +234,6 @@ fn writes_registration_and_applies_each_removal_plan() {
     let foreign = read_observed_registration(sid.as_str()).unwrap().unwrap();
     assert_eq!(foreign.action_path, PathBuf::from(FOREIGN_PAYLOAD));
     assert_eq!(
-        ensure_task_registration(sid.as_str(), PAYLOAD, MACHINE_ROOT, USER_ROOT),
-        Err(EnsureTaskRegistrationError::Refused)
-    );
-    assert_eq!(
         apply_task_removal(sid.as_str(), &per_user_scope).unwrap(),
         TaskRemovalPlan::LeaveUnchanged
     );
@@ -161,10 +244,32 @@ fn writes_registration_and_applies_each_removal_plan() {
 }
 
 #[test]
-fn starting_an_absent_task_does_not_clear_the_crash_window() {
+fn lists_a_registered_runtime_task_until_it_is_removed() {
     let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
+    let sid = current_process_user_sid().unwrap();
+    let uri = format!(r"\Muniment\Runtime-{}", sid.as_str());
+
+    {
+        let mut fixture = SchedulerFixture::new(sid.as_str());
+        fixture.owns_task = true;
+        fixture.register_task(sid.as_str(), Path::new(PAYLOAD));
+        let registrations = list_observed_registrations().unwrap();
+
+        assert!(registrations
+            .iter()
+            .any(|registration| registration.uri == uri));
+    }
+
+    let registrations = list_observed_registrations().unwrap();
+    assert!(registrations
+        .iter()
+        .all(|registration| registration.uri != uri));
+}
+
+#[test]
+fn starting_an_absent_task_does_not_clear_the_crash_window() {
     let mut cleared = false;
-    let result = start_registered_task("S-1-5-999999999", || {
+    let result = start_registered_task("S-1-5-999999999", runtime_payload_path(), || {
         cleared = true;
         Ok::<(), ()>(())
     });
@@ -174,7 +279,7 @@ fn starting_an_absent_task_does_not_clear_the_crash_window() {
 }
 
 #[test]
-fn starting_a_foreign_task_is_refused_without_clearing_the_crash_window() {
+fn starting_with_a_non_matching_expected_payload_is_refused_without_clearing_the_crash_window() {
     let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
     let sid = current_process_user_sid().unwrap();
     let mut fixture = SchedulerFixture::new(sid.as_str());
@@ -182,7 +287,7 @@ fn starting_a_foreign_task_is_refused_without_clearing_the_crash_window() {
     fixture.register_task(sid.as_str(), Path::new(FOREIGN_PAYLOAD));
     let mut cleared = false;
 
-    let result = start_registered_task(sid.as_str(), || {
+    let result = start_registered_task(sid.as_str(), runtime_payload_path(), || {
         cleared = true;
         Ok::<(), ()>(())
     });
@@ -192,11 +297,16 @@ fn starting_a_foreign_task_is_refused_without_clearing_the_crash_window() {
 }
 
 #[test]
-fn starts_a_registered_task_that_exits_at_once() {
+fn starts_a_registered_task_with_a_matching_expected_payload_outside_the_test_directory() {
     let _guard = SCHEDULER_TEST_LOCK.lock().unwrap();
     let sid = current_process_user_sid().unwrap();
     let mut fixture = SchedulerFixture::new(sid.as_str());
     let payload = runtime_payload_path();
+    let test_executable = std::env::current_exe().unwrap();
+    assert_ne!(payload.parent(), test_executable.parent());
+    let payload_directory = payload.parent().unwrap();
+    std::fs::create_dir_all(payload_directory).unwrap();
+    fixture.payload_directory = Some(payload_directory.to_owned());
     let system_root = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
     std::fs::copy(system_root.join("System32").join("where.exe"), &payload).unwrap();
     fixture.payload = Some(payload.clone());
@@ -204,7 +314,7 @@ fn starts_a_registered_task_that_exits_at_once() {
     fixture.register_task(sid.as_str(), &payload);
     let mut clear_count = 0;
 
-    let result = start_registered_task(sid.as_str(), || {
+    let result = start_registered_task(sid.as_str(), &payload, || {
         clear_count += 1;
         Ok::<(), ()>(())
     });
@@ -215,9 +325,9 @@ fn starts_a_registered_task_that_exits_at_once() {
 }
 
 fn runtime_payload_path() -> PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.set_file_name("muniment-runtime.exe");
-    path
+    std::env::temp_dir()
+        .join(format!("muniment-task-service-{}", std::process::id()))
+        .join("muniment-runtime.exe")
 }
 
 struct SchedulerFixture {
@@ -229,6 +339,7 @@ struct SchedulerFixture {
     remove_machine_root: bool,
     remove_machine_payload: bool,
     payload: Option<PathBuf>,
+    payload_directory: Option<PathBuf>,
     _apartment: TestComApartment,
 }
 
@@ -250,6 +361,7 @@ impl SchedulerFixture {
             remove_machine_root: false,
             remove_machine_payload: false,
             payload: None,
+            payload_directory: None,
             _apartment: apartment,
         }
     }
@@ -414,6 +526,9 @@ impl Drop for SchedulerFixture {
         }
         if let Some(payload) = &self.payload {
             let _ = std::fs::remove_file(payload);
+        }
+        if let Some(payload_directory) = &self.payload_directory {
+            let _ = std::fs::remove_dir(payload_directory);
         }
     }
 }

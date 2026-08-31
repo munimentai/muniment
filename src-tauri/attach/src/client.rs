@@ -499,31 +499,37 @@ mod linux {
     use super::{
         ApprovalDecision, ApprovalPresentRequest, ApprovalPresenterServeOutcome, ArtifactChunk,
         ArtifactTransferEvent, ArtifactTransferMetadata, ArtifactTransferTerminalCode,
-        ArtifactWindowGrant, AuthorizationSummary, ChatPermissionAnswer, ClientError,
-        MigrationControlFailure, MigrationControlOutcome, PendingPermission,
-        PermissionAnswerAccepted, PermissionDecision, RedactedRunEvent, RunCancelAccepted,
-        RunMessageAccepted, RunOpenPage, RunPermissionAnswerAccepted, RunResumeAccepted,
-        RunStartAccepted, RunStreamMessage, RunStreamSubscription, RunSubmitAccepted,
-        ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
+        ArtifactWindowGrant, AuthorizationSummary, ClientError, MigrationControlFailure,
+        MigrationControlOutcome, PendingPermission, PermissionAnswerAccepted, PermissionDecision,
+        RedactedRunEvent, RunCancelAccepted, RunOpenPage, RunStartAccepted, RunStreamMessage,
+        RunStreamSubscription, ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
+    };
+    use crate::client_stream::{
+        read_approval_value, read_approval_value_with_prefix, read_exact_before, read_value,
+        write_all_before,
+    };
+    use crate::desktop_client::{handshake_desktop_client, DesktopClient};
+    use crate::desktop_client_holder::DesktopClientHolder;
+    use crate::desktop_supervisor::{serve_desktop_client_with, DesktopClientSupervisorStop};
+    use crate::protocol_helpers::{
+        deadline, fresh_nonce, fresh_request_id, is_hex_secret, is_rfc3339, map_frame_error,
+        map_protocol_error, parse_message, reject_protocol_error, validate_capability_revocation,
     };
     use crate::{
-        decode_frame, encode_frame, Authorization, Authorized, Client,
-        DesktopClientAuthorizedGrant, Envelope, ErrorCode, ErrorEnvelope, EventName, FrameError,
-        Hello, Id, Operation, PeerAuthorizedGrant, Protocol, Request, Response, VersionRange,
-        Welcome, WorkspaceOnboarded, MAX_FRAME_LENGTH, MAX_TEXT_LENGTH, PROTOCOL,
+        encode_frame, Authorization, Authorized, Client, Envelope, ErrorCode, ErrorEnvelope,
+        EventName, Hello, Id, Operation, PeerAuthorizedGrant, Protocol, Request, Response,
+        VersionRange, Welcome, WorkspaceOnboarded, MAX_TEXT_LENGTH, PROTOCOL,
     };
-    use serde::de::DeserializeOwned;
     use serde_json::Value;
-    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+    use std::collections::{BTreeMap, VecDeque};
     use std::env;
-    use std::fs::File;
     use std::io::{self, Read, Write};
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::io::{AsRawFd, FromRawFd};
     use std::os::unix::net::UnixStream;
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant};
 
     #[cfg(target_os = "macos")]
     pub trait MacosPeerReader {
@@ -645,14 +651,11 @@ mod linux {
 
     const IO_TIMEOUT: Duration = Duration::from_secs(5);
     const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
-    const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
-    const DESKTOP_CLIENT_LOCK_TIMEOUT: Duration = Duration::from_millis(100);
     const THREAD_LIST_LIMIT: u8 = 100;
     const THREAD_OPEN_LIMIT: u8 = 100;
     const MAX_THREAD_ID_LENGTH: usize = 36;
     const MAX_CURSOR_LENGTH: usize = 1024;
     const MAX_RUN_START_TEXT_LENGTH: usize = 32 * 1024;
-    const MAX_RUN_MESSAGE_TEXT_LENGTH: usize = 32 * 1024;
     const MAX_RUN_START_CONTEXT_LENGTH: usize = 64 * 1024;
     const MAX_PERMISSION_GATE_ID_LENGTH: usize = 256;
     const MAX_PERMISSION_TITLE_LENGTH: usize = 1_024;
@@ -772,9 +775,7 @@ mod linux {
                 Envelope::Error(error) if error.request_id.as_ref() == Some(request_id) => {
                     Err(map_protocol_error(error.error.code()))
                 }
-                Envelope::Event(event)
-                    if Self::validate_capability_revocation(&event)?.is_some() =>
-                {
+                Envelope::Event(event) if validate_capability_revocation(&event)?.is_some() => {
                     Err(ClientError::CapabilityRevoked)
                 }
                 _ => Err(ClientError::UnexpectedMessage),
@@ -818,9 +819,7 @@ mod linux {
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
                     }
-                    Envelope::Event(event)
-                        if Self::validate_capability_revocation(&event)?.is_some() =>
-                    {
+                    Envelope::Event(event) if validate_capability_revocation(&event)?.is_some() => {
                         return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
@@ -909,9 +908,7 @@ mod linux {
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
                     }
-                    Envelope::Event(event)
-                        if Self::validate_capability_revocation(&event)?.is_some() =>
-                    {
+                    Envelope::Event(event) if validate_capability_revocation(&event)?.is_some() => {
                         return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
@@ -1365,9 +1362,7 @@ mod linux {
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
                     }
-                    Envelope::Event(event)
-                        if Self::validate_capability_revocation(&event)?.is_some() =>
-                    {
+                    Envelope::Event(event) if validate_capability_revocation(&event)?.is_some() => {
                         return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
@@ -1427,9 +1422,7 @@ mod linux {
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
                     }
-                    Envelope::Event(event)
-                        if Self::validate_capability_revocation(&event)?.is_some() =>
-                    {
+                    Envelope::Event(event) if validate_capability_revocation(&event)?.is_some() => {
                         return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
@@ -1480,9 +1473,7 @@ mod linux {
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
                     }
-                    Envelope::Event(event)
-                        if Self::validate_capability_revocation(&event)?.is_some() =>
-                    {
+                    Envelope::Event(event) if validate_capability_revocation(&event)?.is_some() => {
                         return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
@@ -1537,9 +1528,7 @@ mod linux {
                     Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
                         return Err(map_protocol_error(error.error.code()));
                     }
-                    Envelope::Event(event)
-                        if Self::validate_capability_revocation(&event)?.is_some() =>
-                    {
+                    Envelope::Event(event) if validate_capability_revocation(&event)?.is_some() => {
                         return Err(ClientError::CapabilityRevoked);
                     }
                     _ => return Err(ClientError::UnexpectedMessage),
@@ -1640,7 +1629,7 @@ mod linux {
                         return Err(map_protocol_error(error.error.code()));
                     }
                     Envelope::Event(event) => {
-                        if Self::validate_capability_revocation(&event)?.is_some() {
+                        if validate_capability_revocation(&event)?.is_some() {
                             return Err(ClientError::CapabilityRevoked);
                         }
                         let message = self.validate_run_stream_event(event)?;
@@ -1744,7 +1733,7 @@ mod linux {
                     Envelope::Error(error) => return Err(map_protocol_error(error.error.code())),
                     _ => return Err(ClientError::UnexpectedMessage),
                 };
-            if Self::validate_capability_revocation(&event)?.is_some() {
+            if validate_capability_revocation(&event)?.is_some() {
                 return Ok(true);
             }
             let message = self.validate_run_stream_event(event)?;
@@ -1760,7 +1749,7 @@ mod linux {
             &mut self,
             event: crate::Event,
         ) -> Result<RunStreamMessage, ClientError> {
-            if let Some(message) = Self::validate_capability_revocation(&event)? {
+            if let Some(message) = validate_capability_revocation(&event)? {
                 return Ok(message);
             }
             let active = self
@@ -1938,36 +1927,6 @@ mod linux {
                 }
                 _ => Err(ClientError::UnexpectedMessage),
             }
-        }
-
-        fn validate_capability_revocation(
-            event: &crate::Event,
-        ) -> Result<Option<RunStreamMessage>, ClientError> {
-            if event.event != EventName::CapabilityRevoked {
-                return Ok(None);
-            }
-            if event.run_id.is_some() || event.run_seq.is_some() {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Body {
-                capability: String,
-                reason: String,
-            }
-            let body: Body = serde_json::from_value(event.body.clone())
-                .map_err(|_| ClientError::UnexpectedMessage)?;
-            if body.capability.trim().is_empty()
-                || body.capability.len() > MAX_TEXT_LENGTH
-                || body.reason.trim().is_empty()
-                || body.reason.len() > MAX_TEXT_LENGTH
-            {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(Some(RunStreamMessage::CapabilityRevoked {
-                capability: body.capability,
-                reason: body.reason,
-            }))
         }
     }
 
@@ -2147,240 +2106,6 @@ mod linux {
         io_timeout: Duration,
     }
 
-    /// A connection-bound client for the peer-authorized desktop session.
-    pub struct DesktopClient {
-        stream: UnixStream,
-        runtime_version: String,
-        profile_id: String,
-        workspace_scopes: BTreeMap<String, BTreeSet<String>>,
-        capability: String,
-        summary: AuthorizationSummary,
-        authorized_at: Instant,
-        chat_subscription_id: Option<Id>,
-        io_timeout: Duration,
-    }
-
-    #[derive(Clone, Debug, Default)]
-    pub struct DesktopClientHolder {
-        inner: Arc<(Mutex<Option<DesktopClient>>, Condvar)>,
-        /// Mirrors the held client's welcome version. Readers such as the
-        /// disconnect observer run while the client lock is held, so they read
-        /// the version here instead of locking the client again.
-        runtime_version: Arc<Mutex<Option<String>>>,
-    }
-
-    impl DesktopClientHolder {
-        pub fn new() -> Self {
-            Self::default()
-        }
-
-        pub fn runtime_version(&self) -> Option<String> {
-            self.runtime_version
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone()
-        }
-
-        pub fn request(
-            &self,
-            operation: Operation,
-            idempotency_key: Option<Id>,
-            body: Value,
-        ) -> Result<Response, ClientError> {
-            self.with_client(|client| client.request(operation, idempotency_key, body))
-        }
-
-        pub fn rename_thread(&self, thread_id: &str, title: &str) -> Result<(), ClientError> {
-            self.with_client(|client| client.rename_thread(thread_id, title))
-        }
-
-        pub fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError> {
-            self.with_client(|client| client.delete_thread(thread_id))
-        }
-
-        pub fn thread_select(&self, thread_id: &str) -> Result<(), ClientError> {
-            self.with_client(|client| client.thread_select(thread_id))
-        }
-
-        pub fn recheck_retention(&self) -> Result<(), ClientError> {
-            self.with_client(DesktopClient::recheck_retention)
-        }
-
-        pub fn session_status(&self) -> Result<Value, ClientError> {
-            self.with_client(DesktopClient::session_status)
-        }
-
-        pub fn entitlement_snapshot(&self) -> Result<Value, ClientError> {
-            self.with_client(DesktopClient::entitlement_snapshot)
-        }
-
-        pub fn list_devices(&self) -> Result<Value, ClientError> {
-            self.with_client(DesktopClient::list_devices)
-        }
-
-        pub fn sign_out(&self) -> Result<Value, ClientError> {
-            self.with_client(DesktopClient::sign_out)
-        }
-
-        pub fn sign_in(&self) -> Result<Value, ClientError> {
-            self.with_client(DesktopClient::sign_in)
-        }
-
-        pub fn thread_summaries(
-            &self,
-            limit: u8,
-            cursor: Option<&str>,
-        ) -> Result<Value, ClientError> {
-            self.with_client(|client| client.thread_summaries(limit, cursor))
-        }
-
-        pub fn thread_history(
-            &self,
-            thread_id: &str,
-            limit: u8,
-            cursor: Option<&str>,
-        ) -> Result<Value, ClientError> {
-            self.with_client(|client| client.thread_history(thread_id, limit, cursor))
-        }
-
-        pub fn list_companions(&self) -> Result<Value, ClientError> {
-            self.with_client(DesktopClient::list_companions)
-        }
-
-        pub fn revoke_companion(&self, client_identity: &str) -> Result<Value, ClientError> {
-            self.with_client(|client| client.revoke_companion(client_identity))
-        }
-
-        pub fn run_submit(
-            &self,
-            text: &str,
-            files: &[String],
-            thread_id: Option<&str>,
-        ) -> Result<RunSubmitAccepted, ClientError> {
-            self.with_client(|client| client.run_submit(text, files, thread_id))
-        }
-
-        pub fn run_submit_if_compatible(
-            &self,
-            text: &str,
-            files: &[String],
-            thread_id: Option<&str>,
-            compatible: impl FnOnce(&str) -> bool,
-        ) -> Result<RunSubmitAccepted, ClientError> {
-            self.with_compatible_client(compatible, |client| {
-                client.run_submit(text, files, thread_id)
-            })
-        }
-
-        pub fn run_cancel(&self, run_id: &str) -> Result<RunCancelAccepted, ClientError> {
-            self.with_client(|client| client.run_cancel(run_id))
-        }
-
-        pub fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError> {
-            self.with_client(|client| client.run_resume(run_id))
-        }
-
-        pub fn run_resume_if_compatible(
-            &self,
-            run_id: &str,
-            compatible: impl FnOnce(&str) -> bool,
-        ) -> Result<RunResumeAccepted, ClientError> {
-            self.with_compatible_client(compatible, |client| client.run_resume(run_id))
-        }
-
-        pub fn run_permission_answer(
-            &self,
-            run_id: &str,
-            gate_id: &str,
-            answer: ChatPermissionAnswer,
-        ) -> Result<RunPermissionAnswerAccepted, ClientError> {
-            self.with_client(|client| client.run_permission_answer(run_id, gate_id, answer))
-        }
-
-        pub fn run_steer(
-            &self,
-            run_id: &str,
-            text: &str,
-        ) -> Result<RunMessageAccepted, ClientError> {
-            self.with_client(|client| client.run_steer(run_id, text))
-        }
-
-        pub fn run_steer_if_compatible(
-            &self,
-            run_id: &str,
-            text: &str,
-            compatible: impl FnOnce(&str) -> bool,
-        ) -> Result<RunMessageAccepted, ClientError> {
-            self.with_compatible_client(compatible, |client| client.run_steer(run_id, text))
-        }
-
-        pub fn run_follow_up(
-            &self,
-            run_id: &str,
-            text: &str,
-        ) -> Result<RunMessageAccepted, ClientError> {
-            self.with_client(|client| client.run_follow_up(run_id, text))
-        }
-
-        pub fn run_follow_up_if_compatible(
-            &self,
-            run_id: &str,
-            text: &str,
-            compatible: impl FnOnce(&str) -> bool,
-        ) -> Result<RunMessageAccepted, ClientError> {
-            self.with_compatible_client(compatible, |client| client.run_follow_up(run_id, text))
-        }
-
-        fn with_compatible_client<T>(
-            &self,
-            compatible: impl FnOnce(&str) -> bool,
-            call: impl FnOnce(&mut DesktopClient) -> Result<T, ClientError>,
-        ) -> Result<T, ClientError> {
-            self.with_client(|client| {
-                if !compatible(&client.runtime_version) {
-                    return Err(ClientError::RuntimeUpgradePending);
-                }
-                call(client)
-            })
-        }
-
-        fn with_client<T>(
-            &self,
-            call: impl FnOnce(&mut DesktopClient) -> Result<T, ClientError>,
-        ) -> Result<T, ClientError> {
-            let (client, wake) = &*self.inner;
-            let mut client = Self::lock_client(client)?;
-            let result = call(client.as_mut().ok_or(ClientError::DesktopUnavailable)?);
-            if !matches!(&result, Err(ClientError::RuntimeUpgradePending)) && result.is_err() {
-                *client = None;
-                *self
-                    .runtime_version
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner()) = None;
-                wake.notify_all();
-            }
-            result
-        }
-
-        fn lock_client(
-            client: &Mutex<Option<DesktopClient>>,
-        ) -> Result<MutexGuard<'_, Option<DesktopClient>>, ClientError> {
-            let deadline = Instant::now() + DESKTOP_CLIENT_LOCK_TIMEOUT;
-            loop {
-                match client.try_lock() {
-                    Ok(client) => return Ok(client),
-                    Err(TryLockError::Poisoned(error)) => return Ok(error.into_inner()),
-                    Err(TryLockError::WouldBlock) if Instant::now() >= deadline => {
-                        return Err(ClientError::DesktopBusy);
-                    }
-                    Err(TryLockError::WouldBlock) => {
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                }
-            }
-        }
-    }
-
     #[derive(Clone, Debug, Default)]
     pub struct DesktopClientStopHandle {
         inner: Arc<(Mutex<DesktopClientStopState>, Condvar)>,
@@ -2421,6 +2146,66 @@ mod linux {
                 client_wake.notify_all();
             }
             wake.notify_all();
+        }
+    }
+
+    impl DesktopClientSupervisorStop for DesktopClientStopHandle {
+        fn stopped(&self) -> bool {
+            let (state, _) = &*self.inner;
+            state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .stopped
+        }
+
+        fn register_holder(&self, holder: DesktopClientHolder) -> bool {
+            let (state, _) = &*self.inner;
+            let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.stopped {
+                return false;
+            }
+            state.holder = Some(holder);
+            true
+        }
+
+        fn notify_connected<P, N>(&self, publish: P, notify: N) -> bool
+        where
+            P: FnOnce(),
+            N: FnOnce(),
+        {
+            let (notification_lock, notification_wake) = &*self.notification;
+            let mut notification = notification_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let (state, _) = &*self.inner;
+            let state = state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.stopped {
+                return false;
+            }
+            publish();
+            *notification = Some(std::thread::current().id());
+            drop(state);
+            drop(notification);
+            notify();
+            let mut notification = notification_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *notification = None;
+            notification_wake.notify_all();
+            true
+        }
+
+        fn wait_for_retry(&self, retry_interval: Duration) -> bool {
+            clear_desktop_stream(self);
+            let (state, wake) = &*self.inner;
+            let state = state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.stopped {
+                return false;
+            }
+            let (state, _) = wake
+                .wait_timeout_while(state, retry_interval, |state| !state.stopped)
+                .unwrap_or_else(|error| error.into_inner());
+            !state.stopped
         }
     }
 
@@ -2608,478 +2393,6 @@ mod linux {
         }
     }
 
-    impl std::fmt::Debug for DesktopClient {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("DesktopClient { .. }")
-        }
-    }
-
-    impl DesktopClient {
-        pub fn capability(&self) -> &str {
-            &self.capability
-        }
-
-        pub fn profile_id(&self) -> &str {
-            &self.profile_id
-        }
-
-        pub fn workspace_scopes(&self) -> &BTreeMap<String, BTreeSet<String>> {
-            &self.workspace_scopes
-        }
-
-        pub fn authorization_summary(&self) -> AuthorizationSummary {
-            self.summary.clone()
-        }
-
-        pub fn request(
-            &mut self,
-            operation: Operation,
-            idempotency_key: Option<Id>,
-            body: Value,
-        ) -> Result<Response, ClientError> {
-            self.request_before(operation, idempotency_key, body, deadline(self.io_timeout))
-        }
-
-        fn request_before(
-            &mut self,
-            operation: Operation,
-            idempotency_key: Option<Id>,
-            body: Value,
-            request_deadline: Instant,
-        ) -> Result<Response, ClientError> {
-            let request_id = fresh_request_id()?;
-            let request = Request {
-                protocol: Protocol,
-                request_id: request_id.clone(),
-                operation,
-                capability: self.capability.clone(),
-                idempotency_key,
-                body,
-            };
-            let bytes = encode_frame(&request).map_err(map_frame_error)?;
-            write_all_before(&mut self.stream, &bytes, request_deadline)?;
-            match serde_json::from_value(read_value(&mut self.stream, request_deadline)?)
-                .map_err(|_| ClientError::UnexpectedMessage)?
-            {
-                Envelope::Response(response) if response.request_id == request_id => Ok(response),
-                Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
-                    Err(map_protocol_error(error.error.code()))
-                }
-                _ => Err(ClientError::UnexpectedMessage),
-            }
-        }
-
-        pub fn rename_thread(&mut self, thread_id: &str, title: &str) -> Result<(), ClientError> {
-            if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH || title.is_empty() {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            let response = self.request(
-                Operation::ThreadRename,
-                Some(fresh_request_id()?),
-                serde_json::json!({"thread_id": thread_id, "title": title}),
-            )?;
-            if response.body != serde_json::json!({}) {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(())
-        }
-
-        pub fn delete_thread(&mut self, thread_id: &str) -> Result<(), ClientError> {
-            if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            let response = self.request(
-                Operation::ThreadDelete,
-                Some(fresh_request_id()?),
-                serde_json::json!({"thread_id": thread_id}),
-            )?;
-            if response.body != serde_json::json!({}) {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(())
-        }
-
-        pub fn thread_select(&mut self, thread_id: &str) -> Result<(), ClientError> {
-            if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            let response = self.request(
-                Operation::ThreadSelect,
-                None,
-                serde_json::json!({"thread_id": thread_id}),
-            )?;
-            if response.body != serde_json::json!({}) {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(())
-        }
-
-        pub fn recheck_retention(&mut self) -> Result<(), ClientError> {
-            let response =
-                self.request(Operation::RetentionRecheck, None, serde_json::json!({}))?;
-            if response.body != serde_json::json!({}) {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(())
-        }
-
-        pub fn run_submit(
-            &mut self,
-            text: &str,
-            files: &[String],
-            thread_id: Option<&str>,
-        ) -> Result<RunSubmitAccepted, ClientError> {
-            if text.trim().is_empty()
-                || text.len() > MAX_TEXT_LENGTH
-                || files
-                    .iter()
-                    .any(|file| file.trim().is_empty() || file.len() > MAX_TEXT_LENGTH)
-                || thread_id.is_some_and(|thread_id| thread_id.is_empty() || thread_id.len() > 36)
-            {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            let response = self.request(
-                Operation::RunSubmit,
-                Some(fresh_request_id()?),
-                serde_json::json!({"text": text, "files": files, "thread_id": thread_id}),
-            )?;
-            let accepted: RunSubmitAccepted = serde_json::from_value(response.body)
-                .map_err(|_| ClientError::UnexpectedMessage)?;
-            if Id::new(accepted.run_id.clone()).is_err()
-                || Id::new(accepted.thread_id.clone()).is_err()
-                || thread_id.is_some_and(|thread_id| accepted.thread_id != thread_id)
-                || accepted.committed_seq == 0
-                || accepted.accepted_at.len() > MAX_TEXT_LENGTH
-                || !is_rfc3339(&accepted.accepted_at)
-                || accepted.attachments.len() != files.len()
-                || accepted.attachments.iter().any(|attachment| {
-                    attachment.display_name.trim().is_empty()
-                        || attachment.display_name.len() > MAX_TEXT_LENGTH
-                        || attachment.media_type.as_ref().is_some_and(|media_type| {
-                            media_type.trim().is_empty() || media_type.len() > MAX_TEXT_LENGTH
-                        })
-                })
-            {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(accepted)
-        }
-
-        pub fn run_cancel(&mut self, run_id: &str) -> Result<RunCancelAccepted, ClientError> {
-            let run_id = Id::new(run_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
-            let response = self.request(
-                Operation::RunCancel,
-                Some(fresh_request_id()?),
-                serde_json::json!({"run_id": run_id.as_str()}),
-            )?;
-            let accepted: RunCancelAccepted = serde_json::from_value(response.body)
-                .map_err(|_| ClientError::UnexpectedMessage)?;
-            if accepted.run_id != run_id.as_str()
-                || accepted.accepted_at.is_empty()
-                || accepted.accepted_at.len() > MAX_TEXT_LENGTH
-                || !is_rfc3339(&accepted.accepted_at)
-            {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(accepted)
-        }
-
-        pub fn run_resume(&mut self, run_id: &str) -> Result<RunResumeAccepted, ClientError> {
-            let run_id = Id::new(run_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
-            let response = self.request(
-                Operation::RunResume,
-                Some(fresh_request_id()?),
-                serde_json::json!({"run_id": run_id.as_str()}),
-            )?;
-            let accepted: RunResumeAccepted = serde_json::from_value(response.body)
-                .map_err(|_| ClientError::UnexpectedMessage)?;
-            if accepted.run_id != run_id.as_str()
-                || Id::new(accepted.thread_id.clone()).is_err()
-                || accepted.committed_seq == 0
-                || accepted.accepted_at.is_empty()
-                || accepted.accepted_at.len() > MAX_TEXT_LENGTH
-                || !is_rfc3339(&accepted.accepted_at)
-            {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(accepted)
-        }
-
-        pub fn run_permission_answer(
-            &mut self,
-            run_id: &str,
-            gate_id: &str,
-            answer: ChatPermissionAnswer,
-        ) -> Result<RunPermissionAnswerAccepted, ClientError> {
-            let run_id = Id::new(run_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
-            if gate_id.trim().is_empty() || gate_id.len() > MAX_PERMISSION_GATE_ID_LENGTH {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            let response = self.request(
-                Operation::RunPermissionAnswer,
-                Some(fresh_request_id()?),
-                serde_json::json!({
-                    "run_id": run_id.as_str(),
-                    "gate_id": gate_id,
-                    "answer": &answer,
-                }),
-            )?;
-            let accepted: RunPermissionAnswerAccepted = serde_json::from_value(response.body)
-                .map_err(|_| ClientError::UnexpectedMessage)?;
-            if accepted.run_id != run_id.as_str()
-                || accepted.gate_id != gate_id
-                || accepted.answer != answer
-                || accepted.committed_seq == 0
-                || accepted.accepted_at.is_empty()
-                || accepted.accepted_at.len() > MAX_TEXT_LENGTH
-                || !is_rfc3339(&accepted.accepted_at)
-            {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(accepted)
-        }
-
-        pub fn run_steer(
-            &mut self,
-            run_id: &str,
-            text: &str,
-        ) -> Result<RunMessageAccepted, ClientError> {
-            self.run_message(Operation::RunSteer, run_id, text)
-        }
-
-        pub fn run_follow_up(
-            &mut self,
-            run_id: &str,
-            text: &str,
-        ) -> Result<RunMessageAccepted, ClientError> {
-            self.run_message(Operation::RunFollowUp, run_id, text)
-        }
-
-        fn run_message(
-            &mut self,
-            operation: Operation,
-            run_id: &str,
-            text: &str,
-        ) -> Result<RunMessageAccepted, ClientError> {
-            let run_id = Id::new(run_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
-            if text.trim().is_empty() || text.len() > MAX_RUN_MESSAGE_TEXT_LENGTH {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            let response = self.request(
-                operation,
-                Some(fresh_request_id()?),
-                serde_json::json!({"run_id": run_id.as_str(), "text": text}),
-            )?;
-            let accepted: RunMessageAccepted = serde_json::from_value(response.body)
-                .map_err(|_| ClientError::UnexpectedMessage)?;
-            if accepted.run_id != run_id.as_str()
-                || accepted.accepted_at.is_empty()
-                || accepted.accepted_at.len() > MAX_TEXT_LENGTH
-                || !is_rfc3339(&accepted.accepted_at)
-            {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(accepted)
-        }
-
-        pub fn session_status(&mut self) -> Result<Value, ClientError> {
-            self.request_body(
-                Operation::SessionStatus,
-                None,
-                serde_json::json!({}),
-                &["signed_in", "subject", "expires_at"],
-            )
-        }
-
-        pub fn entitlement_snapshot(&mut self) -> Result<Value, ClientError> {
-            self.request_body(
-                Operation::EntitlementSnapshot,
-                None,
-                serde_json::json!({}),
-                &["snapshot", "changed_snapshot_version"],
-            )
-        }
-
-        pub fn list_devices(&mut self) -> Result<Value, ClientError> {
-            self.request_body(
-                Operation::DeviceList,
-                None,
-                serde_json::json!({}),
-                &["devices"],
-            )
-        }
-
-        pub fn sign_out(&mut self) -> Result<Value, ClientError> {
-            self.request_body(
-                Operation::SessionSignOut,
-                Some(fresh_request_id()?),
-                serde_json::json!({}),
-                &["status"],
-            )
-        }
-
-        pub fn sign_in(&mut self) -> Result<Value, ClientError> {
-            let body = self
-                .request_before(
-                    Operation::SessionSignIn,
-                    Some(fresh_request_id()?),
-                    serde_json::json!({}),
-                    deadline(SIGN_IN_TIMEOUT),
-                )?
-                .body;
-            let object = body.as_object().ok_or(ClientError::UnexpectedMessage)?;
-            if !object.contains_key("status") {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(body)
-        }
-
-        pub fn thread_summaries(
-            &mut self,
-            limit: u8,
-            cursor: Option<&str>,
-        ) -> Result<Value, ClientError> {
-            let body = thread_read_body(limit, cursor)?;
-            Ok(self.request(Operation::ThreadSummaries, None, body)?.body)
-        }
-
-        pub fn thread_history(
-            &mut self,
-            thread_id: &str,
-            limit: u8,
-            cursor: Option<&str>,
-        ) -> Result<Value, ClientError> {
-            if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            let mut body = thread_read_body(limit, cursor)?;
-            body["thread_id"] = Value::String(thread_id.into());
-            Ok(self.request(Operation::ThreadHistory, None, body)?.body)
-        }
-
-        pub fn subscribe_chat_events(&mut self) -> Result<String, ClientError> {
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Subscription {
-                subscription_id: String,
-            }
-
-            let response = self.request(Operation::RunChatEvents, None, serde_json::json!({}))?;
-            let subscription: Subscription = serde_json::from_value(response.body)
-                .map_err(|_| ClientError::UnexpectedMessage)?;
-            let subscription_id = Id::new(subscription.subscription_id)
-                .map_err(|_| ClientError::UnexpectedMessage)?;
-            let result = subscription_id.as_str().to_owned();
-            self.chat_subscription_id = Some(subscription_id);
-            Ok(result)
-        }
-
-        pub fn read_chat_event(&mut self) -> Result<Value, ClientError> {
-            let subscription_id = self
-                .chat_subscription_id
-                .as_ref()
-                .ok_or(ClientError::UnexpectedMessage)?;
-            let authorization_remaining = Duration::from_secs(self.summary.expires_in_seconds)
-                .saturating_sub(self.authorized_at.elapsed());
-            let wait =
-                authorization_remaining.min(Duration::from_secs(self.summary.idle_timeout_seconds));
-            if wait.is_zero() {
-                return Err(ClientError::AuthorizationExpired);
-            }
-            let value = read_value(&mut self.stream, deadline(wait)).map_err(|error| {
-                if error == ClientError::ConnectionClosed {
-                    ClientError::DesktopUnavailable
-                } else {
-                    error
-                }
-            })?;
-            if value
-                .get("protocol")
-                .and_then(Value::as_str)
-                .is_some_and(|protocol| protocol != PROTOCOL)
-            {
-                return Err(ClientError::ProtocolIncompatible);
-            }
-            let event =
-                match serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)? {
-                    Envelope::Event(event) => event,
-                    Envelope::Error(error) => return Err(map_protocol_error(error.error.code())),
-                    _ => return Err(ClientError::UnexpectedMessage),
-                };
-            if event.event == EventName::CapabilityRevoked {
-                AuthorizedClient::validate_capability_revocation(&event)?
-                    .ok_or(ClientError::UnexpectedMessage)?;
-                return Err(ClientError::CapabilityRevoked);
-            }
-            if &event.subscription_id != subscription_id
-                || event.event != EventName::ChatEvent
-                || event.run_id.is_some()
-                || event.run_seq.is_some()
-            {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(event.body)
-        }
-
-        pub fn list_companions(&mut self) -> Result<Value, ClientError> {
-            self.request_body(
-                Operation::CompanionList,
-                None,
-                serde_json::json!({}),
-                &["companions"],
-            )
-        }
-
-        pub fn revoke_companion(&mut self, client_identity: &str) -> Result<Value, ClientError> {
-            if client_identity.is_empty() || client_identity.len() > MAX_TEXT_LENGTH {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            let body = self.request_body(
-                Operation::CompanionRevoke,
-                Some(fresh_request_id()?),
-                serde_json::json!({"client_identity": client_identity}),
-                &[],
-            )?;
-            if body != serde_json::json!({}) {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(body)
-        }
-
-        fn request_body(
-            &mut self,
-            operation: Operation,
-            idempotency_key: Option<Id>,
-            body: Value,
-            expected_keys: &[&str],
-        ) -> Result<Value, ClientError> {
-            let body = self.request(operation, idempotency_key, body)?.body;
-            let object = body.as_object().ok_or(ClientError::UnexpectedMessage)?;
-            if !expected_keys.iter().all(|key| object.contains_key(*key)) {
-                return Err(ClientError::UnexpectedMessage);
-            }
-            Ok(body)
-        }
-
-        pub fn into_stream(self) -> UnixStream {
-            self.stream
-        }
-    }
-
-    fn thread_read_body(limit: u8, cursor: Option<&str>) -> Result<Value, ClientError> {
-        if limit == 0
-            || limit > 100
-            || cursor.is_some_and(|cursor| cursor.is_empty() || cursor.len() > MAX_CURSOR_LENGTH)
-        {
-            return Err(ClientError::UnexpectedMessage);
-        }
-        let mut body = serde_json::json!({"limit": limit});
-        if let Some(cursor) = cursor {
-            body["cursor"] = Value::String(cursor.into());
-        }
-        Ok(body)
-    }
-
     impl MigrationControlClient {
         pub fn capability(&self) -> &str {
             &self.capability
@@ -3158,69 +2471,6 @@ mod linux {
 
         pub fn into_stream(self) -> UnixStream {
             self.stream
-        }
-    }
-
-    fn is_rfc3339(value: &str) -> bool {
-        let bytes = value.as_bytes();
-        if bytes.len() < 20
-            || bytes.get(4) != Some(&b'-')
-            || bytes.get(7) != Some(&b'-')
-            || !matches!(bytes.get(10), Some(b'T' | b't'))
-            || bytes.get(13) != Some(&b':')
-            || bytes.get(16) != Some(&b':')
-        {
-            return false;
-        }
-
-        let number = |start: usize, end: usize| {
-            bytes
-                .get(start..end)
-                .filter(|digits| digits.iter().all(u8::is_ascii_digit))
-                .and_then(|digits| std::str::from_utf8(digits).ok())
-                .and_then(|digits| digits.parse::<u32>().ok())
-        };
-        let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
-            number(0, 4),
-            number(5, 7),
-            number(8, 10),
-            number(11, 13),
-            number(14, 16),
-            number(17, 19),
-        ) else {
-            return false;
-        };
-        let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-        let max_day = match month {
-            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-            4 | 6 | 9 | 11 => 30,
-            2 if leap_year => 29,
-            2 => 28,
-            _ => return false,
-        };
-        if day == 0 || day > max_day || hour > 23 || minute > 59 || second > 60 {
-            return false;
-        }
-
-        let mut zone = 19;
-        if bytes.get(zone) == Some(&b'.') {
-            zone += 1;
-            let fraction_start = zone;
-            while bytes.get(zone).is_some_and(u8::is_ascii_digit) {
-                zone += 1;
-            }
-            if zone == fraction_start {
-                return false;
-            }
-        }
-        match bytes.get(zone..) {
-            Some([b'Z' | b'z']) => true,
-            Some([b'+' | b'-', h1, h2, b':', m1, m2]) => {
-                [h1, h2, m1, m2].iter().all(|digit| digit.is_ascii_digit())
-                    && (h1 - b'0') * 10 + (h2 - b'0') <= 23
-                    && (m1 - b'0') * 10 + (m2 - b'0') <= 59
-            }
-            _ => false,
         }
     }
 
@@ -3353,83 +2603,24 @@ mod linux {
         retry_interval: Duration,
         stop: DesktopClientStopHandle,
         holder: DesktopClientHolder,
-        mut observe: impl FnMut(bool),
+        observe: impl FnMut(bool),
     ) {
-        {
-            let (state, _) = &*stop.inner;
-            let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
-            if state.stopped {
-                return;
-            }
-            state.holder = Some(holder.clone());
-        }
-        loop {
-            let connected = interruptible_desktop_connect(endpoint, &stop);
-            if let Some(stream) = connected {
-                if let Ok(client) =
-                    handshake_desktop_client_stream(stream, client_version, io_timeout)
-                {
-                    let runtime_version = client.runtime_version.clone();
-                    let (notification_lock, notification_wake) = &*stop.notification;
-                    let mut notification = notification_lock
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    let (stop_state, _) = &*stop.inner;
-                    let stop_state = stop_state.lock().unwrap_or_else(|error| error.into_inner());
-                    if stop_state.stopped {
-                        return;
-                    }
-                    let (held, wake) = &*holder.inner;
-                    *held.lock().unwrap_or_else(|error| error.into_inner()) = Some(client);
-                    *holder
-                        .runtime_version
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner()) = Some(runtime_version);
-                    *notification = Some(std::thread::current().id());
-                    drop(stop_state);
-                    drop(notification);
-                    observe(true);
-                    let mut notification = notification_lock
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    *notification = None;
-                    notification_wake.notify_all();
-                    drop(notification);
-                    let connection = held.lock().unwrap_or_else(|error| error.into_inner());
-                    let mut connection = wake
-                        .wait_while(connection, |client| {
-                            if client.is_none() {
-                                return false;
-                            }
-                            let (state, _) = &*stop.inner;
-                            !state
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .stopped
-                        })
-                        .unwrap_or_else(|error| error.into_inner());
-                    *connection = None;
-                    *holder
-                        .runtime_version
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner()) = None;
-                    observe(false);
+        let connect_stop = stop.clone();
+        serve_desktop_client_with(
+            || {
+                let stream = interruptible_desktop_connect(endpoint, &connect_stop)?;
+                let client =
+                    handshake_desktop_client_stream(stream, client_version, io_timeout).ok();
+                if client.is_none() {
+                    clear_desktop_stream(&connect_stop);
                 }
-                clear_desktop_stream(&stop);
-            }
-
-            let (state, wake) = &*stop.inner;
-            let state = state.lock().unwrap_or_else(|error| error.into_inner());
-            if state.stopped {
-                return;
-            }
-            let (state, _) = wake
-                .wait_timeout_while(state, retry_interval, |state| !state.stopped)
-                .unwrap_or_else(|error| error.into_inner());
-            if state.stopped {
-                return;
-            }
-        }
+                client
+            },
+            stop,
+            holder,
+            retry_interval,
+            observe,
+        );
     }
 
     fn interruptible_desktop_connect(
@@ -3746,68 +2937,12 @@ mod linux {
 
     #[doc(hidden)]
     pub fn handshake_desktop_client_stream(
-        mut stream: UnixStream,
+        stream: UnixStream,
         client_version: &str,
         io_timeout: Duration,
     ) -> Result<DesktopClient, ClientError> {
         verify_connected_peer(&stream)?;
-        let hello = Hello {
-            protocol: Protocol,
-            client: Client {
-                kind: "desktop-client".into(),
-                version: client_version.into(),
-            },
-            supported: VersionRange { min: 1, max: 1 },
-            client_nonce: fresh_nonce()?,
-            authorized_client_id: Id::new(fresh_request_id()?.as_str())
-                .map_err(|_| ClientError::UnexpectedMessage)?,
-            authorized_client_credential: None,
-        };
-        let bytes = encode_frame(&hello).map_err(map_frame_error)?;
-        write_all_before(&mut stream, &bytes, deadline(io_timeout))?;
-
-        let welcome_value = read_value(&mut stream, deadline(io_timeout))?;
-        reject_protocol_error(&welcome_value)?;
-        let welcome: Welcome = parse_message(welcome_value)?;
-        if welcome.selected != 1
-            || welcome.authorization != Authorization::Authorized
-            || !is_hex_secret(&welcome.server_nonce, 32)
-        {
-            return Err(ClientError::UnexpectedMessage);
-        }
-
-        let authorized_value = read_value(&mut stream, deadline(io_timeout))?;
-        reject_protocol_error(&authorized_value)?;
-        if authorized_value
-            .get("authorized_client_credential")
-            .is_some()
-        {
-            return Err(ClientError::UnexpectedMessage);
-        }
-        let authorized: DesktopClientAuthorizedGrant = parse_message(authorized_value)?;
-        if authorized.workspace_scopes.len() > 1
-            || !is_hex_secret(&authorized.capability, 64)
-            || authorized.expires_at == 0
-            || authorized.expires_at > 8 * 60 * 60
-            || authorized.idle_timeout_seconds == 0
-            || authorized.idle_timeout_seconds > 15 * 60
-        {
-            return Err(ClientError::UnexpectedMessage);
-        }
-        Ok(DesktopClient {
-            stream,
-            runtime_version: welcome.desktop_version,
-            profile_id: authorized.profile_id,
-            workspace_scopes: authorized.workspace_scopes,
-            capability: authorized.capability,
-            summary: AuthorizationSummary {
-                expires_in_seconds: authorized.expires_at,
-                idle_timeout_seconds: authorized.idle_timeout_seconds,
-            },
-            authorized_at: Instant::now(),
-            chat_subscription_id: None,
-            io_timeout,
-        })
+        handshake_desktop_client(Box::new(stream), client_version, io_timeout)
     }
 
     #[doc(hidden)]
@@ -3936,175 +3071,6 @@ mod linux {
             pending_artifact_events: BTreeMap::new(),
             authorized_client_credential: authorized.authorized_client_credential,
         })
-    }
-
-    fn fresh_request_id() -> Result<Id, ClientError> {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| ClientError::RandomnessUnavailable)?
-            .as_millis();
-        if timestamp > 0xffff_ffff_ffff {
-            return Err(ClientError::RandomnessUnavailable);
-        }
-        let mut bytes = random_bytes()?;
-        bytes[..6].copy_from_slice(&(timestamp as u64).to_be_bytes()[2..]);
-        bytes[6] = (bytes[6] & 0x0f) | 0x70;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
-        Id::new(format!(
-            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
-        ))
-        .map_err(|_| ClientError::RandomnessUnavailable)
-    }
-
-    fn map_protocol_error(code: ErrorCode) -> ClientError {
-        match code {
-            ErrorCode::ProtocolIncompatible => ClientError::ProtocolIncompatible,
-            ErrorCode::Unauthorized => ClientError::AuthorizationExpired,
-            ErrorCode::ThreadNotFound => ClientError::ThreadNotFound,
-            ErrorCode::PersistenceFailed => ClientError::DesktopFailed,
-            _ => ClientError::RequestRejected,
-        }
-    }
-
-    fn fresh_nonce() -> Result<String, ClientError> {
-        let bytes = random_bytes()?;
-        let mut nonce = String::with_capacity(32);
-        for byte in bytes {
-            use std::fmt::Write as _;
-            write!(&mut nonce, "{byte:02x}").expect("writing to String cannot fail");
-        }
-        Ok(nonce)
-    }
-
-    fn random_bytes() -> Result<[u8; 16], ClientError> {
-        let mut bytes = [0u8; 16];
-        File::open("/dev/urandom")
-            .and_then(|mut file| file.read_exact(&mut bytes))
-            .map_err(|_| ClientError::RandomnessUnavailable)?;
-        Ok(bytes)
-    }
-
-    fn is_hex_secret(value: &str, length: usize) -> bool {
-        value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-    }
-
-    fn deadline(timeout: Duration) -> Instant {
-        Instant::now()
-            .checked_add(timeout)
-            .unwrap_or_else(Instant::now)
-    }
-
-    fn remaining(deadline: Instant) -> Result<Duration, ClientError> {
-        deadline
-            .checked_duration_since(Instant::now())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or(ClientError::Timeout)
-    }
-
-    fn read_exact_before(
-        stream: &mut UnixStream,
-        mut bytes: &mut [u8],
-        deadline: Instant,
-    ) -> Result<(), ClientError> {
-        while !bytes.is_empty() {
-            stream
-                .set_read_timeout(Some(remaining(deadline)?))
-                .map_err(|_| ClientError::DesktopUnavailable)?;
-            match stream.read(bytes).map_err(map_io_error)? {
-                0 => return Err(ClientError::ConnectionClosed),
-                read => bytes = &mut bytes[read..],
-            }
-        }
-        Ok(())
-    }
-
-    fn write_all_before(
-        stream: &mut UnixStream,
-        mut bytes: &[u8],
-        deadline: Instant,
-    ) -> Result<(), ClientError> {
-        while !bytes.is_empty() {
-            stream
-                .set_write_timeout(Some(remaining(deadline)?))
-                .map_err(|_| ClientError::DesktopUnavailable)?;
-            match stream.write(bytes).map_err(map_io_error)? {
-                0 => return Err(ClientError::ConnectionClosed),
-                written => bytes = &bytes[written..],
-            }
-        }
-        Ok(())
-    }
-
-    fn read_value(stream: &mut UnixStream, deadline: Instant) -> Result<Value, ClientError> {
-        let mut prefix = [0u8; 4];
-        read_exact_before(stream, &mut prefix, deadline)?;
-        let length = u32::from_be_bytes(prefix) as usize;
-        if length > MAX_FRAME_LENGTH {
-            return Err(ClientError::PayloadTooLarge);
-        }
-        let mut frame = vec![0u8; length + 4];
-        frame[..4].copy_from_slice(&prefix);
-        read_exact_before(stream, &mut frame[4..], deadline)?;
-        decode_frame(&frame)
-            .map_err(map_frame_error)?
-            .map(|(value, _)| value)
-            .ok_or(ClientError::MalformedFrame)
-    }
-
-    fn read_approval_value(
-        stream: &mut UnixStream,
-        deadline: Instant,
-    ) -> Result<Value, ClientError> {
-        let mut prefix = [0u8; 4];
-        read_exact_before(stream, &mut prefix, deadline)?;
-        read_approval_value_with_prefix(stream, prefix, deadline)
-    }
-
-    fn read_approval_value_with_prefix(
-        stream: &mut UnixStream,
-        prefix: [u8; 4],
-        deadline: Instant,
-    ) -> Result<Value, ClientError> {
-        let length = u32::from_be_bytes(prefix) as usize;
-        if length > MAX_FRAME_LENGTH {
-            return Err(ClientError::PayloadTooLarge);
-        }
-        let mut frame = vec![0u8; length];
-        read_exact_before(stream, &mut frame, deadline)?;
-        serde_json::from_slice(&frame).map_err(|_| ClientError::MalformedFrame)
-    }
-
-    fn reject_protocol_error(value: &Value) -> Result<(), ClientError> {
-        if value
-            .get("protocol")
-            .and_then(Value::as_str)
-            .is_some_and(|p| p != PROTOCOL)
-        {
-            return Err(ClientError::ProtocolIncompatible);
-        }
-        if value.get("ok") == Some(&Value::Bool(false)) {
-            let error: ErrorEnvelope =
-                serde_json::from_value(value.clone()).map_err(|_| ClientError::MalformedFrame)?;
-            return Err(if error.error.code() == ErrorCode::ProtocolIncompatible {
-                ClientError::ProtocolIncompatible
-            } else {
-                ClientError::UnexpectedMessage
-            });
-        }
-        Ok(())
-    }
-
-    fn parse_message<T: DeserializeOwned>(value: Value) -> Result<T, ClientError> {
-        serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)
-    }
-
-    fn map_frame_error(error: FrameError) -> ClientError {
-        match error {
-            FrameError::PayloadTooLarge => ClientError::PayloadTooLarge,
-            _ => ClientError::MalformedFrame,
-        }
     }
 
     fn valid_sha256(value: &str) -> bool {
@@ -4244,112 +3210,6 @@ mod linux {
             _ => ClientError::DesktopUnavailable,
         }
     }
-
-    #[cfg(test)]
-    mod holder_tests {
-        use super::*;
-        use std::sync::Barrier;
-
-        fn test_client(runtime_version: &str) -> DesktopClient {
-            let (stream, _peer) = UnixStream::pair().unwrap();
-            DesktopClient {
-                stream,
-                runtime_version: runtime_version.to_string(),
-                profile_id: "profile".to_string(),
-                workspace_scopes: BTreeMap::new(),
-                capability: "capability".to_string(),
-                summary: AuthorizationSummary {
-                    expires_in_seconds: 60,
-                    idle_timeout_seconds: 60,
-                },
-                authorized_at: Instant::now(),
-                chat_subscription_id: None,
-                io_timeout: IO_TIMEOUT,
-            }
-        }
-
-        #[test]
-        fn slow_call_makes_second_caller_busy_without_clearing_client() {
-            let holder = DesktopClientHolder::new();
-            let (client, _) = &*holder.inner;
-            *client.lock().unwrap() = Some(test_client("0.0.1"));
-
-            let entered = Arc::new(Barrier::new(2));
-            let slow_holder = holder.clone();
-            let slow_entered = entered.clone();
-            let slow_call = std::thread::spawn(move || {
-                slow_holder.with_client(|_| {
-                    slow_entered.wait();
-                    std::thread::sleep(DESKTOP_CLIENT_LOCK_TIMEOUT * 3);
-                    Ok(())
-                })
-            });
-            entered.wait();
-
-            let started = Instant::now();
-            assert_eq!(holder.session_status(), Err(ClientError::DesktopBusy));
-            assert!(started.elapsed() < DESKTOP_CLIENT_LOCK_TIMEOUT * 2);
-            assert_eq!(slow_call.join().unwrap(), Ok(()));
-            assert!(client.lock().unwrap().is_some());
-        }
-
-        #[test]
-        fn compatible_check_and_request_keep_the_same_client_generation() {
-            let holder = DesktopClientHolder::new();
-            let (client, _) = &*holder.inner;
-            *client.lock().unwrap() = Some(test_client("2.0.0"));
-
-            let checked = Arc::new(Barrier::new(2));
-            let release = Arc::new(Barrier::new(2));
-            let request_holder = holder.clone();
-            let request_checked = checked.clone();
-            let request_release = release.clone();
-            let request = std::thread::spawn(move || {
-                request_holder.with_compatible_client(
-                    |version| {
-                        assert_eq!(version, "2.0.0");
-                        true
-                    },
-                    |client| {
-                        request_checked.wait();
-                        request_release.wait();
-                        assert_eq!(client.runtime_version, "2.0.0");
-                        Ok(())
-                    },
-                )
-            });
-            checked.wait();
-
-            assert!(client.try_lock().is_err());
-            let replacement_holder = holder.clone();
-            let replacement = std::thread::spawn(move || {
-                let (client, _) = &*replacement_holder.inner;
-                *client.lock().unwrap() = Some(test_client("1.0.0"));
-            });
-            release.wait();
-            assert_eq!(request.join().unwrap(), Ok(()));
-            replacement.join().unwrap();
-
-            let compatible = |version: &str| version >= "2.0.0";
-            assert_eq!(
-                holder.run_submit_if_compatible("prompt", &[], None, compatible),
-                Err(ClientError::RuntimeUpgradePending)
-            );
-            assert_eq!(
-                holder.run_resume_if_compatible("run", compatible),
-                Err(ClientError::RuntimeUpgradePending)
-            );
-            assert_eq!(
-                holder.run_steer_if_compatible("run", "message", compatible),
-                Err(ClientError::RuntimeUpgradePending)
-            );
-            assert_eq!(
-                holder.run_follow_up_if_compatible("run", "message", compatible),
-                Err(ClientError::RuntimeUpgradePending)
-            );
-            assert!(client.lock().unwrap().is_some());
-        }
-    }
 }
 
 #[cfg(unix)]
@@ -4359,8 +3219,8 @@ pub use linux::{
     handshake_desktop_client_stream, handshake_migration_control_stream, handshake_stream,
     handshake_stream_with_credential, interruptible_connect_with_state,
     serve_approval_presenter_at, serve_desktop_client_at, ApprovalPresenterClient,
-    ApprovalPresenterStopHandle, AuthorizedClient, DesktopClient, DesktopClientHolder,
-    DesktopClientStopHandle, InterruptibleConnectState, MigrationControlClient,
+    ApprovalPresenterStopHandle, AuthorizedClient, DesktopClientStopHandle,
+    InterruptibleConnectState, MigrationControlClient,
 };
 
 #[cfg(target_os = "macos")]
@@ -4372,104 +3232,6 @@ pub use linux::{
 #[cfg(not(unix))]
 #[derive(Debug)]
 pub struct AuthorizedClient;
-
-#[cfg(not(unix))]
-#[derive(Debug)]
-pub struct DesktopClient;
-
-#[cfg(not(unix))]
-impl DesktopClient {
-    pub fn run_submit(
-        &mut self,
-        _text: &str,
-        _files: &[String],
-        _thread_id: Option<&str>,
-    ) -> Result<RunSubmitAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-
-    pub fn run_resume(&mut self, _run_id: &str) -> Result<RunResumeAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-
-    pub fn run_permission_answer(
-        &mut self,
-        _run_id: &str,
-        _gate_id: &str,
-        _answer: ChatPermissionAnswer,
-    ) -> Result<RunPermissionAnswerAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-
-    pub fn run_steer(
-        &mut self,
-        _run_id: &str,
-        _text: &str,
-    ) -> Result<RunMessageAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-
-    pub fn run_follow_up(
-        &mut self,
-        _run_id: &str,
-        _text: &str,
-    ) -> Result<RunMessageAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-}
-
-#[cfg(not(unix))]
-#[derive(Clone, Debug, Default)]
-pub struct DesktopClientHolder;
-
-#[cfg(not(unix))]
-impl DesktopClientHolder {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn runtime_version(&self) -> Option<String> {
-        None
-    }
-
-    pub fn run_submit(
-        &self,
-        _text: &str,
-        _files: &[String],
-        _thread_id: Option<&str>,
-    ) -> Result<RunSubmitAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-
-    pub fn run_cancel(&self, _run_id: &str) -> Result<RunCancelAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-
-    pub fn run_resume(&self, _run_id: &str) -> Result<RunResumeAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-
-    pub fn run_permission_answer(
-        &self,
-        _run_id: &str,
-        _gate_id: &str,
-        _answer: ChatPermissionAnswer,
-    ) -> Result<RunPermissionAnswerAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-
-    pub fn run_steer(&self, _run_id: &str, _text: &str) -> Result<RunMessageAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-
-    pub fn run_follow_up(
-        &self,
-        _run_id: &str,
-        _text: &str,
-    ) -> Result<RunMessageAccepted, ClientError> {
-        Err(ClientError::UnsupportedPlatform)
-    }
-}
 
 #[cfg(not(unix))]
 impl AuthorizedClient {

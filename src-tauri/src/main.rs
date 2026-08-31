@@ -15,6 +15,8 @@ mod onboarding_import;
 mod test_support;
 mod thread_retention;
 mod voice_capture;
+#[cfg(any(target_os = "windows", all(test, unix)))]
+mod windows_runtime_service;
 
 use muniment_core::attach::{DrainState, PreparedHandoffSlot, RuntimeActivityRegistry};
 use std::sync::{Arc, Mutex};
@@ -49,6 +51,14 @@ fn main() {
                 app.manage(activation);
             }
             let app_data = app.path().app_data_dir()?;
+            #[cfg(target_os = "windows")]
+            {
+                let state_directory = app_data.clone();
+                std::thread::spawn(move || {
+                    windows_runtime_service::register_runtime_task_at_startup(&state_directory);
+                    windows_runtime_service::start_runtime_task_at_startup(&state_directory);
+                });
+            }
             let app_config = app.path().app_config_dir()?;
             let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
                 app_config,

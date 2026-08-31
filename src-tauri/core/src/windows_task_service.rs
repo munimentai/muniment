@@ -1,10 +1,15 @@
 //! Live registration access through the Windows Task Scheduler.
 
+use crate::windows_payload::{
+    plan_windows_payload_removals, resolve_live_windows_payload,
+    resolve_live_windows_payload_scopes, LiveWindowsPayloadScopesError, UninstallerRemovalPlan,
+};
+use crate::windows_sid::{current_process_user_sid, WindowsSidError};
 use crate::windows_task::{
     parse_observed_registration, plan_task_registration, plan_task_removal, registration_verdict,
-    render_task_definition_xml, task_uri, ObservedRegistration, ParseObservedRegistrationError,
-    RegistrationVerdict, RemovalScope, RenderTaskDefinitionError, SidError, TaskDefinition,
-    TaskDefinitionError, TaskRegistrationPlan, TaskRemovalPlan,
+    render_task_definition_xml, sid_from_task_uri, task_uri, ObservedRegistration,
+    ParseObservedRegistrationError, RegistrationVerdict, RemovalScope, RenderTaskDefinitionError,
+    SidError, TaskDefinition, TaskDefinitionError, TaskRegistrationPlan, TaskRemovalPlan,
 };
 use std::fmt;
 use std::os::windows::ffi::OsStrExt;
@@ -60,6 +65,87 @@ impl fmt::Display for ReadObservedRegistrationError {
 
 impl std::error::Error for ReadObservedRegistrationError {}
 
+/// A failure while listing runtime task registrations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ListObservedRegistrationsError {
+    InitializeCom(HRESULT),
+    CreateTaskService(HRESULT),
+    ConnectTaskService(HRESULT),
+    OpenTaskFolder(HRESULT),
+    ListTasks(HRESULT),
+    CountTasks(HRESULT),
+    ReadTask(HRESULT),
+    ReadTaskName(HRESULT),
+    InvalidTaskNameText,
+    ReadTaskXml {
+        uri: String,
+        code: HRESULT,
+    },
+    InvalidTaskXmlText {
+        uri: String,
+    },
+    ParseTaskXml {
+        uri: String,
+        source: ParseObservedRegistrationError,
+    },
+}
+
+impl fmt::Display for ListObservedRegistrationsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InitializeCom(_) => formatter.write_str("could not initialize COM"),
+            Self::CreateTaskService(_) => {
+                formatter.write_str("could not create the Task Scheduler service")
+            }
+            Self::ConnectTaskService(_) => {
+                formatter.write_str("could not connect to the local Task Scheduler")
+            }
+            Self::OpenTaskFolder(_) => {
+                formatter.write_str("could not open the Muniment task folder")
+            }
+            Self::ListTasks(_) => formatter.write_str("could not list the Muniment tasks"),
+            Self::CountTasks(_) => formatter.write_str("could not count the Muniment tasks"),
+            Self::ReadTask(_) => formatter.write_str("could not read a Muniment task"),
+            Self::ReadTaskName(_) => formatter.write_str("could not read a Muniment task name"),
+            Self::InvalidTaskNameText => {
+                formatter.write_str("a Muniment task name contains invalid text")
+            }
+            Self::ReadTaskXml { uri, .. } => write!(formatter, "could not read task XML for {uri}"),
+            Self::InvalidTaskXmlText { uri } => {
+                write!(formatter, "task XML for {uri} contains invalid text")
+            }
+            Self::ParseTaskXml { uri, .. } => {
+                write!(formatter, "could not parse task XML for {uri}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ListObservedRegistrationsError {}
+
+/// A failure while planning live runtime task removal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlanLiveTaskRemovalsError {
+    ResolvePayloads(LiveWindowsPayloadScopesError),
+    ReadProcessUserSid(WindowsSidError),
+    ListRegistrations(ListObservedRegistrationsError),
+    InvalidProcessUserSid(SidError),
+}
+
+impl fmt::Display for PlanLiveTaskRemovalsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::ResolvePayloads(_) => "could not resolve the installed runtime payloads",
+            Self::ReadProcessUserSid(_) => "could not read the process user SID",
+            Self::ListRegistrations(_) => "could not list the runtime task registrations",
+            Self::InvalidProcessUserSid(_) => "the process user SID is not canonical",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for PlanLiveTaskRemovalsError {}
+
 /// A failure while writing a runtime task registration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EnsureTaskRegistrationError {
@@ -108,6 +194,29 @@ impl fmt::Display for EnsureTaskRegistrationError {
 }
 
 impl std::error::Error for EnsureTaskRegistrationError {}
+
+/// A failure while writing a live runtime task registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EnsureLiveTaskRegistrationError {
+    ReadProcessUserSid(WindowsSidError),
+    ResolvePayload(LiveWindowsPayloadScopesError),
+    NoInstalledPayload,
+    EnsureRegistration(EnsureTaskRegistrationError),
+}
+
+impl fmt::Display for EnsureLiveTaskRegistrationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::ReadProcessUserSid(_) => "could not read the process user SID",
+            Self::ResolvePayload(_) => "could not resolve the installed runtime payload",
+            Self::NoInstalledPayload => "no installed runtime payload exists",
+            Self::EnsureRegistration(_) => "could not write the runtime task registration",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for EnsureLiveTaskRegistrationError {}
 
 /// A failure while removing or repointing a runtime task registration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -184,7 +293,6 @@ pub enum StartRegisteredTaskResult {
 pub enum StartRegisteredTaskError<E> {
     ReadRegistration(ReadObservedRegistrationError),
     Missing,
-    CurrentExecutable,
     InvalidTaskDefinition(TaskDefinitionError),
     Refused,
     InitializeCom(HRESULT),
@@ -205,7 +313,6 @@ impl<E> fmt::Display for StartRegisteredTaskError<E> {
         let message = match self {
             Self::ReadRegistration(_) => "could not read the runtime task registration",
             Self::Missing => "the runtime task is not registered",
-            Self::CurrentExecutable => "could not locate the current executable",
             Self::InvalidTaskDefinition(_) => "the runtime task definition is invalid",
             Self::Refused => "refused to start a foreign runtime task",
             Self::InitializeCom(_) => "could not initialize COM",
@@ -240,6 +347,7 @@ where
 /// Reads, validates, and starts the registered runtime task.
 pub fn start_registered_task<F, E>(
     sid: &str,
+    expected_payload_path: impl AsRef<Path>,
     clear_crash_window: F,
 ) -> Result<StartRegisteredTaskResult, StartRegisteredTaskError<E>>
 where
@@ -248,10 +356,7 @@ where
     let observed = read_observed_registration(sid)
         .map_err(StartRegisteredTaskError::ReadRegistration)?
         .ok_or(StartRegisteredTaskError::Missing)?;
-    let mut payload_path =
-        std::env::current_exe().map_err(|_| StartRegisteredTaskError::CurrentExecutable)?;
-    payload_path.set_file_name("muniment-runtime.exe");
-    let expected = TaskDefinition::new(sid, payload_path)
+    let expected = TaskDefinition::new(sid, expected_payload_path)
         .map_err(StartRegisteredTaskError::InvalidTaskDefinition)?;
     if registration_verdict(&expected, &observed) == RegistrationVerdict::Foreign {
         return Err(StartRegisteredTaskError::Refused);
@@ -333,6 +438,90 @@ pub fn read_observed_registration(
         .map_err(ReadObservedRegistrationError::ParseTaskXml)?;
 
     Ok(Some(observed))
+}
+
+/// Lists the runtime task registrations in the Muniment task folder.
+pub fn list_observed_registrations(
+) -> Result<Vec<ObservedRegistration>, ListObservedRegistrationsError> {
+    let _apartment = ComApartment::initialize_for_list()?;
+    let service: ITaskService = unsafe {
+        CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| ListObservedRegistrationsError::CreateTaskService(error.code()))?
+    };
+    let empty = VARIANT::default();
+    unsafe { service.Connect(&empty, &empty, &empty, &empty) }
+        .map_err(|error| ListObservedRegistrationsError::ConnectTaskService(error.code()))?;
+    let folder = match unsafe { service.GetFolder(&BSTR::from(TASK_FOLDER)) } {
+        Ok(folder) => folder,
+        Err(error) if is_absent(error.code()) => return Ok(Vec::new()),
+        Err(error) => return Err(ListObservedRegistrationsError::OpenTaskFolder(error.code())),
+    };
+    let tasks = unsafe { folder.GetTasks(TASK_ENUM_HIDDEN.0) }
+        .map_err(|error| ListObservedRegistrationsError::ListTasks(error.code()))?;
+    let count = unsafe { tasks.Count() }
+        .map_err(|error| ListObservedRegistrationsError::CountTasks(error.code()))?;
+    let mut registrations = Vec::new();
+
+    for index in 1..=count {
+        let task = unsafe { tasks.get_Item(&VARIANT::from(index)) }
+            .map_err(|error| ListObservedRegistrationsError::ReadTask(error.code()))?;
+        let name = unsafe { task.Name() }
+            .map_err(|error| ListObservedRegistrationsError::ReadTaskName(error.code()))?;
+        let name = String::try_from(&name)
+            .map_err(|_| ListObservedRegistrationsError::InvalidTaskNameText)?;
+        let uri = format!(r"{TASK_FOLDER}\{name}");
+        if sid_from_task_uri(&uri).is_none() {
+            continue;
+        }
+        let xml =
+            unsafe { task.Xml() }.map_err(|error| ListObservedRegistrationsError::ReadTaskXml {
+                uri: uri.clone(),
+                code: error.code(),
+            })?;
+        let xml = String::try_from(&xml)
+            .map_err(|_| ListObservedRegistrationsError::InvalidTaskXmlText { uri: uri.clone() })?;
+        let observed = parse_observed_registration(&uri, &xml).map_err(|source| {
+            ListObservedRegistrationsError::ParseTaskXml {
+                uri: uri.clone(),
+                source,
+            }
+        })?;
+        registrations.push(observed);
+    }
+
+    Ok(registrations)
+}
+
+/// Plans every live uninstaller scope against every runtime task registration.
+pub fn plan_live_task_removals() -> Result<Vec<UninstallerRemovalPlan>, PlanLiveTaskRemovalsError> {
+    let payload_scopes = resolve_live_windows_payload_scopes()
+        .map_err(PlanLiveTaskRemovalsError::ResolvePayloads)?;
+    let user_sid =
+        current_process_user_sid().map_err(PlanLiveTaskRemovalsError::ReadProcessUserSid)?;
+    let registrations =
+        list_observed_registrations().map_err(PlanLiveTaskRemovalsError::ListRegistrations)?;
+    plan_windows_payload_removals(&payload_scopes, user_sid.as_str(), &registrations)
+        .map_err(PlanLiveTaskRemovalsError::InvalidProcessUserSid)
+}
+
+/// Registers the runtime task from the live payload and known-folder roots.
+///
+/// The caller must hold the per-user install lock.
+pub fn ensure_live_task_registration(
+) -> Result<TaskRegistrationPlan, EnsureLiveTaskRegistrationError> {
+    let sid =
+        current_process_user_sid().map_err(EnsureLiveTaskRegistrationError::ReadProcessUserSid)?;
+    let payload = resolve_live_windows_payload()
+        .map_err(EnsureLiveTaskRegistrationError::ResolvePayload)?
+        .ok_or(EnsureLiveTaskRegistrationError::NoInstalledPayload)?;
+
+    ensure_task_registration(
+        sid.as_str(),
+        payload.payload_path,
+        payload.machine_payload_root,
+        payload.user_payload_root,
+    )
+    .map_err(EnsureLiveTaskRegistrationError::EnsureRegistration)
 }
 
 /// Makes the planned runtime task registration change and returns its plan.
@@ -594,6 +783,10 @@ struct ComApartment {
 impl ComApartment {
     fn initialize() -> Result<Self, ReadObservedRegistrationError> {
         Self::initialize_inner().map_err(ReadObservedRegistrationError::InitializeCom)
+    }
+
+    fn initialize_for_list() -> Result<Self, ListObservedRegistrationsError> {
+        Self::initialize_inner().map_err(ListObservedRegistrationsError::InitializeCom)
     }
 
     fn initialize_for_write() -> Result<Self, EnsureTaskRegistrationError> {

@@ -1,26 +1,26 @@
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, TerminationSignalWait};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use muniment_runtime::{
     config_directory, profile_directory, run_runtime_activation, RuntimeActivationExit,
 };
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use std::sync::mpsc;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const INITIAL_WAIT_INTERVAL: Duration = Duration::from_millis(25);
 // Limit lock polling to one wakeup every two seconds during long waits.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const MAX_WAIT_INTERVAL: Duration = Duration::from_secs(2);
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const UPGRADE_REFRESH_EXIT_STATUS: i32 = 75;
 const FAILURE_EXIT_STATUS: i32 = 1;
 const SUCCESS_EXIT_STATUS: i32 = 0;
@@ -41,12 +41,48 @@ fn main() {
             eprintln!("muniment-runtime: {error}");
             #[cfg(target_os = "macos")]
             record_macos_diagnostic(muniment_runtime::MacosDiagnosticEvent::ArgumentsInvalid);
+            #[cfg(target_os = "windows")]
+            record_windows_diagnostic(muniment_runtime::WindowsDiagnosticEvent::ArgumentsInvalid);
             std::process::exit(1);
         }
     }
 
     #[cfg(target_os = "windows")]
-    return;
+    {
+        use muniment_runtime::{
+            profile_directory, record_windows_failed_activation, run_recorded_windows_activation,
+            run_windows_attach_activation, windows_local_app_data, SystemWindowsAttachFactory,
+        };
+
+        let state_directory = match profile_directory() {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("muniment-runtime: {error}");
+                record_windows_diagnostic(
+                    muniment_runtime::WindowsDiagnosticEvent::StartRecordFailed,
+                );
+                std::process::exit(FAILURE_EXIT_STATUS);
+            }
+        };
+        let local_app_data = match windows_local_app_data() {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("muniment-runtime: {error}");
+                std::process::exit(record_windows_failed_activation(&state_directory));
+            }
+        };
+        let factory =
+            SystemWindowsAttachFactory::new(&state_directory, std::time::Duration::from_secs(2));
+        let diagnostics = MainWindowsDiagnosticSink {
+            local_app_data: &local_app_data,
+        };
+        let (_stop_sender, stop_receiver) = std::sync::mpsc::channel();
+        std::process::exit(run_recorded_windows_activation(
+            &state_directory,
+            &local_app_data,
+            || run_windows_attach_activation(&factory, stop_receiver, &diagnostics),
+        ));
+    }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(exit) = test_macos_activation_exit() {
@@ -148,6 +184,25 @@ fn record_macos_diagnostic(event: muniment_runtime::MacosDiagnosticEvent) {
     }
 }
 
+#[cfg(target_os = "windows")]
+struct MainWindowsDiagnosticSink<'a> {
+    local_app_data: &'a std::path::Path,
+}
+
+#[cfg(target_os = "windows")]
+impl muniment_runtime::WindowsDiagnosticSink for MainWindowsDiagnosticSink<'_> {
+    fn record(&self, event: muniment_runtime::WindowsDiagnosticEvent) {
+        let _ = muniment_runtime::write_windows_diagnostic(self.local_app_data, event);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn record_windows_diagnostic(event: muniment_runtime::WindowsDiagnosticEvent) {
+    if let Ok(local_app_data) = muniment_runtime::windows_local_app_data() {
+        let _ = muniment_runtime::write_windows_diagnostic(local_app_data, event);
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 fn record_macos_diagnostic(_event: muniment_runtime::MacosDiagnosticEvent) {}
 
@@ -160,7 +215,7 @@ fn test_macos_activation_exit() -> Option<impl FnOnce() -> MacosActivationExit> 
     Some(move || exit)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn macos_activation() -> MacosActivationExit {
     match run(RuntimeDirectorySource::Profile) {
         Ok(RuntimeActivationExit::ManagerStop) => MacosActivationExit::Orderly(SUCCESS_EXIT_STATUS),
@@ -174,7 +229,12 @@ fn macos_activation() -> MacosActivationExit {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "macos")]
+fn macos_activation() -> MacosActivationExit {
+    MacosActivationExit::Failed(FAILURE_EXIT_STATUS)
+}
+
+#[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 enum RuntimeDirectorySource {
     Environment,
@@ -200,7 +260,7 @@ fn handle_arguments() -> Result<bool, String> {
     Ok(true)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn run(runtime_directory_source: RuntimeDirectorySource) -> Result<RuntimeActivationExit, String> {
     let termination_signal = TerminationSignalWait::new().map_err(|error| error.to_string())?;
     let wait_timeout = test_wait_timeout()?;
@@ -237,7 +297,7 @@ fn run(runtime_directory_source: RuntimeDirectorySource) -> Result<RuntimeActiva
     .map_err(|error| error.to_string())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn wait_for_instance_lock(wait_timeout: Option<Duration>) -> Result<(), String> {
     let filesystem = AttachFilesystem::from_environment().map_err(|error| error.to_string())?;
     let started = Instant::now();
@@ -273,7 +333,7 @@ fn wait_for_instance_lock(wait_timeout: Option<Duration>) -> Result<(), String> 
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn test_wait_timeout() -> Result<Option<Duration>, String> {
     let Some(value) = std::env::var_os(WAIT_TIMEOUT_ENV) else {
         return Ok(None);

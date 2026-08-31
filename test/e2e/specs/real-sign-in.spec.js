@@ -56,7 +56,8 @@ async function signInCompleted(driver) {
 async function waitForLinuxSignIn(driver) {
   if (process.platform !== 'linux') return false
   try {
-    await browser.waitUntil(async () => await signInCompleted(driver), { timeout: 10000 })
+    // Give the callback its full budget before another command can block on WebKitWebDriver.
+    await browser.waitUntil(async () => await signInCompleted(driver), { timeout: 120000 })
     return true
   } catch {
     return false
@@ -184,6 +185,11 @@ describe('installed nightly', () => {
       }
       signInBrowser = await remote({
         hostname: '127.0.0.1', port: 9515, logLevel: 'silent',
+        // A WebKit navigation can hold each command while the page changes.
+        // Keep those expected timeouts below the surrounding sign-in waits.
+        ...(process.platform === 'linux'
+          ? { connectionRetryTimeout: 5000, connectionRetryCount: 0 }
+          : {}),
         capabilities: process.platform === 'win32'
           ? { browserName: 'MicrosoftEdge', 'ms:edgeOptions': { args: ['--headless=new', '--disable-gpu'] } }
           : process.platform === 'linux'
@@ -264,7 +270,9 @@ describe('installed nightly', () => {
       })
     } finally {
       try {
-        if (signInBrowser) await signInBrowser.deleteSession()
+        // WebKitWebDriver can hold Delete Session after the callback navigation.
+        // Stopping its process releases the session without blocking the test.
+        if (signInBrowser && process.platform !== 'linux') await signInBrowser.deleteSession()
       } catch (error) {
         console.error('Failed to delete hosted sign-in session.', error)
       } finally {

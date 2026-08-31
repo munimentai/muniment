@@ -41,7 +41,12 @@ them must exercise the real contracts. It must add no mocked production path.
 > (2026-08-25) folded the passive-delivery and read-contract chains into two
 > entries, recorded the macOS cutover, and recorded the Windows activation
 > groundwork. The forty-sixth (2026-08-26) folded the twelve Windows slices
-> into two entries. It grows every wave, so it stays the next compaction target.
+> into two entries. The forty-seventh (2026-08-28) dropped eight settled Windows
+> rulings and folded three landed slices into one entry. The forty-eighth
+> (2026-08-29) folded the three served-endpoint slices into one entry and dropped
+> two settled route rulings. The forty-ninth (2026-08-29) folded sixteen Windows
+> entries into three and dropped one settled runtime ruling. It grows every wave,
+> so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -252,6 +257,14 @@ already holds the assistant text, `receipt_projection` holds the receipt, and
 fields those projections own is a contract call rather than a query rewrite, and
 carrying it out would add columns, so it waits behind the same owner ruling.
 
+MEASURED 2026-08-30 (planner, read the Linux `desktop-build` release log of CI
+run 33307389806) — `chat_thread_open_page` has no production caller. The release
+build of the desktop bin reports it, `newest_owned_workspace_thread`,
+`prepare_new_run_with_session_thread`, `prepare_opened_run`, `event_envelope`,
+and `AttachListenerState::load` as never used. Tests are their only callers, so
+the projection cost above is unpaid today. Whether each one gains a caller or
+leaves the tree is an owner call, so the lane files no slice for it.
+
 ### Capability vocabulary and provenance
 
 DONE — user surfaces say "capabilities". Receipts render only server-supplied
@@ -428,6 +441,13 @@ chat storage, approval presentation, and desktop client status all ride the
 runtime client on macOS. The installed macOS smoke verifies the bundled payload
 and proves the installed desktop connects to the LaunchAgent runtime.
 
+DONE 2026-08-30 — the macOS runtime binary compiles again (MUNIDESK-1564).
+Between 2026-08-21 and 2026-08-29 it did not, so no macOS bundle carried a
+runtime across that window. `src-tauri/runtime/src/main.rs` now gates the Linux
+activation imports to Linux, and the macOS branch records a failed activation and
+exits. The macOS compile preflight builds the runtime binary, so the hole cannot
+reopen. The macOS `desktop-build` job reported BUILD GREEN on 2026-08-30.
+
 DONE 2026-08-25 — both macOS attach peers verify the connected socket
 (MUNIDESK-1419, 1455). `peer_effective_uid`
 (`src-tauri/core/src/attach/macos_peer.rs:13`) and the client half
@@ -487,141 +507,327 @@ the installed payload resolver and its two removal scopes
 `verify_windows_pipe_security_with_reader`
 (`src-tauri/core/src/attach/windows_pipe_security.rs:51`).
 
-DONE 2026-08-26 — the first runtime pure half and both blocking seams landed
-(MUNIDESK-1474, 1475, 1476, and 1477). `install_lock::acquire`
-(`src-tauri/runtime/src/install_lock.rs:34`) takes the per-user install lock
-within a bounded wait, so registration and replacement serialize. It has no
-caller yet. `current_process_user_sid`
-(`src-tauri/core/src/windows_sid.rs:65`) returns this process's own user SID as
-owned bytes and a canonical string, so the pipe path, the task URI, and both
-peer checks now have a source. `deadline_io`
-(`src-tauri/core/src/attach/deadline_io.rs:6`) types `read_exact_before` and
-`write_all_before` against a `DeadlineStream` trait rather than `UnixStream`, so
-a named-pipe transport can reuse the bounded frame reads.
+DONE 2026-08-26 through 2026-08-29 — the whole Windows attach chain below the
+desktop client is built (MUNIDESK-1474 through 1543). `muniment-core` owns the
+per-user pipe. `WindowsAttachListener::bind`
+(`src-tauri/core/src/attach/windows_listener.rs:147`) takes the per-profile
+instance lock, creates the protected owner-only pipe, and reads the owner and
+the DACL back before it publishes the path. `accept` (`:182`) waits out
+`ConnectNamedPipe` within a deadline, and `take_stream_and_replace` (`:265`)
+swaps in the next instance. `serve_next_windows_attach` (`:131`) serves the
+connection on a worker thread, and `serve_windows_attach_session_with_reader`
+(`src-tauri/core/src/attach/windows_session.rs:23`) reads the four-byte prefix,
+verifies the peer, and writes one Welcome frame. `WindowsAttachStream`
+(`src-tauri/core/src/attach/windows_stream.rs:18`) carries the bounded frame
+reads. `connect_windows_attach_endpoint`
+(`src-tauri/core/src/attach/windows_connect.rs:64`) and
+`wait_for_windows_attach_endpoint` (`:66`) are the client halves.
+`name_windows_attach_connection_route`
+(`src-tauri/core/src/attach/windows_route.rs:20`) names the route, and
+`NativeWindowsAttachRouteReader`
+(`src-tauri/core/src/attach/windows_route_native.rs:15`) reads the live peer
+image path through `GetNamedPipeClientProcessId` and
+`QueryFullProcessImageNameW` (MUNIDESK-1546). It has no caller yet.
+`src-tauri/core/src/windows_task_service.rs` reads, plans, writes, enumerates,
+and starts the runtime task. `src-tauri/core/src/windows_payload.rs` resolves
+the installed payload, both removal scopes, and the desktop executable beside
+it.
 
-DONE 2026-08-26 — the last runtime pure half and the pipe endpoint landed
-(MUNIDESK-1479 and 1480). `clear_windows_crash_window`
-(`src-tauri/runtime/src/windows_activation.rs:40`) clears the crash window under
-the per-user install lock, which ADR 0012 requires before an explicit `Run`
-call. `WindowsAttachListener::bind`
-(`src-tauri/core/src/attach/windows_listener.rs:41`) creates the per-user pipe
-with a protected owner-only DACL, then reads the owner and the DACL back through
-`NativeWindowsPipeSecurityReader` before it publishes the path. Every pure half
-of the Windows lane is now built. The listener has no caller, so the ADR 0012
-attach admission gate still holds.
+DONE 2026-08-28 through 2026-08-29 — the runtime and the desktop both drive that
+chain (MUNIDESK-1514 through 1547). Windows `main`
+(`src-tauri/runtime/src/main.rs:50`) resolves the state directory and
+`%LocalAppData%`. A state-directory lookup failure attempts the
+`StartRecordFailed` diagnostic. A `%LocalAppData%` lookup failure records a
+failed start in `windows-starts`. Windows `main` runs
+`run_windows_attach_activation`
+(`src-tauri/runtime/src/windows_attach_activation.rs:35`) inside
+`run_recorded_windows_activation`. That step binds an acceptor through
+`SystemWindowsAttachFactory` (`:58`), then runs
+`run_windows_attach_accept_loop`
+(`src-tauri/runtime/src/windows_attach_loop.rs:70`). The Windows runtime
+therefore serves its attach endpoint. A Tauri setup-hook worker thread
+(`src-tauri/src/main.rs:57`) registers and starts the runtime task through
+`src-tauri/src/windows_runtime_service.rs`, and it records every failed
+registration and start. ADR 0012 carries the admission-gate-lifted amendment
+(`docs/decisions/0012-user-level-runtime-service.md:1177`) and the connection
+route amendment (`:1198`). `THREAT_MODEL.md:130` records the served endpoint
+boundary, and `docs/windows-installers.md` describes the runtime task.
 
-DONE 2026-08-26 — the task-XML parse and the impersonation peer reader landed
-(MUNIDESK-1482 and 1483). `parse_observed_registration`
-(`src-tauri/core/src/windows_task.rs:346`) turns one Task Scheduler XML document
-into an `ObservedRegistration`, so `registration_verdict`,
-`plan_task_registration`, and `plan_task_removal` now have a source.
-`NativeWindowsAttachPeerReader`
-(`src-tauri/core/src/attach/windows_peer_native.rs:20`) calls
-`ImpersonateNamedPipeClient`, `OpenThreadToken`, and `GetTokenInformation` with
-`TokenUser`, copies the client SID, and calls `RevertToSelf`. It reads identity
-alone and no listener calls it, so the ADR 0012 attach admission gate still
-holds. `main` (`src-tauri/runtime/src/main.rs:49`) still returns on Windows
-before it opens the instance lock, and no surface calls `IRegisteredTask::Run`.
+DONE 2026-08-29 — the attach client's protocol helpers are platform-neutral
+(MUNIDESK-1544). `src-tauri/attach/src/protocol_helpers.rs` holds `deadline`,
+`fresh_request_id`, `fresh_nonce`, `is_hex_secret`, `map_frame_error`,
+`map_protocol_error`, `parse_message`, and `reject_protocol_error`. It takes
+randomness from `getrandom` rather than from `/dev/urandom`.
+`src-tauri/attach/src/client_stream.rs` holds the platform-neutral
+`ClientStream` trait, and `muniment-core` implements it for
+`WindowsAttachStream`. `src-tauri/attach/src/desktop_client_holder.rs` holds
+`DesktopClientHolder` (MUNIDESK-1556).
 
-DONE 2026-08-26 — the bounded pipe stream, the read-order amendment, and the
-registration read landed (MUNIDESK-1485, 1486, and 1487). `WindowsAttachStream`
-(`src-tauri/core/src/attach/windows_stream.rs:18`) wraps a connected overlapped
-pipe handle, cancels a timed-out operation through `CancelIoEx`, and implements
-`DeadlineStream`, so `read_exact_before` and `write_all_before` now work over a
-named pipe. ADR 0012 carries the Windows attach peer check read-order amendment
-(`docs/decisions/0012-user-level-runtime-service.md:1142`). It names the
-four-byte frame-length prefix as the sole read that precedes
-`ImpersonateNamedPipeClient`. `read_observed_registration`
-(`src-tauri/core/src/windows_task_service.rs:55`) opens the Task Scheduler
-through COM, reads the runtime task XML, and returns the parsed
-`ObservedRegistration`, so the registration planners now have a live source. It
-reads alone. No surface writes a registration and no listener accepts a
-connection, so the ADR 0012 attach admission gate still holds.
+DONE 2026-08-29 — the listener stops without a timer, and the session names the
+route it serves (MUNIDESK-1554, 1555). `WindowsAttachStopEvent`
+(`src-tauri/core/src/attach/windows_listener.rs:139`) is a manual-reset event.
+`accept_until` (`:249`) waits on the pipe connect event and the stop event
+together, and it cancels the pending connect when the stop wins.
+`serve_windows_attach_session_with_reader`
+(`src-tauri/core/src/attach/windows_session.rs:23`) takes a
+`WindowsAttachRouteReader` and the expected desktop executable, and it returns the
+named route. `serve_windows_attach_session` (`:75`) supplies
+`NativeWindowsAttachRouteReader` and `resolve_live_windows_desktop_executable`.
 
-DONE 2026-08-27 — the client endpoint owner check and the registration write
-landed (MUNIDESK-1489 and 1490). `connect_windows_attach_endpoint`
-(`src-tauri/core/src/attach/windows_connect.rs:64`) opens the per-user pipe with
-`SECURITY_IDENTIFICATION` and waits out `ERROR_PIPE_BUSY` within a deadline. It
-then compares the endpoint owner SID with its own before any protocol byte.
-`ensure_task_registration` (`src-tauri/core/src/windows_task_service.rs:147`)
-composes `read_observed_registration` with `plan_task_registration` and
-`ITaskFolder::RegisterTaskDefinition`, so the runtime task has a writer now. No
-listener accepts a connection, so the ADR 0012 attach admission gate still
-holds.
+DONE 2026-08-29 — `muniment-core` opens a desktop client over the Windows pipe
+(MUNIDESK-1557). `connect_windows_desktop_client`
+(`src-tauri/core/src/attach/windows_desktop_client.rs:47`) waits for the current
+user's endpoint and hands the stream to `handshake_desktop_client`. It has no
+desktop caller yet.
 
-DONE 2026-08-27 — the attach instance lock, the explicit task start, and the
-shared SID copy landed (MUNIDESK-1494, 1495, and 1496).
-`acquire_windows_attach_instance_lock`
-(`src-tauri/core/src/attach/windows_instance_lock.rs:47`) takes
-`<state directory>\attach\instance.lock` within a bounded wait, and its caller
-injects the state directory. `start_registered_task`
-(`src-tauri/core/src/windows_task_service.rs:176`) validates the URI, principal,
-and action through `registration_verdict`, then calls `IRegisteredTask::Run` and
-reads `SCHED_E_ALREADY_RUNNING` as a start. `copy_sid_bytes`
-(`src-tauri/core/src/windows_sid.rs`) is the one pointer-copy helper behind the
-four native SID reads. No surface calls `Run` and no listener accepts a
-connection, so the ADR 0012 attach admission gate still holds.
+MEASURED 2026-08-29 (planner, read `run_windows_attach_accept_loop` against
+`WindowsAttachListener::accept_until`) — the ten hertz idle poll is still live.
+`ACCEPT_TIMEOUT` (`src-tauri/runtime/src/windows_attach_loop.rs:14`) is 100
+milliseconds, and `WindowsAttachAcceptBoundary::serve_next` still takes an accept
+deadline. The listener gained `accept_until`, and nothing calls it. The loop join
+is the first slice below.
 
-DONE 2026-08-27 — the listener accept half and the bounded readiness wait
-landed (MUNIDESK-1499 and 1500). `WindowsAttachListener::accept`
-(`src-tauri/core/src/attach/windows_listener.rs:131`) waits on
-`ConnectNamedPipe` until its deadline and returns the connected pipe stream.
-`wait_for_windows_attach_endpoint`
-(`src-tauri/core/src/attach/windows_connect.rs:66`) retries an absent endpoint
-until its deadline and fails immediately on every other connection error.
+DECIDED 2026-08-29 (planner, read `serve_windows_attach_session_with_reader`
+beside `admit_desktop_client` and `run_bound_attach_listener`) — the Windows
+desktop-client route needs two platform-neutral extractions before it can serve a
+session. The Windows session writes one plain `welcome` frame and closes. Linux
+instead admits that route through `admit_desktop_client`
+(`src-tauri/core/src/attach/desktop_client_admission.rs:47`), which writes a
+`reconnect_welcome` frame and a `DesktopClientAuthorizedGrant` frame, and then
+serves requests through `serve_desktop_client_session`
+(`src-tauri/core/src/attach/linux.rs:2140`). Both are `UnixStream`-bound, and
+`DeadlineStream` already covers `UnixStream` and `WindowsAttachStream`. The
+admission body below the peer check reads and writes through that trait alone, so
+it extracts first. The desktop half needs the same treatment, because
+`serve_desktop_client_at` (`src-tauri/attach/src/client.rs:2538`) binds its retry
+supervisor to `UnixStream`.
 
-NEXT — two slices remain before the Windows accept loop composes. The session
-half answers one Welcome frame. It follows the read-order amendment, so it reads
-the prefix, verifies the peer, reads the body, and writes Welcome. Its shape is
-`serve_macos_attach_session` (`src-tauri/core/src/attach/macos_listener.rs:88`).
-The supporting slice gives the listener more than one pipe instance. The loop
-then binds under the instance lock and joins the accept and session halves. The
-installer band runs beside those two slices. Its first slice resolves the live
-payload roots, and its second lists the removal candidates. The removal write
-half sits in Needs Human, so the lane files nothing for it. The runtime
-dependency boundary bars a third direct package, so a runtime half composes from
-`muniment-core` and the standard library alone
-(`test/runtime-dependency-boundary.sh`). The Windows preflight on CI runs every
-Windows-only test target, including `browser_control_windows_identity`
-(`.github/workflows/ci.yml:345`). `test/smoke.sh` guards the target list against
-every Windows-only test target.
+DONE 2026-08-29 — the four slices that reach the served Windows endpoint all
+landed (MUNIDESK-1559, 1560, 1561, 1562). `run_windows_attach_accept_loop`
+(`src-tauri/runtime/src/windows_attach_loop.rs:105`) serves through
+`serve_next_windows_attach_until`, so the ten hertz idle poll is gone.
+`admit_desktop_client_over_stream`
+(`src-tauri/core/src/attach/desktop_admission.rs:41`) holds the platform-neutral
+admission core, and `admit_desktop_client`
+(`src-tauri/core/src/attach/desktop_client_admission.rs:24`) keeps the Linux peer
+check above it. `serve_desktop_client_with`
+(`src-tauri/attach/src/desktop_supervisor.rs:20`) holds the platform-neutral
+supervisor loop. ADR 0012 carries the Windows desktop-client route handling and
+the service gap behind it
+(`docs/decisions/0012-user-level-runtime-service.md:1224`).
 
-DECIDED 2026-08-27 (planner, read `WindowsAttachListener::bind` beside the macOS
-accept loop) — the Windows attach pipe carries more than one instance. `bind`
-(`src-tauri/core/src/attach/windows_listener.rs:41`) passes `nMaxInstances` as
-one, so a second client meets `ERROR_PIPE_BUSY` while the first connection
-lives. Closing the served handle and creating a replacement also leaves a window
-where the path resolves to nothing, and a client in that window reads
-`EndpointAbsent` rather than a busy endpoint. The Linux and macOS listeners each
-serve concurrent companions, so the Windows endpoint must too. The listener
-therefore passes `PIPE_UNLIMITED_INSTANCES`, claims the first instance with
-`FILE_FLAG_FIRST_PIPE_INSTANCE`, and creates each later instance without that
-flag. It reads back the owner and the DACL of every instance it creates. The
-accept loop creates the next instance before it serves the connected one.
+DONE 2026-08-30 — the Windows desktop route runs the admission exchange, and the
+service message types are platform-neutral (MUNIDESK-1568, 1569).
+`serve_windows_attach_session_with_reader`
+(`src-tauri/core/src/attach/windows_session.rs:32`) hands the desktop route to
+`admit_desktop_client_over_stream_with_prefix`. It returns
+`WindowsAttachSessionOutcome::DesktopClient`.
+`src-tauri/core/src/attach/desktop_service_message.rs` holds the message types,
+and `desktop_service.rs` imports them from there.
 
-DECIDED 2026-08-27 (planner, read `ensure_task_registration` beside
-`resolve_windows_payload_scopes`) — the Windows registrar reads its payload
-roots from the Shell known folders. `ensure_task_registration`
-(`src-tauri/core/src/windows_task_service.rs:274`) takes a payload path and both
-payload roots, and nothing resolves those values on a live system.
-`resolve_windows_payload_scopes` (`src-tauri/core/src/windows_payload.rs:63`)
-takes both roots as arguments on purpose. A child process inherits
-`%ProgramFiles%` and `%LocalAppData%` from its parent, so an environment read
-lets a caller move the task action. `SHGetKnownFolderPath` with
-`FOLDERID_ProgramFiles` and `FOLDERID_LocalAppData` reads the shell registration
-instead. The resolver calls it, and the registration caller follows in a later
-slice.
+SETTLED 2026-08-31 — the 2026-08-30 dropped-client measurement closed.
+MUNIDESK-1596 serves an admitted Windows desktop client through a supplied
+session service, and MUNIDESK-1598 supplies the profile journal.
 
-DECIDED 2026-08-27 (planner, read the ADR 0012 removal rules against the Needs
-Human item) — the removal read half is fileable while the write half waits. The
-elevated MSI uninstaller enumerates `\Muniment\Runtime-*` and acts only on a
-task whose URI, principal, and action match its own payload
-(`docs/decisions/0012-user-level-runtime-service.md:1059`).
-`read_observed_registration` (`src-tauri/core/src/windows_task_service.rs:236`)
-reads one named task alone, so no code lists the removal candidates. Enumeration
-is a read, and `plan_task_removal` (`src-tauri/core/src/windows_task.rs:668`)
-already consumes each observed registration. The repoint and delete calls stay
-unfiled.
+DONE 2026-08-30 — the live connection registry is platform-neutral
+(MUNIDESK-1573). `src-tauri/core/src/attach/live_connections.rs` holds
+`LiveConnectionRegistry`, and `linux.rs:29` re-exports it under the old path.
+
+DONE 2026-08-30 — the companion credential store has a platform-neutral half
+(MUNIDESK-1576). `src-tauri/core/src/attach/credential_store.rs` holds the store
+model, the version and legacy decode, and the validation predicate.
+`credential.rs` keeps the `O_NOFOLLOW` open and the `0o600` create, and it stays
+Linux-gated.
+
+DONE 2026-08-30 — the seam slice landed (MUNIDESK-1579).
+`src-tauri/core/src/attach/thread_service.rs` holds `CompanionRecord`,
+`ThreadListService`, its two impls, and the seven thread request and page
+types, and `linux.rs` re-exports them under the old paths.
+
+DONE 2026-08-30 — the transport slice landed (MUNIDESK-1581). `DeadlineStream`
+(`src-tauri/core/src/attach/deadline_io.rs:17`) carries `wait_until_readable`.
+The Unix impl holds the `libc::poll` body, `WindowsAttachStream` implements it
+without consuming stream bytes (`windows_stream.rs:153`), and both `linux.rs`
+session loops (`:1363` and `:1588`) call through the trait.
+
+DONE 2026-08-30 — the Windows credential twins landed (MUNIDESK-1583).
+`load_client_credentials` and `save_client_credentials`
+(`src-tauri/core/src/attach/windows_credential.rs`) read and write the
+companion credential store with an owner-only DACL, and both carry the
+signatures of their Linux twins. The RULING below is applied.
+
+DONE 2026-08-30 — the registry gate drop landed (MUNIDESK-1585).
+`companion_registry.rs` carries no Linux gate. It imports
+`LiveConnectionRegistry` from `live_connections` and `CompanionRecord` from
+`thread_service`, and its default constructor gates on Linux and Windows
+together.
+
+DONE 2026-08-30 — the session slice landed on its third filing (MUNIDESK-1587).
+`src-tauri/core/src/attach/desktop_session.rs` holds the platform-neutral
+desktop client request loop, generic over `DeadlineStream`, with the
+`DesktopSessionService` seam and `AttachSessionError`.
+`serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:1298`)
+keeps the `UnixStream` wrapper and binds the authorized client.
+
+DONE 2026-08-30 — the gate slice landed (MUNIDESK-1590). `desktop_service.rs`
+carries no module gate. Its imports come from `thread_service`,
+`desktop_service_message`, and the module root, and an impl bound to a
+Linux-only run boundary keeps its item gate.
+
+MEASURED 2026-08-31 (planner, read the merge log against the last cut) — the
+gate slice re-file merged on its second filing, and the `chat.rs` split
+merged beside it. The dispatch extraction drained its first filing without
+reaching a pull request. Under the 2026-08-11 drained-slice rule the lane
+re-filed it in the first position.
+
+DONE 2026-08-31 — the dispatch extraction landed (MUNIDESK-1593).
+`src-tauri/core/src/attach/desktop_dispatch.rs` holds `dispatch_request` and
+its stream-free machinery, and `linux.rs` re-exports the public constants
+under their old paths.
+
+DONE 2026-08-31 — the five runtime service gates widened (MUNIDESK-1594).
+`stream_run` and `subscribe_run_commits` import their platform-neutral types
+from `thread_service` and `desktop_service_message`. The runtime now exports
+those functions, `open_companion_registry`, `list_companions`, and
+`revoke_companion` on Windows.
+
+DONE 2026-08-31 — the served session, the boundary widening, and the
+journal-backed service all landed (MUNIDESK-1596, 1597, 1598).
+`serve_windows_attach_session_with_reader`
+(`src-tauri/core/src/attach/windows_session.rs:122`) takes a supplied session
+service, runs `serve_desktop_client_requests` after a desktop-client
+admission, and the worker threads the service through.
+`attach_boundaries.rs` compiles on Windows through its platform-neutral
+imports. `WindowsAttachAcceptor::bind`
+(`src-tauri/runtime/src/windows_attach_loop.rs:67`) supplies each admitted
+desktop client a profile-journal service, so `thread.list` and `thread.open`
+answer on Windows.
+
+MEASURED 2026-08-31 (planner, read `run_start.rs:90` beside
+`attach_state.rs:99`) — the journal-backed service is a stopgap. The factory
+opens the profile storage once per accepted connection, serves a bare
+`RunJournal`, and every operation outside the two thread reads answers
+`unsupported_operation`. `RuntimeAttachState` and `compose_attach_service`
+are already platform-neutral, and `RuntimeAttachState::attach_service`
+composes the full `DesktopAttachService<RuntimeAttachBoundaries>`. Three
+gates stand between the Windows loop and that service. Every
+`RunAttachBoundaries` trait method is declared under
+`cfg(target_os = "linux")` (`src-tauri/core/src/run_start.rs:90`), the
+`ThreadListService` impl on `DesktopAttachService` carries matching item
+gates (`src-tauri/core/src/attach/desktop_service.rs:198`), and the
+`RunAttachBoundaries` impl on `RuntimeAttachBoundaries` carries the file's
+last gate (`src-tauri/runtime/src/attach_boundaries.rs:452`). Every type in
+those signatures has a platform-neutral home, so each widening is mechanical.
+`desktop_dispatch.rs` and `thread_service.rs` carry no gate at all.
+
+DONE 2026-08-31 — the trait gate fell (MUNIDESK-1599). Every
+`RunAttachBoundaries` method now compiles for Windows through its
+platform-neutral imports (`src-tauri/core/src/run_start.rs:98`). The
+`RunStartBoundaries` methods `attach_approval` and `control_migration` stay
+Linux-gated because Windows has no takeover protocol. The item gates and the
+runtime impl gate are the two that remain.
+
+DONE 2026-08-31 — the item gates fell (MUNIDESK-1604). Every
+`ThreadListService` method on `DesktopAttachService` compiles for Windows
+(`src-tauri/core/src/attach/desktop_service.rs`), and `reconnect_approval`
+and `control_migration` keep their Linux gates. The runtime impl gate
+(`src-tauri/runtime/src/attach_boundaries.rs:451`) is the last one.
+
+DONE 2026-08-31 — Windows desktop-client provenance records the live peer
+process id (MUNIDESK-1606). Route admission now carries `peer_pid` into the
+session provenance (`src-tauri/core/src/attach/windows_session.rs:114`).
+
+NEXT — two slices, re-cut 2026-08-31 in order. The first slice widens the
+`attach_state` and `attach_service` module gates and re-exports to Windows
+(`src-tauri/runtime/src/lib.rs:6`). It keeps `AttachListenerInputs`,
+`installed_desktop_executable`, `ApprovalCoordinator`, the `approvals` field
+and initialization, and `attach_listener_inputs` Linux-only. The slice also
+widens the `RunAttachBoundaries` impl and every Linux-gated dependency its
+body uses. These include the gated standard-library and core imports,
+`RuntimeChatEventTarget`, and `ATTACH_PERMISSION_COMMIT_TIMEOUT`. The slice
+also widens `run_service_error`, `SignInPermit`, its implementations,
+`thread_mutation_protocol_error`, and `device_list_protocol_error`. This makes
+`apply_recorded_retention`, which `recheck_retention` calls, available on
+Windows. Every `service` function the body calls already compiles on every
+platform. The second slice makes `WindowsAttachAcceptor::bind` open one
+`RuntimeAttachState` per activation and serve `attach_service()`. This retires
+per-connection journal opens and bare-journal services. The desktop client
+cutover follows in a later wave, after the composed service answers.
+
+RULING 2026-08-30 (planner) — the Windows companion credential file carries a
+DACL that grants the current user alone. It is built the way
+`src-tauri/core/src/attach/windows_pipe_security.rs` builds the pipe DACL.
+MUNIDESK-1583 applied this ruling.
+
+The Windows runtime serves thread reads from the profile journal, and it
+composes no Pi, chat broadcast, or companion service yet. The removal write
+half sits in Needs Human, so the lane still files the read and planning
+halves alone.
+The Windows preflight on CI runs every Windows-only test target
+(`.github/workflows/ci.yml:345`), and `test/smoke.sh` guards that list.
+
+DECIDED 2026-08-29 (planner, read `WindowsAttachListener::accept` beside the
+Linux stop thread) — the Windows accept loop stops polling through a stop event
+rather than a cancel call. `take_stream_and_replace`
+(`src-tauri/core/src/attach/windows_listener.rs:265`) swaps the listening handle
+after every accepted connection, so a handle cached for `CancelIoEx` goes stale.
+A manual-reset event does not. The listener therefore gains an `accept_until`
+that waits on the connect event and the stop event together. The runtime loop
+join follows in its own slice, because that loop owns the stop channel.
+
+DONE 2026-08-29 — the listener recovers when replacement creation fails
+(MUNIDESK-1549). `take_stream_and_replace`
+(`src-tauri/core/src/attach/windows_listener.rs:275`) returns the connected
+stream and leaves the listening handle empty when it cannot create a replacement.
+If replacement creation fails, each later `WindowsAttachListener::accept` call
+(`:189`) retries it once. The endpoint accepts a new client after a retry succeeds.
+
+DONE 2026-08-29 — the runtime bounds consecutive failed accepts
+(MUNIDESK-1551). `run_windows_attach_accept_loop`
+(`src-tauri/runtime/src/windows_attach_loop.rs:81`) returns `Failed` after five
+consecutive `WindowsAttachAcceptOutcome::Failed` results. A served connection or
+an idle accept resets the count. `run_windows_attach_activation`
+(`src-tauri/runtime/src/windows_attach_activation.rs:35`) records an
+`ActivationFailed` diagnostic and returns `Failed(1)` when the loop fails.
+
+DONE 2026-08-29 — the desktop client and its handshake are platform-neutral
+(MUNIDESK-1550). `src-tauri/attach/src/desktop_client.rs` holds `DesktopClient`,
+its impl block, and `handshake_desktop_client`. The client uses the
+platform-neutral `ClientStream` trait. `src-tauri/attach/src/lib.rs` exports the
+client and handshake when the `client` feature is active. The Windows connect
+follows in a later slice.
+
+MEASURED 2026-08-28 (planner, read `run_windows_attach_accept_loop` against the
+Linux stop thread) — the idle Windows accept loop wakes ten times a second for
+the whole logon session. `ACCEPT_TIMEOUT`
+(`src-tauri/runtime/src/windows_attach_loop.rs:14`) is 100 milliseconds. Each
+pass creates an event, issues an overlapped `ConnectNamedPipe`, waits it out, and
+cancels it. The Linux listener instead blocks in `accept` and keeps its stop poll
+on a separate thread (`src-tauri/runtime/src/attach_listener.rs:103`). A
+background service that polls at ten hertz defeats Windows timer coalescing and
+costs battery on an idle laptop. The `main` join landed, so the lane files the
+listener half of that slice now.
+
+MEASURED 2026-08-28 (planner, read `WindowsAttachEndpointAdapter` against
+`operation_error`) — the desktop readiness probe strands no runtime session. The
+probe connects and drops the stream, and the runtime session then reads a closed
+pipe. `operation_error` (`src-tauri/core/src/attach/windows_stream.rs:178`) maps
+`ERROR_BROKEN_PIPE` to a zero-byte read, so `read_exact_before` fails at once
+rather than at the five-second session deadline. The probe also verifies the
+endpoint owner SID before it answers, which a bare `WaitNamedPipeW` check would
+drop. The lane files no slice against it.
+
+DECIDED 2026-08-28 (planner, read `run_recorded_windows_activation` beside the
+Linux termination-signal wait) — the Windows accept loop takes a stop channel
+rather than a signal wait. `TerminationSignalWait`
+(`src-tauri/core/src/attach/linux.rs`) is a Unix construct, and the runtime crate
+may add no third direct package (`test/runtime-dependency-boundary.sh`). Task
+Scheduler ends a task by terminating the process, so no orderly exit runs there.
+`record_start_millis` (`src-tauri/runtime/src/start_record.rs:92`) drops a
+pending start once the five-minute failure window passes. A runtime that lives
+longer than that window leaves no counted failure behind. The loop therefore
+polls a `Receiver<()>` between bounded accepts. The `main` wiring landed on
+2026-08-29, and the stop event replaces the poll.
 
 DECIDED 2026-08-26 (planner) — the Windows attach instance lock is
 `<state directory>\attach\instance.lock` below `%APPDATA%\ai.muniment.desktop`.
@@ -1307,10 +1513,16 @@ needs no privacy permission. Pull request CI runs the 14 Windows-only tests,
 `test/windows-pr-gate.test.js` guards that gate, and MUNIDESK-950 pinned the
 working tree to LF. Git history holds the per-lane repair detail.
 
-OPERATING CONSTRAINT — the planning clone cannot compile the `src-tauri` desktop
-crate, because the container has no ALSA headers for `alsa-sys`. The desktop-ci VM
-builds remain the gate for that crate. The planner runs the workspace library
-crates, the frontend suite, and the probe capture instead.
+MEASURED 2026-08-29 (planner, built the crate and ran its bin suite) — the
+planning clone now compiles and tests the `src-tauri` desktop crate. The
+container carries the ALSA headers and `webkit2gtk-4.1`. Three commands run the
+bin suite. Build `muniment-acp` and `muniment-runtime` with `--release`, build
+the `sidecar-test-stub` example with `--profile test`, then run `cargo test
+--manifest-path src-tauri/Cargo.toml --locked --bin muniment-desktop --
+--test-threads=1`. The first build matters, because `build.rs` resolves
+`target/release/muniment-acp` as a bundled resource and fails without it. This
+retires the earlier ALSA operating constraint. The desktop-ci VM builds stay the
+gate for the bundle itself.
 
 OPEN OWNER ITEM — on 2026-08-02 two green branches merged into a build break,
 because each pull request built against its own stale base and the merge
@@ -1339,7 +1551,9 @@ in `src-tauri/core/tests/sidecar_supervisor.rs`. Run 32915107904 failed
 `:722`. Both assertions are wall-clock deadlines around a spawned stub child.
 One of three local runs failed the same way under 120 busy loops on 40 cores,
 and four idle runs each passed in about two seconds. The desktop-ci VM
-serializes its `cargo test` for this reason. The smoke job does not.
+serializes its `cargo test` for this reason. SETTLED 2026-08-25 —
+MUNIDESK-1456 serialized the smoke job's core test run the same day
+(`.github/workflows/ci.yml:197`), so this failure mode is closed.
 
 MEASURED 2026-08-13 (fifty-eighth wave, planner, counted each path with
 `git log --name-only --since=2026-08-01 -- <path>`) — `src-tauri/src/chat.rs` is
@@ -1358,6 +1572,16 @@ MEASURED 2026-08-14 (seventy-second wave, planner, re-counted the same paths) �
 files, `src-tauri/core/src/attach/linux.rs` is the largest at 3,636 lines and
 has 26 touches. The planning clone compiles it, so a pure-move split is provable
 here. The lane files no split this wave.
+
+DONE 2026-08-30 — the `attach_service.rs` pure-move split landed
+(MUNIDESK-1588). The root file spans 99 lines, declares `commands.rs`,
+`listener.rs`, `migration.rs`, `state.rs`, and `tests.rs` under
+`src-tauri/src/attach_service/`, and re-exports the public names.
+`src-tauri/src/chat.rs` split the same way on 2026-08-30 (MUNIDESK-1591).
+The largest production Rust file is now `src-tauri/core/src/attach/linux.rs`
+at 4,016 lines, and the filed dispatch extraction moves about 1,760 of those
+lines, so the lane files no separate split. The 2026-08-29 measurement above
+keeps the bin suite as the local proof.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
 all 31 skipped frontend tests are Windows-only cases. Every one sits behind
@@ -1380,10 +1604,11 @@ PLANNER PROCEDURE — pick an unused port for the capture server. Port 8899 was
 already bound by another workspace in this container, and the stale server
 answered 404 for every probe path until the planner moved to 8944. The
 fifty-third wave used 8951, the fifty-fourth used 8962, the fifty-fifth used
-8975, the fifty-sixth used 8988, the fifty-eighth used 8993, and the
-sixty-seventh used 9014. The fifty-seventh, the fifty-ninth, the sixtieth, the
-sixty-first, the sixty-fifth, the sixty-sixth, the sixty-eighth, the sixty-ninth,
-and the seventy-first waves each ran no capture, because each read code alone. A
+8975, the fifty-sixth used 8988, the fifty-eighth used 8993, the sixty-seventh
+used 9014, and the 2026-08-28 wave used 4173. The fifty-seventh, the
+fifty-ninth, the sixtieth, the sixty-first, the sixty-fifth, the sixty-sixth,
+the sixty-eighth, the sixty-ninth, and the seventy-first waves each ran no
+capture, because each read code alone. A
 server started from `src-tauri` answers 404 for every `test/probe/` path, so start
 it from the repository root.
 
@@ -1409,6 +1634,43 @@ is the designed state that `src/App.svelte:1013` renders and `App.test.js` guard
 No design slice came out of the pass, so the wave spent its whole budget on the
 ADR 0012 extraction lane. The fifty-sixth wave read the same result from the
 access, onboarding, and signed-out fixtures.
+
+## Build gate repair (opened 2026-08-29, closed 2026-08-30)
+
+MEASURED 2026-08-29 (planner, read the `desktop-build` step against three CI job
+logs) — the `desktop-build` job reports success when the platform build fails.
+The step pipes the driver through `tee` (`.github/workflows/ci.yml:448`), and the
+`if` then reads the pipeline status, which is the status of `tee`. The step sets
+`set -u` alone (`:397`), and a `run:` block with no `shell:` key runs under `bash
+-e` without `pipefail`, so `status` is always zero and the `${PIPESTATUS[0]}`
+branch never runs. `test/desktop-build-retry.sh` extracts the same loop but runs
+it under `bash -e -o pipefail`, so the test passes while CI does not. The pipe
+landed on 2026-08-08 with MUNIDESK-1001.
+
+DONE 2026-08-30 — the six repair slices landed (MUNIDESK-1564 through 1567,
+1571, 1572). The macOS runtime binary compiles, and the macOS compile preflight
+builds it. The three `chat` tests pass, and `attach_home_uses_recorded_home`
+creates its own temporary root. `.github/build-windows-installers.mjs` prints the
+WiX tool output when a bundling pass fails. The three racing `attach_service`
+tests now wait on a real event instead of spinning on a short deadline.
+`src-tauri/windows/per-user.wxs` roots `INSTALLDIR` under `TARGETDIR` and sets
+its path at run time. The per-user MSI therefore declares no profile folder, and
+it clears ICE38 and ICE64. The installed location stays `%LOCALAPPDATA%\muniment`, which
+`test/windows-installers.ps1` asserts. `per-machine.wxs` kept its Program Files
+root. The per-user template had arrived on 2026-08-22 with MUNIDESK-1440, and the
+swallowed gate let it merge.
+
+MEASURED 2026-08-30 (planner, read all three raw `desktop-build` job logs of CI
+run 33307389806) — every platform builds. Linux reports BUILD GREEN and bundles
+the `.deb` and the AppImage. Windows reports BUILD GREEN, bundles both MSI
+scopes, and passes the silent installer verification. macOS reports BUILD GREEN
+and bundles `muniment.app`. The 2026-08-30 failure measurement is settled, and
+the nightly channel can ship again.
+
+DONE 2026-08-30 — the gate is on (MUNIDESK-1575). The `desktop-build` step runs
+under `set -uo pipefail` (`.github/workflows/ci.yml:397`), so a failed platform
+build now fails its job, and `test/desktop-build-retry.sh` runs under the same
+shell flags. With the all-green measurement above, this section is closed.
 
 ## Stable release and distribution
 

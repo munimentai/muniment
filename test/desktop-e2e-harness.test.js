@@ -392,7 +392,7 @@ esac
 
   it('waits for the LaunchAgent and the desktop runtime connection', () => {
     const probe = fs.readFileSync(path.join(root, 'test/e2e/support/macos-runtime-probe.sh'), 'utf8')
-    const attachService = fs.readFileSync(path.join(root, 'src-tauri/src/attach_service.rs'), 'utf8')
+    const attachService = fs.readFileSync(path.join(root, 'src-tauri/src/attach_service/commands.rs'), 'utf8')
     expect(runner).toContain('probe_macos_runtime "$runtime_target" "$app_pid"')
     expect(runner).toContain('runtime_target="gui/$(id -u)/ai.muniment.runtime"')
     expect(probe).toContain("grep -Eq 'state = running'")
@@ -1305,7 +1305,8 @@ describe('Linux E2E shared-library contract', () => {
 describe('hosted sign-in teardown contract', () => {
   const spec = fs.readFileSync(path.join(root, 'test/e2e/specs/real-sign-in.spec.js'), 'utf8')
 
-  it('logs teardown errors without replacing sign-in failures', () => {
-    expect(spec).toMatch(/try \{\s*if \(signInBrowser\) await signInBrowser\.deleteSession\(\)\s*\} catch \(error\) \{\s*console\.error\('Failed to delete hosted sign-in session\.', error\)\s*\} finally \{\s*if \(authDriver\) authDriver\.kill\(\)\s*\}/)
+  it('does not let hosted teardown replace sign-in results', () => {
+    expect(spec).toContain("if (signInBrowser && process.platform !== 'linux') await signInBrowser.deleteSession()")
+    expect(spec).toMatch(/catch \(error\) \{\s*console\.error\('Failed to delete hosted sign-in session\.', error\)\s*\} finally \{\s*if \(authDriver\) authDriver\.kill\(\)\s*\}/)
   })
 })

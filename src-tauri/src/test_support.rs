@@ -2,12 +2,15 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use muniment_core::attach::desktop_service_message::RunStreamPage;
 #[cfg(target_os = "linux")]
-use muniment_core::attach::linux::{
-    RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
-    ThreadOpenRequest,
+use muniment_core::attach::thread_service::ThreadListService;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use muniment_core::attach::thread_service::{
+    ThreadListPage, ThreadListRequest, ThreadOpenPage, ThreadOpenRequest,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 use muniment_core::auth::TokenSet;
@@ -122,6 +125,53 @@ impl FakeRunStartBoundaries {
 }
 
 impl RunAttachBoundaries for FakeRunStartBoundaries {
+    #[cfg(target_os = "windows")]
+    fn list_threads(
+        &self,
+        _workspace: &str,
+        _request: ThreadListRequest,
+    ) -> Result<ThreadListPage, ProtocolError> {
+        unreachable!()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn open_thread(
+        &self,
+        _workspace: &str,
+        _request: ThreadOpenRequest,
+    ) -> Result<ThreadOpenPage, ProtocolError> {
+        unreachable!()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn stream_run(
+        &self,
+        _workspace: &str,
+        _run_id: &str,
+        _after_run_seq: u64,
+    ) -> Result<RunStreamPage, ProtocolError> {
+        unreachable!()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn subscribe_run_commits(
+        &self,
+        _run_id: &str,
+    ) -> Result<muniment_core::journal::CommitSubscription, ProtocolError> {
+        unreachable!()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn queue_attach_permission_answer(
+        &self,
+        _workspace: &str,
+        _run_id: &str,
+        _gate_id: &str,
+        _answer: ChatPermissionAnswer,
+    ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError> {
+        unreachable!()
+    }
+
     #[cfg(target_os = "linux")]
     fn select_thread(&self, thread_id: &str) -> Result<bool, ProtocolError> {
         let mut journal = self

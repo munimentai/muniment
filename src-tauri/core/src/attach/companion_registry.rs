@@ -1,7 +1,10 @@
 //! Companion credentials and their live connection revocation state.
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use super::save_client_credentials;
 use super::{
-    linux::LiveConnectionRegistry, save_client_credentials, ClientCredential, ProtocolError,
+    live_connections::LiveConnectionRegistry, thread_service::CompanionRecord, ClientCredential,
+    ProtocolError,
 };
 use std::{
     collections::HashMap,
@@ -11,15 +14,6 @@ use std::{
 
 type PersistCredentials =
     dyn Fn(&Path, &HashMap<String, ClientCredential>) -> Result<(), ProtocolError> + Send + Sync;
-
-/// A companion row that excludes its secret credential.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompanionRecord {
-    pub identity: String,
-    pub claimed_kind: String,
-    pub claimed_version: String,
-    pub approved_at: Option<String>,
-}
 
 /// Manages the shared companion credential store and its live connections.
 #[derive(Clone)]
@@ -31,6 +25,7 @@ pub struct CompanionRegistry {
 }
 
 impl CompanionRegistry {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn new(
         credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
         credential_path: impl AsRef<Path>,

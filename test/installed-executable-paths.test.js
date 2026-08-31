@@ -88,8 +88,9 @@ describe('Windows runtime bundle paths', () => {
     expect(windowsConfig.bundle.resources).toMatchObject(runtimeResource)
     expect(windowsConfig.bundle.windows.wix.template).toBe('./windows/per-user.wxs')
     expect(userTemplate).toContain('InstallScope="perUser"')
-    expect(userTemplate).toContain('<Directory Id="LocalAppDataFolder">')
-    expect(userTemplate).toContain('<Directory Id="INSTALLDIR" Name="{{product_name}}"/>')
+    expect(userTemplate).not.toContain('<Directory Id="LocalAppDataFolder">')
+    expect(userTemplate).toMatch(/<Directory Id="TARGETDIR" Name="SourceDir">\s*<Directory Id="INSTALLDIR" Name="{{product_name}}"\/>/)
+    expect(userTemplate).toContain('<SetDirectory Id="INSTALLDIR" Value="[LocalAppDataFolder]{{product_name}}" Sequence="both">')
     expect(userTemplate).toContain('{{resources}}')
   })
 
