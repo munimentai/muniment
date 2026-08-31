@@ -143,7 +143,7 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
         )
         .map_err(RunStartError::InvalidRequest)
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn list_threads(
         &self,
         workspace: &str,
@@ -157,7 +157,7 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
         ThreadListService::list_threads(&mut storage.journal, workspace, request)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn open_thread(
         &self,
         workspace: &str,
@@ -199,13 +199,13 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
             .map_err(|_| ProtocolError::persistence_failed())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn stream_run(
         &self,
         workspace: &str,
         run_id: &str,
         after_run_seq: u64,
-    ) -> Result<muniment_core::attach::linux::RunStreamPage, ProtocolError> {
+    ) -> Result<muniment_core::attach::desktop_service_message::RunStreamPage, ProtocolError> {
         let state = self.state();
         let mut storage = state
             .storage
@@ -214,7 +214,7 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
         ThreadListService::stream_run(&mut storage.journal, workspace, run_id, after_run_seq)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn subscribe_run_commits(
         &self,
         run_id: &str,
@@ -228,7 +228,7 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
             .map_err(|_| ProtocolError::persistence_failed())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn queue_attach_permission_answer(
         &self,
         workspace: &str,
