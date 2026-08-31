@@ -1,14 +1,13 @@
 //! Workspace and companion service operations.
 
-#[cfg(target_os = "linux")]
-use muniment_core::attach::linux::LiveConnectionRegistry;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use muniment_core::attach::{
-    load_client_credentials, CompanionRecord, CompanionRegistry, COMPANION_CREDENTIAL_FILE_NAME,
+    live_connections::LiveConnectionRegistry, load_client_credentials,
+    COMPANION_CREDENTIAL_FILE_NAME,
 };
 use muniment_core::attach::{
-    onboard_workspace_context, ProtocolError, WorkspaceContextMap, WorkspaceOnboardRequest,
-    WorkspaceOnboarded,
+    onboard_workspace_context, CompanionRecord, CompanionRegistry, ProtocolError,
+    WorkspaceContextMap, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
 use muniment_core::chat_profile::{ChatProfile, ChatProfileError};
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
@@ -51,7 +50,7 @@ pub fn open_profile_storage(
 
 /// Opens the shared companion registry.
 /// The credential file sits under the data directory beside the journal.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn open_companion_registry(
     profile_directory: impl AsRef<Path>,
 ) -> Result<CompanionRegistry, ProtocolError> {
@@ -67,7 +66,6 @@ pub fn open_companion_registry(
 }
 
 /// Lists authorized companions by identity without their secret credentials.
-#[cfg(target_os = "linux")]
 pub fn list_companions(
     registry: &CompanionRegistry,
 ) -> Result<Vec<CompanionRecord>, ProtocolError> {
@@ -75,7 +73,6 @@ pub fn list_companions(
 }
 
 /// Revokes one authorized companion.
-#[cfg(target_os = "linux")]
 pub fn revoke_companion(registry: &CompanionRegistry, identity: &str) -> Result<(), ProtocolError> {
     registry.revoke(identity)
 }

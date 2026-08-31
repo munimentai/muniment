@@ -62,15 +62,14 @@ pub use migration::{run_migration_takeover, MigrationTakeoverError};
 pub use service::{
     accept_prompt, answer_permission, apply_retention, cancel_run, configure_run, create_thread,
     delete_thread, drive_prompt, ensure_home, ensure_native_session, entitlement_snapshot,
-    list_devices, onboard_workspace, open_profile_storage, queue_run_message, rename_thread,
-    resume_run, run_prompt, select_thread, session_status, sign_in, sign_out, thread_page,
-    thread_summaries, ConfigureRunError, EntitlementSnapshotError, EntitlementSnapshotResult,
-    PromptAcceptance, PromptLaunch, SignOutError,
+    list_companions, list_devices, onboard_workspace, open_profile_storage, queue_run_message,
+    rename_thread, resume_run, revoke_companion, run_prompt, select_thread, session_status, sign_in,
+    sign_out, stream_run, subscribe_run_commits, thread_page, thread_summaries, ConfigureRunError,
+    EntitlementSnapshotError, EntitlementSnapshotResult, PromptAcceptance, PromptLaunch,
+    SignOutError,
 };
-#[cfg(target_os = "linux")]
-pub use service::{
-    list_companions, open_companion_registry, revoke_companion, stream_run, subscribe_run_commits,
-};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use service::open_companion_registry;
 pub use sink::{
     RuntimeChatEventBroadcast, RuntimeChatEventSink, RuntimeChatEventTarget,
     CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY,

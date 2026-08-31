@@ -14,14 +14,14 @@ pub use session::{
     EntitlementSnapshotError, EntitlementSnapshotResult, SignOutError,
 };
 pub use threads::{
-    apply_retention, create_thread, delete_thread, rename_thread, select_thread, thread_page,
-    thread_summaries,
+    apply_retention, create_thread, delete_thread, rename_thread, select_thread, stream_run,
+    subscribe_run_commits, thread_page, thread_summaries,
 };
-#[cfg(target_os = "linux")]
-pub use threads::{stream_run, subscribe_run_commits};
-pub use workspace::{ensure_home, onboard_workspace, open_profile_storage};
-#[cfg(target_os = "linux")]
-pub use workspace::{list_companions, open_companion_registry, revoke_companion};
+pub use workspace::{
+    ensure_home, list_companions, onboard_workspace, open_profile_storage, revoke_companion,
+};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use workspace::open_companion_registry;
 
 use muniment_core::journal::Provenance;
 use std::collections::BTreeMap;
