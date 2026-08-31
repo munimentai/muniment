@@ -733,18 +733,19 @@ DONE 2026-08-31 — the item gates fell (MUNIDESK-1604). Every
 and `control_migration` keep their Linux gates. The runtime impl gate
 (`src-tauri/runtime/src/attach_boundaries.rs:451`) is the last one.
 
-NEXT — three slices, re-cut 2026-08-31 in order. The `RunAttachBoundaries`
-impl on `RuntimeAttachBoundaries` widens to Windows together with the
-Linux-gated imports its body uses, and every `service` function the body
-calls already compiles on every platform. `WindowsAttachAcceptor::bind`
-then widens the `attach_state` and `attach_service` module gates
-(`src-tauri/runtime/src/lib.rs:6`), opens one `RuntimeAttachState` per
-activation, and serves `attach_service()`, which retires the
-per-connection journal open and the bare-journal service. Last, the
-Windows desktop-client provenance records the live peer process id, which
-stamps zero today (`src-tauri/core/src/attach/windows_session.rs:113`).
-The desktop client cutover follows in a later wave, after the composed
-service answers.
+NEXT — three slices, re-cut 2026-08-31 in order. The first slice widens the
+`attach_state` and `attach_service` module gates and re-exports to Windows
+(`src-tauri/runtime/src/lib.rs:6`). It also widens the `RunAttachBoundaries`
+impl on `RuntimeAttachBoundaries` and the Linux-gated imports its body uses.
+This makes `apply_recorded_retention`, which `recheck_retention` calls,
+available when the impl compiles. Every `service` function the body calls
+already compiles on every platform. `WindowsAttachAcceptor::bind` then opens
+one `RuntimeAttachState` per activation and serves `attach_service()`. This
+retires the per-connection journal open and the bare-journal service. Last,
+the Windows desktop-client provenance records the live peer process id, which
+stamps zero today (`src-tauri/core/src/attach/windows_session.rs:113`). The
+desktop client cutover follows in a later wave, after the composed service
+answers.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
