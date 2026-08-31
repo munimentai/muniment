@@ -667,26 +667,37 @@ DONE 2026-08-30 — the registry gate drop landed (MUNIDESK-1585).
 `thread_service`, and its default constructor gates on Linux and Windows
 together.
 
+DONE 2026-08-30 — the session slice landed on its third filing (MUNIDESK-1587).
+`src-tauri/core/src/attach/desktop_session.rs` holds the platform-neutral
+desktop client request loop, generic over `DeadlineStream`, with the
+`DesktopSessionService` seam and `AttachSessionError`.
+`serve_desktop_client_session` (`src-tauri/core/src/attach/linux.rs:1298`)
+keeps the `UnixStream` wrapper and binds the authorized client.
+
 MEASURED 2026-08-30 (planner, read the merge log against the last cut) — the
-registry slice merged on its third filing. The session slice drained its
-second filing without reaching a pull request. Under the 2026-08-11
-drained-slice rule the lane re-files it in the first position.
+session slice merged on its third filing, and the attach_service split merged
+beside it. The `desktop_service.rs` gate drop drained its first filing without
+reaching a pull request. Under the 2026-08-11 drained-slice rule the lane
+re-files it in the first position.
 
-NEXT — two slices run in parallel, and this wave filed both. The session
-slice extracts the desktop client request loop (`linux.rs:1332`) into a
-platform-neutral module generic over `DeadlineStream`. That loop reaches
-`dispatch_request`, `poll_run_streams`, and `drain_chat_events` through a
-seam that `linux.rs` implements, and `AttachSessionError` moves with it under
-a `linux.rs` re-export. The gate slice drops the `desktop_service.rs` Linux
-gate. Its imports move from `super::linux` to `thread_service`,
-`desktop_service_message`, and the module root. The pre-staged inner gates
-widen where their dependencies are platform-neutral, and the
-`ThreadListService` impl may keep its Linux gate until the run boundaries
-widen.
+NEXT — two slices run in parallel, and this wave filed both. The gate slice
+drops the `desktop_service.rs` Linux gate. Its imports move from
+`super::linux` to `thread_service`, `desktop_service_message`, and the module
+root. The pre-staged inner gates widen where their dependencies are
+platform-neutral, and an impl bound to a Linux-only run boundary may keep its
+gate. The dispatch slice moves `dispatch_request` (`linux.rs:2097`) and the
+stream-free machinery around it into a platform-neutral module, with
+`linux.rs` re-exports under the old paths. That block covers `DispatchResult`
+(`:1697`), `SessionRegistries` (`:1703`), `DispatchFailure` (`:1709`),
+`ActiveRunStream` (`:1726`), `ActiveChatSubscription` (`:1737`),
+`DesktopSessionState` (`:1742`), the blanket `DesktopSessionService` impl
+(`:1748`), `drain_chat_events` (`:1805`), and `poll_run_streams` (`:1827`).
+`dispatch_request` is generic over `ThreadListService` and touches no
+`UnixStream`, so the move is pure.
 
-The service chain continues behind those slices. The dispatch machinery
-follows the extracted session loop in its own slice, because
-`dispatch_request` (`linux.rs:2157`) spans about 1,400 lines.
+The service chain continues behind those slices. Serving an admitted Windows
+desktop client through the extracted loop follows, and the Windows runtime
+composition of the journal and CAS follows that.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
@@ -1506,13 +1517,13 @@ files, `src-tauri/core/src/attach/linux.rs` is the largest at 3,636 lines and
 has 26 touches. The planning clone compiles it, so a pure-move split is provable
 here. The lane files no split this wave.
 
-MEASURED 2026-08-30 (planner, counted lines) — `src-tauri/src/attach_service.rs`
-now spans 3,516 lines and `src-tauri/src/chat.rs` spans 3,678. The 2026-08-29
-measurement above gives the planning clone a compiling desktop crate with a
-runnable bin suite, which retires the provability blocker both split notes
-named. This wave files the `attach_service.rs` pure-move split as structural
-work. The `chat.rs` split waits for that landing, so the two moves never merge
-across each other.
+DONE 2026-08-30 — the `attach_service.rs` pure-move split landed
+(MUNIDESK-1588). The root file spans 99 lines, declares `commands.rs`,
+`listener.rs`, `migration.rs`, `state.rs`, and `tests.rs` under
+`src-tauri/src/attach_service/`, and re-exports the public names.
+`src-tauri/src/chat.rs` spans 3,678 lines and is now the last oversized
+desktop bin file, so this wave files its pure-move split as structural work.
+The 2026-08-29 measurement above keeps the bin suite as the local proof.
 
 MEASURED 2026-08-12 (fifty-second wave, planner, read the vitest JSON report) —
 all 31 skipped frontend tests are Windows-only cases. Every one sits behind
