@@ -720,17 +720,24 @@ last gate (`src-tauri/runtime/src/attach_boundaries.rs:452`). Every type in
 those signatures has a platform-neutral home, so each widening is mechanical.
 `desktop_dispatch.rs` and `thread_service.rs` carry no gate at all.
 
-NEXT — five slices, filed 2026-08-31 in order. The `RunAttachBoundaries`
-trait widens to Windows through its platform-neutral imports, with
-`attach_approval` and `control_migration` left Linux-gated because Windows
-has no takeover protocol. The `ThreadListService` item gates on
-`DesktopAttachService` widen the same way. The runtime impl widens behind
-the trait. `WindowsAttachAcceptor::bind` then opens one `RuntimeAttachState`
-per activation and serves `attach_service()`, which retires the
-per-connection journal open and the bare-journal service. Last, the Windows
-desktop-client provenance records the live peer process id, which stamps
-zero today (`src-tauri/core/src/attach/windows_session.rs:98`). The desktop
-client cutover follows in a later wave, after the composed service answers.
+DONE 2026-08-31 — the trait gate fell (MUNIDESK-1599). Every
+`RunAttachBoundaries` method now compiles for Windows through its
+platform-neutral imports (`src-tauri/core/src/run_start.rs:98`). The
+`RunStartBoundaries` methods `attach_approval` and `control_migration` stay
+Linux-gated because Windows has no takeover protocol. The item gates and the
+runtime impl gate are the two that remain.
+
+NEXT — four slices, re-filed 2026-08-31 in order. The `ThreadListService`
+item gates on `DesktopAttachService` widen to Windows, with
+`reconnect_approval` and `control_migration` left Linux-gated. The
+`RunAttachBoundaries` impl on `RuntimeAttachBoundaries` widens behind the
+trait, together with the Linux-gated imports its body uses.
+`WindowsAttachAcceptor::bind` then opens one `RuntimeAttachState` per
+activation and serves `attach_service()`, which retires the per-connection
+journal open and the bare-journal service. Last, the Windows desktop-client
+provenance records the live peer process id, which stamps zero today
+(`src-tauri/core/src/attach/windows_session.rs:113`). The desktop client
+cutover follows in a later wave, after the composed service answers.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
