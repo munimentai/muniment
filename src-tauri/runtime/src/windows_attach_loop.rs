@@ -2,15 +2,17 @@
 
 use std::time::Duration;
 
-#[cfg(target_os = "windows")]
+#[cfg(test)]
 use muniment_core::attach::thread_service::ThreadListService;
 #[cfg(target_os = "windows")]
 use muniment_core::attach::{
     serve_next_windows_attach_until, WindowsAttachAcceptError, WindowsAttachBindError,
     WindowsAttachListener, WindowsAttachServeOutcome, WindowsAttachStopEvent,
 };
-#[cfg(target_os = "windows")]
-use std::convert::Infallible;
+#[cfg(any(test, target_os = "windows"))]
+use muniment_core::chat_profile::{ChatProfile, ChatProfileError};
+#[cfg(any(test, target_os = "windows"))]
+use muniment_core::journal::RunJournal;
 #[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(target_os = "windows")]
@@ -50,17 +52,13 @@ pub struct WindowsAttachAcceptor {
 }
 
 #[cfg(target_os = "windows")]
-struct WindowsDesktopSessionService;
+type WindowsDesktopSessionServiceFactory =
+    Box<dyn Fn() -> Result<RunJournal, ChatProfileError> + Send + Sync>;
 
-#[cfg(target_os = "windows")]
-type WindowsDesktopSessionServiceFactory = fn() -> Result<WindowsDesktopSessionService, Infallible>;
-
-#[cfg(target_os = "windows")]
-impl ThreadListService for WindowsDesktopSessionService {}
-
-#[cfg(target_os = "windows")]
-fn windows_desktop_session_service() -> Result<WindowsDesktopSessionService, Infallible> {
-    Ok(WindowsDesktopSessionService)
+#[cfg(any(test, target_os = "windows"))]
+fn windows_desktop_session_service(profile: &ChatProfile) -> Result<RunJournal, ChatProfileError> {
+    let (journal, _cas) = profile.open_storage()?;
+    Ok(journal)
 }
 
 #[cfg(target_os = "windows")]
@@ -70,15 +68,18 @@ impl WindowsAttachAcceptor {
         state_directory: impl AsRef<Path>,
         bounded_wait: Duration,
     ) -> Result<Self, WindowsAttachBindError> {
-        let listener = WindowsAttachListener::bind(state_directory, bounded_wait)?;
+        let listener = WindowsAttachListener::bind(state_directory.as_ref(), bounded_wait)?;
         let stop = Arc::new(
             WindowsAttachStopEvent::new()
                 .map_err(|error| WindowsAttachBindError::Pipe(std::io::Error::other(error)))?,
         );
+        let profile = ChatProfile::new(state_directory.as_ref());
         Ok(Self {
             listener,
             stop,
-            service_factory: Arc::new(windows_desktop_session_service),
+            service_factory: Arc::new(Box::new(move || {
+                windows_desktop_session_service(&profile)
+            })),
         })
     }
 }
@@ -148,10 +149,65 @@ pub fn run_windows_attach_accept_loop(
     }
 }
 
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn opens_a_fresh_profile_as_an_empty_journal() {
+        use muniment_core::attach::thread_service::ThreadListRequest;
+        use muniment_core::attach::ErrorCode;
+
+        let directory = std::env::temp_dir().join(format!(
+            "muniment-windows-desktop-service-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let profile = ChatProfile::new(&directory);
+
+        let mut service = windows_desktop_session_service(&profile).unwrap();
+        let page = service
+            .list_threads(
+                "workspace",
+                ThreadListRequest {
+                    limit: 20,
+                    cursor: None,
+                },
+            )
+            .unwrap();
+
+        assert!(page.threads.is_empty());
+        assert_eq!(
+            service.ensure_home().unwrap_err().code(),
+            ErrorCode::UnsupportedOperation
+        );
+        assert!(profile.journal_path().is_file());
+        assert!(profile.cas_directory().join("objects").is_dir());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn returns_a_profile_open_failure() {
+        let directory = std::env::temp_dir().join(format!(
+            "muniment-windows-desktop-service-error-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let profile = ChatProfile::new(&directory);
+        std::fs::create_dir_all(profile.journal_path()).unwrap();
+
+        assert!(windows_desktop_session_service(&profile).is_err());
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
     #[test]
     fn maps_each_accept_result() {
         assert_eq!(
