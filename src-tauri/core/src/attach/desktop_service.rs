@@ -1,7 +1,6 @@
 //! Generic desktop attach service seam.
 
-#![cfg(target_os = "linux")]
-
+#[cfg(target_os = "linux")]
 use super::desktop_service_message::{
     ArtifactFetchResult, CompanionProvenance, MigrationControlRequest, PermissionAnswerAccepted,
     PermissionAnswerRequest, PermissionDecision, RunCancelAccepted, RunCancelRequest,
@@ -9,31 +8,45 @@ use super::desktop_service_message::{
     RunResumeAccepted, RunResumeRequest, RunStartAccepted, RunStreamPage, RunSubmitAccepted,
     RunSubmitRequest, ThreadCreateAccepted,
 };
-use super::linux::{
-    EntitlementSnapshotResult, RunStartRequest as AttachRunStartRequest, ThreadListPage,
-    ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
+#[cfg(target_os = "linux")]
+use super::thread_service::{
+    RunStartRequest as AttachRunStartRequest, ThreadListPage, ThreadListRequest, ThreadListService,
+    ThreadOpenPage, ThreadOpenRequest,
 };
+#[cfg(target_os = "linux")]
 use super::{
     bounded_claim, onboard_workspace_context,
-    save_client_credentials as persist_client_credentials, Approval, ClientCredential,
-    CommittedResult, Id, IdempotencyOutcome, IdempotencyStore, Operation, Protocol, ProtocolError,
-    Request as AttachRequest, WorkspaceContextMap, WorkspaceOnboardRequest, WorkspaceOnboarded,
+    save_client_credentials as persist_client_credentials, Approval, EntitlementSnapshotResult, Id,
+    Operation, Protocol, WorkspaceOnboardRequest, WorkspaceOnboarded,
 };
+use super::{
+    ClientCredential, CommittedResult, IdempotencyOutcome, IdempotencyStore, ProtocolError,
+    Request as AttachRequest, WorkspaceContextMap,
+};
+#[cfg(target_os = "linux")]
 use crate::active_run::ChatDelivery;
+#[cfg(target_os = "linux")]
 use crate::journal::Provenance;
+#[cfg(target_os = "linux")]
 use crate::permission_gate::ChatPermissionAnswer;
+#[cfg(target_os = "linux")]
 use crate::run_start::{
     prepare_desktop_run, RunAttachBoundaries, RunStartBoundaries, RunStartRequest,
 };
-use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap};
+#[cfg(target_os = "linux")]
+use serde_json::json;
+use serde_json::Value;
+#[cfg(target_os = "linux")]
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
-#[cfg(not(test))]
+#[cfg(all(target_os = "linux", not(test)))]
 const PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
-#[cfg(test)]
+#[cfg(all(target_os = "linux", test))]
 const PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub type WorkspaceContexts = Arc<Mutex<WorkspaceContextMap>>;
@@ -81,7 +94,7 @@ impl From<PathBuf> for AttachHome {
     }
 }
 
-/// Production adapter from the authorized Linux attach seam into the desktop coordinator.
+/// Production adapter from the authorized attach seam into the desktop coordinator.
 pub trait RunStartIdempotency {
     fn execute<A, W>(
         &mut self,
@@ -126,6 +139,7 @@ pub struct DesktopAttachService<B, I = IdempotencyStore> {
     pub drain_state: crate::attach::DrainState,
 }
 
+#[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)]
 fn queue_run_message<B: RunAttachBoundaries, I: RunStartIdempotency>(
     boundaries: &B,
@@ -1116,6 +1130,7 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
     }
 }
 
+#[cfg(target_os = "linux")]
 fn attach_provenance(
     request_id: &Id,
     idempotency_key: &Id,
@@ -1150,9 +1165,10 @@ mod tests {
     use std::sync::Mutex;
 
     #[cfg(target_os = "linux")]
-    use crate::attach::linux::{
-        RunStreamPage, ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage,
-        ThreadOpenRequest,
+    use crate::attach::desktop_service_message::RunStreamPage;
+    #[cfg(target_os = "linux")]
+    use crate::attach::thread_service::{
+        ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
     };
     #[cfg(target_os = "linux")]
     use crate::attach::{ErrorCode, ProtocolError};
