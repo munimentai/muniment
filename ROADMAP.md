@@ -680,10 +680,10 @@ carries no module gate. Its imports come from `thread_service`,
 Linux-only run boundary keeps its item gate.
 
 MEASURED 2026-08-31 (planner, read the merge log against the last cut) — the
-gate slice merged on its first filing, and the `chat.rs` split merged beside
-it. The dispatch extraction drained its first filing without reaching a pull
-request. Under the 2026-08-11 drained-slice rule the lane re-files it in the
-first position.
+gate slice re-file merged on its second filing, and the `chat.rs` split
+merged beside it. The dispatch extraction drained its first filing without
+reaching a pull request. Under the 2026-08-11 drained-slice rule the lane
+re-files it in the first position.
 
 MEASURED 2026-08-31 (planner, read the runtime service exports against the
 moved core modules) — five runtime service exports keep Linux gates their
