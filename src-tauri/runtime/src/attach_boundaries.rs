@@ -2,34 +2,47 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::Ordering;
+#[cfg(target_os = "linux")]
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
+#[cfg(target_os = "linux")]
 use muniment_core::attach::desktop_service_message::{ArtifactFetchResult, RunStreamPage};
+#[cfg(target_os = "linux")]
 use muniment_core::attach::thread_service::{
     ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
+#[cfg(target_os = "linux")]
 use muniment_core::attach::ProtocolError;
+#[cfg(target_os = "linux")]
+use muniment_core::attach::{CompanionRecord, EntitlementSnapshotResult};
 use muniment_core::attach::{
-    CompanionRecord, CompanionRegistry, EntitlementSnapshotResult, RuntimeActivityGuard,
-    RuntimeActivityRegistry, SignedWorkspaceApproval,
+    CompanionRegistry, RuntimeActivityGuard, RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
-use muniment_core::auth::{
-    BrowserOpenError, BrowserOpener, EntitlementSnapshotTracker, NativeDeviceListError, TokenSet,
-};
+#[cfg(target_os = "linux")]
+use muniment_core::auth::NativeDeviceListError;
+use muniment_core::auth::{BrowserOpenError, BrowserOpener, EntitlementSnapshotTracker, TokenSet};
+#[cfg(target_os = "linux")]
 use muniment_core::cas::ContentHash;
 use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
 use muniment_core::chat_resume::{clear_active_run, install_active_run};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reducer::ChatProjector;
+#[cfg(target_os = "linux")]
 use muniment_core::journal::thread_mutation::{
     append_thread_delete_now, append_thread_rename_now, create_thread_now, ThreadMutationError,
 };
 use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
+#[cfg(target_os = "linux")]
 use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_events::SharedStorage;
@@ -37,19 +50,25 @@ use muniment_core::run_preparation::{
     append_prepared_run_persistence_failure, prepare_new_run_in_thread_after_validation,
     prepare_new_run_with_session_thread, OpenSelectedFile, SessionThreadStart,
 };
+#[cfg(target_os = "linux")]
 use muniment_core::run_start::{
-    accepted_time_now, new_run_id, ActiveRun, AttachPromptAccepted, AttachResumeAccepted,
-    RunAttachBoundaries, RunStartBoundaries, RunStartError, RunStartLaunch,
+    accepted_time_now, new_run_id, AttachPromptAccepted, AttachResumeAccepted, RunAttachBoundaries,
 };
+use muniment_core::run_start::{ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch};
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::PiArtifactDescriptor;
 
 use crate::service::{self, ConfigureRunError};
-use crate::{RuntimeChatEventBroadcast, RuntimeChatEventSink, RuntimeChatEventTarget};
+#[cfg(target_os = "linux")]
+use crate::RuntimeChatEventTarget;
+use crate::{RuntimeChatEventBroadcast, RuntimeChatEventSink};
 
+#[cfg(target_os = "linux")]
 const ATTACH_PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Supplies attach reads from runtime-owned state.
+// Four fields serve only the Linux-gated `RunAttachBoundaries` impl below.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub struct RuntimeAttachBoundaries {
     storage: SharedStorage,
     active: Arc<Mutex<Option<ActiveRun>>>,
@@ -418,6 +437,7 @@ fn persistence_error() -> RunStartError {
     RunStartError::Persistence("Conversation history is unavailable.".into())
 }
 
+#[cfg(target_os = "linux")]
 fn run_service_error(error: String) -> RunStartError {
     if error == "thread_not_found" {
         RunStartError::ThreadNotFound
@@ -426,6 +446,9 @@ fn run_service_error(error: String) -> RunStartError {
     }
 }
 
+// Every `RunAttachBoundaries` method is declared under `cfg(target_os = "linux")`,
+// so the impl carries the matching gate until the trait itself widens.
+#[cfg(target_os = "linux")]
 impl RunAttachBoundaries for RuntimeAttachBoundaries {
     fn submit_run(
         &self,
@@ -876,8 +899,10 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
     }
 }
 
+#[cfg(target_os = "linux")]
 struct SignInPermit(Arc<AtomicBool>);
 
+#[cfg(target_os = "linux")]
 impl SignInPermit {
     fn acquire(running: Arc<AtomicBool>) -> Option<Self> {
         running
@@ -887,6 +912,7 @@ impl SignInPermit {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for SignInPermit {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
@@ -894,13 +920,40 @@ impl Drop for SignInPermit {
 }
 
 fn open_browser(url: &str) -> Result<(), BrowserOpenError> {
-    Command::new("xdg-open")
-        .arg(url)
+    browser_command(url)
         .spawn()
         .map(drop)
         .map_err(|_| BrowserOpenError)
 }
 
+#[cfg(target_os = "macos")]
+fn browser_command(url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "windows")]
+fn browser_command(url: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // rundll32 takes the URL as a plain argument, so cmd.exe never parses the
+    // `&` in the query string.
+    let mut command = Command::new("rundll32");
+    command
+        .args(["url.dll,FileProtocolHandler", url])
+        .creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn browser_command(url: &str) -> Command {
+    let mut command = Command::new("xdg-open");
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "linux")]
 fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
     match error {
         ThreadMutationError::NotOwned => ProtocolError::thread_not_found(),
@@ -910,6 +963,7 @@ fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
     match error {
         NativeDeviceListError::CredentialsMissing
@@ -925,6 +979,7 @@ fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn sign_in_permit_clears_when_an_attempt_ends() {
         let running = Arc::new(AtomicBool::new(false));
@@ -932,5 +987,30 @@ mod tests {
         assert!(SignInPermit::acquire(Arc::clone(&running)).is_none());
         drop(first);
         assert!(SignInPermit::acquire(running).is_some());
+    }
+
+    #[test]
+    fn the_default_browser_command_matches_the_host_platform() {
+        let url = "https://example.test/sign-in?a=1&b=2";
+        let command = browser_command(url);
+
+        #[cfg(target_os = "macos")]
+        let expected_program = "open";
+        #[cfg(target_os = "windows")]
+        let expected_program = "rundll32";
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let expected_program = "xdg-open";
+
+        assert_eq!(command.get_program(), expected_program);
+        let arguments: Vec<String> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(arguments.last().map(String::as_str), Some(url));
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            arguments.first().map(String::as_str),
+            Some("url.dll,FileProtocolHandler")
+        );
     }
 }
