@@ -10,13 +10,14 @@ use muniment_core::attach::{
     WindowsAttachListener, WindowsAttachServeOutcome, WindowsAttachStopEvent,
 };
 #[cfg(any(test, target_os = "windows"))]
-use muniment_core::chat_profile::{ChatProfile, ChatProfileError};
-#[cfg(any(test, target_os = "windows"))]
-use muniment_core::journal::RunJournal;
+use muniment_core::attach::{DesktopAttachService, ProtocolError};
 #[cfg(target_os = "windows")]
 use std::path::Path;
-#[cfg(target_os = "windows")]
+#[cfg(any(test, target_os = "windows"))]
 use std::sync::Arc;
+
+#[cfg(any(test, target_os = "windows"))]
+use crate::{RuntimeAttachBoundaries, RuntimeAttachState};
 
 const FAILED_ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// The consecutive failed accept limit for one activation.
@@ -48,17 +49,15 @@ pub trait WindowsAttachAcceptBoundary {
 pub struct WindowsAttachAcceptor {
     listener: WindowsAttachListener,
     stop: Arc<WindowsAttachStopEvent>,
-    service_factory: Arc<WindowsDesktopSessionServiceFactory>,
+    state: Arc<RuntimeAttachState>,
 }
 
-#[cfg(target_os = "windows")]
-type WindowsDesktopSessionServiceFactory =
-    Box<dyn Fn() -> Result<RunJournal, ChatProfileError> + Send + Sync>;
-
 #[cfg(any(test, target_os = "windows"))]
-fn windows_desktop_session_service(profile: &ChatProfile) -> Result<RunJournal, ChatProfileError> {
-    let (journal, _cas) = profile.open_storage()?;
-    Ok(journal)
+fn runtime_attach_service_factory(
+    state: Arc<RuntimeAttachState>,
+) -> impl Fn() -> Result<DesktopAttachService<RuntimeAttachBoundaries>, ProtocolError> + Send + Sync
+{
+    move || state.attach_service()
 }
 
 #[cfg(target_os = "windows")]
@@ -68,16 +67,23 @@ impl WindowsAttachAcceptor {
         state_directory: impl AsRef<Path>,
         bounded_wait: Duration,
     ) -> Result<Self, WindowsAttachBindError> {
-        let listener = WindowsAttachListener::bind(state_directory.as_ref(), bounded_wait)?;
+        let state_directory = state_directory.as_ref();
+        let listener = WindowsAttachListener::bind(state_directory, bounded_wait)?;
         let stop = Arc::new(
             WindowsAttachStopEvent::new()
                 .map_err(|error| WindowsAttachBindError::Pipe(std::io::Error::other(error)))?,
         );
-        let profile = ChatProfile::new(state_directory.as_ref());
+        let state = Arc::new(
+            RuntimeAttachState::open(state_directory, state_directory).map_err(|error| {
+                WindowsAttachBindError::Pipe(std::io::Error::other(format!(
+                    "could not open runtime attach state: {error:?}"
+                )))
+            })?,
+        );
         Ok(Self {
             listener,
             stop,
-            service_factory: Arc::new(Box::new(move || windows_desktop_session_service(&profile))),
+            state,
         })
     }
 }
@@ -98,11 +104,12 @@ impl WindowsAttachAcceptBoundary for WindowsAttachAcceptor {
     }
 
     fn serve_next(&mut self) -> WindowsAttachAcceptOutcome {
+        let service_factory = Arc::new(runtime_attach_service_factory(Arc::clone(&self.state)));
         windows_attach_accept_outcome(serve_next_windows_attach_until(
             &mut self.listener,
             env!("CARGO_PKG_VERSION"),
             &self.stop,
-            Arc::clone(&self.service_factory),
+            service_factory,
         ))
     }
 }
@@ -152,21 +159,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opens_a_fresh_profile_as_an_empty_journal() {
+    fn composes_a_service_from_fresh_runtime_attach_state() {
         use muniment_core::attach::thread_service::ThreadListRequest;
-        use muniment_core::attach::ErrorCode;
 
-        let directory = std::env::temp_dir().join(format!(
-            "muniment-windows-desktop-service-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let profile = ChatProfile::new(&directory);
+        let directory = temporary_state_directory("service");
+        let state = Arc::new(RuntimeAttachState::open(&directory, &directory).unwrap());
 
-        let mut service = windows_desktop_session_service(&profile).unwrap();
+        let mut service = runtime_attach_service_factory(state)().unwrap();
         let page = service
             .list_threads(
                 "workspace",
@@ -178,32 +177,30 @@ mod tests {
             .unwrap();
 
         assert!(page.threads.is_empty());
-        assert_eq!(
-            service.ensure_home().unwrap_err().code(),
-            ErrorCode::UnsupportedOperation
-        );
-        assert!(profile.journal_path().is_file());
-        assert!(profile.cas_directory().join("objects").is_dir());
+        assert!(directory.join("attach-idempotency.sqlite3").is_file());
         drop(service);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
-    fn returns_a_profile_open_failure() {
-        let directory = std::env::temp_dir().join(format!(
-            "muniment-windows-desktop-service-error-{}-{}",
+    fn returns_a_runtime_attach_state_open_failure() {
+        let directory = temporary_state_directory("state-error");
+        std::fs::create_dir_all(directory.join("runs.sqlite3")).unwrap();
+
+        assert!(RuntimeAttachState::open(&directory, &directory).is_err());
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn temporary_state_directory(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "muniment-windows-attach-{name}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        ));
-        let profile = ChatProfile::new(&directory);
-        std::fs::create_dir_all(profile.journal_path()).unwrap();
-
-        assert!(windows_desktop_session_service(&profile).is_err());
-
-        std::fs::remove_dir_all(directory).unwrap();
+        ))
     }
 
     #[cfg(target_os = "windows")]
