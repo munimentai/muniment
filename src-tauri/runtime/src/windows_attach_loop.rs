@@ -3,10 +3,14 @@
 use std::time::Duration;
 
 #[cfg(target_os = "windows")]
+use muniment_core::attach::thread_service::ThreadListService;
+#[cfg(target_os = "windows")]
 use muniment_core::attach::{
     serve_next_windows_attach_until, WindowsAttachAcceptError, WindowsAttachBindError,
     WindowsAttachListener, WindowsAttachServeOutcome, WindowsAttachStopEvent,
 };
+#[cfg(target_os = "windows")]
+use std::convert::Infallible;
 #[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(target_os = "windows")]
@@ -42,6 +46,22 @@ pub trait WindowsAttachAcceptBoundary {
 pub struct WindowsAttachAcceptor {
     listener: WindowsAttachListener,
     stop: Arc<WindowsAttachStopEvent>,
+    service_factory: Arc<WindowsDesktopSessionServiceFactory>,
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsDesktopSessionService;
+
+#[cfg(target_os = "windows")]
+type WindowsDesktopSessionServiceFactory =
+    fn() -> Result<WindowsDesktopSessionService, Infallible>;
+
+#[cfg(target_os = "windows")]
+impl ThreadListService for WindowsDesktopSessionService {}
+
+#[cfg(target_os = "windows")]
+fn windows_desktop_session_service() -> Result<WindowsDesktopSessionService, Infallible> {
+    Ok(WindowsDesktopSessionService)
 }
 
 #[cfg(target_os = "windows")]
@@ -56,7 +76,11 @@ impl WindowsAttachAcceptor {
             WindowsAttachStopEvent::new()
                 .map_err(|error| WindowsAttachBindError::Pipe(std::io::Error::other(error)))?,
         );
-        Ok(Self { listener, stop })
+        Ok(Self {
+            listener,
+            stop,
+            service_factory: Arc::new(windows_desktop_session_service),
+        })
     }
 }
 
@@ -80,6 +104,7 @@ impl WindowsAttachAcceptBoundary for WindowsAttachAcceptor {
             &mut self.listener,
             env!("CARGO_PKG_VERSION"),
             &self.stop,
+            Arc::clone(&self.service_factory),
         ))
     }
 }
