@@ -77,9 +77,7 @@ impl WindowsAttachAcceptor {
         Ok(Self {
             listener,
             stop,
-            service_factory: Arc::new(Box::new(move || {
-                windows_desktop_session_service(&profile)
-            })),
+            service_factory: Arc::new(Box::new(move || windows_desktop_session_service(&profile))),
         })
     }
 }
