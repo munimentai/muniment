@@ -7,6 +7,61 @@ mod cases {
     };
     use muniment_core::journal::RunJournal;
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_status_uses_live_desktop_client_state_and_start_is_idempotent() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        let starts = Arc::new(AtomicUsize::new(0));
+        for _ in 0..2 {
+            let starts = starts.clone();
+            app.state::<AttachCompanionState>()
+                .start_desktop_client(move |_, _| {
+                    starts.fetch_add(1, Ordering::SeqCst);
+                    std::thread::spawn(|| {})
+                });
+        }
+        app.state::<AttachCompanionState>().record_connected(true);
+
+        let status = attach_listener_status(app.state::<AttachCompanionState>());
+        assert!(status.started);
+        assert!(status.supervisor_running);
+        assert!(status.connected);
+        assert!(!status.chat_events_connected);
+        assert!(status.runtime_upgrade_pending);
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_observer_publishes_each_connection_transition() {
+        use std::sync::mpsc;
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        let (status_tx, status_rx) = mpsc::channel();
+        app.handle()
+            .listen("desktop-client-status-changed", move |event| {
+                let status: serde_json::Value = serde_json::from_str(event.payload()).unwrap();
+                status_tx.send(status).unwrap();
+            });
+
+        observe_desktop_client_connection(app.handle(), true);
+        assert_eq!(
+            status_rx.recv_timeout(Duration::from_secs(1)).unwrap()["connected"],
+            true
+        );
+        observe_desktop_client_connection(app.handle(), false);
+        assert_eq!(
+            status_rx.recv_timeout(Duration::from_secs(1)).unwrap()["connected"],
+            false
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_observers_publish_each_connection_transition() {
