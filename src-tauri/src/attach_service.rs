@@ -86,7 +86,7 @@ pub use listener::{start_attach_listener, stop_attach_listener};
 pub(crate) use migration::control_desktop_migration;
 #[cfg(target_os = "linux")]
 pub(crate) use state::AttachListenerState;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) use state::DesktopClientSession;
 pub use state::{AttachCompanionState, AttachListenerStatus, AuthorizedCompanion};
 

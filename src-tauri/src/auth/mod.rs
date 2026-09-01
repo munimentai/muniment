@@ -25,7 +25,7 @@ use tauri::Emitter;
 
 #[cfg(unix)]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::ClientError;
 #[cfg(unix)]
 use muniment_core::attach::DesktopClientHolder;
@@ -467,17 +467,17 @@ async fn auth_devices_with_state<R: tauri::Runtime>(
     .map_err(|_| device_list_error())?
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) fn background_service_error() -> String {
     "Muniment cannot reach its background service.".to_string()
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) fn runtime_update_pending_error() -> String {
     "A runtime update is pending. Muniment will start new runs after the update.".to_string()
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) fn desktop_client_error(error: ClientError) -> String {
     match error {
         ClientError::DesktopBusy => "Muniment is busy with another request. Try again.".to_string(),
