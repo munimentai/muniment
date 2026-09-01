@@ -739,6 +739,17 @@ DONE 2026-09-01 — the two Windows thread read commands ride the desktop client
 macOS, and Windows. Their Windows twins are gone. Windows fails closed the macOS
 way without a connected client.
 
+DONE 2026-09-01 — the `RunAttachBoundaries` trait gates include macOS
+(MUNIDESK-1625). Its platform-neutral items in
+`src-tauri/core/src/run_start.rs` now compile on macOS, and the test doubles
+implement the required boundary methods there.
+
+DONE 2026-09-01 — the four Windows thread write commands ride the desktop client
+(MUNIDESK-1626). `chat_select_thread`, `chat_rename_thread`,
+`chat_delete_thread`, and `chat_new_thread` in
+`src-tauri/src/chat_threads.rs` now share their command bodies with Linux and
+macOS. Windows fails closed without a connected client.
+
 MEASURED 2026-09-01 (planner, read `macos_activation` against the LaunchAgent
 plist and the core module gates) — the macOS runtime serves nothing. The macOS
 app therefore reaches no runtime. Runtime-backed chat, thread, and native-auth
@@ -771,19 +782,15 @@ whole body on Linux. It returns an empty list elsewhere (`:24`).
 companion registry. The macOS half waits on the macOS restoration above.
 
 NEXT — two lanes, re-cut 2026-09-01. The macOS restoration leads, because macOS
-ships a nightly bundle today. Its first slice widens the `RunAttachBoundaries`
-trait gates (`src-tauri/core/src/run_start.rs`) to macOS. MUNIDESK-1599 widened
-the same gates to Windows. Its second slice widens the `DesktopAttachService`
-item gates (`src-tauri/core/src/attach/desktop_service.rs`). Its third widens
+ships a nightly bundle today. Its first slice widens the `DesktopAttachService`
+item gates (`src-tauri/core/src/attach/desktop_service.rs`). Its second widens
 `RuntimeAttachBoundaries` and `attach_service`
 (`src-tauri/runtime/src/attach_boundaries.rs`). A macOS activation that binds
-`MacosAttachListener` and serves the composed service follows those three. The
-Windows lane runs beside it in five slices. It flips the four thread write
-commands (`chat_select_thread`, `chat_rename_thread`, `chat_delete_thread`,
-`chat_new_thread`) in `src-tauri/src/chat_threads.rs`. It gives the Windows
-runtime activation the 24-hour recorded-retention schedule the Linux activation
-has (`src-tauri/runtime/src/activation.rs:79`). It sends `retention.recheck`
-through the connected client after a Windows retention save
+`MacosAttachListener` and serves the composed service follows those two. The
+Windows lane runs beside it in four slices. It gives the Windows runtime
+activation the 24-hour recorded-retention schedule the Linux activation has
+(`src-tauri/runtime/src/activation.rs:79`). It sends `retention.recheck` through
+the connected client after a Windows retention save
 (`src-tauri/src/thread_retention.rs`). It flips the three auth read commands
 (`auth_status`, `auth_entitlement_snapshot`, `auth_devices`) in
 `src-tauri/src/auth/mod.rs`. It carries `attach_companions` and
