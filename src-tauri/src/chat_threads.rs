@@ -54,7 +54,7 @@ fn require_runtime(attach_state: &AttachCompanionState) -> Result<(), String> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn rename_thread_command(
     storage: Option<&SharedStorage>,
     attach_state: &AttachCompanionState,
@@ -64,7 +64,7 @@ fn rename_thread_command(
 ) -> Result<(), String> {
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             {
@@ -84,7 +84,7 @@ fn rename_thread_command(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn delete_thread_command(
     storage: Option<&SharedStorage>,
     session_thread: &SessionThread,
@@ -94,7 +94,7 @@ fn delete_thread_command(
 ) -> Result<(), String> {
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             {
@@ -114,26 +114,26 @@ fn delete_thread_command(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 trait ThreadSelectClient {
     fn thread_select(&self, thread_id: &str) -> Result<(), ClientError>;
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 impl ThreadSelectClient for muniment_core::attach::DesktopClientHolder {
     fn thread_select(&self, thread_id: &str) -> Result<(), ClientError> {
         muniment_core::attach::DesktopClientHolder::thread_select(self, thread_id)
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 enum ThreadSelectSession<C> {
     NoSupervisor,
     Connected(C),
     Disconnected,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 impl From<DesktopClientSession>
     for ThreadSelectSession<muniment_core::attach::DesktopClientHolder>
 {
@@ -146,7 +146,7 @@ impl From<DesktopClientSession>
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn select_thread_command<C: ThreadSelectClient>(
     session: ThreadSelectSession<C>,
     storage: Option<&SharedStorage>,
@@ -156,7 +156,7 @@ fn select_thread_command<C: ThreadSelectClient>(
 ) -> Result<(), String> {
     match session {
         ThreadSelectSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             {
@@ -449,7 +449,7 @@ pub async fn chat_thread_summaries(
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub async fn chat_select_thread(
     app_handle: tauri::AppHandle,
@@ -462,7 +462,7 @@ pub async fn chat_select_thread(
     if matches!(&session, ThreadSelectSession::Disconnected) {
         return Err(auth::background_service_error());
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     if matches!(&session, ThreadSelectSession::NoSupervisor) {
         return Err(auth::background_service_error());
     }
@@ -476,28 +476,7 @@ pub async fn chat_select_thread(
     )
 }
 
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub async fn chat_select_thread(
-    app_handle: tauri::AppHandle,
-    auth_state: tauri::State<'_, auth::AuthState>,
-    state: tauri::State<'_, ChatState>,
-    thread_id: String,
-) -> Result<(), String> {
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    let mut storage = state
-        .storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    select_session_thread(
-        &mut storage.journal,
-        &state.session_thread,
-        tokens.subject.as_deref(),
-        &thread_id,
-    )
-}
-
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub async fn chat_rename_thread(
     app_handle: tauri::AppHandle,
@@ -509,61 +488,17 @@ pub async fn chat_rename_thread(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     require_runtime(&attach_state)?;
-    chat_rename_thread_with_state(
-        app_handle,
-        auth_state,
-        state,
-        attach_state,
-        thread_id,
-        title,
-    )
-    .await
-}
-
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub async fn chat_rename_thread(
-    app_handle: tauri::AppHandle,
-    auth_state: tauri::State<'_, auth::AuthState>,
-    state: tauri::State<'_, ChatState>,
-    thread_id: String,
-    title: String,
-) -> Result<(), String> {
-    chat_rename_thread_with_state(app_handle, auth_state, state, thread_id, title).await
-}
-
-async fn chat_rename_thread_with_state<R: tauri::Runtime>(
-    app_handle: tauri::AppHandle<R>,
-    auth_state: tauri::State<'_, auth::AuthState>,
-    state: tauri::State<'_, ChatState>,
-    #[cfg(unix)] attach_state: tauri::State<'_, AttachCompanionState>,
-    thread_id: String,
-    title: String,
-) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    #[cfg(unix)]
-    return rename_thread_command(
+    rename_thread_command(
         state.storage().ok(),
         &attach_state,
         tokens.subject.as_deref(),
         &thread_id,
         &title,
-    );
-    #[cfg(target_os = "windows")]
-    let mut storage = state
-        .storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    #[cfg(target_os = "windows")]
-    return rename_thread(
-        &mut storage.journal,
-        tokens.subject.as_deref(),
-        &thread_id,
-        &title,
-    );
+    )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub async fn chat_delete_thread(
     app_handle: tauri::AppHandle,
@@ -574,51 +509,17 @@ pub async fn chat_delete_thread(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     require_runtime(&attach_state)?;
-    chat_delete_thread_with_state(app_handle, auth_state, state, attach_state, thread_id).await
-}
-
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub async fn chat_delete_thread(
-    app_handle: tauri::AppHandle,
-    auth_state: tauri::State<'_, auth::AuthState>,
-    state: tauri::State<'_, ChatState>,
-    thread_id: String,
-) -> Result<(), String> {
-    chat_delete_thread_with_state(app_handle, auth_state, state, thread_id).await
-}
-
-async fn chat_delete_thread_with_state<R: tauri::Runtime>(
-    app_handle: tauri::AppHandle<R>,
-    auth_state: tauri::State<'_, auth::AuthState>,
-    state: tauri::State<'_, ChatState>,
-    #[cfg(unix)] attach_state: tauri::State<'_, AttachCompanionState>,
-    thread_id: String,
-) -> Result<(), String> {
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    #[cfg(unix)]
-    return delete_thread_command(
+    delete_thread_command(
         state.storage().ok(),
         &state.session_thread,
         &attach_state,
         tokens.subject.as_deref(),
         &thread_id,
-    );
-    #[cfg(target_os = "windows")]
-    let mut storage = state
-        .storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    #[cfg(target_os = "windows")]
-    return delete_thread(
-        &mut storage.journal,
-        &state.session_thread,
-        tokens.subject.as_deref(),
-        &thread_id,
-    );
+    )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub async fn chat_new_thread(
     app_handle: tauri::AppHandle,
@@ -627,7 +528,7 @@ pub async fn chat_new_thread(
     attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<(), String> {
     let session = attach_state.desktop_client_session();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     if !matches!(&session, DesktopClientSession::Connected(_)) {
         return Err(auth::background_service_error());
     }
@@ -638,7 +539,7 @@ pub async fn chat_new_thread(
             Ok(())
         }
         DesktopClientSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             {
@@ -651,21 +552,6 @@ pub async fn chat_new_thread(
         }
         DesktopClientSession::Disconnected => Err(auth::background_service_error()),
     }
-}
-
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub async fn chat_new_thread(
-    app_handle: tauri::AppHandle,
-    auth_state: tauri::State<'_, auth::AuthState>,
-    state: tauri::State<'_, ChatState>,
-) -> Result<(), String> {
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    fresh_session_thread(
-        &state.storage,
-        &state.session_thread,
-        tokens.subject.as_deref(),
-    )
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -882,14 +768,13 @@ mod tests {
             title: &str,
         ) -> Result<(), String> {
             use tauri::Manager;
-            tauri::async_runtime::block_on(chat_rename_thread_with_state(
-                app.handle().clone(),
-                app.state(),
-                app.state(),
-                app.state(),
-                thread_id.into(),
-                title.into(),
-            ))
+            rename_thread_command(
+                app.state::<ChatState>().storage().ok(),
+                &app.state::<AttachCompanionState>(),
+                Some("owner"),
+                thread_id,
+                title,
+            )
         }
 
         fn invoke_delete(
@@ -897,13 +782,13 @@ mod tests {
             thread_id: &str,
         ) -> Result<(), String> {
             use tauri::Manager;
-            tauri::async_runtime::block_on(chat_delete_thread_with_state(
-                app.handle().clone(),
-                app.state(),
-                app.state(),
-                app.state(),
-                thread_id.into(),
-            ))
+            delete_thread_command(
+                app.state::<ChatState>().storage().ok(),
+                &app.state::<ChatState>().session_thread,
+                &app.state::<AttachCompanionState>(),
+                Some("owner"),
+                thread_id,
+            )
         }
 
         fn invoke_summaries(
