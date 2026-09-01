@@ -65,7 +65,7 @@ pub(super) fn observe_desktop_client_connection<R: tauri::Runtime>(
     let _ = app.emit("desktop-client-status-changed", status);
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) fn observe_chat_event_subscription<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     connected: bool,
