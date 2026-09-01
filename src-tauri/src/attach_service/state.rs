@@ -152,7 +152,7 @@ impl ChatEventStopHandle {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) enum DesktopClientSession {
     NoSupervisor,
     Connected(DesktopClientHolder),
@@ -529,7 +529,7 @@ impl AttachCompanionState {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(crate) fn desktop_client_session(&self) -> DesktopClientSession {
         if self
             .desktop_client
