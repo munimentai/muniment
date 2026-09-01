@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::ptr::{null, null_mut};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,18 +12,22 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
-use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, WaitForMultipleObjects, WaitForSingleObject, INFINITE,
+};
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
 use muniment_attach::ClientStream;
 
 use super::deadline_io::{DeadlineStream, ReadableWait};
+use super::WindowsAttachStopEvent;
 
 /// A connected Windows attach pipe that uses bounded overlapped I/O.
 pub struct WindowsAttachStream {
     handle: OwnedHandle,
     read_timeout: Cell<Option<Duration>>,
     write_timeout: Cell<Option<Duration>>,
+    stop_event: Option<Arc<WindowsAttachStopEvent>>,
 }
 
 impl WindowsAttachStream {
@@ -32,7 +37,13 @@ impl WindowsAttachStream {
             handle,
             read_timeout: Cell::new(None),
             write_timeout: Cell::new(None),
+            stop_event: None,
         }
+    }
+
+    /// Registers the shared stop event that interrupts blocked operations.
+    pub fn set_stop_event(&mut self, stop_event: Arc<WindowsAttachStopEvent>) {
+        self.stop_event = Some(stop_event);
     }
 
     fn operate(
@@ -40,6 +51,15 @@ impl WindowsAttachStream {
         timeout: Option<Duration>,
         issue: impl FnOnce(*mut OVERLAPPED) -> i32,
     ) -> io::Result<usize> {
+        if let Some(stop_event) = &self.stop_event {
+            match unsafe { WaitForSingleObject(stop_event.as_raw_handle(), 0) } {
+                WAIT_OBJECT_0 => return Err(io::Error::from(io::ErrorKind::Interrupted)),
+                WAIT_TIMEOUT => {}
+                WAIT_FAILED => return Err(io::Error::last_os_error()),
+                _ => return Err(io::Error::other("unexpected stop event wait result")),
+            }
+        }
+
         let event = unsafe { CreateEventW(null(), 1, 0, null()) };
         if event.is_null() {
             return Err(io::Error::last_os_error());
@@ -58,7 +78,19 @@ impl WindowsAttachStream {
             }
         }
 
-        let wait = unsafe { WaitForSingleObject(event.as_raw_handle(), timeout_millis(timeout)) };
+        let wait = if let Some(stop_event) = &self.stop_event {
+            let events = [event.as_raw_handle(), stop_event.as_raw_handle()];
+            unsafe {
+                WaitForMultipleObjects(
+                    events.len() as u32,
+                    events.as_ptr(),
+                    0,
+                    timeout_millis(timeout),
+                )
+            }
+        } else {
+            unsafe { WaitForSingleObject(event.as_raw_handle(), timeout_millis(timeout)) }
+        };
         if wait == WAIT_TIMEOUT {
             let cancelled = unsafe { CancelIoEx(handle, &overlapped) } != 0;
             let cancel_error = if cancelled {
@@ -87,6 +119,10 @@ impl WindowsAttachStream {
             let error = io::Error::last_os_error();
             cancel_and_wait(handle, &overlapped);
             return Err(error);
+        }
+        if self.stop_event.is_some() && wait == WAIT_OBJECT_0 + 1 {
+            cancel_and_wait(handle, &overlapped);
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
         }
         if wait != WAIT_OBJECT_0 {
             cancel_and_wait(handle, &overlapped);

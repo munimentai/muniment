@@ -3,7 +3,9 @@ use std::fmt;
 use std::io;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{
+    AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle, RawHandle,
+};
 use std::path::Path;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -163,6 +165,12 @@ impl WindowsAttachStopEvent {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+}
+
+impl AsRawHandle for WindowsAttachStopEvent {
+    fn as_raw_handle(&self) -> RawHandle {
+        self.handle.as_raw_handle()
     }
 }
 
