@@ -1,8 +1,8 @@
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use super::resume::attach_permission_answer;
 use super::*;
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) trait RunCommandClient {
     fn run_submit(
         &self,
@@ -22,7 +22,7 @@ pub(super) trait RunCommandClient {
     ) -> Result<RunPermissionAnswerAccepted, ClientError>;
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 impl RunCommandClient for DesktopClientHolder {
     fn run_submit(
         &self,
@@ -72,14 +72,14 @@ impl RunCommandClient for DesktopClientHolder {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) enum RunCommandSession<C> {
     NoSupervisor,
     Connected(C),
     Disconnected,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 impl From<DesktopClientSession> for RunCommandSession<DesktopClientHolder> {
     fn from(session: DesktopClientSession) -> Self {
         match session {
@@ -90,7 +90,7 @@ impl From<DesktopClientSession> for RunCommandSession<DesktopClientHolder> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) async fn handle_run_submit<C, L, F>(
     session: RunCommandSession<C>,
     state: &ChatState,
@@ -106,7 +106,7 @@ where
 {
     match session {
         RunCommandSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             local(files).await
@@ -134,7 +134,7 @@ where
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) async fn handle_run_resume<C, L, F>(
     session: RunCommandSession<C>,
     _state: &ChatState,
@@ -148,7 +148,7 @@ where
 {
     match session {
         RunCommandSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             local().await
@@ -161,7 +161,7 @@ where
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) fn submit_result(accepted: RunSubmitAccepted) -> SubmitResult {
     SubmitResult {
         run_id: accepted.run_id,
@@ -179,7 +179,7 @@ pub(super) fn submit_result(accepted: RunSubmitAccepted) -> SubmitResult {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) fn resume_result(accepted: RunResumeAccepted) -> SubmitResult {
     SubmitResult {
         run_id: accepted.run_id,
@@ -189,7 +189,7 @@ pub(super) fn resume_result(accepted: RunResumeAccepted) -> SubmitResult {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     session: RunCommandSession<C>,
     run_id: &str,
@@ -199,7 +199,7 @@ pub(super) fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), St
 ) -> Result<(), String> {
     match session {
         RunCommandSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             local()
@@ -214,7 +214,7 @@ pub(super) fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), St
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) fn handle_run_cancel<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
     session: RunCommandSession<C>,
     run_id: &str,
@@ -222,7 +222,7 @@ pub(super) fn handle_run_cancel<C: RunCommandClient, L: FnOnce() -> Result<(), S
 ) -> Result<(), String> {
     match session {
         RunCommandSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             local()
@@ -235,7 +235,7 @@ pub(super) fn handle_run_cancel<C: RunCommandClient, L: FnOnce() -> Result<(), S
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) fn handle_run_permission_answer<
     C: RunCommandClient,
     L: FnOnce() -> Result<(), String>,
@@ -248,7 +248,7 @@ pub(super) fn handle_run_permission_answer<
 ) -> Result<(), String> {
     match session {
         RunCommandSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             local()
@@ -269,11 +269,11 @@ pub async fn chat_queue(
     delivery: ChatDelivery,
     message: String,
 ) -> Result<(), String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     let local_run_id = run_id.clone();
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     let local_message = message.clone();
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     return handle_run_queue(
         app.state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
@@ -283,9 +283,6 @@ pub async fn chat_queue(
         &message,
         || local_chat_queue(&state, local_run_id, delivery, local_message),
     );
-
-    #[cfg(not(unix))]
-    return local_chat_queue(&state, run_id, delivery, message);
 }
 
 pub(super) fn local_chat_queue(
@@ -311,7 +308,7 @@ pub async fn chat_cancel(
     state: tauri::State<'_, ChatState>,
     run_id: String,
 ) -> Result<(), String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     return handle_run_cancel(
         app.state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
@@ -319,9 +316,6 @@ pub async fn chat_cancel(
         &run_id,
         || cancel_active_run(&state.active, &run_id, None),
     );
-
-    #[cfg(not(unix))]
-    return cancel_active_run(&state.active, &run_id, None);
 }
 
 #[tauri::command]
@@ -332,11 +326,11 @@ pub async fn chat_answer_permission(
     gate_id: String,
     answer: ChatPermissionAnswer,
 ) -> Result<(), String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     let local_run_id = run_id.clone();
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     let local_gate_id = gate_id.clone();
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     return handle_run_permission_answer(
         app.state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
@@ -346,7 +340,4 @@ pub async fn chat_answer_permission(
         attach_permission_answer(answer.clone()),
         || queue_permission_answer(&state.active, local_run_id, local_gate_id, answer),
     );
-
-    #[cfg(not(unix))]
-    return queue_permission_answer(&state.active, run_id, gate_id, answer);
 }

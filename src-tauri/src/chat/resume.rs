@@ -1,4 +1,4 @@
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use super::commands::{handle_run_resume, handle_run_submit, RunCommandSession};
 use super::run_preparation::{fetch_grant, fetch_grant_error_message, validate_grant};
 use super::*;
@@ -44,7 +44,7 @@ pub(super) fn chat_resume_error_message(error: ChatResumeError) -> String {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) fn attach_permission_answer(answer: ChatPermissionAnswer) -> AttachChatPermissionAnswer {
     match answer {
         ChatPermissionAnswer::Select(value) => AttachChatPermissionAnswer::Select(value),
@@ -76,7 +76,7 @@ pub async fn chat_submit(
     prompt: String,
     files: Option<Vec<SelectedFile>>,
 ) -> Result<SubmitResult, String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     {
         let session: RunCommandSession<_> = app
             .state::<crate::attach_service::AttachCompanionState>()
@@ -99,14 +99,11 @@ pub async fn chat_submit(
             selected_files,
             #[cfg(target_os = "linux")]
             |local_files| local_chat_submit(app, local_prompt, local_files),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             |_| async { Err(auth::background_service_error()) },
         )
         .await;
     }
-
-    #[cfg(not(unix))]
-    return local_chat_submit(app, prompt, files.unwrap_or_default()).await;
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -142,7 +139,7 @@ pub async fn chat_resume(
     state: tauri::State<'_, ChatState>,
     run_id: String,
 ) -> Result<SubmitResult, String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     {
         let session = app
             .state::<crate::attach_service::AttachCompanionState>()
@@ -153,16 +150,13 @@ pub async fn chat_resume(
         #[cfg(target_os = "linux")]
         let local_run_id = run_id.clone();
         return handle_run_resume(session, &state, &run_id, || {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return async { Err(auth::background_service_error()) };
             #[cfg(target_os = "linux")]
             local_chat_resume(app, auth_state, local_state, local_run_id)
         })
         .await;
     }
-
-    #[cfg(not(unix))]
-    return local_chat_resume(app, auth_state, state, run_id).await;
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]

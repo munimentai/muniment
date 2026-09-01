@@ -16,7 +16,7 @@ use muniment_core::attach::thread_service::{
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use muniment_core::attach::ProtocolError;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::{
     ClientError, DesktopClientHolder, RunCancelAccepted, RunMessageAccepted,
     RunPermissionAnswerAccepted, RunResumeAccepted, RunSubmitAccepted,
@@ -71,10 +71,10 @@ use tauri::{Emitter, Manager};
 #[cfg(test)]
 use uuid::Uuid;
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use crate::attach_service::DesktopClientSession;
 use crate::auth;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::ChatPermissionAnswer as AttachChatPermissionAnswer;
 #[cfg(test)]
 use muniment_core::session_thread::OfferedThread;
