@@ -1,4 +1,4 @@
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::{ClientError, DesktopClientHolder};
 use muniment_core::retention_record::{
     read_retention_choice, write_retention_choice, RetentionChoice,
@@ -6,9 +6,9 @@ use muniment_core::retention_record::{
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use crate::auth;
 use crate::chat::{ChatState, RetentionTrigger};
 
@@ -23,26 +23,26 @@ pub fn thread_retention_choice(app: AppHandle) -> Result<Option<RetentionChoice>
     Ok(read_retention_choice(&config_dir(&app)?))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 trait RetentionRecheckClient {
     fn recheck_retention(&self) -> Result<(), ClientError>;
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 impl RetentionRecheckClient for DesktopClientHolder {
     fn recheck_retention(&self) -> Result<(), ClientError> {
         DesktopClientHolder::recheck_retention(self)
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 enum RetentionRecheckSession<C> {
     NoSupervisor,
     Connected(C),
     Disconnected,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 impl From<DesktopClientSession> for RetentionRecheckSession<DesktopClientHolder> {
     fn from(session: DesktopClientSession) -> Self {
         match session {
@@ -57,7 +57,7 @@ impl From<DesktopClientSession> for RetentionRecheckSession<DesktopClientHolder>
 ///
 /// The save is durable first. A failed recheck leaves the saved choice in
 /// place for the next scheduled check.
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn record_choice_command<C: RetentionRecheckClient>(
     config_dir: &Path,
     session: RetentionRecheckSession<C>,
@@ -77,19 +77,7 @@ fn record_choice_command<C: RetentionRecheckClient>(
     Ok(())
 }
 
-/// Saves the choice, then asks the desktop schedule to check now.
-#[cfg(not(unix))]
-fn record_choice_command(
-    config_dir: &Path,
-    trigger: &RetentionTrigger,
-    choice: RetentionChoice,
-) -> Result<(), String> {
-    write_retention_choice(config_dir, choice).map_err(|error| error.to_string())?;
-    trigger.check_now();
-    Ok(())
-}
-
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub fn record_thread_retention_choice(
     app: AppHandle,
@@ -105,16 +93,6 @@ pub fn record_thread_retention_choice(
     )
 }
 
-#[cfg(not(unix))]
-#[tauri::command]
-pub fn record_thread_retention_choice(
-    app: AppHandle,
-    state: tauri::State<'_, ChatState>,
-    choice: RetentionChoice,
-) -> Result<(), String> {
-    record_choice_command(&config_dir(&app)?, &state.retention_trigger, choice)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,14 +103,14 @@ mod tests {
         std::env::temp_dir().join(format!("muniment-retention-save-{name}-{}", Uuid::now_v7()))
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     #[derive(Clone)]
     struct FakeRecheckClient {
         calls: std::sync::Arc<std::sync::Mutex<usize>>,
         result: Result<(), ClientError>,
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     impl FakeRecheckClient {
         fn new(result: Result<(), ClientError>) -> Self {
             Self {
@@ -146,15 +124,15 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     impl RetentionRecheckClient for FakeRecheckClient {
         fn recheck_retention(&self) -> Result<(), ClientError> {
             *self.calls.lock().unwrap() += 1;
-            self.result.clone()
+            self.result
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     #[test]
     fn a_connected_save_sends_the_recheck_after_the_local_write() {
         let directory = test_directory("connected");
@@ -178,7 +156,7 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     #[test]
     fn a_failed_recheck_keeps_the_saved_choice() {
         let directory = test_directory("failed-recheck");
@@ -201,7 +179,7 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     #[test]
     fn a_save_without_a_supervisor_triggers_the_desktop_check() {
         let directory = test_directory("no-supervisor");
@@ -223,7 +201,7 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     #[test]
     fn a_disconnected_save_returns_the_background_service_error() {
         let directory = test_directory("disconnected");
@@ -246,7 +224,7 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     #[test]
     fn a_failed_write_sends_no_recheck() {
         let directory = test_directory("failed-write");
@@ -263,38 +241,6 @@ mod tests {
         .is_err());
 
         assert_eq!(client.calls(), 0);
-        assert_eq!(checks.try_recv(), Err(TryRecvError::Empty));
-        std::fs::remove_file(directory).unwrap();
-    }
-
-    #[cfg(not(unix))]
-    #[test]
-    fn a_save_triggers_the_desktop_check() {
-        let directory = test_directory("desktop-journal");
-        let (trigger, checks) = RetentionTrigger::for_test();
-
-        record_choice_command(&directory, &trigger, RetentionChoice::DeleteAfter90Days).unwrap();
-
-        assert_eq!(checks.try_recv(), Ok(()));
-        assert_eq!(
-            read_retention_choice(&directory),
-            Some(RetentionChoice::DeleteAfter90Days)
-        );
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[cfg(not(unix))]
-    #[test]
-    fn a_failed_write_sends_no_trigger() {
-        let directory = test_directory("desktop-failed-write");
-        std::fs::write(&directory, b"not a directory").unwrap();
-        let (trigger, checks) = RetentionTrigger::for_test();
-
-        assert!(
-            record_choice_command(&directory, &trigger, RetentionChoice::DeleteAfter30Days)
-                .is_err()
-        );
-
         assert_eq!(checks.try_recv(), Err(TryRecvError::Empty));
         std::fs::remove_file(directory).unwrap();
     }
