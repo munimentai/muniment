@@ -1,5 +1,7 @@
 #[cfg(all(target_os = "linux", test))]
 use muniment_core::attach::save_client_credentials as persist_client_credentials;
+#[cfg(target_os = "windows")]
+use muniment_core::attach::serve_windows_desktop_client;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
@@ -8,7 +10,7 @@ use muniment_core::attach::ClientError;
 use muniment_core::attach::{
     answer_presented_approval, handshake_desktop_client_stream, interruptible_connect_with_state,
     serve_approval_presenter_at, serve_desktop_client_at, ApprovalPresenterStopHandle,
-    DesktopClientHolder, DesktopClientStopHandle, InterruptibleConnectState,
+    InterruptibleConnectState,
 };
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
@@ -16,6 +18,8 @@ use muniment_core::attach::{
     WorkspaceContextMap, COMPANION_CREDENTIAL_FILE_NAME,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
+#[cfg(any(unix, target_os = "windows"))]
+use muniment_core::attach::{DesktopClientHolder, DesktopClientStopHandle};
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -26,8 +30,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 #[cfg(unix)]
 use std::sync::{Arc, Condvar};
+#[cfg(any(unix, target_os = "windows"))]
+use std::time::Duration;
 #[cfg(unix)]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{
@@ -54,14 +60,14 @@ use muniment_core::browser_control::ProcReader;
 use serde_json::json;
 #[cfg(unix)]
 use serde_json::Value;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use tauri::{Emitter, Manager};
 #[cfg(all(target_os = "linux", test))]
 use uuid::Uuid;
 
 /// Matches the `muniment-runtime` version in `src-tauri/runtime/Cargo.toml`.
 /// Raise this constant when a new run needs a newer runtime.
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) const MINIMUM_COMPATIBLE_RUNTIME_VERSION: &str = "0.0.1";
 
 mod commands;
@@ -70,7 +76,7 @@ mod migration;
 mod state;
 
 pub use commands::*;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) use listener::start_desktop_client;
 #[cfg(target_os = "linux")]
 pub use listener::{start_attach_listener, stop_attach_listener};
@@ -84,7 +90,7 @@ pub use state::{AttachCompanionState, AttachListenerStatus, AuthorizedCompanion}
 
 #[cfg(target_os = "linux")]
 use crate::chat::TauriRunStartBoundaries;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) use migration::{runtime_upgrade_pending, runtime_version_compatible};
 #[cfg(target_os = "linux")]
 #[allow(unused_imports)]
