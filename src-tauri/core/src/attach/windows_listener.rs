@@ -201,7 +201,7 @@ where
 pub fn serve_next_windows_attach_until<S, F, E>(
     listener: &mut WindowsAttachListener,
     desktop_version: &str,
-    stop: &WindowsAttachStopEvent,
+    stop: &Arc<WindowsAttachStopEvent>,
     service_factory: Arc<F>,
 ) -> Result<WindowsAttachServeOutcome, WindowsAttachAcceptError>
 where
@@ -209,7 +209,8 @@ where
     F: Fn() -> Result<S, E> + Send + Sync + 'static,
 {
     match listener.accept_until(stop)? {
-        WindowsAttachAcceptOutcome::Connected(stream) => {
+        WindowsAttachAcceptOutcome::Connected(mut stream) => {
+            stream.set_stop_event(Arc::clone(stop));
             serve_windows_attach_on_worker(stream, desktop_version, service_factory);
             Ok(WindowsAttachServeOutcome::Served)
         }

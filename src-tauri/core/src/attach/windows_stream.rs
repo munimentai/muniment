@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::ptr::{null, null_mut};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,7 @@ pub struct WindowsAttachStream {
     read_timeout: Cell<Option<Duration>>,
     write_timeout: Cell<Option<Duration>>,
     stop_event: Option<Arc<WindowsAttachStopEvent>>,
+    operation_pending_sender: Option<mpsc::Sender<()>>,
 }
 
 impl WindowsAttachStream {
@@ -38,12 +39,18 @@ impl WindowsAttachStream {
             read_timeout: Cell::new(None),
             write_timeout: Cell::new(None),
             stop_event: None,
+            operation_pending_sender: None,
         }
     }
 
     /// Registers the shared stop event that interrupts blocked operations.
     pub fn set_stop_event(&mut self, stop_event: Arc<WindowsAttachStopEvent>) {
         self.stop_event = Some(stop_event);
+    }
+
+    #[doc(hidden)]
+    pub fn set_operation_pending_sender_for_tests(&mut self, sender: mpsc::Sender<()>) {
+        self.operation_pending_sender = Some(sender);
     }
 
     fn operate(
@@ -75,6 +82,9 @@ impl WindowsAttachStream {
             let error = unsafe { GetLastError() };
             if error != windows_sys::Win32::Foundation::ERROR_IO_PENDING {
                 return operation_error(error);
+            }
+            if let Some(sender) = &self.operation_pending_sender {
+                let _ = sender.send(());
             }
         }
 

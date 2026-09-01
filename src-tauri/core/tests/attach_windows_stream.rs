@@ -122,9 +122,9 @@ fn stop_event_interrupts_blocked_and_later_reads() {
     let stop_event = Arc::new(WindowsAttachStopEvent::new().unwrap());
     let mut stream = listener.into_stream();
     stream.set_stop_event(Arc::clone(&stop_event));
-    let (read_started_sender, read_started_receiver) = mpsc::channel();
+    let (operation_pending_sender, operation_pending_receiver) = mpsc::channel();
+    stream.set_operation_pending_sender_for_tests(operation_pending_sender);
     let reader = thread::spawn(move || {
-        read_started_sender.send(()).unwrap();
         let started = Instant::now();
         let first_error =
             read_exact_before(&mut stream, &mut [0], started + Duration::from_secs(5)).unwrap_err();
@@ -141,11 +141,13 @@ fn stop_event_interrupts_blocked_and_later_reads() {
         )
     });
 
-    read_started_receiver.recv().unwrap();
-    thread::sleep(Duration::from_millis(50));
-    stop_event.signal().unwrap();
+    operation_pending_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    let signaler = thread::spawn(move || stop_event.signal().unwrap());
 
     let (first_kind, first_elapsed, second_kind, second_elapsed) = reader.join().unwrap();
+    signaler.join().unwrap();
     assert_eq!(first_kind, std::io::ErrorKind::Interrupted);
     assert!(first_elapsed < Duration::from_secs(1));
     assert_eq!(second_kind, std::io::ErrorKind::Interrupted);
