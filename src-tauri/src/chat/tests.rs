@@ -8,7 +8,7 @@ use muniment_core::sidecar::validate_pi_session;
 
 static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RunClientCall {
     Submit(String, Vec<String>, Option<String>),
@@ -19,11 +19,11 @@ enum RunClientCall {
     PermissionAnswer(String, String, AttachChatPermissionAnswer),
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 #[derive(Clone, Default)]
 struct FakeRunClient(Arc<Mutex<Vec<RunClientCall>>>, bool);
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 impl FakeRunClient {
     fn calls(&self) -> Vec<RunClientCall> {
         self.0.lock().unwrap().clone()
@@ -34,7 +34,7 @@ impl FakeRunClient {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 impl RunCommandClient for FakeRunClient {
     fn run_submit(
         &self,
@@ -135,7 +135,7 @@ impl RunCommandClient for FakeRunClient {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 fn assert_disconnected<T>(result: Result<T, String>) {
     assert_eq!(
         result.err().unwrap(),
@@ -143,7 +143,7 @@ fn assert_disconnected<T>(result: Result<T, String>) {
     );
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 fn assert_runtime_update_pending<T>(result: Result<T, String>) {
     assert_eq!(
         result.err().unwrap(),
@@ -151,7 +151,7 @@ fn assert_runtime_update_pending<T>(result: Result<T, String>) {
     );
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 fn command_test_state() -> (PathBuf, ChatState) {
     let directory = std::env::temp_dir().join(format!("muniment-run-command-{}", Uuid::now_v7()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -162,6 +162,8 @@ fn command_test_state() -> (PathBuf, ChatState) {
     let state = ChatState {
         #[cfg(unix)]
         storage: DeferredStorage(OnceLock::from(storage)),
+        #[cfg(target_os = "windows")]
+        storage,
         active: Arc::new(Mutex::new(None)),
         runtime: Arc::new(Mutex::new(None)),
         session_thread: SessionThread::default(),
@@ -171,9 +173,15 @@ fn command_test_state() -> (PathBuf, ChatState) {
     (directory, state)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(unix)]
 fn deferred_command_test_state() -> (Option<PathBuf>, ChatState) {
     (None, ChatState::new(RuntimeActivityRegistry::new()))
+}
+
+#[cfg(target_os = "windows")]
+fn deferred_command_test_state() -> (Option<PathBuf>, ChatState) {
+    let (directory, state) = command_test_state();
+    (Some(directory), state)
 }
 
 #[cfg(unix)]
@@ -200,7 +208,7 @@ fn linux_chat_storage_starts_deferred() {
     ));
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 #[test]
 fn chat_submit_routes_all_states_and_connected_stops_before_local_run() {
     let (directory, state) = command_test_state();
@@ -227,7 +235,7 @@ fn chat_submit_routes_all_states_and_connected_stops_before_local_run() {
         assert_eq!(local.unwrap().run_id, "local-run");
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         assert_disconnected(local);
         assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
@@ -304,7 +312,7 @@ fn chat_submit_routes_all_states_and_connected_stops_before_local_run() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 #[test]
 fn chat_resume_routes_all_states_and_connected_stops_before_local_run() {
     let (directory, state) = command_test_state();
@@ -329,7 +337,7 @@ fn chat_resume_routes_all_states_and_connected_stops_before_local_run() {
         assert_eq!(local.unwrap().run_id, "local-run");
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         assert_disconnected(local);
         assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
@@ -368,7 +376,7 @@ fn chat_resume_routes_all_states_and_connected_stops_before_local_run() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 #[test]
 fn chat_queue_routes_all_desktop_client_states_and_deliveries() {
     let local_called = AtomicBool::new(false);
@@ -387,7 +395,7 @@ fn chat_queue_routes_all_desktop_client_states_and_deliveries() {
         assert!(local.is_ok());
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         assert_disconnected(local);
         assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
@@ -432,7 +440,7 @@ fn chat_queue_routes_all_desktop_client_states_and_deliveries() {
     ));
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 #[test]
 fn chat_cancel_routes_all_desktop_client_states() {
     let local_called = AtomicBool::new(false);
@@ -446,7 +454,7 @@ fn chat_cancel_routes_all_desktop_client_states() {
         assert!(local.is_ok());
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         assert_disconnected(local);
         assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
@@ -466,7 +474,7 @@ fn chat_cancel_routes_all_desktop_client_states() {
     ));
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(unix, target_os = "windows"))]
 #[test]
 fn chat_answer_permission_routes_all_desktop_client_states() {
     let answer = AttachChatPermissionAnswer::Confirm(true);
@@ -486,7 +494,7 @@ fn chat_answer_permission_routes_all_desktop_client_states() {
         assert!(local.is_ok());
         assert!(local_called.load(std::sync::atomic::Ordering::SeqCst));
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         assert_disconnected(local);
         assert!(!local_called.load(std::sync::atomic::Ordering::SeqCst));
