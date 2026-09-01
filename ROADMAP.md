@@ -722,31 +722,30 @@ desktop's Windows `ChatState::new` (`src-tauri/src/chat/state.rs:469`) still
 opens the profile journal directly, so the 2026-08-31 dual-owner measurement
 stands until the command flips land and the storage handover follows them.
 
-MEASURED 2026-09-01 (planner, read `wait_until_readable` beside the session
-loop) — an idle Windows desktop-client session wakes about one thousand times
-a second. The session loop waits for the next request in 50 millisecond
-windows (`src-tauri/core/src/attach/desktop_session.rs:117`). The Unix impl
-blocks in `libc::poll` for the whole window, so an idle Linux session wakes
-about twenty times a second. The Windows impl
-(`src-tauri/core/src/attach/windows_stream.rs:153`) peeks the pipe and sleeps
-one millisecond per pass (`:175`). MUNIDESK-1612 started a persistent Windows
-desktop client, so a signed-in Windows machine now pays that wake rate for
-the whole logon session. The Windows sleep can match the Linux wake rate by
-sleeping the remaining window between peeks.
+DONE 2026-09-01 — the idle Windows session wake rate matches Linux
+(MUNIDESK-1619). `wait_until_readable`
+(`src-tauri/core/src/attach/windows_stream.rs:218`) sleeps the remaining
+window bounded at 50 milliseconds per peek, so an idle session wakes about
+twenty times a second rather than one thousand.
 
-NEXT — six slices, re-cut 2026-09-01 in order. The first slows the idle
-Windows readability wait to the Linux wake rate, which is the one open slice
-from the prior cut. The second flips the five Windows run commands
-(`chat_submit`, `chat_resume`, `chat_queue`, `chat_cancel`,
-`chat_answer_permission`) onto the connected desktop client, failing closed
-the macOS way without one. The third flips the two thread read commands, and
-the fourth flips the four thread write commands, deleting each Windows twin
-in `src-tauri/src/chat_threads.rs`. The fifth gives the Windows runtime
+DONE 2026-09-01 — the five Windows run commands ride the desktop client
+(MUNIDESK-1620). `chat_submit`, `chat_resume`, `chat_queue`, `chat_cancel`,
+and `chat_answer_permission` widen their session handling to Windows in
+`src-tauri/src/chat/commands.rs` and `resume.rs`, and each fails closed the
+macOS way without a connected client.
+
+NEXT — four slices, re-cut 2026-09-01 in order. The first flips the two
+Windows thread read commands (`chat_thread_summaries`, `chat_thread_open`)
+onto the connected desktop client and deletes their Windows twins in
+`src-tauri/src/chat_threads.rs`. The second flips the four thread write
+commands (`chat_select_thread`, `chat_rename_thread`, `chat_delete_thread`,
+`chat_new_thread`) the same way. The third gives the Windows runtime
 activation the 24-hour recorded-retention schedule the Linux activation has
-(`src-tauri/runtime/src/activation.rs:79`). The sixth sends
-`retention.recheck` through the client after a Windows retention save. The
-storage handover follows in a later wave: Windows `ChatState::new` keeps its
-direct journal open until every command above rides the client.
+(`src-tauri/runtime/src/activation.rs:79`). The fourth sends
+`retention.recheck` through the connected client after a Windows retention
+save (`src-tauri/src/thread_retention.rs`). The storage handover follows in
+a later wave: Windows `ChatState::new` keeps its direct journal open until
+every command above rides the client.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
