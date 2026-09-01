@@ -750,6 +750,16 @@ DONE 2026-09-01 — the four Windows thread write commands ride the desktop clie
 `src-tauri/src/chat_threads.rs` now share their command bodies with Linux and
 macOS. Windows fails closed without a connected client.
 
+DONE 2026-09-01 — the `DesktopAttachService` item gates include macOS
+(MUNIDESK-1628). The service items in
+`src-tauri/core/src/attach/desktop_service.rs` compile on macOS, and the test
+doubles follow.
+
+DONE 2026-09-01 — a Windows retention save sends `retention.recheck` through the
+desktop client (MUNIDESK-1629). `src-tauri/src/thread_retention.rs` widens its
+session handling to Windows, and a save without a connected client fails closed
+the macOS way.
+
 MEASURED 2026-09-01 (planner, read `macos_activation` against the LaunchAgent
 plist and the core module gates) — the macOS runtime serves nothing. The macOS
 app therefore reaches no runtime. Runtime-backed chat, thread, and native-auth
@@ -770,6 +780,15 @@ background service.` Local commands such as `chat_current_thread` remain
 available without the runtime. The macOS lane runs an install-and-launch smoke
 with no sign-in, so no gate caught it.
 
+MEASURED 2026-09-01 (audit, read `record_choice_command` against the macOS
+`ChatState` constructor) — a macOS retention save answers Ok and applies
+nothing. The NoSupervisor arm calls `trigger.check_now()`, and macOS installs
+no trigger: `new_runtime_owned` (`src-tauri/src/chat/state.rs:501`) leaves
+`RetentionTrigger` empty, and the desktop schedule install is Linux-gated
+(`:512`) with a Windows twin. The saved record waits for the restored macOS
+runtime and its retention schedule, so the restoration lane covers it and no
+separate slice files.
+
 MEASURED 2026-09-01 (planner, read `attach_companions` against the runtime
 boundary) — the `Connected programs` panel is empty off Linux.
 `attach_companions` (`src-tauri/src/attach_service/commands.rs:4`) gates its
@@ -781,18 +800,17 @@ whole body on Linux. It returns an empty list elsewhere (`:24`).
 (`src-tauri/runtime/src/attach_boundaries.rs:626`) serves both from the
 companion registry. The macOS half waits on the macOS restoration above.
 
-NEXT — two lanes, re-cut 2026-09-01. The macOS restoration leads, because macOS
-ships a nightly bundle today. Its first slice widens the `DesktopAttachService`
-item gates (`src-tauri/core/src/attach/desktop_service.rs`). Its second widens
-`RuntimeAttachBoundaries` and `attach_service`
-(`src-tauri/runtime/src/attach_boundaries.rs`). A macOS activation that binds
-`MacosAttachListener` and serves the composed service follows those two. The
-Windows lane runs beside it in four slices. It gives the Windows runtime
-activation the 24-hour recorded-retention schedule the Linux activation has
-(`src-tauri/runtime/src/activation.rs:79`). It sends `retention.recheck` through
-the connected client after a Windows retention save
-(`src-tauri/src/thread_retention.rs`). It flips the three auth read commands
-(`auth_status`, `auth_entitlement_snapshot`, `auth_devices`) in
+NEXT — two lanes, re-cut 2026-09-01 after the MUNIDESK-1628 and 1629 landings.
+The macOS restoration leads, because macOS ships a nightly bundle today. Its
+next slice widens `attach_state`, `attach_service`, and the
+`RuntimeAttachBoundaries` impl
+(`src-tauri/runtime/src/attach_boundaries.rs`) to macOS, the way MUNIDESK-1608
+widened them to Windows. A macOS activation that binds `MacosAttachListener`
+and serves the composed service follows it. The Windows lane runs beside it in
+three slices. It gives the Windows runtime activation the 24-hour
+recorded-retention schedule the Linux activation has
+(`src-tauri/runtime/src/activation.rs:79`). It flips the three auth read
+commands (`auth_status`, `auth_entitlement_snapshot`, `auth_devices`) in
 `src-tauri/src/auth/mod.rs`. It carries `attach_companions` and
 `attach_revoke_companion` onto the desktop client. The storage handover follows
 in a later wave. Windows `ChatState::new` keeps its direct journal open until
