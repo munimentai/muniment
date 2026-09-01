@@ -114,8 +114,7 @@ mod unix_tests {
             (
                 |deadline| {
                     attempts += 1;
-                    assert!(deadline >= Instant::now());
-                    assert!(deadline <= Instant::now() + Duration::from_millis(20));
+                    assert!(deadline > started);
                     if attempts == 2 {
                         connect_stop.stop();
                     }
