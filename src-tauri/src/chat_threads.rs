@@ -16,11 +16,11 @@ use muniment_core::thread_ownership::{subject_owns_first_run, ThreadOwnershipErr
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 use crate::auth;
 use crate::chat::{state_session_root, ChatState};
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::ClientError;
 use muniment_core::run_events::SharedStorage;
 use muniment_core::session_thread::SessionThread;
@@ -219,7 +219,7 @@ fn owned_threads_error_message(_error: OwnedThreadsError) -> String {
     "Conversation history is unavailable.".into()
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn desktop_thread_history_error(error: ClientError) -> String {
     match error {
         ClientError::DesktopBusy => auth::desktop_client_error(error),
@@ -227,7 +227,7 @@ fn desktop_thread_history_error(error: ClientError) -> String {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn chat_thread_summaries_command(
     storage: Option<&SharedStorage>,
     attach_state: &AttachCompanionState,
@@ -237,7 +237,7 @@ fn chat_thread_summaries_command(
 ) -> Result<serde_json::Value, String> {
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             {
@@ -290,7 +290,7 @@ fn thread_history_error_message(_error: ThreadHistoryError) -> String {
     "Conversation history is unavailable.".into()
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn chat_thread_open_command(
     storage: Option<&SharedStorage>,
     attach_state: &AttachCompanionState,
@@ -302,7 +302,7 @@ fn chat_thread_open_command(
 ) -> Result<serde_json::Value, String> {
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             {
@@ -427,7 +427,7 @@ pub async fn chat_current_thread(
     Ok(state.session_thread.current(tokens.subject.as_deref()))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub async fn chat_thread_summaries(
     app_handle: tauri::AppHandle,
@@ -443,28 +443,6 @@ pub async fn chat_thread_summaries(
     chat_thread_summaries_command(
         state.storage().ok(),
         &attach_state,
-        tokens.subject.as_deref(),
-        limit,
-        cursor.as_deref(),
-    )
-}
-
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub async fn chat_thread_summaries(
-    app_handle: tauri::AppHandle,
-    auth_state: tauri::State<'_, auth::AuthState>,
-    state: tauri::State<'_, ChatState>,
-    limit: usize,
-    cursor: Option<String>,
-) -> Result<ChatThreadSummaryPage, String> {
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    let mut storage = state
-        .storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    chat_thread_summaries_page(
-        &mut storage.journal,
         tokens.subject.as_deref(),
         limit,
         cursor.as_deref(),
@@ -690,7 +668,7 @@ pub async fn chat_new_thread(
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub async fn chat_thread_open(
     app_handle: tauri::AppHandle,
@@ -714,35 +692,6 @@ pub async fn chat_thread_open(
         limit,
         cursor.as_deref(),
     )
-}
-
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub async fn chat_thread_open(
-    app_handle: tauri::AppHandle,
-    auth_state: tauri::State<'_, auth::AuthState>,
-    state: tauri::State<'_, ChatState>,
-    thread_id: String,
-    limit: usize,
-    cursor: Option<String>,
-) -> Result<ChatThreadOpenPage, String> {
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    let session_root = state_session_root(&app_handle)?;
-    let mut storage = state
-        .storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    let muniment_core::run_events::ChatStorage { journal, cas } = &mut *storage;
-    core_chat_thread_open_page(
-        journal,
-        Some(cas),
-        tokens.subject.as_deref(),
-        &session_root,
-        &thread_id,
-        limit,
-        cursor.as_deref(),
-    )
-    .map_err(thread_history_error_message)
 }
 
 #[cfg(test)]
