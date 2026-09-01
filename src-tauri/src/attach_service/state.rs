@@ -377,7 +377,7 @@ impl AttachCompanionState {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, target_os = "windows"))]
     pub(super) fn start_desktop_client(
         &self,
         start: impl FnOnce(DesktopClientStopHandle, DesktopClientHolder) -> std::thread::JoinHandle<()>,
