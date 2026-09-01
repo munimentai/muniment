@@ -711,21 +711,16 @@ Tauri setup hook starts the supervisor through `start_desktop_client`
 (`src-tauri/src/attach_service/listener.rs:98`), and `attach_listener_status`
 answers from live state on Windows.
 
-MEASURED 2026-09-01 (planner, read the Windows `start_desktop_client` beside
-its Unix twin) — Windows still receives no chat events. The whole chat-event
-supervisor is Unix-gated. `ChatEventStopHandle`
-(`src-tauri/src/attach_service/state.rs:87`) interrupts a blocked read through
-a `UnixStream` shutdown, `serve_chat_events_at`
-(`src-tauri/src/attach_service/listener.rs:202`) rides
-`interruptible_connect_with_state`, and the Windows start wires no chat-event
-worker. A Windows stop needs its own interrupt, because `read_chat_event`
-(`src-tauri/attach/src/desktop_client.rs:406`) waits up to the fifteen-minute
-`CAPABILITY_IDLE_LIFETIME` and `WindowsAttachStream::operate` waits on one
-per-operation event alone. `WindowsAttachStopEvent`
-(`src-tauri/core/src/attach/windows_listener.rs:148`) is the accept-loop
-precedent for a second wait event. The desktop's Windows `ChatState::new`
-(`src-tauri/src/chat/state.rs:469`) still opens the profile journal directly,
-so the 2026-08-31 dual-owner measurement stands until the command flips.
+DONE 2026-09-01 — the Windows chat-event path is built (MUNIDESK-1615, 1616,
+1617). `muniment_attach::serve_chat_events_with` holds the platform-neutral
+chat-event supervisor loop, a registered stop event interrupts a blocked
+`WindowsAttachStream` operation, `serve_windows_chat_events`
+(`src-tauri/core/src/attach/windows_desktop_client.rs:116`) composes the
+bounded pipe connect with that loop, and the Windows desktop bin starts the
+chat-event supervisor and emits each delivered event as `chat-event`. The
+desktop's Windows `ChatState::new` (`src-tauri/src/chat/state.rs:469`) still
+opens the profile journal directly, so the 2026-08-31 dual-owner measurement
+stands until the command flips land and the storage handover follows them.
 
 MEASURED 2026-09-01 (planner, read `wait_until_readable` beside the session
 loop) — an idle Windows desktop-client session wakes about one thousand times
@@ -739,17 +734,19 @@ desktop client, so a signed-in Windows machine now pays that wake rate for
 the whole logon session. The Windows sleep can match the Linux wake rate by
 sleeping the remaining window between peeks.
 
-NEXT — five slices, cut 2026-09-01 in order. The first adds a
-platform-neutral chat-event supervisor loop to `muniment-attach` beside
-`serve_desktop_client_with`. The second gives `WindowsAttachStream` a
-registered stop event that interrupts a blocked operation. The third adds
-`serve_windows_chat_events` to
-`src-tauri/core/src/attach/windows_desktop_client.rs`, composing the bounded
-pipe connect with that loop behind a Linux-testable seam. The fourth widens
-the desktop bin's chat-event supervisor to Windows and emits each delivered
-event as `chat-event`. The fifth slows the idle Windows readability wait to
-the Linux wake rate. The command flips and the storage handover follow in a
-later wave, after the connection is observable.
+NEXT — six slices, re-cut 2026-09-01 in order. The first slows the idle
+Windows readability wait to the Linux wake rate, which is the one open slice
+from the prior cut. The second flips the five Windows run commands
+(`chat_submit`, `chat_resume`, `chat_queue`, `chat_cancel`,
+`chat_answer_permission`) onto the connected desktop client, failing closed
+the macOS way without one. The third flips the two thread read commands, and
+the fourth flips the four thread write commands, deleting each Windows twin
+in `src-tauri/src/chat_threads.rs`. The fifth gives the Windows runtime
+activation the 24-hour recorded-retention schedule the Linux activation has
+(`src-tauri/runtime/src/activation.rs:79`). The sixth sends
+`retention.recheck` through the client after a Windows retention save. The
+storage handover follows in a later wave: Windows `ChatState::new` keeps its
+direct journal open until every command above rides the client.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
