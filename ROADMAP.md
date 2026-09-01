@@ -430,17 +430,16 @@ restored the control and its tests.
 
 ### ADR 0012 runtime-service extraction
 
-DONE 2026-08-20 through 2026-08-25 — the macOS activation amendment and the whole
-macOS cutover landed (MUNIDESK-1417, 1418, 1420, 1421, 1423, 1424, 1426 through
+DONE 2026-08-20 through 2026-08-25 — the macOS activation amendment and
+cutover setup landed (MUNIDESK-1417, 1418, 1420, 1421, 1423, 1424, 1426 through
 1438, and 1451). The app bundle carries the universal runtime and the LaunchAgent
 payload. `src-tauri/src/macos_runtime_service.rs` checks and registers the
 per-user service through `SMAppService`, reports the approval state, opens Login
-Items, and kick-starts an enabled service whose endpoint is absent. The runtime
-bounds failed starts, writes owner-only bounded diagnostics, and mirrors fixed
-records into unified logging. Run commands, native auth, retention rechecks,
-chat storage, approval presentation, and desktop client status all ride the
-runtime client on macOS. The installed macOS smoke verifies the bundled payload
-and proves the installed desktop connects to the LaunchAgent runtime.
+Items, and kick-starts an enabled service whose endpoint is absent. The setup
+includes bounded failed-start diagnostics and runtime-client wiring for run
+commands, native auth, retention rechecks, chat storage, approval presentation,
+and desktop client status. The installed macOS smoke verifies the bundled
+payload, but it does not prove that the desktop connects to a working runtime.
 
 DONE 2026-08-30 — the macOS runtime binary compiles again (MUNIDESK-1564).
 Between 2026-08-21 and 2026-08-29 it did not, so no macOS bundle carried a
@@ -742,7 +741,8 @@ way without a connected client.
 
 MEASURED 2026-09-01 (planner, read `macos_activation` against the LaunchAgent
 plist and the core module gates) — the macOS runtime serves nothing. The macOS
-app therefore reaches no runtime, and every chat command fails.
+app therefore reaches no runtime. Runtime-backed chat, thread, and native-auth
+commands fail.
 `macos_activation` (`src-tauri/runtime/src/main.rs:232`) returns `Failed(1)` at
 once. MUNIDESK-1564 wrote that stub on 2026-08-29 to repair the macOS compile
 break. The real body (`:217`) is gated to Linux. `mod activation`
@@ -753,11 +753,11 @@ production caller. Nothing binds `<profile>/muniment/attach-v1.sock`.
 `record_macos_failed_exit` (`src-tauri/runtime/src/main.rs:158`) bounds the
 launchd restarts and then stops the loop. The desktop still starts its client
 supervisor (`src-tauri/src/attach_service/listener.rs`), so
-`desktop_client_session` reports `Disconnected`. Every macOS chat, thread, and
-native-auth command then returns `Muniment cannot reach its background
-service.` The macOS lane runs an install-and-launch smoke with no sign-in, so no
-gate caught it. The 2026-08-25 macOS cutover entry above overstates the macOS
-runtime.
+`desktop_client_session` reports `Disconnected`. Runtime-backed macOS chat,
+thread, and native-auth commands then return `Muniment cannot reach its
+background service.` Local commands such as `chat_current_thread` remain
+available without the runtime. The macOS lane runs an install-and-launch smoke
+with no sign-in, so no gate caught it.
 
 MEASURED 2026-09-01 (planner, read `attach_companions` against the runtime
 boundary) — the `Connected programs` panel is empty off Linux.
