@@ -85,15 +85,47 @@ fn rename_thread_command(
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-fn delete_thread_command(
+trait ThreadDeleteClient {
+    fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError>;
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl ThreadDeleteClient for muniment_core::attach::DesktopClientHolder {
+    fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError> {
+        muniment_core::attach::DesktopClientHolder::delete_thread(self, thread_id)
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+enum ThreadDeleteSession<C> {
+    NoSupervisor,
+    Connected(C),
+    Disconnected,
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl From<DesktopClientSession>
+    for ThreadDeleteSession<muniment_core::attach::DesktopClientHolder>
+{
+    fn from(session: DesktopClientSession) -> Self {
+        match session {
+            DesktopClientSession::NoSupervisor => Self::NoSupervisor,
+            DesktopClientSession::Connected(client) => Self::Connected(client),
+            DesktopClientSession::Disconnected => Self::Disconnected,
+        }
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+fn delete_thread_command<C: ThreadDeleteClient>(
+    session: ThreadDeleteSession<C>,
     storage: Option<&SharedStorage>,
     session_thread: &SessionThread,
-    attach_state: &AttachCompanionState,
     subject: Option<&str>,
     thread_id: &str,
 ) -> Result<(), String> {
-    match attach_state.desktop_client_session() {
-        DesktopClientSession::NoSupervisor => {
+    match session {
+        ThreadDeleteSession::NoSupervisor => {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
@@ -105,10 +137,14 @@ fn delete_thread_command(
                 delete_thread(&mut storage.journal, session_thread, subject, thread_id)
             }
         }
-        DesktopClientSession::Connected(client) => client
-            .delete_thread(thread_id)
-            .map_err(auth::desktop_client_error),
-        DesktopClientSession::Disconnected => {
+        ThreadDeleteSession::Connected(client) => {
+            client
+                .delete_thread(thread_id)
+                .map_err(auth::desktop_client_error)?;
+            session_thread.fresh_if_current(thread_id, subject);
+            Ok(())
+        }
+        ThreadDeleteSession::Disconnected => {
             Err("Muniment cannot reach its background service.".into())
         }
     }
@@ -511,9 +547,9 @@ pub async fn chat_delete_thread(
     require_runtime(&attach_state)?;
     let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
     delete_thread_command(
+        attach_state.desktop_client_session().into(),
         state.storage().ok(),
         &state.session_thread,
-        &attach_state,
         tokens.subject.as_deref(),
         &thread_id,
     )
@@ -619,6 +655,92 @@ mod tests {
             self.calls.lock().unwrap().push(thread_id.to_owned());
             self.result.clone()
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[derive(Clone)]
+    struct FakeThreadDeleteClient {
+        calls: Arc<Mutex<Vec<String>>>,
+        result: Result<(), ClientError>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl ThreadDeleteClient for FakeThreadDeleteClient {
+        fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError> {
+            self.calls.lock().unwrap().push(thread_id.to_owned());
+            self.result
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn connected_delete_resets_the_selected_thread() {
+        let tracker = SessionThread::default();
+        tracker.select("selected-thread".to_string(), Some("owner"));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let client = FakeThreadDeleteClient {
+            calls: Arc::clone(&calls),
+            result: Ok(()),
+        };
+
+        delete_thread_command(
+            ThreadDeleteSession::Connected(client),
+            None,
+            &tracker,
+            Some("owner"),
+            "selected-thread",
+        )
+        .unwrap();
+
+        assert_eq!(&*calls.lock().unwrap(), &["selected-thread"]);
+        assert_eq!(tracker.current(Some("owner")), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn connected_delete_keeps_the_other_selected_thread_and_keeps_it_on_failure() {
+        let tracker = SessionThread::default();
+        tracker.select("selected-thread".to_string(), Some("owner"));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let successful_client = FakeThreadDeleteClient {
+            calls: Arc::clone(&calls),
+            result: Ok(()),
+        };
+
+        delete_thread_command(
+            ThreadDeleteSession::Connected(successful_client),
+            None,
+            &tracker,
+            Some("owner"),
+            "other-thread",
+        )
+        .unwrap();
+        assert_eq!(
+            tracker.current(Some("owner")),
+            Some("selected-thread".to_string())
+        );
+
+        let failed_client = FakeThreadDeleteClient {
+            calls: Arc::clone(&calls),
+            result: Err(ClientError::AuthorizationExpired),
+        };
+        assert!(delete_thread_command(
+            ThreadDeleteSession::Connected(failed_client),
+            None,
+            &tracker,
+            Some("owner"),
+            "selected-thread",
+        )
+        .is_err());
+
+        assert_eq!(
+            &*calls.lock().unwrap(),
+            &["other-thread", "selected-thread"]
+        );
+        assert_eq!(
+            tracker.current(Some("owner")),
+            Some("selected-thread".to_string())
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -783,9 +905,11 @@ mod tests {
         ) -> Result<(), String> {
             use tauri::Manager;
             delete_thread_command(
+                app.state::<AttachCompanionState>()
+                    .desktop_client_session()
+                    .into(),
                 app.state::<ChatState>().storage().ok(),
                 &app.state::<ChatState>().session_thread,
-                &app.state::<AttachCompanionState>(),
                 Some("owner"),
                 thread_id,
             )
