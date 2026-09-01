@@ -34,19 +34,19 @@ pub struct AttachCompanionState {
     pub(super) approval_presenter: Mutex<Option<ApprovalPresenterStopHandle>>,
     #[cfg(target_os = "linux")]
     pub(super) presenting: Mutex<bool>,
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) desktop_supervisor_lifecycle: Mutex<()>,
     #[cfg(all(test, target_os = "linux"))]
     pub(super) desktop_stop_started: Mutex<Option<std::sync::mpsc::Sender<()>>>,
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) desktop_client: Mutex<Option<DesktopClientSupervisor>>,
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) desktop_client_holder: DesktopClientHolder,
     #[cfg(unix)]
     pub(super) chat_events: Mutex<Option<ChatEventSupervisor>>,
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) connected: Mutex<bool>,
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) chat_events_connected: Mutex<bool>,
 }
 
@@ -70,7 +70,7 @@ pub(super) enum AttachListenerStopState {
     Stopped,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) struct DesktopClientSupervisor {
     pub(super) stop: DesktopClientStopHandle,
     pub(super) worker: std::thread::JoinHandle<()>,
@@ -151,7 +151,7 @@ pub(crate) enum DesktopClientSession {
     Disconnected,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 impl AttachCompanionState {
     #[cfg(all(target_os = "linux", test))]
     pub(super) fn new(listener: Arc<AttachListenerState>) -> Self {
@@ -323,7 +323,7 @@ impl AttachCompanionState {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(super) fn listener_status(&self) -> AttachListenerStatus {
         let connected = *self
             .connected
@@ -406,7 +406,7 @@ impl AttachCompanionState {
         *client = Some(DesktopClientSupervisor { stop, worker });
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn start_chat_events(
         &self,
         start: impl FnOnce(ChatEventStopHandle) -> std::thread::JoinHandle<()>,
@@ -418,6 +418,7 @@ impl AttachCompanionState {
         self.start_chat_events_locked(start);
     }
 
+    #[cfg(unix)]
     pub(super) fn start_chat_events_locked(
         &self,
         start: impl FnOnce(ChatEventStopHandle) -> std::thread::JoinHandle<()>,
@@ -434,6 +435,7 @@ impl AttachCompanionState {
         *supervisor = Some(ChatEventSupervisor { stop, worker });
     }
 
+    #[cfg(unix)]
     pub(super) fn start_desktop_supervisors(
         &self,
         start_client: impl FnOnce(
@@ -464,6 +466,7 @@ impl AttachCompanionState {
         {
             let _ = started.send(());
         }
+        #[cfg(unix)]
         self.stop_chat_events_locked();
         let supervisor = self
             .desktop_client
@@ -477,7 +480,7 @@ impl AttachCompanionState {
         self.record_connected(false);
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn stop_chat_events(&self) {
         let _lifecycle = self
             .desktop_supervisor_lifecycle
@@ -486,6 +489,7 @@ impl AttachCompanionState {
         self.stop_chat_events_locked();
     }
 
+    #[cfg(unix)]
     pub(super) fn stop_chat_events_locked(&self) {
         let supervisor = self
             .chat_events
@@ -498,6 +502,7 @@ impl AttachCompanionState {
         }
     }
 
+    #[cfg(unix)]
     pub(crate) fn desktop_client_session(&self) -> DesktopClientSession {
         if self
             .desktop_client
@@ -606,7 +611,7 @@ impl Default for AttachCompanionState {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 impl Drop for AttachCompanionState {
     fn drop(&mut self) {
         #[cfg(unix)]
@@ -627,6 +632,7 @@ impl Drop for AttachCompanionState {
             supervisor.stop.stop();
             let _ = supervisor.worker.join();
         }
+        #[cfg(unix)]
         if let Some(supervisor) = self
             .chat_events
             .get_mut()
@@ -654,7 +660,20 @@ impl Default for AttachCompanionState {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+impl Default for AttachCompanionState {
+    fn default() -> Self {
+        Self {
+            desktop_supervisor_lifecycle: Mutex::new(()),
+            desktop_client: Mutex::new(None),
+            desktop_client_holder: DesktopClientHolder::new(),
+            connected: Mutex::new(false),
+            chat_events_connected: Mutex::new(false),
+        }
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 impl Default for AttachCompanionState {
     fn default() -> Self {
         Self {}

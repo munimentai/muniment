@@ -32,10 +32,10 @@ pub fn attach_companions(
 pub fn attach_listener_status(
     state: tauri::State<'_, AttachCompanionState>,
 ) -> AttachListenerStatus {
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     return state.listener_status();
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         let _ = state;
         AttachListenerStatus {
@@ -52,7 +52,7 @@ pub fn attach_listener_status(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) fn observe_desktop_client_connection<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     connected: bool,

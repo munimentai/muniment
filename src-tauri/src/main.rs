@@ -58,6 +58,8 @@ fn main() {
                     windows_runtime_service::register_runtime_task_at_startup(&state_directory);
                     windows_runtime_service::start_runtime_task_at_startup(&state_directory);
                 });
+                app.manage(attach_service::AttachCompanionState::default());
+                attach_service::start_desktop_client(app.handle());
             }
             let app_config = app.path().app_config_dir()?;
             let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
@@ -79,7 +81,6 @@ fn main() {
                     app.handle(),
                     runtime_activity.clone(),
                 )?);
-                app.manage(attach_service::AttachCompanionState::default());
             }
             #[cfg(target_os = "macos")]
             attach_service::start_desktop_client(app.handle());
