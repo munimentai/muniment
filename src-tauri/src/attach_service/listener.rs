@@ -97,22 +97,42 @@ pub(super) static TEST_PRESENTER_WORKERS: std::sync::atomic::AtomicUsize =
 #[cfg(target_os = "windows")]
 pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let client_app = app.clone();
+    let event_app = app.clone();
+    let event_status_app = app.clone();
     app.state::<AttachCompanionState>()
-        .start_desktop_client(move |stop, holder| {
-            std::thread::spawn(move || {
-                let observer_app = client_app.clone();
-                serve_windows_desktop_client(
-                    env!("CARGO_PKG_VERSION"),
-                    Duration::from_secs(5),
-                    Duration::from_millis(250),
-                    stop,
-                    holder,
-                    move |connected| {
-                        observe_desktop_client_connection(&observer_app, connected);
-                    },
-                );
-            })
-        });
+        .start_desktop_supervisors(
+            move |stop, holder| {
+                std::thread::spawn(move || {
+                    let observer_app = client_app.clone();
+                    serve_windows_desktop_client(
+                        env!("CARGO_PKG_VERSION"),
+                        Duration::from_secs(5),
+                        Duration::from_millis(250),
+                        stop,
+                        holder,
+                        move |connected| {
+                            observe_desktop_client_connection(&observer_app, connected);
+                        },
+                    );
+                })
+            },
+            move |stop| {
+                std::thread::spawn(move || {
+                    serve_windows_chat_events(
+                        env!("CARGO_PKG_VERSION"),
+                        Duration::from_secs(5),
+                        Duration::from_millis(250),
+                        stop,
+                        move |connected| {
+                            observe_chat_event_subscription(&event_status_app, connected);
+                        },
+                        move |event| {
+                            let _ = event_app.emit("chat-event", event);
+                        },
+                    );
+                })
+            },
+        );
 }
 
 #[cfg(unix)]

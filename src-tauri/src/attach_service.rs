@@ -1,7 +1,5 @@
 #[cfg(all(target_os = "linux", test))]
 use muniment_core::attach::save_client_credentials as persist_client_credentials;
-#[cfg(target_os = "windows")]
-use muniment_core::attach::serve_windows_desktop_client;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ApprovalRequest;
 #[cfg(target_os = "linux")]
@@ -16,6 +14,10 @@ use muniment_core::attach::{
 use muniment_core::attach::{
     bounded_claim, load_client_credentials, ClientCredential, CompanionRegistry,
     WorkspaceContextMap, COMPANION_CREDENTIAL_FILE_NAME,
+};
+#[cfg(target_os = "windows")]
+use muniment_core::attach::{
+    serve_windows_chat_events, serve_windows_desktop_client, WindowsChatEventStopHandle,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 #[cfg(any(unix, target_os = "windows"))]
@@ -58,7 +60,7 @@ use muniment_core::attach::{
 use muniment_core::browser_control::ProcReader;
 #[cfg(all(target_os = "linux", test))]
 use serde_json::json;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use serde_json::Value;
 #[cfg(any(unix, target_os = "windows"))]
 use tauri::{Emitter, Manager};
