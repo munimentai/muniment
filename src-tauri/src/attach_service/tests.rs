@@ -37,7 +37,7 @@ mod cases {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_observer_publishes_each_connection_transition() {
+    fn windows_observers_publish_each_connection_transition() {
         use std::sync::mpsc;
         use tauri::Listener;
 
@@ -51,15 +51,103 @@ mod cases {
             });
 
         observe_desktop_client_connection(app.handle(), true);
-        assert_eq!(
-            status_rx.recv_timeout(Duration::from_secs(1)).unwrap()["connected"],
-            true
-        );
+        let connected = status_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(connected["connected"], true);
+        assert_eq!(connected["chat_events_connected"], false);
+
         observe_desktop_client_connection(app.handle(), false);
-        assert_eq!(
-            status_rx.recv_timeout(Duration::from_secs(1)).unwrap()["connected"],
-            false
+        let disconnected = status_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(disconnected["connected"], false);
+        assert_eq!(disconnected["chat_events_connected"], false);
+
+        observe_chat_event_subscription(app.handle(), true);
+        let subscribed = status_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(subscribed["connected"], false);
+        assert_eq!(subscribed["chat_events_connected"], true);
+
+        observe_chat_event_subscription(app.handle(), false);
+        let unsubscribed = status_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(unsubscribed["connected"], false);
+        assert_eq!(unsubscribed["chat_events_connected"], false);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_starts_and_stops_both_desktop_supervisors() {
+        use muniment_core::attach::{ChatEventSupervisorStop, DesktopClientSupervisorStop};
+        use std::sync::mpsc;
+
+        let state = AttachCompanionState::default();
+        let (client_finished, client_finished_rx) = mpsc::channel();
+        let (events_finished, events_finished_rx) = mpsc::channel();
+        state.start_desktop_supervisors(
+            move |stop, _| {
+                std::thread::spawn(move || {
+                    while !stop.stopped() {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    client_finished.send(()).unwrap();
+                })
+            },
+            move |stop| {
+                std::thread::spawn(move || {
+                    while !stop.stopped() {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    events_finished.send(()).unwrap();
+                })
+            },
         );
+
+        assert!(state.desktop_client.lock().unwrap().is_some());
+        assert!(state.chat_events.lock().unwrap().is_some());
+        state.stop_desktop_client();
+        client_finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        events_finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(state.desktop_client.lock().unwrap().is_none());
+        assert!(state.chat_events.lock().unwrap().is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_drop_stops_and_joins_both_desktop_supervisors() {
+        use muniment_core::attach::{ChatEventSupervisorStop, DesktopClientSupervisorStop};
+        use std::sync::mpsc;
+
+        let (client_finished, client_finished_rx) = mpsc::channel();
+        let (events_finished, events_finished_rx) = mpsc::channel();
+        {
+            let state = AttachCompanionState::default();
+            state.start_desktop_supervisors(
+                move |stop, _| {
+                    std::thread::spawn(move || {
+                        while !stop.stopped() {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        client_finished.send(()).unwrap();
+                    })
+                },
+                move |stop| {
+                    std::thread::spawn(move || {
+                        while !stop.stopped() {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        events_finished.send(()).unwrap();
+                    })
+                },
+            );
+        }
+
+        client_finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        events_finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
     }
 
     #[cfg(target_os = "macos")]

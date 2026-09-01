@@ -3,6 +3,11 @@ use super::*;
 #[cfg(target_os = "linux")]
 pub(super) type WorkspaceContexts = Arc<Mutex<WorkspaceContextMap>>;
 
+#[cfg(unix)]
+type PlatformChatEventStopHandle = ChatEventStopHandle;
+#[cfg(target_os = "windows")]
+type PlatformChatEventStopHandle = WindowsChatEventStopHandle;
+
 #[cfg(target_os = "linux")]
 pub(crate) struct AttachListenerState {
     pub(super) workspace_contexts: WorkspaceContexts,
@@ -42,7 +47,7 @@ pub struct AttachCompanionState {
     pub(super) desktop_client: Mutex<Option<DesktopClientSupervisor>>,
     #[cfg(any(unix, target_os = "windows"))]
     pub(super) desktop_client_holder: DesktopClientHolder,
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) chat_events: Mutex<Option<ChatEventSupervisor>>,
     #[cfg(any(unix, target_os = "windows"))]
     pub(super) connected: Mutex<bool>,
@@ -76,9 +81,12 @@ pub(super) struct DesktopClientSupervisor {
     pub(super) worker: std::thread::JoinHandle<()>,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(super) struct ChatEventSupervisor {
+    #[cfg(unix)]
     pub(super) stop: ChatEventStopHandle,
+    #[cfg(target_os = "windows")]
+    pub(super) stop: WindowsChatEventStopHandle,
     pub(super) worker: std::thread::JoinHandle<()>,
 }
 
@@ -435,14 +443,33 @@ impl AttachCompanionState {
         *supervisor = Some(ChatEventSupervisor { stop, worker });
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "windows")]
+    pub(super) fn start_chat_events_locked(
+        &self,
+        start: impl FnOnce(WindowsChatEventStopHandle) -> std::thread::JoinHandle<()>,
+    ) {
+        let mut supervisor = self
+            .chat_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if supervisor.is_some() {
+            return;
+        }
+        let Ok(stop) = WindowsChatEventStopHandle::new() else {
+            return;
+        };
+        let worker = start(stop.clone());
+        *supervisor = Some(ChatEventSupervisor { stop, worker });
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) fn start_desktop_supervisors(
         &self,
         start_client: impl FnOnce(
             DesktopClientStopHandle,
             DesktopClientHolder,
         ) -> std::thread::JoinHandle<()>,
-        start_chat_events: impl FnOnce(ChatEventStopHandle) -> std::thread::JoinHandle<()>,
+        start_chat_events: impl FnOnce(PlatformChatEventStopHandle) -> std::thread::JoinHandle<()>,
     ) {
         let _lifecycle = self
             .desktop_supervisor_lifecycle
@@ -466,7 +493,7 @@ impl AttachCompanionState {
         {
             let _ = started.send(());
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, target_os = "windows"))]
         self.stop_chat_events_locked();
         let supervisor = self
             .desktop_client
@@ -489,7 +516,7 @@ impl AttachCompanionState {
         self.stop_chat_events_locked();
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) fn stop_chat_events_locked(&self) {
         let supervisor = self
             .chat_events
@@ -632,7 +659,7 @@ impl Drop for AttachCompanionState {
             supervisor.stop.stop();
             let _ = supervisor.worker.join();
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, target_os = "windows"))]
         if let Some(supervisor) = self
             .chat_events
             .get_mut()
@@ -667,6 +694,7 @@ impl Default for AttachCompanionState {
             desktop_supervisor_lifecycle: Mutex::new(()),
             desktop_client: Mutex::new(None),
             desktop_client_holder: DesktopClientHolder::new(),
+            chat_events: Mutex::new(None),
             connected: Mutex::new(false),
             chat_events_connected: Mutex::new(false),
         }
