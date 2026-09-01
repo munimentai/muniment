@@ -700,30 +700,55 @@ DONE 2026-08-31 — the Scheduled Task removal plan applies on uninstall, and
 the fixture task starts without an interactive session (MUNIDESK-1508). The
 Needs Human hold on the removal write half is resolved.
 
-MEASURED 2026-08-31 (planner, read `ChatState::new` beside
-`WindowsAttachAcceptor::bind`) — Windows has two owners of one journal and no
-client between them. The desktop's Windows `ChatState::new`
-(`src-tauri/src/chat/state.rs:469`) opens the profile journal directly and
-runs `reconcile_interrupted_runs` at setup, while the runtime holds the
-per-profile instance lock and serves the same journal through the composed
-service. Nothing on Windows starts a desktop client. `start_desktop_client`
-(`src-tauri/src/attach_service/listener.rs:98`) is Unix-gated,
-`DesktopClientStopHandle` sits in the attach crate's Unix module with a
-`UnixStream` slot (`src-tauri/attach/src/client.rs:2110`), and
-`connect_windows_desktop_client`
-(`src-tauri/core/src/attach/windows_desktop_client.rs:47`) has no caller. The
-desktop-client cutover starts now.
+DONE 2026-09-01 — the first three desktop-client cutover slices landed
+(MUNIDESK-1610, 1611, 1612). `DesktopClientStopHandle` lives in the
+platform-neutral `src-tauri/attach/src/desktop_client_stop.rs`, with the Unix
+stream shutdown behind its `ShutdownHook` seam. `serve_windows_desktop_client`
+(`src-tauri/core/src/attach/windows_desktop_client.rs:65`) runs
+`serve_desktop_client_with` over bounded pipe connect attempts, and
+`serve_windows_desktop_client_with` is its Linux-testable seam. The Windows
+Tauri setup hook starts the supervisor through `start_desktop_client`
+(`src-tauri/src/attach_service/listener.rs:98`), and `attach_listener_status`
+answers from live state on Windows.
 
-NEXT — four slices, cut 2026-08-31 in order. The first moves
-`DesktopClientStopHandle` and its state into a platform-neutral attach
-module, with the Unix stream shutdown behind a seam and the old paths
-re-exported. The second adds `serve_windows_desktop_client` beside the
-Windows connect, running `serve_desktop_client_with` over bounded connect
-attempts with a Linux-testable seam. The third widens the desktop-client half
-of `AttachCompanionState` to Windows, starts the supervisor from the Tauri
-setup hook, and answers `attach_listener_status` from live state. The fourth
-subscribes to the runtime chat-event broadcast on Windows and emits each
-event as `chat-event`. The command flips and the storage handover follow in a
+MEASURED 2026-09-01 (planner, read the Windows `start_desktop_client` beside
+its Unix twin) — Windows still receives no chat events. The whole chat-event
+supervisor is Unix-gated. `ChatEventStopHandle`
+(`src-tauri/src/attach_service/state.rs:87`) interrupts a blocked read through
+a `UnixStream` shutdown, `serve_chat_events_at`
+(`src-tauri/src/attach_service/listener.rs:202`) rides
+`interruptible_connect_with_state`, and the Windows start wires no chat-event
+worker. A Windows stop needs its own interrupt, because `read_chat_event`
+(`src-tauri/attach/src/desktop_client.rs:406`) waits up to the fifteen-minute
+`CAPABILITY_IDLE_LIFETIME` and `WindowsAttachStream::operate` waits on one
+per-operation event alone. `WindowsAttachStopEvent`
+(`src-tauri/core/src/attach/windows_listener.rs:148`) is the accept-loop
+precedent for a second wait event. The desktop's Windows `ChatState::new`
+(`src-tauri/src/chat/state.rs:469`) still opens the profile journal directly,
+so the 2026-08-31 dual-owner measurement stands until the command flips.
+
+MEASURED 2026-09-01 (planner, read `wait_until_readable` beside the session
+loop) — an idle Windows desktop-client session wakes about one thousand times
+a second. The session loop waits for the next request in 50 millisecond
+windows (`src-tauri/core/src/attach/desktop_session.rs:117`). The Unix impl
+blocks in `libc::poll` for the whole window, so an idle Linux session wakes
+about twenty times a second. The Windows impl
+(`src-tauri/core/src/attach/windows_stream.rs:153`) peeks the pipe and sleeps
+one millisecond per pass (`:175`). MUNIDESK-1612 started a persistent Windows
+desktop client, so a signed-in Windows machine now pays that wake rate for
+the whole logon session. The Windows sleep can match the Linux wake rate by
+sleeping the remaining window between peeks.
+
+NEXT — five slices, cut 2026-09-01 in order. The first adds a
+platform-neutral chat-event supervisor loop to `muniment-attach` beside
+`serve_desktop_client_with`. The second gives `WindowsAttachStream` a
+registered stop event that interrupts a blocked operation. The third adds
+`serve_windows_chat_events` to
+`src-tauri/core/src/attach/windows_desktop_client.rs`, composing the bounded
+pipe connect with that loop behind a Linux-testable seam. The fourth widens
+the desktop bin's chat-event supervisor to Windows and emits each delivered
+event as `chat-event`. The fifth slows the idle Windows readability wait to
+the Linux wake rate. The command flips and the storage handover follow in a
 later wave, after the connection is observable.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
