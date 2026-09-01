@@ -101,7 +101,6 @@ describe('installed nightly', () => {
   })
 
   it('signs in through the production UI', async function () {
-    this.timeout(900000)
     const location = await $('[data-testid="onboarding-home-path"]')
     await location.waitForDisplayed()
     const home = await location.getProperty('textContent')
@@ -326,5 +325,5 @@ describe('installed nightly', () => {
     }
     await appendFile(path.join(rawDir, 'frontend-console.log'), frontendLogs.map(({ level, message }) => `${level}: ${message}\n`).join(''))
 
-  })
+  }).timeout(900000)
 })
