@@ -1,16 +1,18 @@
 //! Bind-and-serve activation for the Windows attach listener.
 
-use std::sync::mpsc::Receiver;
+use std::sync::{mpsc, mpsc::Receiver, mpsc::Sender};
+use std::time::Duration;
 
 #[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "windows")]
-use std::time::Duration;
 
+use crate::retention_schedule::{start_retention_schedule, RetentionScheduleCommand};
 use crate::{
     run_windows_attach_accept_loop, WindowsActivationExit, WindowsAttachAcceptBoundary,
     WindowsAttachAcceptLoopExit, WindowsAttachStopSignal, WindowsDiagnosticEvent,
 };
+
+const RETENTION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// A runtime-owned attach bind failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,6 +39,24 @@ pub fn run_windows_attach_activation(
     stop: Receiver<()>,
     diagnostics: &impl WindowsDiagnosticSink,
 ) -> WindowsActivationExit {
+    run_windows_attach_activation_with_retention_schedule(
+        factory,
+        stop,
+        diagnostics,
+        RETENTION_INTERVAL,
+        None,
+    )
+}
+
+/// Runs a Windows activation with retention schedule settings for contract tests.
+#[doc(hidden)]
+pub fn run_windows_attach_activation_with_retention_schedule(
+    factory: &impl WindowsAttachFactory,
+    stop: Receiver<()>,
+    diagnostics: &impl WindowsDiagnosticSink,
+    retention_interval: Duration,
+    retention_checked: Option<Sender<()>>,
+) -> WindowsActivationExit {
     let mut acceptor = match factory.bind() {
         Ok(acceptor) => acceptor,
         Err(WindowsAttachBindFailure::Contended) => {
@@ -49,13 +69,32 @@ pub fn run_windows_attach_activation(
         }
     };
 
+    let (retention_commands, retention_command_rx) = mpsc::channel();
+    let retention_thread = acceptor.retention_state().map(|state| {
+        start_retention_schedule(
+            state,
+            retention_interval,
+            retention_command_rx,
+            retention_checked,
+        )
+    });
     let stop_signal = acceptor.stop_signal();
+    let stop_retention_commands = retention_commands.clone();
     std::thread::spawn(move || {
         let _ = stop.recv();
+        let _ = stop_retention_commands.send(RetentionScheduleCommand::Stop);
         stop_signal.signal();
     });
 
-    match run_windows_attach_accept_loop(&mut acceptor) {
+    let loop_exit = run_windows_attach_accept_loop(&mut acceptor);
+    let _ = retention_commands.send(RetentionScheduleCommand::Stop);
+    if let Some(retention_thread) = retention_thread {
+        retention_thread
+            .join()
+            .expect("retention schedule does not panic");
+    }
+
+    match loop_exit {
         WindowsAttachAcceptLoopExit::Stopped => WindowsActivationExit::Orderly(0),
         WindowsAttachAcceptLoopExit::Failed => {
             diagnostics.record(WindowsDiagnosticEvent::ActivationFailed);

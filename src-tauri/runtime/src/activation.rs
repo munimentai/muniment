@@ -1,5 +1,6 @@
 //! Runtime attach service activation.
 
+use crate::retention_schedule::{start_retention_schedule, RetentionScheduleCommand};
 use crate::upgrade_watch::UpgradeWatch;
 use crate::{
     migration::run_migration_takeover_with_activation, run_bound_attach_listener,
@@ -25,32 +26,26 @@ pub enum RuntimeActivationExit {
     UpgradeRefresh,
 }
 
-enum ActivationCommand {
-    Stop,
-    Retention,
-    Finished,
-}
-
 fn coordinate_activation(
     stop: Receiver<()>,
     listener_finished: Receiver<()>,
     stopped: Arc<AtomicBool>,
     refresh_pending: Arc<AtomicBool>,
     activity: RuntimeActivityRegistry,
-    commands: Sender<ActivationCommand>,
+    commands: Sender<RetentionScheduleCommand>,
     listener_stop: Sender<()>,
 ) -> RuntimeActivationExit {
     loop {
         if !matches!(listener_finished.try_recv(), Err(mpsc::TryRecvError::Empty)) {
             stopped.store(true, Ordering::Release);
-            let _ = commands.send(ActivationCommand::Stop);
+            let _ = commands.send(RetentionScheduleCommand::Stop);
             let _ = listener_stop.send(());
             return RuntimeActivationExit::ManagerStop;
         }
         match stop.try_recv() {
             Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {
                 stopped.store(true, Ordering::Release);
-                let _ = commands.send(ActivationCommand::Stop);
+                let _ = commands.send(RetentionScheduleCommand::Stop);
                 let _ = listener_stop.send(());
                 return RuntimeActivationExit::ManagerStop;
             }
@@ -60,12 +55,12 @@ fn coordinate_activation(
         {
             if !matches!(stop.try_recv(), Err(mpsc::TryRecvError::Empty)) {
                 stopped.store(true, Ordering::Release);
-                let _ = commands.send(ActivationCommand::Stop);
+                let _ = commands.send(RetentionScheduleCommand::Stop);
                 let _ = listener_stop.send(());
                 return RuntimeActivationExit::ManagerStop;
             }
             stopped.store(true, Ordering::Release);
-            let _ = commands.send(ActivationCommand::Stop);
+            let _ = commands.send(RetentionScheduleCommand::Stop);
             let _ = listener_stop.send(());
             return RuntimeActivationExit::UpgradeRefresh;
         }
@@ -74,35 +69,6 @@ fn coordinate_activation(
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-}
-
-fn start_retention_schedule(
-    state: Arc<RuntimeAttachState>,
-    command_rx: Receiver<ActivationCommand>,
-    checked: Option<Sender<()>>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let _ = state.apply_recorded_retention();
-        if let Some(checked) = &checked {
-            let _ = checked.send(());
-        }
-        loop {
-            match command_rx.recv_timeout(RETENTION_INTERVAL) {
-                Ok(ActivationCommand::Retention) | Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let _ = state.apply_recorded_retention();
-                    if let Some(checked) = &checked {
-                        let _ = checked.send(());
-                    }
-                }
-                Ok(ActivationCommand::Stop) => {
-                    break;
-                }
-                Ok(ActivationCommand::Finished) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    break;
-                }
-            }
-        }
-    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -317,7 +283,10 @@ fn run_runtime_activation_inner(
         let trigger_commands = command_tx.clone();
         std::thread::spawn(move || {
             while retention_control.trigger.recv().is_ok() {
-                if trigger_commands.send(ActivationCommand::Retention).is_err() {
+                if trigger_commands
+                    .send(RetentionScheduleCommand::Recheck)
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -342,6 +311,7 @@ fn run_runtime_activation_inner(
             };
             retention_thread = Some(start_retention_schedule(
                 Arc::clone(&state),
+                RETENTION_INTERVAL,
                 command_rx,
                 retention_checked,
             ));
@@ -370,8 +340,12 @@ fn run_runtime_activation_inner(
                 move || service_state.attach_service(),
                 takeover_deadline,
                 move || {
-                    let thread =
-                        start_retention_schedule(retention_state, command_rx, retention_checked);
+                    let thread = start_retention_schedule(
+                        retention_state,
+                        RETENTION_INTERVAL,
+                        command_rx,
+                        retention_checked,
+                    );
                     let _ = started_tx.send(thread);
                 },
                 listener_stop_rx,
@@ -382,7 +356,7 @@ fn run_runtime_activation_inner(
         Err(_) => Err(RuntimeActivationError::InstanceLock),
     };
     let _ = listener_finished_tx.send(());
-    let _ = command_tx.send(ActivationCommand::Finished);
+    let _ = command_tx.send(RetentionScheduleCommand::Stop);
     if let Some(retention_thread) = retention_thread {
         retention_thread
             .join()

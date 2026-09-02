@@ -12,6 +12,8 @@ pub mod install_lock;
 mod macos_activation;
 #[cfg(target_os = "linux")]
 mod migration;
+#[cfg(any(unix, target_os = "windows"))]
+mod retention_schedule;
 pub mod service;
 mod sink;
 mod start_record;
@@ -83,8 +85,8 @@ pub use windows_activation::{run_recorded_windows_activation, write_windows_diag
 #[cfg(target_os = "windows")]
 pub use windows_attach_activation::SystemWindowsAttachFactory;
 pub use windows_attach_activation::{
-    run_windows_attach_activation, WindowsAttachBindFailure, WindowsAttachFactory,
-    WindowsDiagnosticSink,
+    run_windows_attach_activation, run_windows_attach_activation_with_retention_schedule,
+    WindowsAttachBindFailure, WindowsAttachFactory, WindowsDiagnosticSink,
 };
 #[cfg(target_os = "windows")]
 pub use windows_attach_loop::WindowsAttachAcceptor;

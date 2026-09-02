@@ -13,11 +13,13 @@ use muniment_core::attach::{
 use muniment_core::attach::{DesktopAttachService, ProtocolError};
 #[cfg(target_os = "windows")]
 use std::path::Path;
-#[cfg(any(test, target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 use std::sync::Arc;
 
 #[cfg(any(test, target_os = "windows"))]
-use crate::{RuntimeAttachBoundaries, RuntimeAttachState};
+use crate::RuntimeAttachBoundaries;
+#[cfg(any(unix, target_os = "windows"))]
+use crate::RuntimeAttachState;
 
 const FAILED_ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// The consecutive failed accept limit for one activation.
@@ -41,6 +43,11 @@ pub trait WindowsAttachAcceptBoundary {
     type StopSignal: WindowsAttachStopSignal;
 
     fn stop_signal(&self) -> Self::StopSignal;
+
+    fn retention_state(&self) -> Option<Arc<RuntimeAttachState>> {
+        None
+    }
+
     fn serve_next(&mut self) -> WindowsAttachAcceptOutcome;
 }
 
@@ -101,6 +108,10 @@ impl WindowsAttachAcceptBoundary for WindowsAttachAcceptor {
 
     fn stop_signal(&self) -> Self::StopSignal {
         Arc::clone(&self.stop)
+    }
+
+    fn retention_state(&self) -> Option<Arc<RuntimeAttachState>> {
+        Some(Arc::clone(&self.state))
     }
 
     fn serve_next(&mut self) -> WindowsAttachAcceptOutcome {

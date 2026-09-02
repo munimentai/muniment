@@ -3,9 +3,11 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use muniment_runtime::{
-    run_windows_attach_activation, WindowsActivationExit, WindowsAttachAcceptBoundary,
+    run_windows_attach_activation, run_windows_attach_activation_with_retention_schedule,
+    RuntimeAttachState, WindowsActivationExit, WindowsAttachAcceptBoundary,
     WindowsAttachAcceptOutcome, WindowsAttachBindFailure, WindowsAttachFactory,
     WindowsAttachStopSignal, WindowsDiagnosticEvent, WindowsDiagnosticSink,
 };
@@ -41,6 +43,7 @@ struct FakeAcceptor {
     outcome: WindowsAttachAcceptOutcome,
     stop: FakeStopSignal,
     wait_for_stop: bool,
+    retention_state: Option<Arc<RuntimeAttachState>>,
 }
 
 impl WindowsAttachAcceptBoundary for FakeAcceptor {
@@ -48,6 +51,10 @@ impl WindowsAttachAcceptBoundary for FakeAcceptor {
 
     fn stop_signal(&self) -> Self::StopSignal {
         self.stop.clone()
+    }
+
+    fn retention_state(&self) -> Option<Arc<RuntimeAttachState>> {
+        self.retention_state.clone()
     }
 
     fn serve_next(&mut self) -> WindowsAttachAcceptOutcome {
@@ -71,6 +78,7 @@ fn fake_acceptor(outcome: WindowsAttachAcceptOutcome, wait_for_stop: bool) -> Fa
             stopped: Arc::new((Mutex::new(false), Condvar::new())),
         },
         wait_for_stop,
+        retention_state: None,
     }
 }
 
@@ -179,4 +187,45 @@ fn repeated_accept_failures_exit_failed_and_record_the_failure() {
         *diagnostics.events.borrow(),
         [WindowsDiagnosticEvent::ActivationFailed]
     );
+}
+
+#[test]
+fn a_bound_acceptor_runs_retention_until_the_activation_ends() {
+    let directory = temporary_state_directory("retention");
+    std::fs::create_dir_all(&directory).unwrap();
+    let state = Arc::new(RuntimeAttachState::open(&directory, &directory).unwrap());
+    let mut acceptor = fake_acceptor(WindowsAttachAcceptOutcome::Failed, false);
+    acceptor.retention_state = Some(state);
+    let factory = FakeFactory {
+        result: Ok(acceptor),
+    };
+    let (_stop_tx, stop_rx) = mpsc::channel();
+    let (checked_tx, checked_rx) = mpsc::channel();
+    let diagnostics = FakeDiagnostics::default();
+
+    assert_eq!(
+        run_windows_attach_activation_with_retention_schedule(
+            &factory,
+            stop_rx,
+            &diagnostics,
+            Duration::from_millis(10),
+            Some(checked_tx),
+        ),
+        WindowsActivationExit::Failed(1)
+    );
+    assert!(checked_rx.try_iter().count() >= 2);
+    assert!(checked_rx.recv_timeout(Duration::from_millis(30)).is_err());
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+fn temporary_state_directory(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "muniment-windows-activation-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
 }
