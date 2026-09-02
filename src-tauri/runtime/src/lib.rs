@@ -10,6 +10,7 @@ mod attach_state;
 mod directories;
 pub mod install_lock;
 mod macos_activation;
+mod macos_attach_loop;
 #[cfg(target_os = "linux")]
 mod migration;
 #[cfg(any(unix, target_os = "windows"))]
@@ -57,6 +58,12 @@ pub use macos_activation::{
 };
 #[cfg(unix)]
 pub use macos_activation::{write_macos_diagnostic, write_macos_diagnostic_with};
+#[cfg(target_os = "macos")]
+pub use macos_attach_loop::MacosAttachAcceptor;
+pub use macos_attach_loop::{macos_attach_socket_path, MacosAttachBindFailure};
+#[cfg(any(unix, target_os = "windows"))]
+#[doc(hidden)]
+pub use macos_attach_loop::{MacosAttachAcceptorWithBoundary, MacosAttachServeBoundary};
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};
 #[cfg(any(unix, target_os = "windows"))]
