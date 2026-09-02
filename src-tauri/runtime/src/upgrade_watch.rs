@@ -1,12 +1,13 @@
 //! Installed runtime executable replacement watch.
 
+#[cfg(target_os = "linux")]
 use muniment_core::attach::DrainState;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc::Sender, Arc};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +32,7 @@ pub(crate) struct UpgradeWatch {
 }
 
 impl UpgradeWatch {
+    #[cfg(target_os = "linux")]
     pub(crate) fn start(
         self,
         drain_state: DrainState,
@@ -54,9 +56,43 @@ impl UpgradeWatch {
             }
         }))
     }
+
+    pub(crate) fn start_stop(
+        self,
+        stop: Sender<()>,
+        stopped: Arc<AtomicBool>,
+        refresh_pending: Arc<AtomicBool>,
+        ready: Option<Sender<()>>,
+        refresh_detected: Option<Sender<()>>,
+    ) -> io::Result<std::thread::JoinHandle<()>> {
+        let initial_identity = ExecutableIdentity::read(&self.path)?;
+        if let Some(ready) = ready {
+            let _ = ready.send(());
+        }
+        Ok(std::thread::spawn(move || loop {
+            if stopped.load(Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(self.poll_interval);
+            if stopped.load(Ordering::Acquire) {
+                break;
+            }
+            let replaced = ExecutableIdentity::read(&self.path)
+                .map(|identity| identity != initial_identity)
+                .unwrap_or(true);
+            if replaced {
+                refresh_pending.store(true, Ordering::Release);
+                if let Some(refresh_detected) = refresh_detected {
+                    let _ = refresh_detected.send(());
+                }
+                let _ = stop.send(());
+                break;
+            }
+        }))
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use muniment_core::attach::{evaluate_quiesce, RuntimeActivityRegistry};

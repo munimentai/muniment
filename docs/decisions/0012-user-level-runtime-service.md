@@ -638,6 +638,11 @@ starts the installed payload. A manager-requested service stop does not use the
 upgrade-refresh status, so the manager leaves the service stopped. Package
 scripts do not enumerate user managers or restart their services.
 
+On macOS, the runtime watches its executable identity once each second. A
+replacement stops the attach accept loop and exits with status 75. The runtime
+records that stop as an orderly exit, so it does not count toward the failed
+start bound. A `SIGTERM` stop still exits with status zero.
+
 A refresh request does not interrupt a live run. After detecting replacement,
 the runtime enters a drain state and rejects new work that could add any
 `evaluate_quiesce` blocker. This rule applies to desktop and companion clients.
