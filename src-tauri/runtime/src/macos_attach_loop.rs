@@ -7,12 +7,12 @@ use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
-#[cfg(any(unix, target_os = "windows"))]
-use muniment_core::attach::{DesktopAttachService, ProtocolError};
 #[cfg(target_os = "macos")]
 use muniment_core::attach::{
     serve_macos_attach_session, MacosAttachListener, MacosAttachStopEvent, MacosAttachWaitOutcome,
 };
+#[cfg(any(unix, target_os = "windows"))]
+use muniment_core::attach::{DesktopAttachService, ProtocolError};
 
 #[cfg(target_os = "macos")]
 use crate::installed_desktop_executable;

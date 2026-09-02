@@ -74,12 +74,13 @@ fn a_stop_signal_ends_a_pending_accept() {
         Condvar::new(),
     ));
     let boundary_state = Arc::clone(&state);
-    let mut acceptor = MacosAttachAcceptorWithBoundary::bind_with(
-        &profile.profile,
-        &profile.config,
-        |_| Ok(BlockingBoundary { state: boundary_state }),
-    )
-    .unwrap();
+    let mut acceptor =
+        MacosAttachAcceptorWithBoundary::bind_with(&profile.profile, &profile.config, |_| {
+            Ok(BlockingBoundary {
+                state: boundary_state,
+            })
+        })
+        .unwrap();
     let stop = acceptor.stop_signal();
     let server = thread::spawn(move || acceptor.serve_next());
 
@@ -127,12 +128,11 @@ fn maps_a_live_endpoint_bind_to_contended() {
 #[test]
 fn retains_the_single_opened_activation_state() {
     let profile = TemporaryProfile::new("macos-acceptor-state", true);
-    let acceptor = MacosAttachAcceptorWithBoundary::bind_with(
-        &profile.profile,
-        &profile.config,
-        |_| Ok(StoppedBoundary),
-    )
-    .unwrap();
+    let acceptor =
+        MacosAttachAcceptorWithBoundary::bind_with(&profile.profile, &profile.config, |_| {
+            Ok(StoppedBoundary)
+        })
+        .unwrap();
 
     let first = acceptor.retention_state().unwrap();
     let second = acceptor.retention_state().unwrap();
@@ -188,12 +188,13 @@ fn serves_a_session_with_the_composed_runtime_service() {
     let profile = TemporaryProfile::new("macos-acceptor-service", true);
     let (mut client, server) = UnixStream::pair().unwrap();
     client.write_all(&hello_frame()).unwrap();
-    let mut acceptor = MacosAttachAcceptorWithBoundary::bind_with(
-        &profile.profile,
-        &profile.config,
-        |_| Ok(SessionBoundary { server: Some(server) }),
-    )
-    .unwrap();
+    let mut acceptor =
+        MacosAttachAcceptorWithBoundary::bind_with(&profile.profile, &profile.config, |_| {
+            Ok(SessionBoundary {
+                server: Some(server),
+            })
+        })
+        .unwrap();
 
     assert_eq!(acceptor.serve_next(), WindowsAttachAcceptOutcome::Served);
     let mut prefix = [0_u8; 4];

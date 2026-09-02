@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
@@ -166,7 +166,9 @@ fn prepare_attach_directory(path: &Path) -> io::Result<fs::File> {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
         }
         Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(path)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::DirBuilder::new().mode(0o700).create(path)?;
+        }
         Err(error) => return Err(error),
     }
     let directory = fs::OpenOptions::new()
