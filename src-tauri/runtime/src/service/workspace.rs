@@ -1,6 +1,6 @@
 //! Workspace and companion service operations.
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::{
     live_connections::LiveConnectionRegistry, load_client_credentials,
     COMPANION_CREDENTIAL_FILE_NAME,
@@ -50,7 +50,7 @@ pub fn open_profile_storage(
 
 /// Opens the shared companion registry.
 /// The credential file sits under the data directory beside the journal.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 pub fn open_companion_registry(
     profile_directory: impl AsRef<Path>,
 ) -> Result<CompanionRegistry, ProtocolError> {
