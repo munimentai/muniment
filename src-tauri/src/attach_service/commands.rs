@@ -4,14 +4,14 @@ use super::*;
 pub fn attach_companions(
     state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<Vec<AuthorizedCompanion>, ProtocolError> {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     return match state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
             #[cfg(target_os = "linux")]
             {
                 state.listener()?.list_companions()
             }
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
                 Err(ProtocolError::persistence_failed())
             }
@@ -30,7 +30,7 @@ pub fn attach_companions(
         DesktopClientSession::Disconnected => Err(ProtocolError::persistence_failed()),
     };
 
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = state;
         Ok(Vec::new())
@@ -90,14 +90,14 @@ pub fn attach_revoke_companion(
     state: tauri::State<'_, AttachCompanionState>,
     client_identity: String,
 ) -> Result<(), ProtocolError> {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     return match state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
             #[cfg(target_os = "linux")]
             {
                 state.listener()?.revoke_companion(&client_identity)
             }
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
                 Err(ProtocolError::persistence_failed())
             }
@@ -109,14 +109,14 @@ pub fn attach_revoke_companion(
         DesktopClientSession::Disconnected => Err(ProtocolError::persistence_failed()),
     };
 
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = (state, client_identity);
         Err(ProtocolError::unsupported_operation())
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub(super) fn companion_client_error(error: ClientError) -> ProtocolError {
     match error {
         ClientError::DesktopBusy => ProtocolError::desktop_busy(),
