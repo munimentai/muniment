@@ -946,7 +946,15 @@ fn browser_command(url: &str) -> Command {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn browser_command(url: &str) -> Command {
-    let mut command = Command::new("xdg-open");
+    browser_command_with_browser(url, std::env::var_os("BROWSER").as_deref())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn browser_command_with_browser(url: &str, browser: Option<&std::ffi::OsStr>) -> Command {
+    let program = browser
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| std::ffi::OsStr::new("xdg-open"));
+    let mut command = Command::new(program);
     command.arg(url);
     command
 }
@@ -990,7 +998,10 @@ mod tests {
     #[test]
     fn the_default_browser_command_matches_the_host_platform() {
         let url = "https://example.test/sign-in?a=1&b=2";
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         let command = browser_command(url);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let command = browser_command_with_browser(url, None);
 
         #[cfg(target_os = "macos")]
         let expected_program = "open";
@@ -1009,6 +1020,29 @@ mod tests {
         assert_eq!(
             arguments.first().map(String::as_str),
             Some("url.dll,FileProtocolHandler")
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_browser_command_uses_the_configured_browser() {
+        let url = "https://example.test/sign-in?a=1&b=2";
+        let command = browser_command_with_browser(
+            url,
+            Some(std::ffi::OsStr::new("/tmp/configured-browser")),
+        );
+
+        assert_eq!(command.get_program(), "/tmp/configured-browser");
+        assert_eq!(
+            command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            [url]
+        );
+        assert_eq!(
+            browser_command_with_browser(url, Some(std::ffi::OsStr::new(""))).get_program(),
+            "xdg-open"
         );
     }
 }
