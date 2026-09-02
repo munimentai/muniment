@@ -1,7 +1,8 @@
 use super::resume::protect_prompt;
+#[cfg(target_os = "linux")]
+use super::run_preparation::desktop_provenance;
 use super::run_preparation::{
-    desktop_provenance, fetch_grant, map_fetch_grant_error,
-    prepare_new_run_in_thread_after_validation,
+    fetch_grant, map_fetch_grant_error, prepare_new_run_in_thread_after_validation,
     prepare_new_run_with_session_thread_after_validation, validate_grant,
 };
 use super::*;
@@ -48,9 +49,7 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
 }
 
 pub struct ChatState {
-    #[cfg(target_os = "windows")]
-    pub(crate) storage: SharedStorage,
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(crate) storage: DeferredStorage,
     pub(super) active: Arc<Mutex<Option<ActiveRun>>>,
     pub(super) runtime: Arc<Mutex<Option<PiRuntime>>>,
@@ -83,10 +82,10 @@ impl RetentionTrigger {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) struct DeferredStorage(pub(super) OnceLock<SharedStorage>);
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 impl DeferredStorage {
     fn new() -> Self {
         Self(OnceLock::new())
@@ -466,38 +465,12 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
 }
 
 impl ChatState {
-    #[cfg(target_os = "windows")]
-    pub fn new<R: tauri::Runtime>(
-        app: &tauri::AppHandle<R>,
-        runtime_activity: RuntimeActivityRegistry,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let directory = app.path().app_data_dir()?;
-        let config_directory = app.path().app_config_dir()?;
-        let profile = ChatProfile::new(directory);
-        let (mut journal, cas) = profile.open_storage()?;
-        reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));
-        let storage = Arc::new(Mutex::new(ChatStorage { journal, cas }));
-        let retention_trigger = RetentionTrigger::default();
-        retention_trigger.install(start_retention_schedule(
-            config_directory,
-            Arc::clone(&storage),
-        ));
-        Ok(Self {
-            storage,
-            active: Arc::new(Mutex::new(None)),
-            runtime: Arc::new(Mutex::new(None)),
-            session_thread: SessionThread::default(),
-            runtime_activity,
-            retention_trigger,
-        })
-    }
-
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub fn new(runtime_activity: RuntimeActivityRegistry) -> Self {
         Self::new_runtime_owned(runtime_activity)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) fn new_runtime_owned(runtime_activity: RuntimeActivityRegistry) -> Self {
         Self {
             storage: DeferredStorage::new(),
@@ -531,16 +504,11 @@ impl ChatState {
         Ok(())
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
         self.storage
             .get()
             .ok_or_else(auth::background_service_error)
-    }
-
-    #[cfg(target_os = "windows")]
-    pub(crate) fn storage(&self) -> Result<&SharedStorage, String> {
-        Ok(&self.storage)
     }
 }
 
