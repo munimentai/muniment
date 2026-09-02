@@ -1221,6 +1221,20 @@ path cannot be read, takes the companion route.
 The route check reads no Hello frame field. A claimed client kind in the Hello
 frame grants no route authority.
 
+## Amendment – 2026-08-29: macOS attach connection route
+
+- Status: accepted
+
+After the peer UID check succeeds, the listener reads `LOCAL_PEERPID` from the
+connected Unix-domain socket. It passes that process ID to `proc_pidpath` to
+read the live peer image path. A peer whose absolute image path matches the
+expected desktop executable takes the desktop-client route. Every other peer,
+including one whose process ID or image path cannot be read, takes the
+companion route.
+
+The route check reads no Hello frame field. A claimed client kind in the Hello
+frame grants no route authority.
+
 ## Amendment – 2026-08-29: Windows desktop-client route handling
 
 - Status: accepted
