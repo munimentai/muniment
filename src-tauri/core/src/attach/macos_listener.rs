@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -22,6 +23,46 @@ pub enum MacosAttachAcceptError {
 pub enum MacosAttachListenerError {
     Accept(MacosAttachAcceptError),
     Session(MacosAttachSessionError),
+}
+
+/// The result of waiting for an attach connection or a stop signal.
+#[derive(Debug)]
+pub enum MacosAttachWaitOutcome {
+    Connected(UnixStream),
+    Stopped,
+}
+
+/// A signal that wakes a blocked macOS attach accept.
+#[derive(Debug)]
+pub struct MacosAttachStopEvent {
+    reader: UnixStream,
+    writer: UnixStream,
+}
+
+impl MacosAttachStopEvent {
+    pub fn new() -> io::Result<Self> {
+        let (reader, writer) = UnixStream::pair()?;
+        writer.set_nonblocking(true)?;
+        Ok(Self { reader, writer })
+    }
+
+    pub fn signal(&self) -> io::Result<()> {
+        let byte = [1_u8];
+        loop {
+            // SAFETY: the descriptor and one-byte buffer remain valid for this call.
+            let written =
+                unsafe { libc::write(self.writer.as_raw_fd(), byte.as_ptr().cast(), byte.len()) };
+            if written >= 0 {
+                return Ok(());
+            }
+            let error = io::Error::last_os_error();
+            match error.kind() {
+                io::ErrorKind::Interrupted => continue,
+                io::ErrorKind::WouldBlock => return Ok(()),
+                _ => return Err(error),
+            }
+        }
+    }
 }
 
 /// An owned macOS attach endpoint.
@@ -62,6 +103,43 @@ impl MacosAttachListener {
 
     pub fn listener(&self) -> &UnixListener {
         &self.listener
+    }
+
+    /// Waits without a timer until a connection or stop signal arrives.
+    pub fn accept_until(
+        &self,
+        stop: &MacosAttachStopEvent,
+    ) -> Result<MacosAttachWaitOutcome, MacosAttachAcceptError> {
+        let mut descriptors = [
+            libc::pollfd {
+                fd: self.listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: stop.reader.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        loop {
+            // SAFETY: both poll descriptors remain valid for this blocking call.
+            let result =
+                unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) };
+            if result < 0 {
+                if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(MacosAttachAcceptError::Accept);
+            }
+            if descriptors[1].revents != 0 {
+                return Ok(MacosAttachWaitOutcome::Stopped);
+            }
+            if descriptors[0].revents & libc::POLLIN != 0 {
+                return accept_macos_attach(&self.listener).map(MacosAttachWaitOutcome::Connected);
+            }
+            return Err(MacosAttachAcceptError::Accept);
+        }
     }
 }
 
