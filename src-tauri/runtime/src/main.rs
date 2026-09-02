@@ -20,7 +20,7 @@ const MAX_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
 #[cfg(target_os = "linux")]
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const UPGRADE_REFRESH_EXIT_STATUS: i32 = 75;
 const FAILURE_EXIT_STATUS: i32 = 1;
 const SUCCESS_EXIT_STATUS: i32 = 0;
@@ -233,8 +233,8 @@ fn macos_activation() -> MacosActivationExit {
 fn macos_activation() -> MacosActivationExit {
     use muniment_core::attach::TerminationSignalWait;
     use muniment_runtime::{
-        config_directory, profile_directory, run_windows_attach_activation,
-        SystemMacosAttachFactory, WindowsActivationExit,
+        config_directory, profile_directory, run_windows_attach_activation_with_upgrade_watch,
+        MacosUpgradeWatchTestControl, SystemMacosAttachFactory, WindowsActivationExit,
     };
 
     let termination_signal = match TerminationSignalWait::new() {
@@ -258,6 +258,13 @@ fn macos_activation() -> MacosActivationExit {
             return MacosActivationExit::Failed(FAILURE_EXIT_STATUS);
         }
     };
+    let runtime_executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            return MacosActivationExit::Failed(FAILURE_EXIT_STATUS);
+        }
+    };
     let factory = SystemMacosAttachFactory::new(profile_directory, config_directory);
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
     if std::env::var_os(MACOS_TEST_EXIT_ENV).is_some() {
@@ -269,7 +276,17 @@ fn macos_activation() -> MacosActivationExit {
         }
     });
 
-    match run_windows_attach_activation(&factory, stop_rx, &MainMacosDiagnosticSink) {
+    match run_windows_attach_activation_with_upgrade_watch(
+        &factory,
+        stop_rx,
+        &MainMacosDiagnosticSink,
+        MacosUpgradeWatchTestControl {
+            path: runtime_executable,
+            poll_interval: std::time::Duration::from_secs(1),
+            ready: None,
+            refresh_detected: None,
+        },
+    ) {
         WindowsActivationExit::Orderly(status) => MacosActivationExit::Orderly(status),
         WindowsActivationExit::Failed(status) => MacosActivationExit::Failed(status),
     }
