@@ -774,21 +774,32 @@ through `TerminationSignalWait`. The Linux sign-in unblock landed the same day
 `BROWSER` value before `xdg-open`, so the installed smoke's sign-in capture
 rides the runtime-owned continuation.
 
-NEXT — re-cut 2026-09-02 after those landings. Two lanes open. First, the
-installed-payload refresh: the served macOS runtime never notices a replaced
-payload. Linux runs `UpgradeWatch` and exits with status 75, and the
-LaunchAgent's `SuccessfulExit=false` KeepAlive restarts a nonzero exit into
-the new payload. The filed slice wires that watch into the macOS activation.
-Second, companion service off Linux: `serve_companion_exchange`
-(`src-tauri/core/src/attach/macos_session.rs:115`) answers one welcome frame
-and closes, so no macOS companion can pair. The whole companion session
-machine is Linux-gated in `src-tauri/core/src/attach/linux.rs`. The filed
-extraction slice moves the request loop (`serve_requests`, `linux.rs:1278`)
-and its frame helpers onto the platform-neutral `DeadlineStream` trait,
-following the MUNIDESK-1587 shape. The pairing and authorization exchange
-follows in its own slice after that landing. The installed macOS smoke's
+DONE 2026-09-02 — both NEXT lanes landed. The macOS activation runs the
+upgrade watch through the shared activation loop and exits with status 75
+after a payload replacement, so the LaunchAgent's `SuccessfulExit` KeepAlive
+restarts it into the new payload (MUNIDESK-1649). The companion request loop
+lives in the platform-neutral `companion_session.rs` over `DeadlineStream`,
+and `linux.rs` delegates to it (MUNIDESK-1650). The installed macOS smoke's
 `probe_macos_runtime` demand is now satisfiable, and the next nightly proves
 it.
+
+NEXT — re-cut 2026-09-02 after those landings. One lane opens: companion
+service off Linux, toward a macOS pairing the installed smoke can prove.
+Four slices are filed in order. First, the pairing and authorization
+exchange (`run_session`, `src-tauri/core/src/attach/linux.rs:850`) moves
+onto the platform-neutral `DeadlineStream` trait, following the
+MUNIDESK-1650 shape, with the peer identity and the migration detour
+injected. Second, the macOS route names the approval-presenter connection.
+Today `name_macos_attach_connection_route` sends the desktop's presenter
+into desktop-client admission, the presenter rejects the grant shape, and
+its supervisor reconnects every 250 milliseconds for the whole session.
+Third, the macOS session admits the presenter through a platform-neutral
+admission core and serves it with the existing `serve_approval_presenter`.
+Fourth, the macOS companion route runs the extracted exchange plus
+`companion_session::serve_requests`, with a fail-closed default waiter at
+the runtime call site. The runtime slice that wires the real approval
+waiter, the coordinator, and the live-connection registry follows after
+those land.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
