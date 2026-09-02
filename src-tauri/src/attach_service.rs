@@ -2,7 +2,7 @@
 use muniment_core::attach::save_client_credentials as persist_client_credentials;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ApprovalRequest;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use muniment_core::attach::ClientError;
 #[cfg(unix)]
 use muniment_core::attach::{
