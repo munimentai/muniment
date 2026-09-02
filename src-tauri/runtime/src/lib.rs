@@ -3,9 +3,9 @@ mod activation;
 mod attach_boundaries;
 #[cfg(target_os = "linux")]
 mod attach_listener;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 mod attach_service;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 mod attach_state;
 mod directories;
 pub mod install_lock;
@@ -33,9 +33,9 @@ pub use attach_boundaries::RuntimeAttachBoundaries;
 pub use attach_listener::{
     run_attach_listener, run_bound_attach_listener, AttachListenerError, AttachListenerInputs,
 };
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 pub use attach_service::compose_attach_service;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 pub use attach_state::RuntimeAttachState;
 #[cfg(target_os = "macos")]
 pub use directories::effective_user_macos_log_directory;
@@ -57,7 +57,7 @@ pub use macos_activation::{
 pub use macos_activation::{write_macos_diagnostic, write_macos_diagnostic_with};
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 pub use service::open_companion_registry;
 pub use service::{
     accept_prompt, answer_permission, apply_retention, cancel_run, configure_run, create_thread,

@@ -17,7 +17,7 @@ pub use threads::{
     apply_retention, create_thread, delete_thread, rename_thread, select_thread, stream_run,
     subscribe_run_commits, thread_page, thread_summaries,
 };
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(unix, target_os = "windows"))]
 pub use workspace::open_companion_registry;
 pub use workspace::{
     ensure_home, list_companions, onboard_workspace, open_profile_storage, revoke_companion,
