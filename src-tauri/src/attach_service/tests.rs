@@ -37,6 +37,35 @@ mod cases {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn windows_companion_commands_fail_without_a_connected_client() {
+        fn assert_commands_fail(app: &tauri::App<tauri::test::MockRuntime>) {
+            assert_eq!(
+                attach_companions(app.state()).unwrap_err().code(),
+                ErrorCode::PersistenceFailed
+            );
+            assert_eq!(
+                attach_revoke_companion(app.state(), "companion-1".into())
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::PersistenceFailed
+            );
+        }
+
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        assert_commands_fail(&app);
+
+        let state = AttachCompanionState::default();
+        state.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
+        let app = tauri::test::mock_app();
+        app.manage(state);
+        assert_commands_fail(&app);
+        app.state::<AttachCompanionState>()
+            .stop_desktop_client_for_test();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn windows_observers_publish_each_connection_transition() {
         use std::sync::mpsc;
         use tauri::Listener;
