@@ -758,9 +758,11 @@ separate slice files.
 MEASURED 2026-09-01, RESOLVED 2026-09-02 — the `Connected programs` panel
 rode a fixed empty list off Linux. MUNIDESK-1636 and MUNIDESK-1640 flipped
 the Windows and macOS halves: `attach_companions` and
-`attach_revoke_companion` (`src-tauri/src/attach_service/commands.rs`) serve
-all three platforms through the connected desktop client and fail closed
-without one.
+`attach_revoke_companion` (`src-tauri/src/attach_service/commands.rs`) use the
+connected desktop client and fail closed without one on those platforms. On
+Linux, they use a connected desktop client when available, fall back to the
+local listener when no supervisor exists, and fail closed for a disconnected
+supervisor.
 
 DONE 2026-09-02 — the macOS widening and serving-entry slices landed
 (MUNIDESK-1634, 1635, 1639, 1640). `attach_state`, `attach_service`, and
