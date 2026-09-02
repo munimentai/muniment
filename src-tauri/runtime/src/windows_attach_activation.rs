@@ -5,7 +5,7 @@ use std::time::Duration;
 
 #[cfg(target_os = "windows")]
 use std::path::Path;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
