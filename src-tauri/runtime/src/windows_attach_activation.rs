@@ -3,12 +3,14 @@
 use std::sync::{mpsc, mpsc::Receiver, mpsc::Sender};
 use std::time::Duration;
 
-#[cfg(unix)]
-use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(unix)]
+use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
+use std::sync::mpsc::TryRecvError;
 #[cfg(unix)]
 use std::sync::Arc;
 
@@ -30,6 +32,8 @@ const UPGRADE_REFRESH_EXIT_STATUS: i32 = 75;
 pub struct MacosUpgradeWatchTestControl {
     pub path: PathBuf,
     pub poll_interval: Duration,
+    pub ready: Option<Sender<()>>,
+    pub refresh_detected: Option<Sender<()>>,
 }
 
 /// A runtime-owned attach bind failure.
@@ -76,11 +80,22 @@ pub fn run_windows_attach_activation_with_upgrade_watch(
     watch: MacosUpgradeWatchTestControl,
 ) -> WindowsActivationExit {
     let (activation_stop_tx, activation_stop_rx) = mpsc::channel();
+    let manager_stop_pending = Arc::new(AtomicBool::new(false));
     let manager_stop_tx = activation_stop_tx.clone();
-    std::thread::spawn(move || {
-        let _ = stop.recv();
-        let _ = manager_stop_tx.send(());
-    });
+    match stop.try_recv() {
+        Ok(()) | Err(TryRecvError::Disconnected) => {
+            manager_stop_pending.store(true, Ordering::Release);
+            let _ = manager_stop_tx.send(());
+        }
+        Err(TryRecvError::Empty) => {
+            let manager_stop_pending_tx = Arc::clone(&manager_stop_pending);
+            std::thread::spawn(move || {
+                let _ = stop.recv();
+                manager_stop_pending_tx.store(true, Ordering::Release);
+                let _ = manager_stop_tx.send(());
+            });
+        }
+    }
 
     let watch_stopped = Arc::new(AtomicBool::new(false));
     let refresh_pending = Arc::new(AtomicBool::new(false));
@@ -92,6 +107,8 @@ pub fn run_windows_attach_activation_with_upgrade_watch(
         activation_stop_tx,
         Arc::clone(&watch_stopped),
         Arc::clone(&refresh_pending),
+        watch.ready,
+        watch.refresh_detected,
     ) {
         Ok(thread) => thread,
         Err(_) => {
@@ -105,7 +122,9 @@ pub fn run_windows_attach_activation_with_upgrade_watch(
     watch_thread
         .join()
         .expect("executable replacement watch does not panic");
-    if refresh_pending.load(Ordering::Acquire) {
+    if manager_stop_pending.load(Ordering::Acquire) {
+        exit
+    } else if refresh_pending.load(Ordering::Acquire) {
         match exit {
             WindowsActivationExit::Orderly(_) => {
                 WindowsActivationExit::Orderly(UPGRADE_REFRESH_EXIT_STATUS)

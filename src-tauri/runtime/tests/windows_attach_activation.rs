@@ -28,10 +28,18 @@ impl WindowsAttachFactory for FakeFactory {
 #[derive(Clone)]
 struct FakeStopSignal {
     stopped: Arc<(Mutex<bool>, Condvar)>,
+    signal_gate: Option<Arc<(Mutex<bool>, Condvar)>>,
 }
 
 impl WindowsAttachStopSignal for FakeStopSignal {
     fn signal(&self) {
+        if let Some(signal_gate) = &self.signal_gate {
+            let (open, wake) = &**signal_gate;
+            let mut open = open.lock().unwrap();
+            while !*open {
+                open = wake.wait(open).unwrap();
+            }
+        }
         let (stopped, wake) = &*self.stopped;
         *stopped.lock().unwrap() = true;
         wake.notify_one();
@@ -77,6 +85,7 @@ fn fake_acceptor(outcome: WindowsAttachAcceptOutcome, wait_for_stop: bool) -> Fa
         outcome,
         stop: FakeStopSignal {
             stopped: Arc::new((Mutex::new(false), Condvar::new())),
+            signal_gate: None,
         },
         wait_for_stop,
         retention_state: None,
@@ -188,12 +197,66 @@ fn manager_stop_with_an_upgrade_watch_exits_orderly() {
             MacosUpgradeWatchTestControl {
                 path: watched,
                 poll_interval: Duration::from_millis(5),
+                ready: None,
+                refresh_detected: None,
             },
         ),
         WindowsActivationExit::Orderly(0)
     );
     assert!(diagnostics.events.borrow().is_empty());
 
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn manager_stop_wins_when_refresh_and_manager_stops_are_pending() {
+    let directory = temporary_state_directory("upgrade-watch-manager-stop");
+    std::fs::create_dir_all(&directory).unwrap();
+    let watched = directory.join("runtime");
+    std::fs::File::create(&watched).unwrap();
+    let replacement = directory.join("replacement");
+    std::fs::File::create(&replacement).unwrap();
+    let replace_watched = watched.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let replacer = std::thread::spawn(move || {
+        ready_rx.recv().unwrap();
+        std::fs::rename(replacement, replace_watched).unwrap();
+    });
+    let (stop_tx, stop_rx) = mpsc::channel();
+    stop_tx.send(()).unwrap();
+    let signal_gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let mut acceptor = fake_acceptor(WindowsAttachAcceptOutcome::Stopped, true);
+    acceptor.stop.signal_gate = Some(Arc::clone(&signal_gate));
+    let factory = FakeFactory {
+        result: Ok(acceptor),
+    };
+    let diagnostics = FakeDiagnostics::default();
+    let (refresh_detected_tx, refresh_detected_rx) = mpsc::channel();
+    let gate_thread = std::thread::spawn(move || {
+        refresh_detected_rx.recv().unwrap();
+        let (open, wake) = &*signal_gate;
+        *open.lock().unwrap() = true;
+        wake.notify_one();
+    });
+
+    assert_eq!(
+        run_windows_attach_activation_with_upgrade_watch(
+            &factory,
+            stop_rx,
+            &diagnostics,
+            MacosUpgradeWatchTestControl {
+                path: watched,
+                poll_interval: Duration::from_millis(5),
+                ready: Some(ready_tx),
+                refresh_detected: Some(refresh_detected_tx),
+            },
+        ),
+        WindowsActivationExit::Orderly(0)
+    );
+    assert!(diagnostics.events.borrow().is_empty());
+
+    replacer.join().unwrap();
+    gate_thread.join().unwrap();
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -206,8 +269,9 @@ fn executable_replacement_stops_the_acceptor_with_refresh_status() {
     let replacement = directory.join("replacement");
     std::fs::File::create(&replacement).unwrap();
     let replace_watched = watched.clone();
+    let (ready_tx, ready_rx) = mpsc::channel();
     let replacer = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(25));
+        ready_rx.recv().unwrap();
         std::fs::rename(replacement, replace_watched).unwrap();
     });
     let (stop_tx, stop_rx) = mpsc::channel();
@@ -225,6 +289,8 @@ fn executable_replacement_stops_the_acceptor_with_refresh_status() {
             MacosUpgradeWatchTestControl {
                 path: watched,
                 poll_interval: Duration::from_millis(5),
+                ready: Some(ready_tx),
+                refresh_detected: None,
             },
         ),
         WindowsActivationExit::Orderly(75)

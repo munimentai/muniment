@@ -89,15 +89,15 @@ pub use windows_activation::{
 };
 #[cfg(any(unix, target_os = "windows"))]
 pub use windows_activation::{run_recorded_windows_activation, write_windows_diagnostic};
-#[cfg(unix)]
-pub use windows_attach_activation::{
-    run_windows_attach_activation_with_upgrade_watch, MacosUpgradeWatchTestControl,
-};
 #[cfg(target_os = "windows")]
 pub use windows_attach_activation::SystemWindowsAttachFactory;
 pub use windows_attach_activation::{
     run_windows_attach_activation, run_windows_attach_activation_with_retention_schedule,
     WindowsAttachBindFailure, WindowsAttachFactory, WindowsDiagnosticSink,
+};
+#[cfg(unix)]
+pub use windows_attach_activation::{
+    run_windows_attach_activation_with_upgrade_watch, MacosUpgradeWatchTestControl,
 };
 #[cfg(target_os = "windows")]
 pub use windows_attach_loop::WindowsAttachAcceptor;

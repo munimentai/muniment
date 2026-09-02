@@ -62,8 +62,13 @@ impl UpgradeWatch {
         stop: Sender<()>,
         stopped: Arc<AtomicBool>,
         refresh_pending: Arc<AtomicBool>,
+        ready: Option<Sender<()>>,
+        refresh_detected: Option<Sender<()>>,
     ) -> io::Result<std::thread::JoinHandle<()>> {
         let initial_identity = ExecutableIdentity::read(&self.path)?;
+        if let Some(ready) = ready {
+            let _ = ready.send(());
+        }
         Ok(std::thread::spawn(move || loop {
             if stopped.load(Ordering::Acquire) {
                 break;
@@ -77,6 +82,9 @@ impl UpgradeWatch {
                 .unwrap_or(true);
             if replaced {
                 refresh_pending.store(true, Ordering::Release);
+                if let Some(refresh_detected) = refresh_detected {
+                    let _ = refresh_detected.send(());
+                }
                 let _ = stop.send(());
                 break;
             }

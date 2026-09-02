@@ -283,6 +283,8 @@ fn macos_activation() -> MacosActivationExit {
         MacosUpgradeWatchTestControl {
             path: runtime_executable,
             poll_interval: std::time::Duration::from_secs(1),
+            ready: None,
+            refresh_detected: None,
         },
     ) {
         WindowsActivationExit::Orderly(status) => MacosActivationExit::Orderly(status),
