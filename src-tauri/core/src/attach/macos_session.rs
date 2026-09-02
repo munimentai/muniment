@@ -30,8 +30,24 @@ pub enum MacosAttachSessionOutcome {
     DesktopClient(AdmittedDesktopClient),
 }
 
-/// Serves the exchange for a verified macOS attach stream.
-pub fn serve_macos_attach_session<S, H>(
+#[cfg(target_os = "macos")]
+/// Serves a verified native macOS attach stream.
+pub fn serve_macos_attach_session<H: ThreadListService>(
+    mut stream: std::os::unix::net::UnixStream,
+    expected_desktop_executable: &Path,
+    desktop_version: &str,
+    deadline: Instant,
+    service: &mut H,
+) -> Result<MacosAttachSessionOutcome, MacosAttachSessionError> {
+    let route = {
+        let route_reader = super::NativeMacosAttachRouteReader::new(&stream);
+        name_macos_attach_connection_route(&route_reader, expected_desktop_executable)
+    };
+    serve_macos_attach_route(&mut stream, route, desktop_version, deadline, service)
+}
+
+/// Serves a verified macOS attach stream through an injected route boundary.
+pub fn serve_macos_attach_session_with_reader<S, H>(
     stream: &mut S,
     route_reader: &impl MacosAttachRouteReader,
     expected_desktop_executable: &Path,
@@ -43,10 +59,26 @@ where
     S: DeadlineStream,
     H: ThreadListService,
 {
+    let route = name_macos_attach_connection_route(route_reader, expected_desktop_executable);
+    serve_macos_attach_route(stream, route, desktop_version, deadline, service)
+}
+
+#[cfg(unix)]
+fn serve_macos_attach_route<S, H>(
+    stream: &mut S,
+    route: MacosAttachConnectionRoute,
+    desktop_version: &str,
+    deadline: Instant,
+    service: &mut H,
+) -> Result<MacosAttachSessionOutcome, MacosAttachSessionError>
+where
+    S: DeadlineStream,
+    H: ThreadListService,
+{
     let mut prefix = [0_u8; 4];
     read_exact_before(stream, &mut prefix, deadline).map_err(|_| MacosAttachSessionError::Read)?;
 
-    match name_macos_attach_connection_route(route_reader, expected_desktop_executable) {
+    match route {
         MacosAttachConnectionRoute::DesktopClient { peer_pid } => {
             let admitted = admit_desktop_client_over_stream_with_prefix(
                 stream,
@@ -78,29 +110,6 @@ where
             Ok(MacosAttachSessionOutcome::Companion)
         }
     }
-}
-
-/// Serves a verified macOS attach stream through an injected route boundary.
-pub fn serve_macos_attach_session_with_reader<S, H>(
-    stream: &mut S,
-    route_reader: &impl MacosAttachRouteReader,
-    expected_desktop_executable: &Path,
-    desktop_version: &str,
-    deadline: Instant,
-    service: &mut H,
-) -> Result<MacosAttachSessionOutcome, MacosAttachSessionError>
-where
-    S: DeadlineStream,
-    H: ThreadListService,
-{
-    serve_macos_attach_session(
-        stream,
-        route_reader,
-        expected_desktop_executable,
-        desktop_version,
-        deadline,
-        service,
-    )
 }
 
 fn serve_companion_exchange<S: DeadlineStream>(
