@@ -160,10 +160,7 @@ fn command_test_state() -> (PathBuf, ChatState) {
         cas: LocalCas::open(&directory.join("cas")).unwrap(),
     }));
     let state = ChatState {
-        #[cfg(unix)]
         storage: DeferredStorage(OnceLock::from(storage)),
-        #[cfg(target_os = "windows")]
-        storage,
         active: Arc::new(Mutex::new(None)),
         runtime: Arc::new(Mutex::new(None)),
         session_thread: SessionThread::default(),
@@ -173,20 +170,14 @@ fn command_test_state() -> (PathBuf, ChatState) {
     (directory, state)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn deferred_command_test_state() -> (Option<PathBuf>, ChatState) {
     (None, ChatState::new(RuntimeActivityRegistry::new()))
 }
 
-#[cfg(target_os = "windows")]
-fn deferred_command_test_state() -> (Option<PathBuf>, ChatState) {
-    let (directory, state) = command_test_state();
-    (Some(directory), state)
-}
-
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[test]
-fn macos_chat_state_starts_without_desktop_storage() {
+fn chat_state_starts_without_desktop_storage() {
     let state = ChatState::new_runtime_owned(RuntimeActivityRegistry::new());
 
     assert!(state.storage.get().is_none());
@@ -194,6 +185,7 @@ fn macos_chat_state_starts_without_desktop_storage() {
         state.storage(),
         Err(error) if error == "Muniment cannot reach its background service."
     ));
+    assert!(!state.retention_trigger.check_now());
 }
 
 #[cfg(target_os = "linux")]
