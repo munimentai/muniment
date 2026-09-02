@@ -18,7 +18,7 @@ mod retention_schedule;
 pub mod service;
 mod sink;
 mod start_record;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod upgrade_watch;
 mod windows_activation;
 mod windows_attach_activation;
@@ -89,6 +89,10 @@ pub use windows_activation::{
 };
 #[cfg(any(unix, target_os = "windows"))]
 pub use windows_activation::{run_recorded_windows_activation, write_windows_diagnostic};
+#[cfg(unix)]
+pub use windows_attach_activation::{
+    run_windows_attach_activation_with_upgrade_watch, MacosUpgradeWatchTestControl,
+};
 #[cfg(target_os = "windows")]
 pub use windows_attach_activation::SystemWindowsAttachFactory;
 pub use windows_attach_activation::{

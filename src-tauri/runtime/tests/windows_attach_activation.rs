@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use muniment_runtime::{
     run_windows_attach_activation, run_windows_attach_activation_with_retention_schedule,
+    run_windows_attach_activation_with_upgrade_watch, MacosUpgradeWatchTestControl,
     RuntimeAttachState, WindowsActivationExit, WindowsAttachAcceptBoundary,
     WindowsAttachAcceptOutcome, WindowsAttachBindFailure, WindowsAttachFactory,
     WindowsAttachStopSignal, WindowsDiagnosticEvent, WindowsDiagnosticSink,
@@ -163,6 +164,76 @@ fn a_disconnected_stop_channel_signals_the_bound_acceptor() {
         WindowsActivationExit::Orderly(0)
     );
     assert!(diagnostics.events.borrow().is_empty());
+}
+
+#[test]
+fn manager_stop_with_an_upgrade_watch_exits_orderly() {
+    let directory = temporary_state_directory("upgrade-watch-stop");
+    std::fs::create_dir_all(&directory).unwrap();
+    let watched = directory.join("runtime");
+    std::fs::File::create(&watched).unwrap();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    stop_tx.send(()).unwrap();
+    let acceptor = fake_acceptor(WindowsAttachAcceptOutcome::Stopped, true);
+    let factory = FakeFactory {
+        result: Ok(acceptor),
+    };
+    let diagnostics = FakeDiagnostics::default();
+
+    assert_eq!(
+        run_windows_attach_activation_with_upgrade_watch(
+            &factory,
+            stop_rx,
+            &diagnostics,
+            MacosUpgradeWatchTestControl {
+                path: watched,
+                poll_interval: Duration::from_millis(5),
+            },
+        ),
+        WindowsActivationExit::Orderly(0)
+    );
+    assert!(diagnostics.events.borrow().is_empty());
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn executable_replacement_stops_the_acceptor_with_refresh_status() {
+    let directory = temporary_state_directory("upgrade-watch");
+    std::fs::create_dir_all(&directory).unwrap();
+    let watched = directory.join("runtime");
+    std::fs::File::create(&watched).unwrap();
+    let replacement = directory.join("replacement");
+    std::fs::File::create(&replacement).unwrap();
+    let replace_watched = watched.clone();
+    let replacer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(25));
+        std::fs::rename(replacement, replace_watched).unwrap();
+    });
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let acceptor = fake_acceptor(WindowsAttachAcceptOutcome::Stopped, true);
+    let factory = FakeFactory {
+        result: Ok(acceptor),
+    };
+    let diagnostics = FakeDiagnostics::default();
+
+    assert_eq!(
+        run_windows_attach_activation_with_upgrade_watch(
+            &factory,
+            stop_rx,
+            &diagnostics,
+            MacosUpgradeWatchTestControl {
+                path: watched,
+                poll_interval: Duration::from_millis(5),
+            },
+        ),
+        WindowsActivationExit::Orderly(75)
+    );
+    assert!(diagnostics.events.borrow().is_empty());
+
+    drop(stop_tx);
+    replacer.join().unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
