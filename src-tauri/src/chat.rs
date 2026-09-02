@@ -39,6 +39,7 @@ use muniment_core::chat_resume::{
     resumable_context as core_resumable_context, run_resume, ChatResumeError, ResumeLaunch,
 };
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
+#[cfg(target_os = "linux")]
 use muniment_core::journal::reconciliation::reconcile_interrupted_runs;
 use muniment_core::journal::reducer::{project_chat, ChatProjector};
 use muniment_core::journal::retention::{apply_retention_now_with, RetentionError};
