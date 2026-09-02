@@ -977,7 +977,7 @@ fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn sign_in_permit_clears_when_an_attempt_ends() {
         let running = Arc::new(AtomicBool::new(false));
