@@ -46,8 +46,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > (2026-08-29) folded the three served-endpoint slices into one entry and dropped
 > two settled route rulings. The forty-ninth (2026-08-29) folded sixteen Windows
 > entries into three and dropped one settled runtime ruling. The fiftieth
-> (2026-08-31) folded the landed service-widening chain into one entry. It
-> grows every wave, so it stays the next compaction target.
+> (2026-08-31) folded the landed service-widening chain into one entry. The
+> fifty-first (2026-09-01) folded the Windows desktop-client cutover chain
+> into one entry. It grows every wave, so it stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -699,66 +700,31 @@ DONE 2026-08-31 — the Scheduled Task removal plan applies on uninstall, and
 the fixture task starts without an interactive session (MUNIDESK-1508). The
 Needs Human hold on the removal write half is resolved.
 
-DONE 2026-09-01 — the first three desktop-client cutover slices landed
-(MUNIDESK-1610, 1611, 1612). `DesktopClientStopHandle` lives in the
-platform-neutral `src-tauri/attach/src/desktop_client_stop.rs`, with the Unix
-stream shutdown behind its `ShutdownHook` seam. `serve_windows_desktop_client`
-(`src-tauri/core/src/attach/windows_desktop_client.rs:65`) runs
-`serve_desktop_client_with` over bounded pipe connect attempts, and
-`serve_windows_desktop_client_with` is its Linux-testable seam. The Windows
-Tauri setup hook starts the supervisor through `start_desktop_client`
-(`src-tauri/src/attach_service/listener.rs:98`), and `attach_listener_status`
-answers from live state on Windows.
-
-DONE 2026-09-01 — the Windows chat-event path is built (MUNIDESK-1615, 1616,
-1617). `muniment_attach::serve_chat_events_with` holds the platform-neutral
+DONE 2026-09-01 — the Windows desktop-client cutover chain landed
+(MUNIDESK-1603, 1610 through 1612, 1615 through 1617, 1619, 1620, 1623,
+1625, 1626, and 1628 through 1633). `DesktopClientStopHandle` lives in the
+platform-neutral `src-tauri/attach/src/desktop_client_stop.rs`.
+`serve_windows_desktop_client`
+(`src-tauri/core/src/attach/windows_desktop_client.rs:65`) runs the
+supervisor over bounded pipe connect attempts, the Windows Tauri setup hook
+starts it, and `attach_listener_status` answers from live state.
+`muniment_attach::serve_chat_events_with` holds the platform-neutral
 chat-event supervisor loop, a registered stop event interrupts a blocked
-`WindowsAttachStream` operation, `serve_windows_chat_events`
-(`src-tauri/core/src/attach/windows_desktop_client.rs:116`) composes the
-bounded pipe connect with that loop, and the Windows desktop bin starts the
-chat-event supervisor and emits each delivered event as `chat-event`. The
-desktop's Windows `ChatState::new` (`src-tauri/src/chat/state.rs:469`) still
-opens the profile journal directly, so the 2026-08-31 dual-owner measurement
-stands until the command flips land and the storage handover follows them.
-
-DONE 2026-09-01 — the idle Windows session wake rate matches Linux
-(MUNIDESK-1619). `wait_until_readable`
-(`src-tauri/core/src/attach/windows_stream.rs:218`) sleeps the remaining
-window bounded at 50 milliseconds per peek, so an idle session wakes about
-twenty times a second rather than one thousand.
-
-DONE 2026-09-01 — the five Windows run commands ride the desktop client
-(MUNIDESK-1620). `chat_submit`, `chat_resume`, `chat_queue`, `chat_cancel`,
-and `chat_answer_permission` widen their session handling to Windows in
-`src-tauri/src/chat/commands.rs` and `resume.rs`, and each fails closed the
-macOS way without a connected client.
-
-DONE 2026-09-01 — the two Windows thread read commands ride the desktop client
-(MUNIDESK-1623). `chat_thread_summaries` and `chat_thread_open`
-(`src-tauri/src/chat_threads.rs:432` and `:673`) each carry one body for Linux,
-macOS, and Windows. Their Windows twins are gone. Windows fails closed the macOS
-way without a connected client.
-
-DONE 2026-09-01 — the `RunAttachBoundaries` trait gates include macOS
-(MUNIDESK-1625). Its platform-neutral items in
-`src-tauri/core/src/run_start.rs` now compile on macOS, and the test doubles
-implement the required boundary methods there.
-
-DONE 2026-09-01 — the four Windows thread write commands ride the desktop client
-(MUNIDESK-1626). `chat_select_thread`, `chat_rename_thread`,
-`chat_delete_thread`, and `chat_new_thread` in
-`src-tauri/src/chat_threads.rs` now share their command bodies with Linux and
-macOS. Windows fails closed without a connected client.
-
-DONE 2026-09-01 — the `DesktopAttachService` item gates include macOS
-(MUNIDESK-1628). The service items in
-`src-tauri/core/src/attach/desktop_service.rs` compile on macOS, and the test
-doubles follow.
-
-DONE 2026-09-01 — a Windows retention save sends `retention.recheck` through the
-desktop client (MUNIDESK-1629). `src-tauri/src/thread_retention.rs` widens its
-session handling to Windows, and a save without a connected client fails closed
-the macOS way.
+`WindowsAttachStream` operation, and the Windows desktop bin emits each
+delivered event as `chat-event`. An idle Windows session wakes about twenty
+times a second (`src-tauri/core/src/attach/windows_stream.rs:218`). The five
+run commands, the two thread read commands, the four thread write commands,
+the retention save, and the three auth read commands
+(`src-tauri/src/auth/mod.rs`) all ride the connected desktop client on
+Windows, and each fails closed the macOS way without a connected client. A
+connected delete of the selected thread resets the session tracker
+(MUNIDESK-1630). The `RunAttachBoundaries` trait gates and the
+`DesktopAttachService` item gates include macOS (MUNIDESK-1625, 1628), and
+macOS persists companion credentials with the real Unix store
+(MUNIDESK-1631). The desktop's Windows `ChatState::new`
+(`src-tauri/src/chat/state.rs:469`) still opens the profile journal
+directly, so the 2026-08-31 dual-owner measurement stands until the storage
+handover lands.
 
 MEASURED 2026-09-01 (planner, read `macos_activation` against the LaunchAgent
 plist and the core module gates) — the macOS runtime serves nothing. The macOS
@@ -800,21 +766,22 @@ whole body on Linux. It returns an empty list elsewhere (`:24`).
 (`src-tauri/runtime/src/attach_boundaries.rs:626`) serves both from the
 companion registry. The macOS half waits on the macOS restoration above.
 
-NEXT — two lanes, re-cut 2026-09-01 after the MUNIDESK-1628 and 1629 landings.
-The macOS restoration leads, because macOS ships a nightly bundle today. Its
-next slice widens `attach_state`, `attach_service`, and the
+NEXT — two lanes, re-cut 2026-09-01 after the MUNIDESK-1633 landing. The
+macOS restoration leads, because macOS ships a nightly bundle today. Its
+first slice widens `attach_state`, `attach_service`, and the
 `RuntimeAttachBoundaries` impl
-(`src-tauri/runtime/src/attach_boundaries.rs`) to macOS, the way MUNIDESK-1608
-widened them to Windows. A macOS activation that binds `MacosAttachListener`
-and serves the composed service follows it. The Windows lane runs beside it in
-three slices. It gives the Windows runtime activation the 24-hour
-recorded-retention schedule the Linux activation has
-(`src-tauri/runtime/src/activation.rs:79`). It flips the three auth read
-commands (`auth_status`, `auth_entitlement_snapshot`, `auth_devices`) in
-`src-tauri/src/auth/mod.rs`. It carries `attach_companions` and
-`attach_revoke_companion` onto the desktop client. The storage handover follows
-in a later wave. Windows `ChatState::new` keeps its direct journal open until
-every thread command rides the client.
+(`src-tauri/runtime/src/attach_boundaries.rs`) to macOS, the way
+MUNIDESK-1608 widened them to Windows. Its second slice names the macOS
+attach connection route from the live peer process, the way MUNIDESK-1546
+named the Windows route. A macOS activation that binds
+`MacosAttachListener`, admits the desktop route, and serves the composed
+service follows both. The Windows lane runs beside it in two slices. It
+gives the Windows activation the 24-hour recorded-retention schedule the
+Linux activation has (`src-tauri/runtime/src/activation.rs:79`). It carries
+`attach_companions` and `attach_revoke_companion` onto the desktop client.
+The storage handover follows in a later wave. Windows `ChatState::new`
+keeps its direct journal open until the runtime schedule lands and the
+companion commands ride the client.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
