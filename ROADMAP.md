@@ -755,40 +755,46 @@ no trigger: `new_runtime_owned` (`src-tauri/src/chat/state.rs:501`) leaves
 runtime and its retention schedule, so the restoration lane covers it and no
 separate slice files.
 
-MEASURED 2026-09-01, RESOLVED FOR WINDOWS 2026-09-02 — the `Connected
-programs` panel rode a fixed empty list off Linux. MUNIDESK-1636 flipped the
-Windows half: `attach_companions` and `attach_revoke_companion`
-(`src-tauri/src/attach_service/commands.rs`) serve Linux and Windows through
-the connected desktop client and fail closed without one. macOS still returns
-the fixed empty list and `unsupported_operation`, and its flip is filed
-behind the macOS serving chain below.
+MEASURED 2026-09-01, RESOLVED 2026-09-02 — the `Connected programs` panel
+rode a fixed empty list off Linux. MUNIDESK-1636 and MUNIDESK-1640 flipped
+the Windows and macOS halves: `attach_companions` and
+`attach_revoke_companion` (`src-tauri/src/attach_service/commands.rs`) serve
+all three platforms through the connected desktop client and fail closed
+without one.
 
-DONE 2026-09-02 — the two macOS widening slices landed (MUNIDESK-1634,
-1635). `attach_state`, `attach_service`, and the `RuntimeAttachBoundaries`
-impl compile for macOS, and `name_macos_attach_connection_route`
-(`src-tauri/core/src/attach/macos_route.rs:22`) names the desktop route from
-the live peer image path through the `MacosAttachRouteReader` seam. The
-Windows companion flip landed the same day (MUNIDESK-1636). The Windows
-retention-schedule slice drained without a pull request, so the 2026-09-02
-wave re-files it in first position for its lane.
+DONE 2026-09-02 — the macOS widening and serving-entry slices landed
+(MUNIDESK-1634, 1635, 1639, 1640). `attach_state`, `attach_service`, and
+the `RuntimeAttachBoundaries` impl compile for macOS,
+`name_macos_attach_connection_route`
+(`src-tauri/core/src/attach/macos_route.rs:22`) names the desktop route
+from the live peer image path, and `serve_macos_attach_session`
+(`src-tauri/core/src/attach/macos_session.rs:35`) admits the desktop route
+and serves the composed service. The Windows companion flip landed the same
+day (MUNIDESK-1636), and the re-filed 24-hour recorded-retention schedule
+landed inside the Windows activation as the platform-neutral
+`src-tauri/runtime/src/retention_schedule.rs` (MUNIDESK-1638).
 
 NEXT — re-cut 2026-09-02 after those landings. The macOS restoration still
-leads, and its serving chain is four ordered slices. One: the macOS attach
-session admits the desktop route and serves the composed service, the way
-`serve_windows_attach_session_with_reader`
-(`src-tauri/core/src/attach/windows_session.rs:123`) does. Two: a macOS
+leads, and three ordered slices remain of its serving chain. One: a macOS
 acceptor binds `MacosAttachListener` at the profile
-`muniment/attach-v1.sock` path, opens one `RuntimeAttachState`, and serves
-`attach_service()` through the bounded accept loop. Three:
-`TerminationSignalWait` moves to a platform-neutral Unix module, so the
-macOS activation can wait on SIGTERM. Four: macOS `macos_activation`
-(`src-tauri/runtime/src/main.rs:233`) binds and serves instead of returning
-`Failed(1)`, and it runs the recorded retention schedule, which closes the
-2026-09-01 retention-save measurement. The macOS companion flip follows the
-chain. The Windows lane re-files the drained 24-hour retention schedule,
-built platform-neutral so slice four reuses it. The storage handover stays a
-later wave: Windows `ChatState::new` keeps its direct journal open until the
-runtime schedule lands.
+`muniment/attach-v1.sock` path, opens one `RuntimeAttachState`, implements
+the platform-neutral accept boundary
+(`src-tauri/runtime/src/windows_attach_loop.rs:42`), and serves each
+connection through `serve_macos_attach_session` with the composed service.
+Its stop signal ends a pending accept without a timer poll. Two:
+`TerminationSignalWait` (`src-tauri/core/src/attach/linux.rs:214`) moves to
+a platform-neutral Unix module, so the macOS activation can wait on
+SIGTERM. Three: macOS `macos_activation`
+(`src-tauri/runtime/src/main.rs:233`) binds and serves through the neutral
+activation body instead of returning `Failed(1)`, and the schedule wiring
+closes the 2026-09-01 retention-save measurement. The installed macOS smoke
+already demands the served endpoint through `probe_macos_runtime`
+(`test/e2e/support/macos-runtime-probe.sh`), so it stays red until slice
+three lands, which is expected. The Windows storage handover is unblocked
+and filed: the runtime schedule landed with MUNIDESK-1638, so Windows
+`ChatState::new` (`src-tauri/src/chat/state.rs:469`) stops opening the
+profile journal and mirrors the Unix runtime-owned constructor, which
+settles the 2026-08-31 dual-owner measurement.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
