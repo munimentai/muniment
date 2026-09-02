@@ -48,7 +48,9 @@ them must exercise the real contracts. It must add no mocked production path.
 > entries into three and dropped one settled runtime ruling. The fiftieth
 > (2026-08-31) folded the landed service-widening chain into one entry. The
 > fifty-first (2026-09-01) folded the Windows desktop-client cutover chain
-> into one entry. It grows every wave, so it stays the next compaction target.
+> into one entry. The fifty-second (2026-09-02) folded the two 2026-09-01 macOS
+> measurements into one restoration entry. It grows every wave, so it stays the
+> next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -723,32 +725,14 @@ connected delete of the selected thread resets the session tracker
 macOS persists companion credentials with the real Unix store
 (MUNIDESK-1631).
 
-MEASURED 2026-09-01 (planner, read `macos_activation` against the LaunchAgent
-plist and the core module gates) — the macOS runtime serves nothing. The macOS
-app therefore reaches no runtime. Runtime-backed chat, thread, and native-auth
-commands fail.
-`macos_activation` (`src-tauri/runtime/src/main.rs:233`) returns `Failed(1)` at
-once. MUNIDESK-1564 wrote that stub on 2026-08-29 to repair the macOS compile
-break. The serving activation remains gated to Linux. `MacosAttachAcceptor::bind`
-(`src-tauri/runtime/src/macos_attach_loop.rs:135`) can bind
-`<profile>/muniment/attach-v1.sock`, but `macos_activation` does not call it.
-`record_macos_failed_exit` (`src-tauri/runtime/src/main.rs:158`) bounds the
-launchd restarts and then stops the loop. The desktop still starts its client
-supervisor (`src-tauri/src/attach_service/listener.rs`), so
-`desktop_client_session` reports `Disconnected`. Runtime-backed macOS chat,
-thread, and native-auth commands then return `Muniment cannot reach its
-background service.` Local commands such as `chat_current_thread` remain
-available without the runtime. The macOS lane runs an install-and-launch smoke
-with no sign-in, so no gate caught it.
-
-MEASURED 2026-09-01 (audit, read `record_choice_command` against the macOS
-`ChatState` constructor) — a macOS retention save answers Ok and applies
-nothing. The NoSupervisor arm calls `trigger.check_now()`, and macOS installs
-no trigger: `new_runtime_owned` (`src-tauri/src/chat/state.rs:501`) leaves
-`RetentionTrigger` empty, and the desktop schedule install is Linux-gated
-(`:512`) with a Windows twin. The saved record waits for the restored macOS
-runtime and its retention schedule, so the restoration lane covers it and no
-separate slice files.
+MEASURED 2026-09-01, RESOLVED 2026-09-02 — the macOS runtime served nothing
+between 2026-08-29 and 2026-09-02, because MUNIDESK-1564 stubbed
+`macos_activation` to repair the compile break. A macOS retention save also
+applied nothing across that window. MUNIDESK-1642 and 1648 restored the served
+activation and its retention schedule, which closed both measurements. The
+macOS lane runs an install-and-launch smoke with no sign-in, so no gate caught
+the stub. `probe_macos_runtime` (`test/e2e/support/macos-runtime-probe.sh`)
+now demands the served endpoint, so the hole cannot reopen silently.
 
 MEASURED 2026-09-01, RESOLVED 2026-09-02 — the `Connected programs` panel
 rode a fixed empty list off Linux. MUNIDESK-1636 and MUNIDESK-1640 flipped
@@ -780,14 +764,31 @@ service (`src-tauri/runtime/src/macos_attach_loop.rs`, MUNIDESK-1642).
 (`src-tauri/src/chat/state.rs:469`), which settles the 2026-08-31 dual-owner
 measurement (MUNIDESK-1644).
 
-NEXT — re-cut 2026-09-02 after those landings. One macOS activation slice
-remains. `macos_activation` (`src-tauri/runtime/src/main.rs:233`) must bind the
-macOS acceptor, serve through the platform-neutral activation loop, wait for
-SIGTERM, and run the recorded-retention schedule. This slice closes the
-2026-09-01 retention-save measurement. The installed macOS smoke demands the
-served endpoint through `probe_macos_runtime`
-(`test/e2e/support/macos-runtime-probe.sh`) and remains red until this slice
-lands.
+DONE 2026-09-02 — the macOS activation serves (MUNIDESK-1648). On macOS,
+`macos_activation` (`src-tauri/runtime/src/main.rs:233`) binds the acceptor
+through `SystemMacosAttachFactory`, serves through the platform-neutral
+activation, runs the 24-hour recorded-retention schedule, and stops on SIGTERM
+through `TerminationSignalWait`. The Linux sign-in unblock landed the same day
+(MUNIDESK-1647). `browser_command`
+(`src-tauri/runtime/src/attach_boundaries.rs:946`) honors a non-empty
+`BROWSER` value before `xdg-open`, so the installed smoke's sign-in capture
+rides the runtime-owned continuation.
+
+NEXT — re-cut 2026-09-02 after those landings. Two lanes open. First, the
+installed-payload refresh: the served macOS runtime never notices a replaced
+payload. Linux runs `UpgradeWatch` and exits with status 75, and the
+LaunchAgent's `SuccessfulExit=false` KeepAlive restarts a nonzero exit into
+the new payload. The filed slice wires that watch into the macOS activation.
+Second, companion service off Linux: `serve_companion_exchange`
+(`src-tauri/core/src/attach/macos_session.rs:115`) answers one welcome frame
+and closes, so no macOS companion can pair. The whole companion session
+machine is Linux-gated in `src-tauri/core/src/attach/linux.rs`. The filed
+extraction slice moves the request loop (`serve_requests`, `linux.rs:1278`)
+and its frame helpers onto the platform-neutral `DeadlineStream` trait,
+following the MUNIDESK-1587 shape. The pairing and authorization exchange
+follows in its own slice after that landing. The installed macOS smoke's
+`probe_macos_runtime` demand is now satisfiable, and the next nightly proves
+it.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
