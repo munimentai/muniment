@@ -77,10 +77,7 @@ fn main() {
             }
             #[cfg(target_os = "windows")]
             {
-                app.manage(chat::ChatState::new(
-                    app.handle(),
-                    runtime_activity.clone(),
-                )?);
+                app.manage(chat::ChatState::new(runtime_activity.clone()));
             }
             #[cfg(target_os = "macos")]
             attach_service::start_desktop_client(app.handle());
