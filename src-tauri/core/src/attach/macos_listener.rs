@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
@@ -70,6 +70,7 @@ impl MacosAttachStopEvent {
 pub struct MacosAttachListener {
     listener: UnixListener,
     path: PathBuf,
+    _parent_directory: fs::File,
     device: u64,
     inode: u64,
 }
@@ -78,6 +79,11 @@ impl MacosAttachListener {
     /// Removes a closed endpoint and binds its path.
     pub fn bind(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
+        let parent = path.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "attach socket has no parent")
+        })?;
+        let parent_directory = prepare_attach_directory(parent)?;
+        verify_attach_directory(parent, &parent_directory)?;
         match UnixStream::connect(path) {
             Ok(_) => return Err(io::Error::from(io::ErrorKind::AddrInUse)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -87,15 +93,26 @@ impl MacosAttachListener {
                 {
                     return Err(io::Error::from(io::ErrorKind::PermissionDenied));
                 }
+                verify_attach_directory(parent, &parent_directory)?;
                 fs::remove_file(path)?;
             }
             Err(error) => return Err(error),
         }
+        verify_attach_directory(parent, &parent_directory)?;
         let listener = UnixListener::bind(path)?;
-        let metadata = fs::symlink_metadata(path)?;
+        let bound_metadata = fs::symlink_metadata(path)?;
+        let bound_identity = (bound_metadata.dev(), bound_metadata.ino());
+        let metadata = match secure_bound_socket(path, parent, &parent_directory, bound_metadata) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                remove_matching_socket(path, bound_identity);
+                return Err(error);
+            }
+        };
         Ok(Self {
             listener,
             path: path.to_owned(),
+            _parent_directory: parent_directory,
             device: metadata.dev(),
             inode: metadata.ino(),
         })
@@ -140,6 +157,77 @@ impl MacosAttachListener {
             }
             return Err(MacosAttachAcceptError::Accept);
         }
+    }
+}
+
+fn prepare_attach_directory(path: &Path) -> io::Result<fs::File> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(path)?,
+        Err(error) => return Err(error),
+    }
+    let directory = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() || metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+    }
+    directory.set_permissions(fs::Permissions::from_mode(0o700))?;
+    verify_attach_directory(path, &directory)?;
+    Ok(directory)
+}
+
+fn verify_attach_directory(path: &Path, directory: &fs::File) -> io::Result<()> {
+    let descriptor_metadata = directory.metadata()?;
+    let path_metadata = fs::symlink_metadata(path)?;
+    if path_metadata.file_type().is_symlink()
+        || !path_metadata.is_dir()
+        || path_metadata.uid() != unsafe { libc::geteuid() }
+        || path_metadata.mode() & 0o777 != 0o700
+        || (path_metadata.dev(), path_metadata.ino())
+            != (descriptor_metadata.dev(), descriptor_metadata.ino())
+    {
+        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+    }
+    Ok(())
+}
+
+fn secure_bound_socket(
+    path: &Path,
+    parent: &Path,
+    parent_directory: &fs::File,
+    bound_metadata: fs::Metadata,
+) -> io::Result<fs::Metadata> {
+    if !bound_metadata.file_type().is_socket() || bound_metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+    }
+    let bound_identity = (bound_metadata.dev(), bound_metadata.ino());
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    let metadata = fs::symlink_metadata(path)?;
+    verify_attach_directory(parent, parent_directory)?;
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o600
+        || (metadata.dev(), metadata.ino()) != bound_identity
+    {
+        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+    }
+    Ok(metadata)
+}
+
+fn remove_matching_socket(path: &Path, identity: (u64, u64)) {
+    if fs::symlink_metadata(path).is_ok_and(|metadata| {
+        metadata.file_type().is_socket()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && (metadata.dev(), metadata.ino()) == identity
+    }) {
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -245,4 +333,58 @@ pub fn accept_macos_attach_with_reader(
     verify_macos_attach_peer_with_reader(&stream, reader)
         .map_err(|_| MacosAttachAcceptError::PeerRejected)?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_directory(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "muniment-macos-listener-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn secures_the_attach_directory_and_socket() {
+        let root = temporary_directory("permissions");
+        fs::create_dir(&root).unwrap();
+        let socket = root.join("muniment/attach-v1.sock");
+        let listener = MacosAttachListener::bind(&socket).unwrap();
+
+        assert_eq!(
+            fs::symlink_metadata(socket.parent().unwrap())
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(fs::symlink_metadata(&socket).unwrap().mode() & 0o777, 0o600);
+
+        drop(listener);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_symlink_at_the_attach_directory() {
+        let root = temporary_directory("symlink");
+        let target = temporary_directory("symlink-target");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&target).unwrap();
+        symlink(&target, root.join("muniment")).unwrap();
+
+        let result = MacosAttachListener::bind(root.join("muniment/attach-v1.sock"));
+
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert!(!target.join("attach-v1.sock").exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(target).unwrap();
+    }
 }

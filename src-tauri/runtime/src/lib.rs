@@ -60,6 +60,9 @@ pub use macos_activation::{
 pub use macos_activation::{write_macos_diagnostic, write_macos_diagnostic_with};
 #[cfg(target_os = "macos")]
 pub use macos_attach_loop::MacosAttachAcceptor;
+#[cfg(any(unix, target_os = "windows"))]
+#[doc(hidden)]
+pub use macos_attach_loop::{MacosAttachAcceptorWithBoundary, MacosAttachServeBoundary};
 pub use macos_attach_loop::{macos_attach_socket_path, MacosAttachBindFailure};
 #[cfg(target_os = "linux")]
 pub use migration::{run_migration_takeover, MigrationTakeoverError};

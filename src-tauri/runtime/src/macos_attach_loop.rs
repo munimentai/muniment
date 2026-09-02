@@ -1,21 +1,24 @@
 //! Runtime-owned macOS attach acceptor.
 
-#[cfg(any(test, target_os = "macos"))]
 use std::io;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
+#[cfg(any(unix, target_os = "windows"))]
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
+#[cfg(any(unix, target_os = "windows"))]
+use muniment_core::attach::{DesktopAttachService, ProtocolError};
 #[cfg(target_os = "macos")]
 use muniment_core::attach::{
     serve_macos_attach_session, MacosAttachListener, MacosAttachStopEvent, MacosAttachWaitOutcome,
 };
 
 #[cfg(target_os = "macos")]
+use crate::installed_desktop_executable;
+#[cfg(any(unix, target_os = "windows"))]
 use crate::{
-    installed_desktop_executable, RuntimeAttachState, WindowsAttachAcceptBoundary,
+    RuntimeAttachBoundaries, RuntimeAttachState, WindowsAttachAcceptBoundary,
     WindowsAttachAcceptOutcome, WindowsAttachStopSignal,
 };
 
@@ -38,7 +41,6 @@ pub fn macos_attach_socket_path(profile_directory: &Path) -> PathBuf {
         .join(MACOS_ATTACH_SOCKET)
 }
 
-#[cfg(any(test, target_os = "macos"))]
 fn classify_bind_failure(error: &io::Error) -> MacosAttachBindFailure {
     if error.kind() == io::ErrorKind::AddrInUse {
         MacosAttachBindFailure::Contended
@@ -47,41 +49,103 @@ fn classify_bind_failure(error: &io::Error) -> MacosAttachBindFailure {
     }
 }
 
+/// Injected boundary for one macOS accept and serve attempt.
+#[doc(hidden)]
+#[cfg(any(unix, target_os = "windows"))]
+pub trait MacosAttachServeBoundary {
+    type StopSignal: WindowsAttachStopSignal;
+
+    fn stop_signal(&self) -> Self::StopSignal;
+
+    fn serve_next(
+        &mut self,
+        service_factory: Arc<
+            dyn Fn() -> Result<DesktopAttachService<RuntimeAttachBoundaries>, ProtocolError>
+                + Send
+                + Sync,
+        >,
+    ) -> WindowsAttachAcceptOutcome;
+}
+
+/// A macOS acceptor with an injected transport boundary.
+#[doc(hidden)]
+#[cfg(any(unix, target_os = "windows"))]
+pub struct MacosAttachAcceptorWithBoundary<B> {
+    boundary: B,
+    state: Arc<RuntimeAttachState>,
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl<B> MacosAttachAcceptorWithBoundary<B> {
+    /// Binds a transport boundary and opens one activation state.
+    #[doc(hidden)]
+    pub fn bind_with(
+        profile_directory: impl AsRef<Path>,
+        config_directory: impl AsRef<Path>,
+        bind_boundary: impl FnOnce(&Path) -> io::Result<B>,
+    ) -> Result<Self, MacosAttachBindFailure> {
+        let profile_directory = profile_directory.as_ref();
+        let boundary = bind_boundary(&macos_attach_socket_path(profile_directory))
+            .map_err(|error| classify_bind_failure(&error))?;
+        let state = Arc::new(
+            RuntimeAttachState::open(profile_directory, config_directory)
+                .map_err(|_| MacosAttachBindFailure::Unavailable)?,
+        );
+        Ok(Self { boundary, state })
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl<B: MacosAttachServeBoundary> WindowsAttachAcceptBoundary
+    for MacosAttachAcceptorWithBoundary<B>
+{
+    type StopSignal = B::StopSignal;
+
+    fn stop_signal(&self) -> Self::StopSignal {
+        self.boundary.stop_signal()
+    }
+
+    fn retention_state(&self) -> Option<Arc<RuntimeAttachState>> {
+        Some(Arc::clone(&self.state))
+    }
+
+    fn serve_next(&mut self) -> WindowsAttachAcceptOutcome {
+        let state = Arc::clone(&self.state);
+        self.boundary
+            .serve_next(Arc::new(move || state.attach_service()))
+    }
+}
+
 /// A bound macOS attach acceptor.
 #[cfg(target_os = "macos")]
-pub struct MacosAttachAcceptor {
+pub type MacosAttachAcceptor = MacosAttachAcceptorWithBoundary<SystemMacosAttachBoundary>;
+
+/// The native macOS attach transport boundary.
+#[doc(hidden)]
+#[cfg(target_os = "macos")]
+pub struct SystemMacosAttachBoundary {
     listener: MacosAttachListener,
     stop: Arc<MacosAttachStopEvent>,
-    state: Arc<RuntimeAttachState>,
     expected_desktop_executable: PathBuf,
 }
 
 #[cfg(target_os = "macos")]
-impl MacosAttachAcceptor {
+impl MacosAttachAcceptorWithBoundary<SystemMacosAttachBoundary> {
     /// Opens the activation state and binds its profile attach socket.
     pub fn bind(
         profile_directory: impl AsRef<Path>,
         config_directory: impl AsRef<Path>,
     ) -> Result<Self, MacosAttachBindFailure> {
-        let profile_directory = profile_directory.as_ref();
-        let attach_directory = profile_directory.join(MACOS_ATTACH_DIRECTORY);
-        std::fs::create_dir_all(&attach_directory)
-            .map_err(|_| MacosAttachBindFailure::Unavailable)?;
-        let listener = MacosAttachListener::bind(macos_attach_socket_path(profile_directory))
-            .map_err(|error| classify_bind_failure(&error))?;
-        let stop =
-            Arc::new(MacosAttachStopEvent::new().map_err(|_| MacosAttachBindFailure::Unavailable)?);
-        let state = Arc::new(
-            RuntimeAttachState::open(profile_directory, config_directory)
-                .map_err(|_| MacosAttachBindFailure::Unavailable)?,
-        );
         let expected_desktop_executable =
             installed_desktop_executable().ok_or(MacosAttachBindFailure::Unavailable)?;
-        Ok(Self {
-            listener,
-            stop,
-            state,
-            expected_desktop_executable,
+        Self::bind_with(profile_directory, config_directory, move |path| {
+            let listener = MacosAttachListener::bind(path)?;
+            let stop = Arc::new(MacosAttachStopEvent::new()?);
+            Ok(SystemMacosAttachBoundary {
+                listener,
+                stop,
+                expected_desktop_executable,
+            })
         })
     }
 }
@@ -94,24 +158,26 @@ impl WindowsAttachStopSignal for Arc<MacosAttachStopEvent> {
 }
 
 #[cfg(target_os = "macos")]
-impl WindowsAttachAcceptBoundary for MacosAttachAcceptor {
+impl MacosAttachServeBoundary for SystemMacosAttachBoundary {
     type StopSignal = Arc<MacosAttachStopEvent>;
 
     fn stop_signal(&self) -> Self::StopSignal {
         Arc::clone(&self.stop)
     }
 
-    fn retention_state(&self) -> Option<Arc<RuntimeAttachState>> {
-        Some(Arc::clone(&self.state))
-    }
-
-    fn serve_next(&mut self) -> WindowsAttachAcceptOutcome {
+    fn serve_next(
+        &mut self,
+        service_factory: Arc<
+            dyn Fn() -> Result<DesktopAttachService<RuntimeAttachBoundaries>, ProtocolError>
+                + Send
+                + Sync,
+        >,
+    ) -> WindowsAttachAcceptOutcome {
         match self.listener.accept_until(&self.stop) {
             Ok(MacosAttachWaitOutcome::Connected(stream)) => {
-                let state = Arc::clone(&self.state);
                 let expected_desktop_executable = self.expected_desktop_executable.clone();
                 std::thread::spawn(move || {
-                    let Ok(mut service) = state.attach_service() else {
+                    let Ok(mut service) = service_factory() else {
                         return;
                     };
                     let _ = serve_macos_attach_session(
