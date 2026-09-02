@@ -18,16 +18,16 @@ use muniment_core::auth::{
     NativeCredentialStore, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
     UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
 };
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use serde::Deserialize;
 use serde::Serialize;
 use tauri::Emitter;
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::ClientError;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::DesktopClientHolder;
 
 /// How long the loopback listener waits for the user to finish in the
@@ -49,7 +49,7 @@ struct EntitlementChanged {
     snapshot_version: u64,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EntitlementSnapshotResponse {
@@ -313,7 +313,7 @@ fn unix_time() -> u64 {
 
 /// Signed-in subject/expiry from the stored tokens; no network.
 #[tauri::command]
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub async fn auth_status(
     state: tauri::State<'_, AuthState>,
     attach_state: tauri::State<'_, AttachCompanionState>,
@@ -330,17 +330,7 @@ pub async fn auth_status(
     .await
 }
 
-#[tauri::command]
-#[cfg(not(unix))]
-pub async fn auth_status(state: tauri::State<'_, AuthState>) -> Result<AuthStatus, String> {
-    let store = state.native_store.clone();
-    tauri::async_runtime::spawn_blocking(move || auth::native_status(store.as_ref(), unix_time()))
-        .await
-        .map_err(|e| format!("status task failed: {e}"))?
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 async fn status_for_session(
     session: DesktopClientSession,
     local_step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
@@ -358,7 +348,7 @@ async fn status_for_session(
 
 /// Fetch the authoritative native session and expose only its typed,
 /// display-only entitlement projection.
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub async fn auth_entitlement_snapshot(
     app: tauri::AppHandle,
@@ -368,21 +358,12 @@ pub async fn auth_entitlement_snapshot(
     auth_entitlement_snapshot_with_state(app, state, attach_state).await
 }
 
-#[cfg(not(unix))]
-#[tauri::command]
-pub async fn auth_entitlement_snapshot(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AuthState>,
-) -> Result<auth::EntitlementSnapshotView, String> {
-    auth_entitlement_snapshot_with_state(app, state).await
-}
-
 async fn auth_entitlement_snapshot_with_state<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AuthState>,
-    #[cfg(unix)] attach_state: tauri::State<'_, AttachCompanionState>,
+    #[cfg(any(unix, target_os = "windows"))] attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<auth::EntitlementSnapshotView, String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     match attach_state.desktop_client_session() {
         DesktopClientSession::Connected(client) => {
             let response: EntitlementSnapshotResponse = serde_json::from_value(
@@ -414,7 +395,7 @@ async fn auth_entitlement_snapshot_with_state<R: tauri::Runtime>(
 }
 
 /// List display-only metadata for this account's native installations.
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub async fn auth_devices(
     app: tauri::AppHandle,
@@ -424,21 +405,12 @@ pub async fn auth_devices(
     auth_devices_with_state(app, state, attach_state).await
 }
 
-#[cfg(not(unix))]
-#[tauri::command]
-pub async fn auth_devices(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AuthState>,
-) -> Result<Vec<auth::NativeDevice>, String> {
-    auth_devices_with_state(app, state).await
-}
-
 async fn auth_devices_with_state<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AuthState>,
-    #[cfg(unix)] attach_state: tauri::State<'_, AttachCompanionState>,
+    #[cfg(any(unix, target_os = "windows"))] attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<Vec<auth::NativeDevice>, String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     match attach_state.desktop_client_session() {
         DesktopClientSession::Connected(client) => {
             let response: auth::NativeDeviceList =
