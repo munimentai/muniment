@@ -18,8 +18,8 @@ pub(crate) fn start_retention_schedule(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         apply_recorded_retention(&state, checked.as_ref());
-        while let Ok(RetentionScheduleCommand::Recheck)
-        | Err(mpsc::RecvTimeoutError::Timeout) = commands.recv_timeout(interval)
+        while let Ok(RetentionScheduleCommand::Recheck) | Err(mpsc::RecvTimeoutError::Timeout) =
+            commands.recv_timeout(interval)
         {
             apply_recorded_retention(&state, checked.as_ref());
         }

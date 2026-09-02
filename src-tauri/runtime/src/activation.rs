@@ -283,7 +283,10 @@ fn run_runtime_activation_inner(
         let trigger_commands = command_tx.clone();
         std::thread::spawn(move || {
             while retention_control.trigger.recv().is_ok() {
-                if trigger_commands.send(RetentionScheduleCommand::Recheck).is_err() {
+                if trigger_commands
+                    .send(RetentionScheduleCommand::Recheck)
+                    .is_err()
+                {
                     break;
                 }
             }
