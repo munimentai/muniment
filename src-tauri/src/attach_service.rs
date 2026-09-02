@@ -2,7 +2,7 @@
 use muniment_core::attach::save_client_credentials as persist_client_credentials;
 #[cfg(target_os = "linux")]
 use muniment_core::attach::ApprovalRequest;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use muniment_core::attach::ClientError;
 #[cfg(unix)]
 use muniment_core::attach::{
@@ -58,13 +58,13 @@ use muniment_core::attach::{
 };
 #[cfg(target_os = "linux")]
 use muniment_core::browser_control::ProcReader;
-#[cfg(all(target_os = "linux", test))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), test))]
 use serde_json::json;
 #[cfg(any(unix, target_os = "windows"))]
 use serde_json::Value;
 #[cfg(any(unix, target_os = "windows"))]
 use tauri::{Emitter, Manager};
-#[cfg(all(target_os = "linux", test))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), test))]
 use uuid::Uuid;
 
 /// Matches the `muniment-runtime` version in `src-tauri/runtime/Cargo.toml`.

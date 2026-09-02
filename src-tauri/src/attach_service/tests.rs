@@ -35,9 +35,9 @@ mod cases {
         assert_eq!(starts.load(Ordering::SeqCst), 1);
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
-    fn windows_companion_commands_fail_without_a_connected_client() {
+    fn desktop_companion_commands_fail_without_a_connected_client() {
         fn assert_commands_fail(app: &tauri::App<tauri::test::MockRuntime>) {
             assert_eq!(
                 attach_companions(app.state()).unwrap_err().code(),
@@ -1216,7 +1216,7 @@ mod cases {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn companion_commands_use_each_desktop_client_session_state() {
         use muniment_core::attach::{reconnect_welcome, serve_desktop_client_at};
