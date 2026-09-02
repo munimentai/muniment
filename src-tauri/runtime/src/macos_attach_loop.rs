@@ -15,7 +15,7 @@ use muniment_core::attach::{
 use muniment_core::attach::{DesktopAttachService, ProtocolError};
 
 #[cfg(target_os = "macos")]
-use crate::installed_desktop_executable;
+use crate::{installed_desktop_executable, WindowsAttachBindFailure, WindowsAttachFactory};
 #[cfg(any(unix, target_os = "windows"))]
 use crate::{
     RuntimeAttachBoundaries, RuntimeAttachState, WindowsAttachAcceptBoundary,
@@ -119,6 +119,38 @@ impl<B: MacosAttachServeBoundary> WindowsAttachAcceptBoundary
 /// A bound macOS attach acceptor.
 #[cfg(target_os = "macos")]
 pub type MacosAttachAcceptor = MacosAttachAcceptorWithBoundary<SystemMacosAttachBoundary>;
+
+/// Production factory for the macOS attach acceptor.
+#[cfg(target_os = "macos")]
+pub struct SystemMacosAttachFactory {
+    profile_directory: PathBuf,
+    config_directory: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl SystemMacosAttachFactory {
+    /// Creates a factory for one profile and config directory.
+    pub fn new(profile_directory: impl AsRef<Path>, config_directory: impl AsRef<Path>) -> Self {
+        Self {
+            profile_directory: profile_directory.as_ref().to_owned(),
+            config_directory: config_directory.as_ref().to_owned(),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl WindowsAttachFactory for SystemMacosAttachFactory {
+    type Acceptor = MacosAttachAcceptor;
+
+    fn bind(&self) -> Result<Self::Acceptor, WindowsAttachBindFailure> {
+        MacosAttachAcceptor::bind(&self.profile_directory, &self.config_directory).map_err(
+            |error| match error {
+                MacosAttachBindFailure::Contended => WindowsAttachBindFailure::Contended,
+                MacosAttachBindFailure::Unavailable => WindowsAttachBindFailure::Unavailable,
+            },
+        )
+    }
+}
 
 /// The native macOS attach transport boundary.
 #[doc(hidden)]

@@ -231,7 +231,69 @@ fn macos_activation() -> MacosActivationExit {
 
 #[cfg(target_os = "macos")]
 fn macos_activation() -> MacosActivationExit {
-    MacosActivationExit::Failed(FAILURE_EXIT_STATUS)
+    use muniment_core::attach::TerminationSignalWait;
+    use muniment_runtime::{
+        config_directory, profile_directory, run_windows_attach_activation,
+        SystemMacosAttachFactory, WindowsActivationExit,
+    };
+
+    let termination_signal = match TerminationSignalWait::new() {
+        Ok(signal) => signal,
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            return MacosActivationExit::Failed(FAILURE_EXIT_STATUS);
+        }
+    };
+    let profile_directory = match profile_directory() {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            return MacosActivationExit::Failed(FAILURE_EXIT_STATUS);
+        }
+    };
+    let config_directory = match config_directory() {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!("muniment-runtime: {error}");
+            return MacosActivationExit::Failed(FAILURE_EXIT_STATUS);
+        }
+    };
+    let factory = SystemMacosAttachFactory::new(profile_directory, config_directory);
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    if std::env::var_os(MACOS_TEST_EXIT_ENV).is_some() {
+        let _ = stop_tx.send(());
+    }
+    std::thread::spawn(move || {
+        if termination_signal.wait().is_ok() {
+            let _ = stop_tx.send(());
+        }
+    });
+
+    match run_windows_attach_activation(&factory, stop_rx, &MainMacosDiagnosticSink) {
+        WindowsActivationExit::Orderly(status) => MacosActivationExit::Orderly(status),
+        WindowsActivationExit::Failed(status) => MacosActivationExit::Failed(status),
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct MainMacosDiagnosticSink;
+
+#[cfg(target_os = "macos")]
+impl muniment_runtime::WindowsDiagnosticSink for MainMacosDiagnosticSink {
+    fn record(&self, event: muniment_runtime::WindowsDiagnosticEvent) {
+        let event = match event {
+            muniment_runtime::WindowsDiagnosticEvent::InstanceLockWait => {
+                Some(muniment_runtime::MacosDiagnosticEvent::InstanceLockWait)
+            }
+            muniment_runtime::WindowsDiagnosticEvent::ActivationFailed => {
+                Some(muniment_runtime::MacosDiagnosticEvent::ActivationFailed)
+            }
+            _ => None,
+        };
+        if let Some(event) = event {
+            record_macos_diagnostic(event);
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
