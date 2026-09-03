@@ -1328,3 +1328,48 @@ writes the authorized grant, and serves companion requests. A valid reconnect
 uses `reconnect_welcome` and the stored client credential. If the runtime has no
 signed workspace, the approval waiter denies the request and pairing fails
 closed.
+
+## Amendment – 2026-09-03: Windows attach route refinement and handling
+
+- Status: accepted
+
+This amendment supersedes the Hello-field rules in the two 2026-08-29 Windows
+attach route amendments. It defines the exchange for each Windows route and
+changes no runtime code.
+
+### Route identity and refinement
+
+After the peer SID check succeeds, the listener reads the peer process ID and
+live image path. Every peer whose image does not match the expected installed
+desktop executable takes the companion route. This includes a peer whose
+process ID, image path, or expected desktop path cannot be read.
+
+For a verified desktop-image peer, the listener reads the first Hello frame to
+refine the route. A `desktop` kind takes the approval-presenter route. A
+`desktop-client` kind takes the desktop-client route. Every other kind takes
+the companion route.
+
+A claimed Hello kind selects a route only after the desktop-image check
+succeeds. The claim grants no admission, workspace, operation, or other
+authority. An unreadable, oversized, or malformed first frame opens no session.
+
+### Route exchanges
+
+The approval-presenter route writes `reconnect_welcome` and a
+`DesktopClientAuthorizedGrant`, then runs the approval-presentation session.
+That session carries only the approval-presentation authority defined by the
+2026-08-13 amendment. Failed admission or a second live presenter opens no
+presenter session. A disconnect ends the presenter's connection-bound authority.
+
+The desktop-client route writes `reconnect_welcome` and a
+`DesktopClientAuthorizedGrant`, then serves desktop client requests. Without a
+signed workspace, the session carries no workspace scope.
+
+The companion route runs the platform-neutral pairing and authorization
+exchange with the activation's live approval waiter and shared connection
+registry. A new pairing writes a `welcome` challenge and requires the visible
+approval-presentation exchange. After approval, it registers the connection,
+writes the authorized grant, and serves companion requests. A valid reconnect
+uses `reconnect_welcome` and the stored client credential. A missing presenter,
+denial, expired decision, invalid credential, or missing signed workspace fails
+pairing closed.
