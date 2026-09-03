@@ -144,7 +144,12 @@ describe('installed nightly', () => {
 
     await browser.saveScreenshot(path.join(rawDir, '01-signed-out.png'))
 
-    await signedOut.click()
+    if (process.platform === 'linux') {
+      // WebKitGTK can acknowledge a native click without dispatching it.
+      await browser.execute((control) => control.click(), signedOut)
+    } else {
+      await signedOut.click()
+    }
     const username = process.env.MUNIMENT_E2E_USERNAME
     const password = process.env.MUNIMENT_E2E_PASSWORD
     if (!username || !password) throw new Error('dedicated E2E credentials are unavailable')
