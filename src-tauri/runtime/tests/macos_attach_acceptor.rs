@@ -5,12 +5,12 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use muniment_core::attach::{
     approval_waiter_with_claims, bounded_claim, decode_frame,
-    serve_macos_attach_session_with_reader, serve_macos_attach_session_with_reader_and_state,
-    ApprovalDecision, ApprovalRequest, Authorized, DesktopAttachService, Event, EventName,
+    serve_macos_attach_session_with_reader_and_state, ApprovalDecision, ApprovalRequest, Authorized,
+    DesktopAttachService, Event, EventName,
     MacosAttachRouteReader, MacosPeerReadError, ProtocolError, Welcome,
 };
 use muniment_runtime::{
@@ -163,15 +163,43 @@ impl MacosAttachServeBoundary for SessionBoundary {
 
     fn serve_next(&mut self, service_factory: ServiceFactory) -> WindowsAttachAcceptOutcome {
         let mut service = service_factory().unwrap();
-        let mut server = self.server.take().unwrap();
-        serve_macos_attach_session_with_reader(
-            &mut server,
+        let approval = service.boundaries.signed_workspace_approval();
+        let coordinator = service.boundaries.approval_coordinator();
+        let live_connections = service.boundaries.live_connections();
+        let waiter_approval = approval.clone();
+        let waiter_coordinator = coordinator.clone();
+        let waiter = approval_waiter_with_claims(
+            move |challenge: &muniment_core::attach::PairingChallenge,
+                  kind: &str,
+                  version: &str,
+                  remaining: Duration| {
+                let recorded = waiter_approval.approval()?;
+                let approved = waiter_coordinator.request(
+                    ApprovalRequest {
+                        challenge: challenge.as_str().to_owned(),
+                        claimed_kind: bounded_claim(kind),
+                        claimed_version: bounded_claim(version),
+                        workspace: recorded.workspace.clone(),
+                        scopes: recorded.scopes.clone(),
+                    },
+                    remaining,
+                );
+                approved.then_some(ApprovalDecision::Approve(recorded))
+            },
+        );
+        serve_macos_attach_session_with_reader_and_state(
+            self.server.take().unwrap(),
             &CompanionRoute,
             501,
             Path::new("/Applications/Muniment.app/muniment"),
             env!("CARGO_PKG_VERSION"),
-            Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
             &mut service,
+            approval.approval(),
+            coordinator,
+            waiter,
+            &live_connections,
+            |_| {},
         )
         .unwrap();
         WindowsAttachAcceptOutcome::Served
