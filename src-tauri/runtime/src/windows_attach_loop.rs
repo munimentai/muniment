@@ -8,7 +8,7 @@ use std::time::Instant;
 use muniment_core::attach::thread_service::ThreadListService;
 #[cfg(target_os = "windows")]
 use muniment_core::attach::{
-    serve_windows_attach_session_with_state,
+    approval_waiter_with_claims, serve_windows_attach_session_with_state,
     WindowsAttachAcceptOutcome as CoreWindowsAttachAcceptOutcome, WindowsAttachBindError,
     WindowsAttachListener, WindowsAttachStopEvent,
 };
@@ -132,6 +132,24 @@ impl WindowsAttachAcceptBoundary for WindowsAttachAcceptor {
                     };
                     let approval = service.boundaries.signed_workspace_approval();
                     let coordinator = service.boundaries.approval_coordinator();
+                    let live_connections = service.boundaries.live_connections();
+                    let approval_waiter = service.boundaries.approval_coordinator();
+                    let waiter_approval = approval.clone();
+                    let waiter = approval_waiter_with_claims(
+                        move |challenge: &muniment_core::attach::PairingChallenge,
+                              kind: &str,
+                              version: &str,
+                              remaining: Duration| {
+                            Some(crate::attach_boundaries::request_approval(
+                                &waiter_approval,
+                                &approval_waiter,
+                                challenge.as_str(),
+                                kind,
+                                version,
+                                remaining,
+                            ))
+                        },
+                    );
                     let deadline = Instant::now() + WINDOWS_ATTACH_SESSION_TIMEOUT;
                     let _ = serve_windows_attach_session_with_state(
                         stream,
@@ -140,6 +158,8 @@ impl WindowsAttachAcceptBoundary for WindowsAttachAcceptor {
                         &mut service,
                         approval.approval(),
                         coordinator,
+                        waiter,
+                        &live_connections,
                     );
                 });
                 WindowsAttachAcceptOutcome::Served
