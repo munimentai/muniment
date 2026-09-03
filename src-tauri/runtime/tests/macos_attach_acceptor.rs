@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use muniment_core::attach::{
     approval_waiter_with_claims, bounded_claim, decode_frame,
-    serve_macos_attach_session_with_reader_and_state, ApprovalDecision, ApprovalRequest, Authorized,
-    DesktopAttachService, Event, EventName,
-    MacosAttachRouteReader, MacosPeerReadError, ProtocolError, Welcome,
+    serve_macos_attach_session_with_reader_and_state, ApprovalDecision, ApprovalRequest,
+    Authorized, DesktopAttachService, Event, EventName, MacosAttachRouteReader, MacosPeerReadError,
+    ProtocolError, Welcome,
 };
 use muniment_runtime::{
     MacosAttachAcceptorWithBoundary, MacosAttachBindFailure, MacosAttachServeBoundary,
