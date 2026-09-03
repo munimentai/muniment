@@ -2039,22 +2039,6 @@ mod linux {
         }
     }
 
-    #[cfg(test)]
-    mod sha256_tests {
-        use super::Sha256;
-
-        #[test]
-        fn hashes_across_the_padding_block_boundary() {
-            let mut digest = Sha256::new();
-            digest.update(&[b'a'; 17]);
-            digest.update(&[b'a'; 39]);
-            assert_eq!(
-                digest.finalize_hex(),
-                "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"
-            );
-        }
-    }
-
     fn decode_artifact_closure(
         value: Value,
     ) -> Result<(String, ArtifactTransferEvent), ClientError> {
@@ -2859,6 +2843,22 @@ mod linux {
             }
         }
         hash.iter().map(|word| format!("{word:08x}")).collect()
+    }
+
+    #[cfg(test)]
+    mod sha256_tests {
+        use super::Sha256;
+
+        #[test]
+        fn hashes_across_the_padding_block_boundary() {
+            let mut digest = Sha256::new();
+            digest.update(&[b'a'; 17]);
+            digest.update(&[b'a'; 39]);
+            assert_eq!(
+                digest.finalize_hex(),
+                "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"
+            );
+        }
     }
 }
 
