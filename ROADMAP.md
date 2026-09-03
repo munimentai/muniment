@@ -821,28 +821,35 @@ Windows non-state serving entries have test callers alone.
 its factory twins, and the stub `serve_companion_exchange_with_frame` are
 superseded. The sixth filed slice retires them.
 
-MEASURED 2026-09-03 (planner, re-dissected the returned ticket) — the third
-slice of the 2026-09-03 cut stuck. The implementer could not land the
-platform-neutral approval-presenter move as one ticket after repeated
-attempts. The ticket bundled three moves that the desktop client landed as
-three separate tickets: the client and handshake (MUNIDESK-1550), the
-supervisor loop (MUNIDESK-1562), and the stop handle (MUNIDESK-1603). The
-re-cut below splits it the same way.
+MEASURED 2026-09-03 (planner, made the move in a scratch checkout and ran the
+crate's fmt, clippy, and test loop) — the platform-neutral approval-presenter
+move is a 250-line change, and it passes. The stick came from three symbols the
+move strands inside the `cfg(unix)` `mod linux` block, not from the move itself.
+`ApprovalPresenterClient::into_stream` (`src-tauri/attach/src/client.rs:2308`)
+returns a `UnixStream`, so it cannot follow the client onto
+`Box<dyn ClientStream + Send>`, and no code calls it.
+`MigrationControlClient::into_stream` (`:2395`) has no caller either.
+`map_io_error` (`src-tauri/attach/src/client.rs:3127`) is byte-identical to the
+private `map_io_error` in `src-tauri/attach/src/client_stream.rs:107`, and the
+presenter's `serve` loop is the only caller of the `mod linux` copy.
+`MAX_APPROVAL_DEADLINE_MS` (`:671`) reads only in the presenter's request
+validation. Each stranded symbol fails `clippy -D warnings` away from the
+edited code, so the loop never converged.
 
-NEXT — re-cut 2026-09-03 after the third slice stuck. The first slice
-landed as MUNIDESK-1664, and the second and fifth slices stay filed. The
-stuck third slice splits into three sub-slices. First, the presenter stop
-handle moves to a platform-neutral module over the shutdown-hook shape of
-`desktop_client_stop.rs`. Second, the presenter client and its handshake
-move over `Box<dyn ClientStream>` the way `desktop_client.rs` holds
-`DesktopClient`. Third, a `serve_approval_presenter_with` supervisor loop
-takes a connect closure, and the Unix `serve_approval_presenter_at`
-delegates to it. The first two sub-slices are filed and are independent of
-each other. The supervisor sub-slice follows after both land, because its
-loop needs the moved client and the moved stop handle. The fourth, fifth,
-and sixth slices of the 2026-09-03 cut then proceed in order. The filed
-fifth slice waits behind the third and fourth. The installed Windows
-pairing probe follows after the presenter start lands.
+NEXT — re-cut 2026-09-03 after the platform-neutral presenter slice stuck.
+Seven slices are filed in order. First, ADR 0012 and `THREAT_MODEL.md` record
+the served Windows presenter and pairing routes. Second, the superseded
+non-state macOS session entry retires. Third, the approval-presenter stop
+handle stores a shutdown hook behind named methods. Fourth, the attach client
+sheds the three symbols that strand the presenter move. Fifth,
+`ApprovalPresenterClient` and its handshake move to a new `presenter_client.rs`
+over `Box<dyn ClientStream + Send>`, and the Unix
+`handshake_approval_presenter_stream` keeps its signature, verifies the peer,
+and delegates, the way `handshake_desktop_client_stream` does. Sixth,
+`muniment-core` connects and serves the Windows approval presenter over the
+per-user pipe. Seventh, the Windows desktop starts the approval presenter. The
+superseded Windows non-state serving entries retire after that, and the
+installed Windows pairing probe follows the presenter start.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
