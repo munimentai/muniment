@@ -1323,8 +1323,8 @@ signed workspace, the session carries no workspace scope.
 The companion route runs the platform-neutral pairing and authorization
 exchange with the activation's live approval waiter and shared connection
 registry. A new pairing writes a `welcome` challenge and requires the visible
-approval-presentation exchange. After approval, it writes the authorized grant,
-registers the connection, and serves companion requests. A valid reconnect uses
-`reconnect_welcome` and the stored client credential. If the runtime has no
+approval-presentation exchange. After approval, it registers the connection,
+writes the authorized grant, and serves companion requests. A valid reconnect
+uses `reconnect_welcome` and the stored client credential. If the runtime has no
 signed workspace, the approval waiter denies the request and pairing fails
 closed.
