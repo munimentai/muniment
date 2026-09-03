@@ -66,6 +66,62 @@ mod cases {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn windows_frontend_decision_resolves_presented_pipe_request() {
+        use muniment_core::attach::{ApprovalDecision, ApprovalPresentRequest};
+        use std::sync::mpsc;
+        use tauri::Listener;
+
+        fn resolve(approve: bool) {
+            let app = tauri::test::mock_app();
+            let approvals = AttachApprovalState::default();
+            app.manage(approvals.clone());
+            register_approval_event_presenter(app.handle());
+            let (event_tx, event_rx) = mpsc::channel();
+            app.handle()
+                .listen("attach-pairing-requested", move |event| {
+                    event_tx.send(event.payload().to_owned()).unwrap();
+                });
+
+            let request = ApprovalPresentRequest {
+                challenge: format!("challenge-{approve}"),
+                claimed_kind: "cli".into(),
+                claimed_version: "1.0.0".into(),
+                workspace: "workspace-a".into(),
+                scopes: vec!["thread.read".into()],
+                deadline_ms: 1_000,
+            };
+            let worker =
+                std::thread::spawn(move || answer_presented_approval(&approvals, &request));
+
+            let payload = event_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            let event: serde_json::Value = serde_json::from_str(&payload).unwrap();
+            assert_eq!(event["challenge"], format!("challenge-{approve}"));
+            assert_eq!(event["claimed_kind"], "cli");
+            assert_eq!(event["claimed_version"], "1.0.0");
+            assert_eq!(event["workspace"], "workspace-a");
+            assert_eq!(event["scopes"], serde_json::json!(["thread.read"]));
+
+            attach_pairing_decide(
+                app.state::<AttachApprovalState>(),
+                format!("challenge-{approve}"),
+                approve,
+            );
+            assert_eq!(
+                worker.join().unwrap(),
+                if approve {
+                    ApprovalDecision::Approve
+                } else {
+                    ApprovalDecision::Deny
+                }
+            );
+        }
+
+        resolve(true);
+        resolve(false);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn windows_observers_publish_each_connection_transition() {
         use std::sync::mpsc;
         use tauri::Listener;

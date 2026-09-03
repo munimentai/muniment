@@ -24,7 +24,7 @@ use muniment_core::attach::{
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::{DesktopClientHolder, DesktopClientStopHandle};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 #[cfg(unix)]

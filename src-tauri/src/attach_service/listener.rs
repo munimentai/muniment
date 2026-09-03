@@ -72,6 +72,7 @@ pub(super) fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle
 
 #[cfg(target_os = "windows")]
 pub(crate) fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    register_approval_event_presenter(app);
     let presenter_app = app.clone();
     app.state::<AttachCompanionState>()
         .start_approval_presenter(move |stop| {
@@ -284,20 +285,8 @@ pub(super) fn serve_chat_events_at(
     }
 }
 
-#[cfg(target_os = "linux")]
-pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    if app.try_state::<AttachCompanionState>().is_some() {
-        app.state::<AttachCompanionState>()
-            .record_listener_pending();
-    }
-    let Some(state) = initialize_attach_listener(&app, || {
-        app.path()
-            .app_data_dir()
-            .ok()
-            .map(|path| path.join(COMPANION_CREDENTIAL_FILE_NAME))
-    }) else {
-        return;
-    };
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn register_approval_event_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let approval_app = app.clone();
     app.state::<AttachApprovalState>()
         .register_presenter(move |request| {
@@ -312,6 +301,23 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 .emit("attach-pairing-requested", &request)
                 .is_ok()
         });
+}
+
+#[cfg(target_os = "linux")]
+pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    if app.try_state::<AttachCompanionState>().is_some() {
+        app.state::<AttachCompanionState>()
+            .record_listener_pending();
+    }
+    let Some(state) = initialize_attach_listener(&app, || {
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|path| path.join(COMPANION_CREDENTIAL_FILE_NAME))
+    }) else {
+        return;
+    };
+    register_approval_event_presenter(&app);
     std::thread::spawn(move || {
         let Ok(filesystem) = AttachFilesystem::from_environment() else {
             app.state::<AttachCompanionState>()
