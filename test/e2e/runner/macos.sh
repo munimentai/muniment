@@ -221,9 +221,11 @@ runtime_touched=1
 
 runtime_endpoint="$runtime_state/muniment/attach-v1.sock"
 runtime_target="gui/$(id -u)/ai.muniment.runtime"
-probe_macos_runtime "$runtime_target" "$app_pid" "$raw/app.log" "$runtime_endpoint" "$raw/runtime-connection.log" || {
+if probe_macos_runtime "$runtime_target" "$app_pid" "$raw/app.log" "$runtime_endpoint" "$raw/runtime-connection.log"; then
+  node test/e2e/support/probe-companion-pairing.mjs "$runtime_endpoint" >"$raw/companion-pairing.log" 2>&1 || status=1
+else
   status=1
-}
+fi
 
 window_ready=0
 window_wait_seconds=120
