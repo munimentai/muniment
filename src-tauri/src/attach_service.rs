@@ -4,20 +4,22 @@ use muniment_core::attach::save_client_credentials as persist_client_credentials
 use muniment_core::attach::ApprovalRequest;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use muniment_core::attach::ClientError;
-#[cfg(unix)]
-use muniment_core::attach::{
-    answer_presented_approval, handshake_desktop_client_stream, interruptible_connect_with_state,
-    serve_approval_presenter_at, serve_desktop_client_at, ApprovalPresenterStopHandle,
-    InterruptibleConnectState,
-};
+#[cfg(any(unix, target_os = "windows"))]
+use muniment_core::attach::{answer_presented_approval, ApprovalPresenterStopHandle};
 #[cfg(target_os = "linux")]
 use muniment_core::attach::{
     bounded_claim, load_client_credentials, ClientCredential, CompanionRegistry,
     WorkspaceContextMap, COMPANION_CREDENTIAL_FILE_NAME,
 };
+#[cfg(unix)]
+use muniment_core::attach::{
+    handshake_desktop_client_stream, interruptible_connect_with_state, serve_approval_presenter_at,
+    serve_desktop_client_at, InterruptibleConnectState,
+};
 #[cfg(target_os = "windows")]
 use muniment_core::attach::{
-    serve_windows_chat_events, serve_windows_desktop_client, WindowsChatEventStopHandle,
+    serve_windows_approval_presenter, serve_windows_chat_events, serve_windows_desktop_client,
+    WindowsChatEventStopHandle,
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 #[cfg(any(unix, target_os = "windows"))]
@@ -78,8 +80,10 @@ mod migration;
 mod state;
 
 pub use commands::*;
-#[cfg(any(unix, target_os = "windows"))]
+#[cfg(unix)]
 pub(crate) use listener::start_desktop_client;
+#[cfg(target_os = "windows")]
+pub(crate) use listener::{start_approval_presenter, start_desktop_client};
 #[cfg(target_os = "linux")]
 pub use listener::{start_attach_listener, stop_attach_listener};
 #[cfg(target_os = "linux")]

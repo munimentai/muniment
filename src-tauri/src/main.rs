@@ -59,6 +59,7 @@ fn main() {
                     windows_runtime_service::start_runtime_task_at_startup(&state_directory);
                 });
                 app.manage(attach_service::AttachCompanionState::default());
+                attach_service::start_approval_presenter(app.handle());
                 attach_service::start_desktop_client(app.handle());
             }
             let app_config = app.path().app_config_dir()?;

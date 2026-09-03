@@ -70,6 +70,25 @@ pub(super) fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle
         });
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let presenter_app = app.clone();
+    app.state::<AttachCompanionState>()
+        .start_approval_presenter(move |stop| {
+            std::thread::spawn(move || {
+                let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
+                serve_windows_approval_presenter(
+                    env!("CARGO_PKG_VERSION"),
+                    Duration::from_secs(5),
+                    Duration::from_millis(250),
+                    stop,
+                    |_| {},
+                    move |request| answer_presented_approval(&approvals, request),
+                );
+            });
+        });
+}
+
 #[cfg(target_os = "linux")]
 pub(super) fn runtime_profile_endpoint() -> Option<PathBuf> {
     let Ok(filesystem) = AttachFilesystem::from_environment() else {
