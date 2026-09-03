@@ -825,14 +825,14 @@ MEASURED 2026-09-03 (planner, made the move in a scratch checkout and ran the
 crate's fmt, clippy, and test loop) — the platform-neutral approval-presenter
 move is a 250-line change, and it passes. The stick came from three symbols the
 move strands inside the `cfg(unix)` `mod linux` block, not from the move itself.
-`ApprovalPresenterClient::into_stream` (`src-tauri/attach/src/client.rs:2283`)
+`ApprovalPresenterClient::into_stream` (`src-tauri/attach/src/client.rs:2308`)
 returns a `UnixStream`, so it cannot follow the client onto
 `Box<dyn ClientStream + Send>`, and no code calls it.
-`MigrationControlClient::into_stream` (`:2370`) has no caller either.
-`map_io_error` (`src-tauri/attach/src/client.rs:3107`) is byte-identical to the
+`MigrationControlClient::into_stream` (`:2395`) has no caller either.
+`map_io_error` (`src-tauri/attach/src/client.rs:3127`) is byte-identical to the
 private `map_io_error` in `src-tauri/attach/src/client_stream.rs:107`, and the
 presenter's `serve` loop is the only caller of the `mod linux` copy.
-`MAX_APPROVAL_DEADLINE_MS` (`:669`) reads only in the presenter's request
+`MAX_APPROVAL_DEADLINE_MS` (`:671`) reads only in the presenter's request
 validation. Each stranded symbol fails `clippy -D warnings` away from the
 edited code, so the loop never converged.
 
