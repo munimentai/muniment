@@ -1,5 +1,6 @@
 #[cfg(unix)]
 mod unix_tests {
+    use std::collections::BTreeSet;
     use std::io::{Read, Write};
     use std::net::Shutdown;
     use std::os::unix::net::UnixStream;
@@ -9,9 +10,12 @@ mod unix_tests {
     use muniment_core::attach::desktop_service_message::{
         CompanionProvenance, ThreadCreateAccepted,
     };
+    use muniment_core::attach::live_connections::LiveConnectionRegistry;
     use muniment_core::attach::thread_service::ThreadListService;
     use muniment_core::attach::{
-        decode_frame, encode_frame, serve_macos_attach_session_with_reader, Authorization,
+        approval_waiter_with_claims, decode_frame, encode_frame,
+        serve_macos_attach_session_with_reader, serve_macos_attach_session_with_reader_and_state,
+        Approval, ApprovalCoordinator, ApprovalDecision, Authorization,
         DesktopClientAuthorizedGrant, Envelope, ErrorCode, ErrorEnvelope, Id,
         MacosAttachRouteReader, MacosAttachSessionError, MacosAttachSessionOutcome,
         MacosPeerReadError, Operation, Protocol, ProtocolError, Request, Welcome,
@@ -101,6 +105,7 @@ mod unix_tests {
             let outcome = serve_macos_attach_session_with_reader(
                 &mut server,
                 &route_reader("/Applications/Muniment.app/Contents/MacOS/muniment"),
+                501,
                 expected_desktop_executable(),
                 "1.2.3",
                 deadline(),
@@ -160,7 +165,83 @@ mod unix_tests {
                 profile: "desktop-owner".into(),
                 companion_kind: "desktop-client".into(),
                 companion_version: "0.0.1".into(),
-                peer_uid: 0,
+                peer_uid: 501,
+                peer_pid: 42,
+            })
+        );
+    }
+
+    #[test]
+    fn companion_route_records_the_verified_peer_identity() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let session = std::thread::spawn(move || {
+            let mut service = TestService::default();
+            let approval = Approval {
+                profile: "profile-1".into(),
+                workspace: "workspace-1".into(),
+                scopes: BTreeSet::from(["run.write".into()]),
+                lifetime: Duration::from_secs(60),
+            };
+            let outcome = serve_macos_attach_session_with_reader_and_state(
+                server,
+                &route_reader("/Applications/Other.app/Contents/MacOS/other"),
+                501,
+                expected_desktop_executable(),
+                "1.2.3",
+                Duration::from_secs(2),
+                &mut service,
+                Some(approval.clone()),
+                ApprovalCoordinator::default(),
+                approval_waiter_with_claims(
+                    move |_: &muniment_core::attach::PairingChallenge,
+                          _: &str,
+                          _: &str,
+                          _: Duration| {
+                        Some(ApprovalDecision::Approve(approval.clone()))
+                    },
+                ),
+                &LiveConnectionRegistry::default(),
+            );
+            (outcome, service)
+        });
+        client.write_all(&hello_frame("editor-extension")).unwrap();
+
+        let _: Welcome = decode_frame(&read_frame(&mut client)).unwrap().unwrap().0;
+        let authorized: muniment_core::attach::Authorized =
+            decode_frame(&read_frame(&mut client)).unwrap().unwrap().0;
+        let request_id = Id::new("018f0000-0000-7000-8000-000000000103").unwrap();
+        client
+            .write_all(
+                &encode_frame(&Request {
+                    protocol: Protocol,
+                    request_id: request_id.clone(),
+                    operation: Operation::ThreadCreate,
+                    capability: authorized.capability,
+                    idempotency_key: Some(Id::new("018f0000-0000-7000-8000-000000000104").unwrap()),
+                    body: serde_json::json!({}),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let _ = read_frame(&mut client);
+        client.shutdown(Shutdown::Write).unwrap();
+
+        let (outcome, service) = session.join().unwrap();
+        assert_eq!(outcome, Ok(MacosAttachSessionOutcome::Companion));
+        assert_eq!(
+            service.bound_identity.as_deref(),
+            Some("018f0000-0000-7000-8000-000000000099")
+        );
+        assert_eq!(
+            service.create_provenance,
+            Some(CompanionProvenance {
+                profile: "profile-1".into(),
+                companion_kind: "editor-extension".into(),
+                companion_version: "0.0.1".into(),
+                peer_uid: 501,
                 peer_pid: 42,
             })
         );
@@ -173,6 +254,7 @@ mod unix_tests {
         let outcome = serve_macos_attach_session_with_reader(
             &mut server,
             &route_reader("/Applications/Muniment.app/Contents/MacOS/muniment"),
+            501,
             expected_desktop_executable(),
             "1.2.3",
             deadline(),
@@ -200,6 +282,7 @@ mod unix_tests {
         let outcome = serve_macos_attach_session_with_reader(
             &mut server,
             &route_reader("/Applications/Muniment.app/Contents/MacOS/muniment"),
+            501,
             expected_desktop_executable(),
             "1.2.3",
             deadline(),

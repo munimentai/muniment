@@ -62,6 +62,7 @@ where
     serve_macos_attach_route_with_state(
         stream,
         route,
+        unsafe { libc::geteuid() },
         desktop_version,
         timeout,
         service,
@@ -78,6 +79,7 @@ where
 pub fn serve_macos_attach_session_with_reader_and_state<H, W>(
     stream: UnixStream,
     route_reader: &impl MacosAttachRouteReader,
+    peer_uid: u32,
     expected_desktop_executable: &Path,
     desktop_version: &str,
     timeout: Duration,
@@ -95,6 +97,7 @@ where
     serve_macos_attach_route_with_state(
         stream,
         route,
+        peer_uid,
         desktop_version,
         timeout,
         service,
@@ -110,6 +113,7 @@ where
 fn serve_macos_attach_route_with_state<H, W>(
     mut stream: UnixStream,
     route: MacosAttachConnectionRoute,
+    peer_uid: u32,
     desktop_version: &str,
     timeout: Duration,
     service: &mut H,
@@ -135,12 +139,11 @@ where
     read_exact_before(&mut stream, &mut prefix, deadline)
         .map_err(|_| MacosAttachSessionError::Read)?;
     let frame = read_first_frame(&mut stream, prefix, deadline)?;
-    let (route, peer_pid) = match route {
-        MacosAttachConnectionRoute::DesktopClient { peer_pid } => (
-            name_macos_desktop_attach_connection_route(peer_pid, &frame),
-            peer_pid,
-        ),
-        route => (route, 0),
+    let route = match route {
+        MacosAttachConnectionRoute::DesktopClient { peer_pid } => {
+            name_macos_desktop_attach_connection_route(peer_pid, &frame)
+        }
+        route => route,
     };
 
     match route {
@@ -163,20 +166,20 @@ where
         MacosAttachConnectionRoute::DesktopClient { peer_pid } => serve_desktop_client(
             &mut stream,
             &frame,
-            peer_pid,
+            (peer_uid, peer_pid),
             desktop_version,
             deadline,
             approval.as_ref(),
             service,
         ),
-        MacosAttachConnectionRoute::Companion => {
+        MacosAttachConnectionRoute::Companion { peer_pid } => {
             let mut random = |bytes: &mut [u8]| getrandom::fill(bytes).map_err(|_| ());
             serve_pairing_exchange(
                 &mut stream,
                 PairingSession {
                     peer: PairingPeer {
-                        companion_identity: format!("0:{peer_pid}"),
-                        peer_uid: 0,
+                        companion_identity: format!("{peer_uid}:{peer_pid}"),
+                        peer_uid,
                         peer_pid,
                     },
                     first_frame: Some(&frame),
@@ -213,13 +216,21 @@ pub fn serve_macos_attach_session<H: ThreadListService>(
         let route_reader = super::NativeMacosAttachRouteReader::new(&stream);
         name_macos_attach_connection_route(&route_reader, expected_desktop_executable)
     };
-    serve_macos_attach_route(&mut stream, route, desktop_version, deadline, service)
+    serve_macos_attach_route(
+        &mut stream,
+        route,
+        unsafe { libc::geteuid() },
+        desktop_version,
+        deadline,
+        service,
+    )
 }
 
 /// Serves a verified macOS attach stream through an injected route boundary.
 pub fn serve_macos_attach_session_with_reader<S, H>(
     stream: &mut S,
     route_reader: &impl MacosAttachRouteReader,
+    peer_uid: u32,
     expected_desktop_executable: &Path,
     desktop_version: &str,
     deadline: Instant,
@@ -230,13 +241,14 @@ where
     H: ThreadListService,
 {
     let route = name_macos_attach_connection_route(route_reader, expected_desktop_executable);
-    serve_macos_attach_route(stream, route, desktop_version, deadline, service)
+    serve_macos_attach_route(stream, route, peer_uid, desktop_version, deadline, service)
 }
 
 #[cfg(unix)]
 fn serve_macos_attach_route<S, H>(
     stream: &mut S,
     route: MacosAttachConnectionRoute,
+    peer_uid: u32,
     desktop_version: &str,
     deadline: Instant,
     service: &mut H,
@@ -263,13 +275,13 @@ where
                 MacosAttachConnectionRoute::DesktopClient { peer_pid } => serve_desktop_client(
                     stream,
                     &frame,
-                    peer_pid,
+                    (peer_uid, peer_pid),
                     desktop_version,
                     deadline,
                     None,
                     service,
                 ),
-                MacosAttachConnectionRoute::Companion => {
+                MacosAttachConnectionRoute::Companion { .. } => {
                     serve_companion_exchange_with_frame(stream, &frame, desktop_version, deadline)?;
                     Ok(MacosAttachSessionOutcome::Companion)
                 }
@@ -283,7 +295,7 @@ where
             );
             Err(MacosAttachSessionError::ApprovalPresenterUnavailable)
         }
-        MacosAttachConnectionRoute::Companion => {
+        MacosAttachConnectionRoute::Companion { .. } => {
             serve_companion_exchange(stream, prefix, desktop_version, deadline)?;
             Ok(MacosAttachSessionOutcome::Companion)
         }
@@ -321,7 +333,7 @@ fn read_first_frame<S: DeadlineStream>(
 fn serve_desktop_client<S, H>(
     stream: &mut S,
     frame: &[u8],
-    peer_pid: u32,
+    peer: (u32, u32),
     desktop_version: &str,
     deadline: Instant,
     approval: Option<&Approval>,
@@ -331,6 +343,7 @@ where
     S: DeadlineStream,
     H: ThreadListService,
 {
+    let (peer_uid, peer_pid) = peer;
     let admitted = admit_desktop_client_over_stream_with_frame(
         stream,
         frame,
@@ -348,7 +361,7 @@ where
             profile: "desktop-owner".into(),
             companion_kind: admitted.companion_kind.clone(),
             companion_version: admitted.companion_version.clone(),
-            peer_uid: 0,
+            peer_uid,
             peer_pid,
         },
         service,

@@ -167,6 +167,7 @@ impl MacosAttachServeBoundary for SessionBoundary {
         serve_macos_attach_session_with_reader(
             &mut server,
             &CompanionRoute,
+            501,
             Path::new("/Applications/Muniment.app/muniment"),
             env!("CARGO_PKG_VERSION"),
             Instant::now() + Duration::from_secs(1),
@@ -225,6 +226,7 @@ impl MacosAttachServeBoundary for PairingBoundary {
         serve_macos_attach_session_with_reader_and_state(
             self.server.take().unwrap(),
             &CompanionRoute,
+            501,
             Path::new("/Applications/Muniment.app/muniment"),
             env!("CARGO_PKG_VERSION"),
             Duration::from_secs(1),
