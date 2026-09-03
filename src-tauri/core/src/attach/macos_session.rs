@@ -70,6 +70,7 @@ where
         coordinator,
         approvals,
         registry,
+        |_| {},
     )
 }
 
@@ -88,6 +89,7 @@ pub fn serve_macos_attach_session_with_reader_and_state<H, W>(
     coordinator: ApprovalCoordinator,
     approvals: W,
     registry: &LiveConnectionRegistry,
+    pairing_identity_observer: impl FnOnce(&str),
 ) -> Result<MacosAttachSessionOutcome, MacosAttachSessionError>
 where
     H: ThreadListService,
@@ -105,6 +107,7 @@ where
         coordinator,
         approvals,
         registry,
+        pairing_identity_observer,
     )
 }
 
@@ -121,6 +124,7 @@ fn serve_macos_attach_route_with_state<H, W>(
     coordinator: ApprovalCoordinator,
     approvals: W,
     registry: &LiveConnectionRegistry,
+    pairing_identity_observer: impl FnOnce(&str),
 ) -> Result<MacosAttachSessionOutcome, MacosAttachSessionError>
 where
     H: ThreadListService,
@@ -174,11 +178,13 @@ where
         ),
         MacosAttachConnectionRoute::Companion { peer_pid } => {
             let mut random = |bytes: &mut [u8]| getrandom::fill(bytes).map_err(|_| ());
+            let companion_identity = format!("{peer_uid}:{peer_pid}");
+            pairing_identity_observer(&companion_identity);
             serve_pairing_exchange(
                 &mut stream,
                 PairingSession {
                     peer: PairingPeer {
-                        companion_identity: format!("{peer_uid}:{peer_pid}"),
+                        companion_identity,
                         peer_uid,
                         peer_pid,
                     },

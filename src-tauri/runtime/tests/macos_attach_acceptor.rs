@@ -235,6 +235,7 @@ impl MacosAttachServeBoundary for PairingBoundary {
             coordinator,
             waiter,
             &live_connections,
+            |_| {},
         )
         .unwrap();
         WindowsAttachAcceptOutcome::Served

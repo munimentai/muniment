@@ -48,22 +48,16 @@ mod unix_tests {
         }
     }
 
-    struct StubRouteReader {
-        peer_pid: u32,
-        image_path: PathBuf,
-    }
+    struct StubRouteReader(Result<(u32, PathBuf), MacosPeerReadError>);
 
     impl MacosAttachRouteReader for StubRouteReader {
         fn peer_process(&self) -> Result<(u32, PathBuf), MacosPeerReadError> {
-            Ok((self.peer_pid, self.image_path.clone()))
+            self.0.clone()
         }
     }
 
     fn route_reader(path: &str) -> StubRouteReader {
-        StubRouteReader {
-            peer_pid: 42,
-            image_path: PathBuf::from(path),
-        }
+        StubRouteReader(Ok((42, PathBuf::from(path))))
     }
 
     fn expected_desktop_executable() -> &'static Path {
@@ -171,14 +165,14 @@ mod unix_tests {
         );
     }
 
-    #[test]
-    fn companion_route_records_the_verified_peer_identity() {
+    fn run_companion_session(route_reader: StubRouteReader) -> (String, CompanionProvenance) {
         let (mut client, server) = UnixStream::pair().unwrap();
         client
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let session = std::thread::spawn(move || {
             let mut service = TestService::default();
+            let mut pairing_identity = None;
             let approval = Approval {
                 profile: "profile-1".into(),
                 workspace: "workspace-1".into(),
@@ -187,7 +181,7 @@ mod unix_tests {
             };
             let outcome = serve_macos_attach_session_with_reader_and_state(
                 server,
-                &route_reader("/Applications/Other.app/Contents/MacOS/other"),
+                &route_reader,
                 501,
                 expected_desktop_executable(),
                 "1.2.3",
@@ -204,8 +198,9 @@ mod unix_tests {
                     },
                 ),
                 &LiveConnectionRegistry::default(),
+                |identity| pairing_identity = Some(identity.to_owned()),
             );
-            (outcome, service)
+            (outcome, service, pairing_identity)
         });
         client.write_all(&hello_frame("editor-extension")).unwrap();
 
@@ -229,22 +224,36 @@ mod unix_tests {
         let _ = read_frame(&mut client);
         client.shutdown(Shutdown::Write).unwrap();
 
-        let (outcome, service) = session.join().unwrap();
+        let (outcome, service, pairing_identity) = session.join().unwrap();
         assert_eq!(outcome, Ok(MacosAttachSessionOutcome::Companion));
         assert_eq!(
             service.bound_identity.as_deref(),
             Some("018f0000-0000-7000-8000-000000000099")
         );
-        assert_eq!(
-            service.create_provenance,
-            Some(CompanionProvenance {
-                profile: "profile-1".into(),
-                companion_kind: "editor-extension".into(),
-                companion_version: "0.0.1".into(),
-                peer_uid: 501,
-                peer_pid: 42,
-            })
-        );
+        (
+            pairing_identity.unwrap(),
+            service.create_provenance.unwrap(),
+        )
+    }
+
+    #[test]
+    fn companion_route_records_the_verified_peer_identity() {
+        let (pairing_identity, provenance) =
+            run_companion_session(route_reader("/Applications/Other.app/Contents/MacOS/other"));
+
+        assert_eq!(pairing_identity, "501:42");
+        assert_eq!(provenance.peer_uid, 501);
+        assert_eq!(provenance.peer_pid, 42);
+    }
+
+    #[test]
+    fn failed_route_read_records_zero_peer_pid() {
+        let (pairing_identity, provenance) =
+            run_companion_session(StubRouteReader(Err(MacosPeerReadError)));
+
+        assert_eq!(pairing_identity, "501:0");
+        assert_eq!(provenance.peer_uid, 501);
+        assert_eq!(provenance.peer_pid, 0);
     }
 
     #[test]
