@@ -765,7 +765,7 @@ DONE 2026-09-03 — the three recording slices landed (MUNIDESK-1657, 1658,
 (`src-tauri/core/src/attach/macos_route.rs:12`), the with-state session
 records the kernel peer uid and that pid in companion provenance, the
 installed macOS smoke's pairing probe sends a companion hello and requires
-the welcome challenge (`test/e2e/support/macos-runtime-probe.sh`), and ADR
+the welcome challenge (`test/e2e/support/probe-companion-pairing.mjs`), and ADR
 0012 and `THREAT_MODEL.md` record the served macOS pairing and presenter
 routes.
 
