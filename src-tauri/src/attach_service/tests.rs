@@ -67,7 +67,8 @@ mod cases {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_frontend_decision_resolves_presented_pipe_request() {
-        use muniment_core::attach::{ApprovalDecision, ApprovalPresentRequest};
+        use muniment_attach::ApprovalDecision;
+        use muniment_core::attach::ApprovalPresentRequest;
         use std::sync::mpsc;
         use tauri::Listener;
 

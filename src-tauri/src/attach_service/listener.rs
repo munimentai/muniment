@@ -286,7 +286,7 @@ pub(super) fn serve_chat_events_at(
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn register_approval_event_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+pub(super) fn register_approval_event_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let approval_app = app.clone();
     app.state::<AttachApprovalState>()
         .register_presenter(move |request| {
