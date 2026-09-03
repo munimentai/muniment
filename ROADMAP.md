@@ -760,44 +760,45 @@ macOS activation wires the live approval waiter, the coordinator, and the
 shared `LiveConnectionRegistry`
 (`src-tauri/runtime/src/macos_attach_loop.rs:238`).
 
-MEASURED 2026-09-03 (planner, read the with-state session beside the Linux
-`run_session`) — macOS companion provenance records uid 0 and pid 0. The
-`Companion` route variant carries no process id, so
-`serve_macos_attach_route_with_state`
-(`src-tauri/core/src/attach/macos_session.rs:138`) drops the pid the route
-reader already returned, and the companion branch hardcodes `peer_uid: 0`.
-Linux records the kernel peer credentials
-(`src-tauri/core/src/attach/linux.rs:799`). Journal provenance therefore
-claims root for every macOS companion. The first filed slice closes this.
+DONE 2026-09-03 — the three recording slices landed (MUNIDESK-1657, 1658,
+1659). The macOS `Companion` route carries the verified peer process id
+(`src-tauri/core/src/attach/macos_route.rs:12`), the with-state session
+records the kernel peer uid and that pid in companion provenance, the
+installed macOS smoke's pairing probe sends a companion hello and requires
+the welcome challenge (`test/e2e/support/macos-runtime-probe.sh`), and ADR
+0012 and `THREAT_MODEL.md` record the served macOS pairing and presenter
+routes.
 
-MEASURED 2026-09-03 (planner, read ADR 0012 and THREAT_MODEL against the
-landed chain) — both security documents are stale on macOS. The 2026-08-29
-macOS route amendment still says the route check reads no Hello frame field,
-and `THREAT_MODEL.md` still says the macOS companion route answers one plain
-welcome frame and closes. The third filed slice corrects both records.
+MEASURED 2026-09-03, RESOLVED 2026-09-03 — macOS companion provenance recorded
+uid 0 and pid 0, because the `Companion` route variant carried no process id.
+MUNIDESK-1657 gives the variant its `peer_pid` and threads the kernel peer uid
+and that pid into the pairing session, which closed the measurement. ADR 0012
+and `THREAT_MODEL.md` were also stale on the served macOS routes, and
+MUNIDESK-1659 records the served pairing and presenter routes in both.
 
 MEASURED 2026-09-03 (planner, searched every caller) — the non-state
 `serve_macos_attach_session` entry
-(`src-tauri/core/src/attach/macos_session.rs:205`) has test callers alone, and
-it still carries the superseded stub companion exchange. The fifth filed slice
-retires it.
+(`src-tauri/core/src/attach/macos_session.rs:214`) has test callers alone, and
+it still carries the superseded stub companion exchange. The second filed
+slice retires it.
 
 MEASURED 2026-09-03 (planner, read the presenter start sites) — the Windows
 desktop starts no approval presenter, because `start_approval_presenter` is
 `#[cfg(unix)]` (`src-tauri/src/attach_service/listener.rs:41`), and
 `WindowsAttachConnectionRoute` has no presenter variant. The Windows
 companion-service lane therefore starts at the route decision, before any
-serving slice.
+serving slice. The first filed slice makes that route decision.
 
-NEXT — re-cut 2026-09-03 after the macOS chain landed. Five slices are filed
-in order. First, the macOS session records the verified companion peer
-identity. Second, the installed macOS smoke probes the served pairing exchange
-with a companion hello and requires the welcome challenge. Third, ADR 0012 and
-THREAT_MODEL record the served macOS routes. Fourth, the Windows attach route
-names the approval-presenter connection from the first hello and fails it
-closed. Fifth, the superseded non-state macOS session entry retires. The
-Windows presenter serving and the approval-waiter widening follow after the
-route naming lands.
+NEXT — re-cut 2026-09-03 after the three recording slices landed. Five
+slices are filed in order. First, the Windows attach route names the
+approval-presenter connection from the first hello, and the session fails it
+closed. Second, the superseded non-state macOS session entry retires. Third,
+the approval presenter connection and session become platform-neutral over
+the stream seam. Fourth, the Windows attach session serves the presenter
+route with the shared coordinator and approval. Fifth, the Windows activation
+threads that state into the served session, and the waiter plumbing widens to
+Windows. The Windows companion pairing exchange and the desktop presenter
+start follow after those land.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
