@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use muniment_core::attach::{decode_frame, windows_attach_pipe_path, Welcome};
 use muniment_core::windows_sid::current_process_user_sid;
@@ -46,6 +46,20 @@ fn read_welcome(client: &mut File) -> Welcome {
     decode_frame::<Welcome>(&response).unwrap().unwrap().0
 }
 
+fn remove_state_directory(path: PathBuf) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match fs::remove_dir_all(&path) {
+            Ok(()) => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.raw_os_error() == Some(32) && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("could not remove {}: {error}", path.display()),
+        }
+    }
+}
+
 #[test]
 fn binds_and_serves_with_the_runtime_version() {
     let _test_guard = TEST_LOCK.lock().unwrap();
@@ -66,7 +80,7 @@ fn binds_and_serves_with_the_runtime_version() {
     assert_eq!(welcome.desktop_version, env!("CARGO_PKG_VERSION"));
 
     drop(acceptor);
-    fs::remove_dir_all(state_directory).unwrap();
+    remove_state_directory(state_directory);
 }
 
 #[test]
