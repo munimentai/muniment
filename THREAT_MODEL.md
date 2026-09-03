@@ -132,24 +132,38 @@ instance lock.
 The runtime resolves the expected desktop executable from the installed
 runtime payload layout at bind time, and a failed resolution fails the bind.
 The accept path runs the `getpeereid` check above before it names a route.
-Under the [ADR 0012 macOS route amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-29-macos-attach-connection-route),
+Under the [ADR 0012 macOS route amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-30-macos-attach-route-refinement-and-handling),
 the runtime then reads the kernel-supplied peer process ID through
-`LOCAL_PEERPID` and reads that process image path through `proc_pidpath`. An
-absolute path equal to the installed desktop payload takes the desktop-client
-route. Every other peer takes the companion route, including a peer whose
-process ID or image path fails to read. The route check reads no Hello frame
-field.
+`LOCAL_PEERPID` and reads that process image path through `proc_pidpath`. A
+peer whose absolute path differs from the installed desktop payload takes the
+companion route without a frame read. A failed process ID or image path read
+also takes that route.
+
+For a verified desktop-image peer, the runtime refines the route from the first
+Hello frame. A `desktop` kind takes the approval-presenter route. A
+`desktop-client` kind takes the desktop-client route. Every other kind takes
+the companion route. The claimed kind selects a route only for that verified
+peer. It grants no other authority.
 
 The runtime opens one `RuntimeAttachState` per activation and composes one
-`DesktopAttachService` for each connection. The desktop-client route writes
-`reconnect_welcome`, then `DesktopClientAuthorizedGrant`, and serves the
-ADR 0012 desktop client session. That session carries no workspace scope until
-the first resolved run grant records the signed workspace. The companion route
-answers one plain `welcome` frame and closes, so a companion holds no service
-on macOS today. The OS-supplied path proves which installed path served the
-connection at the check. It does not prove binary integrity, defend against
-compromise under the same account, or make a claimed Hello client kind
-authoritative.
+`DesktopAttachService` for each connection. The approval-presenter route runs
+the ADR 0012 approval-presentation session. The desktop-client route writes
+`reconnect_welcome`, then `DesktopClientAuthorizedGrant`, and serves the ADR
+0012 desktop client session. That session carries no workspace scope until the
+first resolved run grant records the signed workspace.
+
+The companion route runs the platform-neutral pairing and authorization
+exchange with the live approval waiter and shared connection registry. A new
+pairing writes a `welcome` challenge and asks the user through the visible
+approval-presentation session. Approval produces an authorized grant and a
+registered connection that serves companion requests. A valid reconnect uses
+`reconnect_welcome` and its stored client credential. With no signed workspace,
+the approval waiter denies the request and pairing fails closed.
+
+The OS-supplied path proves which installed path served the connection at the
+check. It does not prove binary integrity or defend against compromise under
+the same account. A claimed Hello kind carries no authority beyond route
+selection for a verified desktop-image peer.
 
 On Windows, the [ADR 0012 Windows activation amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-21-windows-activation-registration-and-startup)
 registers one per-user Scheduled Task named `\Muniment\Runtime-{user-sid}`.

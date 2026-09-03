@@ -1283,3 +1283,48 @@ then ends the loop.
 Five consecutive failed accepts end the loop with failure, as
 `MAX_CONSECUTIVE_FAILED_ACCEPTS` already enforces. A successful accept resets
 the consecutive failure count.
+
+## Amendment – 2026-08-30: macOS attach route refinement and handling
+
+- Status: accepted
+
+This amendment supersedes the Hello-field rule in the 2026-08-29 macOS attach
+connection route amendment. It defines the exchange for each macOS route and
+changes no runtime code.
+
+### Route identity and refinement
+
+After the peer UID check succeeds, the listener reads `LOCAL_PEERPID` from the
+connected Unix-domain socket. It passes that process ID to `proc_pidpath` to
+read the live peer image path. Every peer whose image does not match the
+expected installed desktop executable takes the companion route without a
+frame read. This includes a peer whose process ID or image path cannot be read.
+
+For a verified desktop-image peer, the listener reads the first Hello frame to
+refine the route. A `desktop` kind takes the approval-presenter route. A
+`desktop-client` kind takes the desktop-client route. Every other kind takes
+the companion route.
+
+A claimed Hello kind selects a route only after the desktop-image check
+succeeds. The claim grants no admission, workspace, operation, or other
+authority.
+
+### Route exchanges
+
+The approval-presenter route writes `reconnect_welcome` and a
+`DesktopClientAuthorizedGrant`, then runs the approval-presentation session.
+That session carries only the approval-presentation authority defined by the
+2026-08-13 amendment.
+
+The desktop-client route writes `reconnect_welcome` and a
+`DesktopClientAuthorizedGrant`, then serves desktop client requests. Without a
+signed workspace, the session carries no workspace scope.
+
+The companion route runs the platform-neutral pairing and authorization
+exchange with the activation's live approval waiter and shared connection
+registry. A new pairing writes a `welcome` challenge and requires the visible
+approval-presentation exchange. After approval, it registers the connection,
+writes the authorized grant, and serves companion requests. A valid reconnect
+uses `reconnect_welcome` and the stored client credential. If the runtime has no
+signed workspace, the approval waiter denies the request and pairing fails
+closed.
