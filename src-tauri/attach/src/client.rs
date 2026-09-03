@@ -498,11 +498,11 @@ impl fmt::Debug for ThreadListPage {
 mod linux {
     use super::{
         ApprovalDecision, ApprovalPresentRequest, ArtifactChunk, ArtifactTransferEvent,
-        ArtifactTransferMetadata, ArtifactTransferTerminalCode,
-        ArtifactWindowGrant, AuthorizationSummary, ClientError, MigrationControlFailure,
-        MigrationControlOutcome, PendingPermission, PermissionAnswerAccepted, PermissionDecision,
-        RedactedRunEvent, RunCancelAccepted, RunOpenPage, RunStartAccepted, RunStreamMessage,
-        RunStreamSubscription, ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
+        ArtifactTransferMetadata, ArtifactTransferTerminalCode, ArtifactWindowGrant,
+        AuthorizationSummary, ClientError, MigrationControlFailure, MigrationControlOutcome,
+        PendingPermission, PermissionAnswerAccepted, PermissionDecision, RedactedRunEvent,
+        RunCancelAccepted, RunOpenPage, RunStartAccepted, RunStreamMessage, RunStreamSubscription,
+        ThreadCreateAccepted, ThreadListPage, ThreadOpenPage,
     };
     use crate::client_stream::{read_value, write_all_before};
     use crate::desktop_client::{handshake_desktop_client, DesktopClient};
@@ -519,8 +519,8 @@ mod linux {
     };
     use crate::{
         encode_frame, Authorization, Authorized, Client, Envelope, ErrorCode, EventName, Hello, Id,
-        Operation, PeerAuthorizedGrant, Protocol, Request, Response,
-        VersionRange, Welcome, WorkspaceOnboarded, MAX_TEXT_LENGTH, PROTOCOL,
+        Operation, PeerAuthorizedGrant, Protocol, Request, Response, VersionRange, Welcome,
+        WorkspaceOnboarded, MAX_TEXT_LENGTH, PROTOCOL,
     };
     use serde_json::Value;
     use std::collections::{BTreeMap, VecDeque};

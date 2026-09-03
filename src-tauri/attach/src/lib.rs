@@ -66,12 +66,12 @@ pub use desktop_client_holder::DesktopClientHolder;
 pub use desktop_client_stop::DesktopClientStopHandle;
 #[cfg(feature = "client")]
 pub use desktop_supervisor::{serve_desktop_client_with, DesktopClientSupervisorStop};
+pub use envelope::*;
+pub use framing::*;
+pub use negotiation::*;
 #[cfg(feature = "client")]
 pub use presenter_client::{
     handshake_approval_presenter, serve_approval_presenter_with, ApprovalPresenterClient,
     ApprovalPresenterStopHandle, ApprovalPresenterSupervisorStop,
 };
-pub use envelope::*;
-pub use framing::*;
-pub use negotiation::*;
 pub use workspace::*;

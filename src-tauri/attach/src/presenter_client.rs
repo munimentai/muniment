@@ -9,9 +9,9 @@ use crate::protocol_helpers::{
 };
 use crate::{
     encode_frame, ApprovalDecision, ApprovalPresentRequest, ApprovalPresenterServeOutcome,
-    Authorization, AuthorizationSummary, Client, ClientError, ClientStream, Envelope, ErrorEnvelope,
-    Hello, Id, Operation, PeerAuthorizedGrant, Protocol, Request, Response, VersionRange, Welcome,
-    MAX_TEXT_LENGTH,
+    Authorization, AuthorizationSummary, Client, ClientError, ClientStream, Envelope,
+    ErrorEnvelope, Hello, Id, Operation, PeerAuthorizedGrant, Protocol, Request, Response,
+    VersionRange, Welcome, MAX_TEXT_LENGTH,
 };
 use serde_json::Value;
 use std::sync::{Arc, Condvar, Mutex};
@@ -472,8 +472,7 @@ mod tests {
         );
 
         assert_eq!(connects.get(), 0);
-        assert!(!stop.register_shutdown(|| {
-            panic!("a stopped supervisor must not register shutdown")
-        }));
+        assert!(!stop
+            .register_shutdown(|| { panic!("a stopped supervisor must not register shutdown") }));
     }
 }
