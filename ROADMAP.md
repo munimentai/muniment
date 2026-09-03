@@ -829,11 +829,12 @@ move strands inside the `cfg(unix)` `mod linux` block, not from the move itself.
 returns a `UnixStream`, so it cannot follow the client onto
 `Box<dyn ClientStream + Send>`, and no code calls it.
 `MigrationControlClient::into_stream` (`:2370`) has no caller either.
-`map_io_error` (`:2910`) is byte-identical to the private `map_io_error` in
-`src-tauri/attach/src/client_stream.rs:107`, and the presenter's `serve` loop is
-the only caller of the `mod linux` copy. `MAX_APPROVAL_DEADLINE_MS` (`:669`)
-reads only in the presenter's request validation. Each stranded symbol fails
-`clippy -D warnings` away from the edited code, so the loop never converged.
+`map_io_error` (`src-tauri/attach/src/client.rs:3107`) is byte-identical to the
+private `map_io_error` in `src-tauri/attach/src/client_stream.rs:107`, and the
+presenter's `serve` loop is the only caller of the `mod linux` copy.
+`MAX_APPROVAL_DEADLINE_MS` (`:669`) reads only in the presenter's request
+validation. Each stranded symbol fails `clippy -D warnings` away from the
+edited code, so the loop never converged.
 
 NEXT — re-cut 2026-09-03 after the platform-neutral presenter slice stuck.
 Seven slices are filed in order. First, ADR 0012 and `THREAT_MODEL.md` record
