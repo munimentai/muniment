@@ -15,22 +15,22 @@ use std::time::Duration;
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::desktop_service_message::{ArtifactFetchResult, RunStreamPage};
+#[cfg(unix)]
+use muniment_core::attach::live_connections::LiveConnectionRegistry;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::thread_service::{
     ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::ProtocolError;
+#[cfg(unix)]
+use muniment_core::attach::{
+    bounded_claim, ApprovalCoordinator, ApprovalDecision, ApprovalRequest,
+};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::{CompanionRecord, EntitlementSnapshotResult};
 use muniment_core::attach::{
     CompanionRegistry, RuntimeActivityGuard, RuntimeActivityRegistry, SignedWorkspaceApproval,
-};
-#[cfg(unix)]
-use muniment_core::attach::live_connections::LiveConnectionRegistry;
-#[cfg(unix)]
-use muniment_core::attach::{
-    bounded_claim, ApprovalCoordinator, ApprovalDecision, ApprovalRequest,
 };
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::auth::NativeDeviceListError;
@@ -1069,9 +1069,7 @@ mod tests {
         approval.record("workspace-a".into());
         let approvals = ApprovalCoordinator::default();
         let decider = approvals.clone();
-        approvals.register_presenter(move |request| {
-            decider.decide(&request.challenge, true)
-        });
+        approvals.register_presenter(move |request| decider.decide(&request.challenge, true));
 
         let decision = request_approval(
             &approval,
