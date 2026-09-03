@@ -1,6 +1,7 @@
 #[cfg(unix)]
 mod unix_tests {
     use std::cell::Cell;
+    use std::collections::BTreeSet;
     use std::io::{Read, Write};
     use std::net::Shutdown;
     use std::os::unix::net::UnixStream;
@@ -10,16 +11,20 @@ mod unix_tests {
     use muniment_core::attach::desktop_service_message::{
         CompanionProvenance, ThreadCreateAccepted,
     };
+    use muniment_core::attach::live_connections::LiveConnectionRegistry;
     use muniment_core::attach::thread_service::{
         ThreadListPage, ThreadListRequest, ThreadListService,
     };
     use muniment_core::attach::{
-        decode_frame, encode_frame, serve_windows_attach_session_with_reader,
-        serve_windows_attach_session_with_reader_factory, Authorization,
-        DesktopClientAdmissionError, DesktopClientAuthorizedGrant, Envelope, ErrorCode,
-        ErrorEnvelope, Id, Operation, Protocol, ProtocolError, Request, Welcome,
-        WindowsAttachPeerReader, WindowsAttachRouteReader, WindowsAttachSessionError,
-        WindowsAttachSessionOutcome, WindowsPeerError, WindowsPeerReadError, MAX_FRAME_LENGTH,
+        approval_waiter_with_claims, decode_frame, encode_frame,
+        serve_windows_attach_session_with_reader,
+        serve_windows_attach_session_with_reader_and_state,
+        serve_windows_attach_session_with_reader_factory, Approval, ApprovalCoordinator,
+        ApprovalDecision, ApprovalRequest, Authorization, DesktopClientAdmissionError,
+        DesktopClientAuthorizedGrant, Envelope, ErrorCode, ErrorEnvelope, Id, Operation, Protocol,
+        ProtocolError, Request, Welcome, WindowsAttachPeerReader, WindowsAttachRouteReader,
+        WindowsAttachSessionError, WindowsAttachSessionOutcome, WindowsPeerError,
+        WindowsPeerReadError, MAX_FRAME_LENGTH,
     };
 
     struct EmptyService;
@@ -121,10 +126,22 @@ mod unix_tests {
         frame
     }
 
-    fn hello_frame() -> Vec<u8> {
+    fn hello_frame_for_kind(kind: &str) -> Vec<u8> {
         frame(
-            br#"{"protocol":"muniment.attach/1","client":{"kind":"editor-extension","version":"0.0.1"},"supported":{"min":1,"max":1},"client_nonce":"nonce","authorized_client_id":"018f0000-0000-7000-8000-000000000099"}"#,
+            serde_json::json!({
+                "protocol": "muniment.attach/1",
+                "client": {"kind": kind, "version": "0.0.1"},
+                "supported": {"min": 1, "max": 1},
+                "client_nonce": "nonce",
+                "authorized_client_id": "018f0000-0000-7000-8000-000000000099"
+            })
+            .to_string()
+            .as_bytes(),
         )
+    }
+
+    fn hello_frame() -> Vec<u8> {
+        hello_frame_for_kind("desktop-client")
     }
 
     fn read_all(mut stream: UnixStream) -> Vec<u8> {
@@ -240,7 +257,7 @@ mod unix_tests {
         let WindowsAttachSessionOutcome::DesktopClient(admitted) = outcome.unwrap() else {
             panic!("expected the desktop-client route");
         };
-        assert_eq!(admitted.companion_kind, "editor-extension");
+        assert_eq!(admitted.companion_kind, "desktop-client");
         assert_eq!(admitted.companion_version, "0.0.1");
         assert_eq!(
             service.create_provenance,
@@ -286,6 +303,58 @@ mod unix_tests {
                 .unwrap();
         assert_eq!(welcome_length + consumed, response.len());
         assert!(!grant.capability.is_empty());
+    }
+
+    #[test]
+    fn matching_desktop_presenter_is_rejected_as_unauthorized() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        client.write_all(&hello_frame_for_kind("desktop")).unwrap();
+
+        assert_eq!(
+            serve_windows_attach_session_with_reader(
+                &mut server,
+                &reader(&[1, 2, 3], &[1, 2, 3]),
+                &route_reader("/Program Files/Muniment/muniment.exe"),
+                Some(expected_desktop_executable()),
+                "1.2.3",
+                deadline(),
+                &mut EmptyService,
+            ),
+            Err(WindowsAttachSessionError::ApprovalPresenterUnavailable)
+        );
+
+        drop(server);
+        let response = read_all(client);
+        let (error, consumed) = decode_frame::<ErrorEnvelope>(&response).unwrap().unwrap();
+        assert_eq!(consumed, response.len());
+        assert_eq!(error.error.code(), ErrorCode::Unauthorized);
+    }
+
+    #[test]
+    fn matching_desktop_companion_reaches_companion_exchange() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        client
+            .write_all(&hello_frame_for_kind("editor-extension"))
+            .unwrap();
+
+        assert_eq!(
+            serve_windows_attach_session_with_reader(
+                &mut server,
+                &reader(&[1, 2, 3], &[1, 2, 3]),
+                &route_reader("/Program Files/Muniment/muniment.exe"),
+                Some(expected_desktop_executable()),
+                "1.2.3",
+                deadline(),
+                &mut EmptyService,
+            ),
+            Ok(WindowsAttachSessionOutcome::Companion)
+        );
+
+        drop(server);
+        let response = read_all(client);
+        let (welcome, consumed) = decode_frame::<Welcome>(&response).unwrap().unwrap();
+        assert_eq!(consumed, response.len());
+        assert_eq!(welcome.authorization, Authorization::PairingRequired);
     }
 
     #[test]
@@ -343,6 +412,162 @@ mod unix_tests {
         assert_eq!(welcome.server_nonce.len(), 32);
         assert_eq!(welcome.authorization, Authorization::PairingRequired);
         assert_eq!(welcome.approval_challenge.len(), 32);
+    }
+
+    #[test]
+    fn approval_presenter_approves_companion_with_recorded_workspace() {
+        let coordinator = ApprovalCoordinator::default();
+        let recorded = Approval {
+            profile: "desktop-owner".into(),
+            workspace: "workspace-recorded".into(),
+            scopes: BTreeSet::from(["thread.read".into(), "run.write".into()]),
+            lifetime: Duration::from_secs(60),
+        };
+
+        let (mut presenter_client, mut presenter_server) = UnixStream::pair().unwrap();
+        presenter_client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let presenter_coordinator = coordinator.clone();
+        let presenter_session = std::thread::spawn(move || {
+            presenter_client
+                .write_all(&hello_frame_for_kind("desktop"))
+                .unwrap();
+            let _: Welcome = decode_frame(&read_frame(&mut presenter_client))
+                .unwrap()
+                .unwrap()
+                .0;
+            let _: DesktopClientAuthorizedGrant = decode_frame(&read_frame(&mut presenter_client))
+                .unwrap()
+                .unwrap()
+                .0;
+            let mut observed = None;
+            for _ in 0..2 {
+                let request_frame = read_frame(&mut presenter_client);
+                let (Envelope::Request(request), _) =
+                    decode_frame::<Envelope>(&request_frame).unwrap().unwrap()
+                else {
+                    panic!("expected an approval request");
+                };
+                observed = Some(request.body.clone());
+                presenter_client
+                    .write_all(
+                        &encode_frame(&serde_json::json!({
+                            "protocol": "muniment.attach/1",
+                            "request_id": request.request_id,
+                            "ok": true,
+                            "body": {
+                                "challenge": request.body["challenge"],
+                                "decision": "approve"
+                            }
+                        }))
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            (presenter_client, observed.unwrap())
+        });
+        let presenter_server_thread = std::thread::spawn(move || {
+            serve_windows_attach_session_with_reader_and_state(
+                &mut presenter_server,
+                &reader(&[1, 2, 3], &[1, 2, 3]),
+                &route_reader("/Program Files/Muniment/muniment.exe"),
+                Some(expected_desktop_executable()),
+                "1.2.3",
+                deadline(),
+                &mut EmptyService,
+                None,
+                presenter_coordinator,
+                |_: &muniment_core::attach::PairingChallenge, _: Duration| None,
+                &LiveConnectionRegistry::default(),
+            )
+        });
+
+        let probe = ApprovalRequest {
+            challenge: "presenter-ready".into(),
+            claimed_kind: "test".into(),
+            claimed_version: "1".into(),
+            workspace: "probe".into(),
+            scopes: BTreeSet::new(),
+        };
+        let ready_deadline = Instant::now() + Duration::from_secs(2);
+        while !coordinator.request(probe.clone(), Duration::from_millis(50)) {
+            assert!(
+                Instant::now() < ready_deadline,
+                "presenter did not claim coordinator"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        let (mut companion, mut companion_server) = UnixStream::pair().unwrap();
+        companion
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        companion
+            .write_all(&hello_frame_for_kind("editor-extension"))
+            .unwrap();
+        let waiter_coordinator = coordinator.clone();
+        let waiter_approval = recorded.clone();
+        let companion_session = std::thread::spawn(move || {
+            serve_windows_attach_session_with_reader_and_state(
+                &mut companion_server,
+                &reader(&[1, 2, 3], &[1, 2, 3]),
+                &route_reader("/Program Files/Other/other.exe"),
+                Some(expected_desktop_executable()),
+                "1.2.3",
+                deadline(),
+                &mut EmptyService,
+                Some(waiter_approval.clone()),
+                coordinator,
+                approval_waiter_with_claims(
+                    move |challenge: &muniment_core::attach::PairingChallenge,
+                          kind: &str,
+                          version: &str,
+                          remaining: Duration| {
+                        waiter_coordinator
+                            .request(
+                                ApprovalRequest {
+                                    challenge: challenge.as_str().to_owned(),
+                                    claimed_kind: kind.to_owned(),
+                                    claimed_version: version.to_owned(),
+                                    workspace: waiter_approval.workspace.clone(),
+                                    scopes: waiter_approval.scopes.clone(),
+                                },
+                                remaining,
+                            )
+                            .then(|| ApprovalDecision::Approve(waiter_approval.clone()))
+                    },
+                ),
+                &LiveConnectionRegistry::default(),
+            )
+        });
+
+        let welcome_frame = read_frame(&mut companion);
+        let (welcome, _) = decode_frame::<Welcome>(&welcome_frame).unwrap().unwrap();
+        assert_eq!(welcome.authorization, Authorization::PairingRequired);
+        let authorized_frame = read_frame(&mut companion);
+        let (authorized, _) = decode_frame::<muniment_core::attach::Authorized>(&authorized_frame)
+            .unwrap()
+            .unwrap();
+        assert_eq!(authorized.profile_id, recorded.profile);
+        assert_eq!(
+            authorized.workspace_scopes.get(&recorded.workspace),
+            Some(&recorded.scopes)
+        );
+
+        companion.shutdown(Shutdown::Write).unwrap();
+        assert_eq!(
+            companion_session.join().unwrap(),
+            Ok(WindowsAttachSessionOutcome::Companion)
+        );
+        let (presenter_client, observed) = presenter_session.join().unwrap();
+        assert_eq!(observed["workspace"], recorded.workspace);
+        assert_eq!(observed["scopes"], serde_json::json!(recorded.scopes));
+        drop(presenter_client);
+        assert_eq!(
+            presenter_server_thread.join().unwrap(),
+            Ok(WindowsAttachSessionOutcome::ApprovalPresenter)
+        );
     }
 
     #[test]
@@ -429,7 +654,7 @@ mod unix_tests {
     }
 
     #[test]
-    fn malformed_desktop_frame_writes_protocol_error() {
+    fn malformed_desktop_frame_returns_malformed_frame() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         client.write_all(&frame(b"{")).unwrap();
 
@@ -443,15 +668,10 @@ mod unix_tests {
                 deadline(),
                 &mut EmptyService,
             ),
-            Err(WindowsAttachSessionError::DesktopClientAdmission(
-                DesktopClientAdmissionError::MalformedFrame
-            ))
+            Err(WindowsAttachSessionError::MalformedFrame)
         );
         drop(server);
-        let response = read_all(client);
-        let (error, consumed) = decode_frame::<ErrorEnvelope>(&response).unwrap().unwrap();
-        assert_eq!(consumed, response.len());
-        assert_eq!(error.error.code(), ErrorCode::MalformedFrame);
+        assert!(read_all(client).is_empty());
     }
 }
 
