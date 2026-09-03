@@ -15,7 +15,7 @@ use std::time::Duration;
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::desktop_service_message::{ArtifactFetchResult, RunStreamPage};
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::live_connections::LiveConnectionRegistry;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::thread_service::{
@@ -23,7 +23,7 @@ use muniment_core::attach::thread_service::{
 };
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::ProtocolError;
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::{
     bounded_claim, ApprovalCoordinator, ApprovalDecision, ApprovalRequest,
 };
@@ -87,7 +87,7 @@ pub struct RuntimeAttachBoundaries {
     session_thread: Arc<SessionThread>,
     approval: SignedWorkspaceApproval,
     companion_registry: CompanionRegistry,
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     approvals: ApprovalCoordinator,
     sign_in_running: Arc<AtomicBool>,
     browser_opener: Arc<dyn BrowserOpener>,
@@ -122,7 +122,7 @@ impl RuntimeAttachBoundaries {
             approval.clone(),
             session_thread,
             companion_registry,
-            #[cfg(unix)]
+            #[cfg(any(unix, target_os = "windows"))]
             ApprovalCoordinator::default(),
             Arc::new(AtomicBool::new(false)),
             RuntimeChatEventBroadcast::new(approval),
@@ -142,7 +142,7 @@ impl RuntimeAttachBoundaries {
         approval: SignedWorkspaceApproval,
         session_thread: Arc<SessionThread>,
         companion_registry: CompanionRegistry,
-        #[cfg(unix)] approvals: ApprovalCoordinator,
+        #[cfg(any(unix, target_os = "windows"))] approvals: ApprovalCoordinator,
         sign_in_running: Arc<AtomicBool>,
         chat_events: RuntimeChatEventBroadcast,
     ) -> Self {
@@ -158,7 +158,7 @@ impl RuntimeAttachBoundaries {
             session_thread,
             approval,
             companion_registry,
-            #[cfg(unix)]
+            #[cfg(any(unix, target_os = "windows"))]
             approvals,
             sign_in_running,
             browser_opener: Arc::new(open_browser),
@@ -189,19 +189,19 @@ impl RuntimeAttachBoundaries {
     }
 
     /// Returns the approval coordinator shared by this activation.
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub fn approval_coordinator(&self) -> ApprovalCoordinator {
         self.approvals.clone()
     }
 
     /// Returns the live connection registry shared by this activation.
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub fn live_connections(&self) -> LiveConnectionRegistry {
         self.companion_registry.live_connections()
     }
 
     /// Prompts the claimed presenter for one companion pairing decision.
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub fn request_approval(
         &self,
         challenge: &str,
@@ -220,7 +220,7 @@ impl RuntimeAttachBoundaries {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub(crate) fn request_approval(
     approval: &SignedWorkspaceApproval,
     approvals: &ApprovalCoordinator,

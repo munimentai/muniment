@@ -1,27 +1,34 @@
 //! Runtime-owned Windows attach accept loop.
 
 use std::time::Duration;
+#[cfg(target_os = "windows")]
+use std::time::Instant;
 
 #[cfg(test)]
 use muniment_core::attach::thread_service::ThreadListService;
 #[cfg(target_os = "windows")]
 use muniment_core::attach::{
-    serve_next_windows_attach_until, WindowsAttachAcceptError, WindowsAttachBindError,
-    WindowsAttachListener, WindowsAttachServeOutcome, WindowsAttachStopEvent,
+    approval_waiter_with_claims, serve_windows_attach_session_with_state,
+    WindowsAttachAcceptOutcome as CoreWindowsAttachAcceptOutcome, WindowsAttachBindError,
+    WindowsAttachListener, WindowsAttachStopEvent,
 };
-#[cfg(any(test, target_os = "windows"))]
+#[cfg(test)]
 use muniment_core::attach::{DesktopAttachService, ProtocolError};
+#[cfg(all(test, target_os = "windows"))]
+use muniment_core::attach::{WindowsAttachAcceptError, WindowsAttachServeOutcome};
 #[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(any(unix, target_os = "windows"))]
 use std::sync::Arc;
 
-#[cfg(any(test, target_os = "windows"))]
+#[cfg(test)]
 use crate::RuntimeAttachBoundaries;
 #[cfg(any(unix, target_os = "windows"))]
 use crate::RuntimeAttachState;
 
 const FAILED_ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(50);
+#[cfg(target_os = "windows")]
+const WINDOWS_ATTACH_SESSION_TIMEOUT: Duration = Duration::from_secs(5);
 /// The consecutive failed accept limit for one activation.
 pub const MAX_CONSECUTIVE_FAILED_ACCEPTS: usize = 5;
 
@@ -59,7 +66,7 @@ pub struct WindowsAttachAcceptor {
     state: Arc<RuntimeAttachState>,
 }
 
-#[cfg(any(test, target_os = "windows"))]
+#[cfg(test)]
 fn runtime_attach_service_factory(
     state: Arc<RuntimeAttachState>,
 ) -> impl Fn() -> Result<DesktopAttachService<RuntimeAttachBoundaries>, ProtocolError> + Send + Sync
@@ -115,17 +122,55 @@ impl WindowsAttachAcceptBoundary for WindowsAttachAcceptor {
     }
 
     fn serve_next(&mut self) -> WindowsAttachAcceptOutcome {
-        let service_factory = Arc::new(runtime_attach_service_factory(Arc::clone(&self.state)));
-        windows_attach_accept_outcome(serve_next_windows_attach_until(
-            &mut self.listener,
-            env!("CARGO_PKG_VERSION"),
-            &self.stop,
-            service_factory,
-        ))
+        match self.listener.accept_until(&self.stop) {
+            Ok(CoreWindowsAttachAcceptOutcome::Connected(mut stream)) => {
+                stream.set_stop_event(Arc::clone(&self.stop));
+                let state = Arc::clone(&self.state);
+                std::thread::spawn(move || {
+                    let Ok(mut service) = state.attach_service() else {
+                        return;
+                    };
+                    let approval = service.boundaries.signed_workspace_approval();
+                    let coordinator = service.boundaries.approval_coordinator();
+                    let live_connections = service.boundaries.live_connections();
+                    let approval_waiter = service.boundaries.approval_coordinator();
+                    let waiter_approval = approval.clone();
+                    let waiter = approval_waiter_with_claims(
+                        move |challenge: &muniment_core::attach::PairingChallenge,
+                              kind: &str,
+                              version: &str,
+                              remaining: Duration| {
+                            Some(crate::attach_boundaries::request_approval(
+                                &waiter_approval,
+                                &approval_waiter,
+                                challenge.as_str(),
+                                kind,
+                                version,
+                                remaining,
+                            ))
+                        },
+                    );
+                    let deadline = Instant::now() + WINDOWS_ATTACH_SESSION_TIMEOUT;
+                    let _ = serve_windows_attach_session_with_state(
+                        stream,
+                        env!("CARGO_PKG_VERSION"),
+                        deadline,
+                        &mut service,
+                        approval.approval(),
+                        coordinator,
+                        waiter,
+                        &live_connections,
+                    );
+                });
+                WindowsAttachAcceptOutcome::Served
+            }
+            Ok(CoreWindowsAttachAcceptOutcome::Stopped) => WindowsAttachAcceptOutcome::Stopped,
+            Err(_) => WindowsAttachAcceptOutcome::Failed,
+        }
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(test, target_os = "windows"))]
 fn windows_attach_accept_outcome(
     result: Result<WindowsAttachServeOutcome, WindowsAttachAcceptError>,
 ) -> WindowsAttachAcceptOutcome {
