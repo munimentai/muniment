@@ -821,15 +821,28 @@ Windows non-state serving entries have test callers alone.
 its factory twins, and the stub `serve_companion_exchange_with_frame` are
 superseded. The sixth filed slice retires them.
 
-NEXT — re-cut 2026-09-03 after MUNIDESK-1661 and 1662 landed. Six slices
-are filed in order. First, ADR 0012 and `THREAT_MODEL.md` record the served
-Windows presenter and pairing routes. Second, the superseded non-state macOS
-session entry retires. Third, the approval-presenter client becomes
-platform-neutral over `ClientStream`. Fourth, `muniment-core` connects and
-serves the Windows approval presenter over the per-user pipe. Fifth, the
-Windows desktop starts the approval presenter. Sixth, the superseded Windows
-non-state serving entries retire. The installed Windows pairing probe
-follows after the presenter start lands.
+MEASURED 2026-09-03 (planner, re-dissected the returned ticket) — the third
+slice of the 2026-09-03 cut stuck. The implementer could not land the
+platform-neutral approval-presenter move as one ticket after repeated
+attempts. The ticket bundled three moves that the desktop client landed as
+three separate tickets: the client and handshake (MUNIDESK-1550), the
+supervisor loop (MUNIDESK-1562), and the stop handle (MUNIDESK-1603). The
+re-cut below splits it the same way.
+
+NEXT — re-cut 2026-09-03 after the third slice stuck. The first slice
+landed as MUNIDESK-1664, and the second and fifth slices stay filed. The
+stuck third slice splits into three sub-slices. First, the presenter stop
+handle moves to a platform-neutral module over the shutdown-hook shape of
+`desktop_client_stop.rs`. Second, the presenter client and its handshake
+move over `Box<dyn ClientStream>` the way `desktop_client.rs` holds
+`DesktopClient`. Third, a `serve_approval_presenter_with` supervisor loop
+takes a connect closure, and the Unix `serve_approval_presenter_at`
+delegates to it. The first two sub-slices are filed and are independent of
+each other. The supervisor sub-slice follows after both land, because its
+loop needs the moved client and the moved stop handle. The fourth, fifth,
+and sixth slices of the 2026-09-03 cut then proceed in order. The filed
+fifth slice waits behind the third and fourth. The installed Windows
+pairing probe follows after the presenter start lands.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
