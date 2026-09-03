@@ -15,12 +15,18 @@ use std::time::Duration;
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::desktop_service_message::{ArtifactFetchResult, RunStreamPage};
+#[cfg(unix)]
+use muniment_core::attach::live_connections::LiveConnectionRegistry;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::thread_service::{
     ThreadListPage, ThreadListRequest, ThreadListService, ThreadOpenPage, ThreadOpenRequest,
 };
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::ProtocolError;
+#[cfg(unix)]
+use muniment_core::attach::{
+    bounded_claim, ApprovalCoordinator, ApprovalDecision, ApprovalRequest,
+};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::{CompanionRecord, EntitlementSnapshotResult};
 use muniment_core::attach::{
@@ -81,6 +87,8 @@ pub struct RuntimeAttachBoundaries {
     session_thread: Arc<SessionThread>,
     approval: SignedWorkspaceApproval,
     companion_registry: CompanionRegistry,
+    #[cfg(unix)]
+    approvals: ApprovalCoordinator,
     sign_in_running: Arc<AtomicBool>,
     browser_opener: Arc<dyn BrowserOpener>,
     chat_events: RuntimeChatEventBroadcast,
@@ -114,6 +122,8 @@ impl RuntimeAttachBoundaries {
             approval.clone(),
             session_thread,
             companion_registry,
+            #[cfg(unix)]
+            ApprovalCoordinator::default(),
             Arc::new(AtomicBool::new(false)),
             RuntimeChatEventBroadcast::new(approval),
         )
@@ -132,6 +142,7 @@ impl RuntimeAttachBoundaries {
         approval: SignedWorkspaceApproval,
         session_thread: Arc<SessionThread>,
         companion_registry: CompanionRegistry,
+        #[cfg(unix)] approvals: ApprovalCoordinator,
         sign_in_running: Arc<AtomicBool>,
         chat_events: RuntimeChatEventBroadcast,
     ) -> Self {
@@ -147,6 +158,8 @@ impl RuntimeAttachBoundaries {
             session_thread,
             approval,
             companion_registry,
+            #[cfg(unix)]
+            approvals,
             sign_in_running,
             browser_opener: Arc::new(open_browser),
             chat_events,
@@ -173,6 +186,70 @@ impl RuntimeAttachBoundaries {
     /// Returns the approval state shared with the attach listener.
     pub fn signed_workspace_approval(&self) -> SignedWorkspaceApproval {
         self.approval.clone()
+    }
+
+    /// Returns the approval coordinator shared by this activation.
+    #[cfg(unix)]
+    pub fn approval_coordinator(&self) -> ApprovalCoordinator {
+        self.approvals.clone()
+    }
+
+    /// Returns the live connection registry shared by this activation.
+    #[cfg(unix)]
+    pub fn live_connections(&self) -> LiveConnectionRegistry {
+        self.companion_registry.live_connections()
+    }
+
+    /// Prompts the claimed presenter for one companion pairing decision.
+    #[cfg(unix)]
+    pub fn request_approval(
+        &self,
+        challenge: &str,
+        claimed_kind: &str,
+        claimed_version: &str,
+        remaining: Duration,
+    ) -> ApprovalDecision {
+        request_approval(
+            &self.approval,
+            &self.approvals,
+            challenge,
+            claimed_kind,
+            claimed_version,
+            remaining,
+        )
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn request_approval(
+    approval: &SignedWorkspaceApproval,
+    approvals: &ApprovalCoordinator,
+    challenge: &str,
+    claimed_kind: &str,
+    claimed_version: &str,
+    remaining: Duration,
+) -> ApprovalDecision {
+    let Some(recorded) = approval.approval() else {
+        return ApprovalDecision::Deny;
+    };
+    let approved = approvals.request(
+        ApprovalRequest {
+            challenge: challenge.to_owned(),
+            claimed_kind: bounded_claim(claimed_kind),
+            claimed_version: bounded_claim(claimed_version),
+            workspace: recorded.workspace.clone(),
+            scopes: recorded.scopes.clone(),
+        },
+        remaining,
+    );
+    if !approved {
+        return ApprovalDecision::Deny;
+    }
+    match approval.approval() {
+        Some(current) if current.workspace == recorded.workspace => {
+            ApprovalDecision::Approve(current)
+        }
+        _ => ApprovalDecision::Deny,
     }
 }
 
@@ -984,6 +1061,52 @@ fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn recorded_workspace_approval_reaches_the_claimed_presenter() {
+        let approval = SignedWorkspaceApproval::default();
+        approval.record("workspace-a".into());
+        let approvals = ApprovalCoordinator::default();
+        let decider = approvals.clone();
+        approvals.register_presenter(move |request| decider.decide(&request.challenge, true));
+
+        let decision = request_approval(
+            &approval,
+            &approvals,
+            "challenge-a",
+            "editor-extension",
+            "1.0.0",
+            Duration::from_secs(1),
+        );
+
+        assert!(matches!(decision, ApprovalDecision::Approve(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_workspace_approval_denies_without_prompting() {
+        let prompted = Arc::new(AtomicBool::new(false));
+        let presenter_prompted = Arc::clone(&prompted);
+        let approvals = ApprovalCoordinator::default();
+        approvals.register_presenter(move |_| {
+            presenter_prompted.store(true, Ordering::Release);
+            true
+        });
+
+        assert_eq!(
+            request_approval(
+                &SignedWorkspaceApproval::default(),
+                &approvals,
+                "challenge-a",
+                "editor-extension",
+                "1.0.0",
+                Duration::from_secs(1),
+            ),
+            ApprovalDecision::Deny
+        );
+        assert!(!prompted.load(Ordering::Acquire));
+    }
 
     #[cfg(any(unix, target_os = "windows"))]
     #[test]

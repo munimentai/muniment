@@ -8,7 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use muniment_core::attach::{
-    decode_frame, serve_macos_attach_session_with_reader, DesktopAttachService,
+    approval_waiter_with_claims, bounded_claim, decode_frame,
+    serve_macos_attach_session_with_reader, serve_macos_attach_session_with_reader_and_state,
+    ApprovalDecision, ApprovalRequest, Authorized, DesktopAttachService, Event, EventName,
     MacosAttachRouteReader, MacosPeerReadError, ProtocolError, Welcome,
 };
 use muniment_runtime::{
@@ -180,6 +182,112 @@ fn hello_frame() -> Vec<u8> {
     let mut frame = Vec::with_capacity(4 + body.len());
     frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
     frame.extend_from_slice(body);
+    frame
+}
+
+struct PairingBoundary {
+    server: Option<UnixStream>,
+}
+
+impl MacosAttachServeBoundary for PairingBoundary {
+    type StopSignal = BlockingStopSignal;
+
+    fn stop_signal(&self) -> Self::StopSignal {
+        unreachable!()
+    }
+
+    fn serve_next(&mut self, service_factory: ServiceFactory) -> WindowsAttachAcceptOutcome {
+        let mut service = service_factory().unwrap();
+        let approval = service.boundaries.signed_workspace_approval();
+        let coordinator = service.boundaries.approval_coordinator();
+        let live_connections = service.boundaries.live_connections();
+        let waiter_approval = approval.clone();
+        let waiter_coordinator = coordinator.clone();
+        let waiter = approval_waiter_with_claims(
+            move |challenge: &muniment_core::attach::PairingChallenge,
+                  kind: &str,
+                  version: &str,
+                  remaining: Duration| {
+                let recorded = waiter_approval.approval()?;
+                let approved = waiter_coordinator.request(
+                    ApprovalRequest {
+                        challenge: challenge.as_str().to_owned(),
+                        claimed_kind: bounded_claim(kind),
+                        claimed_version: bounded_claim(version),
+                        workspace: recorded.workspace.clone(),
+                        scopes: recorded.scopes.clone(),
+                    },
+                    remaining,
+                );
+                approved.then_some(ApprovalDecision::Approve(recorded))
+            },
+        );
+        serve_macos_attach_session_with_reader_and_state(
+            self.server.take().unwrap(),
+            &CompanionRoute,
+            Path::new("/Applications/Muniment.app/muniment"),
+            env!("CARGO_PKG_VERSION"),
+            Duration::from_secs(1),
+            &mut service,
+            approval.approval(),
+            coordinator,
+            waiter,
+            &live_connections,
+        )
+        .unwrap();
+        WindowsAttachAcceptOutcome::Served
+    }
+}
+
+#[test]
+fn companion_pairing_uses_the_activation_presenter_and_live_registry() {
+    let profile = TemporaryProfile::new("macos-acceptor-pairing", true);
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut acceptor =
+        MacosAttachAcceptorWithBoundary::bind_with(&profile.profile, &profile.config, |_| {
+            Ok(PairingBoundary {
+                server: Some(server),
+            })
+        })
+        .unwrap();
+    let state = acceptor.retention_state().unwrap();
+    state
+        .signed_workspace_approval()
+        .record("workspace-a".into());
+    let coordinator = state.boundaries().approval_coordinator();
+    let decider = coordinator.clone();
+    coordinator.register_presenter(move |request| decider.decide(&request.challenge, true));
+    let server_thread = thread::spawn(move || acceptor.serve_next());
+
+    client.write_all(&hello_frame()).unwrap();
+    let _: Welcome = decode_frame(&read_frame(&mut client)).unwrap().unwrap().0;
+    let authorized: Authorized = decode_frame(&read_frame(&mut client)).unwrap().unwrap().0;
+    state
+        .companion_registry()
+        .revoke("018f0000-0000-7000-8000-000000000099")
+        .unwrap();
+
+    assert!(!authorized.authorized_client_credential.is_empty());
+    let event: Event = decode_frame(&read_frame(&mut client)).unwrap().unwrap().0;
+    assert_eq!(event.event, EventName::CapabilityRevoked);
+    assert_eq!(event.body["capability"], authorized.capability);
+    assert_eq!(event.body["reason"], "companion_revoked");
+    assert_eq!(
+        server_thread.join().unwrap(),
+        WindowsAttachAcceptOutcome::Served
+    );
+}
+
+fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
+    let mut prefix = [0_u8; 4];
+    stream.read_exact(&mut prefix).unwrap();
+    let length = u32::from_be_bytes(prefix) as usize;
+    let mut frame = vec![0_u8; 4 + length];
+    frame[..4].copy_from_slice(&prefix);
+    stream.read_exact(&mut frame[4..]).unwrap();
     frame
 }
 
