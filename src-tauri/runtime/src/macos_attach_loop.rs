@@ -5,15 +5,18 @@ use std::path::{Path, PathBuf};
 #[cfg(any(unix, target_os = "windows"))]
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 use muniment_core::attach::{
-    serve_macos_attach_session, MacosAttachListener, MacosAttachStopEvent, MacosAttachWaitOutcome,
+    approval_waiter_with_claims, serve_macos_attach_session_with_state, MacosAttachListener,
+    MacosAttachStopEvent, MacosAttachWaitOutcome,
 };
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::{DesktopAttachService, ProtocolError};
 
+#[cfg(target_os = "macos")]
+use crate::attach_boundaries::request_approval;
 #[cfg(target_os = "macos")]
 use crate::{installed_desktop_executable, WindowsAttachBindFailure, WindowsAttachFactory};
 #[cfg(any(unix, target_os = "windows"))]
@@ -212,12 +215,36 @@ impl MacosAttachServeBoundary for SystemMacosAttachBoundary {
                     let Ok(mut service) = service_factory() else {
                         return;
                     };
-                    let _ = serve_macos_attach_session(
+                    let approval = service.boundaries.signed_workspace_approval();
+                    let coordinator = service.boundaries.approval_coordinator();
+                    let live_connections = service.boundaries.live_connections();
+                    let approval_waiter = service.boundaries.approval_coordinator();
+                    let waiter_approval = approval.clone();
+                    let waiter = approval_waiter_with_claims(
+                        move |challenge: &muniment_core::attach::PairingChallenge,
+                              kind: &str,
+                              version: &str,
+                              remaining: Duration| {
+                            Some(request_approval(
+                                &waiter_approval,
+                                &approval_waiter,
+                                challenge.as_str(),
+                                kind,
+                                version,
+                                remaining,
+                            ))
+                        },
+                    );
+                    let _ = serve_macos_attach_session_with_state(
                         stream,
                         &expected_desktop_executable,
                         env!("CARGO_PKG_VERSION"),
-                        Instant::now() + MACOS_ATTACH_SESSION_TIMEOUT,
+                        MACOS_ATTACH_SESSION_TIMEOUT,
                         &mut service,
+                        approval.approval(),
+                        coordinator,
+                        waiter,
+                        &live_connections,
                     );
                 });
                 WindowsAttachAcceptOutcome::Served
