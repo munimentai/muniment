@@ -4,53 +4,14 @@ Phases mirror harness-spec §9. Muniment-cloud Phase 1 native auth and the cloud
 prerequisites for desktop chat went live on 2026-07-11. Client work that uses
 them must exercise the real contracts. It must add no mocked production path.
 
-> **Compacted 2026-08-04, again 2026-08-07, again 2026-08-12, again
-> 2026-08-13, again 2026-08-14, again 2026-08-15, again 2026-08-16, again
-> 2026-08-17, again 2026-08-18, again 2026-08-19, and again 2026-08-20.** This document reached 265 KB and no longer
-> fit in one read.
-> Every landed slice used to carry its own paragraph. Those paragraphs are now
-> per-lane summaries with their ticket ranges. Every open item, parked item,
-> held item, gated item, and do-not-re-file measurement is preserved below. Git
-> history holds the full slice-by-slice record. The first 2026-08-12 pass took
-> the ADR 0012 extraction section. The second took the ADR 0024 code-diff chain.
-> The third took the memory index and retrieval section. The fourth took the
-> signed-in shell section. The fifth took the desktop QA automation repair
-> waves. The sixth took the Phase 3 voice section. The seventh took the
-> companion execution surfaces section. The eighth took the onboarding and
-> Muniment Home section. The ninth took the durable local run journal section.
-> The tenth took the cross-surface contracts section. The eleventh took the
-> stable release and distribution section. The twelfth took the desktop QA
-> automation section. The thirteenth and the fifteenth both took the ADR 0012
-> runtime-service extraction section. The fourteenth took the Phase 2 client
-> core section. The sixteenth through the twenty-fifth all took that
-> extraction section again, and so did the twenty-sixth through the
-> thirty-fourth, and the thirty-fifth. The thirty-sixth (2026-08-17) took it
-> again after the Linux cutover landed, and the thirty-seventh (2026-08-18)
-> folded the four eighty-sixth-wave slices into one entry. The thirty-eighth
-> (2026-08-19) recorded the eighty-eighth-wave landings. The thirty-ninth
-> (2026-08-19) recorded the eighty-ninth-wave landings and named the two
-> remaining consumers. The fortieth (2026-08-19) recorded the ninetieth-wave
-> open-thread landing and named the remaining reconnect consumer. The
-> forty-first (2026-08-19) recorded the reconnect landing and named the
-> remaining attach operations. The forty-second (2026-08-19) recorded the
-> request.cancel, run.open contract, artifact registry, and open_run client
-> landings. The forty-third (2026-08-20) recorded the run.open dispatch,
-> artifact identity, and artifact client landings. The forty-fourth
-> (2026-08-20) recorded the completed ADR 0009 artifact-transfer chain and
-> held product consumption for its real event contract. The forty-fifth
-> (2026-08-25) folded the passive-delivery and read-contract chains into two
-> entries, recorded the macOS cutover, and recorded the Windows activation
-> groundwork. The forty-sixth (2026-08-26) folded the twelve Windows slices
-> into two entries. The forty-seventh (2026-08-28) dropped eight settled Windows
-> rulings and folded three landed slices into one entry. The forty-eighth
-> (2026-08-29) folded the three served-endpoint slices into one entry and dropped
-> two settled route rulings. The forty-ninth (2026-08-29) folded sixteen Windows
-> entries into three and dropped one settled runtime ruling. The fiftieth
-> (2026-08-31) folded the landed service-widening chain into one entry. The
-> fifty-first (2026-09-01) folded the Windows desktop-client cutover chain
-> into one entry. The fifty-second (2026-09-02) folded the two 2026-09-01 macOS
-> measurements into one restoration entry. It grows every wave, so it stays the
-> next compaction target.
+> **Compacted repeatedly since 2026-08-04, most recently 2026-09-03.** This
+> document reached 265 KB and no longer fit in one read. Every landed slice
+> used to carry its own paragraph. Those paragraphs are now per-lane summaries
+> with their ticket ranges. Every open item, parked item, held item, gated
+> item, and do-not-re-file measurement is preserved below. Git history holds
+> the full slice-by-slice record and the pass-by-pass history of this note.
+> The ADR 0012 runtime-service extraction section absorbs most passes, and it
+> stays the next compaction target.
 
 ## M0 — Scaffold (done 2026-07-09)
 
@@ -783,23 +744,60 @@ and `linux.rs` delegates to it (MUNIDESK-1650). The installed macOS smoke's
 `probe_macos_runtime` demand is now satisfiable, and the next nightly proves
 it.
 
-NEXT — re-cut 2026-09-02 after those landings. One lane opens: companion
-service off Linux, toward a macOS pairing the installed smoke can prove.
-Four slices are filed in order. First, the pairing and authorization
-exchange (`run_session`, `src-tauri/core/src/attach/linux.rs:850`) moves
-onto the platform-neutral `DeadlineStream` trait, following the
-MUNIDESK-1650 shape, with the peer identity and the migration detour
-injected. Second, the macOS route names the approval-presenter connection.
-Today `name_macos_attach_connection_route` sends the desktop's presenter
-into desktop-client admission, the presenter rejects the grant shape, and
-its supervisor reconnects every 250 milliseconds for the whole session.
-Third, the macOS session admits the presenter through a platform-neutral
-admission core and serves it with the existing `serve_approval_presenter`.
-Fourth, the macOS companion route runs the extracted exchange plus
-`companion_session::serve_requests`, with a fail-closed default waiter at
-the runtime call site. The runtime slice that wires the real approval
-waiter, the coordinator, and the live-connection registry follows after
-those land.
+DONE 2026-09-02 through 2026-09-03 — the whole macOS companion-service chain
+landed (MUNIDESK-1653, 1655, 1656). The pairing and authorization exchange is
+platform-neutral over `DeadlineStream`
+(`src-tauri/core/src/attach/companion_pairing.rs:153`), and it ends in the
+platform-neutral `companion_session::serve_requests`.
+`name_macos_desktop_attach_connection_route`
+(`src-tauri/core/src/attach/macos_route.rs:44`) refines a desktop-image peer by
+its first hello, so the desktop presenter no longer loops through
+desktop-client admission. `serve_macos_attach_session_with_state`
+(`src-tauri/core/src/attach/macos_session.rs:43`) serves all three routes. It
+admits the presenter and serves `serve_approval_presenter`, it serves the
+desktop client session, and it runs the pairing exchange for a companion. The
+macOS activation wires the live approval waiter, the coordinator, and the
+shared `LiveConnectionRegistry`
+(`src-tauri/runtime/src/macos_attach_loop.rs:238`).
+
+MEASURED 2026-09-03 (planner, read the with-state session beside the Linux
+`run_session`) — macOS companion provenance records uid 0 and pid 0. The
+`Companion` route variant carries no process id, so
+`serve_macos_attach_route_with_state`
+(`src-tauri/core/src/attach/macos_session.rs:138`) drops the pid the route
+reader already returned, and the companion branch hardcodes `peer_uid: 0`.
+Linux records the kernel peer credentials
+(`src-tauri/core/src/attach/linux.rs:799`). Journal provenance therefore
+claims root for every macOS companion. The first filed slice closes this.
+
+MEASURED 2026-09-03 (planner, read ADR 0012 and THREAT_MODEL against the
+landed chain) — both security documents are stale on macOS. The 2026-08-29
+macOS route amendment still says the route check reads no Hello frame field,
+and `THREAT_MODEL.md` still says the macOS companion route answers one plain
+welcome frame and closes. The third filed slice corrects both records.
+
+MEASURED 2026-09-03 (planner, searched every caller) — the non-state
+`serve_macos_attach_session` entry
+(`src-tauri/core/src/attach/macos_session.rs:205`) has test callers alone, and
+it still carries the superseded stub companion exchange. The fifth filed slice
+retires it.
+
+MEASURED 2026-09-03 (planner, read the presenter start sites) — the Windows
+desktop starts no approval presenter, because `start_approval_presenter` is
+`#[cfg(unix)]` (`src-tauri/src/attach_service/listener.rs:41`), and
+`WindowsAttachConnectionRoute` has no presenter variant. The Windows
+companion-service lane therefore starts at the route decision, before any
+serving slice.
+
+NEXT — re-cut 2026-09-03 after the macOS chain landed. Five slices are filed
+in order. First, the macOS session records the verified companion peer
+identity. Second, the installed macOS smoke probes the served pairing exchange
+with a companion hello and requires the welcome challenge. Third, ADR 0012 and
+THREAT_MODEL record the served macOS routes. Fourth, the Windows attach route
+names the approval-presenter connection from the first hello and fails it
+closed. Fifth, the superseded non-state macOS session entry retires. The
+Windows presenter serving and the approval-waiter widening follow after the
+route naming lands.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
