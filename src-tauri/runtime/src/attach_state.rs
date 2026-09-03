@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use muniment_core::attach::ApprovalCoordinator;
 use muniment_core::attach::{
     CompanionRegistry, DesktopAttachService, DrainState, ProtocolError, RuntimeActivityRegistry,
@@ -35,7 +35,7 @@ pub struct RuntimeAttachState {
     approval: SignedWorkspaceApproval,
     session_thread: Arc<SessionThread>,
     companion_registry: CompanionRegistry,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     approvals: ApprovalCoordinator,
     sign_in_running: Arc<AtomicBool>,
     chat_events: RuntimeChatEventBroadcast,
@@ -72,7 +72,7 @@ impl RuntimeAttachState {
             approval: approval.clone(),
             session_thread: Arc::new(SessionThread::default()),
             companion_registry,
-            #[cfg(target_os = "linux")]
+            #[cfg(unix)]
             approvals: ApprovalCoordinator::default(),
             sign_in_running: Arc::new(AtomicBool::new(false)),
             chat_events: RuntimeChatEventBroadcast::new(approval),
@@ -93,6 +93,8 @@ impl RuntimeAttachState {
             self.approval.clone(),
             Arc::clone(&self.session_thread),
             self.companion_registry.clone(),
+            #[cfg(unix)]
+            self.approvals.clone(),
             Arc::clone(&self.sign_in_running),
             self.chat_events.clone(),
         )
