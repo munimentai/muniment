@@ -790,11 +790,11 @@ served connection (`src-tauri/runtime/src/windows_attach_loop.rs:154`). The
 MUNIDESK-1662 pull request delivered the third and fourth filed slices with
 the fifth, so only the macOS retirement remains from the 2026-09-03 batch.
 
-MEASURED 2026-09-03 (planner, searched every caller) — the non-state
-`serve_macos_attach_session` entry
-(`src-tauri/core/src/attach/macos_session.rs:214`) has test callers alone, and
-it still carries the superseded stub companion exchange. The second filed
-slice retires it.
+MEASURED 2026-09-03, RESOLVED 2026-09-03 — the non-state
+`serve_macos_attach_session` entry had test callers alone, and it still
+carried the superseded stub companion exchange. MUNIDESK-1665 retired the
+entry, its with-reader twin, and the stub exchange, and the retargeted tests
+keep the coverage through the with-state entry.
 
 MEASURED 2026-09-03, PARTLY RESOLVED 2026-09-03 — the Windows desktop starts
 no approval presenter. The route decision and the served presenter route
@@ -805,13 +805,12 @@ Windows pairing approval finds no presenter and fails closed. The whole
 approval-presenter client (`src-tauri/attach/src/client.rs:2111`) also sits
 inside the `cfg(unix)` module over `UnixStream`, where the desktop client
 already went platform-neutral over `ClientStream` (MUNIDESK-1550). The
-third, fourth, and fifth filed slices close this measurement.
+first, second, third, and fourth re-filed slices close this measurement.
 
-MEASURED 2026-09-03 (planner, read the Windows sentences of both records) —
-ADR 0012 ends at the macOS route amendment, and `THREAT_MODEL.md:64` still
-says the Windows route check reads no hello frame field. Neither record
-names the served Windows presenter and pairing routes. The first filed slice
-records them, the way MUNIDESK-1659 recorded the macOS routes.
+MEASURED 2026-09-03, RESOLVED 2026-09-03 — ADR 0012 ended at the macOS route
+amendment, and `THREAT_MODEL.md` said the Windows route check reads no hello
+frame field. MUNIDESK-1664 records the served Windows presenter and pairing
+routes in both, the way MUNIDESK-1659 recorded the macOS routes.
 
 MEASURED 2026-09-03 (planner, searched every caller of each entry) — the
 Windows non-state serving entries have test callers alone.
@@ -819,7 +818,7 @@ Windows non-state serving entries have test callers alone.
 `serve_windows_attach_session_with_state`, so `serve_next_windows_attach`,
 `serve_next_windows_attach_until`, `serve_windows_attach_session_with_reader`,
 its factory twins, and the stub `serve_companion_exchange_with_frame` are
-superseded. The sixth filed slice retires them.
+superseded. The fifth re-filed slice retires them.
 
 MEASURED 2026-09-03 (planner, made the move in a scratch checkout and ran the
 crate's fmt, clippy, and test loop) — the platform-neutral approval-presenter
@@ -836,20 +835,23 @@ presenter's `serve` loop is the only caller of the `mod linux` copy.
 validation. Each stranded symbol fails `clippy -D warnings` away from the
 edited code, so the loop never converged.
 
-NEXT — re-cut 2026-09-03 after the platform-neutral presenter slice stuck.
-Seven slices are filed in order. First, ADR 0012 and `THREAT_MODEL.md` record
-the served Windows presenter and pairing routes. Second, the superseded
-non-state macOS session entry retires. Third, the approval-presenter stop
-handle stores a shutdown hook behind named methods. Fourth, the attach client
-sheds the three symbols that strand the presenter move. Fifth,
+DONE 2026-09-03 — the first three re-cut slices landed (MUNIDESK-1664, 1665,
+1674). ADR 0012 and `THREAT_MODEL.md` record the served Windows presenter and
+pairing routes, the superseded non-state macOS session entry is gone, and the
+approval-presenter stop handle stores a shutdown hook behind named methods.
+
+NEXT — re-filed 2026-09-03 after the queue drained past the first three
+slices. Five slices are filed in order. First, the attach client sheds the
+three symbols that strand the presenter move. Second,
 `ApprovalPresenterClient` and its handshake move to a new `presenter_client.rs`
 over `Box<dyn ClientStream + Send>`, and the Unix
 `handshake_approval_presenter_stream` keeps its signature, verifies the peer,
-and delegates, the way `handshake_desktop_client_stream` does. Sixth,
+and delegates, the way `handshake_desktop_client_stream` does. Third,
 `muniment-core` connects and serves the Windows approval presenter over the
-per-user pipe. Seventh, the Windows desktop starts the approval presenter. The
-superseded Windows non-state serving entries retire after that, and the
-installed Windows pairing probe follows the presenter start.
+per-user pipe, behind a platform-neutral `serve_approval_presenter_with` in
+`muniment-attach`. Fourth, the Windows desktop starts the approval presenter.
+Fifth, the superseded Windows non-state serving entries retire. The installed
+Windows pairing probe follows the presenter start.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
