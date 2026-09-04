@@ -28,6 +28,58 @@ use common::{credentials, stage_pi_stub, TemporaryProfile};
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 #[test]
+fn local_mode_prepares_a_journaled_run_without_native_auth_or_a_cloud_grant() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let store = KeyringNativeCredentialStore::new();
+    store.clear_session().unwrap();
+    let temporary_profile = TemporaryProfile::new("local-run-boundaries", true);
+    std::fs::write(
+        temporary_profile
+            .config
+            .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+        "1",
+    )
+    .unwrap();
+    let storage = open_profile_storage(&temporary_profile.profile).unwrap();
+    let boundaries = RuntimeAttachBoundaries::new(
+        Arc::clone(&storage),
+        Arc::new(Mutex::new(None)),
+        temporary_profile.profile.clone(),
+        temporary_profile.config.clone(),
+        Arc::new(Mutex::new(None::<PiRuntime>)),
+        Arc::new(ApplicationMemoryRuntime::new(
+            temporary_profile.config.clone(),
+            temporary_profile.profile.join("memory"),
+        )),
+        RuntimeActivityRegistry::new(),
+        Arc::new(EntitlementSnapshotTracker::new()),
+        SignedWorkspaceApproval::default(),
+        Arc::new(SessionThread::default()),
+        muniment_runtime::open_companion_registry(&temporary_profile.profile).unwrap(),
+    );
+
+    let (result, launch) = prepare_desktop_run(
+        &boundaries,
+        RunStartRequest {
+            prompt: "hello".into(),
+            files: Vec::new(),
+            workspace: None,
+            provenance: None,
+            thread_id: None,
+        },
+    )
+    .unwrap();
+
+    assert!(launch.grant.is_local());
+    assert!(launch.tokens.access_token.is_empty());
+    let events = storage.lock().unwrap().journal.events(&result.run_id).unwrap();
+    assert!(!events.is_empty());
+    assert!(events.iter().all(|event| event.envelope_version == 1));
+    assert!(events.iter().all(|event| event.provenance.source == "muniment-runtime"));
+}
+
+#[test]
 fn workspace_less_submit_records_the_resolved_grant_workspace() {
     let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();

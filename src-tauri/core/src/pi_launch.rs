@@ -41,14 +41,16 @@ pub fn pi_launch_config_for_executable(
     let session_root = boundaries.pi_session_root()?;
     let mut config = pi_sidecar_config(executable.to_string_lossy(), &session_root, reopen)
         .map_err(|_| PiLaunchError::RejectedConfig)?;
-    config
-        .env
-        .insert("OPENAI_API_KEY".into(), grant.virtual_key.clone());
-    config
-        .env
-        .insert("OPENAI_BASE_URL".into(), grant.gateway_url.clone());
-    if let Some(model) = &grant.model {
-        config.env.insert("PI_DEFAULT_MODEL".into(), model.clone());
+    if !grant.is_local() {
+        config
+            .env
+            .insert("OPENAI_API_KEY".into(), grant.virtual_key.clone());
+        config
+            .env
+            .insert("OPENAI_BASE_URL".into(), grant.gateway_url.clone());
+        if let Some(model) = &grant.model {
+            config.env.insert("PI_DEFAULT_MODEL".into(), model.clone());
+        }
     }
     if let Some(extension) = boundaries
         .memory_agent_extension_path()

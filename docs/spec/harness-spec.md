@@ -17,7 +17,7 @@ Muniment is a **hosted SaaS**: we operate the control plane and gateway as a mul
 
 ### Non-goals (v1)
 
-- **No serverless/solo mode.** The desktop app requires a control plane connection. Accepted tradeoffs: no offline use, no bottom-up solo-dev adoption funnel. Benefit: policy is always enforced, no provider API keys on laptops, one source of truth.
+- **Local mode.** Per the owner ruling on 2026-09-04, the desktop may run Pi with Pi's credential store and the local run journal without a control plane connection. Sign-in gates cloud features only. Cloud-backed use still enforces policy through the gateway.
 - **No hosted MCP servers.** We manage MCP *connections* only. Hosting/governance of remote MCPs is delegated to services like MintMCP.
 - **No multiple UI modes.** One mode. No chat/cowork/code split.
   (Clarified 2026-07-12 — §13 adds the CLI and editor extension as

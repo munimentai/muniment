@@ -110,6 +110,23 @@ fn appends_a_present_extension_file_and_environment() {
 }
 
 #[test]
+fn local_launch_uses_pis_credential_store_without_cloud_credentials() {
+    let root = temporary_directory();
+    let boundaries = Boundaries {
+        session_root: Ok(root.clone()),
+        extension: None,
+    };
+    let config =
+        pi_launch_config_for_executable(&boundaries, "pi".into(), &ChatGrant::local(), None)
+            .unwrap();
+    assert!(!config.env.contains_key("OPENAI_API_KEY"));
+    assert!(!config.env.contains_key("OPENAI_BASE_URL"));
+    assert!(!config.env.contains_key("PI_DEFAULT_MODEL"));
+    assert_eq!(config.args[0..2], ["--mode", "rpc"]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn omits_an_absent_extension_file() {
     let root = temporary_directory();
     let boundaries = Boundaries {

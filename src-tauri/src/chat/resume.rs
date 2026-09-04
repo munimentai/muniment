@@ -82,7 +82,9 @@ pub async fn chat_submit(
             .state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
             .into();
-        let subject = if matches!(session, RunCommandSession::Connected(_)) {
+        let subject = if matches!(session, RunCommandSession::Connected(_))
+            && !crate::local_mode::is_active(&app)?
+        {
             let tokens = auth::fresh_tokens_async(&auth_state, &app).await?;
             tokens.subject
         } else {
@@ -166,7 +168,17 @@ pub(super) async fn local_chat_resume(
     state: tauri::State<'_, ChatState>,
     run_id: String,
 ) -> Result<SubmitResult, String> {
-    let tokens = auth::fresh_tokens_async(&auth_state, &app).await?;
+    let local_mode = crate::local_mode::is_active(&app)?;
+    let tokens = if local_mode {
+        TokenSet {
+            access_token: String::new(),
+            refresh_token: None,
+            expires_at: None,
+            subject: None,
+        }
+    } else {
+        auth::fresh_tokens_async(&auth_state, &app).await?
+    };
     let session_root = state_session_root(&app)?;
     let (resume, thread_id) = {
         let mut storage = state
@@ -192,16 +204,21 @@ pub(super) async fn local_chat_resume(
             .map_err(|_| "This reply could not be resumed.".to_string())?
             .attachments,
     );
-    let access_token = tokens.access_token.clone();
-    let grant = tauri::async_runtime::spawn_blocking(move || {
-        let grant = fetch_grant(&access_token).map_err(fetch_grant_error_message)?;
-        validate_grant(&grant)?;
-        Ok::<_, String>(grant)
-    })
-    .await
-    .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())??;
-    app.state::<crate::attach_service::AttachCompanionState>()
-        .record_workspace(grant.workspace.clone());
+    let grant = if local_mode {
+        ChatGrant::local()
+    } else {
+        let access_token = tokens.access_token.clone();
+        let grant = tauri::async_runtime::spawn_blocking(move || {
+            let grant = fetch_grant(&access_token).map_err(fetch_grant_error_message)?;
+            validate_grant(&grant)?;
+            Ok::<_, String>(grant)
+        })
+        .await
+        .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())??;
+        app.state::<crate::attach_service::AttachCompanionState>()
+            .record_workspace(grant.workspace.clone());
+        grant
+    };
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
