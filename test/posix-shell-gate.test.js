@@ -4,17 +4,17 @@ import path from 'node:path'
 
 const ALLOWED = {
   'test/desktop-e2e-harness.test.js:322:28': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
-  'test/desktop-e2e-harness.test.js:352:20': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
-  'test/desktop-e2e-harness.test.js:367:19': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
-  'test/desktop-e2e-harness.test.js:414:20': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
-  'test/desktop-e2e-harness.test.js:453:19': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
-  'test/desktop-e2e-harness.test.js:737:20': "it.skipIf(process.platform === 'win32')('includes and escapes the captured runner reason')",
-  'test/desktop-e2e-harness.test.js:747:20': "it.skipIf(process.platform === 'win32')('does not copy the desktop-ci transcript into JUnit')",
-  'test/desktop-e2e-harness.test.js:830:20': "describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction')",
-  'test/desktop-e2e-harness.test.js:996:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:1012:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:1038:19': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:1065:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:359:20': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
+  'test/desktop-e2e-harness.test.js:376:19': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
+  'test/desktop-e2e-harness.test.js:423:20': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
+  'test/desktop-e2e-harness.test.js:465:19': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
+  'test/desktop-e2e-harness.test.js:749:20': "it.skipIf(process.platform === 'win32')('includes and escapes the captured runner reason')",
+  'test/desktop-e2e-harness.test.js:759:20': "it.skipIf(process.platform === 'win32')('does not copy the desktop-ci transcript into JUnit')",
+  'test/desktop-e2e-harness.test.js:842:20': "describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction')",
+  'test/desktop-e2e-harness.test.js:1008:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:1024:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:1050:19': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:1077:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/nightly-workflow.test.js:13:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
 }
 

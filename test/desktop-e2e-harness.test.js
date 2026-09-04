@@ -322,11 +322,12 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
     return fixture.outcome(spawnSync('bash', [runnerPath], { encoding: 'utf8', env: fixture.env }))
   }
 
-  const runMacosPayload = ({ runtime = 'ok', agent = true, field = '', value = '' } = {}) => {
+  const runMacosPayload = ({ runtime = 'ok', rpath = 'ok', agent = true, field = '', value = '' } = {}) => {
     const directory = temp(); const bundle = path.join(directory, 'muniment.app'); const artifacts = path.join(directory, 'artifacts')
     const runtimePath = path.join(bundle, 'Contents/Library/LaunchServices/muniment-runtime')
     const agentPath = path.join(bundle, 'Contents/Library/LaunchAgents/ai.muniment.runtime.plist')
     const plistBuddy = path.join(directory, 'PlistBuddy')
+    const otool = path.join(directory, 'otool')
     fs.mkdirSync(path.dirname(runtimePath), { recursive: true })
     fs.mkdirSync(path.dirname(agentPath), { recursive: true })
     fs.writeFileSync(runtimePath, runtime === 'failure' ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\nprintf '${runtime === 'empty' ? '   ' : 'muniment-runtime 0.0.1'}\\n'\n`)
@@ -349,6 +350,12 @@ case "$key" in
 esac
 `)
     fs.chmodSync(plistBuddy, 0o700)
+    fs.writeFileSync(otool, `#!/bin/sh
+[ "$MUNIMENT_E2E_TEST_RPATH" != failure ] || exit 1
+[ "$MUNIMENT_E2E_TEST_RPATH" != missing ] || { printf 'Load command 0\\n      cmd LC_LOAD_DYLIB\\n'; exit; }
+printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offset 12)\\n' "$MUNIMENT_E2E_TEST_RPATH"
+`)
+    fs.chmodSync(otool, 0o700)
     const result = spawnSync('bash', [runnerPath], { encoding: 'utf8', env: {
       ...process.env,
       TMPDIR: directory,
@@ -356,6 +363,8 @@ esac
       MUNIMENT_E2E_PAYLOAD_TEST_MODE: '1',
       MUNIMENT_E2E_PAYLOAD_TEST_BUNDLE: bundle,
       MUNIMENT_E2E_PLIST_BUDDY: plistBuddy,
+      MUNIMENT_E2E_OTOOL: otool,
+      MUNIMENT_E2E_TEST_RPATH: rpath === 'ok' ? '@executable_path/../../Resources/asr-runtime' : rpath,
       MUNIMENT_E2E_TEST_FIELD: field,
       MUNIMENT_E2E_TEST_VALUE: value,
     } })
@@ -435,6 +444,9 @@ esac
   it.each([
     ['missing runtime', { runtime: 'missing' }, 'installed runtime is unavailable or not executable'],
     ['non-executable runtime', { runtime: 'not-executable' }, 'installed runtime is unavailable or not executable'],
+    ['missing ASR rpath', { rpath: 'missing' }, 'installed runtime ASR rpath is unavailable'],
+    ['wrong ASR rpath', { rpath: '@executable_path/../Resources/asr-runtime' }, 'installed runtime ASR rpath is unavailable'],
+    ['failed load command probe', { rpath: 'failure' }, 'installed runtime load commands are unavailable'],
     ['failed version probe', { runtime: 'failure' }, 'installed runtime version probe failed'],
     ['empty version', { runtime: 'empty' }, 'installed runtime version is empty'],
     ['missing LaunchAgent', { agent: false }, 'installed runtime LaunchAgent is unavailable'],
@@ -1175,25 +1187,25 @@ describe('installed ACP adapter contract', () => {
 describe('installed desktop client identity', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
 
-  it('points the installed desktop path at the WebDriver build before each phase', () => {
+  it('copies the WebDriver build to the installed desktop path before each phase', () => {
     expect(runner).toContain('installed_desktop=/usr/bin/muniment')
     expect(runner).toContain('[[ -f $installed_desktop ]]')
-    expect(runner).toContain('sudo ln -sf "$app_binary" "$installed_desktop"')
-    expect(runner).toContain("echo 'installed desktop path could not point at the E2E build' >&2")
-    expect(runner.indexOf('sudo ln -sf "$app_binary" "$installed_desktop"'))
+    expect(runner).toContain('sudo install -m 0755 "$e2e_app_binary" "$installed_desktop"')
+    expect(runner).toContain("echo 'installed desktop path could not use the E2E build' >&2")
+    expect(runner.indexOf('sudo install -m 0755 "$e2e_app_binary" "$installed_desktop"'))
       .toBeLessThan(runner.indexOf('run_e2e "$raw/wdio-onboarding.log"'))
   })
 
   it('reads the shipped binary before that path changes', () => {
     expect(runner.indexOf('webdriver-release-guard.mjs absent'))
-      .toBeLessThan(runner.indexOf('sudo ln -sf "$app_binary" "$installed_desktop"'))
+      .toBeLessThan(runner.indexOf('sudo install -m 0755 "$e2e_app_binary" "$installed_desktop"'))
   })
 
-  it('fails the run when that path resolves elsewhere', () => {
-    expect(runner).toContain('[[ $(readlink -f "$installed_desktop") == "$(readlink -f "$app_binary")" ]]')
-    expect(runner).toContain("echo 'installed desktop path does not resolve to the E2E build' >&2")
-    expect(runner.indexOf('readlink -f "$installed_desktop"'))
-      .toBeGreaterThan(runner.indexOf('sudo ln -sf "$app_binary" "$installed_desktop"'))
+  it('fails the run when the installed copy differs', () => {
+    expect(runner).toContain('cmp -s "$e2e_app_binary" "$installed_desktop"')
+    expect(runner).toContain("echo 'installed desktop path does not contain the E2E build' >&2")
+    expect(runner.indexOf('cmp -s "$e2e_app_binary" "$installed_desktop"'))
+      .toBeGreaterThan(runner.indexOf('sudo install -m 0755 "$e2e_app_binary" "$installed_desktop"'))
   })
 })
 
@@ -1295,10 +1307,10 @@ describe('onboarding Home path assertion', () => {
 })
 
 describe('Linux E2E shared-library contract', () => {
-  it('loads the checked-in ASR runtime for the raw binary', () => {
+  it('probes the installed runtime without a library path override', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
-    expect(runner).toContain('asr_runtime="$PWD/src-tauri/third-party/sherpa-onnx-v1.13.2/link"')
-    expect(runner).toContain('export LD_LIBRARY_PATH="$asr_runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"')
+    expect(runner).toContain('unset LD_LIBRARY_PATH\nruntime_version=$(/usr/lib/muniment/muniment-runtime --version)')
+    expect(runner).not.toContain('export LD_LIBRARY_PATH=')
   })
 })
 

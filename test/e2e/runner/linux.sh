@@ -224,27 +224,25 @@ node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { 
 cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked >>"$installer_log" 2>&1 || { echo 'muniment-acp build failed' >&2; status=1; exit; }
 cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --release --locked >>"$installer_log" 2>&1 || { echo 'muniment-runtime build failed' >&2; status=1; exit; }
 npm run tauri build -- --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
-app_binary="$PWD/src-tauri/target/release/muniment-desktop"
-[[ -x $app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
-asr_runtime="$PWD/src-tauri/third-party/sherpa-onnx-v1.13.2/link"
-export LD_LIBRARY_PATH="$asr_runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+e2e_app_binary="$PWD/src-tauri/target/release/muniment-desktop"
+[[ -x $e2e_app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
 e2e_deb=$(find "$PWD/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)
 [[ -n $e2e_deb ]] || { echo 'E2E DEB is unavailable' >&2; status=1; exit; }
 bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb" || { status=1; exit; }
 [[ -x /usr/lib/muniment/muniment-acp ]] || { echo 'installed ACP adapter is unavailable or not executable' >&2; status=1; exit; }
 node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp || { echo 'installed ACP adapter initialize probe failed' >&2; status=1; exit; }
 [[ -x /usr/lib/muniment/muniment-runtime ]] || { echo 'installed runtime is unavailable or not executable' >&2; status=1; exit; }
+unset LD_LIBRARY_PATH
 runtime_version=$(/usr/lib/muniment/muniment-runtime --version) || { echo 'installed runtime version probe failed' >&2; status=1; exit; }
 [[ -n $runtime_version ]] || { echo 'installed runtime version probe returned no version' >&2; status=1; exit; }
-# The installed runtime admits a desktop client only when the peer executable
-# resolves to the installed desktop path beside its own resources. This suite
-# drives the WebDriver build, so point that path at the build. Both sides
-# resolve the link, so the runtime answers the session for the app under test
-# instead of routing it as a companion.
+# The installed runtime admits a desktop client only from the installed path.
+# Copy the WebDriver build there so its rpath also resolves the installed ASR
+# libraries without a loader environment override.
 installed_desktop=/usr/bin/muniment
 [[ -f $installed_desktop ]] || { echo 'installed desktop path is unavailable' >&2; status=1; exit; }
-sudo ln -sf "$app_binary" "$installed_desktop" || { echo 'installed desktop path could not point at the E2E build' >&2; status=1; exit; }
-[[ $(readlink -f "$installed_desktop") == "$(readlink -f "$app_binary")" ]] || { echo 'installed desktop path does not resolve to the E2E build' >&2; status=1; exit; }
+sudo install -m 0755 "$e2e_app_binary" "$installed_desktop" || { echo 'installed desktop path could not use the E2E build' >&2; status=1; exit; }
+cmp -s "$e2e_app_binary" "$installed_desktop" || { echo 'installed desktop path does not contain the E2E build' >&2; status=1; exit; }
+app_binary=$installed_desktop
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"

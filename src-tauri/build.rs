@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+mod asr_rpath;
+
+use asr_rpath::ExecutableLocation;
+
 const ROOT: &str = "third-party/sherpa-onnx-v1.13.2";
 
 fn main() {
@@ -90,15 +94,8 @@ fn main() {
 
     // The packaged libraries live in Tauri's resource directory. Keep loader
     // lookup relative to the executable so no machine-global install is used.
-    match os.as_str() {
-        "linux" => {
-            println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/muniment/asr-runtime")
-        }
-        "macos" => {
-            println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Resources/asr-runtime")
-        }
-        "windows" => {}
-        _ => unreachable!(),
+    if let Some(link_arg) = asr_rpath::link_arg(&os, ExecutableLocation::Desktop) {
+        println!("cargo:rustc-link-arg={link_arg}");
     }
     tauri_build::build()
 }
