@@ -1,9 +1,20 @@
-const historyFixtures = {
+export const historyFixtures = {
   'signed-out': [],
   onboarding: [],
   approved: [],
   access: [],
   empty: [],
+  'local-mode': [
+    {
+      runId: 'probe-local-complete',
+      prompt: 'Summarize the local notes.',
+      phase: 'complete',
+      text: 'The local notes list the lease renewal date and notice period.',
+      receipt: null,
+      toolActivity: [],
+      resumable: false,
+    },
+  ],
   restored: [
     {
       runId: 'probe-complete',
@@ -206,30 +217,181 @@ const historyFixtures = {
   ],
 }
 
-const fixtureName = document.currentScript.dataset.history
-const history = historyFixtures[fixtureName]
-if (!history) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
-const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'approved'
-const approvedFixture = fixtureName === 'approved'
-const accessFixture = fixtureName === 'access'
-const signedOutFixture = fixtureName === 'signed-out'
-const onboardingHomePath = '/Users/alice/Documents/Muniment'
-const threadSummaries = history.length
-  ? [
-      { threadId: 'probe-thread', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z' },
-      { threadId: 'probe-archive', title: 'Archive review', updatedAt: '2026-07-28T09:00:00Z' },
-      { threadId: 'probe-notes', title: 'Client notes', updatedAt: '2026-07-25T12:00:00Z' },
-    ]
-  : []
-const olderThreadSummaries = history.length
-  ? [{ threadId: 'probe-older', title: 'Older correspondence', updatedAt: '2026-07-20T12:00:00Z' }]
-  : []
 
-const eventListeners = []
-const invokedCommands = []
+export function buildProbeCommandTable(fixtureName) {
+  const fixtureHistory = historyFixtures[fixtureName]
+  if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
+  const history = structuredClone(fixtureHistory)
+  const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'approved'
+  const approvedFixture = fixtureName === 'approved'
+  const accessFixture = fixtureName === 'access'
+  const signedOutFixture = fixtureName === 'signed-out'
+  const onboardingHomePath = '/Users/alice/Documents/Muniment'
+  const threadSummaries = history.length
+    ? [
+        { threadId: 'probe-thread', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z' },
+        { threadId: 'probe-archive', title: 'Archive review', updatedAt: '2026-07-28T09:00:00Z' },
+        { threadId: 'probe-notes', title: 'Client notes', updatedAt: '2026-07-25T12:00:00Z' },
+      ]
+    : []
+  const olderThreadSummaries = history.length
+    ? [{ threadId: 'probe-older', title: 'Older correspondence', updatedAt: '2026-07-20T12:00:00Z' }]
+    : []
+  const eventListeners = []
+  const invokedCommands = []
+  let currentThreadId = history.length ? 'probe-thread' : null
+  let retentionChoice = null
+
+  async function invoke(command, payload) {
+    if (command === 'local_mode_status') return fixtureName === 'local-mode'
+    if (command === 'local_mode_enter') return null
+    if (command === 'local_mode_leave') return null
+    if (command === 'local_mode_store_provider_key') return null
+    if (command === 'home_status') {
+      if (onboardingFixture) return { configured: false, homePath: onboardingHomePath }
+      return { configured: true, homePath: '/Documents/Muniment' }
+    }
+    if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+    if (command === 'onboarding_import_preview') return {
+      entries: [
+        { name: 'profile.json', kind: 'json', byteSize: 24, excerpt: '{"name":"Alice"}', excerptTruncated: false },
+      ],
+      totalByteSize: 24,
+    }
+    if (command === 'onboarding_import_extract') return [
+      { sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export:profile.json' },
+    ]
+    if (command === 'auth_status') {
+      if (signedOutFixture) return { signed_in: false, subject: null }
+      return { signed_in: true, subject: 'probe-user' }
+    }
+    if (command === 'chat_thread_summaries') {
+      if (payload.cursor === 'older') return { summaries: structuredClone(olderThreadSummaries), nextCursor: null }
+      return { summaries: structuredClone(threadSummaries), nextCursor: history.length ? 'older' : null }
+    }
+    if (command === 'chat_current_thread') return currentThreadId
+    if (command === 'chat_rename_thread') {
+      const summary = threadSummaries.find(({ threadId }) => threadId === payload.threadId)
+      if (summary) summary.title = payload.title
+      return null
+    }
+    if (command === 'chat_delete_thread') {
+      const index = threadSummaries.findIndex(({ threadId }) => threadId === payload.threadId)
+      if (index !== -1) threadSummaries.splice(index, 1)
+      if (currentThreadId === payload.threadId) currentThreadId = null
+      return null
+    }
+    if (command === 'chat_submit') {
+      const runId = 'probe-new-run'
+      currentThreadId = 'probe-new-thread'
+      threadSummaries.unshift({
+        threadId: currentThreadId,
+        title: payload.prompt,
+        updatedAt: new Date().toISOString(),
+      })
+      queueMicrotask(() => {
+        for (const entry of eventListeners.filter(({ event }) => event === 'chat-event')) {
+          entry.listener({ payload: { runId, type: 'completed', receipt: null } })
+        }
+      })
+      return {
+        runId,
+        attachments: [
+          { displayName: 'site-photo.png', byteLength: 18432, mediaType: 'image/png' },
+          { displayName: 'lease.pdf', byteLength: 219136 },
+        ],
+      }
+    }
+    if (command === 'chat_answer_permission') return null
+    if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
+    if (command === 'auth_entitlement_snapshot') {
+      return {
+        snapshot_version: 2,
+        subject: 'probe-user',
+        user_display_name: 'Alice',
+        org_id: 'probe-org',
+        organization_display_name: 'Acme',
+        role: 'owner',
+        territory: 'us',
+        groups: [],
+      }
+    }
+    if (command === 'auth_devices') return accessFixture
+      ? [
+          {
+            device_id: 'probe-current-device',
+            client_id: 'muniment-desktop',
+            client_role: 'desktop',
+            platform: 'desktop',
+            created_at: '2026-07-01T12:00:00Z',
+            revoked_at: null,
+            last_active_at: '2026-08-13T12:00:00Z',
+            current: true,
+          },
+          {
+            device_id: 'probe-revoked-device',
+            client_id: 'muniment-mobile',
+            client_role: 'mobile',
+            platform: 'ios',
+            created_at: '2026-06-01T12:00:00Z',
+            revoked_at: '2026-08-01T12:00:00Z',
+            last_active_at: '2026-07-31T12:00:00Z',
+            current: false,
+          },
+        ]
+      : []
+    if (command === 'thread_retention_choice') return retentionChoice
+    if (command === 'record_thread_retention_choice') {
+      retentionChoice = payload.choice
+      return null
+    }
+    if (command === 'attach_listener_status') return { started: true, failure: null, connected: false, supervisor_running: false }
+    if (command === 'attach_companions') return [
+      {
+        identity: '018f0000-0000-7000-8000-000000000001',
+        claimed_kind: 'CLI',
+        claimed_version: '1.2.3',
+        approved_at: '2026-08-04T12:00:00Z',
+      },
+    ]
+    if (command === 'attach_revoke_companion') return null
+    throw new Error(`Unknown probe command: ${command}`)
+  }
+
+  return {
+    invoke,
+    history,
+    onboardingFixture,
+    approvedFixture,
+    accessFixture,
+    signedOutFixture,
+    onboardingHomePath,
+    threadSummaries,
+    olderThreadSummaries,
+    eventListeners,
+    invokedCommands,
+  }
+}
+
+const browserFixtureScript = typeof document === 'undefined'
+  ? null
+  : document.querySelector('script[src$="stub.js"][data-history]')
+if (browserFixtureScript) {
+const fixtureName = browserFixtureScript.dataset.history
+const probeTable = buildProbeCommandTable(fixtureName)
 let callbackId = 0
-let currentThreadId = history.length ? 'probe-thread' : null
-let retentionChoice = null
+const {
+  history,
+  onboardingFixture,
+  approvedFixture,
+  accessFixture,
+  signedOutFixture,
+  onboardingHomePath,
+  threadSummaries,
+  olderThreadSummaries,
+  eventListeners,
+  invokedCommands,
+} = probeTable
 
 function recordInvoke(surface, command, payload) {
   invokedCommands.push({ surface, command, payload })
@@ -359,115 +521,7 @@ window.__TAURI__ = {
   core: {
     async invoke(command, payload) {
       recordInvoke('core', command, payload)
-      if (command === 'home_status') {
-        if (onboardingFixture) return { configured: false, homePath: onboardingHomePath }
-        return { configured: true, homePath: '/Documents/Muniment' }
-      }
-      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
-      if (command === 'onboarding_import_preview') return {
-        entries: [
-          { name: 'profile.json', kind: 'json', byteSize: 24, excerpt: '{"name":"Alice"}', excerptTruncated: false },
-        ],
-        totalByteSize: 24,
-      }
-      if (command === 'onboarding_import_extract') return [
-        { sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export:profile.json' },
-      ]
-      if (command === 'auth_status') {
-        if (signedOutFixture) return { signed_in: false, subject: null }
-        return { signed_in: true, subject: 'probe-user' }
-      }
-      if (command === 'chat_thread_summaries') {
-        if (payload.cursor === 'older') return { summaries: structuredClone(olderThreadSummaries), nextCursor: null }
-        return { summaries: structuredClone(threadSummaries), nextCursor: history.length ? 'older' : null }
-      }
-      if (command === 'chat_current_thread') return currentThreadId
-      if (command === 'chat_rename_thread') {
-        const summary = threadSummaries.find(({ threadId }) => threadId === payload.threadId)
-        if (summary) summary.title = payload.title
-        return null
-      }
-      if (command === 'chat_delete_thread') {
-        const index = threadSummaries.findIndex(({ threadId }) => threadId === payload.threadId)
-        if (index !== -1) threadSummaries.splice(index, 1)
-        if (currentThreadId === payload.threadId) currentThreadId = null
-        return null
-      }
-      if (command === 'chat_submit') {
-        const runId = 'probe-new-run'
-        currentThreadId = 'probe-new-thread'
-        threadSummaries.unshift({
-          threadId: currentThreadId,
-          title: payload.prompt,
-          updatedAt: new Date().toISOString(),
-        })
-        queueMicrotask(() => {
-          for (const entry of eventListeners.filter(({ event }) => event === 'chat-event')) {
-            entry.listener({ payload: { runId, type: 'completed', receipt: null } })
-          }
-        })
-        return {
-          runId,
-          attachments: [
-            { displayName: 'site-photo.png', byteLength: 18432, mediaType: 'image/png' },
-            { displayName: 'lease.pdf', byteLength: 219136 },
-          ],
-        }
-      }
-      if (command === 'chat_answer_permission') return null
-      if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
-      if (command === 'auth_entitlement_snapshot') {
-        return {
-          snapshot_version: 2,
-          subject: 'probe-user',
-          user_display_name: 'Alice',
-          org_id: 'probe-org',
-          organization_display_name: 'Acme',
-          role: 'owner',
-          territory: 'us',
-          groups: [],
-        }
-      }
-      if (command === 'auth_devices') return accessFixture
-        ? [
-            {
-              device_id: 'probe-current-device',
-              client_id: 'muniment-desktop',
-              client_role: 'desktop',
-              platform: 'desktop',
-              created_at: '2026-07-01T12:00:00Z',
-              revoked_at: null,
-              last_active_at: '2026-08-13T12:00:00Z',
-              current: true,
-            },
-            {
-              device_id: 'probe-revoked-device',
-              client_id: 'muniment-mobile',
-              client_role: 'mobile',
-              platform: 'ios',
-              created_at: '2026-06-01T12:00:00Z',
-              revoked_at: '2026-08-01T12:00:00Z',
-              last_active_at: '2026-07-31T12:00:00Z',
-              current: false,
-            },
-          ]
-        : []
-      if (command === 'thread_retention_choice') return retentionChoice
-      if (command === 'record_thread_retention_choice') {
-        retentionChoice = payload.choice
-        return null
-      }
-      if (command === 'attach_listener_status') return { started: true, failure: null, connected: false, supervisor_running: false }
-      if (command === 'attach_companions') return [
-        {
-          identity: '018f0000-0000-7000-8000-000000000001',
-          claimed_kind: 'CLI',
-          claimed_version: '1.2.3',
-          approved_at: '2026-08-04T12:00:00Z',
-        },
-      ]
-      if (command === 'attach_revoke_companion') return null
-      throw new Error(`Unknown probe command: ${command}`)
+      return probeTable.invoke(command, payload)
     },
   },
   event: {
@@ -503,4 +557,5 @@ window.__TAURI_INTERNALS__ = {
   unregisterCallback(id) {
     delete window[`_${id}`]
   },
+}
 }
