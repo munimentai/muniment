@@ -230,13 +230,17 @@ jobs:
             echo 'HOMEBREW_TAP_TOKEN must grant write access to the public Homebrew tap.' >&2
             exit 1
           fi
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPOSITORY}.git" "$RUNNER_TEMP/muniment-homebrew-tap"
+          cd "$RUNNER_TEMP/muniment-homebrew-tap"
+          if [ ! -f Casks/muniment-nightly.rb ]; then
+            echo 'Homebrew tap seed gate: Casks/muniment-nightly.rb does not exist. Skipping publish.'
+            exit 0
+          fi
+
           asset="nightly-${SOURCE_SHA}-macos-muniment.app.zip"
           mkdir -p "$RUNNER_TEMP/muniment-homebrew-asset"
           GH_TOKEN="$SOURCE_TOKEN" gh release download nightly --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir "$RUNNER_TEMP/muniment-homebrew-asset"
           digest=$(shasum -a 256 "$RUNNER_TEMP/muniment-homebrew-asset/$asset" | awk '{print $1}')
-
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPOSITORY}.git" "$RUNNER_TEMP/muniment-homebrew-tap"
-          cd "$RUNNER_TEMP/muniment-homebrew-tap"
           if ! GH_TOKEN="$TAP_TOKEN" gh release view nightly --repo "$TAP_REPOSITORY" >/dev/null 2>&1; then
             GH_TOKEN="$TAP_TOKEN" gh release create nightly --repo "$TAP_REPOSITORY" --target main --title "Muniment nightly" --notes "Public macOS archives for the Homebrew cask." --prerelease
           fi
