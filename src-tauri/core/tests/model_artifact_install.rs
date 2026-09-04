@@ -158,7 +158,7 @@ fn coordinator_owns_locking_and_uses_model_artifacts_exact_stage_accounting() {
     )
     .unwrap();
 
-    assert_eq!(installed, root.join("revisions/revision"));
+    assert_eq!(installed, root.join("revisions/fixture/revision"));
     assert_eq!(fs::read(installed.join("model.gguf")).unwrap(), b"abc");
     assert_eq!(checks, [MARGIN + 2, MARGIN]);
     assert_eq!(lock.0, 1);

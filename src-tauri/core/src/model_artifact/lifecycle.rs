@@ -212,8 +212,11 @@ impl ModelArtifactRevisionLifecycle {
         boundary.sync_directory(staged_directory)?;
 
         let revisions = self.root.join("revisions");
-        fs::create_dir_all(&revisions).map_err(|_| ModelArtifactPersistenceError::Failed)?;
-        let revision = revisions.join(self.target.model.version);
+        create_directory(&revisions)?;
+        let artifact_revisions = revisions.join(self.target.model.name);
+        create_directory(&artifact_revisions)?;
+        boundary.sync_directory(&revisions)?;
+        let revision = artifact_revisions.join(self.target.model.version);
         let installed_is_valid = require_directory(&revision).is_ok()
             && verify_model_artifact(revision.join(self.target.model.filename), self.target.model)
                 .is_ok()
@@ -224,7 +227,7 @@ impl ModelArtifactRevisionLifecycle {
             .is_ok();
         if !installed_is_valid {
             boundary.replace_revision(staged_directory, &revision)?;
-            boundary.sync_directory(&revisions)?;
+            boundary.sync_directory(&artifact_revisions)?;
         }
 
         if let Ok(current) = self.resolve_pointer("current") {
@@ -365,7 +368,11 @@ impl ModelArtifactRevisionLifecycle {
                 descriptor.model.name == lines[1] && descriptor.model.version == lines[2]
             })
             .ok_or(ModelArtifactLifecycleError::UnknownPointer)?;
-        let path = self.root.join("revisions").join(descriptor.model.version);
+        let path = self
+            .root
+            .join("revisions")
+            .join(descriptor.model.name)
+            .join(descriptor.model.version);
         require_directory(&path).map_err(ModelArtifactLifecycleError::RevisionInvalid)?;
         verify_model_artifact(path.join(descriptor.model.filename), descriptor.model)
             .map_err(ModelArtifactLifecycleError::RevisionInvalid)?;
@@ -503,6 +510,16 @@ fn safe_component(value: &str) -> bool {
         && value != ".."
         && !value.contains(['/', '\\'])
         && !Path::new(value).is_absolute()
+}
+
+fn create_directory(path: &Path) -> Result<(), ModelArtifactPersistenceError> {
+    match fs::create_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            require_directory(path).map_err(|_| ModelArtifactPersistenceError::Failed)
+        }
+        Err(_) => Err(ModelArtifactPersistenceError::Failed),
+    }
 }
 
 fn require_directory(path: &Path) -> Result<(), ModelVerificationError> {

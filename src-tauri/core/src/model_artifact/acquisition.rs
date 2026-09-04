@@ -562,14 +562,38 @@ fn write_notice(
     descriptor: &ModelArtifactRevisionDescriptor,
 ) -> Result<(), ModelArtifactAcquisitionError> {
     let path = stage.join(descriptor.notice.filename);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)
-        .map_err(|_| ModelArtifactAcquisitionError::Persistence)?;
-    file.write_all(descriptor.notice.contents)
-        .map_err(|_| ModelArtifactAcquisitionError::Persistence)
+    let replace_existing = match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => true,
+        Ok(_) => return Err(ModelArtifactAcquisitionError::InvalidStage),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return Err(ModelArtifactAcquisitionError::Persistence),
+    };
+    let temporary = stage.join(format!(".{}.tmp", descriptor.notice.filename));
+    match fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(ModelArtifactAcquisitionError::Persistence),
+    }
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|_| ModelArtifactAcquisitionError::Persistence)?;
+        file.write_all(descriptor.notice.contents)
+            .map_err(|_| ModelArtifactAcquisitionError::Persistence)?;
+        file.flush()
+            .map_err(|_| ModelArtifactAcquisitionError::Persistence)?;
+        drop(file);
+        if replace_existing {
+            fs::remove_file(&path).map_err(|_| ModelArtifactAcquisitionError::Persistence)?;
+        }
+        fs::rename(&temporary, path).map_err(|_| ModelArtifactAcquisitionError::Persistence)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
 }
 
 fn part_length(path: &Path, maximum: u64) -> Result<u64, ModelArtifactAcquisitionError> {

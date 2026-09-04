@@ -29,6 +29,15 @@ static NEW_MODEL: ModelArtifactDescriptor = ModelArtifactDescriptor {
     byte_size: 3,
     sha256: "cb8379ac2098aa165029e3938a51da0bcecfc008fd6795f401178647f96c5b34",
 };
+static OTHER_MODEL: ModelArtifactDescriptor = ModelArtifactDescriptor {
+    name: "other-artifact",
+    version: "old",
+    source_url: "https://example.invalid/other.gguf",
+    license: "fixture",
+    filename: "model.gguf",
+    byte_size: 3,
+    sha256: "cb8379ac2098aa165029e3938a51da0bcecfc008fd6795f401178647f96c5b34",
+};
 static OLD: ModelArtifactRevisionDescriptor = ModelArtifactRevisionDescriptor {
     model: &OLD_MODEL,
     notice: ModelArtifactNoticeDescriptor {
@@ -43,7 +52,14 @@ static NEW: ModelArtifactRevisionDescriptor = ModelArtifactRevisionDescriptor {
         contents: b"notice-v2",
     },
 };
-static KNOWN: [&ModelArtifactRevisionDescriptor; 2] = [&OLD, &NEW];
+static OTHER: ModelArtifactRevisionDescriptor = ModelArtifactRevisionDescriptor {
+    model: &OTHER_MODEL,
+    notice: ModelArtifactNoticeDescriptor {
+        filename: "NOTICE.txt",
+        contents: b"notice-v2",
+    },
+};
+static KNOWN: [&ModelArtifactRevisionDescriptor; 3] = [&OLD, &NEW, &OTHER];
 
 struct Boundary {
     locks: AtomicUsize,
@@ -236,7 +252,8 @@ fn activation_returns_current_only_after_readiness() {
         .unwrap();
     assert!(matches!(
         result,
-        ModelArtifactActivation::Active { revision, .. } if revision == root.join("revisions/new")
+        ModelArtifactActivation::Active { revision, .. }
+            if revision == root.join("revisions/artifact-fixture/new")
     ));
     assert_eq!(activation.launched.lock().unwrap().len(), 1);
     assert!(!root.join("activation-failure").exists());
@@ -253,11 +270,12 @@ fn rollback_restores_the_installed_previous_artifact_without_a_download() {
         .unwrap();
     assert!(matches!(
         result,
-        ModelArtifactActivation::RolledBack { revision, .. } if revision == root.join("revisions/old")
+        ModelArtifactActivation::RolledBack { revision, .. }
+            if revision == root.join("revisions/artifact-fixture/old")
     ));
     assert_eq!(
         lifecycle.resolve_current().unwrap(),
-        root.join("revisions/old")
+        root.join("revisions/artifact-fixture/old")
     );
     assert_eq!(
         fs::read_to_string(root.join("activation-failure")).unwrap(),
@@ -268,10 +286,48 @@ fn rollback_restores_the_installed_previous_artifact_without_a_download() {
     assert!(!rejected.contains(root.to_str().unwrap()));
     assert_eq!(activation.launched.lock().unwrap().len(), 2);
     assert_eq!(
-        fs::read(root.join("revisions/old/model.gguf")).unwrap(),
+        fs::read(root.join("revisions/artifact-fixture/old/model.gguf")).unwrap(),
         b"abc"
     );
     assert_eq!(fs::read_dir(root.join("staging")).unwrap().count(), 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn same_version_for_distinct_artifacts_preserves_rollback_revision() {
+    let root = root();
+    let first = ModelArtifactRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
+    let first_revision = first
+        .publish(
+            &stage(&root, "first-artifact", b"abc"),
+            &Boundary::working(),
+        )
+        .unwrap();
+    let second = ModelArtifactRevisionLifecycle::new(root.clone(), &KNOWN, &OTHER).unwrap();
+    let second_revision = second
+        .publish(
+            &stage(&root, "second-artifact", b"def"),
+            &Boundary::working(),
+        )
+        .unwrap();
+
+    assert_eq!(first_revision, root.join("revisions/artifact-fixture/old"));
+    assert_eq!(second_revision, root.join("revisions/other-artifact/old"));
+    assert_eq!(fs::read(first_revision.join("model.gguf")).unwrap(), b"abc");
+    assert_eq!(
+        fs::read(second_revision.join("model.gguf")).unwrap(),
+        b"def"
+    );
+
+    let activation = ActivationBoundary::new(vec![Attempt::ReadinessFails, Attempt::Ready]);
+    assert!(matches!(
+        second
+            .activate(&Boundary::working(), &activation)
+            .unwrap(),
+        ModelArtifactActivation::RolledBack { revision, .. }
+            if revision == first_revision
+    ));
+    assert_eq!(second.resolve_current().unwrap(), first_revision);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -319,7 +375,7 @@ fn failed_rollback_activation_stops_after_exactly_two_attempts() {
     assert_eq!(activation.launched.lock().unwrap().len(), 2);
     assert_eq!(
         lifecycle.resolve_current().unwrap(),
-        root.join("revisions/old")
+        root.join("revisions/artifact-fixture/old")
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -347,15 +403,15 @@ fn interrupted_activation_state_replacement_never_relaunches_rejected_current() 
             result,
             ModelArtifactActivation::Active { revision, .. }
                 | ModelArtifactActivation::RolledBack { revision, .. }
-                if revision == root.join("revisions/old")
+                if revision == root.join("revisions/artifact-fixture/old")
         ));
         assert_eq!(
             retry.launched.lock().unwrap().as_slice(),
-            &[root.join("revisions/old/model.gguf")]
+            &[root.join("revisions/artifact-fixture/old/model.gguf")]
         );
         assert_eq!(
             lifecycle.resolve_current().unwrap(),
-            root.join("revisions/old")
+            root.join("revisions/artifact-fixture/old")
         );
         if let Ok(diagnostic) = fs::read_to_string(root.join("activation-failure")) {
             assert_eq!(diagnostic, "readiness\n");
@@ -387,7 +443,11 @@ fn notice_must_match_the_revision_descriptor_for_publication_and_resolution() {
     lifecycle
         .publish(&stage(&root, "valid", b"abc"), &Boundary::working())
         .unwrap();
-    fs::write(root.join("revisions/old/NOTICE.txt"), b"tampered").unwrap();
+    fs::write(
+        root.join("revisions/artifact-fixture/old/NOTICE.txt"),
+        b"tampered",
+    )
+    .unwrap();
     assert!(matches!(
         lifecycle.resolve_current(),
         Err(ModelArtifactLifecycleError::RevisionInvalid(_))
@@ -413,7 +473,7 @@ fn publishes_only_verified_stage_under_an_exclusive_lock() {
 
     let good = stage(&root, "good", b"abc");
     let revision = lifecycle.publish(&good, &boundary).unwrap();
-    assert_eq!(revision, root.join("revisions/old"));
+    assert_eq!(revision, root.join("revisions/artifact-fixture/old"));
     assert_eq!(lifecycle.resolve_current().unwrap(), revision);
     assert_eq!(boundary.locks.load(Ordering::Relaxed), 2);
     fs::remove_dir_all(root).unwrap();
@@ -438,7 +498,7 @@ fn interrupted_pointer_replace_keeps_verified_current_and_previous() {
     assert_eq!(fs::read(root.join("previous")).unwrap(), old_pointer);
     assert_eq!(
         update.resolve_current().unwrap(),
-        root.join("revisions/old")
+        root.join("revisions/artifact-fixture/old")
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -453,18 +513,22 @@ fn corrupt_current_restores_verified_previous_and_never_promotes_staging() {
     update
         .publish(&stage(&root, "new", b"def"), &Boundary::working())
         .unwrap();
-    fs::write(root.join("revisions/new/model.gguf"), b"bad").unwrap();
+    fs::write(
+        root.join("revisions/artifact-fixture/new/model.gguf"),
+        b"bad",
+    )
+    .unwrap();
     stage(&root, "tempting", b"def");
     fs::write(root.join(".current.tmp"), b"interrupted pointer").unwrap();
 
     let boundary = Boundary::working();
     assert_eq!(
         update.recover(&boundary).unwrap(),
-        ModelArtifactRecovery::RestoredPrevious(root.join("revisions/old"))
+        ModelArtifactRecovery::RestoredPrevious(root.join("revisions/artifact-fixture/old"))
     );
     assert_eq!(
         update.resolve_current().unwrap(),
-        root.join("revisions/old")
+        root.join("revisions/artifact-fixture/old")
     );
     assert_eq!(boundary.locks.load(Ordering::Relaxed), 1);
     fs::remove_dir_all(root).unwrap();
@@ -477,12 +541,16 @@ fn verified_stage_repairs_corrupt_existing_revision() {
     lifecycle
         .publish(&stage(&root, "first", b"abc"), &Boundary::working())
         .unwrap();
-    fs::write(root.join("revisions/old/model.gguf"), b"bad").unwrap();
+    fs::write(
+        root.join("revisions/artifact-fixture/old/model.gguf"),
+        b"bad",
+    )
+    .unwrap();
 
     let repaired = lifecycle
         .publish(&stage(&root, "repair", b"abc"), &Boundary::working())
         .unwrap();
-    assert_eq!(repaired, root.join("revisions/old"));
+    assert_eq!(repaired, root.join("revisions/artifact-fixture/old"));
     assert_eq!(fs::read(repaired.join("model.gguf")).unwrap(), b"abc");
     assert_eq!(lifecycle.resolve_current().unwrap(), repaired);
     fs::remove_dir_all(root).unwrap();
@@ -496,7 +564,11 @@ fn interrupted_corrupt_revision_replacement_never_exposes_staged_bytes() {
         lifecycle
             .publish(&stage(&root, "first", b"abc"), &Boundary::working())
             .unwrap();
-        fs::write(root.join("revisions/old/model.gguf"), b"bad").unwrap();
+        fs::write(
+            root.join("revisions/artifact-fixture/old/model.gguf"),
+            b"bad",
+        )
+        .unwrap();
         let repair = stage(&root, "repair", b"abc");
 
         assert_eq!(
@@ -511,7 +583,7 @@ fn interrupted_corrupt_revision_replacement_never_exposes_staged_bytes() {
         lifecycle.publish(&repair, &Boundary::working()).unwrap();
         assert_eq!(
             lifecycle.resolve_current().unwrap(),
-            root.join("revisions/old")
+            root.join("revisions/artifact-fixture/old")
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -557,7 +629,7 @@ fn recovery_rejects_linked_revision_directory_and_model() {
         lifecycle
             .publish(&stage(&root, "first", b"abc"), &Boundary::working())
             .unwrap();
-        let revision = root.join("revisions/old");
+        let revision = root.join("revisions/artifact-fixture/old");
         let outside = root.with_extension("outside");
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("model.gguf"), b"abc").unwrap();

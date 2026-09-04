@@ -151,6 +151,69 @@ fn resumes_a_part_and_returns_only_a_verified_publication_stage() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn notice_link_rejects_stage_without_changing_link_target() {
+    use std::os::unix::fs::symlink;
+
+    let root = root();
+    fs::create_dir(root.join("install")).unwrap();
+    fs::write(root.join("install/model.gguf"), b"abc").unwrap();
+    let target = root.join("notice-target");
+    fs::write(&target, b"preserve").unwrap();
+    symlink(&target, root.join("install/NOTICE.txt")).unwrap();
+    let mut transport = Transport::new([]);
+
+    assert_eq!(
+        acquire_model_artifact_stage(
+            &root,
+            "install",
+            &REVISION,
+            ModelArtifactAcquisitionLimits::default(),
+            &mut transport,
+            ModelArtifactAcquisitionRuntime {
+                clock: &|| Duration::ZERO,
+                retry_wait: &mut no_wait,
+            },
+            &|| false,
+        ),
+        Err(ModelArtifactAcquisitionError::InvalidStage)
+    );
+    assert_eq!(fs::read(target).unwrap(), b"preserve");
+    assert!(fs::symlink_metadata(root.join("install/NOTICE.txt"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn notice_directory_rejects_stage() {
+    let root = root();
+    fs::create_dir(root.join("install")).unwrap();
+    fs::write(root.join("install/model.gguf"), b"abc").unwrap();
+    fs::create_dir(root.join("install/NOTICE.txt")).unwrap();
+    let mut transport = Transport::new([]);
+
+    assert_eq!(
+        acquire_model_artifact_stage(
+            &root,
+            "install",
+            &REVISION,
+            ModelArtifactAcquisitionLimits::default(),
+            &mut transport,
+            ModelArtifactAcquisitionRuntime {
+                clock: &|| Duration::ZERO,
+                retry_wait: &mut no_wait,
+            },
+            &|| false,
+        ),
+        Err(ModelArtifactAcquisitionError::InvalidStage)
+    );
+    assert!(root.join("install/NOTICE.txt").is_dir());
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn surfaces_resumed_download_progress_to_callers() {
     let root = root();
