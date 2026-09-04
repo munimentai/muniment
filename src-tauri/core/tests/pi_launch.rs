@@ -30,7 +30,7 @@ impl PiLaunchBoundaries for Boundaries {
 
 struct WorkspaceBoundaries {
     session_root: PathBuf,
-    workspace: PathBuf,
+    agent_workspace: Mutex<Option<PathBuf>>,
 }
 
 impl PiLaunchBoundaries for WorkspaceBoundaries {
@@ -42,8 +42,12 @@ impl PiLaunchBoundaries for WorkspaceBoundaries {
         None
     }
 
-    fn pi_workspace_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
-        Ok(Some(self.workspace.clone()))
+    fn pi_agent_directory(
+        &self,
+        workspace: &std::path::Path,
+    ) -> Result<Option<PathBuf>, PiLaunchError> {
+        *self.agent_workspace.lock().unwrap() = Some(workspace.to_path_buf());
+        Ok(None)
     }
 }
 
@@ -194,18 +198,23 @@ fn bundled_pi_agent_is_copied_and_seeds_the_workspace_mcp_config_once() {
 }
 
 #[test]
-fn launch_uses_the_workspace_as_the_sidecar_working_directory() {
+fn launch_uses_the_grant_workspace_for_the_sidecar_and_agent_seed() {
     let root = temporary_directory();
     let workspace = root.join("workspace");
     fs::create_dir(&workspace).unwrap();
+    assert_ne!(std::env::current_dir().unwrap(), workspace);
     let boundaries = WorkspaceBoundaries {
         session_root: root.clone(),
-        workspace: workspace.clone(),
+        agent_workspace: Mutex::new(None),
     };
+    let mut workspace_grant = grant();
+    workspace_grant.workspace = workspace.to_string_lossy().into_owned();
 
-    let config = pi_launch_config_for_executable(&boundaries, "pi".into(), &grant(), None).unwrap();
+    let config =
+        pi_launch_config_for_executable(&boundaries, "pi".into(), &workspace_grant, None).unwrap();
 
-    assert_eq!(config.working_directory, Some(workspace));
+    assert_eq!(config.working_directory, Some(workspace.clone()));
+    assert_eq!(*boundaries.agent_workspace.lock().unwrap(), Some(workspace));
     fs::remove_dir_all(root).unwrap();
 }
 

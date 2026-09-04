@@ -16,7 +16,7 @@ use muniment_runtime::{
 };
 
 mod common;
-use common::{fixture_grant, TemporaryProfile};
+use common::{fixture_grant, stage_pi_agent_bundle, TemporaryProfile};
 
 struct AgentlessBoundaries<'a>(&'a RuntimeChatEventSink);
 
@@ -255,10 +255,22 @@ fn drives_pi_launch_config_over_the_profile_directory() {
         .args
         .windows(2)
         .any(|args| { args == ["--extension", extension.to_string_lossy().as_ref()] }));
+    let sink = sink.with_pi_agent_bundle(profile.root.join("missing-bundle"));
     assert_eq!(
         pi_launch_config_for_executable(&sink, "pi".into(), &grant(), None).unwrap_err(),
         PiLaunchError::UnavailableAgentDirectory
     );
+
+    let bundle = stage_pi_agent_bundle(&profile.root);
+    let workspace = profile.root.join("grant-workspace");
+    fs::create_dir(&workspace).unwrap();
+    let mut workspace_grant = grant();
+    workspace_grant.workspace = workspace.to_string_lossy().into_owned();
+    let sink = sink.with_pi_agent_bundle(bundle);
+    let config =
+        pi_launch_config_for_executable(&sink, "pi".into(), &workspace_grant, None).unwrap();
+    assert_eq!(config.working_directory, Some(workspace.clone()));
+    assert!(workspace.join(".pi/mcp.json").is_file());
 }
 
 #[test]

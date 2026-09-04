@@ -32,6 +32,7 @@ fn queued_message_reaches_a_live_runtime_run(
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
     let descriptor = stage_pi_stub(&temporary_root);
+    let pi_agent_bundle = temporary_root.join("pi-agent");
     let steer_capture = temporary_root.join("steer.json");
     std::env::set_var("PI_RESUME_STUB_STEER_CAPTURE", &steer_capture);
 
@@ -76,6 +77,7 @@ fn queued_message_reaches_a_live_runtime_run(
                 Arc::clone(&active),
                 RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
+                Some(pi_agent_bundle),
             )
         });
         assert_eq!(

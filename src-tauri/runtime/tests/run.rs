@@ -129,6 +129,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
         Arc::clone(&active),
         RuntimeChatEventTarget::Subscriber(None),
         None,
+        None,
     )
     .unwrap();
     drop(first_launch);
@@ -151,6 +152,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
         fixture_grant(),
         Arc::clone(&active),
         RuntimeChatEventTarget::Subscriber(None),
+        None,
         None,
     )
     .unwrap();
@@ -211,6 +213,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
         active,
         RuntimeChatEventTarget::Subscriber(None),
         None,
+        None,
     )
     .unwrap_err();
 
@@ -236,6 +239,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let runtime = Arc::new(Mutex::new(None::<PiRuntime>));
     let runtime_activity = RuntimeActivityRegistry::new();
     let descriptor = stage_pi_stub(&temporary_root);
+    let pi_agent_bundle = temporary_root.join("pi-agent");
     let captured_prompts = temporary_root.join("prompts");
     let captured_args = temporary_root.join("args");
     std::env::set_var("PI_RESUME_STUB_PROMPTS", &captured_prompts);
@@ -260,6 +264,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         Arc::new(Mutex::new(None)),
         RuntimeChatEventTarget::Subscriber(None),
         Some(descriptor),
+        Some(pi_agent_bundle.clone()),
     )
     .unwrap_err();
     assert_eq!(error, "thread_not_found");
@@ -295,6 +300,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
                 Arc::clone(&active),
                 RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
+                Some(pi_agent_bundle.clone()),
             )
         });
         assert_eq!(
@@ -346,6 +352,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         Arc::clone(&second_active),
         RuntimeChatEventTarget::Subscriber(None),
         Some(descriptor),
+        Some(pi_agent_bundle),
     )
     .unwrap();
     assert_eq!(accepted.run_id, second_run_id);

@@ -93,6 +93,7 @@ pub struct RuntimeAttachBoundaries {
     browser_opener: Arc<dyn BrowserOpener>,
     chat_events: RuntimeChatEventBroadcast,
     pi_artifact: Option<PiArtifactDescriptor>,
+    pi_agent_bundle: Option<PathBuf>,
 }
 
 impl RuntimeAttachBoundaries {
@@ -164,6 +165,7 @@ impl RuntimeAttachBoundaries {
             browser_opener: Arc::new(open_browser),
             chat_events,
             pi_artifact: None,
+            pi_agent_bundle: None,
         }
     }
 
@@ -176,6 +178,10 @@ impl RuntimeAttachBoundaries {
     /// Replaces the production Pi artifact for tests and alternate hosts.
     pub fn with_pi_artifact(mut self, pi_artifact: PiArtifactDescriptor) -> Self {
         self.pi_artifact = Some(pi_artifact);
+        self.pi_agent_bundle = self
+            .profile_directory
+            .parent()
+            .map(|root| root.join("pi-agent"));
         self
     }
 
@@ -585,6 +591,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             Arc::clone(&self.active),
             RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
             self.pi_artifact,
+            self.pi_agent_bundle.clone(),
         )
         .map_err(run_service_error)?;
         std::thread::spawn(move || service::drive_prompt(launch));
@@ -639,6 +646,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             Arc::clone(&self.active),
             RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
             self.pi_artifact,
+            self.pi_agent_bundle.clone(),
         )
         .map_err(run_service_error)?;
         let mut storage = self.storage.lock().map_err(|_| persistence_error())?;

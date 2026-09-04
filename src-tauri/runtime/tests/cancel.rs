@@ -19,6 +19,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
     let descriptor = stage_pi_stub(&temporary_root);
+    let pi_agent_bundle = temporary_root.join("pi-agent");
     let abort_capture = temporary_root.join("abort.json");
     std::env::set_var("PI_RESUME_STUB_ABORT_CAPTURE", &abort_capture);
     std::env::set_var("PI_RESUME_STUB_MEMORY_QUERY", "hold the run open");
@@ -49,6 +50,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
                 Arc::clone(&active),
                 RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
+                Some(pi_agent_bundle),
             )
         });
         assert_eq!(

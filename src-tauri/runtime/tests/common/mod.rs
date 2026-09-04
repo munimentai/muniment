@@ -162,7 +162,25 @@ pub fn credentials_with_expiry(expires_at: u64) -> NativeCredentials {
     }
 }
 
+pub fn stage_pi_agent_bundle(temporary_root: &Path) -> PathBuf {
+    let bundle = temporary_root.join("pi-agent");
+    for package in [
+        "pi-web-access",
+        "pi-subagents",
+        "pi-background-tasks",
+        "pi-mcp-adapter",
+    ] {
+        fs::create_dir_all(bundle.join("npm/node_modules").join(package)).unwrap();
+    }
+    fs::create_dir_all(bundle.join(".pi")).unwrap();
+    fs::write(bundle.join("settings.json"), "{}\n").unwrap();
+    fs::write(bundle.join("bundle-version"), "test\n").unwrap();
+    fs::write(bundle.join(".pi/mcp.json"), "{\"mcpServers\":{}}\n").unwrap();
+    bundle
+}
+
 pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
+    stage_pi_agent_bundle(temporary_root);
     let pi_root = temporary_root.join("pi");
     let revision_root = pi_root.join("revisions").join(PI_ARTIFACT.version);
     let staged_stub = revision_root.join(PI_ARTIFACT.executable);

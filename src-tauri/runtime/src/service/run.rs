@@ -64,6 +64,7 @@ pub struct PromptLaunch {
         Arc<Mutex<VecDeque<muniment_core::permission_gate::PendingPermissionAnswer>>>,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
+    pi_agent_bundle: Option<PathBuf>,
     prepared: (u64, muniment_core::journal::reducer::ChatProjector),
 }
 
@@ -105,6 +106,7 @@ pub fn accept_prompt(
     active: Arc<Mutex<Option<ActiveRun>>>,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
+    pi_agent_bundle: Option<PathBuf>,
 ) -> Result<(PromptAcceptance, PromptLaunch), String> {
     let profile_directory = profile_directory.as_ref();
     let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
@@ -269,6 +271,7 @@ pub fn accept_prompt(
         permission_answers,
         events,
         pi_artifact,
+        pi_agent_bundle,
         prepared,
     };
     Ok((acceptance, launch))
@@ -276,15 +279,19 @@ pub fn accept_prompt(
 
 /// Drives an accepted prompt to completion.
 pub fn drive_prompt(launch: PromptLaunch) {
+    let mut sink = RuntimeChatEventSink::with_target(
+        &launch.profile_directory,
+        launch.events,
+        launch.memory_runtime.clone(),
+        launch.thread_id,
+        launch.grant.workspace.clone(),
+    )
+    .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_ARTIFACT));
+    if let Some(bundle) = launch.pi_agent_bundle {
+        sink = sink.with_pi_agent_bundle(bundle);
+    }
     coordinate(
-        RuntimeChatEventSink::with_target(
-            &launch.profile_directory,
-            launch.events,
-            launch.memory_runtime.clone(),
-            launch.thread_id,
-            launch.grant.workspace.clone(),
-        )
-        .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_ARTIFACT)),
+        sink,
         launch.storage,
         launch.runtime,
         launch.runtime_activity,
@@ -326,6 +333,7 @@ pub fn run_prompt(
     active: Arc<Mutex<Option<ActiveRun>>>,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
+    pi_agent_bundle: Option<PathBuf>,
 ) -> Result<(), String> {
     let (_, launch) = accept_prompt(
         profile_directory,
@@ -345,6 +353,7 @@ pub fn run_prompt(
         active,
         events,
         pi_artifact,
+        pi_agent_bundle,
     )?;
     drive_prompt(launch);
     Ok(())
@@ -399,6 +408,7 @@ pub fn resume_run(
     active: Arc<Mutex<Option<ActiveRun>>>,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
+    pi_agent_bundle: Option<PathBuf>,
 ) -> Result<(), String> {
     let profile_directory = profile_directory.as_ref();
     let profile = ChatProfile::new(profile_directory);
@@ -443,15 +453,19 @@ pub fn resume_run(
         grant.minimum_cacheable_prefix_characters,
     )?;
     let (attempt, result) = std::sync::mpsc::channel();
+    let mut sink = RuntimeChatEventSink::with_target(
+        profile_directory,
+        events,
+        memory_runtime.clone(),
+        thread_id,
+        grant.workspace.clone(),
+    )
+    .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT));
+    if let Some(bundle) = pi_agent_bundle {
+        sink = sink.with_pi_agent_bundle(bundle);
+    }
     drive_resume(ResumeLaunch {
-        sink: RuntimeChatEventSink::with_target(
-            profile_directory,
-            events,
-            memory_runtime.clone(),
-            thread_id,
-            grant.workspace.clone(),
-        )
-        .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
+        sink,
         storage,
         runtime,
         runtime_activity: runtime_activity.clone(),

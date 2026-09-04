@@ -36,6 +36,7 @@ fn memory_session_failure_ends_the_prepared_run() {
         Arc::clone(&active),
         RuntimeChatEventTarget::Subscriber(None),
         None,
+        None,
     );
     let error = match result {
         Ok(_) => panic!("the memory session opened without a confirmed Home"),

@@ -60,7 +60,7 @@ const LOCAL_MODE_ENV_REMOVE: &[&str] = &[
 pub trait PiLaunchBoundaries {
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError>;
     fn memory_agent_extension_path(&self) -> Option<PathBuf>;
-    fn pi_agent_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+    fn pi_agent_directory(&self, _workspace: &Path) -> Result<Option<PathBuf>, PiLaunchError> {
         Ok(None)
     }
     fn pi_workspace_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
@@ -211,13 +211,23 @@ pub fn pi_launch_config_for_executable(
         "--append-system-prompt".into(),
         PI_BASH_TIMEOUT_PROMPT.into(),
     ]);
-    if let Some(agent_directory) = boundaries.pi_agent_directory()? {
+    let workspace = if grant.is_local() {
+        boundaries.pi_workspace_directory()?
+    } else {
+        Some(PathBuf::from(&grant.workspace))
+    };
+    if let Some(agent_directory) = workspace
+        .as_deref()
+        .map(|workspace| boundaries.pi_agent_directory(workspace))
+        .transpose()?
+        .flatten()
+    {
         config.env.insert(
             "PI_CODING_AGENT_DIR".into(),
             agent_directory.to_string_lossy().into_owned(),
         );
     }
-    config.working_directory = boundaries.pi_workspace_directory()?;
+    config.working_directory = workspace;
     if grant.is_local() {
         config.env_remove = LOCAL_MODE_ENV_REMOVE
             .iter()

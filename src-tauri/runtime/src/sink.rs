@@ -128,6 +128,7 @@ pub struct RuntimeChatEventSink {
     profile: ChatProfile,
     target: Mutex<RuntimeChatEventTarget>,
     pi_artifact: PiArtifactDescriptor,
+    pi_agent_bundle: Option<PathBuf>,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     thread_id: String,
     workspace: String,
@@ -176,6 +177,7 @@ impl RuntimeChatEventSink {
             profile: ChatProfile::new(profile_directory.as_ref()),
             target: Mutex::new(target),
             pi_artifact: PI_ARTIFACT,
+            pi_agent_bundle: None,
             memory_runtime,
             thread_id,
             workspace,
@@ -184,6 +186,11 @@ impl RuntimeChatEventSink {
 
     pub fn with_pi_artifact(mut self, pi_artifact: PiArtifactDescriptor) -> Self {
         self.pi_artifact = pi_artifact;
+        self
+    }
+
+    pub fn with_pi_agent_bundle(mut self, bundle: impl Into<PathBuf>) -> Self {
+        self.pi_agent_bundle = Some(bundle.into());
         self
     }
 }
@@ -237,29 +244,31 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         }
     }
 
-    fn pi_agent_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
-        let executable =
-            std::env::current_exe().map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
-        let parent = executable
-            .parent()
-            .ok_or(PiLaunchError::UnavailableAgentDirectory)?;
-        #[cfg(target_os = "macos")]
-        let bundled = parent
-            .parent()
-            .and_then(Path::parent)
-            .map(|contents| contents.join("Resources/pi-agent"));
-        #[cfg(not(target_os = "macos"))]
-        let bundled = Some(parent.join("pi-agent"));
-        let bundled = bundled
-            .filter(|path| path.is_dir())
-            .ok_or(PiLaunchError::UnavailableAgentDirectory)?;
+    fn pi_agent_directory(&self, workspace: &Path) -> Result<Option<PathBuf>, PiLaunchError> {
+        let bundled = match &self.pi_agent_bundle {
+            Some(bundle) => Some(bundle.clone()),
+            None => {
+                let executable = std::env::current_exe()
+                    .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+                let parent = executable
+                    .parent()
+                    .ok_or(PiLaunchError::UnavailableAgentDirectory)?;
+                #[cfg(target_os = "macos")]
+                let bundle = parent
+                    .parent()
+                    .and_then(Path::parent)
+                    .map(|contents| contents.join("Resources/pi-agent"));
+                #[cfg(not(target_os = "macos"))]
+                let bundle = Some(parent.join("pi-agent"));
+                bundle
+            }
+        }
+        .filter(|path| path.is_dir())
+        .ok_or(PiLaunchError::UnavailableAgentDirectory)?;
         let destination = crate::directories::config_directory()
             .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?
             .join("pi-agent");
-        let workspace = self
-            .pi_workspace_directory()?
-            .ok_or(PiLaunchError::UnavailableAgentDirectory)?;
-        muniment_core::pi_launch::prepare_pi_agent_directory(&bundled, &destination, &workspace)
+        muniment_core::pi_launch::prepare_pi_agent_directory(&bundled, &destination, workspace)
             .map(Some)
     }
 }

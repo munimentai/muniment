@@ -94,6 +94,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
     let descriptor = stage_pi_stub(&temporary_root);
+    let pi_agent_bundle = temporary_root.join("pi-agent");
     let permission_capture = temporary_root.join("permission.jsonl");
     let steer_capture = temporary_root.join("steer.json");
     std::env::set_var("PI_RESUME_STUB_PERMISSION_CAPTURE", &permission_capture);
@@ -141,6 +142,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
                 Arc::clone(&active),
                 RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
+                Some(pi_agent_bundle),
             )
         });
         assert_eq!(
