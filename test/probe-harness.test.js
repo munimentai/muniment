@@ -1,9 +1,65 @@
-import { describe, expect, it } from 'vitest'
+// @vitest-environment jsdom
+
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { cleanup, render, screen } from '@testing-library/svelte'
+import '@testing-library/jest-dom/vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+
+import { buildProbeCommandTable } from './probe/stub.js'
+
 const source = fs.readFileSync(path.join(process.cwd(), 'test/probe/stub.js'), 'utf8')
 const readyMarker = "document.body.dataset.probeReady = ''"
+let App
+
+vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
+  register: vi.fn().mockResolvedValue(undefined),
+  unregister: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn().mockResolvedValue(null) }))
+vi.mock('@tauri-apps/api/window', () => ({
+  UserAttentionType: { Informational: 2 },
+  getCurrentWindow: () => ({
+    isFocused: vi.fn().mockResolvedValue(true),
+    requestUserAttention: vi.fn().mockResolvedValue(undefined),
+  }),
+}))
+vi.mock('@tauri-apps/api/webview', () => ({
+  getCurrentWebview: () => ({ onDragDropEvent: vi.fn().mockResolvedValue(vi.fn()) }),
+}))
+
+function installTable(fixtureName) {
+  const table = buildProbeCommandTable(fixtureName)
+  window.__TAURI__ = {
+    core: { invoke: table.invoke },
+    event: {
+      listen: vi.fn(async (event, listener) => {
+        const entry = { event, listener }
+        table.eventListeners.push(entry)
+        return () => {
+          const index = table.eventListeners.indexOf(entry)
+          if (index !== -1) table.eventListeners.splice(index, 1)
+        }
+      }),
+    },
+  }
+  window.__TAURI_INTERNALS__ = {
+    invoke: vi.fn().mockResolvedValue(null),
+    transformCallback: vi.fn(),
+  }
+  return table
+}
+
+beforeAll(async () => {
+  HTMLElement.prototype.scrollTo = vi.fn()
+  App = (await import('../src/App.svelte')).default
+})
+
+afterEach(() => {
+  cleanup()
+  localStorage.clear()
+})
 
 describe('probe harness', () => {
   it('sets the ready marker only after the font set settles', () => {
@@ -11,17 +67,54 @@ describe('probe harness', () => {
     expect(source.split(readyMarker)).toHaveLength(2)
   })
 
-  it('drives the in-flight page from the shared stub', () => {
-    const page = fs.readFileSync(path.join(process.cwd(), 'test/probe/in-flight.html'), 'utf8')
-    expect(page).toContain('<script src="./stub.js" data-history="in-flight"></script>')
-    expect(page).not.toContain('probeReady')
+  it('drives every fixture page from the shared stub and its data value', () => {
+    const pages = fs.readdirSync(path.join(process.cwd(), 'test/probe'))
+      .filter((name) => name.endsWith('.html'))
+    for (const name of pages) {
+      const page = fs.readFileSync(path.join(process.cwd(), 'test/probe', name), 'utf8')
+      expect(page).toMatch(/<script type="module" src="\.\/stub\.js" data-history="[^"]+"><\/script>/)
+      expect(page).not.toContain('probeReady')
+    }
   })
 
-  it('reports a started attachment listener', () => {
-    expect(source).toMatch(/if \(command === 'attach_listener_status'\) return \{ started: true, failure: null, connected: false, supervisor_running: false \}/)
+  it('reports a started attachment listener', async () => {
+    const table = buildProbeCommandTable('restored')
+    await expect(table.invoke('attach_listener_status')).resolves.toEqual({
+      started: true,
+      failure: null,
+      connected: false,
+      supervisor_running: false,
+    })
   })
 
-  it('rejects an unknown core command with its name', () => {
-    expect(source).toMatch(/throw new Error\(`Unknown probe command: \$\{command\}`\)/)
+  it('answers every local mode command', async () => {
+    const table = buildProbeCommandTable('local-mode')
+    await expect(table.invoke('local_mode_status')).resolves.toBe(true)
+    await expect(table.invoke('local_mode_enter')).resolves.toBeNull()
+    await expect(table.invoke('local_mode_leave')).resolves.toBeNull()
+    await expect(table.invoke('local_mode_store_provider_key', { provider: 'google', key: 'test' })).resolves.toBeNull()
+  })
+
+  it('rejects an unknown core command with its name', async () => {
+    const table = buildProbeCommandTable('restored')
+    await expect(table.invoke('missing_probe_command')).rejects.toThrow('Unknown probe command: missing_probe_command')
+  })
+
+  it('renders the signed-in workspace from the restored command table', async () => {
+    installTable('restored')
+    render(App)
+
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(await screen.findByText('Find the renewal terms in the lease.')).toBeInTheDocument()
+    expect(screen.queryByText('Sign in')).not.toBeInTheDocument()
+  })
+
+  it('renders the local mode workspace from the local command table', async () => {
+    installTable('local-mode')
+    render(App)
+
+    expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    expect(screen.getByText('The local notes list the lease renewal date and notice period.')).toBeInTheDocument()
+    expect(screen.queryByText('Sign in')).not.toBeInTheDocument()
   })
 })
