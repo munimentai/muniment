@@ -272,6 +272,7 @@ jobs:
       RELEASE_TOKEN: ${{ github.token }}
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
+      FIXTURE_PROVIDER_KEY: ${{ secrets.DESKTOP_E2E_PROVIDER_KEY }}
     steps:
       - name: Check out E2E harness
         uses: actions/checkout@v7
@@ -302,6 +303,7 @@ jobs:
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
             "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
             "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
+            "MUNIMENT_E2E_PROVIDER_KEY=$FIXTURE_PROVIDER_KEY" \
           | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 "$remote" >"$output" 2>&1
@@ -396,6 +398,7 @@ jobs:
       RELEASE_TOKEN: ${{ github.token }}
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
+      FIXTURE_PROVIDER_KEY: ${{ secrets.DESKTOP_E2E_PROVIDER_KEY }}
     steps:
       - name: Check out E2E harness
         uses: actions/checkout@v7
@@ -426,6 +429,7 @@ jobs:
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
             "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
             "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
+            "MUNIMENT_E2E_PROVIDER_KEY=$FIXTURE_PROVIDER_KEY" \
           | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 "$remote" >"$output" 2>&1
@@ -512,6 +516,7 @@ jobs:
       RELEASE_TOKEN: ${{ github.token }}
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
+      FIXTURE_PROVIDER_KEY: ${{ secrets.DESKTOP_E2E_PROVIDER_KEY }}
     steps:
       - name: Check out E2E harness
         uses: actions/checkout@v7
@@ -542,6 +547,7 @@ jobs:
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
             "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
             "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
+            "MUNIMENT_E2E_PROVIDER_KEY=$FIXTURE_PROVIDER_KEY" \
           | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 "$remote" >"$output" 2>&1

@@ -294,7 +294,7 @@ try {
 
   $sha = $env:MUNIMENT_E2E_SOURCE_SHA
   if ($sha -notmatch '^[0-9a-f]{40}$') { throw "invalid source SHA" }
-  if (-not $env:GH_TOKEN -or -not $env:GITHUB_REPOSITORY -or -not $env:MUNIMENT_E2E_USERNAME -or -not $env:MUNIMENT_E2E_PASSWORD) {
+  if (-not $env:GH_TOKEN -or -not $env:GITHUB_REPOSITORY -or -not $env:MUNIMENT_E2E_USERNAME -or -not $env:MUNIMENT_E2E_PASSWORD -or -not $env:MUNIMENT_E2E_PROVIDER_KEY) {
     throw "required injected environment is unavailable"
   }
 
@@ -360,16 +360,7 @@ try {
   $env:MUNIMENT_E2E_AUTH_URL_FILE = $authUrlFile
   $env:MUNIMENT_E2E_IMAGE_PATH = $imageFixture
   $ready = $true
-  $env:APPDATA = Join-Path $stateRoot "Ready\Roaming"
-  $env:LOCALAPPDATA = Join-Path $stateRoot "Ready\Local"
-  $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'ready-home'
-  $env:MUNIMENT_E2E_ONBOARDING_ONLY = "1"
-  try {
-    Invoke-NativeCommand "npm.cmd" "run test:e2e" (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed"
-  } catch {
-    $status = 1
-  }
-  Remove-Item Env:MUNIMENT_E2E_ONBOARDING_ONLY -ErrorAction SilentlyContinue
+  # Run the installed chat specs first. Each later phase still runs after a failure.
   $env:APPDATA = Join-Path $stateRoot "Degraded\Roaming"
   $env:LOCALAPPDATA = Join-Path $stateRoot "Degraded\Local"
   $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'degraded-home'
@@ -380,6 +371,16 @@ try {
   } catch {
     $status = 1
   }
+  $env:APPDATA = Join-Path $stateRoot "Ready\Roaming"
+  $env:LOCALAPPDATA = Join-Path $stateRoot "Ready\Local"
+  $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'ready-home'
+  $env:MUNIMENT_E2E_ONBOARDING_ONLY = "1"
+  try {
+    Invoke-NativeCommand "npm.cmd" "run test:e2e" (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed"
+  } catch {
+    $status = 1
+  }
+  Remove-Item Env:MUNIMENT_E2E_ONBOARDING_ONLY -ErrorAction SilentlyContinue
 } catch {
   $diagnostic = "message: $($_.Exception.Message)`ncategory: $($_.CategoryInfo.Category)`nline: $($_.InvocationInfo.ScriptLineNumber)"
   Set-Content -LiteralPath $diagnosticFile -Value $diagnostic -ErrorAction SilentlyContinue
