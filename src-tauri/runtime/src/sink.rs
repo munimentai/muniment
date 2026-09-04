@@ -235,7 +235,7 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
     }
 
     fn pi_workspace_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
-        if self.workspace.is_empty() {
+        if self.workspace.is_empty() || self.workspace == "local" {
             std::env::current_dir()
                 .map(Some)
                 .map_err(|_| PiLaunchError::UnavailableAgentDirectory)

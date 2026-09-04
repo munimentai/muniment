@@ -209,6 +209,24 @@ fn drops_a_subscriber_when_its_bounded_queue_is_full() {
 }
 
 #[test]
+fn uses_the_process_directory_for_a_local_workspace() {
+    let profile = TemporaryProfile::new("sink-local-workspace", false);
+    let local_grant = ChatGrant::local();
+    let sink = RuntimeChatEventSink::new(
+        &profile.profile,
+        recorded_broadcast(&local_grant.workspace),
+        memory_runtime(&profile),
+        "thread-1".into(),
+        local_grant.workspace,
+    );
+
+    assert_eq!(
+        sink.pi_workspace_directory().unwrap(),
+        Some(std::env::current_dir().unwrap())
+    );
+}
+
+#[test]
 fn drives_pi_launch_config_over_the_profile_directory() {
     let profile = TemporaryProfile::new("sink-launch-config", false);
     let _storage = open_profile_storage(&profile.profile).unwrap();
