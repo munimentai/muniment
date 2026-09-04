@@ -80,10 +80,17 @@ fn local_mode_prepares_a_journaled_run_without_native_auth_or_a_cloud_grant() {
 
     assert!(launch.grant.is_local());
     assert!(launch.tokens.access_token.is_empty());
-    let events = storage.lock().unwrap().journal.events(&result.run_id).unwrap();
+    let events = storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(&result.run_id)
+        .unwrap();
     assert!(!events.is_empty());
     assert!(events.iter().all(|event| event.envelope_version == 1));
-    assert!(events.iter().all(|event| event.provenance.source == "muniment-runtime"));
+    assert!(events
+        .iter()
+        .all(|event| event.provenance.source == "muniment-runtime"));
     assert_eq!(
         server.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
@@ -145,7 +152,10 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     std::env::remove_var("PI_RESUME_STUB_PROMPTS");
     std::env::remove_var("PI_RESUME_STUB_TOOL_EVENTS");
     assert!(!boundaries.active_run_exists());
-    assert_eq!(std::fs::read_to_string(prompt_capture).unwrap().trim(), "local prompt");
+    assert_eq!(
+        std::fs::read_to_string(prompt_capture).unwrap().trim(),
+        "local prompt"
+    );
 
     let storage = open_profile_storage(&profile.profile).unwrap();
     let events = storage
@@ -171,7 +181,9 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
         ]
     );
     assert!(events.iter().all(|event| event.envelope_version == 1));
-    assert!(events.iter().all(|event| event.provenance.source == "muniment-runtime"));
+    assert!(events
+        .iter()
+        .all(|event| event.provenance.source == "muniment-runtime"));
     let payloads = events
         .iter()
         .map(|event| match &event.payload {

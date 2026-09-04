@@ -607,7 +607,11 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 "A reply is already in progress.".into(),
             ));
         }
-        let workspace = if self.local_mode() { "local" } else { workspace };
+        let workspace = if self.local_mode() {
+            "local"
+        } else {
+            workspace
+        };
         let belongs_to_workspace = self
             .storage
             .lock()
@@ -665,7 +669,11 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         delivery: ChatDelivery,
         message: &str,
     ) -> Result<(), RunStartError> {
-        let workspace = if self.local_mode() { "local" } else { workspace };
+        let workspace = if self.local_mode() {
+            "local"
+        } else {
+            workspace
+        };
         service::queue_run_message(
             Arc::clone(&self.active),
             ChatQueueRequest {
