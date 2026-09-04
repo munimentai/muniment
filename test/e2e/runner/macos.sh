@@ -63,9 +63,12 @@ verify_installed_payload() {
   local runtime="$installed_bundle/Contents/Library/LaunchServices/muniment-runtime"
   local agent="$installed_bundle/Contents/Library/LaunchAgents/ai.muniment.runtime.plist"
   local plist_buddy=${MUNIMENT_E2E_PLIST_BUDDY:-/usr/libexec/PlistBuddy}
-  local runtime_version label bundle_program throttle unsuccessful_exit
+  local otool=${MUNIMENT_E2E_OTOOL:-/usr/bin/otool}
+  local runtime_version rpaths label bundle_program throttle unsuccessful_exit
 
   [[ -x $runtime ]] || payload_failure 'installed runtime is unavailable or not executable' || return
+  rpaths=$("$otool" -l "$runtime" 2>>"$raw/payload.log" | awk '$1 == "cmd" { rpath = ($2 == "LC_RPATH"); next } rpath && $1 == "path" { print $2; rpath = 0 }') || payload_failure 'installed runtime load commands are unavailable' || return
+  grep -Fxq '@executable_path/../../Resources/asr-runtime' <<<"$rpaths" || payload_failure 'installed runtime ASR rpath is unavailable' || return
   runtime_version=$("$runtime" --version 2>>"$raw/payload.log") || payload_failure 'installed runtime version probe failed' || return
   [[ -n ${runtime_version//[[:space:]]/} ]] || payload_failure 'installed runtime version is empty' || return
   [[ -f $agent ]] || payload_failure 'installed runtime LaunchAgent is unavailable' || return
