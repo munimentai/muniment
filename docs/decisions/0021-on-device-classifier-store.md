@@ -8,7 +8,9 @@
 ## Context
 
 The 2026-07-29 owner ruling supersedes this decision. The cloud now classifies
-prompts at ingress. Desktop clients do not download or run a classifier.
+prompts at ingress. Desktop clients do not use this downloaded classifier
+store. [ADR 0028](0028-bundled-router-classifier.md) records the later ruling
+for a bundled on-device router classifier.
 
 > The remaining sections record the superseded design. They do not describe
 > current behavior or planned desktop work.

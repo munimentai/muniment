@@ -791,9 +791,12 @@ distinct layers, and neither silently replaces or absorbs the other.
 
 ### 15.3 Required on-device onboard and query-router model
 
-Superseded 2026-07-29. The cloud classifies every prompt at ingress.
-The desktop has no required language model, classifier, or language-model runtime.
-The desktop sends no classification metadata. Parakeet remains the ASR model.
+Owner ruling 2026-09-04: the desktop bundles an on-device router classifier
+with the install. The classifier never uses the model downloader. Its local
+result does not change the cloud contract. The cloud still classifies every
+prompt at ingress.
+The desktop sends no classification metadata.
+Parakeet remains the ASR model.
 
 ### 15.4 Consent-gated onboarding and import
 

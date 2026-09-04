@@ -79,12 +79,10 @@ test -z "$(grep -RilE \
 grep -Fq -- '- Status: superseded by the 2026-07-29 cloud ingress ruling' \
   docs/decisions/0017-resident-model-artifact-pin.md
 grep -Fq 'The desktop sends no classification metadata.' docs/spec/harness-spec.md
-# SPEC law 13: the desktop has one mode, the thread surface, and it classifies
-# nothing. No source may compute a routing tier, a routing label, or a
-# classification, because the cloud classifies every request at ingress.
-# `chat_grant.rs` is the one exception. It names these fields inside the two
-# tests below, which read both cloud-bound requests off the wire and reject any
-# request that carries one. Those tests are asserted present.
+# SPEC law 13 permits the bundled local classifier but keeps its result off the
+# cloud-bound wire. Reserved classification fields remain forbidden in source.
+# `chat_grant.rs` names these fields only in tests that reject them from both
+# cloud-bound requests. The assertions below keep those tests present.
 test -z "$(grep -RilE \
   --exclude='chat_grant.rs' \
   'routing_?label|routing_?tier|task_?tier|signals_?version|keyword-code-v1' \
@@ -93,6 +91,13 @@ grep -Fq 'fn the_grant_request_carries_no_client_classification' \
   src-tauri/core/src/chat_grant.rs
 grep -Fq 'fn the_receipt_request_carries_only_the_run_id' \
   src-tauri/core/src/chat_grant.rs
+classifier_adr=docs/decisions/0028-bundled-router-classifier.md
+test -f "$classifier_adr"
+grep -Fq 'This artifact has no download, no lifecycle pointer, and no user opt-in.' \
+  "$classifier_adr"
+for classifier_class in route.cloud route.local route.proxy; do
+  grep -Fq "\`$classifier_class\`" "$classifier_adr"
+done
 # SPEC and ROADMAP name that one mode identically, and neither names it a chat.
 grep -Fq 'the thread surface' SPEC.md
 grep -Fq 'the thread surface' ROADMAP.md

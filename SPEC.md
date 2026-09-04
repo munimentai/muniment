@@ -6,9 +6,9 @@ The client supports cloud-backed use and local mode. Closed source.
 **The canonical spec is vendored, verbatim, in [docs/spec/](docs/spec/):**
 
 - [harness-spec.md](docs/spec/harness-spec.md) §6 (desktop client — THE spec
-  for this repo), §5 (routing: the cloud classifies at ingress, and the
-  desktop classifies nothing),
-  §2 (architecture), §9 (build order this repo follows).
+  for this repo), §5 (routing: the cloud classifies at ingress),
+  §15.3 (the bundled on-device router classifier), §2 (architecture), and §9
+  (build order this repo follows).
 - [02-desktop-app.md](docs/spec/02-desktop-app.md) +
   [design-spec.md](docs/spec/design-spec.md) §2 (layout, thread grammar,
   composer, voice states, projects) and §1 (brand foundation, color law,
@@ -70,11 +70,11 @@ reference implementation: [docs/design-reference/ring/](docs/design-reference/ri
     monetization content (owner-only). The reviewer blocks a PR that changes a
     public surface without updating evidence. Merged evidence changes are
     picked up automatically by the site lane — do not file site tickets by hand.
-13. **One mode, and the desktop classifies nothing.** The desktop runs a single
-    mode, **the thread surface** (harness-spec §6.1). No mode switcher exists.
-    This SPEC and the ROADMAP name that mode identically, and never as a chat.
-    No desktop source computes a routing tier, a routing label, or a
-    classification, and no desktop request carries one. A desktop request
+13. **One mode, and no classification on the cloud-bound wire.** The desktop
+    runs a single mode, **the thread surface** (harness-spec §6.1). No mode
+    switcher exists. This SPEC and the ROADMAP name that mode identically, and
+    never as a chat. An on-device router classifier is allowed, but no desktop
+    request carries its class or any other classification. A desktop request
     reaches the cloud with server-supplied grant values alone. The cloud
     classifies every request at ingress with the pinned embedding classifier
     (harness-spec §5.1, ratified by MUNICLOUD-968).
