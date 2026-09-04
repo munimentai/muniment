@@ -67,7 +67,7 @@ use muniment_core::thread_ownership::subject_owns_first_run;
 #[cfg(test)]
 use serde_json::json;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{Emitter, Manager};
 #[cfg(test)]
 use uuid::Uuid;

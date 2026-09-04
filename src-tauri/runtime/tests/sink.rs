@@ -234,13 +234,9 @@ fn drives_pi_launch_config_over_the_profile_directory() {
         profile.profile.join("pi-sessions")
     );
     assert_eq!(sink.memory_agent_extension_path(), Some(extension.clone()));
-    let config = pi_launch_config_for_executable(
-        &AgentlessBoundaries(&sink),
-        "pi".into(),
-        &grant(),
-        None,
-    )
-    .unwrap();
+    let config =
+        pi_launch_config_for_executable(&AgentlessBoundaries(&sink), "pi".into(), &grant(), None)
+            .unwrap();
     assert!(config.args.windows(2).any(|args| {
         args == [
             "--session-dir",

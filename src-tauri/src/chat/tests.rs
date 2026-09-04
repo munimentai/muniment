@@ -8,6 +8,45 @@ use muniment_core::sidecar::validate_pi_session;
 
 static PI_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+#[test]
+fn desktop_pi_sink_uses_the_process_directory_for_a_local_grant() {
+    assert_eq!(
+        desktop_pi_workspace(&ChatGrant::local()).unwrap(),
+        std::env::current_dir().unwrap()
+    );
+}
+
+#[test]
+fn desktop_pi_sink_uses_the_grant_workspace_instead_of_the_process_directory() {
+    let process_directory = std::env::current_dir().unwrap();
+    let directory = std::env::temp_dir().join(format!("muniment-pi-workspace-{}", Uuid::now_v7()));
+    let workspace = directory.join("grant-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    assert_ne!(workspace, process_directory);
+    let grant = ChatGrant {
+        workspace: workspace.to_string_lossy().into_owned(),
+        gateway_url: "https://gateway.invalid".into(),
+        virtual_key: "virtual-key".into(),
+        model: None,
+        minimum_cacheable_prefix_characters: 8_192,
+        receipt_url: "https://receipt.invalid".into(),
+    };
+    core_validate_grant(&grant).unwrap();
+
+    let app = tauri::test::mock_app();
+    let sink = TauriChatEventSink::new(
+        app.handle().clone(),
+        Arc::new(crate::memory::ApplicationMemoryRuntime::new(
+            directory.join("config"),
+            directory.join("cache"),
+        )),
+        desktop_pi_workspace(&grant),
+    );
+
+    assert_eq!(sink.pi_workspace_directory().unwrap(), Some(workspace));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[cfg(any(unix, target_os = "windows"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RunClientCall {

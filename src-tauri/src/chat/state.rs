@@ -7,19 +7,30 @@ use super::run_preparation::{
 };
 use super::*;
 
+pub(super) fn desktop_pi_workspace(grant: &ChatGrant) -> Result<PathBuf, PiLaunchError> {
+    if grant.is_local() {
+        std::env::current_dir().map_err(|_| PiLaunchError::UnavailableAgentDirectory)
+    } else {
+        Ok(PathBuf::from(&grant.workspace))
+    }
+}
+
 pub(crate) struct TauriChatEventSink<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
     memory_runtime: Arc<crate::memory::ApplicationMemoryRuntime>,
+    workspace: Result<PathBuf, PiLaunchError>,
 }
 
 impl<R: tauri::Runtime> TauriChatEventSink<R> {
     pub(super) fn new(
         app: tauri::AppHandle<R>,
         memory_runtime: Arc<crate::memory::ApplicationMemoryRuntime>,
+        workspace: Result<PathBuf, PiLaunchError>,
     ) -> Self {
         Self {
             app,
             memory_runtime,
+            workspace,
         }
     }
 }
@@ -48,12 +59,10 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
     }
 
     fn pi_workspace_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
-        std::env::current_dir()
-            .map(Some)
-            .map_err(|_| PiLaunchError::UnavailableAgentDirectory)
+        self.workspace.clone().map(Some)
     }
 
-    fn pi_agent_directory(&self, workspace: &Path) -> Result<Option<PathBuf>, PiLaunchError> {
+    fn pi_agent_directory(&self, _workspace: &Path) -> Result<Option<PathBuf>, PiLaunchError> {
         let bundled = self
             .app
             .path()
@@ -69,8 +78,12 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
             .app_config_dir()
             .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?
             .join("pi-agent");
-        muniment_core::pi_launch::prepare_pi_agent_directory(&bundled, &destination, workspace)
-            .map(Some)
+        muniment_core::pi_launch::prepare_pi_agent_directory(
+            &bundled,
+            &destination,
+            self.workspace.as_deref().map_err(|error| *error)?,
+        )
+        .map(Some)
     }
 }
 
@@ -479,7 +492,8 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 .inner(),
         );
         tauri::async_runtime::spawn_blocking(move || {
-            let sink = TauriChatEventSink::new(app.clone(), Arc::clone(&memory_runtime));
+            let workspace = desktop_pi_workspace(&launch.grant);
+            let sink = TauriChatEventSink::new(app.clone(), Arc::clone(&memory_runtime), workspace);
             coordinate(
                 sink,
                 storage,

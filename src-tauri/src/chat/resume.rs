@@ -248,8 +248,9 @@ pub(super) async fn local_chat_resume(
         app.state::<Arc<crate::memory::ApplicationMemoryRuntime>>()
             .inner(),
     );
+    let workspace = desktop_pi_workspace(&grant);
     let launch = ResumeLaunch {
-        sink: TauriChatEventSink::new(app, Arc::clone(&memory_runtime)),
+        sink: TauriChatEventSink::new(app, Arc::clone(&memory_runtime), workspace),
         storage: Arc::clone(state.storage()?),
         runtime: Arc::clone(&state.runtime),
         runtime_activity,
