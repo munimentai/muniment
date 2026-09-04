@@ -137,7 +137,7 @@
   let backgroundServiceNoticeVisible = $state(false)
   let runtimeServiceActivation = $state(null)
   let authRequestVersion = 0
-  let localEntryPending = false
+  let localEntryPending = $state(false)
   let markerStartupLocalMode = null
   let markerStartupReady = Promise.resolve(false)
   let startupReady = Promise.resolve()
@@ -703,7 +703,7 @@
   }
 
   async function signIn() {
-    if (auth.name !== 'signed-out' && auth.name !== 'local') return
+    if (localEntryPending || (auth.name !== 'signed-out' && auth.name !== 'local')) return
     if (auth.name === 'local') {
       try {
         await tauri.invoke('local_mode_leave')
@@ -997,8 +997,8 @@
       <section class="auth-state">
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in for cloud features, or use local mode.'}</p>
         <div class="auth-actions">
-          <button class="primary" class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
-          <button aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={enterLocalMode}>Use local mode</button>
+          <button class="primary" class:inactive={auth.name === 'signing-in' || localEntryPending} disabled={localEntryPending} aria-disabled={auth.name === 'signing-in' || localEntryPending ? 'true' : undefined} onclick={signIn}>Sign in</button>
+          <button disabled={localEntryPending} aria-disabled={auth.name === 'signing-in' || localEntryPending ? 'true' : undefined} onclick={enterLocalMode}>Use local mode</button>
         </div>
         {#if localEntryError}<p class="record error-record" role="alert">{localEntryError}</p>{/if}
       </section>

@@ -943,6 +943,27 @@ describe('workspace composer entry', () => {
     expect(await screen.findByText('Pi saved the provider key.')).toBeInTheDocument()
   })
 
+  it('blocks sign-in while local mode entry is pending', async () => {
+    const localEntry = deferred()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter') return localEntry.promise
+      if (command === 'chat_thread_open') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    const signIn = await screen.findByRole('button', { name: 'Sign in' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Use local mode' }))
+
+    expect(signIn).toBeDisabled()
+    await fireEvent.click(signIn)
+    expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
+
+    localEntry.resolve()
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+  })
+
   it('waits for the local marker before a connection refresh checks auth', async () => {
     const marker = deferred()
     localModeStatus = marker.promise
