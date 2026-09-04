@@ -43,6 +43,33 @@ published org library. The listing endpoint and the `CreateAccessRequest`
 contract both live in muniment-cloud. The lane selects the first slice after
 that contract publishes.
 
+DONE 2026-09-04 — local mode makes the desktop usable without an account
+(MUNIDESK-1682). A marker file in the app config directory holds the state, and
+`src-tauri/src/local_mode.rs` writes a provider key into Pi's
+`~/.pi/agent/auth.json` under Pi's own file lock. `ChatGrant::local`
+(`src-tauri/core/src/chat_grant.rs:22`) carries no gateway, no virtual key, and
+no receipt URL. `pi_launch_config_for_executable` strips 43 inherited provider
+variables from the Pi environment, so Pi reads its own credential store alone.
+`docs/public-evidence/local-mode.md` is the page.
+
+MEASURED 2026-09-04 (planner, shot five probe fixtures in headless Chromium) —
+the committed probe harness is dead. Every fixture renders the signed-out screen
+under the message `Local mode could not be checked. Try again.`. The startup path
+invokes `local_mode_status` (`src/App.svelte:813`), `test/probe/stub.js:470`
+throws on a command it does not know, and the catch at `src/App.svelte:826` drops
+the shell to signed-out. `history.html`, `access.html`, `in-flight.html`,
+`code-diff.html`, and `permission.html` each produced the same 16,174-byte
+capture. No CI job runs the probe, so nothing caught the break. The lane files
+the repair now.
+
+GAP — local mode exposes one provider and reports no credential state. The
+sidebar panel takes a Google key alone, while `PROVIDERS`
+(`src-tauri/src/local_mode.rs:12`) accepts anthropic, google, and openai. No
+command reads the store, so the panel cannot say whether Pi holds any credential.
+A first run against an empty store fails at the first prompt. The lane files this
+after the probe repair, because a probe fixture is the only way to inspect the
+panel.
+
 ### 9. Pi sidecar and cloud chat
 
 DONE — verified Pi runtime acquisition and supervision, signed-in streamed chat,
@@ -99,6 +126,14 @@ model. DONE 2026-07-30 — the removal finished (MUNIDESK-680).
 `src-tauri/core/src/llama.rs` and its four submodules are gone, together with
 `src/lib/model-acquisition-state.js`, seven core test binaries, and the routing
 classifier golden fixture. ADR 0018 and ADR 0021 carry superseded status.
+
+OWNER RULING 2026-09-04 — the desktop ships local models again. ADR 0027 records
+the restored artifact lifecycle, and MUNIDESK-1687 landed it
+(`src-tauri/core/src/model_artifact.rs`). Two artifacts are in scope. The router
+classifier ships inside the installer and uses no downloader. The extractor
+arrives through the restored descriptor, acquisition, verification, and lifecycle
+contracts. Neither artifact restores a resident language model. Neither restores
+a general local inference runtime. Phase 3 carries the classifier lane.
 
 ### 11. Attachments and local CAS
 
@@ -251,6 +286,43 @@ gateway URL, and the optional pinned model into the sidecar environment.
 wire and reject any tier, label, or classification field. `test/smoke.sh` holds
 the mode name and the no-classification rule. MUNICLOUD-968 ratified the
 mandated classification path on 2026-08-07.
+
+OWNER RULING 2026-09-04 — a bundled router classifier returns to the desktop.
+The ruling names two local models and forbids a download path for the classifier.
+The artifact measures roughly 113 MB int8 on top of a 91 MB AppImage. Bundling
+removes the download, the version pointer, and every failure mode where routing
+degrades because a file is missing. The three classes are `route.cloud`,
+`route.local`, and `route.proxy`. The operator supplies the final artifact, its
+sha256, and its byte size from the bake-off.
+
+BLOCKED — the ruling collides with SPEC law 13 and with `test/smoke.sh`. Law 13
+forbids any desktop source that computes a classification, and the smoke guard
+at `test/smoke.sh:87` enforces it. harness-spec 15.3 says the desktop has no
+classifier. No classifier code merges until those documents scope the ban to the
+cloud-bound wire. The desktop must still send no classification to the cloud.
+
+NEXT — three ordered slices. First, SPEC law 13, harness-spec 15.3, a new ADR,
+and the smoke guards scope the ban to the cloud-bound wire and record the
+bundled-classifier contract. Second, an inference seam loads the pinned encoder
+from the bundle and fails closed when the head's class list does not match the
+taxonomy. Third, the three bundle configs carry the artifact and an installed
+smoke verifies its sha256. The lane files slice one now. Slice two waits on the
+ADR's runtime choice. Slice three waits on the operator's artifact.
+
+OPEN QUESTION for the owner — no ruling says what each class does. The desktop
+must know which action follows `route.cloud`, `route.local`, and `route.proxy`
+before a consumer slice is fileable. A classifier with no consumer is dead code.
+The 2026-09-04 stuck implementation named no consumer either.
+
+MEASURED 2026-09-04 (planner, read the three bundle configs beside
+`src-tauri/core/Cargo.toml:42`) — the desktop already ships an ONNX Runtime
+shared library on all three platforms. `libonnxruntime.so`,
+`libonnxruntime.1.24.4.dylib`, and `onnxruntime.dll` sit under
+`src-tauri/third-party/sherpa-onnx-v1.13.2/`, and each platform config publishes
+one. The `sherpa-onnx` bindings expose speech graphs alone, so they run no text
+encoder. The committed third-party tree already holds 122 MB of binaries, so a
+committed classifier artifact breaks no existing practice. The ADR decides how
+the classifier reaches that library.
 
 OPEN — the cloud `RoutingSurface` enum still reads `desktop_thread_chat`
 (`api/src/routing-policy-resolver.ts:5` in muniment-cloud). That value names a
@@ -840,18 +912,17 @@ DONE 2026-09-03 — the first three re-cut slices landed (MUNIDESK-1664, 1665,
 pairing routes, the superseded non-state macOS session entry is gone, and the
 approval-presenter stop handle stores a shutdown hook behind named methods.
 
-NEXT — re-filed 2026-09-03 after the queue drained past the first three
-slices. Five slices are filed in order. First, the attach client sheds the
-three symbols that strand the presenter move. Second,
-`ApprovalPresenterClient` and its handshake move to a new `presenter_client.rs`
-over `Box<dyn ClientStream + Send>`, and the Unix
-`handshake_approval_presenter_stream` keeps its signature, verifies the peer,
-and delegates, the way `handshake_desktop_client_stream` does. Third,
-`muniment-core` connects and serves the Windows approval presenter over the
-per-user pipe, behind a platform-neutral `serve_approval_presenter_with` in
-`muniment-attach`. Fourth, the Windows desktop starts the approval presenter.
-Fifth, the superseded Windows non-state serving entries retire. The installed
-Windows pairing probe follows the presenter start.
+DONE 2026-09-03 through 2026-09-04 — the five re-filed presenter slices landed
+(MUNIDESK-1665, 1674, 1676, 1677, and 1678). The attach client shed the three
+symbols that stranded the presenter move. `ApprovalPresenterClient` and its
+handshake sit behind `Box<dyn ClientStream + Send>`. `muniment-core` connects and
+serves the Windows approval presenter over the per-user pipe, behind a
+platform-neutral `serve_approval_presenter_with`. The Windows desktop starts the
+presenter, and the superseded Windows non-state serving entries retired.
+
+NEXT — the installed Windows pairing probe proves the served exchange, the way
+the macOS probe proves the macOS one (MUNIDESK-1658). This lane files it after
+the classifier contract slice and the probe-harness repair.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
@@ -1591,6 +1662,11 @@ so a capture never shoots the fallback type. `test/probe-harness.test.js` guards
 the single ready-marker write. `test/probe/stub.js` fails loudly on a command it
 does not know, so a missing command breaks a fixture instead of hiding a panel.
 
+DONE 2026-09-04 — a local-mode chat smoke is the first installed spec, and real
+sign-in stopped gating the nightly (MUNIDESK-1683).
+`test/e2e/specs/local-mode-chat.spec.js` drives the installed app without an
+account, so a nightly no longer fails on a cloud credential it cannot hold.
+
 DONE — the suite runs on Windows. Three slices gated every block that spawns a
 POSIX shell, and `test/posix-shell-gate.test.js` fails when a new `bash` call site
 appears outside a guarded block (MUNIDESK-679). Its walk skips any path segment
@@ -1789,6 +1865,11 @@ bundle configs ship both records beside the two webfont license texts.
 `test/homebrew-cask.test.js` and `test/third-party-notices.test.js` guard both
 shapes, and `docs/macos-signing.md`, `docs/macos-packages.md`, and
 `docs/homebrew.md` are the pages.
+
+DONE 2026-09-04 — the nightly skips the Homebrew publish step while the tap is
+unseeded rather than failing the run (MUNIDESK-1681). The installed macOS binary
+also starts again, because `muniment-runtime` carries the ASR rpath
+(MUNIDESK-1680, `src-tauri/asr_rpath.rs`).
 
 OWNER-GATED — fork and token setup, WinGet publication, Homebrew tap publication, Apple
 enrollment Y5DUNHQA74, public download and install docs, distribution accounts,
