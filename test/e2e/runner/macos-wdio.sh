@@ -35,7 +35,7 @@ finalize() {
 }
 trap finalize EXIT INT TERM
 
-[[ -n ${MUNIMENT_E2E_USERNAME:-} && -n ${MUNIMENT_E2E_PASSWORD:-} ]] || {
+[[ -n ${MUNIMENT_E2E_USERNAME:-} && -n ${MUNIMENT_E2E_PASSWORD:-} && -n ${MUNIMENT_E2E_PROVIDER_KEY:-} ]] || {
   echo 'required injected environment is unavailable' >&2
   status=1
   exit
@@ -51,11 +51,12 @@ export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/suppor
 openssl base64 -d -A -in test/e2e/fixtures/image-token.png.base64 -out "$state_root/image-token.png" || { status=1; exit; }
 export MUNIMENT_E2E_IMAGE_PATH="$state_root/image-token.png"
 
+# Run the installed chat specs first. Each later phase still runs after a failure.
+export HOME="$state_root/degraded" MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
+npm run test:e2e >"$raw/wdio.log" 2>&1 || status=1
 export HOME="$state_root/ready" MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
 export MUNIMENT_E2E_ONBOARDING_ONLY=1
 npm run test:e2e >"$raw/wdio-onboarding.log" 2>&1 || status=1
 unset MUNIMENT_E2E_ONBOARDING_ONLY
-export HOME="$state_root/degraded" MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
-npm run test:e2e >"$raw/wdio.log" 2>&1 || status=1
 export MUNIMENT_E2E_CLEANUP_ONLY=1
 npm run test:e2e >"$raw/wdio-cleanup.log" 2>&1 || status=1

@@ -1322,3 +1322,22 @@ describe('hosted sign-in teardown contract', () => {
     expect(spec).toMatch(/catch \(error\) \{\s*console\.error\('Failed to delete hosted sign-in session\.', error\)\s*\} finally \{\s*if \(authDriver\) authDriver\.kill\(\)\s*\}/)
   })
 })
+
+describe('installed local-mode chat contract', () => {
+  const config = fs.readFileSync(path.join(root, 'test/e2e/wdio.conf.js'), 'utf8')
+  const spec = fs.readFileSync(path.join(root, 'test/e2e/specs/local-mode-chat.spec.js'), 'utf8')
+
+  it('runs local mode first without bailing after sign-in failures', () => {
+    expect(config.indexOf("'./specs/local-mode-chat.spec.js'")).toBeLessThan(config.indexOf("'./specs/real-sign-in.spec.js'"))
+    expect(config).toContain('bail: 0')
+    expect(config).toContain("path.basename(specs[0], '.spec.js')")
+  })
+
+  it('stores the provider credential and waits for the first reply', () => {
+    expect(spec).toContain('process.env.MUNIMENT_E2E_PROVIDER_KEY')
+    expect(spec).toContain("$('button=Use local mode')")
+    expect(spec).toContain("$('button=Save Google key')")
+    expect(spec).toContain("response.$('.response-prose.streaming')")
+    expect(spec).not.toContain('browser.tauri.mock')
+  })
+})
