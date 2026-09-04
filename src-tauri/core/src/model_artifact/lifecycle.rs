@@ -230,10 +230,13 @@ impl ModelArtifactRevisionLifecycle {
             boundary.sync_directory(&artifact_revisions)?;
         }
 
+        let target_pointer = pointer_value(self.target);
         if let Ok(current) = self.resolve_pointer("current") {
-            self.write_pointer("previous", &current.value, boundary)?;
+            if current.value != target_pointer {
+                self.write_pointer("previous", &current.value, boundary)?;
+            }
         }
-        self.write_pointer("current", &pointer_value(self.target), boundary)?;
+        self.write_pointer("current", &target_pointer, boundary)?;
         boundary.sync_directory(&self.root)?;
         Ok(revision)
     }

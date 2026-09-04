@@ -294,6 +294,36 @@ fn rollback_restores_the_installed_previous_artifact_without_a_download() {
 }
 
 #[test]
+fn republishing_current_preserves_the_previous_rollback_revision() {
+    let root = root();
+    let old = ModelArtifactRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
+    old.publish(&stage(&root, "old", b"abc"), &Boundary::working())
+        .unwrap();
+    let new = ModelArtifactRevisionLifecycle::new(root.clone(), &KNOWN, &NEW).unwrap();
+    new.publish(&stage(&root, "new", b"def"), &Boundary::working())
+        .unwrap();
+    new.publish(&stage(&root, "new-again", b"def"), &Boundary::working())
+        .unwrap();
+    fs::remove_dir_all(root.join("staging")).unwrap();
+
+    let activation = ActivationBoundary::new(vec![Attempt::ReadinessFails, Attempt::Ready]);
+    assert!(matches!(
+        new.activate(&Boundary::working(), &activation).unwrap(),
+        ModelArtifactActivation::RolledBack { revision, .. }
+            if revision == root.join("revisions/artifact-fixture/old")
+    ));
+    assert_eq!(
+        new.resolve_current().unwrap(),
+        root.join("revisions/artifact-fixture/old")
+    );
+    assert_eq!(
+        fs::read(root.join("revisions/artifact-fixture/old/model.gguf")).unwrap(),
+        b"abc"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn same_version_for_distinct_artifacts_preserves_rollback_revision() {
     let root = root();
     let first = ModelArtifactRevisionLifecycle::new(root.clone(), &KNOWN, &OLD).unwrap();
