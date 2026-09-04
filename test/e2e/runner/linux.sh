@@ -204,7 +204,7 @@ trap finalize EXIT INT TERM
 
 sha=${MUNIMENT_E2E_SOURCE_SHA:-}
 [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid source SHA' >&2; status=1; exit; }
-[[ -n ${GH_TOKEN:-} && -n ${MUNIMENT_E2E_USERNAME:-} && -n ${MUNIMENT_E2E_PASSWORD:-} ]] || { echo 'required injected environment is unavailable' >&2; status=1; exit; }
+[[ -n ${GH_TOKEN:-} && -n ${MUNIMENT_E2E_USERNAME:-} && -n ${MUNIMENT_E2E_PASSWORD:-} && -n ${MUNIMENT_E2E_PROVIDER_KEY:-} ]] || { echo 'required injected environment is unavailable' >&2; status=1; exit; }
 base64 --decode test/e2e/fixtures/image-token.png.base64 >"$image_fixture" || { status=1; exit; }
 # Resolve and validate identity before package installation. Missing/duplicate
 # assets and a release pointing elsewhere fail shut.
@@ -252,12 +252,12 @@ export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"
 ready=1
-# The per-phase XDG roots and MUNIMENT_E2E_ONBOARDING_ONLY separate the two phases.
+# Run the installed chat specs first. Each later phase still runs after a failure.
+export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
+export MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
+run_e2e "$raw/wdio.log" || status=1
 export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
 export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
 run_e2e "$raw/wdio-onboarding.log" || status=1
 unset MUNIMENT_E2E_ONBOARDING_ONLY
-export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
-export MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
-run_e2e "$raw/wdio.log" || status=1
 exit
