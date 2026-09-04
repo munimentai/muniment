@@ -183,6 +183,10 @@ impl RuntimeAttachBoundaries {
         self.approval.clear();
     }
 
+    fn local_mode(&self) -> bool {
+        muniment_core::local_mode::is_local_mode(&self.config_directory)
+    }
+
     /// Returns the approval state shared with the attach listener.
     pub fn signed_workspace_approval(&self) -> SignedWorkspaceApproval {
         self.approval.clone()
@@ -266,6 +270,14 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
     }
 
     fn fresh_tokens(&self) -> Result<TokenSet, RunStartError> {
+        if self.local_mode() {
+            return Ok(TokenSet {
+                access_token: String::new(),
+                refresh_token: None,
+                expires_at: None,
+                subject: None,
+            });
+        }
         service::ensure_native_session(&self.runtime_activity)
             .map_err(|error| RunStartError::Unauthorized(error.to_string()))?
             .into_credentials()
@@ -280,6 +292,9 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         tokens: &TokenSet,
         requested_workspace: Option<&str>,
     ) -> Result<ChatGrant, RunStartError> {
+        if self.local_mode() {
+            return Ok(ChatGrant::local());
+        }
         let grant =
             service::configure_run(&tokens.access_token, requested_workspace).map_err(|error| {
                 match error {
@@ -592,6 +607,11 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 "A reply is already in progress.".into(),
             ));
         }
+        let workspace = if self.local_mode() {
+            "local"
+        } else {
+            workspace
+        };
         let belongs_to_workspace = self
             .storage
             .lock()
@@ -649,6 +669,11 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         delivery: ChatDelivery,
         message: &str,
     ) -> Result<(), RunStartError> {
+        let workspace = if self.local_mode() {
+            "local"
+        } else {
+            workspace
+        };
         service::queue_run_message(
             Arc::clone(&self.active),
             ChatQueueRequest {
@@ -673,6 +698,14 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         &self,
         _provenance: Provenance,
     ) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+        let marker = self
+            .config_directory
+            .join(muniment_core::local_mode::LOCAL_MODE_MARKER);
+        match std::fs::remove_file(marker) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(ProtocolError::persistence_failed()),
+        }
         let _permit = SignInPermit::acquire(Arc::clone(&self.sign_in_running))
             .ok_or_else(ProtocolError::invalid_request)?;
         service::sign_in(
