@@ -44,6 +44,7 @@ let unregisterGlobalShortcut
 let registeredShortcuts
 let threadSummaryResult
 let olderThreadSummaryResult
+let localModeStatus
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: (...args) => registerGlobalShortcut(...args),
@@ -138,9 +139,9 @@ beforeAll(async () => {
       if (command === 'chat_thread_open') {
         return Promise.resolve(invoke(command, ...args)).then((entries) => ({ entries, nextCursor: null }))
       }
-      return command === 'home_status'
-        ? Promise.resolve(homeStatus)
-        : invoke(command, ...args)
+      if (command === 'home_status') return Promise.resolve(homeStatus)
+      if (command === 'local_mode_status') return Promise.resolve(localModeStatus)
+      return invoke(command, ...args)
     } },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
@@ -169,6 +170,7 @@ beforeEach(() => {
   threadSummaryResult = [{ threadId: 'thread-1', title: '', updatedAt: '' }]
   olderThreadSummaryResult = null
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
+  localModeStatus = false
   chatListener = undefined
   dictationListener = undefined
   entitlementListener = undefined
@@ -602,7 +604,7 @@ describe('workspace composer entry', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
 
     desktopClientListener({ payload: chatEventsStatus(true) })
-    expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 }))
     expect(threadOpens()).toBe(1)
     expect(invoke).toHaveBeenCalledWith('chat_current_thread')
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
@@ -913,6 +915,125 @@ describe('workspace composer entry', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'muniment' })).toBeInTheDocument()
     expect(document.querySelector('.lockup svg')).toHaveAttribute('aria-hidden', 'true')
     expect(document.querySelector('.lockup svg')).not.toHaveAttribute('aria-label')
+    expect(screen.getByRole('button', { name: 'Use local mode' })).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('enters local mode and saves a Pi provider key', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'local_mode_status') return false
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter') return undefined
+      if (command === 'chat_thread_open') return []
+      if (command === 'local_mode_store_provider_key') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Use local mode' }))
+
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(screen.getByText("Pi uses a provider from its credential store.", { exact: false })).toBeInTheDocument()
+    expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
+
+    await fireEvent.input(screen.getByLabelText('Google API key'), { target: { value: 'secret-key' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Save Google key' }))
+
+    expect(invoke).toHaveBeenCalledWith('local_mode_store_provider_key', { provider: 'google', key: 'secret-key' })
+    expect(await screen.findByText('Pi saved the provider key.')).toBeInTheDocument()
+  })
+
+  it('blocks sign-in while local mode entry is pending', async () => {
+    const localEntry = deferred()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter') return localEntry.promise
+      if (command === 'chat_thread_open') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    const signIn = await screen.findByRole('button', { name: 'Sign in' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Use local mode' }))
+
+    expect(signIn).toBeDisabled()
+    await fireEvent.click(signIn)
+    expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
+
+    localEntry.resolve()
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+  })
+
+  it('waits for the local marker before a connection refresh checks auth', async () => {
+    const marker = deferred()
+    localModeStatus = marker.promise
+    invoke.mockImplementation(async (command) => {
+      if (command === 'attach_listener_status') return { connected: true, supervisor_running: true }
+      if (command === 'chat_thread_open') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    render(App)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_listener_status'))
+    expect(invoke).not.toHaveBeenCalledWith('auth_status')
+
+    marker.resolve(true)
+
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('auth_status')
+  })
+
+  it('ignores a connection auth result after the user enters local mode', async () => {
+    const refresh = deferred()
+    let authChecks = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') {
+        authChecks += 1
+        if (authChecks === 1) return { signed_in: false, subject: null }
+        return refresh.promise
+      }
+      if (command === 'attach_listener_status') return { connected: false, supervisor_running: true }
+      if (command === 'local_mode_enter') return undefined
+      if (command === 'chat_thread_open') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    render(App)
+    const localMode = await screen.findByRole('button', { name: 'Use local mode' })
+    desktopClientListener({ payload: { connected: true, supervisor_running: true } })
+    await waitFor(() => expect(authChecks).toBe(2))
+
+    await fireEvent.click(localMode)
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    refresh.resolve({ signed_in: false, subject: null })
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
+  })
+
+  it('uses the native marker when web storage disagrees', async () => {
+    localStorage.setItem('muniment.local-mode', 'false')
+    localModeStatus = true
+    invoke.mockImplementation(async (command) => {
+      if (command === 'chat_thread_open') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    render(App)
+
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command]) => command.startsWith('auth_'))).toHaveLength(0)
+
+    cleanup()
+    localModeStatus = false
+    localStorage.setItem('muniment.local-mode', 'true')
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
@@ -925,7 +1046,7 @@ describe('workspace composer entry', () => {
     })
     const { container } = render(App)
     const signIn = await screen.findByRole('button', { name: 'Sign in' })
-    expect(screen.getByText('Sign in to continue to your workspace.')).toHaveAttribute('aria-live', 'polite')
+    expect(screen.getByText('Sign in for cloud features, or use local mode.')).toHaveAttribute('aria-live', 'polite')
     expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1)
     expect(signIn).not.toHaveAttribute('aria-live')
     signIn.focus()
@@ -941,7 +1062,7 @@ describe('workspace composer entry', () => {
     expect(signIn).toHaveAttribute('aria-disabled', 'true')
     expect(signIn).not.toBeDisabled()
     expect(signIn).toHaveClass('inactive')
-    expect(container.querySelectorAll('button')).toHaveLength(1)
+    expect(container.querySelectorAll('button')).toHaveLength(2)
     expect(appRules.get('button[aria-disabled="true"].inactive')).toMatch(/color:\s*var\(--muted\)/)
     expect(appRules.get('button[aria-disabled="true"].inactive')).toMatch(/cursor:\s*default/)
     expect(appRules.has('button:hover:not(:disabled):not([aria-disabled="true"])')).toBe(true)

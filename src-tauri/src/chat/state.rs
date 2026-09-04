@@ -172,14 +172,21 @@ impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
 
     #[cfg(target_os = "linux")]
     fn select_thread(&self, thread_id: &str) -> Result<bool, ProtocolError> {
-        let tokens = auth::fresh_tokens(&self.app.state::<auth::AuthState>(), &self.app)
-            .map_err(|_| ProtocolError::unauthorized())?;
+        let subject = if crate::local_mode::is_active(&self.app)
+            .map_err(|_| ProtocolError::persistence_failed())?
+        {
+            None
+        } else {
+            auth::fresh_tokens(&self.app.state::<auth::AuthState>(), &self.app)
+                .map_err(|_| ProtocolError::unauthorized())?
+                .subject
+        };
         let state = self.state();
         let mut storage = state
             .storage
             .lock()
             .map_err(|_| ProtocolError::persistence_failed())?;
-        subject_owns_first_run(&mut storage.journal, thread_id, tokens.subject.as_deref())
+        subject_owns_first_run(&mut storage.journal, thread_id, subject.as_deref())
             .map_err(|_| ProtocolError::thread_not_found())
     }
 
@@ -276,6 +283,14 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
     }
 
     fn fresh_tokens(&self) -> Result<TokenSet, RunStartError> {
+        if crate::local_mode::is_active(&self.app).map_err(RunStartError::Persistence)? {
+            return Ok(TokenSet {
+                access_token: String::new(),
+                refresh_token: None,
+                expires_at: None,
+                subject: None,
+            });
+        }
         auth::fresh_tokens(&self.app.state::<auth::AuthState>(), &self.app)
             .map_err(RunStartError::Unauthorized)
     }
@@ -287,6 +302,9 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
         tokens: &TokenSet,
         requested_workspace: Option<&str>,
     ) -> Result<ChatGrant, RunStartError> {
+        if crate::local_mode::is_active(&self.app).map_err(RunStartError::Persistence)? {
+            return Ok(ChatGrant::local());
+        }
         let grant = fetch_grant(&tokens.access_token).map_err(map_fetch_grant_error)?;
         validate_grant(&grant).map_err(RunStartError::Persistence)?;
         self.app

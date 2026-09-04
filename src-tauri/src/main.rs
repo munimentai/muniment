@@ -6,6 +6,7 @@ mod chat;
 mod chat_threads;
 mod dictation;
 mod home;
+mod local_mode;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos_runtime_service;
 mod memory;
@@ -95,6 +96,10 @@ fn main() {
             auth::auth_entitlement_snapshot,
             auth::auth_devices,
             auth::auth_sign_out,
+            local_mode::local_mode_status,
+            local_mode::local_mode_enter,
+            local_mode::local_mode_leave,
+            local_mode::local_mode_store_provider_key,
             chat::chat_submit,
             chat::chat_file_metadata,
             chat::chat_resume,

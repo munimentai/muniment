@@ -1,8 +1,7 @@
 # muniment-desktop — SPEC
 
 The muniment desktop client: Tauri v2 shell + Pi sidecar + on-device voice.
-Thin client to the muniment cloud — **no serverless/solo mode exists**
-(harness-spec non-goal). Closed source.
+The client supports cloud-backed use and local mode. Closed source.
 
 **The canonical spec is vendored, verbatim, in [docs/spec/](docs/spec/):**
 
@@ -25,13 +24,14 @@ reference implementation: [docs/design-reference/ring/](docs/design-reference/ri
 
 ## Operating Constraints (LAW — reviewer enforces on every PR)
 
-1. **The app requires the control plane.** No offline mode, no fake-degraded
-   mode; server-unreachable shows the honest full-surface notice
-   (design-spec §2.6). Feature work that needs cloud endpoints not yet
-   shipped is BLOCKED, not mocked — coordinate via the ROADMAP phase gates.
-2. **No provider API keys on this machine, ever.** Short-lived session
-   tokens + the user's LiteLLM virtual endpoint only (harness-spec §8).
-   Entitlement snapshots are display hints — the server enforces.
+1. **Local mode exists.** Per the owner ruling on 2026-09-04, local mode may
+   run Pi, use Pi's credential store, and read or write the local run journal
+   without a cloud session. Sign-in gates cloud features only. Cloud outages
+   still show the full-surface notice for cloud-backed use (design-spec §2.6).
+2. **Cloud credentials stay scoped.** Cloud-backed use passes short-lived
+   session tokens and the user's LiteLLM virtual endpoint. Local mode passes no
+   cloud virtual key and lets Pi read provider credentials from its own store.
+   Entitlement snapshots are display hints. The server enforces cloud use.
 3. **Color law (design-spec §1.2):** color means computation. `--signal`
    only on: mark thinking state, running-tool pulse, streaming underline +
    caret, provenance route segment, voice polish flash, workflow-run

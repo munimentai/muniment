@@ -63,6 +63,10 @@
 
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
+  let localEntryError = $state('')
+  let providerKey = $state('')
+  let providerKeyStatus = $state('')
+  let providerKeyPending = $state(false)
   let draft = $state('')
   let selectedFiles = $state([])
   let submitError = $state('')
@@ -133,6 +137,10 @@
   let backgroundServiceNoticeVisible = $state(false)
   let runtimeServiceActivation = $state(null)
   let authRequestVersion = 0
+  let localEntryPending = $state(false)
+  let markerStartupLocalMode = null
+  let markerStartupReady = Promise.resolve(false)
+  let startupReady = Promise.resolve()
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
   const sidebarWidth = 260
@@ -243,8 +251,8 @@
     desktopClientStatus = status
     backgroundServiceNotice.update(status)
     if (chatEventsRecovered) {
-      void chatController.refreshOpenThread()
-      void chatController.refreshThreads()
+      void startupReady.then(() => chatController.refreshOpenThread())
+      void startupReady.then(() => chatController.refreshThreads())
     }
   }
 
@@ -507,7 +515,7 @@
     readRequested: () => dictationRequested,
     readStatus: () => dictation,
     busy: dictationBusy,
-    signedIn: () => auth.name === 'signed-in',
+    signedIn: () => workspaceMode(),
     hasActiveRun: () => !!active,
   })
   const { pointerDown: voicePointerDown, pointerEnd: voicePointerEnd, keyDown: voiceKeyDown, keyUp: voiceKeyUp, click: voiceClick, globalShortcut: globalVoiceShortcut } = voiceGesture
@@ -619,19 +627,23 @@
   })
 
   $effect(() => {
-    const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete'
+    const inWorkspace = workspaceMode() && onboarding.name === 'complete'
     const hasConversation = currentThreadId !== null || messages.some(({ role }) => role === 'user')
     void windowTitle.set(inWorkspace && hasConversation ? currentThreadTitle : undefined)
   })
 
   $effect(() => {
-    if (auth.name !== 'signed-in' || onboarding.name !== 'complete') artifactRailOpen = false
+    if (!workspaceMode() || onboarding.name !== 'complete') artifactRailOpen = false
   })
 
-  // A signed-out window drives no run, so the desktop drops the active one.
-  // The next sign-in restores history and rejoins whatever the runtime runs.
+  function workspaceMode() {
+    return auth.name === 'signed-in' || auth.name === 'local'
+  }
+
+  // A window outside a workspace drives no run, so the desktop drops the active one.
+  // The next workspace entry restores history and rejoins whatever the runtime runs.
   $effect(() => {
-    if (auth.name !== 'signed-in') active = null
+    if (!workspaceMode()) active = null
   })
 
   $effect(() => {
@@ -639,9 +651,9 @@
   })
 
   $effect(() => {
-    const inWorkspace = auth.name === 'signed-in' && onboarding.name === 'complete' && desktopClientStatus
+    const inWorkspace = workspaceMode() && onboarding.name === 'complete' && desktopClientStatus
       && !backgroundServiceNoticeVisible
-    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && composer) {
+    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && pairingRequests.length === 0 && composer) {
       wasInWorkspace = true
       composer.focus()
     } else if (!inWorkspace) {
@@ -673,9 +685,50 @@
     }
   }
 
-  function signIn() {
-    if (auth.name !== 'signed-out') return
+  async function enterLocalMode() {
+    if (auth.name !== 'signed-out' || localEntryPending) return
+    localEntryPending = true
+    authRequestVersion += 1
+    localEntryError = ''
+    try {
+      await tauri.invoke('local_mode_enter')
+      markerStartupLocalMode = true
+      auth = { name: 'local', subject: null }
+      await chatController.loadHistory()
+    } catch (_) {
+      localEntryError = 'Local mode could not start. Try again.'
+    } finally {
+      localEntryPending = false
+    }
+  }
+
+  async function signIn() {
+    if (localEntryPending || (auth.name !== 'signed-out' && auth.name !== 'local')) return
+    if (auth.name === 'local') {
+      try {
+        await tauri.invoke('local_mode_leave')
+        markerStartupLocalMode = false
+      } catch (_) {
+        providerKeyStatus = 'Cloud sign-in could not start. Try again.'
+        return
+      }
+    }
     void run('sign-in')
+  }
+
+  async function saveProviderKey() {
+    if (providerKeyPending || !providerKey.trim()) return
+    providerKeyPending = true
+    providerKeyStatus = ''
+    try {
+      await tauri.invoke('local_mode_store_provider_key', { provider: 'google', key: providerKey })
+      providerKey = ''
+      providerKeyStatus = 'Pi saved the provider key.'
+    } catch (_) {
+      providerKeyStatus = 'Pi could not save the provider key. Try again.'
+    } finally {
+      providerKeyPending = false
+    }
   }
 
   function openLoginItems() {
@@ -692,7 +745,7 @@
         if (version === desktopClientStatusVersion) {
           const connectionRecovered = desktopClientStatus?.connected !== true && status?.connected === true
           applyDesktopClientStatus(status)
-          if (connectionRecovered) void run('status')
+          refreshAuthAfterStartup(connectionRecovered)
         }
       }).catch(() => {
         if (version === desktopClientStatusVersion) {
@@ -701,13 +754,23 @@
         console.error('Desktop client status failed.')
       })
     }
+    const refreshAuthAfterStartup = (connectionRecovered) => {
+      if (!connectionRecovered || markerStartupLocalMode === true) return
+      if (markerStartupLocalMode === false) {
+        if (!destroyed && !localEntryPending && auth.name !== 'local') void run('status')
+        return
+      }
+      void markerStartupReady.then((localModeActive) => {
+        if (!destroyed && !localEntryPending && !localModeActive && auth.name !== 'local') void run('status')
+      }).catch(() => {})
+    }
     const startDesktopClientStatus = async () => {
       try {
         const stop = await window.__TAURI__?.event?.listen('desktop-client-status-changed', ({ payload }) => {
           const connectionRecovered = desktopClientStatus?.connected !== true && payload?.connected === true
           desktopClientStatusVersion += 1
           applyDesktopClientStatus(payload)
-          if (connectionRecovered) void run('status')
+          refreshAuthAfterStartup(connectionRecovered)
         })
         if (destroyed) stop?.()
         else desktopClientUnlisten = stop
@@ -747,19 +810,30 @@
     })
     if (tauri) {
       void startDesktopClientStatus()
+      markerStartupReady = tauri.invoke('local_mode_status')
       if (navigator.userAgent.includes('Macintosh')) {
         void tauri.invoke('runtime_service_activation').then((activation) => {
           runtimeServiceActivation = activation
         }).catch(() => console.error('Runtime service activation failed.'))
       }
-      run('status')
+      startupReady = markerStartupReady.then((active) => {
+        markerStartupLocalMode = active
+        if (active) {
+          auth = { name: 'local', subject: null }
+          return chatController.loadHistory()
+        }
+        return run('status')
+      }).catch(() => {
+        auth = { name: 'signed-out' }
+        localEntryError = 'Local mode could not be checked. Try again.'
+      })
       chatController.start()
       entitlementToast.start()
       voiceShortcutManager.start()
     }
     const shortcuts = (event) => {
       const rowPosition = threadRowShortcutPosition(event)
-      if (auth.name === 'signed-in' && onboarding.name === 'complete' && rowPosition !== null) {
+      if (workspaceMode() && onboarding.name === 'complete' && rowPosition !== null) {
         event.preventDefault()
         if (sidebarCollapsed || active || threadSwitching) return
         const threadId = freshThread ? threadSummaries[rowPosition - 2]?.threadId : threadSummaries[rowPosition - 1]?.threadId
@@ -767,17 +841,17 @@
         void chatController.openThread(threadId)
         return
       }
-      if (auth.name === 'signed-in' && onboarding.name === 'complete' && isNewThreadShortcut(event)) {
+      if (workspaceMode() && onboarding.name === 'complete' && isNewThreadShortcut(event)) {
         event.preventDefault()
         void chatController.newThread()
         return
       }
-      if (auth.name === 'signed-in' && onboarding.name === 'complete' && isArtifactRailShortcut(event)) {
+      if (workspaceMode() && onboarding.name === 'complete' && isArtifactRailShortcut(event)) {
         event.preventDefault()
         toggleArtifactRail()
         return
       }
-      if (auth.name === 'signed-in' && onboarding.name === 'complete' && isSidebarShortcut(event)) {
+      if (workspaceMode() && onboarding.name === 'complete' && isSidebarShortcut(event)) {
         event.preventDefault()
         toggleSidebar()
         return
@@ -797,7 +871,7 @@
     window.addEventListener('resize', fitArtifactRail)
     let stopDragDrop
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
-        if (auth.name !== 'signed-in' || active) {
+        if (!workspaceMode() || active) {
           draggingFiles = false
           return
         }
@@ -902,7 +976,7 @@
 </script>
 
 <main class:onboarding-active={tauri && onboarding.name !== 'complete'}>
-  {#if auth.name !== 'signed-in' || onboarding.name !== 'complete'}
+  {#if !workspaceMode() || onboarding.name !== 'complete'}
     <div class="lockup">
       <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true">
         <path d={markD} stroke-width="4.5" />
@@ -921,16 +995,20 @@
     {#if onboarding.name === 'complete'}
       {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
       <section class="auth-state">
-        <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in to continue to your workspace.'}</p>
-        <button class="primary" class:inactive={auth.name === 'signing-in'} aria-disabled={auth.name === 'signing-in' ? 'true' : undefined} onclick={signIn}>Sign in</button>
+        <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in for cloud features, or use local mode.'}</p>
+        <div class="auth-actions">
+          <button class="primary" class:inactive={auth.name === 'signing-in' || localEntryPending} disabled={localEntryPending} aria-disabled={auth.name === 'signing-in' || localEntryPending ? 'true' : undefined} onclick={signIn}>Sign in</button>
+          <button disabled={localEntryPending} aria-disabled={auth.name === 'signing-in' || localEntryPending ? 'true' : undefined} onclick={enterLocalMode}>Use local mode</button>
+        </div>
+        {#if localEntryError}<p class="record error-record" role="alert">{localEntryError}</p>{/if}
       </section>
-    {:else if (auth.name === 'signed-in' || (auth.name === 'error' && auth.retry === 'status'))
+    {:else if (workspaceMode() || (auth.name === 'error' && auth.retry === 'status'))
       && backgroundServiceNoticeVisible}
       <section class="auth-state" aria-live="polite">
         <p class="record error-record">Muniment cannot reach its background service.</p>
         <p class="support">Muniment reconnects on its own.</p>
       </section>
-    {:else if auth.name === 'signed-in' && desktopClientStatus}
+    {:else if workspaceMode() && desktopClientStatus}
       <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<h1 class="thread-title-heading" aria-label={currentThreadTitle}><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>{/if}<span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
@@ -983,14 +1061,23 @@
             {/if}
           {/if}
           <button class="side-action home-settings" aria-label={sidebarCollapsed ? 'Home settings' : null} title={sidebarCollapsed ? 'Home settings' : null} onclick={() => { onboarding = onboardingSettingsState(onboarding) }}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 10.5 12 4.75l7.5 5.75V19a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19z" /><path d="M9.75 20.5v-5.75h4.5v5.75" /></svg>{#if !sidebarCollapsed}<span>Home settings</span>{/if}</button>
-          {#if !sidebarCollapsed}
+          {#if !sidebarCollapsed && auth.name === 'signed-in'}
             <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+          {:else if !sidebarCollapsed && auth.name === 'local'}
+            <section class="local-account" aria-labelledby="local-account-title">
+              <strong id="local-account-title">Local mode</strong>
+              <label for="provider-key">Google API key</label>
+              <input id="provider-key" type="password" autocomplete="off" bind:value={providerKey} disabled={!!active || providerKeyPending}>
+              <button type="button" disabled={!!active || providerKeyPending || !providerKey.trim()} onclick={saveProviderKey}>Save Google key</button>
+              {#if providerKeyStatus}<p class="support" role="status">{providerKeyStatus}</p>{/if}
+              <button type="button" class="quiet" disabled={!!active} onclick={signIn}>Sign in for cloud features</button>
+            </section>
           {/if}
         </aside>
         <div class="thread-shell">
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
-          {#if messages.length === 0}<p class="empty">Ask anything. Your org's routing decides which model answers.</p>{/if}
+          {#if messages.length === 0}<p class="empty">{auth.name === 'local' ? 'Ask anything. Pi uses a provider from its credential store.' : "Ask anything. Your org's routing decides which model answers."}</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
               <div class="user-turn">
@@ -1324,6 +1411,7 @@
     text-align: center;
   }
 
+  .auth-actions { display: flex; gap: 8px; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
   .composer-actions .primary[aria-disabled="true"] { background: var(--faint); border-color: var(--border); color: var(--muted); }
 
@@ -1413,6 +1501,11 @@
   .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
   .side-action span { flex: 1; }
   .new-thread kbd { margin-left: auto; }
+  .local-account { display: grid; gap: 7px; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
+  .local-account strong { margin-bottom: 3px; }
+  .local-account label { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .local-account input { min-width: 0; padding: 6px 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; }
+  .local-account .support { margin: 0; font: var(--text-12) var(--font-mono); }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
   .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
   .workspace.sidebar-collapsed .side-brand { padding: 0 0 14px; }

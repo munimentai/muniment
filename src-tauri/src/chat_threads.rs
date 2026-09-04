@@ -44,6 +44,17 @@ fn thread_ownership_error_message(_error: ThreadOwnershipError) -> String {
     "Conversation history is unavailable.".into()
 }
 
+fn chat_subject(
+    app: &tauri::AppHandle,
+    auth_state: &auth::AuthState,
+) -> Result<Option<String>, String> {
+    if crate::local_mode::is_active(app)? {
+        Ok(None)
+    } else {
+        Ok(auth::fresh_tokens(auth_state, app)?.subject)
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn require_runtime(attach_state: &AttachCompanionState) -> Result<(), String> {
     match attach_state.desktop_client_session() {
@@ -459,8 +470,8 @@ pub async fn chat_current_thread(
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
 ) -> Result<Option<String>, String> {
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
-    Ok(state.session_thread.current(tokens.subject.as_deref()))
+    let subject = chat_subject(&app_handle, &auth_state)?;
+    Ok(state.session_thread.current(subject.as_deref()))
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -475,11 +486,11 @@ pub async fn chat_thread_summaries(
 ) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     require_runtime(&attach_state)?;
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let subject = chat_subject(&app_handle, &auth_state)?;
     chat_thread_summaries_command(
         state.storage().ok(),
         &attach_state,
-        tokens.subject.as_deref(),
+        subject.as_deref(),
         limit,
         cursor.as_deref(),
     )
@@ -502,12 +513,12 @@ pub async fn chat_select_thread(
     if matches!(&session, ThreadSelectSession::NoSupervisor) {
         return Err(auth::background_service_error());
     }
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let subject = chat_subject(&app_handle, &auth_state)?;
     select_thread_command(
         session,
         state.storage().ok(),
         &state.session_thread,
-        tokens.subject.as_deref(),
+        subject.as_deref(),
         &thread_id,
     )
 }
@@ -524,11 +535,11 @@ pub async fn chat_rename_thread(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     require_runtime(&attach_state)?;
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let subject = chat_subject(&app_handle, &auth_state)?;
     rename_thread_command(
         state.storage().ok(),
         &attach_state,
-        tokens.subject.as_deref(),
+        subject.as_deref(),
         &thread_id,
         &title,
     )
@@ -545,12 +556,12 @@ pub async fn chat_delete_thread(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     require_runtime(&attach_state)?;
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let subject = chat_subject(&app_handle, &auth_state)?;
     delete_thread_command(
         attach_state.desktop_client_session().into(),
         state.storage().ok(),
         &state.session_thread,
-        tokens.subject.as_deref(),
+        subject.as_deref(),
         &thread_id,
     )
 }
@@ -568,10 +579,10 @@ pub async fn chat_new_thread(
     if !matches!(&session, DesktopClientSession::Connected(_)) {
         return Err(auth::background_service_error());
     }
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let subject = chat_subject(&app_handle, &auth_state)?;
     match session {
         DesktopClientSession::Connected(_) => {
-            state.session_thread.fresh(tokens.subject.as_deref());
+            state.session_thread.fresh(subject.as_deref());
             Ok(())
         }
         DesktopClientSession::NoSupervisor => {
@@ -579,11 +590,7 @@ pub async fn chat_new_thread(
             return Err(auth::background_service_error());
             #[cfg(target_os = "linux")]
             {
-                fresh_session_thread(
-                    state.storage()?,
-                    &state.session_thread,
-                    tokens.subject.as_deref(),
-                )
+                fresh_session_thread(state.storage()?, &state.session_thread, subject.as_deref())
             }
         }
         DesktopClientSession::Disconnected => Err(auth::background_service_error()),
@@ -603,12 +610,12 @@ pub async fn chat_thread_open(
 ) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     require_runtime(&attach_state)?;
-    let tokens = auth::fresh_tokens(&auth_state, &app_handle)?;
+    let subject = chat_subject(&app_handle, &auth_state)?;
     let session_root = state_session_root(&app_handle)?;
     chat_thread_open_command(
         state.storage().ok(),
         &attach_state,
-        tokens.subject.as_deref(),
+        subject.as_deref(),
         &session_root,
         &thread_id,
         limit,

@@ -28,6 +28,179 @@ use common::{credentials, stage_pi_stub, TemporaryProfile};
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 #[test]
+fn local_mode_prepares_a_journaled_run_without_native_auth_or_a_cloud_grant() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let store = KeyringNativeCredentialStore::new();
+    store.clear_session().unwrap();
+    store.save_credentials(&credentials()).unwrap();
+    let server = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    server.set_nonblocking(true).unwrap();
+    std::env::set_var(
+        "MUNIMENT_API_BASE_URL",
+        format!("http://{}", server.local_addr().unwrap()),
+    );
+    let temporary_profile = TemporaryProfile::new("local-run-boundaries", true);
+    std::fs::write(
+        temporary_profile
+            .config
+            .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+        "1",
+    )
+    .unwrap();
+    let storage = open_profile_storage(&temporary_profile.profile).unwrap();
+    let boundaries = RuntimeAttachBoundaries::new(
+        Arc::clone(&storage),
+        Arc::new(Mutex::new(None)),
+        temporary_profile.profile.clone(),
+        temporary_profile.config.clone(),
+        Arc::new(Mutex::new(None::<PiRuntime>)),
+        Arc::new(ApplicationMemoryRuntime::new(
+            temporary_profile.config.clone(),
+            temporary_profile.profile.join("memory"),
+        )),
+        RuntimeActivityRegistry::new(),
+        Arc::new(EntitlementSnapshotTracker::new()),
+        SignedWorkspaceApproval::default(),
+        Arc::new(SessionThread::default()),
+        muniment_runtime::open_companion_registry(&temporary_profile.profile).unwrap(),
+    );
+
+    let (result, launch) = prepare_desktop_run(
+        &boundaries,
+        RunStartRequest {
+            prompt: "hello".into(),
+            files: Vec::new(),
+            workspace: None,
+            provenance: None,
+            thread_id: None,
+        },
+    )
+    .unwrap();
+
+    assert!(launch.grant.is_local());
+    assert!(launch.tokens.access_token.is_empty());
+    let events = storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(&result.run_id)
+        .unwrap();
+    assert!(!events.is_empty());
+    assert!(events.iter().all(|event| event.envelope_version == 1));
+    assert!(events
+        .iter()
+        .all(|event| event.provenance.source == "muniment-runtime"));
+    assert_eq!(
+        server.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
+    store.clear_session().unwrap();
+}
+
+#[test]
+fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let profile = TemporaryProfile::new("local-pi-run", true);
+    std::fs::write(
+        profile
+            .config
+            .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+        "1",
+    )
+    .unwrap();
+    let descriptor = stage_pi_stub(&profile.root);
+    let prompt_capture = profile.root.join("prompt.txt");
+    std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_capture);
+    std::env::set_var("PI_RESUME_STUB_TOOL_EVENTS", "1");
+    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let launch_boundaries = state.boundaries().with_pi_artifact(descriptor);
+    let boundaries = state.boundaries();
+    let mut service = muniment_runtime::compose_attach_service(
+        launch_boundaries,
+        state.companion_registry(),
+        &profile.profile,
+        &profile.config,
+    )
+    .unwrap();
+
+    let submitted = service
+        .submit_run(
+            "",
+            RunSubmitRequest {
+                text: "local prompt".into(),
+                files: Vec::new(),
+                thread_id: None,
+            },
+            &Id::new("018f0000-0000-7000-8000-000000000021").unwrap(),
+            &Id::new("018f0000-0000-7000-8000-000000000022").unwrap(),
+            CompanionProvenance {
+                profile: "default".into(),
+                companion_kind: "desktop".into(),
+                companion_version: "test".into(),
+                peer_uid: 1000,
+                peer_pid: 42,
+            },
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while boundaries.active_run_exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::env::remove_var("PI_RESUME_STUB_PROMPTS");
+    std::env::remove_var("PI_RESUME_STUB_TOOL_EVENTS");
+    assert!(!boundaries.active_run_exists());
+    assert_eq!(
+        std::fs::read_to_string(prompt_capture).unwrap().trim(),
+        "local prompt"
+    );
+
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    let events = storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(&submitted.run_id)
+        .unwrap();
+    let event_types = events
+        .iter()
+        .map(|event| event.event_type.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        event_types,
+        [
+            "run.started",
+            "runtime.pi_session.bound",
+            "model.prompt.accepted",
+            "model.stream.delta",
+            "tool.effect.started",
+            "tool.effect.completed",
+            "run.completed",
+        ]
+    );
+    assert!(events.iter().all(|event| event.envelope_version == 1));
+    assert!(events
+        .iter()
+        .all(|event| event.provenance.source == "muniment-runtime"));
+    let payloads = events
+        .iter()
+        .map(|event| match &event.payload {
+            muniment_core::journal::EventPayload::Inline { payload_json } => payload_json,
+            _ => panic!("the local Pi stub emits only inline events"),
+        })
+        .collect::<Vec<_>>();
+    assert!(payloads[2].as_object().unwrap().is_empty());
+    assert_eq!(payloads[3]["text"].as_str(), Some(" resumed"));
+    assert_eq!(payloads[4]["effect_id"].as_str(), Some("tool-1"));
+    assert_eq!(payloads[4]["display_name"].as_str(), Some("read"));
+    assert_eq!(payloads[5]["effect_id"].as_str(), Some("tool-1"));
+    assert_eq!(payloads[5].as_object().unwrap().len(), 1);
+    assert!(payloads[6]["receipt"].as_object().unwrap().is_empty());
+}
+
+#[test]
 fn workspace_less_submit_records_the_resolved_grant_workspace() {
     let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
