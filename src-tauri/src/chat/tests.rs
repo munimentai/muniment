@@ -1283,9 +1283,10 @@ fn coordinator_sends_exact_ordered_images_and_preserves_text_only_prompt_shape()
             journal: RunJournal::open(directory.join("runs.sqlite3")).unwrap(),
             cas: LocalCas::open(&directory.join("cas")).unwrap(),
         }));
+        let workspace = directory.to_string_lossy().into_owned();
         let run_id = Uuid::now_v7().to_string();
         let prepared =
-            prepare_new_run(&storage, &run_id, "workspace-a", Some("owner"), files, None).unwrap();
+            prepare_new_run(&storage, &run_id, &workspace, Some("owner"), files, None).unwrap();
 
         let executable_name = if cfg!(windows) {
             "sidecar-test-stub.exe"
@@ -1348,7 +1349,7 @@ fn coordinator_sends_exact_ordered_images_and_preserves_text_only_prompt_shape()
             "token".into(),
             Some("owner".into()),
             ChatGrant {
-                workspace: "workspace-a".into(),
+                workspace: workspace.clone(),
                 gateway_url: "https://gateway.invalid".into(),
                 virtual_key: "virtual-key".into(),
                 model: None,
@@ -1872,7 +1873,7 @@ fn resume_reopens_the_stub_session_and_completes_the_same_contiguous_run() {
         "token".into(),
         Some("owner".into()),
         ChatGrant {
-            workspace: "workspace-a".into(),
+            workspace: directory.to_string_lossy().into_owned(),
             gateway_url: "https://gateway.invalid".into(),
             virtual_key: "virtual-key".into(),
             model: None,
@@ -1991,11 +1992,12 @@ fn resumed_run_answers_a_memory_search_and_ends_without_a_session() {
         .unwrap();
     });
 
+    let workspace = directory.to_string_lossy().into_owned();
     let run_id = Uuid::now_v7().to_string();
     let mut journal = RunJournal::open(directory.join("runs.sqlite3")).unwrap();
     journal
         .append_new_run(
-            "workspace-a",
+            &workspace,
             &event_envelope(&run_id, 1, "run.started", json!({}), Some("owner")),
         )
         .unwrap();
@@ -2035,7 +2037,7 @@ fn resumed_run_answers_a_memory_search_and_ends_without_a_session() {
         &active,
         ActiveRun {
             id: run_id.clone(),
-            workspace: "workspace-a".into(),
+            workspace: workspace.clone(),
             cancelled: Arc::clone(&cancelled),
             transport: Arc::clone(&transport),
             adapter: Arc::clone(&adapter),
@@ -2075,7 +2077,7 @@ fn resumed_run_answers_a_memory_search_and_ends_without_a_session() {
             subject: Some("owner".into()),
         },
         grant: ChatGrant {
-            workspace: "workspace-a".into(),
+            workspace,
             gateway_url: "https://gateway.invalid".into(),
             virtual_key: "virtual-key".into(),
             model: None,
