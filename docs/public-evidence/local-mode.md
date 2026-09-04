@@ -12,6 +12,6 @@ Pi can also use provider credentials that the Pi CLI saved in the same store. Lo
 
 ## Local records
 
-Local mode writes run input, model output, tool activity, and completion records to the local run journal. These records use the same event shapes as cloud-backed runs.
+Local mode writes run input, model output, tool activity, and completion records to the local run journal. A completed local run records its elapsed time and no cloud receipt. These records use the same event shapes as cloud-backed runs.
 
 Select **Sign in for cloud features** to leave local mode. Sign-in remains available for features that need the Muniment control plane.
