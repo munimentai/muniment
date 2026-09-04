@@ -96,6 +96,7 @@ fn main() {
             auth::auth_entitlement_snapshot,
             auth::auth_devices,
             auth::auth_sign_out,
+            local_mode::local_mode_status,
             local_mode::local_mode_enter,
             local_mode::local_mode_leave,
             local_mode::local_mode_store_provider_key,

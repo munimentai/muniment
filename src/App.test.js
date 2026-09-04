@@ -44,6 +44,7 @@ let unregisterGlobalShortcut
 let registeredShortcuts
 let threadSummaryResult
 let olderThreadSummaryResult
+let localModeStatus
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: (...args) => registerGlobalShortcut(...args),
@@ -138,9 +139,9 @@ beforeAll(async () => {
       if (command === 'chat_thread_open') {
         return Promise.resolve(invoke(command, ...args)).then((entries) => ({ entries, nextCursor: null }))
       }
-      return command === 'home_status'
-        ? Promise.resolve(homeStatus)
-        : invoke(command, ...args)
+      if (command === 'home_status') return Promise.resolve(homeStatus)
+      if (command === 'local_mode_status') return Promise.resolve(localModeStatus)
+      return invoke(command, ...args)
     } },
     event: { listen: vi.fn((event, listener) => {
       if (event === 'chat-event') chatListener = listener
@@ -169,6 +170,7 @@ beforeEach(() => {
   threadSummaryResult = [{ threadId: 'thread-1', title: '', updatedAt: '' }]
   olderThreadSummaryResult = null
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
+  localModeStatus = false
   chatListener = undefined
   dictationListener = undefined
   entitlementListener = undefined
@@ -602,7 +604,7 @@ describe('workspace composer entry', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
 
     desktopClientListener({ payload: chatEventsStatus(true) })
-    expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 }))
     expect(threadOpens()).toBe(1)
     expect(invoke).toHaveBeenCalledWith('chat_current_thread')
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
@@ -917,7 +919,7 @@ describe('workspace composer entry', () => {
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
-  it('enters local mode without a native auth request and saves a Pi provider key', async () => {
+  it('enters local mode and saves a Pi provider key', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'local_mode_status') return false
       if (command === 'auth_status') return { signed_in: false, subject: null }
@@ -933,7 +935,6 @@ describe('workspace composer entry', () => {
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(screen.getByText("Pi uses a provider from its credential store.", { exact: false })).toBeInTheDocument()
     expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
-    expect(invoke.mock.calls.some(([command]) => command.includes('/v1/auth/native/'))).toBe(false)
 
     await fireEvent.input(screen.getByLabelText('Google API key'), { target: { value: 'secret-key' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save Google key' }))
@@ -942,10 +943,10 @@ describe('workspace composer entry', () => {
     expect(await screen.findByText('Pi saved the provider key.')).toBeInTheDocument()
   })
 
-  it('restores local mode without checking a native auth session', async () => {
-    localStorage.setItem('muniment.local-mode', 'true')
+  it('uses the native marker when web storage disagrees', async () => {
+    localStorage.setItem('muniment.local-mode', 'false')
+    localModeStatus = true
     invoke.mockImplementation(async (command) => {
-      if (command === 'local_mode_enter') return undefined
       if (command === 'chat_thread_open') return []
       throw new Error(`unexpected command: ${command}`)
     })
@@ -953,8 +954,19 @@ describe('workspace composer entry', () => {
     render(App)
 
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    expect(invoke).not.toHaveBeenCalledWith('auth_status')
     expect(invoke.mock.calls.filter(([command]) => command.startsWith('auth_'))).toHaveLength(0)
+
+    cleanup()
+    localModeStatus = false
+    localStorage.setItem('muniment.local-mode', 'true')
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
   it('keeps one focused sign-in button while browser sign-in is pending', async () => {

@@ -13,11 +13,14 @@ Every existing tool falls in one of two camps. Desktop-native multi-model client
 
 We build the thing in the gap: a desktop-native AI work app with one powerful mode, backed by an org control plane that handles identity, group-based capability entitlements, automatic model routing, MCP connection management, scheduled workflows, and a shared library of capabilities and artifacts.
 
-Muniment is a **hosted SaaS**: we operate the control plane and gateway as a multi-tenant cloud; customers run nothing. The desktop app is a thin client to our cloud. **Closed source, commercial.** Pricing: one plan — $15/seat/mo billed annually, $20/seat/mo billed monthly, 10-seat minimum, 30-day full-product trial. Customers bring their own provider keys or model endpoints; muniment never marks up inference. No partner/reseller program. Self-hosting is not offered publicly; a self-hosted enterprise deployment is held in reserve as an unadvertised sales card only, so the architecture must remain deployable by compose/K8s even though we never say so.
+Muniment operates the control plane and gateway as a multi-tenant cloud. The desktop also offers local mode without a cloud session. Local mode runs Pi with credentials from Pi's store and records runs in the local journal. **Closed source, commercial.** Pricing: one plan — $15/seat/mo billed annually, $20/seat/mo billed monthly, 10-seat minimum, 30-day full-product trial. Customers bring their own provider keys or model endpoints; muniment never marks up inference. No partner/reseller program. Self-hosting is not offered publicly; a self-hosted enterprise deployment is held in reserve as an unadvertised sales card only, so the architecture must remain deployable by compose/K8s even though we never say so.
+
+### Local mode
+
+Per the owner ruling on 2026-09-04, the desktop may run Pi with Pi's credential store and the local run journal. Local mode needs no control plane connection. Sign-in gates cloud features only. Cloud-backed use still enforces policy through the gateway.
 
 ### Non-goals (v1)
 
-- **Local mode.** Per the owner ruling on 2026-09-04, the desktop may run Pi with Pi's credential store and the local run journal without a control plane connection. Sign-in gates cloud features only. Cloud-backed use still enforces policy through the gateway.
 - **No hosted MCP servers.** We manage MCP *connections* only. Hosting/governance of remote MCPs is delegated to services like MintMCP.
 - **No multiple UI modes.** One mode. No chat/cowork/code split.
   (Clarified 2026-07-12 — §13 adds the CLI and editor extension as
@@ -83,7 +86,7 @@ Three roles, org-scoped: `user`, `admin`, `owner`.
 ### 3.1 Auth
 
 - better-auth with OIDC for IdP login (Okta, Entra, Google Workspace) plus local email/password for orgs without an IdP.
-- Sessions are short-lived tokens issued to the desktop client. No provider API keys ever reach the client.
+- Cloud sessions use short-lived tokens and scoped virtual keys. In local mode, Pi reads provider credentials from its laptop store.
 
 ### 3.2 SCIM 2.0 (v1, not deferred)
 
@@ -408,7 +411,7 @@ Append-only `audit_log` for every privileged decision: entitlement checks that d
 
 ## 8. Security summary
 
-- No provider API keys on laptops; short-lived session tokens + scoped LiteLLM virtual keys only.
+- Cloud use passes short-lived session tokens and scoped LiteLLM virtual keys. Local mode keeps provider credentials in Pi's laptop store.
 - Deny-wins entitlements; server-side enforcement; client snapshots are display hints.
 - Gateway refuses out-of-entitlement model calls even from a compromised client.
 - Voice fully on-device.
@@ -597,10 +600,11 @@ The **muniment CLI** (terminal) and the **muniment editor extension**
 (VS Code and license-compatible forks; JetBrains later) are companion
 surfaces over the SAME per-user runtime service. Like the desktop UI, they
 attach to the service's managed Pi process and run journal over the local
-IPC/attach protocol; they never spawn a second ungoverned runtime, never
-hold provider keys, and never bypass the virtual-key path. Everything a
-user does in them carries the same entitlements, permission gates,
-receipts, and journal entries as the desktop surface. Any execution-surface
+IPC/attach protocol; they never spawn a second ungoverned runtime. Cloud use
+never bypasses the virtual-key path. Local mode lets the managed Pi process
+read Pi's provider credentials. Everything a user does in them carries the
+same permission gates and journal entries as the desktop surface. Cloud use
+also carries the same entitlements and receipts. Any execution-surface
 installer installs the shared per-user service if absent and upgrades an older
 version that does not meet its declared minimum in place; a compatible
 installed service is reused, so there is never a per-surface or second runtime.

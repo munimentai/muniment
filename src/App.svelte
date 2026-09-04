@@ -62,7 +62,6 @@
   }
 
   const tauri = window.__TAURI__?.core
-  const localModeStorageKey = 'muniment.local-mode'
   let auth = $state(bootState)
   let localEntryError = $state('')
   let providerKey = $state('')
@@ -138,6 +137,7 @@
   let backgroundServiceNoticeVisible = $state(false)
   let runtimeServiceActivation = $state(null)
   let authRequestVersion = 0
+  let startupReady = Promise.resolve()
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
   const sidebarWidth = 260
@@ -248,8 +248,8 @@
     desktopClientStatus = status
     backgroundServiceNotice.update(status)
     if (chatEventsRecovered) {
-      void chatController.refreshOpenThread()
-      void chatController.refreshThreads()
+      void startupReady.then(() => chatController.refreshOpenThread())
+      void startupReady.then(() => chatController.refreshThreads())
     }
   }
 
@@ -637,10 +637,6 @@
     return auth.name === 'signed-in' || auth.name === 'local'
   }
 
-  function localModeRemembered() {
-    try { return localStorage.getItem(localModeStorageKey) === 'true' } catch (_) { return false }
-  }
-
   // A window outside a workspace drives no run, so the desktop drops the active one.
   // The next workspace entry restores history and rejoins whatever the runtime runs.
   $effect(() => {
@@ -654,7 +650,7 @@
   $effect(() => {
     const inWorkspace = workspaceMode() && onboarding.name === 'complete' && desktopClientStatus
       && !backgroundServiceNoticeVisible
-    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && composer) {
+    if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && pairingRequests.length === 0 && composer) {
       wasInWorkspace = true
       composer.focus()
     } else if (!inWorkspace) {
@@ -691,7 +687,6 @@
     localEntryError = ''
     try {
       await tauri.invoke('local_mode_enter')
-      try { localStorage.setItem(localModeStorageKey, 'true') } catch (_) {}
       auth = { name: 'local', subject: null }
       await chatController.loadHistory()
     } catch (_) {
@@ -704,7 +699,6 @@
     if (auth.name === 'local') {
       try {
         await tauri.invoke('local_mode_leave')
-        try { localStorage.removeItem(localModeStorageKey) } catch (_) {}
       } catch (_) {
         providerKeyStatus = 'Cloud sign-in could not start. Try again.'
         return
@@ -802,15 +796,16 @@
           runtimeServiceActivation = activation
         }).catch(() => console.error('Runtime service activation failed.'))
       }
-      if (localModeRemembered()) {
-        auth = { name: 'local', subject: null }
-        void tauri.invoke('local_mode_enter').then(() => chatController.loadHistory()).catch(() => {
-          auth = { name: 'signed-out' }
-          localEntryError = 'Local mode could not start. Try again.'
-        })
-      } else {
-        run('status')
-      }
+      startupReady = tauri.invoke('local_mode_status').then((active) => {
+        if (active) {
+          auth = { name: 'local', subject: null }
+          return chatController.loadHistory()
+        }
+        return run('status')
+      }).catch(() => {
+        auth = { name: 'signed-out' }
+        localEntryError = 'Local mode could not be checked. Try again.'
+      })
       chatController.start()
       entitlementToast.start()
       voiceShortcutManager.start()

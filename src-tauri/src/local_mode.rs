@@ -1,6 +1,8 @@
+use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use tauri::Manager;
 use uuid::Uuid;
@@ -8,6 +10,39 @@ use uuid::Uuid;
 use muniment_core::local_mode::LOCAL_MODE_MARKER;
 
 const PROVIDERS: [&str; 3] = ["anthropic", "google", "openai"];
+const AUTH_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+const AUTH_LOCK_RETRY: Duration = Duration::from_millis(20);
+
+struct PiAuthLock(PathBuf);
+
+impl Drop for PiAuthLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
+fn pi_auth_lock_path(auth_file: &Path) -> PathBuf {
+    let mut name = OsString::from(auth_file.as_os_str());
+    name.push(".lock");
+    PathBuf::from(name)
+}
+
+fn lock_pi_auth_file(auth_file: &Path) -> Result<PiAuthLock, String> {
+    let lock_path = pi_auth_lock_path(auth_file);
+    let deadline = Instant::now() + AUTH_LOCK_TIMEOUT;
+    loop {
+        match fs::create_dir(&lock_path) {
+            Ok(()) => return Ok(PiAuthLock(lock_path)),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(AUTH_LOCK_RETRY);
+            }
+            Err(_) => return Err("Pi credentials could not be saved.".into()),
+        }
+    }
+}
 
 pub(crate) fn is_active<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<bool, String> {
     Ok(app
@@ -51,6 +86,21 @@ fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(),
         .parent()
         .ok_or_else(|| "Pi credentials could not be saved.".to_string())?;
     fs::create_dir_all(parent).map_err(|_| "Pi credentials could not be saved.".to_string())?;
+    if !auth_file.exists() {
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(auth_file).and_then(|mut file| file.write_all(b"{}")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err("Pi credentials could not be saved.".into()),
+        }
+    }
+    let _lock = lock_pi_auth_file(auth_file)?;
     let mut auth = match fs::read(auth_file) {
         Ok(bytes) => serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&bytes)
             .map_err(|_| "Pi credentials could not be saved.".to_string())?,
@@ -81,6 +131,11 @@ fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(),
         let _ = fs::remove_file(&temporary);
     }
     result.map_err(|_| "Pi credentials could not be saved.".into())
+}
+
+#[tauri::command]
+pub(crate) fn local_mode_status(app: tauri::AppHandle) -> Result<bool, String> {
+    is_active(&app)
 }
 
 #[tauri::command]
@@ -154,6 +209,37 @@ mod tests {
             serde_json::json!({"type":"api_key","key":"test-key"})
         );
         assert_eq!(auth["github-copilot"]["access"], "saved");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn provider_key_command_waits_for_a_concurrent_pi_credential_update() {
+        let directory = temporary_directory();
+        let auth_file = directory.join("auth.json");
+        fs::write(&auth_file, "{}").unwrap();
+        let lock_path = pi_auth_lock_path(&auth_file);
+        fs::create_dir(&lock_path).unwrap();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let writer_file = auth_file.clone();
+        let writer = std::thread::spawn(move || {
+            let result = store_provider_key(&writer_file, "anthropic", "test-key");
+            finished_tx.send(()).unwrap();
+            result
+        });
+
+        assert!(finished_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        fs::write(
+            &auth_file,
+            r#"{"github-copilot":{"type":"oauth","access":"updated"}}"#,
+        )
+        .unwrap();
+        fs::remove_dir(lock_path).unwrap();
+        writer.join().unwrap().unwrap();
+
+        let auth: serde_json::Value =
+            serde_json::from_slice(&fs::read(&auth_file).unwrap()).unwrap();
+        assert_eq!(auth["github-copilot"]["access"], "updated");
+        assert_eq!(auth["anthropic"]["key"], "test-key");
         fs::remove_dir_all(directory).unwrap();
     }
 
