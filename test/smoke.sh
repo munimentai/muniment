@@ -71,10 +71,10 @@ grep -Fq 'ci_gate_wait_minutes' "$e2e_adr"
 grep -Fq 'non-human E2E identity' "$e2e_adr"
 grep -Fq 'desktop E2E runner contract' "$e2e_adr"
 grep -Fq '0013-desktop-e2e-harness.md' README.md
-# The desktop must not restore the removed resident classifier.
+# The restored artifact lifecycle must not restore the old runtime-specific model code.
 test -z "$(grep -RilE \
   --exclude='*.test.js' \
-  'Qwen3\.5|llama-server|RESIDENT_MODEL|MunimentHuggingFace|required_model_acquisition_status|dictation_polish|dictation_transform|onboarding_triage' \
+  'Qwen3\.5|llama-server|RESIDENT_MODEL|required_model_acquisition_status|dictation_polish|dictation_transform|onboarding_triage' \
   src src-tauri/src src-tauri/core/src test/probe 2>/dev/null)"
 grep -Fq -- '- Status: superseded by the 2026-07-29 cloud ingress ruling' \
   docs/decisions/0017-resident-model-artifact-pin.md
