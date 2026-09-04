@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 
 use super::{ProbeOutcome, RestartPolicy, SidecarConfig, SidecarIo};
 
-pub const PI_NPM_PACKAGE: &str = "@mariozechner/pi-coding-agent";
-pub const PI_VERSION: &str = "0.73.1";
+pub const PI_NPM_PACKAGE: &str = "@earendil-works/pi-coding-agent";
+pub const PI_VERSION: &str = "0.84.4";
 
 type PendingCalls = Arc<Mutex<HashMap<String, Option<mpsc::Sender<Result<Value, String>>>>>>;
 type CurrentTransport = Arc<Mutex<Option<(u64, Arc<PiRpcTransport>)>>>;
@@ -98,7 +98,7 @@ pub fn pi_sidecar_config(
 }
 
 impl PiRpcTransport {
-    /// Reads the pinned 0.73.1 state contract and turns its session file into a
+    /// Reads the pinned 0.84.4 state contract and turns its session file into a
     /// root-relative, non-secret locator suitable for the journal.
     pub fn session_locator(
         &self,

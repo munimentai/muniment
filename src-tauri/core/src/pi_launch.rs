@@ -1,8 +1,13 @@
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+
+use fs2::FileExt;
 
 use crate::chat_grant::ChatGrant;
 use crate::sidecar::pi_install::{resolve_current_for, PiArtifactDescriptor, PI_ARTIFACT};
 use crate::sidecar::{pi_sidecar_config, PiSessionLocator, SidecarConfig};
+
+pub const PI_BASH_TIMEOUT_PROMPT: &str = "`bash` reads its `timeout` in SECONDS, never milliseconds, and applies NO timeout at all when you omit it. Pass one on every call: 60 for a quick command, up to 600 for a build or a test suite. Work that needs more than 600 seconds belongs in `bg_run`, not behind a bigger timeout.";
 
 const LOCAL_MODE_ENV_REMOVE: &[&str] = &[
     "AI_GATEWAY_API_KEY",
@@ -54,6 +59,9 @@ const LOCAL_MODE_ENV_REMOVE: &[&str] = &[
 pub trait PiLaunchBoundaries {
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError>;
     fn memory_agent_extension_path(&self) -> Option<PathBuf>;
+    fn pi_agent_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+        Ok(None)
+    }
     fn pi_artifact(&self) -> PiArtifactDescriptor {
         PI_ARTIFACT
     }
@@ -65,6 +73,106 @@ pub enum PiLaunchError {
     UnresolvableExecutable,
     UnavailableSessionRoot,
     RejectedConfig,
+    UnavailableAgentDirectory,
+}
+
+const PI_PACKAGE_NAMES: &[&str] = &[
+    "pi-web-access",
+    "pi-subagents",
+    "pi-background-tasks",
+    "pi-mcp-adapter",
+];
+
+pub fn prepare_pi_agent_directory(
+    bundled: &Path,
+    destination: &Path,
+) -> Result<PathBuf, PiLaunchError> {
+    for package in PI_PACKAGE_NAMES {
+        if !bundled.join("npm/node_modules").join(package).is_dir() {
+            return Err(PiLaunchError::UnavailableAgentDirectory);
+        }
+    }
+    if !bundled.join("settings.json").is_file()
+        || !bundled.join(".pi/mcp.json").is_file()
+        || !bundled.join("bundle-version").is_file()
+    {
+        return Err(PiLaunchError::UnavailableAgentDirectory);
+    }
+
+    fs::create_dir_all(destination).map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(destination.join(".install.lock"))
+        .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    lock.lock_exclusive()
+        .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    let settings_match = fs::read(bundled.join("settings.json")).ok()
+        == fs::read(destination.join("settings.json")).ok();
+    let version_match = fs::read(bundled.join("bundle-version")).ok()
+        == fs::read(destination.join("bundle-version")).ok();
+    let packages_present = PI_PACKAGE_NAMES
+        .iter()
+        .all(|package| destination.join("npm/node_modules").join(package).is_dir());
+    if settings_match
+        && version_match
+        && packages_present
+        && destination.join(".pi/mcp.json").is_file()
+    {
+        return Ok(destination.to_owned());
+    }
+
+    let staged_npm = destination.join(format!(".npm-stage-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&staged_npm);
+    copy_directory(&bundled.join("npm"), &staged_npm)?;
+    let installed_npm = destination.join("npm");
+    let previous_npm = destination.join(".npm-previous");
+    let _ = fs::remove_dir_all(&previous_npm);
+    if installed_npm.exists() {
+        fs::rename(&installed_npm, &previous_npm)
+            .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    }
+    if fs::rename(&staged_npm, &installed_npm).is_err() {
+        let _ = fs::rename(&previous_npm, &installed_npm);
+        return Err(PiLaunchError::UnavailableAgentDirectory);
+    }
+    fs::copy(
+        bundled.join("settings.json"),
+        destination.join("settings.json"),
+    )
+    .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    fs::create_dir_all(destination.join(".pi"))
+        .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    let mcp = destination.join(".pi/mcp.json");
+    if !mcp.exists() {
+        fs::copy(bundled.join(".pi/mcp.json"), mcp)
+            .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    }
+    fs::copy(
+        bundled.join("bundle-version"),
+        destination.join("bundle-version"),
+    )
+    .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    let _ = fs::remove_dir_all(previous_npm);
+    FileExt::unlock(&lock).map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    Ok(destination.to_owned())
+}
+
+fn copy_directory(source: &Path, destination: &Path) -> Result<(), PiLaunchError> {
+    fs::create_dir_all(destination).map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    for entry in fs::read_dir(source).map_err(|_| PiLaunchError::UnavailableAgentDirectory)? {
+        let entry = entry.map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_directory(&source_path, &destination_path)?;
+        } else if source_path.is_file() {
+            fs::copy(source_path, destination_path)
+                .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn pi_launch_config(
@@ -88,6 +196,16 @@ pub fn pi_launch_config_for_executable(
     let session_root = boundaries.pi_session_root()?;
     let mut config = pi_sidecar_config(executable.to_string_lossy(), &session_root, reopen)
         .map_err(|_| PiLaunchError::RejectedConfig)?;
+    config.args.extend([
+        "--append-system-prompt".into(),
+        PI_BASH_TIMEOUT_PROMPT.into(),
+    ]);
+    if let Some(agent_directory) = boundaries.pi_agent_directory()? {
+        config.env.insert(
+            "PI_CODING_AGENT_DIR".into(),
+            agent_directory.to_string_lossy().into_owned(),
+        );
+    }
     if grant.is_local() {
         config.env_remove = LOCAL_MODE_ENV_REMOVE
             .iter()

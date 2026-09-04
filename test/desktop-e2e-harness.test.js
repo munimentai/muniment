@@ -330,6 +330,9 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
     const otool = path.join(directory, 'otool')
     fs.mkdirSync(path.dirname(runtimePath), { recursive: true })
     fs.mkdirSync(path.dirname(agentPath), { recursive: true })
+    for (const packageName of ['pi-web-access', 'pi-subagents', 'pi-background-tasks', 'pi-mcp-adapter']) {
+      fs.mkdirSync(path.join(bundle, 'Contents/Resources/pi-agent/npm/node_modules', packageName), { recursive: true })
+    }
     fs.writeFileSync(runtimePath, runtime === 'failure' ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\nprintf '${runtime === 'empty' ? '   ' : 'muniment-runtime 0.0.1'}\\n'\n`)
     if (runtime !== 'missing') fs.chmodSync(runtimePath, runtime === 'not-executable' ? 0o600 : 0o700)
     else fs.rmSync(runtimePath)

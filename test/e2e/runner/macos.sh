@@ -67,6 +67,10 @@ verify_installed_payload() {
   local runtime_version rpaths label bundle_program throttle unsuccessful_exit
 
   [[ -x $runtime ]] || payload_failure 'installed runtime is unavailable or not executable' || return
+  for package in pi-web-access pi-subagents pi-background-tasks pi-mcp-adapter; do
+    [[ -d "$installed_bundle/Contents/Resources/pi-agent/npm/node_modules/$package" ]] ||
+      payload_failure "installed Pi package is unavailable: $package" || return
+  done
   rpaths=$("$otool" -l "$runtime" 2>>"$raw/payload.log" | awk '$1 == "cmd" { rpath = ($2 == "LC_RPATH"); next } rpath && $1 == "path" { print $2; rpath = 0 }') || payload_failure 'installed runtime load commands are unavailable' || return
   grep -Fxq '@executable_path/../../Resources/asr-runtime' <<<"$rpaths" || payload_failure 'installed runtime ASR rpath is unavailable' || return
   runtime_version=$("$runtime" --version 2>>"$raw/payload.log") || payload_failure 'installed runtime version probe failed' || return

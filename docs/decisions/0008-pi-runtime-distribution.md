@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-07-11
 - Context: ROADMAP Phase 2 item 9; harness-spec §§2, 6.2
+- Amended: 2026-09-04 — moved the Pi pin from 0.73.1 to the factory's 0.84.4 release
 
 ## Context
 
@@ -22,19 +23,19 @@ the upstream project's supported non-Node installation path.
 
 ### Identity and updates
 
-Muniment pins **`@mariozechner/pi-coding-agent` 0.73.1**, upstream tag
-`v0.73.1`, under the MIT license. The executable descriptors are:
+Muniment pins **`@earendil-works/pi-coding-agent` 0.84.4**, upstream tag
+`v0.84.4`, under the MIT license. The executable descriptors are:
 
 | Target | Release archive | Bytes | SHA-256 |
 | --- | --- | ---: | --- |
-| macOS arm64 | `pi-darwin-arm64.tar.gz` | 28,567,469 | `c64f501cad8fa0a581257dc9e878e1b2f351f295d0d85d573fe8d7967bfb1bee` |
-| macOS x64 | `pi-darwin-x64.tar.gz` | 31,000,715 | `e59fded1f79fbc7b12e263bf43d1e358af598f6fb3c4d4f58e16d1c5ebe6b2b5` |
-| Linux arm64 | `pi-linux-arm64.tar.gz` | 44,095,594 | `f47455b6a7ff6e43752a37c7c0a08b8054efd82cae1efc06d007c94f06a56318` |
-| Linux x64 | `pi-linux-x64.tar.gz` | 45,540,364 | `00f0db9e93f6ba33deb1bb4d75b4eafede9fa5379b635a908cf967d5b37e366d` |
-| Windows x64 | `pi-windows-x64.zip` | 48,225,045 | `8bdb8e612a4b820f939a524652709b167ac5f1d4d1bba25988a631bff0bbe80b` |
+| macOS arm64 | `pi-darwin-arm64.tar.gz` | 30,928,407 | `c68e3ac4d05b4e282aaab2e6c76f161d3e9e68f19a22e38913cbfaadb6c800f0` |
+| macOS x64 | `pi-darwin-x64.tar.gz` | 33,440,191 | `7a042d6413065421387001a4986190a1a03186c95a695f4dee0bdc76e60de8f7` |
+| Linux arm64 | `pi-linux-arm64.tar.gz` | 42,529,658 | `135580f6b942151646e67b8b866d987d28ce3cff5a497030775ddd29659f943d` |
+| Linux x64 | `pi-linux-x64.tar.gz` | 42,464,648 | `c2f3c3e6a1850bd87654cc3ca8811013272397c3d042a4e2a64c43ee1b423972` |
+| Windows x64 | `pi-windows-x64.zip` | 44,907,374 | `03b2318774f18721e959d9f8f3340a9f942e7aa516fb7030d3007a12a40a4a97` |
 
 The archive URL is the immutable GitHub release URL under
-`earendil-works/pi/releases/download/v0.73.1/`; archive name, byte count, and
+`earendil-works/pi/releases/download/v0.84.4/`; archive name, byte count, and
 digest are compiled into a signed Muniment release. Selection is an exact
 OS/architecture match and unsupported targets fail closed.
 
@@ -126,7 +127,7 @@ application call is in flight instead of competing for stdout.
 
 ### Verified RPC surface
 
-Pi 0.73.1 RPC is newline-delimited JSON over stdio, **not JSON-RPC 2.0**: there
+Pi 0.84.4 RPC is newline-delimited JSON over stdio, **not JSON-RPC 2.0**: there
 is no `jsonrpc` member or method/params envelope. Commands use a `type` field,
 optional correlation `id`, and receive `{type:"response", command, success,
 data?}` while agent events are interleaved on stdout. `get_state` is the
@@ -188,8 +189,8 @@ target descriptor to a temporary directory, sets the variable, and runs
 
 ## Sources
 
-- Pi 0.73.1 release and platform artifacts: <https://github.com/earendil-works/pi/releases/tag/v0.73.1>
-- Pi RPC protocol: <https://github.com/earendil-works/pi/blob/v0.73.1/packages/coding-agent/docs/rpc.md>
-- Pinned npm package metadata: <https://www.npmjs.com/package/@mariozechner/pi-coding-agent/v/0.73.1>
+- Pi 0.84.4 release and platform artifacts: <https://github.com/earendil-works/pi/releases/tag/v0.84.4>
+- Pi RPC protocol: <https://github.com/earendil-works/pi/blob/v0.84.4/packages/coding-agent/docs/rpc.md>
+- Pinned npm package metadata: <https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/0.84.4>
 - Shared lifecycle and verified publication: [ADR 0006](0006-resident-gemma-model-lifecycle.md)
 - Shared acquisition rules: [ADR 0005](0005-asr-model-lifecycle.md)

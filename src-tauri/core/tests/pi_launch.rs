@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::pi_launch::{
-    pi_launch_config, pi_launch_config_for_executable, PiLaunchBoundaries, PiLaunchError,
+    pi_launch_config, pi_launch_config_for_executable, prepare_pi_agent_directory,
+    PiLaunchBoundaries, PiLaunchError, PI_BASH_TIMEOUT_PROMPT,
 };
 use muniment_core::sidecar::{PiRpcWiring, SidecarStatus, SidecarSupervisor};
 use uuid::Uuid;
@@ -111,6 +112,80 @@ fn appends_a_present_extension_file_and_environment() {
         .args
         .windows(2)
         .any(|args| args == ["--extension", extension.to_string_lossy().as_ref()]));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn bundled_pi_agent_is_copied_without_replacing_user_mcp_servers() {
+    let root = temporary_directory();
+    let bundled = root.join("bundled");
+    let destination = root.join("configured");
+    for package in [
+        "pi-web-access",
+        "pi-subagents",
+        "pi-background-tasks",
+        "pi-mcp-adapter",
+    ] {
+        fs::create_dir_all(bundled.join("npm/node_modules").join(package)).unwrap();
+        fs::write(
+            bundled
+                .join("npm/node_modules")
+                .join(package)
+                .join("package.json"),
+            "{}",
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(bundled.join(".pi")).unwrap();
+    fs::write(bundled.join("settings.json"), "{\"packages\":[]}").unwrap();
+    fs::write(bundled.join("bundle-version"), "0.84.4\n").unwrap();
+    fs::write(bundled.join(".pi/mcp.json"), "{\"mcpServers\":{}}").unwrap();
+
+    prepare_pi_agent_directory(&bundled, &destination).unwrap();
+    fs::write(
+        destination.join(".pi/mcp.json"),
+        "{\"mcpServers\":{\"local\":{}}}",
+    )
+    .unwrap();
+    prepare_pi_agent_directory(&bundled, &destination).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(destination.join("settings.json")).unwrap(),
+        "{\"packages\":[]}"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join(".pi/mcp.json")).unwrap(),
+        "{\"mcpServers\":{\"local\":{}}}"
+    );
+    for package in [
+        "pi-web-access",
+        "pi-subagents",
+        "pi-background-tasks",
+        "pi-mcp-adapter",
+    ] {
+        assert!(destination.join("npm/node_modules").join(package).is_dir());
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn launch_appends_the_factory_bash_timeout_rule() {
+    let root = temporary_directory();
+    let boundaries = Boundaries {
+        session_root: Ok(root.clone()),
+        extension: None,
+    };
+
+    let config = pi_launch_config_for_executable(&boundaries, "pi".into(), &grant(), None).unwrap();
+
+    assert!(config
+        .args
+        .windows(2)
+        .any(|args| { args == ["--append-system-prompt", PI_BASH_TIMEOUT_PROMPT] }));
+    assert!(PI_BASH_TIMEOUT_PROMPT.contains("SECONDS, never milliseconds"));
+    assert!(PI_BASH_TIMEOUT_PROMPT.contains("60 for a quick command"));
+    assert!(PI_BASH_TIMEOUT_PROMPT.contains("up to 600 for a build"));
+    assert!(PI_BASH_TIMEOUT_PROMPT.contains("belongs in `bg_run`"));
     fs::remove_dir_all(root).unwrap();
 }
 

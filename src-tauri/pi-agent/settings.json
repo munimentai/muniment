@@ -1,0 +1,17 @@
+{
+  "packages": [
+    "npm:pi-web-access",
+    "npm:pi-subagents",
+    "npm:pi-background-tasks",
+    "npm:pi-mcp-adapter"
+  ],
+  "defaultTools": [
+    "read",
+    "write",
+    "edit",
+    "bash",
+    "grep",
+    "find",
+    "ls"
+  ]
+}

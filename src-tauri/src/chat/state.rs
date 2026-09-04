@@ -46,6 +46,25 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
     fn memory_agent_extension_path(&self) -> Option<PathBuf> {
         Some(self.memory_runtime.agent_extension_path())
     }
+
+    fn pi_agent_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+        let bundled = self
+            .app
+            .path()
+            .resource_dir()
+            .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?
+            .join("pi-agent");
+        if !bundled.is_dir() {
+            return Ok(None);
+        }
+        let destination = self
+            .app
+            .path()
+            .app_config_dir()
+            .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?
+            .join("pi-agent");
+        muniment_core::pi_launch::prepare_pi_agent_directory(&bundled, &destination).map(Some)
+    }
 }
 
 pub struct ChatState {

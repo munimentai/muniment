@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:pi-agent": "node .github/build-pi-agent.mjs",
     "lint:copy": "node test/ui-copy-lint.mjs src src-tauri browser-control docs/mockups",
     "test:records": "vitest run src/styles/record-font.test.js",
     "test:provenance": "vitest run src/App.test.js -t 'provenance line'",

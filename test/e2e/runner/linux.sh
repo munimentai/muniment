@@ -232,6 +232,11 @@ bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb" || { status
 [[ -x /usr/lib/muniment/muniment-acp ]] || { echo 'installed ACP adapter is unavailable or not executable' >&2; status=1; exit; }
 node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp || { echo 'installed ACP adapter initialize probe failed' >&2; status=1; exit; }
 [[ -x /usr/lib/muniment/muniment-runtime ]] || { echo 'installed runtime is unavailable or not executable' >&2; status=1; exit; }
+for package in pi-web-access pi-subagents pi-background-tasks pi-mcp-adapter; do
+  [[ -d "/usr/lib/muniment/pi-agent/npm/node_modules/$package" ]] || {
+    echo "installed Pi package is unavailable: $package" >&2; status=1; exit;
+  }
+done
 unset LD_LIBRARY_PATH
 runtime_version=$(/usr/lib/muniment/muniment-runtime --version) || { echo 'installed runtime version probe failed' >&2; status=1; exit; }
 [[ -n $runtime_version ]] || { echo 'installed runtime version probe returned no version' >&2; status=1; exit; }

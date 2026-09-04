@@ -333,6 +333,12 @@ try {
     $appBinary = $matches[0].FullName
   }
   if (-not $installDirectory) { $installDirectory = Split-Path $appBinary -Parent }
+  foreach ($package in @("pi-web-access", "pi-subagents", "pi-background-tasks", "pi-mcp-adapter")) {
+    $packageDirectory = Join-Path $installDirectory "pi-agent\npm\node_modules\$package"
+    if (-not (Test-Path -LiteralPath $packageDirectory -PathType Container)) {
+      throw "installed Pi package is unavailable: $package"
+    }
+  }
 
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs absent `"$appBinary`"" $installerLog "release WebDriver guard failed"
   Invoke-NativeCommand "npm.cmd" "run tauri -- build --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json" $installerLog "E2E application build failed"

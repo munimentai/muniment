@@ -181,8 +181,23 @@ pub(crate) fn local_mode_store_provider_key(
         .path()
         .home_dir()
         .map_err(|_| "Pi credentials could not be saved.".to_string())?;
-    let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
-    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref());
+    let bundled_agent = app
+        .path()
+        .resource_dir()
+        .map_err(|_| "Pi credentials could not be saved.".to_string())?
+        .join("pi-agent");
+    let configured_agent = if bundled_agent.is_dir() {
+        Some(
+            app.path()
+                .app_config_dir()
+                .map_err(|_| "Pi credentials could not be saved.".to_string())?
+                .join("pi-agent")
+                .into_os_string(),
+        )
+    } else {
+        std::env::var_os("PI_CODING_AGENT_DIR")
+    };
+    let auth_file = pi_auth_file(&home_directory, configured_agent.as_deref());
     store_provider_key(&auth_file, &provider, &key)
 }
 

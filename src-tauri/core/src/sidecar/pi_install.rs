@@ -11,7 +11,7 @@ use crate::model_install::{
     install_model, AvailableSpace, InstallCancellation, InstallLock, ModelInstallError,
 };
 
-pub const PI_RELEASE_BASE: &str = "https://github.com/earendil-works/pi/releases/download/v0.73.1";
+pub const PI_RELEASE_BASE: &str = "https://github.com/earendil-works/pi/releases/download/v0.84.4";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PiArtifactDescriptor {
@@ -22,49 +22,87 @@ pub struct PiArtifactDescriptor {
     pub executable: &'static str,
 }
 
-/// The one older pin admitted for rollback. A pin update moves the former
-/// `PI_ARTIFACT` descriptor here; arbitrary installed revision names are never
-/// trusted. There is no predecessor for the first supported pin.
-pub const PI_PREVIOUS_ARTIFACT: Option<PiArtifactDescriptor> = None;
-
+/// The one older pin admitted for rollback. Arbitrary installed revision names
+/// are never trusted.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+pub const PI_PREVIOUS_ARTIFACT: Option<PiArtifactDescriptor> = Some(PiArtifactDescriptor {
     version: "0.73.1",
     archive: "pi-linux-x64.tar.gz",
     byte_size: 45_540_364,
     sha256: "00f0db9e93f6ba33deb1bb4d75b4eafede9fa5379b635a908cf967d5b37e366d",
     executable: "pi/pi",
-};
+});
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+pub const PI_PREVIOUS_ARTIFACT: Option<PiArtifactDescriptor> = Some(PiArtifactDescriptor {
     version: "0.73.1",
     archive: "pi-linux-arm64.tar.gz",
     byte_size: 44_095_594,
     sha256: "f47455b6a7ff6e43752a37c7c0a08b8054efd82cae1efc06d007c94f06a56318",
     executable: "pi/pi",
-};
+});
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+pub const PI_PREVIOUS_ARTIFACT: Option<PiArtifactDescriptor> = Some(PiArtifactDescriptor {
     version: "0.73.1",
     archive: "pi-darwin-arm64.tar.gz",
     byte_size: 28_567_469,
     sha256: "c64f501cad8fa0a581257dc9e878e1b2f351f295d0d85d573fe8d7967bfb1bee",
     executable: "pi/pi",
-};
+});
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+pub const PI_PREVIOUS_ARTIFACT: Option<PiArtifactDescriptor> = Some(PiArtifactDescriptor {
     version: "0.73.1",
     archive: "pi-darwin-x64.tar.gz",
     byte_size: 31_000_715,
     sha256: "e59fded1f79fbc7b12e263bf43d1e358af598f6fb3c4d4f58e16d1c5ebe6b2b5",
     executable: "pi/pi",
-};
+});
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+pub const PI_PREVIOUS_ARTIFACT: Option<PiArtifactDescriptor> = Some(PiArtifactDescriptor {
     version: "0.73.1",
     archive: "pi-windows-x64.zip",
     byte_size: 48_225_045,
     sha256: "8bdb8e612a4b820f939a524652709b167ac5f1d4d1bba25988a631bff0bbe80b",
+    executable: "pi/pi.exe",
+});
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+    version: "0.84.4",
+    archive: "pi-linux-x64.tar.gz",
+    byte_size: 42_464_648,
+    sha256: "c2f3c3e6a1850bd87654cc3ca8811013272397c3d042a4e2a64c43ee1b423972",
+    executable: "pi/pi",
+};
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+    version: "0.84.4",
+    archive: "pi-linux-arm64.tar.gz",
+    byte_size: 42_529_658,
+    sha256: "135580f6b942151646e67b8b866d987d28ce3cff5a497030775ddd29659f943d",
+    executable: "pi/pi",
+};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+    version: "0.84.4",
+    archive: "pi-darwin-arm64.tar.gz",
+    byte_size: 30_928_407,
+    sha256: "c68e3ac4d05b4e282aaab2e6c76f161d3e9e68f19a22e38913cbfaadb6c800f0",
+    executable: "pi/pi",
+};
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+    version: "0.84.4",
+    archive: "pi-darwin-x64.tar.gz",
+    byte_size: 33_440_191,
+    sha256: "7a042d6413065421387001a4986190a1a03186c95a695f4dee0bdc76e60de8f7",
+    executable: "pi/pi",
+};
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub const PI_ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
+    version: "0.84.4",
+    archive: "pi-windows-x64.zip",
+    byte_size: 44_907_374,
+    sha256: "03b2318774f18721e959d9f8f3340a9f942e7aa516fb7030d3007a12a40a4a97",
     executable: "pi/pi.exe",
 };
 
