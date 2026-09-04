@@ -137,6 +137,9 @@
   let backgroundServiceNoticeVisible = $state(false)
   let runtimeServiceActivation = $state(null)
   let authRequestVersion = 0
+  let localEntryPending = false
+  let markerStartupLocalMode = null
+  let markerStartupReady = Promise.resolve(false)
   let startupReady = Promise.resolve()
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
@@ -683,14 +686,19 @@
   }
 
   async function enterLocalMode() {
-    if (auth.name !== 'signed-out') return
+    if (auth.name !== 'signed-out' || localEntryPending) return
+    localEntryPending = true
+    authRequestVersion += 1
     localEntryError = ''
     try {
       await tauri.invoke('local_mode_enter')
+      markerStartupLocalMode = true
       auth = { name: 'local', subject: null }
       await chatController.loadHistory()
     } catch (_) {
       localEntryError = 'Local mode could not start. Try again.'
+    } finally {
+      localEntryPending = false
     }
   }
 
@@ -699,6 +707,7 @@
     if (auth.name === 'local') {
       try {
         await tauri.invoke('local_mode_leave')
+        markerStartupLocalMode = false
       } catch (_) {
         providerKeyStatus = 'Cloud sign-in could not start. Try again.'
         return
@@ -736,7 +745,7 @@
         if (version === desktopClientStatusVersion) {
           const connectionRecovered = desktopClientStatus?.connected !== true && status?.connected === true
           applyDesktopClientStatus(status)
-          if (connectionRecovered && auth.name !== 'local') void run('status')
+          refreshAuthAfterStartup(connectionRecovered)
         }
       }).catch(() => {
         if (version === desktopClientStatusVersion) {
@@ -745,13 +754,23 @@
         console.error('Desktop client status failed.')
       })
     }
+    const refreshAuthAfterStartup = (connectionRecovered) => {
+      if (!connectionRecovered || markerStartupLocalMode === true) return
+      if (markerStartupLocalMode === false) {
+        if (!destroyed && !localEntryPending && auth.name !== 'local') void run('status')
+        return
+      }
+      void markerStartupReady.then((localModeActive) => {
+        if (!destroyed && !localEntryPending && !localModeActive && auth.name !== 'local') void run('status')
+      }).catch(() => {})
+    }
     const startDesktopClientStatus = async () => {
       try {
         const stop = await window.__TAURI__?.event?.listen('desktop-client-status-changed', ({ payload }) => {
           const connectionRecovered = desktopClientStatus?.connected !== true && payload?.connected === true
           desktopClientStatusVersion += 1
           applyDesktopClientStatus(payload)
-          if (connectionRecovered && auth.name !== 'local') void run('status')
+          refreshAuthAfterStartup(connectionRecovered)
         })
         if (destroyed) stop?.()
         else desktopClientUnlisten = stop
@@ -791,12 +810,14 @@
     })
     if (tauri) {
       void startDesktopClientStatus()
+      markerStartupReady = tauri.invoke('local_mode_status')
       if (navigator.userAgent.includes('Macintosh')) {
         void tauri.invoke('runtime_service_activation').then((activation) => {
           runtimeServiceActivation = activation
         }).catch(() => console.error('Runtime service activation failed.'))
       }
-      startupReady = tauri.invoke('local_mode_status').then((active) => {
+      startupReady = markerStartupReady.then((active) => {
+        markerStartupLocalMode = active
         if (active) {
           auth = { name: 'local', subject: null }
           return chatController.loadHistory()

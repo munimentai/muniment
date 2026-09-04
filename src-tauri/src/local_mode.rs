@@ -74,6 +74,18 @@ fn set_local_mode(config_directory: &Path, enabled: bool) -> Result<(), String> 
     }
 }
 
+fn pi_auth_file(home_directory: &Path, agent_directory: Option<&std::ffi::OsStr>) -> PathBuf {
+    let agent_directory = match agent_directory.filter(|value| !value.is_empty()) {
+        Some(value) if value == "~" => home_directory.to_owned(),
+        Some(value) => match value.to_str() {
+            Some(value) if value.starts_with("~/") => home_directory.join(&value[2..]),
+            _ => PathBuf::from(value),
+        },
+        None => home_directory.join(".pi").join("agent"),
+    };
+    agent_directory.join("auth.json")
+}
+
 fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(), String> {
     if !PROVIDERS.contains(&provider)
         || key.is_empty()
@@ -94,7 +106,10 @@ fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(),
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        match options.open(auth_file).and_then(|mut file| file.write_all(b"{}")) {
+        match options
+            .open(auth_file)
+            .and_then(|mut file| file.write_all(b"{}"))
+        {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(_) => return Err("Pi credentials could not be saved.".into()),
@@ -162,13 +177,12 @@ pub(crate) fn local_mode_store_provider_key(
     provider: String,
     key: String,
 ) -> Result<(), String> {
-    let auth_file = app
+    let home_directory = app
         .path()
         .home_dir()
-        .map_err(|_| "Pi credentials could not be saved.".to_string())?
-        .join(".pi")
-        .join("agent")
-        .join("auth.json");
+        .map_err(|_| "Pi credentials could not be saved.".to_string())?;
+    let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
+    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref());
     store_provider_key(&auth_file, &provider, &key)
 }
 
@@ -189,6 +203,44 @@ mod tests {
         assert!(directory.join(LOCAL_MODE_MARKER).is_file());
         set_local_mode(&directory, false).unwrap();
         assert!(!directory.join(LOCAL_MODE_MARKER).exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn pi_auth_file_matches_pis_directory_resolution() {
+        let home = Path::new("/home/tester");
+
+        assert_eq!(
+            pi_auth_file(home, None),
+            PathBuf::from("/home/tester/.pi/agent/auth.json")
+        );
+        assert_eq!(
+            pi_auth_file(home, Some(std::ffi::OsStr::new(""))),
+            PathBuf::from("/home/tester/.pi/agent/auth.json")
+        );
+        assert_eq!(
+            pi_auth_file(home, Some(std::ffi::OsStr::new("~"))),
+            PathBuf::from("/home/tester/auth.json")
+        );
+        assert_eq!(
+            pi_auth_file(home, Some(std::ffi::OsStr::new("~/pi-credentials"))),
+            PathBuf::from("/home/tester/pi-credentials/auth.json")
+        );
+    }
+
+    #[test]
+    fn provider_key_command_uses_custom_pi_credential_directory() {
+        let directory = temporary_directory();
+        let custom_directory = directory.join("custom-pi-directory");
+        let auth_file = pi_auth_file(&directory, Some(custom_directory.as_os_str()));
+
+        store_provider_key(&auth_file, "openai", "test-key").unwrap();
+
+        assert_eq!(auth_file, custom_directory.join("auth.json"));
+        let auth: serde_json::Value =
+            serde_json::from_slice(&fs::read(&auth_file).unwrap()).unwrap();
+        assert_eq!(auth["openai"]["key"], "test-key");
+        assert!(!directory.join(".pi").exists());
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -227,7 +279,9 @@ mod tests {
             result
         });
 
-        assert!(finished_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        assert!(finished_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
         fs::write(
             &auth_file,
             r#"{"github-copilot":{"type":"oauth","access":"updated"}}"#,

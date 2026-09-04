@@ -943,6 +943,53 @@ describe('workspace composer entry', () => {
     expect(await screen.findByText('Pi saved the provider key.')).toBeInTheDocument()
   })
 
+  it('waits for the local marker before a connection refresh checks auth', async () => {
+    const marker = deferred()
+    localModeStatus = marker.promise
+    invoke.mockImplementation(async (command) => {
+      if (command === 'attach_listener_status') return { connected: true, supervisor_running: true }
+      if (command === 'chat_thread_open') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    render(App)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_listener_status'))
+    expect(invoke).not.toHaveBeenCalledWith('auth_status')
+
+    marker.resolve(true)
+
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('auth_status')
+  })
+
+  it('ignores a connection auth result after the user enters local mode', async () => {
+    const refresh = deferred()
+    let authChecks = 0
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') {
+        authChecks += 1
+        if (authChecks === 1) return { signed_in: false, subject: null }
+        return refresh.promise
+      }
+      if (command === 'attach_listener_status') return { connected: false, supervisor_running: true }
+      if (command === 'local_mode_enter') return undefined
+      if (command === 'chat_thread_open') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+
+    render(App)
+    const localMode = await screen.findByRole('button', { name: 'Use local mode' })
+    desktopClientListener({ payload: { connected: true, supervisor_running: true } })
+    await waitFor(() => expect(authChecks).toBe(2))
+
+    await fireEvent.click(localMode)
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    refresh.resolve({ signed_in: false, subject: null })
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
+  })
+
   it('uses the native marker when web storage disagrees', async () => {
     localStorage.setItem('muniment.local-mode', 'false')
     localModeStatus = true
