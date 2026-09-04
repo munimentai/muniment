@@ -174,7 +174,7 @@ impl AttachListenerState {
 
 pub type AttachApprovalState = ApprovalCoordinator;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(serde::Serialize)]
 pub(super) struct AttachPairingRequest {
     pub(super) challenge: String,
