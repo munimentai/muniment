@@ -3,14 +3,15 @@ import path from 'node:path'
 
 const appBinary = process.env.MUNIMENT_E2E_APP_BINARY
 const artifactDir = process.env.MUNIMENT_E2E_RAW_DIR
-const reportName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? 'onboarding' : 'sign-in'
-const specName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? 'onboarding' : 'real-sign-in'
+const reportName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? 'onboarding' : null
+const specName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? 'onboarding' : 'installed'
 
 if (!appBinary || !path.isAbsolute(appBinary)) throw new Error('MUNIMENT_E2E_APP_BINARY must be an absolute path')
 if (!artifactDir || !path.isAbsolute(artifactDir)) throw new Error('MUNIMENT_E2E_RAW_DIR must be an absolute path')
 
-export function redactPageSource(source, values = [process.env.MUNIMENT_E2E_USERNAME, process.env.MUNIMENT_E2E_PASSWORD]) {
-  return values.filter(Boolean).reduce((redacted, value) => redacted.split(value).join('[REDACTED]'), source)
+export function redactPageSource(source, values = [process.env.MUNIMENT_E2E_USERNAME, process.env.MUNIMENT_E2E_PASSWORD, process.env.MUNIMENT_E2E_PROVIDER_KEY]) {
+  return values.filter(Boolean).sort((left, right) => right.length - left.length)
+    .reduce((redacted, value) => redacted.split(value).join('[REDACTED]'), source)
 }
 
 export async function captureFailureArtifacts(result, capture = {
@@ -40,7 +41,13 @@ export async function captureFailureArtifacts(result, capture = {
 
 export const config = {
   runner: 'local',
-  specs: [process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? './specs/cleanup.spec.js' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? './specs/onboarding.spec.js' : './specs/real-sign-in.spec.js'],
+  // Keep local mode first. Mocha records all spec failures because bail stays disabled.
+  specs: process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1'
+    ? ['./specs/cleanup.spec.js']
+    : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1'
+      ? ['./specs/onboarding.spec.js']
+      : ['./specs/local-mode-chat.spec.js', './specs/real-sign-in.spec.js'],
+  bail: 0,
   maxInstances: 1,
   capabilities: [{ browserName: 'tauri' }],
   logLevel: 'info',
@@ -50,7 +57,10 @@ export const config = {
     ['spec', { addConsoleLogs: true }],
     ['junit', {
       outputDir: artifactDir,
-      outputFileFormat: ({ cid }) => `junit-${reportName}-${cid}.xml`,
+      outputFileFormat: ({ cid, specs }) => {
+        const suite = reportName ?? path.basename(specs[0], '.spec.js')
+        return `junit-${suite}-${cid}.xml`
+      },
     }],
   ],
   mochaOpts: { timeout: 180000 },

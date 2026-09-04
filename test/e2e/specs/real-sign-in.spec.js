@@ -22,6 +22,15 @@ async function shellState() {
   return `desktop client status: ${connection}. shell: ${rendered}`
 }
 
+async function verifyInitialHome(location) {
+  const home = await location.getProperty('textContent')
+  expect(path.isAbsolute(home)).toBe(true)
+  let homeExists = true
+  try { await access(home) } catch { homeExists = false }
+  expect(homeExists).toBe(false)
+  return home
+}
+
 const hostedLogin = 'button[name="action"][value="login"]'
 const hostedSelect = 'button[name="action"][value="select"]'
 const hostedApprove = 'button[name="action"][value="approve"]'
@@ -102,18 +111,22 @@ describe('installed nightly', () => {
 
   it('signs in through the production UI', async function () {
     const location = await $('[data-testid="onboarding-home-path"]')
-    await location.waitForDisplayed()
-    const home = await location.getProperty('textContent')
-    expect(path.isAbsolute(home)).toBe(true)
-    let homeExists = true
-    try { await access(home) } catch { homeExists = false }
-    expect(homeExists).toBe(false)
-    await (await $('[data-testid="onboarding-confirm"]')).click()
-    const skipImport = await $('button=Continue without importing')
-    await skipImport.waitForDisplayed()
-    await skipImport.click()
-
     const signedOut = await $('button=Sign in')
+    await browser.waitUntil(async () => (
+      await location.isDisplayed() || await signedOut.isDisplayed()
+    ), {
+      timeout: 120000,
+      timeoutMsg: 'neither onboarding nor the signed-out screen appeared',
+    })
+    let home
+    if (await location.isDisplayed()) {
+      home = await verifyInitialHome(location)
+      await (await $('[data-testid="onboarding-confirm"]')).click()
+      const skipImport = await $('button=Continue without importing')
+      await skipImport.waitForDisplayed()
+      await skipImport.click()
+    }
+
     // The shell now reads the session through the desktop client, so the
     // signed-out screen appears once that client connects to the installed
     // runtime. Bound the wait for that connection instead of the default.
@@ -126,20 +139,22 @@ describe('installed nightly', () => {
       throw new Error(`${waitError.message} ${await shellState()}`)
     }
 
-    const readmes = ['memory', 'agents', 'projects', 'sessions'].map((directory) => ({
-      directory,
-      path: path.join(home, directory, 'README.md'),
-    }))
-    await browser.waitUntil(async () => {
-      try {
-        await Promise.all(readmes.map(({ path: readme }) => readFile(readme, 'utf8')))
-        return true
-      } catch {
-        return false
+    if (home) {
+      const readmes = ['memory', 'agents', 'projects', 'sessions'].map((directory) => ({
+        directory,
+        path: path.join(home, directory, 'README.md'),
+      }))
+      await browser.waitUntil(async () => {
+        try {
+          await Promise.all(readmes.map(({ path: readme }) => readFile(readme, 'utf8')))
+          return true
+        } catch {
+          return false
+        }
+      }, { timeoutMsg: 'Home README files were not created' })
+      for (const { directory, path: readme } of readmes) {
+        expect(await readFile(readme, 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
       }
-    }, { timeoutMsg: 'Home README files were not created' })
-    for (const { directory, path: readme } of readmes) {
-      expect(await readFile(readme, 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
     }
 
     await browser.saveScreenshot(path.join(rawDir, '01-signed-out.png'))
