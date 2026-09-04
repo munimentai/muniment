@@ -187,12 +187,14 @@ pub async fn auth_sign_in(
     attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
+    eprintln!("desktop native-auth request: session.sign_in");
     sign_in_for_session(
         &state,
         attach_state.desktop_client_session(),
         move || sign_in_blocking(store.as_ref(), &app).map_err(|error| error.to_string()),
         |client| {
-            let response = client.sign_in().map_err(desktop_client_error)?;
+            let response = native_auth_runtime_result(client.sign_in(), |line| eprintln!("{line}"))
+                .map_err(desktop_client_error)?;
             decode_sign_in_status(response)
         },
     )
@@ -210,6 +212,27 @@ pub async fn auth_sign_in(
         sign_in_blocking(store.as_ref(), &app).map_err(|error| error.to_string())
     })
     .await
+}
+
+#[cfg(unix)]
+fn native_auth_runtime_result(
+    result: Result<serde_json::Value, ClientError>,
+    mut log: impl FnMut(&str),
+) -> Result<serde_json::Value, ClientError> {
+    match result {
+        Ok(response) => {
+            log("desktop native-auth response: success");
+            Ok(response)
+        }
+        Err(ClientError::Timeout) => {
+            log("desktop native-auth timeout: session.sign_in");
+            Err(ClientError::Timeout)
+        }
+        Err(error) => {
+            log("desktop native-auth response: error");
+            Err(error)
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -233,7 +256,10 @@ async fn sign_in_for_session(
         DesktopClientSession::Connected(client) => {
             sign_in_marked(state, move || connected_step(client)).await
         }
-        DesktopClientSession::Disconnected => Err(background_service_error()),
+        DesktopClientSession::Disconnected => {
+            eprintln!("desktop native-auth response: runtime unavailable");
+            Err(background_service_error())
+        }
     }
 }
 
@@ -739,6 +765,38 @@ mod tests {
         assert!(!status.signed_in);
         assert_eq!(status.subject, None);
         assert_eq!(status.expires_at, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_auth_runtime_result_logs_success_error_and_timeout() {
+        let response = serde_json::json!({"status": {"signed_in": true}});
+        let mut success_log = Vec::new();
+        assert_eq!(
+            native_auth_runtime_result(Ok(response.clone()), |line| {
+                success_log.push(line.to_owned())
+            }),
+            Ok(response)
+        );
+        assert_eq!(success_log, ["desktop native-auth response: success"]);
+
+        for (error, terminal_line) in [
+            (
+                ClientError::ConnectionClosed,
+                "desktop native-auth response: error",
+            ),
+            (
+                ClientError::Timeout,
+                "desktop native-auth timeout: session.sign_in",
+            ),
+        ] {
+            let mut log = Vec::new();
+            assert_eq!(
+                native_auth_runtime_result(Err(error), |line| log.push(line.to_owned())),
+                Err(error)
+            );
+            assert_eq!(log, [terminal_line]);
+        }
     }
 
     #[cfg(target_os = "linux")]

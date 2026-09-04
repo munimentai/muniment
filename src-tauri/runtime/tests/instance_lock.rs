@@ -108,6 +108,42 @@ fn rejects_an_invalid_test_wait_timeout() {
 }
 
 #[test]
+fn logs_version_state_directory_and_served_endpoint_at_startup() {
+    let runtime = RuntimeDirectory::new();
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    drop(filesystem);
+    let mut command = runtime.command(2_000);
+    let child = command.stderr(Stdio::piped()).spawn().unwrap();
+    let started = Instant::now();
+    while !endpoint.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "runtime endpoint did not open"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let signal = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .output()
+        .unwrap();
+    assert!(signal.status.success());
+    let output = wait_for_exit(child, Duration::from_secs(3));
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        format!(
+            "muniment-runtime: started version={} state_directory={} endpoint={}\n",
+            env!("CARGO_PKG_VERSION"),
+            runtime.0.join("ai.muniment.desktop").display(),
+            endpoint.display()
+        )
+    );
+}
+
+#[test]
 fn sigterm_releases_the_instance_lock_and_exits_successfully() {
     let runtime = RuntimeDirectory::new();
     let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
