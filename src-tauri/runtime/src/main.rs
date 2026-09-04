@@ -341,7 +341,6 @@ fn handle_arguments() -> Result<bool, String> {
 
 #[cfg(target_os = "linux")]
 fn run(runtime_directory_source: RuntimeDirectorySource) -> Result<RuntimeActivationExit, String> {
-    let termination_signal = TerminationSignalWait::new().map_err(|error| error.to_string())?;
     let wait_timeout = test_wait_timeout()?;
     if std::env::var_os(EXIT_AFTER_LOCK_ENV).is_some() {
         return wait_for_instance_lock(wait_timeout).map(|_| RuntimeActivationExit::ManagerStop);
@@ -354,6 +353,16 @@ fn run(runtime_directory_source: RuntimeDirectorySource) -> Result<RuntimeActiva
         RuntimeDirectorySource::Profile => profile_directory.clone(),
     };
     let config_directory = config_directory().map_err(|error| error.to_string())?;
+    let filesystem = AttachFilesystem::from_runtime_directory(&runtime_directory)
+        .map_err(|error| error.to_string())?;
+    eprintln!(
+        "muniment-runtime: started version={} state_directory={} endpoint={}",
+        env!("CARGO_PKG_VERSION"),
+        profile_directory.display(),
+        filesystem.endpoint_path().display()
+    );
+    drop(filesystem);
+    let termination_signal = TerminationSignalWait::new().map_err(|error| error.to_string())?;
     let takeover_deadline = wait_timeout
         .and_then(|timeout| Instant::now().checked_add(timeout))
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(100 * 365 * 24 * 60 * 60));
