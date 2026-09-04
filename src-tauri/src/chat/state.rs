@@ -47,6 +47,12 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
         Some(self.memory_runtime.agent_extension_path())
     }
 
+    fn pi_workspace_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+        std::env::current_dir()
+            .map(Some)
+            .map_err(|_| PiLaunchError::UnavailableAgentDirectory)
+    }
+
     fn pi_agent_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
         let bundled = self
             .app
@@ -55,7 +61,7 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
             .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?
             .join("pi-agent");
         if !bundled.is_dir() {
-            return Ok(None);
+            return Err(PiLaunchError::UnavailableAgentDirectory);
         }
         let destination = self
             .app
@@ -63,7 +69,11 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
             .app_config_dir()
             .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?
             .join("pi-agent");
-        muniment_core::pi_launch::prepare_pi_agent_directory(&bundled, &destination).map(Some)
+        let workspace = self
+            .pi_workspace_directory()?
+            .ok_or(PiLaunchError::UnavailableAgentDirectory)?;
+        muniment_core::pi_launch::prepare_pi_agent_directory(&bundled, &destination, &workspace)
+            .map(Some)
     }
 }
 

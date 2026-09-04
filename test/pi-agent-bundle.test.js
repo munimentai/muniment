@@ -28,4 +28,9 @@ describe("the bundled Pi agent", () => {
     expect(template).toEqual({ mcpServers: {} });
     expect(template).toEqual(JSON.parse(readFileSync("src-tauri/pi-agent/.pi/mcp.json", "utf8")));
   });
+
+  it("builds the Pi package bundle before a development launch", () => {
+    const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+    expect(config.build.beforeDevCommand).toBe("npm run build:pi-agent && npm run dev");
+  });
 });

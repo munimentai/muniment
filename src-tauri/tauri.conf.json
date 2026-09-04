@@ -4,7 +4,7 @@
   "version": "../package.json",
   "identifier": "ai.muniment.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:pi-agent && npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build && npm run build:pi-agent",
     "frontendDist": "../dist"

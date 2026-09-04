@@ -28,6 +28,25 @@ impl PiLaunchBoundaries for Boundaries {
     }
 }
 
+struct WorkspaceBoundaries {
+    session_root: PathBuf,
+    workspace: PathBuf,
+}
+
+impl PiLaunchBoundaries for WorkspaceBoundaries {
+    fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
+        Ok(self.session_root.clone())
+    }
+
+    fn memory_agent_extension_path(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn pi_workspace_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+        Ok(Some(self.workspace.clone()))
+    }
+}
+
 fn grant() -> ChatGrant {
     ChatGrant {
         workspace: "/work".into(),
@@ -116,10 +135,12 @@ fn appends_a_present_extension_file_and_environment() {
 }
 
 #[test]
-fn bundled_pi_agent_is_copied_without_replacing_user_mcp_servers() {
+fn bundled_pi_agent_is_copied_and_seeds_the_workspace_mcp_config_once() {
     let root = temporary_directory();
     let bundled = root.join("bundled");
     let destination = root.join("configured");
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).unwrap();
     for package in [
         "pi-web-access",
         "pi-subagents",
@@ -141,20 +162,24 @@ fn bundled_pi_agent_is_copied_without_replacing_user_mcp_servers() {
     fs::write(bundled.join("bundle-version"), "0.84.4\n").unwrap();
     fs::write(bundled.join(".pi/mcp.json"), "{\"mcpServers\":{}}").unwrap();
 
-    prepare_pi_agent_directory(&bundled, &destination).unwrap();
+    prepare_pi_agent_directory(&bundled, &destination, &workspace).unwrap();
+    assert_eq!(
+        fs::read_to_string(workspace.join(".pi/mcp.json")).unwrap(),
+        "{\"mcpServers\":{}}"
+    );
     fs::write(
-        destination.join(".pi/mcp.json"),
+        workspace.join(".pi/mcp.json"),
         "{\"mcpServers\":{\"local\":{}}}",
     )
     .unwrap();
-    prepare_pi_agent_directory(&bundled, &destination).unwrap();
+    prepare_pi_agent_directory(&bundled, &destination, &workspace).unwrap();
 
     assert_eq!(
         fs::read_to_string(destination.join("settings.json")).unwrap(),
         "{\"packages\":[]}"
     );
     assert_eq!(
-        fs::read_to_string(destination.join(".pi/mcp.json")).unwrap(),
+        fs::read_to_string(workspace.join(".pi/mcp.json")).unwrap(),
         "{\"mcpServers\":{\"local\":{}}}"
     );
     for package in [
@@ -165,6 +190,22 @@ fn bundled_pi_agent_is_copied_without_replacing_user_mcp_servers() {
     ] {
         assert!(destination.join("npm/node_modules").join(package).is_dir());
     }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn launch_uses_the_workspace_as_the_sidecar_working_directory() {
+    let root = temporary_directory();
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).unwrap();
+    let boundaries = WorkspaceBoundaries {
+        session_root: root.clone(),
+        workspace: workspace.clone(),
+    };
+
+    let config = pi_launch_config_for_executable(&boundaries, "pi".into(), &grant(), None).unwrap();
+
+    assert_eq!(config.working_directory, Some(workspace));
     fs::remove_dir_all(root).unwrap();
 }
 

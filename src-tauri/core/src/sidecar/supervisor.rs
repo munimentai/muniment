@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter};
+use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
@@ -54,6 +55,7 @@ pub struct SidecarConfig {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub env_remove: Vec<String>,
+    pub working_directory: Option<PathBuf>,
     pub restart: RestartPolicy,
     pub health_interval: Duration,
     /// Maximum time a spawned generation may report `Loading` before restart.
@@ -72,6 +74,7 @@ impl SidecarConfig {
             args: Vec::new(),
             env: HashMap::new(),
             env_remove: Vec::new(),
+            working_directory: None,
             restart: RestartPolicy::default(),
             health_interval: Duration::from_secs(5),
             startup_timeout: Duration::from_secs(60),
@@ -532,6 +535,9 @@ fn spawn_child(
 ) -> Result<(Child, JoinHandle<()>), std::io::Error> {
     let mut command = Command::new(&config.program);
     command.args(&config.args).envs(&config.env);
+    if let Some(directory) = &config.working_directory {
+        command.current_dir(directory);
+    }
     for name in &config.env_remove {
         command.env_remove(name);
     }

@@ -1,4 +1,5 @@
 use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
@@ -62,6 +63,9 @@ pub trait PiLaunchBoundaries {
     fn pi_agent_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
         Ok(None)
     }
+    fn pi_workspace_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+        Ok(None)
+    }
     fn pi_artifact(&self) -> PiArtifactDescriptor {
         PI_ARTIFACT
     }
@@ -86,6 +90,7 @@ const PI_PACKAGE_NAMES: &[&str] = &[
 pub fn prepare_pi_agent_directory(
     bundled: &Path,
     destination: &Path,
+    workspace: &Path,
 ) -> Result<PathBuf, PiLaunchError> {
     for package in PI_PACKAGE_NAMES {
         if !bundled.join("npm/node_modules").join(package).is_dir() {
@@ -108,6 +113,23 @@ pub fn prepare_pi_agent_directory(
         .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
     lock.lock_exclusive()
         .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    let workspace_pi = workspace.join(".pi");
+    fs::create_dir_all(&workspace_pi).map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    let workspace_mcp = workspace_pi.join("mcp.json");
+    let mcp_template = fs::read(bundled.join(".pi/mcp.json"))
+        .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
+    match OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(workspace_mcp)
+    {
+        Ok(mut file) => file
+            .write_all(&mcp_template)
+            .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err(PiLaunchError::UnavailableAgentDirectory),
+    }
+
     let settings_match = fs::read(bundled.join("settings.json")).ok()
         == fs::read(destination.join("settings.json")).ok();
     let version_match = fs::read(bundled.join("bundle-version")).ok()
@@ -115,11 +137,7 @@ pub fn prepare_pi_agent_directory(
     let packages_present = PI_PACKAGE_NAMES
         .iter()
         .all(|package| destination.join("npm/node_modules").join(package).is_dir());
-    if settings_match
-        && version_match
-        && packages_present
-        && destination.join(".pi/mcp.json").is_file()
-    {
+    if settings_match && version_match && packages_present {
         return Ok(destination.to_owned());
     }
 
@@ -142,13 +160,6 @@ pub fn prepare_pi_agent_directory(
         destination.join("settings.json"),
     )
     .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
-    fs::create_dir_all(destination.join(".pi"))
-        .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
-    let mcp = destination.join(".pi/mcp.json");
-    if !mcp.exists() {
-        fs::copy(bundled.join(".pi/mcp.json"), mcp)
-            .map_err(|_| PiLaunchError::UnavailableAgentDirectory)?;
-    }
     fs::copy(
         bundled.join("bundle-version"),
         destination.join("bundle-version"),
@@ -206,6 +217,7 @@ pub fn pi_launch_config_for_executable(
             agent_directory.to_string_lossy().into_owned(),
         );
     }
+    config.working_directory = boundaries.pi_workspace_directory()?;
     if grant.is_local() {
         config.env_remove = LOCAL_MODE_ENV_REMOVE
             .iter()

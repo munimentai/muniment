@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
 
@@ -16,6 +17,18 @@ use muniment_runtime::{
 
 mod common;
 use common::{fixture_grant, TemporaryProfile};
+
+struct AgentlessBoundaries<'a>(&'a RuntimeChatEventSink);
+
+impl PiLaunchBoundaries for AgentlessBoundaries<'_> {
+    fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
+        self.0.pi_session_root()
+    }
+
+    fn memory_agent_extension_path(&self) -> Option<PathBuf> {
+        self.0.memory_agent_extension_path()
+    }
+}
 
 fn event() -> ChatEvent {
     ChatEvent {
@@ -221,7 +234,13 @@ fn drives_pi_launch_config_over_the_profile_directory() {
         profile.profile.join("pi-sessions")
     );
     assert_eq!(sink.memory_agent_extension_path(), Some(extension.clone()));
-    let config = pi_launch_config_for_executable(&sink, "pi".into(), &grant(), None).unwrap();
+    let config = pi_launch_config_for_executable(
+        &AgentlessBoundaries(&sink),
+        "pi".into(),
+        &grant(),
+        None,
+    )
+    .unwrap();
     assert!(config.args.windows(2).any(|args| {
         args == [
             "--session-dir",
@@ -236,6 +255,10 @@ fn drives_pi_launch_config_over_the_profile_directory() {
         .args
         .windows(2)
         .any(|args| { args == ["--extension", extension.to_string_lossy().as_ref()] }));
+    assert_eq!(
+        pi_launch_config_for_executable(&sink, "pi".into(), &grant(), None).unwrap_err(),
+        PiLaunchError::UnavailableAgentDirectory
+    );
 }
 
 #[test]
