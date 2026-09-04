@@ -35,7 +35,7 @@ pub struct AttachCompanionState {
     pub(super) listener_stop: Mutex<AttachListenerStopState>,
     #[cfg(target_os = "linux")]
     pub(super) listener_stopped: Condvar,
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) approval_presenter: Mutex<Option<ApprovalPresenterStopHandle>>,
     #[cfg(target_os = "linux")]
     pub(super) presenting: Mutex<bool>,
@@ -358,7 +358,7 @@ impl AttachCompanionState {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) fn start_approval_presenter(&self, start: impl FnOnce(ApprovalPresenterStopHandle)) {
         let mut presenter = self
             .approval_presenter
@@ -373,7 +373,7 @@ impl AttachCompanionState {
         start(stop);
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) fn stop_approval_presenter(&self) {
         if let Some(stop) = self
             .approval_presenter
@@ -641,7 +641,6 @@ impl Default for AttachCompanionState {
 #[cfg(any(unix, target_os = "windows"))]
 impl Drop for AttachCompanionState {
     fn drop(&mut self) {
-        #[cfg(unix)]
         if let Some(stop) = self
             .approval_presenter
             .get_mut()
@@ -691,6 +690,7 @@ impl Default for AttachCompanionState {
 impl Default for AttachCompanionState {
     fn default() -> Self {
         Self {
+            approval_presenter: Mutex::new(None),
             desktop_supervisor_lifecycle: Mutex::new(()),
             desktop_client: Mutex::new(None),
             desktop_client_holder: DesktopClientHolder::new(),
