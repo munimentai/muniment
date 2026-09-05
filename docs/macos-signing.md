@@ -21,7 +21,8 @@ When the flag is true, any partial set fails and names the missing keys.
 | `APPLE_API_ISSUER` | The App Store Connect issuer UUID (Users and Access → Integrations → Keys) |
 
 Notes:
-- Export both Developer ID identities and their private keys in one `.p12`.
+- Export both Developer ID leaf identities and their private keys in one `.p12`.
+  The `.p12` needs no intermediate certificate chain.
 - The App Store Connect API key must have at least the **Developer** role so
   `notarytool` can submit. Download the `.p8` once at creation; Apple never
   re-issues it.
@@ -35,13 +36,14 @@ Set the `MACOS_SIGNING_ENABLED` repository variable to `true` after all six secr
 `build-macos-app.mjs` (macOS build VM only):
 1. Builds the universal `.app` (identical bits to the unsigned path).
 2. Imports the `.p12` and finds both Developer ID identities by SHA-1.
-3. `codesign`s the nested ASR runtime dylibs, then the `.app`, with the
+3. Imports the vendored Apple Developer ID G2 intermediate certificate.
+4. `codesign`s the nested ASR runtime dylibs, then the `.app`, with the
    hardened runtime (`--options runtime`) and a secure `--timestamp`.
-4. `xcrun notarytool submit … --wait` using the API key; a rejected build fails
+5. `xcrun notarytool submit … --wait` using the API key. A rejected build fails
    the job instead of shipping.
-5. `xcrun stapler staple` staples the ticket so Gatekeeper validates offline.
-6. Packages `muniment.app.zip` from the signed and stapled bundle.
-7. Builds the signed `.pkg`, notarizes it, and staples its ticket.
+6. `xcrun stapler staple` staples the ticket so Gatekeeper validates offline.
+7. Packages `muniment.app.zip` from the signed and stapled bundle.
+8. Builds the signed `.pkg`, notarizes it, and staples its ticket.
 
 The nightly release notes state whether the macOS artifacts have signatures.
 
