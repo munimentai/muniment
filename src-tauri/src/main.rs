@@ -99,6 +99,7 @@ fn main() {
             local_mode::local_mode_status,
             local_mode::local_mode_enter,
             local_mode::local_mode_leave,
+            local_mode::local_mode_provider_status,
             local_mode::local_mode_store_provider_key,
             chat::chat_submit,
             chat::chat_file_metadata,

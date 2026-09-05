@@ -67,6 +67,13 @@
   let providerKey = $state('')
   let providerKeyStatus = $state('')
   let providerKeyPending = $state(false)
+  let providerStatuses = $state([
+    { provider: 'anthropic', configured: false },
+    { provider: 'google', configured: false },
+    { provider: 'openai', configured: false },
+  ])
+  const providerNames = { anthropic: 'Anthropic', google: 'Google', openai: 'OpenAI' }
+  let providerStatusRequestVersion = 0
   let draft = $state('')
   let selectedFiles = $state([])
   let submitError = $state('')
@@ -685,6 +692,20 @@
     }
   }
 
+  async function refreshProviderStatuses() {
+    const version = ++providerStatusRequestVersion
+    try {
+      const statuses = await tauri.invoke('local_mode_provider_status')
+      if (version === providerStatusRequestVersion) providerStatuses = statuses
+      return true
+    } catch (_) {
+      if (version === providerStatusRequestVersion) {
+        providerKeyStatus = "Pi's credential store could not be read."
+      }
+      return false
+    }
+  }
+
   async function enterLocalMode() {
     if (auth.name !== 'signed-out' || localEntryPending) return
     localEntryPending = true
@@ -694,6 +715,7 @@
       await tauri.invoke('local_mode_enter')
       markerStartupLocalMode = true
       auth = { name: 'local', subject: null }
+      await refreshProviderStatuses()
       await chatController.loadHistory()
     } catch (_) {
       localEntryError = 'Local mode could not start. Try again.'
@@ -724,6 +746,7 @@
       await tauri.invoke('local_mode_store_provider_key', { provider: 'google', key: providerKey })
       providerKey = ''
       providerKeyStatus = 'Pi saved the provider key.'
+      await refreshProviderStatuses()
     } catch (_) {
       providerKeyStatus = 'Pi could not save the provider key. Try again.'
     } finally {
@@ -820,6 +843,7 @@
         markerStartupLocalMode = active
         if (active) {
           auth = { name: 'local', subject: null }
+          void refreshProviderStatuses()
           return chatController.loadHistory()
         }
         return run('status')
@@ -1066,6 +1090,11 @@
           {:else if !sidebarCollapsed && auth.name === 'local'}
             <section class="local-account" aria-labelledby="local-account-title">
               <strong id="local-account-title">Local mode</strong>
+              <dl class="provider-statuses">
+                {#each providerStatuses as status (status.provider)}
+                  <div><dt>{providerNames[status.provider]}</dt><dd>{status.configured ? 'Saved' : 'Not set'}</dd></div>
+                {/each}
+              </dl>
               <label for="provider-key">Google API key</label>
               <input id="provider-key" type="password" autocomplete="off" bind:value={providerKey} disabled={!!active || providerKeyPending}>
               <button type="button" disabled={!!active || providerKeyPending || !providerKey.trim()} onclick={saveProviderKey}>Save Google key</button>
@@ -1503,6 +1532,9 @@
   .new-thread kbd { margin-left: auto; }
   .local-account { display: grid; gap: 7px; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
   .local-account strong { margin-bottom: 3px; }
+  .provider-statuses { display: grid; gap: 4px; margin: 0 0 3px; font: var(--text-12) var(--font-mono); }
+  .provider-statuses div { display: flex; justify-content: space-between; gap: 8px; }
+  .provider-statuses dd { margin: 0; color: var(--muted); }
   .local-account label { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .local-account input { min-width: 0; padding: 6px 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; }
   .local-account .support { margin: 0; font: var(--text-12) var(--font-mono); }

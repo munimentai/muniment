@@ -246,6 +246,11 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'local_mode_status') return fixtureName === 'local-mode'
     if (command === 'local_mode_enter') return null
     if (command === 'local_mode_leave') return null
+    if (command === 'local_mode_provider_status') return [
+      { provider: 'anthropic', configured: false },
+      { provider: 'google', configured: true },
+      { provider: 'openai', configured: false },
+    ]
     if (command === 'local_mode_store_provider_key') return null
     if (command === 'home_status') {
       if (onboardingFixture) return { configured: false, homePath: onboardingHomePath }

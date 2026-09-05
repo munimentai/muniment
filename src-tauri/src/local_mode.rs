@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
 use tauri::Manager;
 use uuid::Uuid;
 
@@ -14,6 +15,12 @@ const AUTH_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const AUTH_LOCK_RETRY: Duration = Duration::from_millis(20);
 
 struct PiAuthLock(PathBuf);
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProviderStatus {
+    provider: &'static str,
+    configured: bool,
+}
 
 impl Drop for PiAuthLock {
     fn drop(&mut self) {
@@ -84,6 +91,41 @@ fn pi_auth_file(home_directory: &Path, agent_directory: Option<&std::ffi::OsStr>
         None => home_directory.join(".pi").join("agent"),
     };
     agent_directory.join("auth.json")
+}
+
+fn provider_status(auth_file: &Path) -> Result<Vec<ProviderStatus>, String> {
+    let statuses = |auth: Option<&serde_json::Map<String, serde_json::Value>>| {
+        PROVIDERS
+            .iter()
+            .map(|provider| ProviderStatus {
+                provider,
+                configured: auth
+                    .and_then(|entries| entries.get(*provider))
+                    .is_some_and(serde_json::Value::is_object),
+            })
+            .collect()
+    };
+
+    if let Some(parent) = auth_file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        match parent.try_exists() {
+            Ok(true) => {}
+            Ok(false) => return Ok(statuses(None)),
+            Err(_) => return Err("Pi credentials could not be read.".into()),
+        }
+    }
+    let _lock = lock_pi_auth_file(auth_file)
+        .map_err(|_| "Pi credentials could not be read.".to_string())?;
+    let bytes = match fs::read(auth_file) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(statuses(None)),
+        Err(_) => return Err("Pi credentials could not be read.".into()),
+    };
+    let auth = serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&bytes)
+        .map_err(|_| "Pi credentials could not be read.".to_string())?;
+    Ok(statuses(Some(&auth)))
 }
 
 fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(), String> {
@@ -172,6 +214,19 @@ pub(crate) fn local_mode_leave(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub(crate) fn local_mode_provider_status(
+    app: tauri::AppHandle,
+) -> Result<Vec<ProviderStatus>, String> {
+    let home_directory = app
+        .path()
+        .home_dir()
+        .map_err(|_| "Pi credentials could not be read.".to_string())?;
+    let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
+    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref());
+    provider_status(&auth_file)
+}
+
+#[tauri::command]
 pub(crate) fn local_mode_store_provider_key(
     app: tauri::AppHandle,
     provider: String,
@@ -226,6 +281,81 @@ mod tests {
             pi_auth_file(home, Some(std::ffi::OsStr::new("~/pi-credentials"))),
             PathBuf::from("/home/tester/pi-credentials/auth.json")
         );
+    }
+
+    #[test]
+    fn provider_status_reports_missing_store_as_not_configured() {
+        let directory = temporary_directory();
+        let statuses = provider_status(&directory.join("missing.json")).unwrap();
+        assert_eq!(
+            serde_json::to_value(statuses).unwrap(),
+            serde_json::json!([
+                {"provider":"anthropic","configured":false},
+                {"provider":"google","configured":false},
+                {"provider":"openai","configured":false}
+            ])
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn provider_status_reports_object_entries_without_exposing_credentials() {
+        let directory = temporary_directory();
+        let auth_file = directory.join("auth.json");
+        fs::write(
+            &auth_file,
+            r#"{"anthropic":{"type":"api_key","key":"secret-key"},"github-copilot":{"type":"oauth","access":"saved"}}"#,
+        )
+        .unwrap();
+
+        let serialized = serde_json::to_string(&provider_status(&auth_file).unwrap()).unwrap();
+        assert_eq!(
+            serialized,
+            r#"[{"provider":"anthropic","configured":true},{"provider":"google","configured":false},{"provider":"openai","configured":false}]"#
+        );
+        assert!(!serialized.contains("secret-key"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn provider_status_treats_oauth_provider_entry_as_configured() {
+        let directory = temporary_directory();
+        let auth_file = directory.join("auth.json");
+        fs::write(
+            &auth_file,
+            r#"{"google":{"type":"oauth","access":"saved"}}"#,
+        )
+        .unwrap();
+
+        let statuses = serde_json::to_value(provider_status(&auth_file).unwrap()).unwrap();
+        assert_eq!(statuses[1]["configured"], true);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn provider_status_rejects_malformed_json() {
+        let directory = temporary_directory();
+        let auth_file = directory.join("auth.json");
+        fs::write(&auth_file, "not json").unwrap();
+
+        assert_eq!(
+            provider_status(&auth_file).unwrap_err(),
+            "Pi credentials could not be read."
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn provider_status_rejects_unreadable_store() {
+        let directory = temporary_directory();
+        let auth_file = directory.join("auth.json");
+        fs::create_dir(&auth_file).unwrap();
+
+        assert_eq!(
+            provider_status(&auth_file).unwrap_err(),
+            "Pi credentials could not be read."
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
