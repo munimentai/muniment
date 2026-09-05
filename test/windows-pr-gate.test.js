@@ -26,4 +26,14 @@ describe('Windows-only PR test gate', () => {
     expect(desktopCompile).toContain("if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'")
     expect(desktopCompile).toContain('platform: [linux, windows, macos]')
   })
+
+  it('runs the same test file in the nightly Windows runner', () => {
+    const windowsCommand = desktopCompile.match(/if \[ "\$PLATFORM" = "windows" \]; then\n\s+cmd='([^']+)'/)?.[1]
+    const nightlyRunner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+    const prTestFile = windowsCommand?.match(/npx vitest run --root \. (\S+\.test\.js)/)?.[1]
+    const nightlyTestFile = nightlyRunner.match(/Invoke-NativeCommand "npx\.cmd" "vitest run --root \. (\S+\.test\.js)"/)?.[1]
+
+    expect(nightlyTestFile).toBeDefined()
+    expect(nightlyTestFile).toBe(prTestFile)
+  })
 })
