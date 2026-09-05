@@ -294,7 +294,7 @@ try {
 
   $sha = $env:MUNIMENT_E2E_SOURCE_SHA
   if ($sha -notmatch '^[0-9a-f]{40}$') { throw "invalid source SHA" }
-  if (-not $env:GH_TOKEN -or -not $env:GITHUB_REPOSITORY -or -not $env:MUNIMENT_E2E_USERNAME -or -not $env:MUNIMENT_E2E_PASSWORD -or -not $env:MUNIMENT_E2E_PROVIDER_KEY) {
+  if (-not $env:GH_TOKEN -or -not $env:GITHUB_REPOSITORY -or -not $env:MUNIMENT_E2E_USERNAME -or -not $env:MUNIMENT_E2E_PASSWORD) {
     throw "required injected environment is unavailable"
   }
 

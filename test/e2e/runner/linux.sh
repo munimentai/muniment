@@ -214,7 +214,6 @@ required_environment=(
   'GH_TOKEN:RELEASE_TOKEN'
   'MUNIMENT_E2E_USERNAME:DESKTOP_E2E_USERNAME'
   'MUNIMENT_E2E_PASSWORD:DESKTOP_E2E_PASSWORD'
-  'MUNIMENT_E2E_PROVIDER_KEY:DESKTOP_E2E_PROVIDER_KEY'
 )
 for requirement in "${required_environment[@]}"; do
   variable=${requirement%%:*}

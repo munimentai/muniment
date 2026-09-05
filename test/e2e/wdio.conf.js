@@ -9,7 +9,7 @@ const specName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : pro
 if (!appBinary || !path.isAbsolute(appBinary)) throw new Error('MUNIMENT_E2E_APP_BINARY must be an absolute path')
 if (!artifactDir || !path.isAbsolute(artifactDir)) throw new Error('MUNIMENT_E2E_RAW_DIR must be an absolute path')
 
-export function redactPageSource(source, values = [process.env.MUNIMENT_E2E_USERNAME, process.env.MUNIMENT_E2E_PASSWORD, process.env.MUNIMENT_E2E_PROVIDER_KEY]) {
+export function redactPageSource(source, values = [process.env.MUNIMENT_E2E_USERNAME, process.env.MUNIMENT_E2E_PASSWORD]) {
   return values.filter(Boolean).sort((left, right) => right.length - left.length)
     .reduce((redacted, value) => redacted.split(value).join('[REDACTED]'), source)
 }

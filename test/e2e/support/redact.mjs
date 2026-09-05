@@ -4,7 +4,7 @@ import path from 'node:path'
 const [source, destination, failureReport] = process.argv.slice(2)
 if (!source || !destination) throw new Error('usage: redact.mjs SOURCE DESTINATION')
 
-const secrets = ['MUNIMENT_E2E_USERNAME', 'MUNIMENT_E2E_PASSWORD', 'MUNIMENT_E2E_PROVIDER_KEY', 'GH_TOKEN']
+const secrets = ['MUNIMENT_E2E_USERNAME', 'MUNIMENT_E2E_PASSWORD', 'GH_TOKEN']
   .map((name) => process.env[name]).filter(Boolean).sort((left, right) => right.length - left.length)
 const tokenPatterns = [
   ['credential-header', /\b(?:authorization|cookie|set-cookie)\s*[:=][^\r\n]+/gi],
