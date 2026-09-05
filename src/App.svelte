@@ -65,6 +65,7 @@
   let auth = $state(bootState)
   let localEntryError = $state('')
   let providerKey = $state('')
+  let selectedProvider = $state('google')
   let providerKeyStatus = $state('')
   let providerKeyPending = $state(false)
   let providerStatuses = $state([
@@ -740,12 +741,13 @@
 
   async function saveProviderKey() {
     if (providerKeyPending || !providerKey.trim()) return
+    const provider = selectedProvider
     providerKeyPending = true
     providerKeyStatus = ''
     try {
-      await tauri.invoke('local_mode_store_provider_key', { provider: 'google', key: providerKey })
+      await tauri.invoke('local_mode_store_provider_key', { provider, key: providerKey })
       providerKey = ''
-      providerKeyStatus = 'Pi saved the provider key.'
+      providerKeyStatus = `Pi saved the ${providerNames[provider]} key.`
       await refreshProviderStatuses()
     } catch (_) {
       providerKeyStatus = 'Pi could not save the provider key. Try again.'
@@ -1095,9 +1097,14 @@
                   <div><dt>{providerNames[status.provider]}</dt><dd>{status.configured ? 'Saved' : 'Not set'}</dd></div>
                 {/each}
               </dl>
-              <label for="provider-key">Google API key</label>
+              <select aria-label="Provider" bind:value={selectedProvider} disabled={!!active || providerKeyPending}>
+                <option value="anthropic">Anthropic</option>
+                <option value="google">Google</option>
+                <option value="openai">OpenAI</option>
+              </select>
+              <label for="provider-key">Provider API key</label>
               <input id="provider-key" type="password" autocomplete="off" bind:value={providerKey} disabled={!!active || providerKeyPending}>
-              <button type="button" disabled={!!active || providerKeyPending || !providerKey.trim()} onclick={saveProviderKey}>Save Google key</button>
+              <button type="button" disabled={!!active || providerKeyPending || !providerKey.trim()} onclick={saveProviderKey}>Save key</button>
               {#if providerKeyStatus}<p class="support" role="status">{providerKeyStatus}</p>{/if}
               <button type="button" class="quiet" disabled={!!active} onclick={signIn}>Sign in for cloud features</button>
             </section>
@@ -1536,7 +1543,7 @@
   .provider-statuses div { display: flex; justify-content: space-between; gap: 8px; }
   .provider-statuses dd { margin: 0; color: var(--muted); }
   .local-account label { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .local-account input { min-width: 0; padding: 6px 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; }
+  .local-account input, .local-account select { min-width: 0; padding: 6px 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; }
   .local-account .support { margin: 0; font: var(--text-12) var(--font-mono); }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
   .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
