@@ -10,7 +10,7 @@ export const historyFixtures = {
       prompt: 'Summarize the local notes.',
       phase: 'complete',
       text: 'The local notes list the lease renewal date and notice period.',
-      receipt: null,
+      receipt: { time: '0.8s' },
       toolActivity: [],
       resumable: false,
     },
