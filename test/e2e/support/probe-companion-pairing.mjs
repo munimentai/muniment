@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import net from 'node:net'
 
 const endpoint = process.argv[2]
+const clientKind = process.argv[3] ?? 'installed-macos-smoke'
 let finished = false
 let socket
 
@@ -26,7 +27,7 @@ if (!endpoint) {
   socket.on('connect', () => {
     const payload = Buffer.from(JSON.stringify({
       protocol: 'muniment.attach/1',
-      client: { kind: 'installed-macos-smoke', version: '0.0.1' },
+      client: { kind: clientKind, version: '0.0.1' },
       supported: { min: 1, max: 1 },
       client_nonce: randomBytes(16).toString('hex'),
       authorized_client_id: '018f0000-0000-7000-8000-000000000099',
