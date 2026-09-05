@@ -920,11 +920,20 @@ describe('workspace composer entry', () => {
   })
 
   it('enters local mode and saves a Pi provider key', async () => {
+    let providerStatusChecks = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'local_mode_status') return false
       if (command === 'auth_status') return { signed_in: false, subject: null }
       if (command === 'local_mode_enter') return undefined
       if (command === 'chat_thread_open') return []
+      if (command === 'local_mode_provider_status') {
+        providerStatusChecks += 1
+        return [
+          { provider: 'anthropic', configured: false },
+          { provider: 'google', configured: providerStatusChecks > 1 },
+          { provider: 'openai', configured: false },
+        ]
+      }
       if (command === 'local_mode_store_provider_key') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
@@ -934,6 +943,9 @@ describe('workspace composer entry', () => {
 
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(screen.getByText("Pi uses a provider from its credential store.", { exact: false })).toBeInTheDocument()
+    expect(screen.getByText('Anthropic').nextElementSibling).toHaveTextContent('Not set')
+    expect(screen.getByText('Google').nextElementSibling).toHaveTextContent('Not set')
+    expect(screen.getByText('OpenAI').nextElementSibling).toHaveTextContent('Not set')
     expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
 
     await fireEvent.input(screen.getByLabelText('Google API key'), { target: { value: 'secret-key' } })
@@ -941,6 +953,8 @@ describe('workspace composer entry', () => {
 
     expect(invoke).toHaveBeenCalledWith('local_mode_store_provider_key', { provider: 'google', key: 'secret-key' })
     expect(await screen.findByText('Pi saved the provider key.')).toBeInTheDocument()
+    expect(screen.getByText('Google').nextElementSibling).toHaveTextContent('Saved')
+    expect(providerStatusChecks).toBe(2)
   })
 
   it('blocks sign-in while local mode entry is pending', async () => {
