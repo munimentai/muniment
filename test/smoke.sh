@@ -92,11 +92,14 @@ grep -Fq 'fn the_grant_request_carries_no_client_classification' \
 grep -Fq 'fn the_receipt_request_carries_only_the_run_id' \
   src-tauri/core/src/chat_grant.rs
 classifier_adr=docs/decisions/0028-bundled-router-classifier.md
+classifier_module=src-tauri/core/src/router_classifier.rs
 test -f "$classifier_adr"
+test -f "$classifier_module"
 grep -Fq 'This artifact has no download, no lifecycle pointer, and no user opt-in.' \
   "$classifier_adr"
 for classifier_class in route.cloud route.local route.proxy; do
   grep -Fq "\`$classifier_class\`" "$classifier_adr"
+  grep -Fq "\"$classifier_class\"" "$classifier_module"
 done
 # SPEC and ROADMAP name that one mode identically, and neither names it a chat.
 grep -Fq 'the thread surface' SPEC.md

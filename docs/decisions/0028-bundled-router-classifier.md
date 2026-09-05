@@ -54,6 +54,12 @@ No classifier result crosses the cloud-bound wire. Cloud requests retain only
 the server-supplied grant values defined by the current request contract. The
 cloud still classifies every request at ingress.
 
+## Amendment — 2026-09-04
+
+The graph stores the ordered class list under the `muniment.router.classes`
+metadata key. The value uses a JSON array of strings. The loader reads and
+validates this key before any session use.
+
 ## Open owner inputs
 
 The operator must supply the artifact with its SHA-256 digest and byte size.
