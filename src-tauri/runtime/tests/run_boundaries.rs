@@ -197,7 +197,11 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     assert_eq!(payloads[4]["display_name"].as_str(), Some("read"));
     assert_eq!(payloads[5]["effect_id"].as_str(), Some("tool-1"));
     assert_eq!(payloads[5].as_object().unwrap().len(), 1);
-    assert!(payloads[6]["receipt"].as_object().unwrap().is_empty());
+    let receipt = payloads[6]["receipt"].as_object().unwrap();
+    assert_eq!(receipt.len(), 1);
+    let elapsed = receipt["time"].as_str().unwrap();
+    assert!(elapsed.ends_with('s'));
+    assert!(elapsed.trim_end_matches('s').parse::<f64>().is_ok());
 }
 
 #[test]
