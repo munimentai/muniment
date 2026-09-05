@@ -742,6 +742,50 @@ describe('Windows nightly workflow gate', () => {
   })
 })
 
+describe.skipIf(process.platform === 'win32')('Linux early abort reporting', () => {
+  const runnerPath = path.join(root, 'test/e2e/runner/linux.sh')
+  const runner = fs.readFileSync(runnerPath, 'utf8')
+
+  it('reports every missing injected variable without exposing injected values', () => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const plantedSecret = 'linux-planted-secret'
+    const env = {
+      ...process.env,
+      DCI_ARTIFACTS_DIR: artifacts,
+      MUNIMENT_E2E_SOURCE_SHA: 'a'.repeat(40),
+      GH_TOKEN: plantedSecret,
+      MUNIMENT_E2E_USERNAME: plantedSecret,
+      MUNIMENT_E2E_PASSWORD: '',
+      MUNIMENT_E2E_PROVIDER_KEY: '',
+    }
+    const result = spawnSync('bash', [runnerPath], { encoding: 'utf8', env })
+    expect(result.status).not.toBe(0)
+    const reason = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+    expect(reason).toContain('missing injected environment: MUNIMENT_E2E_PASSWORD (repository secret DESKTOP_E2E_PASSWORD)')
+    expect(reason).toContain('missing injected environment: MUNIMENT_E2E_PROVIDER_KEY (repository secret DESKTOP_E2E_PROVIDER_KEY)')
+    expect(reason).not.toContain('GH_TOKEN')
+    expect(reason).not.toContain('MUNIMENT_E2E_USERNAME')
+    expect(`${reason}\n${result.stderr}`).not.toContain(plantedSecret)
+
+    const junit = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, 'installed-linux', '1', '0'], { encoding: 'utf8' })
+    expect(junit.status, junit.stderr).toBe(0)
+    const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
+    expect(report).toContain('MUNIMENT_E2E_PROVIDER_KEY')
+    expect(report).toContain('DESKTOP_E2E_PROVIDER_KEY')
+    expect(report).not.toContain(plantedSecret)
+  })
+
+  it('routes every printed early abort through the reason helper', () => {
+    const earlyRun = runner.slice(runner.indexOf('\nsha=${MUNIMENT_E2E_SOURCE_SHA:-}'), runner.indexOf('\nready=1'))
+    const bypasses = [...earlyRun.matchAll(/\{([^{}]*status=1; exit;[^{}]*)\}/g)]
+      .filter((match) => /\becho\b/.test(match[1]) && !/\brunner_failure\b/.test(match[1]))
+    expect(bypasses).toEqual([])
+    expect(earlyRun).not.toContain("echo 'required injected environment is unavailable'")
+    expect(earlyRun).toContain("runner_failure 'invalid source SHA'")
+  })
+})
+
 describe('JUnit infrastructure fallback', () => {
   it.skipIf(process.platform === 'win32')('includes and escapes the captured runner reason', () => {
     const artifacts = temp()
@@ -1180,7 +1224,7 @@ describe('installed ACP adapter contract', () => {
     const probe = 'node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp'
     expect(runner).toContain(probe)
     expect(runner.indexOf(executableCheck)).toBeLessThan(runner.indexOf(probe))
-    expect(runner).toContain("echo 'installed ACP adapter initialize probe failed' >&2")
+    expect(runner).toContain("runner_failure 'installed ACP adapter initialize probe failed'")
   })
 })
 
@@ -1191,7 +1235,7 @@ describe('installed desktop client identity', () => {
     expect(runner).toContain('installed_desktop=/usr/bin/muniment')
     expect(runner).toContain('[[ -f $installed_desktop ]]')
     expect(runner).toContain('sudo install -m 0755 "$e2e_app_binary" "$installed_desktop"')
-    expect(runner).toContain("echo 'installed desktop path could not use the E2E build' >&2")
+    expect(runner).toContain("runner_failure 'installed desktop path could not use the E2E build'")
     expect(runner.indexOf('sudo install -m 0755 "$e2e_app_binary" "$installed_desktop"'))
       .toBeLessThan(runner.indexOf('run_e2e "$raw/wdio-onboarding.log"'))
   })
@@ -1203,7 +1247,7 @@ describe('installed desktop client identity', () => {
 
   it('fails the run when the installed copy differs', () => {
     expect(runner).toContain('cmp -s "$e2e_app_binary" "$installed_desktop"')
-    expect(runner).toContain("echo 'installed desktop path does not contain the E2E build' >&2")
+    expect(runner).toContain("runner_failure 'installed desktop path does not contain the E2E build'")
     expect(runner.indexOf('cmp -s "$e2e_app_binary" "$installed_desktop"'))
       .toBeGreaterThan(runner.indexOf('sudo install -m 0755 "$e2e_app_binary" "$installed_desktop"'))
   })

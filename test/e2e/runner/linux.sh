@@ -39,6 +39,12 @@ index_failure_artifacts() {
     >"$raw/failure-artifacts.log"
 }
 
+runner_failure() {
+  printf '%s\n' "$1" >&2
+  printf '%s\n' "$1" >>"$raw/runner-failure.txt"
+  status=1
+}
+
 run_e2e() {
   local wdio_log=$1 run_timeout=${2:-0} run_status=0 portal_log="$raw/xdg-desktop-portal.log" runtime_log="$raw/muniment-runtime.log"
   local -a session=(dbus-run-session -- xvfb-run -a bash -c '
@@ -203,45 +209,58 @@ fi
 trap finalize EXIT INT TERM
 
 sha=${MUNIMENT_E2E_SOURCE_SHA:-}
-[[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid source SHA' >&2; status=1; exit; }
-[[ -n ${GH_TOKEN:-} && -n ${MUNIMENT_E2E_USERNAME:-} && -n ${MUNIMENT_E2E_PASSWORD:-} && -n ${MUNIMENT_E2E_PROVIDER_KEY:-} ]] || { echo 'required injected environment is unavailable' >&2; status=1; exit; }
+[[ $sha =~ ^[0-9a-f]{40}$ ]] || { runner_failure 'invalid source SHA'; exit; }
+required_environment=(
+  'GH_TOKEN:RELEASE_TOKEN'
+  'MUNIMENT_E2E_USERNAME:DESKTOP_E2E_USERNAME'
+  'MUNIMENT_E2E_PASSWORD:DESKTOP_E2E_PASSWORD'
+  'MUNIMENT_E2E_PROVIDER_KEY:DESKTOP_E2E_PROVIDER_KEY'
+)
+for requirement in "${required_environment[@]}"; do
+  variable=${requirement%%:*}
+  repository_secret=${requirement#*:}
+  if [[ -z ${!variable:-} ]]; then
+    runner_failure "missing injected environment: $variable (repository secret $repository_secret)"
+  fi
+done
+(( status == 0 )) || exit
 base64 --decode test/e2e/fixtures/image-token.png.base64 >"$image_fixture" || { status=1; exit; }
 # Resolve and validate identity before package installation. Missing/duplicate
 # assets and a release pointing elsewhere fail shut.
 release=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { status=1; exit; }
 asset_id=$(node test/e2e/support/asset-identity.mjs "$sha" <<<"$release") || { status=1; exit; }
 gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$deb" || { status=1; exit; }
-[[ $(dpkg-deb -f "$deb" Package) == muniment ]] || { echo 'package identity mismatch' >&2; status=1; exit; }
+[[ $(dpkg-deb -f "$deb" Package) == muniment ]] || { runner_failure 'package identity mismatch'; exit; }
 
 sudo apt-get update -qq >>"$installer_log" 2>&1 || { status=1; exit; }
 installed=1
 sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin libasound2-dev "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
-[[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] || { echo 'FUSE device is unavailable to the runner user' >&2; status=1; exit; }
+[[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] || { runner_failure 'FUSE device is unavailable to the runner user'; exit; }
 npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
-release_binary=$(command -v muniment-desktop || command -v muniment) || { echo 'installed application binary is unavailable' >&2; status=1; exit; }
+release_binary=$(command -v muniment-desktop || command -v muniment) || { runner_failure 'installed application binary is unavailable'; exit; }
 node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
 # Build both bundle resources declared in tauri.linux.conf.json before the Tauri bundle.
-cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked >>"$installer_log" 2>&1 || { echo 'muniment-acp build failed' >&2; status=1; exit; }
-cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --release --locked >>"$installer_log" 2>&1 || { echo 'muniment-runtime build failed' >&2; status=1; exit; }
+cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked >>"$installer_log" 2>&1 || { runner_failure 'muniment-acp build failed'; exit; }
+cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --release --locked >>"$installer_log" 2>&1 || { runner_failure 'muniment-runtime build failed'; exit; }
 npm run tauri build -- --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
 e2e_app_binary="$PWD/src-tauri/target/release/muniment-desktop"
-[[ -x $e2e_app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
+[[ -x $e2e_app_binary ]] || { runner_failure 'E2E application binary is unavailable'; exit; }
 e2e_deb=$(find "$PWD/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)
-[[ -n $e2e_deb ]] || { echo 'E2E DEB is unavailable' >&2; status=1; exit; }
+[[ -n $e2e_deb ]] || { runner_failure 'E2E DEB is unavailable'; exit; }
 bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb" || { status=1; exit; }
-[[ -x /usr/lib/muniment/muniment-acp ]] || { echo 'installed ACP adapter is unavailable or not executable' >&2; status=1; exit; }
-node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp || { echo 'installed ACP adapter initialize probe failed' >&2; status=1; exit; }
-[[ -x /usr/lib/muniment/muniment-runtime ]] || { echo 'installed runtime is unavailable or not executable' >&2; status=1; exit; }
+[[ -x /usr/lib/muniment/muniment-acp ]] || { runner_failure 'installed ACP adapter is unavailable or not executable'; exit; }
+node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp || { runner_failure 'installed ACP adapter initialize probe failed'; exit; }
+[[ -x /usr/lib/muniment/muniment-runtime ]] || { runner_failure 'installed runtime is unavailable or not executable'; exit; }
 unset LD_LIBRARY_PATH
-runtime_version=$(/usr/lib/muniment/muniment-runtime --version) || { echo 'installed runtime version probe failed' >&2; status=1; exit; }
-[[ -n $runtime_version ]] || { echo 'installed runtime version probe returned no version' >&2; status=1; exit; }
+runtime_version=$(/usr/lib/muniment/muniment-runtime --version) || { runner_failure 'installed runtime version probe failed'; exit; }
+[[ -n $runtime_version ]] || { runner_failure 'installed runtime version probe returned no version'; exit; }
 # The installed runtime admits a desktop client only from the installed path.
 # Copy the WebDriver build there so its rpath also resolves the installed ASR
 # libraries without a loader environment override.
 installed_desktop=/usr/bin/muniment
-[[ -f $installed_desktop ]] || { echo 'installed desktop path is unavailable' >&2; status=1; exit; }
-sudo install -m 0755 "$e2e_app_binary" "$installed_desktop" || { echo 'installed desktop path could not use the E2E build' >&2; status=1; exit; }
-cmp -s "$e2e_app_binary" "$installed_desktop" || { echo 'installed desktop path does not contain the E2E build' >&2; status=1; exit; }
+[[ -f $installed_desktop ]] || { runner_failure 'installed desktop path is unavailable'; exit; }
+sudo install -m 0755 "$e2e_app_binary" "$installed_desktop" || { runner_failure 'installed desktop path could not use the E2E build'; exit; }
+cmp -s "$e2e_app_binary" "$installed_desktop" || { runner_failure 'installed desktop path does not contain the E2E build'; exit; }
 app_binary=$installed_desktop
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
