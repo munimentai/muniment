@@ -103,6 +103,10 @@ fn pi_models_file(home_directory: &Path, agent_directory: Option<&std::ffi::OsSt
     pi_agent_directory(home_directory, agent_directory).join("models.json")
 }
 
+fn pi_settings_file(models_file: &Path) -> PathBuf {
+    models_file.with_file_name("settings.json")
+}
+
 fn read_json_store(
     path: &Path,
 ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
@@ -236,15 +240,14 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
         .ok_or_else(|| "Pi provider settings could not be saved.".to_string())?;
     fs::create_dir_all(parent)
         .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
-    let _lock = lock_pi_auth_file(models_file)
+    let settings_file = pi_settings_file(models_file);
+    let _models_lock = lock_pi_auth_file(models_file)
         .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
-    let mut root = match fs::read(models_file) {
-        Ok(bytes) => serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&bytes)
-            .map_err(|_| "Pi provider settings could not be saved.".to_string())?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
-        Err(_) => return Err("Pi provider settings could not be saved.".into()),
-    };
-    let providers = root
+    let _settings_lock = lock_pi_auth_file(&settings_file)
+        .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
+    let mut models = read_json_for_update(models_file)?;
+    let mut settings = read_json_for_update(&settings_file)?;
+    let providers = models
         .entry("providers")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
@@ -262,9 +265,30 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
             "models": [{ "id": OLLAMA_MODEL }]
         }),
     );
-    let bytes = serde_json::to_vec_pretty(&root)
+    settings.insert("defaultProvider".to_owned(), OLLAMA_PROVIDER.into());
+    settings.insert("defaultModel".to_owned(), OLLAMA_MODEL.into());
+
+    // Write the route first. A later models write failure cannot fall back to a cloud model.
+    write_json_for_update(&settings_file, &settings)?;
+    write_json_for_update(models_file, &models)
+}
+
+fn read_json_for_update(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|_| "Pi provider settings could not be saved.".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
+        Err(_) => Err("Pi provider settings could not be saved.".into()),
+    }
+}
+
+fn write_json_for_update(
+    path: &Path,
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(root)
         .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
-    let temporary = models_file.with_extension(format!("tmp-{}", Uuid::new_v4()));
+    let temporary = path.with_extension(format!("tmp-{}", Uuid::new_v4()));
     let result = (|| {
         let mut options = OpenOptions::new();
         options.create_new(true).write(true);
@@ -276,7 +300,7 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
         let mut file = options.open(&temporary)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
-        muniment_core::atomic_file::replace(&temporary, models_file)
+        muniment_core::atomic_file::replace(&temporary, path)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -594,6 +618,39 @@ mod tests {
             .iter()
             .any(|status| status.provider == "ollama" && status.configured));
         assert!(!directory.join("auth.json").exists());
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["defaultProvider"], "ollama");
+        assert_eq!(settings["defaultModel"], "llama3.2:latest");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn local_provider_pins_ollama_when_cloud_credentials_exist() {
+        let directory = temporary_directory();
+        let auth_file = directory.join("auth.json");
+        let models_file = directory.join("models.json");
+        fs::write(
+            &auth_file,
+            r#"{"openai":{"type":"api_key","key":"paid-cloud-key"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            directory.join("settings.json"),
+            r#"{"defaultProvider":"openai","defaultModel":"gpt-5","theme":"dark"}"#,
+        )
+        .unwrap();
+
+        store_local_provider(&models_file, "http://127.0.0.1:11434/v1").unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["defaultProvider"], "ollama");
+        assert_eq!(settings["defaultModel"], "llama3.2:latest");
+        assert_eq!(settings["theme"], "dark");
+        let auth: serde_json::Value =
+            serde_json::from_slice(&fs::read(auth_file).unwrap()).unwrap();
+        assert_eq!(auth["openai"]["key"], "paid-cloud-key");
         fs::remove_dir_all(directory).unwrap();
     }
 
