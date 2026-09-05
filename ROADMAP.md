@@ -1706,6 +1706,43 @@ sign-in stopped gating the nightly (MUNIDESK-1683).
 `test/e2e/specs/local-mode-chat.spec.js` drives the installed app without an
 account, so a nightly no longer fails on a cloud credential it cannot hold.
 
+MEASURED 2026-09-05 (planner, read the job graph of the last 40 nightly runs
+and the raw `linux-e2e` log of run 33956072029) — all three installed lanes
+have failed on every nightly since 2026-08-08. The Linux lane now dies before
+it installs anything. `test/e2e/runner/linux.sh:207` requires
+`MUNIMENT_E2E_PROVIDER_KEY` since MUNIDESK-1683, the repository holds no
+`DESKTOP_E2E_PROVIDER_KEY` secret, and the runner prints one fixed sentence
+that names no variable. The JUnit fallback then reads `desktop-ci
+infrastructure`, which is why the tester's ticket stuck. The lane filed the
+runner fix. Every early abort writes its reason to `runner-failure.txt`, the
+gate names each empty variable and its secret, and
+`test/e2e/support/ensure-junit-report.sh` already carries that file into the
+report. `test/e2e/runner/macos-wdio.sh:38` and `test/e2e/runner/windows.ps1:297`
+carry the same gate and fail the same way once they reach it.
+
+OWNER ITEM 2026-09-05 — store the `DESKTOP_E2E_PROVIDER_KEY` repository secret.
+`test/e2e/specs/local-mode-chat.spec.js:55` saves it through the `Save Google
+key` control, so the value is a Google provider key for the fixture account. No
+installed lane can pass without it, and no code change can supply it.
+
+OPEN — a later slice moves the three credential checks out of the runners and
+into the specs. `real-sign-in.spec.js:170` and `local-mode-chat.spec.js:44`
+already throw a named error when their credential is empty. With the runner gate
+reduced to `GH_TOKEN`, a missing credential still fails the lane, but the
+install proof, the adapter probe, the runtime probe, and the onboarding spec run
+first, and the JUnit report names the spec and the credential. The lane holds
+this slice until the reason-file fix lands, because both touch the same line.
+
+MEASURED 2026-09-05 (planner, read the `windows-e2e` transcripts of 2026-08-08,
+2026-08-20, 2026-08-30, 2026-09-04, and 2026-09-05) — the Windows lane dies at
+`test/e2e/runner/windows.ps1:294` on every run. That line runs the whole `npm
+test` script inside the VM, which includes `test:browser` and the Chromium the
+VM never installs. The vitest output stays in the installer log, no artifact
+leaves the VM, and no run has named the failing test. The pull request gate
+runs `test/desktop-e2e-harness.test.js` alone on Windows and is green. The lane
+filed the swap to that same file. The full suite on Windows stays unverified
+after it, and this entry records that gap.
+
 DONE — the suite runs on Windows. Three slices gated every block that spawns a
 POSIX shell, and `test/posix-shell-gate.test.js` fails when a new `bash` call site
 appears outside a guarded block (MUNIDESK-679). Its walk skips any path segment
@@ -1913,8 +1950,20 @@ also starts again, because `muniment-runtime` carries the ASR rpath
 OWNER-GATED — fork and token setup, WinGet publication, Homebrew tap publication, Apple
 enrollment Y5DUNHQA74, public download and install docs, distribution accounts,
 marketplace and store publishing, production launch, and publicity. Switching
-macOS signing on is secrets-only. No monetization or promotional surface is
+macOS signing on was meant to be secrets-only, and the measurement below records
+the one build fix it also needs. No monetization or promotional surface is
 implied.
+
+MEASURED 2026-09-05 (planner, read the `build (macos)` log of nightly run
+33956072029) — the owner stored the six Apple secrets on 2026-09-04, and the
+first signed build failed. `codesign` found the identity, printed `unable to
+build chain to self-signed root for signer`, and failed the first ASR dylib
+with `errSecInternalComponent`. `.github/build-macos-app.mjs:98` imports the
+`.p12` into a throwaway keychain and never imports Apple's `Developer ID
+Certification Authority` G2 intermediate, which a bare build VM does not carry.
+The lane filed the import of the vendored public certificate, pinned by its
+SHA-256 fingerprint. Until it lands the nightly publish job stays skipped, so
+every installed lane also reads a stale release.
 
 ## Phase 4+ — Org surface (§9 items 16–19)
 
