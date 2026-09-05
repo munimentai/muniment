@@ -385,12 +385,28 @@ try {
     $runtimeTask = Get-ScheduledTask -TaskPath "\Muniment\" -TaskName "Runtime-$sid" -ErrorAction SilentlyContinue
     if ($runtimeTask) { $runtimeTaskState = $runtimeTask.State.ToString() }
 
+    Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+
+namespace MunimentE2e {
+  public static class NamedPipe {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool WaitNamedPipe(string name, uint timeout);
+  }
+}
+'@
     $waitStarted = [DateTime]::UtcNow
     $waitDeadline = $waitStarted.AddSeconds(60)
     do {
-      $pipePresent = Test-Path -LiteralPath $pipePath
-      if ($pipePresent -or [DateTime]::UtcNow -ge $waitDeadline) { break }
-      Start-Sleep -Seconds 1
+      $remainingMilliseconds = [Math]::Ceiling(($waitDeadline - [DateTime]::UtcNow).TotalMilliseconds)
+      if ($remainingMilliseconds -le 0) { break }
+      $waitMilliseconds = [uint32][Math]::Min(1000, $remainingMilliseconds)
+      $pipePresent = [MunimentE2e.NamedPipe]::WaitNamedPipe($pipePath, $waitMilliseconds)
+      if ($pipePresent) { break }
+      $remainingMilliseconds = [Math]::Ceiling(($waitDeadline - [DateTime]::UtcNow).TotalMilliseconds)
+      if ($remainingMilliseconds -le 0) { break }
+      Start-Sleep -Milliseconds ([Math]::Min(100, $remainingMilliseconds))
     } while ($true)
     $waitSeconds = [Math]::Min(60, [Math]::Ceiling(([DateTime]::UtcNow - $waitStarted).TotalSeconds))
   } catch {
