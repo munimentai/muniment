@@ -54,7 +54,7 @@ describe('installed desktop executable paths', () => {
     const resolverSegments = [...(resolverFunction?.matchAll(/OsStr::new\("([^"]+)"\)/g) ?? [])]
       .map((match) => match[1])
     const installedRuntime = runner.match(
-      /\[\[ -x (\/\S+) \]\] \|\| \{ echo 'installed runtime is unavailable or not executable'/,
+      /\[\[ -x (\/\S+) \]\] \|\| \{ runner_failure 'installed runtime is unavailable or not executable'/,
     )?.[1]
     const runnerSegments = installedRuntime?.split('/').filter(Boolean)
     const runnerLibrary = runnerSegments?.at(-3)
