@@ -371,6 +371,65 @@ try {
   } catch {
     $status = 1
   }
+
+  $runtimeConnectionLog = Join-Path $raw "runtime-connection.log"
+  $pipePresent = $false
+  $waitSeconds = 0
+  $runtimeTaskState = "unavailable"
+  $runtimeProbeError = $null
+  $pipePath = $null
+  try {
+    $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $pipeHelper = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../support/windows-attach-pipe.mjs"))
+    $pipePath = (Invoke-NativeCommand "node" "`"$pipeHelper`" $sid" $runtimeConnectionLog "Windows attach pipe derivation failed").Trim()
+    $runtimeTask = Get-ScheduledTask -TaskPath "\Muniment\" -TaskName "Runtime-$sid" -ErrorAction SilentlyContinue
+    if ($runtimeTask) { $runtimeTaskState = $runtimeTask.State.ToString() }
+
+    Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+
+namespace MunimentE2e {
+  public static class NamedPipe {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool WaitNamedPipe(string name, uint timeout);
+  }
+}
+'@
+    $waitStarted = [DateTime]::UtcNow
+    $waitDeadline = $waitStarted.AddSeconds(60)
+    do {
+      $remainingMilliseconds = [Math]::Ceiling(($waitDeadline - [DateTime]::UtcNow).TotalMilliseconds)
+      if ($remainingMilliseconds -le 0) { break }
+      $waitMilliseconds = [uint32][Math]::Min(1000, $remainingMilliseconds)
+      $pipePresent = [MunimentE2e.NamedPipe]::WaitNamedPipe($pipePath, $waitMilliseconds)
+      if ($pipePresent) { break }
+      $remainingMilliseconds = [Math]::Ceiling(($waitDeadline - [DateTime]::UtcNow).TotalMilliseconds)
+      if ($remainingMilliseconds -le 0) { break }
+      Start-Sleep -Milliseconds ([Math]::Min(100, $remainingMilliseconds))
+    } while ($true)
+    $waitSeconds = [Math]::Min(60, [Math]::Ceiling(([DateTime]::UtcNow - $waitStarted).TotalSeconds))
+  } catch {
+    $runtimeProbeError = $_.Exception.Message
+  }
+
+  @(
+    "pipe_present=$($pipePresent.ToString().ToLowerInvariant())"
+    "wait_seconds=$waitSeconds"
+    "task_state=$runtimeTaskState"
+  ) | Set-Content -LiteralPath $runtimeConnectionLog
+  if ($runtimeProbeError) { Add-Content -LiteralPath $runtimeConnectionLog -Value "error=$runtimeProbeError" }
+
+  if ($pipePresent) {
+    try {
+      Invoke-NativeCommand "node" "`"test/e2e/support/probe-companion-pairing.mjs`" `"$pipePath`" installed-windows-smoke" (Join-Path $raw "companion-pairing.log") "Windows companion pairing probe failed"
+    } catch {
+      $status = 1
+    }
+  } else {
+    $status = 1
+  }
+
   $env:APPDATA = Join-Path $stateRoot "Ready\Roaming"
   $env:LOCALAPPDATA = Join-Path $stateRoot "Ready\Local"
   $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'ready-home'
