@@ -52,23 +52,32 @@ no receipt URL. `pi_launch_config_for_executable` strips 43 inherited provider
 variables from the Pi environment, so Pi reads its own credential store alone.
 `docs/public-evidence/local-mode.md` is the page.
 
-MEASURED 2026-09-04 (planner, shot five probe fixtures in headless Chromium) —
-the committed probe harness is dead. Every fixture renders the signed-out screen
-under the message `Local mode could not be checked. Try again.`. The startup path
-invokes `local_mode_status` (`src/App.svelte:813`), `test/probe/stub.js:470`
-throws on a command it does not know, and the catch at `src/App.svelte:826` drops
-the shell to signed-out. `history.html`, `access.html`, `in-flight.html`,
-`code-diff.html`, and `permission.html` each produced the same 16,174-byte
-capture. No CI job runs the probe, so nothing caught the break. The lane files
-the repair now.
+DONE 2026-09-04 — the probe harness runs again (MUNIDESK-1691). On 2026-09-04
+every fixture had rendered the signed-out screen, because `test/probe/stub.js`
+threw on the unknown `local_mode_status` command and the startup catch dropped
+the shell to signed-out. The stub now answers the four local-mode commands
+(`test/probe/stub.js:246`), and `test/probe/local-mode.html` is the local-mode
+fixture. The planner shot `local-mode.html`, `signed-out.html`, and `index.html`
+on 2026-09-04 and read all three. No CI job runs the probe, so a wave that adds
+a command must also teach the stub.
 
-GAP — local mode exposes one provider and reports no credential state. The
+NEXT — local mode exposes one provider and reports no credential state. The
 sidebar panel takes a Google key alone, while `PROVIDERS`
 (`src-tauri/src/local_mode.rs:12`) accepts anthropic, google, and openai. No
 command reads the store, so the panel cannot say whether Pi holds any credential.
-A first run against an empty store fails at the first prompt. The lane files this
-after the probe repair, because a probe fixture is the only way to inspect the
-panel.
+A first run against an empty store fails at the first prompt. The lane filed two
+independent slices on 2026-09-04. The first adds a read-only
+`local_mode_provider_status` command and shows each provider's state in the
+panel. The second turns the Google-only form into a three-provider form and
+corrects `docs/public-evidence/local-mode.md`, which still points at a profile
+panel and a `Pi provider` label that the shell does not have.
+
+MEASURED 2026-09-04 (planner, read `local-mode.html` at 1100x720) — the idle
+composer hint in local mode reads `Routing is automatic. Every reply carries
+its receipt.` (`src/App.svelte:1253`). Local mode routes nothing and records no
+cloud receipt, and the provenance line under the reply reads `Receipt
+unavailable`. The hint contradicts the line above it. The lane filed the copy
+fix.
 
 ### 9. Pi sidecar and cloud chat
 
@@ -301,13 +310,23 @@ at `test/smoke.sh:87` enforces it. harness-spec 15.3 says the desktop has no
 classifier. No classifier code merges until those documents scope the ban to the
 cloud-bound wire. The desktop must still send no classification to the cloud.
 
-NEXT — three ordered slices. First, SPEC law 13, harness-spec 15.3, a new ADR,
-and the smoke guards scope the ban to the cloud-bound wire and record the
-bundled-classifier contract. Second, an inference seam loads the pinned encoder
-from the bundle and fails closed when the head's class list does not match the
-taxonomy. Third, the three bundle configs carry the artifact and an installed
-smoke verifies its sha256. The lane files slice one now. Slice two waits on the
-ADR's runtime choice. Slice three waits on the operator's artifact.
+DONE 2026-09-04 — slice one landed (MUNIDESK-1690). SPEC law 13 and
+harness-spec 15.3 scope the ban to the cloud-bound wire, ADR 0028 records the
+bundled-classifier contract, and `test/smoke.sh:82` guards the reserved wire
+fields plus the three class names in the ADR. ADR 0028 also chose the runtime.
+A classifier-owned native adapter loads the platform's bundled ONNX Runtime
+library from its exact resource path, resolves the C API through
+`OrtGetApiBase`, and creates the session directly. It routes nothing through the
+speech-only `sherpa-onnx` bindings and adds no second library.
+
+NEXT — slice two, the inference seam, splits into three parts. The first names
+the taxonomy in code and pins the model-metadata key that carries the ordered
+class list. The second opens the bundled library and resolves the C API base,
+with a test against the committed Linux library. The third creates the session,
+reads the class list from the graph metadata, and fails closed on a mismatch.
+The lane filed the first two on 2026-09-04, because neither depends on the
+other. The third waits on both. Slice three, the bundle configs and the
+installed sha256 smoke, waits on the operator's artifact.
 
 OPEN QUESTION for the owner — no ruling says what each class does. The desktop
 must know which action follows `route.cloud`, `route.local`, and `route.proxy`
@@ -921,8 +940,15 @@ platform-neutral `serve_approval_presenter_with`. The Windows desktop starts the
 presenter, and the superseded Windows non-state serving entries retired.
 
 NEXT — the installed Windows pairing probe proves the served exchange, the way
-the macOS probe proves the macOS one (MUNIDESK-1658). This lane files it after
-the classifier contract slice and the probe-harness repair.
+the macOS probe proves the macOS one (MUNIDESK-1658). The lane filed it on
+2026-09-04. The Windows runner launches no installed app of its own. The
+WebDriver launch in the installed chat phase registers and starts the runtime
+task from `src-tauri/src/main.rs:55`, and the payload check reads known folders
+rather than the redirected `%APPDATA%`, so the pipe exists after that phase. The
+probe derives the pipe path from the current user's SID the way
+`windows_attach_pipe_path` does, waits for the pipe, and runs the shared pairing
+probe over it. The MSI uninstaller stops the `\Muniment\Runtime-*` tasks, so
+the cleanup phase needs no new step.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
