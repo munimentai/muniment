@@ -92,6 +92,22 @@ holds that slice for a later wave, after the fixture check lands.
 
 ### 9. Pi sidecar and cloud chat
 
+POLICY 2026-09-05 — MUNIDESK-1711 replaces MUNIDESK-1684.
+[SPEC.md](SPEC.md#pi-version-policy) and [ADR 0008](docs/decisions/0008-pi-runtime-distribution.md)
+record separate production and candidate tracks. Only the desktop's passing
+nightly evidence on Linux, macOS, and Windows qualifies exact candidate
+versions for promotion. Packages must appear on pi.dev, and executables must
+come from earendil-works/pi or an approved Muniment-controlled mirror.
+The Node floor follows the pin's `engines` field on an Active LTS line.
+Pin moves retain the verified predecessor for activation rollback.
+
+OPEN — separate tickets will adopt the four approved extensions and enable
+the extra built-in tools through `settings.json`. Other tickets will carry
+the bash-timeout unit rule in the Pi system prompt and move the production
+pin with its Node floor.
+Tool adoption must check the candidate registry and `defaultTools` support.
+The 0.73.1 production descriptor stays unchanged.
+
 DONE — verified Pi runtime acquisition and supervision, signed-in streamed chat,
 steering and follow-up, durable tool effects, provenance and receipts, inline
 tool cards, extension UI, permission-gate replay and answers, and safe

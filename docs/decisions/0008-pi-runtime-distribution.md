@@ -22,7 +22,8 @@ the upstream project's supported non-Node installation path.
 
 ### Identity and updates
 
-Muniment pins **`@mariozechner/pi-coding-agent` 0.73.1**, upstream tag
+The current upstream package identity is **`@earendil-works/pi-coding-agent`**.
+Muniment's production executable pin remains **0.73.1**, upstream tag
 `v0.73.1`, under the MIT license. The executable descriptors are:
 
 | Target | Release archive | Bytes | SHA-256 |
@@ -50,6 +51,24 @@ those identities, verifies each revision with its own size, digest, archive
 name and executable layout, and atomically repoints `current` to `previous`
 when supervisor activation of the new pin fails. It never resolves an
 arbitrary version or filesystem path from pointer contents.
+
+### Amendment 2026-09-05: desktop-owned version policy
+
+The production pin records the exact Pi and extension versions a shipped
+desktop carries. A separate candidate records the exact versions the nightly
+exercises and may run ahead of production. Only Muniment Desktop's passing
+nightly evidence on Linux, macOS, and Windows qualifies that candidate for
+promotion through a signed desktop release. Nothing else promotes a version.
+The desktop never adopts a release because it is newest.
+
+The harness installs only packages listed on [pi.dev/packages](https://pi.dev/packages)
+and executables from the official [earendil-works/pi repository](https://github.com/earendil-works/pi).
+It rejects unlisted npm packages, forks, and mirrors outside Muniment's control.
+The distribution checks below still govern any Muniment-controlled mirror.
+A pin move retains the verified predecessor and the pointer rollback rule above.
+[SPEC.md](../../SPEC.md#pi-version-policy) records the approved extensions,
+built-in tools, and Active LTS Node requirement from the pinned Pi's `engines`
+field. This amendment selects no candidate and changes no production descriptor.
 
 ### Distribution
 
@@ -190,6 +209,7 @@ target descriptor to a temporary directory, sets the variable, and runs
 
 - Pi 0.73.1 release and platform artifacts: <https://github.com/earendil-works/pi/releases/tag/v0.73.1>
 - Pi RPC protocol: <https://github.com/earendil-works/pi/blob/v0.73.1/packages/coding-agent/docs/rpc.md>
-- Pinned npm package metadata: <https://www.npmjs.com/package/@mariozechner/pi-coding-agent/v/0.73.1>
+- Current npm package identity: <https://www.npmjs.com/package/@earendil-works/pi-coding-agent>
+- Historical 0.73.1 package metadata: <https://github.com/earendil-works/pi/blob/v0.73.1/packages/coding-agent/package.json>
 - Shared lifecycle and verified publication: [ADR 0006](0006-resident-gemma-model-lifecycle.md)
 - Shared acquisition rules: [ADR 0005](0005-asr-model-lifecycle.md)
