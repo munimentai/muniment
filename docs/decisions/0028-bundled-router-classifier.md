@@ -60,6 +60,9 @@ The graph stores the ordered class list under the `muniment.router.classes`
 metadata key. The value uses a JSON array of strings. The loader reads and
 validates this key before any session use.
 
+The classifier session loader has landed. The operator artifact and owner class
+actions remain open.
+
 ## Open owner inputs
 
 The operator must supply the artifact with its SHA-256 digest and byte size.
