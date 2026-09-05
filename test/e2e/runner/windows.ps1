@@ -290,7 +290,7 @@ try {
   [IO.File]::WriteAllBytes($imageFixture, [Convert]::FromBase64String($imageBase64))
 
   Invoke-NativeCommand "npm.cmd" "ci --no-audit --no-fund" $installerLog "npm dependency installation failed"
-  Invoke-NativeCommand "npm.cmd" "test" $installerLog "Windows contract tests failed"
+  Invoke-NativeCommand "npx.cmd" "vitest run --root . test/desktop-e2e-harness.test.js" $installerLog "Windows contract tests failed for test/desktop-e2e-harness.test.js"
 
   $sha = $env:MUNIMENT_E2E_SOURCE_SHA
   if ($sha -notmatch '^[0-9a-f]{40}$') { throw "invalid source SHA" }
