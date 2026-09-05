@@ -941,7 +941,9 @@ describe('workspace composer entry', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Use local mode' }))
 
-    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    expect(composer).toBeInTheDocument()
+    expect(composer).toHaveAccessibleDescription('Pi answers with the provider key you saved. Local replies carry no cloud receipt.')
     expect(screen.getByText("Pi uses a provider from its credential store.", { exact: false })).toBeInTheDocument()
     expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
     expect(screen.getByText('Google', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
