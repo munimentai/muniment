@@ -239,6 +239,7 @@ export function buildProbeCommandTable(fixtureName) {
     : []
   const eventListeners = []
   const invokedCommands = []
+  const unknownCommands = []
   let currentThreadId = history.length ? 'probe-thread' : null
   let retentionChoice = null
 
@@ -360,6 +361,7 @@ export function buildProbeCommandTable(fixtureName) {
       },
     ]
     if (command === 'attach_revoke_companion') return null
+    unknownCommands.push(command)
     throw new Error(`Unknown probe command: ${command}`)
   }
 
@@ -375,6 +377,7 @@ export function buildProbeCommandTable(fixtureName) {
     olderThreadSummaries,
     eventListeners,
     invokedCommands,
+    unknownCommands,
   }
 }
 
@@ -396,6 +399,7 @@ const {
   olderThreadSummaries,
   eventListeners,
   invokedCommands,
+  unknownCommands,
 } = probeTable
 
 function recordInvoke(surface, command, payload) {
@@ -492,6 +496,7 @@ function markReadyAfterFixtureRender() {
 window.__PROBE__ = {
   eventListeners,
   invokedCommands,
+  unknownCommands,
   emit(event, payload) {
     for (const entry of eventListeners.filter((entry) => entry.event === event)) {
       entry.listener({ event, payload })
