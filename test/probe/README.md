@@ -24,7 +24,7 @@ Inspect `window.__PROBE__.invokedCommands` and `window.__PROBE__.eventListeners`
 Capture every fixture at the default desktop size:
 
 ```sh
-for fixture in index history in-flight access markdown signed-out onboarding approved-files permission select input editor code-diff code-diff-unavailable applied-diff; do
+for fixture in index history local-mode in-flight access markdown signed-out onboarding approved-files permission select input editor code-diff code-diff-unavailable applied-diff; do
   playwright screenshot --browser chromium --viewport-size "1100,720" --wait-for-selector "[data-probe-ready]" "http://127.0.0.1:4173/test/probe/$fixture.html" "/tmp/muniment-probe-$fixture.png"
 done
 ```
