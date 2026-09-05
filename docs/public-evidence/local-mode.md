@@ -6,7 +6,7 @@ Local mode does not contact the Muniment control plane for authentication or mod
 
 ## Provider access
 
-Open the profile panel from the thread surface. Enter a Google API key under **Pi provider**, then select **Save Google key**. The desktop writes the key to Pi's `~/.pi/agent/auth.json` store with Pi's file lock.
+Open the sidebar's **Local mode** section from the thread surface. Select **Anthropic**, **Google**, or **OpenAI**. Enter the key in **Provider API key**, then select **Save key**. The desktop writes the key to Pi's `~/.pi/agent/auth.json` store with Pi's file lock.
 
 Pi can also use provider credentials that the Pi CLI saved in the same store. Local mode removes inherited provider credential and endpoint variables from the Pi process environment.
 

@@ -929,8 +929,8 @@ describe('workspace composer entry', () => {
       if (command === 'local_mode_provider_status') {
         providerStatusChecks += 1
         return [
-          { provider: 'anthropic', configured: false },
-          { provider: 'google', configured: providerStatusChecks > 1 },
+          { provider: 'anthropic', configured: providerStatusChecks > 1 },
+          { provider: 'google', configured: false },
           { provider: 'openai', configured: false },
         ]
       }
@@ -943,17 +943,25 @@ describe('workspace composer entry', () => {
 
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(screen.getByText("Pi uses a provider from its credential store.", { exact: false })).toBeInTheDocument()
-    expect(screen.getByText('Anthropic').nextElementSibling).toHaveTextContent('Not set')
-    expect(screen.getByText('Google').nextElementSibling).toHaveTextContent('Not set')
-    expect(screen.getByText('OpenAI').nextElementSibling).toHaveTextContent('Not set')
+    expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
+    expect(screen.getByText('Google', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
+    expect(screen.getByText('OpenAI', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
     expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
 
-    await fireEvent.input(screen.getByLabelText('Google API key'), { target: { value: 'secret-key' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Save Google key' }))
+    const provider = screen.getByRole('combobox', { name: 'Provider' })
+    expect(provider).toHaveValue('google')
+    expect([...provider.options].map(({ text, value }) => [text, value])).toEqual([
+      ['Anthropic', 'anthropic'],
+      ['Google', 'google'],
+      ['OpenAI', 'openai'],
+    ])
+    await fireEvent.change(provider, { target: { value: 'anthropic' } })
+    await fireEvent.input(screen.getByLabelText('Provider API key'), { target: { value: 'secret-key' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
 
-    expect(invoke).toHaveBeenCalledWith('local_mode_store_provider_key', { provider: 'google', key: 'secret-key' })
-    expect(await screen.findByText('Pi saved the provider key.')).toBeInTheDocument()
-    expect(screen.getByText('Google').nextElementSibling).toHaveTextContent('Saved')
+    expect(invoke).toHaveBeenCalledWith('local_mode_store_provider_key', { provider: 'anthropic', key: 'secret-key' })
+    expect(await screen.findByText('Pi saved the Anthropic key.')).toBeInTheDocument()
+    expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Saved')
     expect(providerStatusChecks).toBe(2)
   })
 
