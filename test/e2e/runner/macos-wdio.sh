@@ -35,7 +35,7 @@ finalize() {
 }
 trap finalize EXIT INT TERM
 
-[[ -n ${MUNIMENT_E2E_USERNAME:-} && -n ${MUNIMENT_E2E_PASSWORD:-} && -n ${MUNIMENT_E2E_PROVIDER_KEY:-} ]] || {
+[[ -n ${MUNIMENT_E2E_USERNAME:-} && -n ${MUNIMENT_E2E_PASSWORD:-} ]] || {
   echo 'required injected environment is unavailable' >&2
   status=1
   exit

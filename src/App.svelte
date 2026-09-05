@@ -65,6 +65,7 @@
   let auth = $state(bootState)
   let localEntryError = $state('')
   let providerKey = $state('')
+  let providerBaseUrl = $state('')
   let selectedProvider = $state('google')
   let providerKeyStatus = $state('')
   let providerKeyPending = $state(false)
@@ -72,8 +73,9 @@
     { provider: 'anthropic', configured: false },
     { provider: 'google', configured: false },
     { provider: 'openai', configured: false },
+    { provider: 'ollama', configured: false },
   ])
-  const providerNames = { anthropic: 'Anthropic', google: 'Google', openai: 'OpenAI' }
+  const providerNames = { anthropic: 'Anthropic', google: 'Google', openai: 'OpenAI', ollama: 'Ollama' }
   let providerStatusRequestVersion = 0
   let draft = $state('')
   let selectedFiles = $state([])
@@ -739,18 +741,26 @@
     void run('sign-in')
   }
 
-  async function saveProviderKey() {
-    if (providerKeyPending || !providerKey.trim()) return
+  async function saveProviderSettings() {
     const provider = selectedProvider
+    if (providerKeyPending || (provider === 'ollama' ? !providerBaseUrl.trim() : !providerKey.trim())) return
     providerKeyPending = true
     providerKeyStatus = ''
     try {
-      await tauri.invoke('local_mode_store_provider_key', { provider, key: providerKey })
-      providerKey = ''
-      providerKeyStatus = `Pi saved the ${providerNames[provider]} key.`
+      if (provider === 'ollama') {
+        await tauri.invoke('local_mode_store_local_provider', { baseUrl: providerBaseUrl })
+        providerBaseUrl = ''
+        providerKeyStatus = 'Pi saved the Ollama server.'
+      } else {
+        await tauri.invoke('local_mode_store_provider_key', { provider, key: providerKey })
+        providerKey = ''
+        providerKeyStatus = `Pi saved the ${providerNames[provider]} key.`
+      }
       await refreshProviderStatuses()
     } catch (_) {
-      providerKeyStatus = 'Pi could not save the provider key. Try again.'
+      providerKeyStatus = provider === 'ollama'
+        ? 'Pi could not save the Ollama server. Check the URL and try again.'
+        : 'Pi could not save the provider key. Try again.'
     } finally {
       providerKeyPending = false
     }
@@ -1101,10 +1111,17 @@
                 <option value="anthropic">Anthropic</option>
                 <option value="google">Google</option>
                 <option value="openai">OpenAI</option>
+                <option value="ollama">Ollama (local)</option>
               </select>
-              <label for="provider-key">Provider API key</label>
-              <input id="provider-key" type="password" autocomplete="off" bind:value={providerKey} disabled={!!active || providerKeyPending}>
-              <button type="button" disabled={!!active || providerKeyPending || !providerKey.trim()} onclick={saveProviderKey}>Save key</button>
+              {#if selectedProvider === 'ollama'}
+                <label for="provider-base-url">Ollama server URL</label>
+                <input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={providerBaseUrl} disabled={!!active || providerKeyPending}>
+                <button type="button" disabled={!!active || providerKeyPending || !providerBaseUrl.trim()} onclick={saveProviderSettings}>Save Ollama server</button>
+              {:else}
+                <label for="provider-key">Provider API key</label>
+                <input id="provider-key" type="password" autocomplete="off" bind:value={providerKey} disabled={!!active || providerKeyPending}>
+                <button type="button" disabled={!!active || providerKeyPending || !providerKey.trim()} onclick={saveProviderSettings}>Save key</button>
+              {/if}
               {#if providerKeyStatus}<p class="support" role="status">{providerKeyStatus}</p>{/if}
               <button type="button" class="quiet" disabled={!!active} onclick={signIn}>Sign in for cloud features</button>
             </section>
@@ -1286,7 +1303,7 @@
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
               </span>
             {:else}
-              <span id="composer-hint">{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : auth.name === 'local' ? 'Pi answers with the provider key you saved. Local replies carry no cloud receipt.' : 'Routing is automatic. Every reply carries its receipt.'}</span>
+              <span id="composer-hint">{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : auth.name === 'local' ? 'Pi answers with the provider settings you saved. Local replies carry no cloud receipt.' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
               <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>

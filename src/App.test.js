@@ -932,9 +932,11 @@ describe('workspace composer entry', () => {
           { provider: 'anthropic', configured: providerStatusChecks > 1 },
           { provider: 'google', configured: false },
           { provider: 'openai', configured: false },
+          { provider: 'ollama', configured: false },
         ]
       }
       if (command === 'local_mode_store_provider_key') return undefined
+      if (command === 'local_mode_store_local_provider') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -943,11 +945,12 @@ describe('workspace composer entry', () => {
 
     const composer = await screen.findByPlaceholderText('Ask anything')
     expect(composer).toBeInTheDocument()
-    expect(composer).toHaveAccessibleDescription('Pi answers with the provider key you saved. Local replies carry no cloud receipt.')
+    expect(composer).toHaveAccessibleDescription('Pi answers with the provider settings you saved. Local replies carry no cloud receipt.')
     expect(screen.getByText("Pi uses a provider from its credential store.", { exact: false })).toBeInTheDocument()
     expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
     expect(screen.getByText('Google', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
     expect(screen.getByText('OpenAI', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
+    expect(screen.getByText('Ollama', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
     expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
 
     const provider = screen.getByRole('combobox', { name: 'Provider' })
@@ -956,6 +959,7 @@ describe('workspace composer entry', () => {
       ['Anthropic', 'anthropic'],
       ['Google', 'google'],
       ['OpenAI', 'openai'],
+      ['Ollama (local)', 'ollama'],
     ])
     await fireEvent.change(provider, { target: { value: 'anthropic' } })
     await fireEvent.input(screen.getByLabelText('Provider API key'), { target: { value: 'secret-key' } })
@@ -964,7 +968,13 @@ describe('workspace composer entry', () => {
     expect(invoke).toHaveBeenCalledWith('local_mode_store_provider_key', { provider: 'anthropic', key: 'secret-key' })
     expect(await screen.findByText('Pi saved the Anthropic key.')).toBeInTheDocument()
     expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Saved')
-    expect(providerStatusChecks).toBe(2)
+
+    await fireEvent.change(provider, { target: { value: 'ollama' } })
+    await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Save Ollama server' }))
+    expect(invoke).toHaveBeenCalledWith('local_mode_store_local_provider', { baseUrl: 'http://localhost:11434/v1' })
+    expect(await screen.findByText('Pi saved the Ollama server.')).toBeInTheDocument()
+    expect(providerStatusChecks).toBe(3)
   })
 
   it('blocks sign-in while local mode entry is pending', async () => {
