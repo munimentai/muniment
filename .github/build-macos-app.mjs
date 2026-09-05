@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
   codesignArguments,
+  intermediateCertificateImportArguments,
   notarytoolSubmitArguments,
   parseInstallerIdentity,
   parseSigningIdentity,
@@ -83,6 +84,7 @@ console.log("macOS signing ENABLED (Developer ID codesign + notarytool notarizat
 // Everything secret-bearing lives in a throwaway directory removed on exit.
 const workDir = mkdtempSync(join(tmpdir(), "muniment-macos-signing-"));
 const certPath = join(workDir, "certificate.p12");
+const intermediateCertPath = join(".github", "certs", "DeveloperIDG2CA.cer");
 const keyPath = join(workDir, "AuthKey.p8");
 const keychain = join(workDir, "muniment-signing.keychain-db");
 const keychainPassword = "muniment-ci-signing";
@@ -100,6 +102,11 @@ mustRun("keychain settings", "security", ["set-keychain-settings", keychain]);
 mustRun("unlock keychain", "security", ["unlock-keychain", "-p", keychainPassword, keychain]);
 mustRun("import certificate", "security",
   ["import", certPath, "-k", keychain, "-P", signingConfig.certificatePassword, "-T", "/usr/bin/codesign"]);
+mustRun("import Developer ID G2 intermediate", "security",
+  intermediateCertificateImportArguments(intermediateCertPath, keychain));
+mustRun("show Developer ID G2 intermediate", "security",
+  ["find-certificate", "-c", "Developer ID Certification Authority", keychain]);
+console.log("imported intermediate: Developer ID Certification Authority, G2");
 mustRun("authorize codesign", "security",
   ["set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", keychainPassword, keychain]);
 const priorKeychains = (spawnSync("security", ["list-keychains", "-d", "user"], { encoding: "utf8" }).stdout || "")
