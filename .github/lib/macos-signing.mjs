@@ -68,6 +68,10 @@ export const productbuildArguments = (application, output, identityHash, keychai
   return [...args, output];
 };
 
+export const intermediateCertificateImportArguments = (certificate, keychain) => [
+  "import", certificate, "-k", keychain,
+];
+
 // Deep-sign a bundle (or a lone binary) with the hardened runtime and a secure
 // timestamp — both are notarization prerequisites. Inner Mach-O resources are
 // signed first (deepest last would be re-sealed), so `identity` is applied to

@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   SIGNING_VARIABLES,
   codesignArguments,
+  intermediateCertificateImportArguments,
   notarytoolSubmitArguments,
   parseInstallerIdentity,
   parseSigningIdentity,
@@ -102,6 +105,21 @@ describe("Signing identity discovery", () => {
 });
 
 describe("Signing, notarization, and stapling commands", () => {
+  it("keeps the vendored Developer ID G2 intermediate unchanged", () => {
+    const certificate = readFileSync(".github/certs/DeveloperIDG2CA.cer");
+    const fingerprint = createHash("sha256").update(certificate).digest("hex")
+      .toUpperCase().match(/.{2}/g).join(":");
+    expect(fingerprint).toBe(
+      "F1:6C:D3:C5:4C:7F:83:CE:A4:BF:1A:3E:6A:08:19:C8:AA:A8:E4:A1:52:8F:D1:44:71:5F:35:06:43:D2:DF:3A",
+    );
+  });
+
+  it("builds the Developer ID G2 intermediate import arguments", () => {
+    expect(intermediateCertificateImportArguments("DeveloperIDG2CA.cer", "/tmp/keychain")).toEqual([
+      "import", "DeveloperIDG2CA.cer", "-k", "/tmp/keychain",
+    ]);
+  });
+
   it("builds unsigned and signed component package arguments", () => {
     expect(productbuildArguments("muniment.app", "muniment.pkg")).toEqual([
       "--component", "muniment.app", "/Applications", "muniment.pkg",
