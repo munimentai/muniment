@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { access } from 'node:fs/promises'
+import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'
 
 async function completeOnboarding() {
   const location = await $('[data-testid="onboarding-home-path"]')
@@ -40,9 +41,6 @@ describe('installed local-mode chat', () => {
   })
 
   it('starts a reply without cloud sign-in', async () => {
-    const providerKey = process.env.MUNIMENT_E2E_PROVIDER_KEY
-    if (!providerKey) throw new Error('the E2E provider credential is unavailable')
-
     await completeOnboarding()
     const localMode = await $('button=Use local mode')
     await localMode.waitForDisplayed({ timeout: 120000 })
@@ -50,12 +48,14 @@ describe('installed local-mode chat', () => {
 
     const composer = await $('textarea[placeholder="Ask anything"]')
     await composer.waitForDisplayed({ timeout: 120000 })
-    const keyInput = await $('#provider-key')
-    await keyInput.waitForDisplayed()
-    await keyInput.setValue(providerKey)
-    await (await $('button=Save Google key')).click()
-    await (await $('p=Pi saved the provider key.')).waitForDisplayed({ timeout: 30000 })
-    expect(await keyInput.getValue()).toBe('')
+    const provider = await $('select[aria-label="Provider"]')
+    await provider.selectByAttribute('value', 'ollama')
+    const baseUrlInput = await $('#provider-base-url')
+    await baseUrlInput.waitForDisplayed()
+    await baseUrlInput.setValue(OLLAMA_BASE_URL)
+    await (await $('button=Save Ollama server')).click()
+    await (await $('p=Pi saved the Ollama server.')).waitForDisplayed({ timeout: 30000 })
+    expect(await baseUrlInput.getValue()).toBe('')
 
     await waitForDesktopClient()
     const prompt = `Muniment local E2E chat ${Date.now()}`

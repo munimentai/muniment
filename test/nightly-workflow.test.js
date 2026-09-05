@@ -125,9 +125,9 @@ describe('nightly Linux E2E workflow', () => {
     expect(workflow.match(/printf '%s' "\$DESKTOP_CI_SSH_KEY"/g)).toHaveLength(4)
   })
 
-  it('passes the provider credential through every installed E2E lane', () => {
-    expect(workflow.match(/FIXTURE_PROVIDER_KEY: \$\{\{ secrets\.DESKTOP_E2E_PROVIDER_KEY \}\}/g)).toHaveLength(3)
-    expect(workflow.match(/"MUNIMENT_E2E_PROVIDER_KEY=\$FIXTURE_PROVIDER_KEY"/g)).toHaveLength(3)
+  it('does not pass a cloud provider credential to installed E2E lanes', () => {
+    expect(workflow).not.toContain('DESKTOP_E2E_PROVIDER_KEY')
+    expect(workflow).not.toContain('MUNIMENT_E2E_PROVIDER_KEY')
   })
 })
 
