@@ -139,6 +139,10 @@ jobs:
           npx playwright install --with-deps chromium
           npm test
 
+      - name: Probe fixtures
+        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        run: npm run probe:check
+
       - name: UI copy law
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm run lint:copy

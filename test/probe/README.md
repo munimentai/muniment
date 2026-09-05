@@ -2,6 +2,8 @@
 
 Run `npm run probe` from the repository root. The command builds the frontend and prints the local probe URLs.
 
+Run `npm run probe:check` to build the frontend and check every fixture in headless Chromium.
+
 Open `index.html` for an empty signed-in workspace. Open `history.html` for completed and interrupted fixture runs.
 Open `in-flight.html` for a thread whose newest run still streams its reply while a tool runs.
 Open `access.html` for the signed-in shell with the profile popover open.
