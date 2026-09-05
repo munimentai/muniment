@@ -757,13 +757,12 @@ describe.skipIf(process.platform === 'win32')('Linux early abort reporting', () 
       GH_TOKEN: plantedSecret,
       MUNIMENT_E2E_USERNAME: plantedSecret,
       MUNIMENT_E2E_PASSWORD: '',
-      MUNIMENT_E2E_PROVIDER_KEY: '',
     }
     const result = spawnSync('bash', [runnerPath], { encoding: 'utf8', env })
     expect(result.status).not.toBe(0)
     const reason = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
     expect(reason).toContain('missing injected environment: MUNIMENT_E2E_PASSWORD (repository secret DESKTOP_E2E_PASSWORD)')
-    expect(reason).toContain('missing injected environment: MUNIMENT_E2E_PROVIDER_KEY (repository secret DESKTOP_E2E_PROVIDER_KEY)')
+    expect(reason).not.toContain('MUNIMENT_E2E_PROVIDER_KEY')
     expect(reason).not.toContain('GH_TOKEN')
     expect(reason).not.toContain('MUNIMENT_E2E_USERNAME')
     expect(`${reason}\n${result.stderr}`).not.toContain(plantedSecret)
@@ -771,8 +770,8 @@ describe.skipIf(process.platform === 'win32')('Linux early abort reporting', () 
     const junit = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, 'installed-linux', '1', '0'], { encoding: 'utf8' })
     expect(junit.status, junit.stderr).toBe(0)
     const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
-    expect(report).toContain('MUNIMENT_E2E_PROVIDER_KEY')
-    expect(report).toContain('DESKTOP_E2E_PROVIDER_KEY')
+    expect(report).not.toContain('MUNIMENT_E2E_PROVIDER_KEY')
+    expect(report).not.toContain('DESKTOP_E2E_PROVIDER_KEY')
     expect(report).not.toContain(plantedSecret)
   })
 
@@ -1370,6 +1369,7 @@ describe('hosted sign-in teardown contract', () => {
 describe('installed local-mode chat contract', () => {
   const config = fs.readFileSync(path.join(root, 'test/e2e/wdio.conf.js'), 'utf8')
   const spec = fs.readFileSync(path.join(root, 'test/e2e/specs/local-mode-chat.spec.js'), 'utf8')
+  const localProvider = fs.readFileSync(path.join(root, 'test/e2e/support/local-provider.mjs'), 'utf8')
 
   it('runs local mode first without bailing after sign-in failures', () => {
     expect(config.indexOf("'./specs/local-mode-chat.spec.js'")).toBeLessThan(config.indexOf("'./specs/real-sign-in.spec.js'"))
@@ -1377,10 +1377,13 @@ describe('installed local-mode chat contract', () => {
     expect(config).toContain("path.basename(specs[0], '.spec.js')")
   })
 
-  it('stores the provider credential and waits for the first reply', () => {
-    expect(spec).toContain('process.env.MUNIMENT_E2E_PROVIDER_KEY')
+  it('stores the local provider and waits for the first reply', () => {
+    expect(localProvider).toContain('export const OLLAMA_BASE_URL')
+    expect(localProvider).toContain('10.1.10.105')
+    expect(spec).toContain("import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'")
+    expect(spec).not.toContain('MUNIMENT_E2E_PROVIDER_KEY')
     expect(spec).toContain("$('button=Use local mode')")
-    expect(spec).toContain("$('button=Save Google key')")
+    expect(spec).toContain("$('button=Save Ollama server')")
     expect(spec).toContain("response.$('.response-prose.streaming')")
     expect(spec).not.toContain('browser.tauri.mock')
   })
