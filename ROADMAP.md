@@ -61,23 +61,34 @@ fixture. The planner shot `local-mode.html`, `signed-out.html`, and `index.html`
 on 2026-09-04 and read all three. No CI job runs the probe, so a wave that adds
 a command must also teach the stub.
 
-NEXT — local mode exposes one provider and reports no credential state. The
-sidebar panel takes a Google key alone, while `PROVIDERS`
-(`src-tauri/src/local_mode.rs:12`) accepts anthropic, google, and openai. No
-command reads the store, so the panel cannot say whether Pi holds any credential.
-A first run against an empty store fails at the first prompt. The lane filed two
-independent slices on 2026-09-04. The first adds a read-only
-`local_mode_provider_status` command and shows each provider's state in the
-panel. The second turns the Google-only form into a three-provider form and
-corrects `docs/public-evidence/local-mode.md`, which still points at a profile
-panel and a `Pi provider` label that the shell does not have.
+DONE 2026-09-05 — local mode reports each provider's credential state and
+takes a key for any of the three providers (MUNIDESK-1697, 1698, 1699).
+`local_mode_provider_status` (`src-tauri/src/local_mode.rs:217`) reads Pi's
+store without exposing a key, the panel shows `Saved` or `Not set` per
+provider, the form selects Anthropic, Google, or OpenAI, and
+`docs/public-evidence/local-mode.md` names the sidebar section the shell has.
+The idle composer hint in local mode reads `Pi answers with the provider key
+you saved. Local replies carry no cloud receipt.`
 
-MEASURED 2026-09-04 (planner, read `local-mode.html` at 1100x720) — the idle
-composer hint in local mode reads `Routing is automatic. Every reply carries
-its receipt.` (`src/App.svelte:1253`). Local mode routes nothing and records no
-cloud receipt, and the provenance line under the reply reads `Receipt
-unavailable`. The hint contradicts the line above it. The lane filed the copy
-fix.
+MEASURED 2026-09-05 (planner, read `local-mode.html` at 1100x720) — the
+completed local run in the fixture still reads `Receipt unavailable`. The
+`local-mode` entry in `historyFixtures` (`test/probe/stub.js:7`) carries
+`receipt: null`, while `local_receipt` (`src-tauri/core/src/chat_coordinate.rs`)
+records `time` for every completed local run since MUNIDESK-1692. The fixture
+contradicts the shipped line. The lane filed the fixture fix, which also adds
+`local-mode` to the README capture loop.
+
+MEASURED 2026-09-05 (planner) — no CI job loads the probe fixtures, and the
+2026-09-04 breakage proved the cost. `stub.js` throws on an unknown command
+(`test/probe/stub.js:363`), the startup catch drops the shell to signed-out,
+and the page still reaches ready. The lane filed a headless check that opens
+every `test/probe/*.html`, waits for ready, and fails on an unknown command or
+a page error. The smoke job runs it after the frontend unit tests, where
+Chromium is already installed.
+
+OPEN — the panel offers no way to remove a stored provider key. A user who
+revokes a key at the provider can only overwrite it in Pi's store. The lane
+holds that slice for a later wave, after the fixture check lands.
 
 ### 9. Pi sidecar and cloud chat
 
@@ -319,14 +330,19 @@ library from its exact resource path, resolves the C API through
 `OrtGetApiBase`, and creates the session directly. It routes nothing through the
 speech-only `sherpa-onnx` bindings and adds no second library.
 
-NEXT — slice two, the inference seam, splits into three parts. The first names
-the taxonomy in code and pins the model-metadata key that carries the ordered
-class list. The second opens the bundled library and resolves the C API base,
-with a test against the committed Linux library. The third creates the session,
-reads the class list from the graph metadata, and fails closed on a mismatch.
-The lane filed the first two on 2026-09-04, because neither depends on the
-other. The third waits on both. Slice three, the bundle configs and the
-installed sha256 smoke, waits on the operator's artifact.
+DONE 2026-09-04 — the first two parts of slice two landed (MUNIDESK-1694,
+1695). `router_classifier.rs` names `RouteClass`, `ROUTE_CLASSES`,
+`CLASS_LIST_METADATA_KEY`, and `parse_class_list`. `onnx_runtime.rs` opens the
+bundled library, resolves `OrtGetApiBase`, and pins the `1.24.4` version
+against the committed Linux library.
+
+NEXT — the third part of slice two creates the session, reads the class list
+from the graph metadata, and fails closed on a mismatch. The lane filed it on
+2026-09-05. It declares the `OrtApi` table prefix from the `v1.24.4` header,
+commits two hand-built fixture graphs beside `tests/fixtures/asr-native/`, and
+adds no consumer. Slice three, the bundle configs and the installed sha256
+smoke, still waits on the operator's artifact. The consumer waits on the
+owner's class-action ruling below.
 
 OPEN QUESTION for the owner — no ruling says what each class does. The desktop
 must know which action follows `route.cloud`, `route.local`, and `route.proxy`
@@ -939,16 +955,13 @@ serves the Windows approval presenter over the per-user pipe, behind a
 platform-neutral `serve_approval_presenter_with`. The Windows desktop starts the
 presenter, and the superseded Windows non-state serving entries retired.
 
-NEXT — the installed Windows pairing probe proves the served exchange, the way
-the macOS probe proves the macOS one (MUNIDESK-1658). The lane filed it on
-2026-09-04. The Windows runner launches no installed app of its own. The
-WebDriver launch in the installed chat phase registers and starts the runtime
-task from `src-tauri/src/main.rs:55`, and the payload check reads known folders
-rather than the redirected `%APPDATA%`, so the pipe exists after that phase. The
-probe derives the pipe path from the current user's SID the way
-`windows_attach_pipe_path` does, waits for the pipe, and runs the shared pairing
-probe over it. The MSI uninstaller stops the `\Muniment\Runtime-*` tasks, so
-the cleanup phase needs no new step.
+DONE 2026-09-05 — the installed Windows pairing probe proves the served
+exchange over the per-user pipe (MUNIDESK-1696), the way the macOS probe proves
+the macOS one (MUNIDESK-1658). The Windows runner launches no installed app of
+its own. The probe derives the pipe path from the current user's SID the way
+`windows_attach_pipe_path` does, waits for the pipe after the WebDriver chat
+phase, and runs the shared pairing probe over it. No ADR 0012 slice is open
+until a measurement or a ruling names one.
 
 RULING 2026-08-30 (planner) — the Windows companion credential file carries a
 DACL that grants the current user alone. It is built the way
