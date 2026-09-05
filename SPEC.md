@@ -84,6 +84,93 @@ reference implementation: [docs/design-reference/ring/](docs/design-reference/ri
     and `the_receipt_request_carries_only_the_run_id` in
     `src-tauri/core/src/chat_grant.rs`.
 
+## Pi version policy
+
+Muniment Desktop owns its Pi release cycle. Its agent harness is Pi alone.
+It takes neither the Claude Agent SDK nor the Claude Code CLI.
+[ADR 0008](docs/decisions/0008-pi-runtime-distribution.md) governs executable
+acquisition and rollback.
+
+### Production pin and candidate
+
+The **PRODUCTION PIN** records the exact Pi version and extension versions
+that a shipped desktop carries. The **CANDIDATE** records the exact versions
+that the nightly exercises ahead of production. These are separate values.
+The nightly may run ahead of the production pin.
+
+Only Muniment Desktop's nightly evidence on Linux, macOS, and Windows can
+qualify a candidate for promotion. All three platforms must pass before a
+signed desktop release promotes those exact versions. Nothing else promotes
+a version. The desktop never adopts a release because it is newest.
+Neither track follows npm `latest`, a semver range, or a mutable release
+manifest.
+
+A pin move keeps exactly one verified predecessor resolvable.
+Pointer resolution accepts only the production descriptor or that predecessor,
+and failed activation rolls back to the predecessor.
+
+The harness installs only packages listed on [pi.dev/packages](https://pi.dev/packages)
+and executables from the official [earendil-works/pi repository](https://github.com/earendil-works/pi).
+It rejects unlisted npm packages, forks, and mirrors outside Muniment's control.
+A Muniment-controlled mirror must preserve ADR 0008's reviewed provenance and
+descriptor checks.
+
+### Node floor
+
+The Node floor comes from the pinned Pi package's `engines.node` field.
+The selected Node release must satisfy that range and belong to an Active LTS
+line. A lower bound does not authorize an unsupported Node line.
+The Pi pin and its Node floor move together or not at all.
+This rule does not add a system Node dependency to ADR 0008's standalone
+executable distribution.
+
+The 2026-09-05 metadata check confirms the upstream split.
+[`@earendil-works/pi-coding-agent` 0.85.0](https://registry.npmjs.org/@earendil-works/pi-coding-agent/0.85.0)
+requires `node >=22.19.0`. The `legacy-node20` dist-tag holds
+[0.74.2](https://registry.npmjs.org/@earendil-works/pi-coding-agent/0.74.2)
+at `node >=20.6.0`. These are reference values, not a candidate selection or
+a production pin change. The production executable remains at 0.73.1.
+
+### Approved extension set
+
+The owner ruling of 2026-09-05 approves these four packages, all listed on
+pi.dev. Adoption must record exact versions under the candidate policy.
+
+| Package | Why the desktop takes it |
+| --- | --- |
+| [`npm:pi-mcp-adapter`](https://pi.dev/packages/pi-mcp-adapter) | It provides MCP reach through one proxy tool. It discovers servers on demand instead of loading every tool at startup. It reads `.pi/mcp.json` as the project override. It uses the MIT license. |
+| [`npm:pi-web-access`](https://pi.dev/packages/pi-web-access) | It provides web reach because Pi ships no web tool of its own. |
+| [`npm:pi-subagents`](https://pi.dev/packages/pi-subagents) | It dispatches subagents. |
+| [`npm:pi-background-tasks`](https://pi.dev/packages/pi-background-tasks) | It executes background tasks. |
+
+The `pi-web-access` adoption ticket must carry its runtime requirements:
+an Anthropic `claude-haiku` model and a Bright Data zone of type `serp`.
+Its pi.dev page documents the summary model and the Bright Data SERP zone.
+This policy records those requirements without configuring credentials,
+selecting providers, or resolving access.
+
+### Built-in tool selection
+
+The pinned 0.73.1 [built-in registry](https://github.com/earendil-works/pi/blob/v0.73.1/packages/coding-agent/src/core/tools/index.ts)
+defines exactly `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`.
+Its default selection is `read`, `bash`, `edit`, and `write`.
+The desktop policy enables all seven, adding `grep`, `find`, and `ls`.
+It deliberately leaves no defined built-in off.
+The pinned registry defines `find`, not `glob`. Tool names must come from
+the exact pin, not a tool list from another version.
+
+The adoption must set `defaultTools` in `settings.json` to the full enabled
+built-in set. It must not use `--tools`. That CLI allowlist also covers
+extension tools, so a built-in-only list would disable the four packages'
+extension tools. The pinned 0.73.1 [settings implementation](https://github.com/earendil-works/pi/blob/v0.73.1/packages/coding-agent/src/core/settings-manager.ts)
+has no `defaultTools` setting. Adoption therefore requires a candidate that
+supports it and a fresh registry check before promotion.
+
+MUNIDESK-1711 records policy only. Separate tickets cover extension adoption
+and built-in tool settings. Other tickets cover the bash-timeout unit rule in
+the Pi system prompt and a production pin move with its Node floor.
+This ticket installs nothing.
+
 ## Production-ready gates (release gate)
 
 A desktop release is production-ready when every criterion below holds.
