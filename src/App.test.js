@@ -4567,6 +4567,15 @@ describe('provenance line', () => {
     expect(line.querySelector('.route-segment')).toBeNull()
   })
 
+  it('renders elapsed time alone for a local receipt', async () => {
+    restore({ time: '6.2s' })
+
+    const line = await screen.findByRole('button', { name: 'Expand receipt: 6.2s' })
+    expect(line.textContent).toBe('6.2s')
+    expect(line.querySelector('.route-segment')).toBeNull()
+    expect(screen.queryByText('Receipt unavailable')).not.toBeInTheDocument()
+  })
+
   it('renders a route-only receipt without a dangling arrow', async () => {
     restore({ route: 'analysis/high' })
 
