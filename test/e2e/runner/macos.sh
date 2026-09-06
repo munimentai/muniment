@@ -218,13 +218,13 @@ clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations \
   echo 'window probe did not compile' >&2; status=1; exit;
 }
 
-TMPDIR="$state_root/tmp" "$installed_bundle/Contents/MacOS/$process_name" >"$raw/app.log" 2>&1 &
+TMPDIR="$state_root/tmp" "$installed_bundle/Contents/MacOS/$process_name" >"$raw/driver-app.log" 2>&1 &
 app_pid=$!
 runtime_touched=1
 
 runtime_endpoint="$runtime_state/muniment/attach-v1.sock"
 runtime_target="gui/$(id -u)/ai.muniment.runtime"
-if probe_macos_runtime "$runtime_target" "$app_pid" "$raw/app.log" "$runtime_endpoint" "$raw/runtime-connection.log"; then
+if probe_macos_runtime "$runtime_target" "$app_pid" "$raw/driver-app.log" "$runtime_endpoint" "$raw/runtime-connection.log"; then
   node test/e2e/support/probe-companion-pairing.mjs "$runtime_endpoint" >"$raw/companion-pairing.log" 2>&1 || status=1
 else
   status=1

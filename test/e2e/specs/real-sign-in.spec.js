@@ -2,6 +2,7 @@ import path from 'node:path'
 import { access, appendFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { remote } from 'webdriverio'
+import { withAuthDiagnostics } from '../support/auth-diagnostics.mjs'
 
 const rawDir = process.env.MUNIMENT_E2E_RAW_DIR
 
@@ -109,7 +110,7 @@ describe('installed nightly', () => {
     }
   })
 
-  it('signs in through the production UI', async function () {
+  it('signs in through the production UI', withAuthDiagnostics(async function () {
     const location = await $('[data-testid="onboarding-home-path"]')
     const signedOut = await $('button=Sign in')
     await browser.waitUntil(async () => (
@@ -345,5 +346,5 @@ describe('installed nightly', () => {
     }
     await appendFile(path.join(rawDir, 'frontend-console.log'), frontendLogs.map(({ level, message }) => `${level}: ${message}\n`).join(''))
 
-  }).timeout(900000)
+  }, rawDir)).timeout(900000)
 })
