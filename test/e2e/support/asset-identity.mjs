@@ -12,6 +12,9 @@ const expectedName = platform === 'macos'
 const matches = release.assets.filter((asset) => platform === 'windows'
   ? windowsPerUser.test(asset.name)
   : asset.name === expectedName)
-if (matches.length !== 1) throw new Error(`missing or duplicate ${platform} artifact`)
+if (matches.length !== 1) {
+  const expected = platform === 'windows' ? windowsPerUser.source : expectedName
+  throw new Error(`missing or duplicate ${platform} artifact: expected ${expected}, matches=${matches.length}, release assets=${JSON.stringify(release.assets.map((asset) => asset.name))}`)
+}
 if (!Number.isSafeInteger(matches[0].id) || matches[0].id <= 0) throw new Error('invalid artifact identity')
 process.stdout.write(String(matches[0].id))

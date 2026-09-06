@@ -32,21 +32,30 @@ else
   failure_message='desktop-ci failed before producing a JUnit report'
 fi
 
-reason_file=
-for candidate in runner-failure.txt envelope-reason.txt; do
-  if [[ -s "$artifacts_dir/$candidate" ]]; then
-    reason_file="$artifacts_dir/$candidate"
-    break
-  fi
-done
-if [[ -n $reason_file ]]; then
-  captured_reason=$(tail -n 20 "$reason_file" | tr '\r\n' '  ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')
-  if [[ -n $captured_reason ]]; then
-    failure_message="$failure_message: $captured_reason"
-  fi
-fi
+failure_message=$(node --input-type=module - "$artifacts_dir" "$failure_message" <<'NODE'
+import fs from 'node:fs'
+import path from 'node:path'
 
-failure_message=$(printf '%s' "$failure_message" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g')
+const [directory, fallback] = process.argv.slice(2)
+let message = fallback
+for (const name of ['runner-failure.txt', 'envelope-reason.txt']) {
+  const file = path.join(directory, name)
+  if (!fs.existsSync(file)) continue
+  const cause = fs.readFileSync(file, 'utf8')
+    .replace(/[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/gu, '')
+    .replace(/\s+/gu, ' ').trim()
+  if (cause) {
+    message = cause
+    break
+  }
+}
+// Cap the decoded message before escaping, so the limit cannot split an XML entity.
+const escaped = Array.from(message).slice(0, 1000).join('')
+  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;').replaceAll("'", '&apos;')
+process.stdout.write(escaped)
+NODE
+)
 
 printf '%s\n' \
   '<?xml version="1.0" encoding="UTF-8"?>' \

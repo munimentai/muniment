@@ -39,11 +39,8 @@ index_failure_artifacts() {
     >"$raw/failure-artifacts.log"
 }
 
-runner_failure() {
-  printf '%s\n' "$1" >&2
-  printf '%s\n' "$1" >>"$raw/runner-failure.txt"
-  status=1
-}
+# shellcheck source=../support/runner-failure.sh
+source test/e2e/support/runner-failure.sh
 
 run_e2e() {
   local wdio_log=$1 run_timeout=${2:-0} run_status=0 portal_log="$raw/xdg-desktop-portal.log" runtime_log="$raw/muniment-runtime.log"
@@ -224,30 +221,30 @@ for requirement in "${required_environment[@]}"; do
   fi
 done
 (( status == 0 )) || exit
-base64 --decode test/e2e/fixtures/image-token.png.base64 >"$image_fixture" || { status=1; exit; }
+run_setup base64 --decode test/e2e/fixtures/image-token.png.base64 >"$image_fixture" || { status=1; exit; }
 # Resolve and validate identity before package installation. Missing/duplicate
 # assets and a release pointing elsewhere fail shut.
-release=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { status=1; exit; }
-asset_id=$(node test/e2e/support/asset-identity.mjs "$sha" <<<"$release") || { status=1; exit; }
-gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$deb" || { status=1; exit; }
+release=$(run_setup gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { status=1; exit; }
+asset_id=$(run_setup node test/e2e/support/asset-identity.mjs "$sha" <<<"$release") || { status=1; exit; }
+run_setup gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$deb" || { status=1; exit; }
 [[ $(dpkg-deb -f "$deb" Package) == muniment ]] || { runner_failure 'package identity mismatch'; exit; }
 
-sudo apt-get update -qq >>"$installer_log" 2>&1 || { status=1; exit; }
+run_setup sudo apt-get update -qq >>"$installer_log" 2>&1 || { status=1; exit; }
 installed=1
-sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin libasound2-dev "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
+run_setup sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin libasound2-dev "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
 [[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] || { runner_failure 'FUSE device is unavailable to the runner user'; exit; }
-npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
+run_setup npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
 release_binary=$(command -v muniment-desktop || command -v muniment) || { runner_failure 'installed application binary is unavailable'; exit; }
-node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
+run_setup node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
 # Build both bundle resources declared in tauri.linux.conf.json before the Tauri bundle.
 cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked >>"$installer_log" 2>&1 || { runner_failure 'muniment-acp build failed'; exit; }
 cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --release --locked >>"$installer_log" 2>&1 || { runner_failure 'muniment-runtime build failed'; exit; }
-npm run tauri build -- --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
+run_setup npm run tauri build -- --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
 e2e_app_binary="$PWD/src-tauri/target/release/muniment-desktop"
 [[ -x $e2e_app_binary ]] || { runner_failure 'E2E application binary is unavailable'; exit; }
 e2e_deb=$(find "$PWD/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)
 [[ -n $e2e_deb ]] || { runner_failure 'E2E DEB is unavailable'; exit; }
-bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb" || { status=1; exit; }
+run_setup bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb" || { status=1; exit; }
 [[ -x /usr/lib/muniment/muniment-acp ]] || { runner_failure 'installed ACP adapter is unavailable or not executable'; exit; }
 node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp || { runner_failure 'installed ACP adapter initialize probe failed'; exit; }
 [[ -x /usr/lib/muniment/muniment-runtime ]] || { runner_failure 'installed runtime is unavailable or not executable'; exit; }

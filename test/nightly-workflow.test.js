@@ -275,6 +275,49 @@ describe('nightly E2E JUnit fallback', () => {
     }
   })
 
+  it.skipIf(process.platform === 'win32').each([0, 1])('uses the cause with extraction status %s', (extractStatus) => {
+    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    try {
+      const cause = 'lookup <failed> & "stopped" at \'nightly\''
+      fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), `\ufeff${cause}\r\n`)
+      fs.writeFileSync(path.join(artifacts, 'envelope-reason.txt'), 'secondary cause')
+      runReportFallback(artifacts, 'installed-windows', 1, extractStatus)
+      const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
+      const xml = new DOMParser().parseFromString(report, 'application/xml')
+      expect(xml.querySelector('parsererror')).toBeNull()
+      expect(xml.querySelector('failure').getAttribute('message')).toBe(cause)
+      expect(report).toContain('&lt;failed&gt; &amp; &quot;stopped&quot; at &apos;nightly&apos;')
+    } finally {
+      fs.rmSync(artifacts, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32').each([999, 1000, 1001])('caps a %s-character cause without splitting XML entities', (length) => {
+    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    try {
+      const cause = '界'.repeat(length - 1) + '&'
+      fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), cause)
+      runReportFallback(artifacts, 'installed-macos', 1, 0)
+      const xml = new DOMParser().parseFromString(fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8'), 'application/xml')
+      expect(xml.querySelector('parsererror')).toBeNull()
+      expect(xml.querySelector('failure').getAttribute('message')).toBe(cause.slice(0, 1000))
+    } finally {
+      fs.rmSync(artifacts, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32').each([undefined, '', '\r\n \t'])('uses the generic envelope failure without a cause: %s', (cause) => {
+    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    try {
+      if (cause !== undefined) fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), cause)
+      runReportFallback(artifacts, 'installed-windows', 1, 1)
+      expect(fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8'))
+        .toContain('<failure message="desktop-ci did not return a valid artifact envelope"/>')
+    } finally {
+      fs.rmSync(artifacts, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(process.platform === 'win32')('retains an existing JUnit report instead of replacing it', () => {
     const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
     const existing = path.join(artifacts, 'junit-results.xml')

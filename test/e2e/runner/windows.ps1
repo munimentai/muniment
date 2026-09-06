@@ -14,6 +14,7 @@ try {
   exit 1
 }
 $diagnostic = $null
+$diagnosticStaged = $false
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -99,7 +100,10 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
   $stderr = $stderrTask.Result
   if ($stdout) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
   if ($stderr) { Add-Content -LiteralPath $(if ($ErrorLog) { $ErrorLog } else { $Log }) -Value $stderr -NoNewline }
-  if ($process.ExitCode -ne 0) { throw "$FailureMessage (exit code $($process.ExitCode))" }
+  if ($process.ExitCode -ne 0) {
+    $detail = if ($stderr) { $stderr.Trim() } else { $stdout.Trim() }
+    throw "$FailureMessage (exit code $($process.ExitCode)): $detail"
+  }
   return $stdout
 }
 
@@ -448,7 +452,10 @@ namespace MunimentE2e {
   Remove-Item Env:MUNIMENT_E2E_ONBOARDING_ONLY -ErrorAction SilentlyContinue
 } catch {
   $diagnostic = "message: $($_.Exception.Message)`ncategory: $($_.CategoryInfo.Category)`nline: $($_.InvocationInfo.ScriptLineNumber)"
-  Set-Content -LiteralPath $diagnosticFile -Value $diagnostic -ErrorAction SilentlyContinue
+  if ($raw -and (Test-Path -LiteralPath $raw)) {
+    Set-Content -LiteralPath (Join-Path $raw "runner-failure.txt") -Value $diagnostic -Encoding UTF8 -ErrorAction SilentlyContinue
+    $diagnosticStaged = $?
+  }
   Write-Output $diagnostic
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL) { $script:redacted = $false }
   if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }
@@ -460,7 +467,22 @@ namespace MunimentE2e {
   }
   Finalize-Run
   New-Item -ItemType Directory -Force $artifacts -ErrorAction SilentlyContinue | Out-Null
-  if ($diagnostic) { Set-Content -LiteralPath $diagnosticFile -Value $diagnostic -ErrorAction SilentlyContinue }
+  if ($diagnostic -and -not $diagnosticStaged) {
+    # Redact early errors separately when the runner could not create raw staging.
+    $diagnosticRoot = Join-Path $env:TEMP ([guid]::NewGuid().ToString("N"))
+    try {
+      $diagnosticRaw = Join-Path $diagnosticRoot "raw"
+      $diagnosticSafe = Join-Path $diagnosticRoot "safe"
+      New-Item -ItemType Directory -Force $diagnosticRaw | Out-Null
+      Set-Content -LiteralPath (Join-Path $diagnosticRaw "runner-failure.txt") -Value $diagnostic -Encoding UTF8
+      Invoke-NativeCommand "node" "`"$redactor`" `"$diagnosticRaw`" `"$diagnosticSafe`"" (Join-Path $diagnosticRoot "redaction.log") "runner failure redaction failed" | Out-Null
+      Copy-Item -LiteralPath (Join-Path $diagnosticSafe "runner-failure.txt") -Destination $diagnosticFile -Force
+    } catch {
+      $status = 1
+    } finally {
+      Remove-Item -LiteralPath $diagnosticRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
   if ($status -ne 0) {
     Write-Output "dci: Windows runner transcript tail"
     Get-Content -LiteralPath $transcriptPath -Tail 200 -ErrorAction SilentlyContinue | Write-Output
