@@ -21,9 +21,9 @@ CI logs land in the GitHub Actions run linked from the pull request's Checks tab
 
 This repo's steering files are `AGENTS.md`, `README.md`, `SPEC.md`,
 `ROADMAP.md`, `DESIGN.md`, and `docs/decisions/`. They are instruction, not
-record: present tense, stating what is. No dates, ticket ids, commit shas, pull
-request numbers, or history phrases such as "decided", "superseded",
-"previously", or "no longer". No ledger file under any name: no open-items,
+record: present tense, stating what is. No dates, ticket ids, commit shas, or
+pull request numbers. No history phrases: "decided", "superseded", "previously", "no longer".
+No ledger file under any name: no open-items,
 build-history, decision-log, handoff, journal, notes, or todo file. A finished
 roadmap phase is deleted, not marked done. Caps: `SPEC.md` 400 lines,
 `DESIGN.md` 250, `ROADMAP.md` 150, `AGENTS.md` 120. State lives in Plane and
