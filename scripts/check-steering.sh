@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Enforce CLAUDE.md: no ledgers, a fixed file list, no history in steering
 # files, and length caps. A ledger is prose, so the name check reads prose
-# files and the folders that hold them. A code module is never a ledger. No argument checks the root folder. A repo directory
+# files and the folders that hold them. A code module is never a ledger, and
+# a source tree is never scanned. No argument checks the root folder. A repo directory
 # checks that repo. Exit 1 on any finding.
 set -u
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,7 +10,7 @@ fail=0
 finding() { printf 'check: %s\n' "$1" >&2; fail=1; }
 
 forbidden_names='open-items|open_items|build-history|build_history|decision-log|decision_log|handoff|journal|journal-ideas|notes|todo|roadmap-history|roadmap-reviews|roadmap_history'
-prune='-name .git -o -name node_modules -o -name target -o -name dist -o -name build -o -name .venv -o -name .next -o -name .expo -o -name ios -o -name android'
+prune='-name .git -o -name node_modules -o -name target -o -name dist -o -name build -o -name .venv -o -name .next -o -name .expo -o -name ios -o -name android -o -name src'
 
 check_forbidden() {
   local dir="$1"
