@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ALLOWED = {
+  'test/linux-sign-in-state.test.js:19:20': "describe.skipIf(process.platform === 'win32')('Linux sign-in state cleanup')",
   'test/desktop-e2e-harness.test.js:322:28': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/desktop-e2e-harness.test.js:359:20': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/desktop-e2e-harness.test.js:376:19': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
