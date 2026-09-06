@@ -67,8 +67,8 @@ describe('installed production chat contract', () => {
   })
 
   it('bounds the signed-out wait and reports the desktop client in its message', () => {
-    expect(spec).toMatch(/signedOut\.waitForDisplayed\(\{\s*timeout: 120000,/)
-    expect(spec).toContain("timeoutMsg: 'the signed-out screen did not appear after onboarding'")
+    expect(spec).toMatch(/browser\.waitUntil\(async \(\) => \(\s*await signedOut\.isDisplayed\(\) \|\| await localMode\.isDisplayed\(\)\s*\), \{\s*timeout: 120000,/)
+    expect(spec).toContain("timeoutMsg: 'the signed-out screen and Local mode did not appear after onboarding'")
     expect(spec).toContain('throw new Error(`${waitError.message} ${await shellState()}`)')
     expect(spec).toContain('return `desktop client status: ${connection}. shell: ${rendered}`')
     expect(spec.indexOf('async function shellState()')).toBeLessThan(spec.indexOf("describe('installed nightly'"))
@@ -215,7 +215,7 @@ describe('WDIO Tauri driver contract', () => {
     const runE2e = runner.slice(runner.indexOf('run_e2e()'), runner.indexOf('\nemit_artifacts()'))
     expect(runE2e).toMatch(/dbus-run-session[\s\S]+xdg-desktop-portal[\s\S]+npm run test:e2e/)
     expect(runner).not.toMatch(/tauri-driver|4444|MUNIMENT_E2E_EXTERNAL_DRIVER/)
-    expect(runner.match(/run_e2e "\$raw\/wdio-(?:onboarding|cleanup)\.log"|run_e2e "\$raw\/wdio\.log"/g)).toHaveLength(3)
+    expect(runner.match(/run_e2e "\$raw\/wdio-(?:onboarding|cleanup|sign-in)\.log"|run_e2e "\$raw\/wdio\.log"/g)).toHaveLength(4)
   })
 })
 
