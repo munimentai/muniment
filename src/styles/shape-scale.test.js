@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 
-// docs/spec/design-spec.md §1.5/§4 permit only the radius scale and two depth
+// DESIGN.md permits only the radius scale and two depth
 // tokens. These named exceptions are the circular dots, square resets, and the
 // per-corner composition required by the segmented theme control.
 const RADIUS_EXCEPTIONS = {

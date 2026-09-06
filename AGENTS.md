@@ -1,5 +1,12 @@
 # Agent operating instructions
 
+muniment desktop is the local app for muniment, the company system of record.
+This repo is the Tauri shell, the Rust runtime service, the Pi sidecar and the
+on-device voice stack, with the local graph embedded in the runtime. The graph
+and the grooming report are the product. The harness is a component. `SPEC.md`
+is the slice of the plan this repo owns and the rules a reviewer holds a diff
+against. `ROADMAP.md` lists the outcomes. Local mode needs no account.
+
 ## Verification loop
 
 Run these commands in order from the repository root before every push:
@@ -7,6 +14,7 @@ Run these commands in order from the repository root before every push:
 1. `cargo fmt --manifest-path src-tauri/core/Cargo.toml --check`
 2. `cargo clippy --manifest-path src-tauri/core/Cargo.toml --all-targets --locked -- -D warnings`
 3. `cargo test --manifest-path src-tauri/core/Cargo.toml --locked --features network-tests`
+4. `scripts/check-steering.sh .`
 
 The format check fails CI when formatting would create any diff. For other Rust crates, use `src-tauri/Cargo.toml` and each changed package name.
 

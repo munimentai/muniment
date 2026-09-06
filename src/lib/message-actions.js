@@ -1,4 +1,4 @@
-// The per-message action row (docs/spec/02-desktop-app.md §3.2). This slice
+// The per-message action row (DESIGN.md, grammar). This slice
 // carries copy only; fork, share, and retry wait on the thread/branching
 // contract, so nothing here models them.
 

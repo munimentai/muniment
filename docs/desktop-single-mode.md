@@ -10,7 +10,7 @@ The desktop's single mode is **the thread surface**.
 SPEC law 13 and the ROADMAP Phase 3 entry use that name and no other name.
 harness-spec §6.1 states the product rule behind it. One surface scales from a
 short question to a full agentic run, and no mode switcher exists anywhere.
-docs/spec/02-desktop-app.md §3 already heads the same surface "Thread surface".
+`DESIGN.md` heads the same surface "Thread surface".
 
 ## The classification rule
 
