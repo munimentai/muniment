@@ -43,15 +43,18 @@ asking anyone, and they already run a harness such as Claude Code.
 
 ## Interfaces
 
-**The public core.** One app, one download. The graph, the read-only SQL
-tool, the Go importers, the local report and the generated UI are built in this
-repo beside the runtime service, attach, the run journal, the Pi sidecar
-integration, the per-thread permission policy, the CAS store, the memory index,
-the code-diff crates, ACP interop and the voice stack. The runtime opens the
-SQLite graph through rusqlite and serves the SQL tool to a harness. The cloud
-client code stays in the app, because sign-in is the upgrade path. At the FSL
-release this repo becomes `munimentai/muniment` by transfer, history included,
-so every workflow and every commit here is written as public.
+**The public core.** One app, one download, the FSL app at every tier. With
+no account the whole local product works. A free account adds the mobile
+connection through the relay. Payment unlocks sharing, scheduled execution and
+routing enforcement in the same app. The graph, the read-only SQL tool, the Go
+importers, the local report and the generated UI are built in this repo beside
+the runtime service, attach, the run journal, the Pi sidecar integration, the
+per-thread permission policy, the CAS store, the memory index, the code-diff
+crates, ACP interop and the voice stack. The runtime opens the SQLite graph
+through rusqlite and serves the SQL tool to a harness. The cloud client code
+stays in the app. At the FSL release this repo becomes `munimentai/muniment`
+by transfer, history included, so every workflow and every commit here is
+written as public.
 
 **muniment-cloud.** Sign-in gates cloud features only. Cloud-backed use passes
 short-lived session tokens and the user's gateway virtual endpoint.
