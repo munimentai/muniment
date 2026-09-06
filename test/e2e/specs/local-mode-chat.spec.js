@@ -71,6 +71,7 @@ describe('installed local-mode chat', () => {
     await provider.selectByAttribute('value', 'ollama')
     const baseUrlInput = await $('#provider-base-url')
     await baseUrlInput.waitForDisplayed()
+    expect(await baseUrlInput.isDisplayed()).toBe(true)
     await baseUrlInput.setValue(OLLAMA_BASE_URL)
     await (await $('button=Save Ollama server')).click()
     await (await $('p=Pi saved the Ollama server.')).waitForDisplayed({ timeout: 30000 })
