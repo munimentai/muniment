@@ -130,6 +130,17 @@ grep -Fq 'docs/desktop-single-mode.md' SPEC.md
 # (`! grep` would be exempt from errexit, so assert on empty output instead)
 test -z "$(grep -rl --exclude='0003-resident-gemma-model.md' 'muniment-resident-gemma' docs/)"
 test -z "$(grep -ril 'resident local gemma' docs/)"
+# The public core boundary names both sets and runs in the smoke job.
+boundary_adr=docs/decisions/0030-public-core-boundary.md
+test -f "$boundary_adr"
+grep -Fxq '## Port' "$boundary_adr"
+grep -Fxq '## Stay' "$boundary_adr"
+grep -Fq '| crate | muniment-core |' "$boundary_adr"
+grep -Fq '| crate | muniment-desktop |' "$boundary_adr"
+grep -Fq '| module | auth |' "$boundary_adr"
+test -x scripts/check-core-boundary.sh
+grep -Fq 'run: scripts/check-core-boundary.sh' "$ci"
+python3 -B test/core-boundary.py
 # companion workspace and its path-scoped CI lane
 grep -Fq 'members = [".", "core", "attach", "code-diff", "cli", "acp", "runtime"]' src-tauri/Cargo.toml
 grep -Fq 'resolver = "2"' src-tauri/Cargo.toml
