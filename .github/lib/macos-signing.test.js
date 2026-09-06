@@ -5,6 +5,7 @@ import {
   SIGNING_VARIABLES,
   codesignArguments,
   intermediateCertificateImportArguments,
+  intermediateCertificateImportSucceeded,
   notarytoolSubmitArguments,
   parseInstallerIdentity,
   parseSigningIdentity,
@@ -101,6 +102,32 @@ describe("Signing identity discovery", () => {
       name: "Developer ID Installer: Muniment (Y5DUNHQA74)",
     });
     expect(parseInstallerIdentity("0 valid identities found")).toBeNull();
+  });
+});
+
+describe("Intermediate certificate import results", () => {
+  const duplicate = "security: SecKeychainItemImport: The specified item already exists in the keychain.\n";
+
+  it("accepts a successful import", () => {
+    expect(intermediateCertificateImportSucceeded({ status: 0, stdout: "1 certificate imported.\n" })).toBe(true);
+    expect(intermediateCertificateImportSucceeded({ status: 0 })).toBe(true);
+  });
+
+  it("accepts exit code 1 only with the duplicate certificate message", () => {
+    expect(intermediateCertificateImportSucceeded({ status: 1, stderr: duplicate })).toBe(true);
+    expect(intermediateCertificateImportSucceeded({ status: 1, stdout: duplicate })).toBe(true);
+    expect(intermediateCertificateImportSucceeded({ status: 1, stderr: "Cannot read certificate" })).toBe(false);
+    expect(intermediateCertificateImportSucceeded({ status: 1, stdout: "", stderr: "" })).toBe(false);
+    expect(intermediateCertificateImportSucceeded({ status: 1, stdout: null, stderr: null })).toBe(false);
+  });
+
+  it("rejects other exit codes and process failures even with the duplicate message", () => {
+    for (const status of [2, -1, null, undefined]) {
+      expect(intermediateCertificateImportSucceeded({ status, stderr: duplicate })).toBe(false);
+    }
+    expect(intermediateCertificateImportSucceeded({
+      status: 1, stderr: duplicate, error: new Error("spawn failed"),
+    })).toBe(false);
   });
 });
 

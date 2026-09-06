@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import {
   codesignArguments,
   intermediateCertificateImportArguments,
+  intermediateCertificateImportSucceeded,
   notarytoolSubmitArguments,
   parseInstallerIdentity,
   parseSigningIdentity,
@@ -102,8 +103,22 @@ mustRun("keychain settings", "security", ["set-keychain-settings", keychain]);
 mustRun("unlock keychain", "security", ["unlock-keychain", "-p", keychainPassword, keychain]);
 mustRun("import certificate", "security",
   ["import", certPath, "-k", keychain, "-P", signingConfig.certificatePassword, "-T", "/usr/bin/codesign"]);
-mustRun("import Developer ID G2 intermediate", "security",
-  intermediateCertificateImportArguments(intermediateCertPath, keychain));
+const intermediate = spawnSync("security",
+  ["find-certificate", "-c", "Developer ID Certification Authority", keychain], { encoding: "utf8" });
+if (intermediate.error) throw intermediate.error;
+if (intermediate.status === 0) {
+  console.log("The keychain already holds the Developer ID G2 intermediate. Skip the import.");
+} else {
+  const imported = spawnSync("security",
+    intermediateCertificateImportArguments(intermediateCertPath, keychain), { encoding: "utf8" });
+  if (imported.stdout) process.stdout.write(imported.stdout);
+  if (imported.stderr) process.stderr.write(imported.stderr);
+  if (imported.error) throw imported.error;
+  if (!intermediateCertificateImportSucceeded(imported)) {
+    console.error(`import Developer ID G2 intermediate FAILED (security rc=${imported.status}) — see output above`);
+    process.exit(imported.status ?? 1);
+  }
+}
 mustRun("show Developer ID G2 intermediate", "security",
   ["find-certificate", "-c", "Developer ID Certification Authority", keychain]);
 console.log("imported intermediate: Developer ID Certification Authority, G2");
