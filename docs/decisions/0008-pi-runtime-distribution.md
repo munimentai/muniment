@@ -98,6 +98,8 @@ The same merge sets `defaultTools` to `read`, `bash`, `powershell`, `edit`, `wri
 The names match the candidate's [built-in registry](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/src/core/tools/index.ts#L96-L105).
 The desktop never passes `--tools`.
 The merge preserves other keys, including `defaultProvider`, and shares Pi's directory lock with local provider writes.
+The lock follows proper-lockfile's ten-second stale threshold and five-second heartbeat.
+The directory resolver follows the candidate's [`normalizePath`](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/src/utils/paths.ts#L78-L107), including file URLs and Windows shell drive paths.
 Production adds neither key and leaves existing settings untouched.
 
 The web package supports an Anthropic `claude-haiku` model for summaries and requires a Bright Data `serp` zone for Bright Data search.
@@ -124,9 +126,13 @@ The selected Node line is **24, Active LTS**, which satisfies that floor.
 The [Node release schedule](https://github.com/nodejs/Release/blob/main/schedule.json) governs the Active LTS requirement.
 Node 22 defines the minimum, not the selected Active LTS line.
 The standalone executable includes its runtime.
-Pi resolves missing npm packages on the first launch through its npm command.
-That launch needs npm and network access.
-The candidate allows 120 seconds for package resolution and the first readiness response.
+The desktop acquires the four packages through the verified executable's embedded Bun package manager before RPC starts.
+It sets [`BUN_BE_BUN=1`](https://bun.com/docs/bundler/executables#act-as-the-bun-cli) only for acquisition and disables install scripts and peer dependencies.
+The package cache lives in the Pi agent directory's `npm` directory.
+An OS lock excludes concurrent desktop installs and releases after a crash.
+A completion marker admits the cache only after acquisition succeeds and all four manifests match the pins.
+The first launch needs network access, not system Node or npm.
+The candidate allows 120 seconds for acquisition and 120 seconds for the first readiness response.
 Later health probes keep their 10-second deadline.
 
 The candidate's [RPC contract](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/rpc.md) uses newline-delimited JSON over stdio.

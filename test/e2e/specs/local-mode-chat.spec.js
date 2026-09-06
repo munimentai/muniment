@@ -1,13 +1,11 @@
 import path from 'node:path'
-import { homedir } from 'node:os'
 import { access, readFile } from 'node:fs/promises'
 import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'
+import { piAgentDirectory } from '../support/pi-agent-directory.mjs'
 
 async function checkCandidatePackages() {
   if (process.env.MUNIMENT_PI_CANDIDATE !== '1') return
-  const configured = process.env.PI_CODING_AGENT_DIR || path.join(homedir(), '.pi', 'agent')
-  const agentDirectory = configured === '~' ? homedir()
-    : configured.startsWith('~/') ? path.join(homedir(), configured.slice(2)) : configured
+  const agentDirectory = piAgentDirectory()
   const packages = [
     ['pi-web-access', '0.28.0'],
     ['pi-subagents', '0.65.1'],

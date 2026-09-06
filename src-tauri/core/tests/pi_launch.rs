@@ -29,6 +29,7 @@ impl PiLaunchBoundaries for Boundaries {
     fn prepare_pi_settings(
         &self,
         _artifact: muniment_core::sidecar::pi_install::PiArtifactDescriptor,
+        _executable: &std::path::Path,
     ) -> Result<(), PiLaunchError> {
         Ok(())
     }
@@ -72,6 +73,7 @@ impl PiLaunchBoundaries for TrackBoundaries {
     fn prepare_pi_settings(
         &self,
         artifact: muniment_core::sidecar::pi_install::PiArtifactDescriptor,
+        _executable: &std::path::Path,
     ) -> Result<(), PiLaunchError> {
         muniment_core::pi_settings::store_pi_settings(&self.root.join("settings.json"), artifact)
             .map_err(|_| PiLaunchError::RejectedConfig)
@@ -110,6 +112,8 @@ fn every_launch_renders_the_selected_track_before_spawn() {
                     assert_eq!(config.startup_timeout, Duration::from_secs(30));
                 }
                 assert!(!config.args.iter().any(|arg| arg == "--tools"));
+                assert!(config.env_remove.iter().any(|name| name == "BUN_BE_BUN"));
+                assert!(!config.env.contains_key("BUN_BE_BUN"));
             }
             fs::remove_dir_all(root).unwrap();
         }

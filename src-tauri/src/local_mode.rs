@@ -86,12 +86,22 @@ fn set_local_mode(config_directory: &Path, enabled: bool) -> Result<(), String> 
     }
 }
 
-fn pi_auth_file(home_directory: &Path, agent_directory: Option<&std::ffi::OsStr>) -> PathBuf {
-    pi_agent_directory(home_directory, agent_directory).join("auth.json")
+fn pi_auth_file(
+    home_directory: &Path,
+    agent_directory: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    pi_agent_directory(home_directory, agent_directory)
+        .map(|directory| directory.join("auth.json"))
+        .map_err(|_| "The Pi agent directory is invalid.".to_string())
 }
 
-fn pi_models_file(home_directory: &Path, agent_directory: Option<&std::ffi::OsStr>) -> PathBuf {
-    pi_agent_directory(home_directory, agent_directory).join("models.json")
+fn pi_models_file(
+    home_directory: &Path,
+    agent_directory: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    pi_agent_directory(home_directory, agent_directory)
+        .map(|directory| directory.join("models.json"))
+        .map_err(|_| "The Pi agent directory is invalid.".to_string())
 }
 
 fn pi_settings_file(models_file: &Path) -> PathBuf {
@@ -234,7 +244,7 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
     let settings_file = pi_settings_file(models_file);
     let _models_lock = lock_pi_auth_file(models_file)
         .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
-    let _settings_lock = lock_pi_auth_file(&settings_file)
+    let settings_lock = muniment_core::pi_settings::lock_settings(&settings_file)
         .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
     let mut models = read_json_for_update(models_file)?;
     let mut settings = read_json_for_update(&settings_file)?;
@@ -261,6 +271,9 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
     merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
 
     // Write the route first. A later models write failure cannot fall back to a cloud model.
+    settings_lock
+        .check()
+        .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
     write_json_for_update(&settings_file, &settings)?;
     write_json_for_update(models_file, &models)
 }
@@ -332,8 +345,8 @@ pub(crate) fn local_mode_provider_status(
         .home_dir()
         .map_err(|_| "Pi credentials could not be read.".to_string())?;
     let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
-    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref());
-    let models_file = pi_models_file(&home_directory, agent_directory.as_deref());
+    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref())?;
+    let models_file = pi_models_file(&home_directory, agent_directory.as_deref())?;
     provider_status(&auth_file, &models_file)
 }
 
@@ -348,7 +361,7 @@ pub(crate) fn local_mode_store_provider_key(
         .home_dir()
         .map_err(|_| "Pi credentials could not be saved.".to_string())?;
     let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
-    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref());
+    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref())?;
     store_provider_key(&auth_file, &provider, &key)
 }
 
@@ -362,7 +375,7 @@ pub(crate) fn local_mode_store_local_provider(
         .home_dir()
         .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
     let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
-    let models_file = pi_models_file(&home_directory, agent_directory.as_deref());
+    let models_file = pi_models_file(&home_directory, agent_directory.as_deref())?;
     store_local_provider(&models_file, &base_url)
 }
 
@@ -391,19 +404,19 @@ mod tests {
         let home = Path::new("/home/tester");
 
         assert_eq!(
-            pi_auth_file(home, None),
+            pi_auth_file(home, None).unwrap(),
             PathBuf::from("/home/tester/.pi/agent/auth.json")
         );
         assert_eq!(
-            pi_auth_file(home, Some(std::ffi::OsStr::new(""))),
+            pi_auth_file(home, Some(std::ffi::OsStr::new(""))).unwrap(),
             PathBuf::from("/home/tester/.pi/agent/auth.json")
         );
         assert_eq!(
-            pi_auth_file(home, Some(std::ffi::OsStr::new("~"))),
+            pi_auth_file(home, Some(std::ffi::OsStr::new("~"))).unwrap(),
             PathBuf::from("/home/tester/auth.json")
         );
         assert_eq!(
-            pi_auth_file(home, Some(std::ffi::OsStr::new("~/pi-credentials"))),
+            pi_auth_file(home, Some(std::ffi::OsStr::new("~/pi-credentials"))).unwrap(),
             PathBuf::from("/home/tester/pi-credentials/auth.json")
         );
     }
@@ -498,7 +511,7 @@ mod tests {
     fn provider_key_command_uses_custom_pi_credential_directory() {
         let directory = temporary_directory();
         let custom_directory = directory.join("custom-pi-directory");
-        let auth_file = pi_auth_file(&directory, Some(custom_directory.as_os_str()));
+        let auth_file = pi_auth_file(&directory, Some(custom_directory.as_os_str())).unwrap();
 
         store_provider_key(&auth_file, "openai", "test-key").unwrap();
 
