@@ -19,3 +19,14 @@ The separate launches produce these reports:
 
 The cleanup launch also produces `junit-cleanup-0-0.xml`.
 This checkout has no qualifying nightly run artifact.
+
+## Installed Windows E2E
+
+The Windows runner uses the GitHub REST API with the injected `GH_TOKEN`
+for both the nightly release lookup and the installer asset download.
+It passes the release response body unchanged to `asset-identity.mjs` before
+it downloads the installer.
+
+The next nightly `windows-e2e` run must confirm that the lookup reaches the
+installer step. Check the runner transcript and `installer.log` in the run
+artifact for installer output after the lookup.

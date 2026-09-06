@@ -1275,6 +1275,30 @@ describe('folder dialog diagnostics', () => {
   })
 })
 
+describe('Windows nightly release lookup', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+  const lookup = runner.slice(runner.indexOf('  # Resolve all identity checks'), runner.indexOf('  $installer ='))
+
+  it('uses the REST API with the injected token and forwards the response body unchanged', () => {
+    expect(lookup).toContain('$release = (Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/vnd.github+json"; Authorization = "Bearer $($env:GH_TOKEN)" }')
+    expect(lookup).toContain('-Uri "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/releases/tags/nightly").Content')
+    expect(lookup).toContain('Add-Content -LiteralPath $installerLog -Value $release -NoNewline')
+    expect(lookup).toContain('Invoke-NativeCommand "node" "test/e2e/support/asset-identity.mjs $sha windows" $installerLog "Windows artifact identity validation failed" $release')
+    expect(lookup).not.toMatch(/ConvertFrom-Json|ConvertTo-Json|\.Trim\(/)
+    expect(lookup).toContain('Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/octet-stream"; Authorization = "Bearer $($env:GH_TOKEN)" }')
+    expect(lookup).toContain('-Uri "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/releases/assets/$assetId" -OutFile $msi')
+  })
+
+  it('throws lookup failures with the exception text and logs runner failures', () => {
+    expect(lookup).toMatch(/try \{\s*\$release = \(Invoke-WebRequest[\s\S]+?\} catch \{\s*throw "nightly release lookup failed: \$\(\$_\.Exception\.Message\)"\s*\}/)
+    expect(runner).toContain('if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }')
+  })
+
+  it('does not depend on the GitHub CLI', () => {
+    expect(runner).not.toMatch(/\bgh(?:\.exe)?\b/i)
+  })
+})
+
 describe('Windows native command contract', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
   it('routes native commands through the process helpers', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
