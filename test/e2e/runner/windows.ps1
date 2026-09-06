@@ -14,6 +14,7 @@ try {
   exit 1
 }
 $diagnostic = $null
+$diagnosticStaged = $false
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -66,7 +67,7 @@ function Resolve-NativeCommand([string]$File, [string]$FailureMessage) {
   }
 }
 
-function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [string]$FailureMessage, [string]$InputText = $null, [string]$ErrorLog = $null) {
+function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [string]$FailureMessage, [string]$InputText = $null, [string]$ErrorLog = $null, [bool]$SummarizeFailure = $true) {
   $resolvedFile = Resolve-NativeCommand $File $FailureMessage
   $startInfo = New-Object Diagnostics.ProcessStartInfo
   if ([IO.Path]::GetExtension($resolvedFile) -eq ".cmd") {
@@ -99,7 +100,18 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
   $stderr = $stderrTask.Result
   if ($stdout) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
   if ($stderr) { Add-Content -LiteralPath $(if ($ErrorLog) { $ErrorLog } else { $Log }) -Value $stderr -NoNewline }
-  if ($process.ExitCode -ne 0) { throw "$FailureMessage (exit code $($process.ExitCode))" }
+  if ($process.ExitCode -ne 0) {
+    if (-not $SummarizeFailure) { throw "diagnostic summary unavailable" }
+    # Share redaction and diagnostic selection with the POSIX runner.
+    $summaryHelper = Join-Path $PSScriptRoot "../support/failure-summary.mjs"
+    $summaryInput = @{ stdout = $stdout; stderr = $stderr; label = $FailureMessage; exitCode = $process.ExitCode } | ConvertTo-Json -Compress
+    try {
+      $detail = Invoke-NativeCommand "node" "`"$summaryHelper`"" $Log "diagnostic summary failed" $summaryInput $null $false
+    } catch {
+      throw "native command failed (exit code $($process.ExitCode)), diagnostic summary unavailable"
+    }
+    throw $detail
+  }
   return $stdout
 }
 
@@ -257,9 +269,20 @@ try {
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL -eq "before-directories") { throw "injected setup failure" }
   New-Item -ItemType Directory -Force $raw, $stateRoot | Out-Null
   New-Item -ItemType File -Force $cleanupLog | Out-Null
+  if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT) {
+    Invoke-NativeCommand "node" "`"$($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT)`"" $installerLog "native command test failed"
+    return
+  }
   if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE) {
     $nativeTestExitCode = [int]$env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE
-    Invoke-NativeCommand "cmd.exe" "/d /c `"echo native warning 1>&2 & exit /b $nativeTestExitCode`"" $installerLog "native command test failed"
+    $nativeTestOutput = switch ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_OUTPUT) {
+      "stdout" { "echo fatal: installer rejected package signature" }
+      "both" { "echo fatal: installer rejected package signature & echo native warning 1>&2" }
+      "long-stdout" { "echo $('p' * 1800) & echo fatal: installer rejected package signature 1>&2" }
+      "long-stderr" { "echo fatal: installer rejected package signature & echo $('p' * 1800) 1>&2" }
+      default { "echo native warning 1>&2" }
+    }
+    Invoke-NativeCommand "cmd.exe" "/d /c `"$nativeTestOutput & exit /b $nativeTestExitCode`"" $installerLog "native command test failed"
     return
   }
   if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_INVOCATION_ERROR -eq "1") {
@@ -448,7 +471,10 @@ namespace MunimentE2e {
   Remove-Item Env:MUNIMENT_E2E_ONBOARDING_ONLY -ErrorAction SilentlyContinue
 } catch {
   $diagnostic = "message: $($_.Exception.Message)`ncategory: $($_.CategoryInfo.Category)`nline: $($_.InvocationInfo.ScriptLineNumber)"
-  Set-Content -LiteralPath $diagnosticFile -Value $diagnostic -ErrorAction SilentlyContinue
+  if ($raw -and (Test-Path -LiteralPath $raw)) {
+    Set-Content -LiteralPath (Join-Path $raw "runner-failure.txt") -Value $diagnostic -Encoding UTF8 -ErrorAction SilentlyContinue
+    $diagnosticStaged = $?
+  }
   Write-Output $diagnostic
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL) { $script:redacted = $false }
   if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }
@@ -460,7 +486,22 @@ namespace MunimentE2e {
   }
   Finalize-Run
   New-Item -ItemType Directory -Force $artifacts -ErrorAction SilentlyContinue | Out-Null
-  if ($diagnostic) { Set-Content -LiteralPath $diagnosticFile -Value $diagnostic -ErrorAction SilentlyContinue }
+  if ($diagnostic -and -not $diagnosticStaged) {
+    # Redact early errors separately when the runner could not create raw staging.
+    $diagnosticRoot = Join-Path $env:TEMP ([guid]::NewGuid().ToString("N"))
+    try {
+      $diagnosticRaw = Join-Path $diagnosticRoot "raw"
+      $diagnosticSafe = Join-Path $diagnosticRoot "safe"
+      New-Item -ItemType Directory -Force $diagnosticRaw | Out-Null
+      Set-Content -LiteralPath (Join-Path $diagnosticRaw "runner-failure.txt") -Value $diagnostic -Encoding UTF8
+      Invoke-NativeCommand "node" "`"$redactor`" `"$diagnosticRaw`" `"$diagnosticSafe`"" (Join-Path $diagnosticRoot "redaction.log") "runner failure redaction failed" | Out-Null
+      Copy-Item -LiteralPath (Join-Path $diagnosticSafe "runner-failure.txt") -Destination $diagnosticFile -Force
+    } catch {
+      $status = 1
+    } finally {
+      Remove-Item -LiteralPath $diagnosticRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
   if ($status -ne 0) {
     Write-Output "dci: Windows runner transcript tail"
     Get-Content -LiteralPath $transcriptPath -Tail 200 -ErrorAction SilentlyContinue | Write-Output

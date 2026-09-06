@@ -26,6 +26,8 @@ finalized=0
 
 # shellcheck source=../support/cleanup-ledger.sh
 source test/e2e/support/cleanup-ledger.sh
+# shellcheck source=../support/runner-failure.sh
+source test/e2e/support/runner-failure.sh
 
 cleanup_absent() { [[ ! -e $1 ]]; }
 process_absent() { [[ -z $process_name ]] || ! pgrep -x "$process_name" >/dev/null; }
@@ -55,7 +57,8 @@ stop_runtime() {
 }
 
 payload_failure() {
-  printf '%s\n' "$1" | tee -a "$raw/payload.log" >&2
+  printf '%s\n' "$1" >>"$raw/payload.log"
+  runner_failure "$1"
   return 1
 }
 
@@ -184,35 +187,35 @@ if [[ ${MUNIMENT_E2E_PAYLOAD_TEST_MODE:-0} == 1 ]]; then
 fi
 
 sha=${MUNIMENT_E2E_SOURCE_SHA:-}
-[[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid source SHA' >&2; status=1; exit; }
-[[ -n ${GH_TOKEN:-} && -n ${GITHUB_REPOSITORY:-} ]] || { echo 'required injected environment is unavailable' >&2; status=1; exit; }
+[[ $sha =~ ^[0-9a-f]{40}$ ]] || { runner_failure 'invalid source SHA'; exit; }
+[[ -n ${GH_TOKEN:-} && -n ${GITHUB_REPOSITORY:-} ]] || { runner_failure 'required injected environment is unavailable'; exit; }
 gui_user=$(stat -f '%Su' /dev/console)
 [[ -n $gui_user && $gui_user != root && $gui_user != loginwindow && $(id -un) == "$gui_user" ]] || {
-  echo 'runner is not executing as the active GUI test user' >&2; status=1; exit;
+  runner_failure 'runner is not executing as the active GUI test user'; exit;
 }
-release=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { status=1; exit; }
-asset_id=$(node test/e2e/support/asset-identity.mjs "$sha" macos <<<"$release") || { status=1; exit; }
-gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$archive" || { status=1; exit; }
+release=$(run_setup gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { status=1; exit; }
+asset_id=$(run_setup node test/e2e/support/asset-identity.mjs "$sha" macos <<<"$release") || { status=1; exit; }
+run_setup gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$archive" || { status=1; exit; }
 
-ditto -x -k "$archive" "$expanded" >>"$raw/install.log" 2>&1 || { status=1; exit; }
+run_setup ditto -x -k "$archive" "$expanded" >>"$raw/install.log" 2>&1 || { status=1; exit; }
 bundles=()
 while IFS= read -r -d '' bundle; do bundles+=("$bundle"); done < <(find "$expanded" -type d -name '*.app' -prune -print0)
-(( ${#bundles[@]} == 1 )) || { echo 'archive does not contain exactly one application bundle' >&2; status=1; exit; }
+(( ${#bundles[@]} == 1 )) || { runner_failure 'archive does not contain exactly one application bundle'; exit; }
 source_bundle=${bundles[0]}
 plist="$source_bundle/Contents/Info.plist"
-[[ -f $plist ]] || { echo 'application bundle metadata is unavailable' >&2; status=1; exit; }
+[[ -f $plist ]] || { runner_failure 'application bundle metadata is unavailable'; exit; }
 process_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2>>"$raw/install.log")
-[[ -n $process_name && $process_name != */* && -x "$source_bundle/Contents/MacOS/$process_name" ]] || { echo 'application bundle does not identify one executable' >&2; status=1; exit; }
+[[ -n $process_name && $process_name != */* && -x "$source_bundle/Contents/MacOS/$process_name" ]] || { runner_failure 'application bundle does not identify one executable'; exit; }
 
 installed=1
-ditto "$source_bundle" "$installed_bundle" >>"$raw/install.log" 2>&1 || { status=1; exit; }
+run_setup ditto "$source_bundle" "$installed_bundle" >>"$raw/install.log" 2>&1 || { status=1; exit; }
 verify_installed_payload || { status=1; exit; }
 mkdir -p "$state_root/tmp"
 
 # The window probe reads CoreGraphics window metadata, which macOS grants with
 # no privacy consent. The build runs before the launch, so a broken toolchain
 # fails the job here and never reads as "the app opened no window yet".
-clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations \
+run_setup clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations \
   -framework CoreFoundation -framework CoreGraphics \
   -o "$window_probe" test/e2e/support/macos-window-count.c >>"$raw/window-probe-build.log" 2>&1 || {
   echo 'window probe did not compile' >&2; status=1; exit;

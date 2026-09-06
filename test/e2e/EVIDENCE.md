@@ -20,6 +20,16 @@ The separate launches produce these reports:
 The cleanup launch also produces `junit-cleanup-0-0.xml`.
 This checkout has no qualifying nightly run artifact.
 
+## Failures before the specs
+
+The `<platform>-e2e-<sha>-failure` artifact holds `runner-failure.txt` with the runner's terminating cause.
+The runner redacts this file with its other logs before publication.
+An asset lookup failure names the platform, expected asset name or Windows pattern, match count, and release asset names.
+`junit-infrastructure.xml` uses this cause as its failure message, capped at 1000 characters before XML escaping.
+If redaction blocks the logs, `envelope-reason.txt` names that failure instead.
+The JUnit helper uses a generic message only when neither file holds a cause.
+`envelope-diagnostics.txt` holds structural counts when artifact extraction fails. It does not copy the runner transcript.
+
 ## Installed Windows E2E
 
 The Windows runner uses the GitHub REST API with the injected `GH_TOKEN`
