@@ -54,9 +54,13 @@ run the smoke only. Nightly and manually dispatched release builds use the same
 serialized VMs and replace the assets on the private repository's `nightly`
 pre-release.
 
-The accepted [installed-nightly desktop E2E architecture](docs/decisions/0013-desktop-e2e-harness.md)
-defines the Windows/Linux WDIO real-auth lane, macOS smoke-only contract, and
-pinned-artifact lifecycle.
+The [installed-nightly desktop E2E architecture](docs/decisions/0013-desktop-e2e-harness.md)
+defines pinned artifact installation plus WDIO chat, real sign-in, onboarding,
+and cleanup on Linux, Windows, and macOS.
+The macOS lane runs `macos.sh` for the pinned `.app` smoke and Proxmox
+screendump, then `macos-wdio.sh` for the specs.
+WDIO uses the embedded provider with separate E2E builds from the pinned
+source, not the released artifacts.
 
 ## Stable releases
 
