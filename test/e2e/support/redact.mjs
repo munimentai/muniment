@@ -1,18 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { redactText, secrets, tokenPatterns } from './redact-text.mjs'
 
 const [source, destination, failureReport] = process.argv.slice(2)
 if (!source || !destination) throw new Error('usage: redact.mjs SOURCE DESTINATION')
-
-const secrets = ['MUNIMENT_E2E_USERNAME', 'MUNIMENT_E2E_PASSWORD', 'GH_TOKEN']
-  .map((name) => process.env[name]).filter(Boolean).sort((left, right) => right.length - left.length)
-const tokenPatterns = [
-  ['credential-header', /\b(?:authorization|cookie|set-cookie)\s*[:=][^\r\n]+/gi],
-  ['bearer-token', /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi],
-  ['oauth-token', /\b(?:access|refresh|id)_token\s*[:=]\s*[^\s,}\]]+/gi],
-  ['github-token', /\bgh[opsu]_[A-Za-z0-9]{20,}\b/g],
-  ['jwt', /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g],
-]
 
 const safeScreenshots = new Set(['01-signed-out.png', '02-authenticated.png'])
 const isSafeScreenshot = (name) => safeScreenshots.has(name) || /^screenshot-[A-Za-z0-9._-]+\.png$/.test(name)
@@ -66,9 +57,7 @@ for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
     fs.writeFileSync(output, inspectScreenshot(input), { mode: 0o600 })
     continue
   }
-  let text = fs.readFileSync(input, 'utf8')
-  for (const secret of secrets) text = text.split(secret).join('[REDACTED]')
-  for (const [category, pattern] of tokenPatterns) text = text.replace(pattern, `[REDACTED:${category}]`)
+  const text = redactText(fs.readFileSync(input, 'utf8'))
   fs.writeFileSync(output, text, { mode: 0o600 })
 }
 

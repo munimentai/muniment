@@ -67,7 +67,7 @@ function Resolve-NativeCommand([string]$File, [string]$FailureMessage) {
   }
 }
 
-function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [string]$FailureMessage, [string]$InputText = $null, [string]$ErrorLog = $null) {
+function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [string]$FailureMessage, [string]$InputText = $null, [string]$ErrorLog = $null, [bool]$SummarizeFailure = $true) {
   $resolvedFile = Resolve-NativeCommand $File $FailureMessage
   $startInfo = New-Object Diagnostics.ProcessStartInfo
   if ([IO.Path]::GetExtension($resolvedFile) -eq ".cmd") {
@@ -101,16 +101,16 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
   if ($stdout) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
   if ($stderr) { Add-Content -LiteralPath $(if ($ErrorLog) { $ErrorLog } else { $Log }) -Value $stderr -NoNewline }
   if ($process.ExitCode -ne 0) {
-    # Reserve space for both streams before JUnit applies its 1000-character cap.
-    $streams = @(@($stdout.Trim(), $stderr.Trim()) | Where-Object { $_ })
-    $budget = if ($streams.Count -gt 1) { 400 } else { 850 }
-    $detail = ($streams | ForEach-Object {
-      if ($_.Length -gt $budget) {
-        $_.Substring(0, $budget / 2) + " ... " + $_.Substring($_.Length - ($budget / 2 - 5))
-      } else { $_ }
-    }) -join "`n"
-    $label = $FailureMessage.Substring(0, [Math]::Min(100, $FailureMessage.Length))
-    throw "$label (exit code $($process.ExitCode)): $detail"
+    if (-not $SummarizeFailure) { throw "diagnostic summary unavailable" }
+    # Share redaction and diagnostic selection with the POSIX runner.
+    $summaryHelper = Join-Path $PSScriptRoot "../support/failure-summary.mjs"
+    $summaryInput = @{ stdout = $stdout; stderr = $stderr; label = $FailureMessage; exitCode = $process.ExitCode } | ConvertTo-Json -Compress
+    try {
+      $detail = Invoke-NativeCommand "node" "`"$summaryHelper`"" $Log "diagnostic summary failed" $summaryInput $null $false
+    } catch {
+      throw "native command failed (exit code $($process.ExitCode)), diagnostic summary unavailable"
+    }
+    throw $detail
   }
   return $stdout
 }
@@ -269,6 +269,10 @@ try {
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL -eq "before-directories") { throw "injected setup failure" }
   New-Item -ItemType Directory -Force $raw, $stateRoot | Out-Null
   New-Item -ItemType File -Force $cleanupLog | Out-Null
+  if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT) {
+    Invoke-NativeCommand "node" "`"$($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT)`"" $installerLog "native command test failed"
+    return
+  }
   if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE) {
     $nativeTestExitCode = [int]$env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE
     $nativeTestOutput = switch ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_OUTPUT) {
