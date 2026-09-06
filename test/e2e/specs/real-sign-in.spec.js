@@ -113,11 +113,13 @@ describe('installed nightly', () => {
   it('signs in through the production UI', withAuthDiagnostics(async function () {
     const location = await $('[data-testid="onboarding-home-path"]')
     const signedOut = await $('button=Sign in')
+    const localMode = await $('#local-account-title')
+    const cloudSignIn = await $('button=Sign in for cloud features')
     await browser.waitUntil(async () => (
-      await location.isDisplayed() || await signedOut.isDisplayed()
+      await location.isDisplayed() || await signedOut.isDisplayed() || await localMode.isDisplayed()
     ), {
       timeout: 120000,
-      timeoutMsg: 'neither onboarding nor the signed-out screen appeared',
+      timeoutMsg: 'onboarding, the signed-out screen, and Local mode did not appear',
     })
     let home
     if (await location.isDisplayed()) {
@@ -128,17 +130,19 @@ describe('installed nightly', () => {
       await skipImport.click()
     }
 
-    // The shell now reads the session through the desktop client, so the
-    // signed-out screen appears once that client connects to the installed
-    // runtime. Bound the wait for that connection instead of the default.
+    // The desktop client can restore Local mode after onboarding.
     try {
-      await signedOut.waitForDisplayed({
+      await browser.waitUntil(async () => (
+        await signedOut.isDisplayed() || await localMode.isDisplayed()
+      ), {
         timeout: 120000,
-        timeoutMsg: 'the signed-out screen did not appear after onboarding',
+        timeoutMsg: 'the signed-out screen and Local mode did not appear after onboarding',
       })
     } catch (waitError) {
       throw new Error(`${waitError.message} ${await shellState()}`)
     }
+    const signIn = await localMode.isDisplayed() ? cloudSignIn : signedOut
+    await signIn.waitForDisplayed()
 
     if (home) {
       const readmes = ['memory', 'agents', 'projects', 'sessions'].map((directory) => ({
@@ -162,9 +166,9 @@ describe('installed nightly', () => {
 
     if (process.platform === 'linux') {
       // WebKitGTK can acknowledge a native click without dispatching it.
-      await browser.execute((control) => control.click(), signedOut)
+      await browser.execute((control) => control.click(), signIn)
     } else {
-      await signedOut.click()
+      await signIn.click()
     }
     const username = process.env.MUNIMENT_E2E_USERNAME
     const password = process.env.MUNIMENT_E2E_PASSWORD

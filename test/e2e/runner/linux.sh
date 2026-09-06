@@ -80,6 +80,7 @@ run_e2e() {
     fi
     exit "$run_status"
   ' bash "$portal_log" "$runtime_log" npm run test:e2e)
+  if [[ -n ${3:-} ]]; then session+=(-- --spec "$3"); fi
   if (( run_timeout > 0 )); then
     timeout "$run_timeout" "${session[@]}" >"$wdio_log" 2>>"$raw/driver-app.log" || run_status=$?
   else
@@ -266,11 +267,17 @@ export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/suppor
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"
 ready=1
 # Run the installed chat specs first. Each later phase still runs after a failure.
-export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
-export MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
-run_e2e "$raw/wdio.log" || status=1
 export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
-export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
+export MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
+run_e2e "$raw/wdio.log" 0 test/e2e/specs/local-mode-chat.spec.js || status=1
+# Remove $state_root/ready/config/ai.muniment.desktop/local-mode before sign-in.
+if rm -f -- "$XDG_CONFIG_HOME/ai.muniment.desktop/local-mode"; then
+  run_e2e "$raw/wdio-sign-in.log" 0 test/e2e/specs/real-sign-in.spec.js || status=1
+else
+  runner_failure 'Local mode marker cleanup failed before sign-in.'
+fi
+export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
+export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
 run_e2e "$raw/wdio-onboarding.log" || status=1
 unset MUNIMENT_E2E_ONBOARDING_ONLY
 exit

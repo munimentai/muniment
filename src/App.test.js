@@ -977,6 +977,22 @@ describe('workspace composer entry', () => {
     expect(providerStatusChecks).toBe(3)
   })
 
+  it('shows the provider fields after each provider change', async () => {
+    localModeStatus = true
+    render(App)
+
+    const provider = await screen.findByRole('combobox', { name: 'Provider' })
+    await fireEvent.change(provider, { target: { value: 'ollama' } })
+    expect(screen.getByLabelText('Ollama server URL')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Save Ollama server' })).toBeDisabled()
+    expect(screen.queryByLabelText('Provider API key')).not.toBeInTheDocument()
+
+    await fireEvent.change(provider, { target: { value: 'anthropic' } })
+    expect(screen.getByLabelText('Provider API key')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Save key' })).toBeDisabled()
+    expect(screen.queryByLabelText('Ollama server URL')).not.toBeInTheDocument()
+  })
+
   it('blocks sign-in while local mode entry is pending', async () => {
     const localEntry = deferred()
     invoke.mockImplementation(async (command) => {

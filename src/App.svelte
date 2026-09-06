@@ -1107,7 +1107,7 @@
                   <div><dt>{providerNames[status.provider]}</dt><dd>{status.configured ? 'Saved' : 'Not set'}</dd></div>
                 {/each}
               </dl>
-              <select aria-label="Provider" bind:value={selectedProvider} disabled={!!active || providerKeyPending}>
+              <select aria-label="Provider" value={selectedProvider} onchange={(event) => { selectedProvider = event.currentTarget.value }} disabled={!!active || providerKeyPending}>
                 <option value="anthropic">Anthropic</option>
                 <option value="google">Google</option>
                 <option value="openai">OpenAI</option>
