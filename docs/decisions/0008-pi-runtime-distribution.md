@@ -68,7 +68,46 @@ The distribution checks below still govern any Muniment-controlled mirror.
 A pin move retains the verified predecessor and the pointer rollback rule above.
 [SPEC.md](../../SPEC.md#pi-version-policy) records the approved extensions,
 built-in tools, and Active LTS Node requirement from the pinned Pi's `engines`
-field. This amendment selects no candidate and changes no production descriptor.
+field. The production descriptor stays at 0.73.1.
+
+### Candidate track
+
+The candidate is **0.85.1** from the official `earendil-works/pi` tag `v0.85.1`.
+Its release base is `https://github.com/earendil-works/pi/releases/download/v0.85.1`.
+The candidate descriptors are:
+
+| Target | Release archive | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| macOS arm64 | `pi-darwin-arm64.tar.gz` | 31,035,676 | `d5f70e3c0cf7398eac239fd0261ee074d98b7ba7f6b43fe3617f052ed5b79d06` |
+| macOS x64 | `pi-darwin-x64.tar.gz` | 33,544,584 | `adb918b845625f184d8bea408d55eacaf21aa87238793c0f5b4f3b9737bce62b` |
+| Linux arm64 | `pi-linux-arm64.tar.gz` | 42,628,180 | `042d20ae885ee4f3b102815f3280b962c377b2e9fb44de4037908cc530eae4d4` |
+| Linux x64 | `pi-linux-x64.tar.gz` | 42,560,927 | `494e498f47d74d21f40b3386f6a5e921a3d49531a169cab55bbdaca0ea1fe25a` |
+| Windows x64 | `pi-windows-x64.zip` | 45,009,021 | `002fa95b90d521245b9985d8f168caebc237ad56e7e30b319807dee1b2e17e1c` |
+
+The build-time environment switch `MUNIMENT_PI_CANDIDATE=1` selects the candidate.
+Every other value, including an absent switch, selects production 0.73.1.
+A runtime environment variable cannot change the compiled track.
+The nightly passes the switch through `desktop-ci --env-stdin` for the build and all three installed E2E lanes.
+This also covers the macOS E2E rebuild.
+Production builds and the PR gate leave the switch unset.
+
+The candidate retains exactly one predecessor, the verified 0.73.1 production descriptor.
+A failed candidate activation restores that installed predecessor through the same `current`/`previous` pointer rule.
+A fresh installation has no predecessor to restore.
+Both tracks use the same size, digest, extraction, and readiness checks.
+The candidate Windows ZIP has a flat root.
+Extraction places its files beneath the installed `pi/` directory and rejects unsafe paths.
+
+The candidate package's [`engines.node`](https://registry.npmjs.org/@earendil-works/pi-coding-agent/0.85.1) sets the Node floor at **22.19.0** (`>=22.19.0`).
+The selected Node line is **24, Active LTS**, which satisfies that floor.
+The [Node release schedule](https://github.com/nodejs/Release/blob/main/schedule.json) governs the Active LTS requirement.
+Node 22 defines the minimum, not the selected Active LTS line.
+The standalone executable includes its runtime and adds no system Node dependency.
+This candidate adopts no extension package or `defaultTools` setting.
+
+The candidate's [RPC contract](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/rpc.md) uses newline-delimited JSON over stdio.
+The installed nightly tests qualify the dispatcher against the candidate before promotion.
+A dialect failure blocks promotion and needs a dispatcher fix in a separate change.
 
 ### Distribution
 
@@ -85,7 +124,7 @@ install coordinator, lock/free-space protections, atomic publication,
 `current`/`previous` pointers and activation rollback defined by ADRs 0005 and
 0006. It adds a `pi` artifact descriptor and archive extraction inside the
 verified stage; extraction admits only regular files and directories beneath
-the release's top-level `pi/` directory and rejects absolute paths, parent
+the installed `pi/` directory and rejects absolute paths, parent
 traversal, links and special files. Publication occurs only after archive
 size/digest verification and verification that the expected `pi` (`pi.exe` on
 Windows) is a regular executable. No webview-supplied URL or path participates.
