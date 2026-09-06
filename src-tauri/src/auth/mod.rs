@@ -187,18 +187,20 @@ pub async fn auth_sign_in(
     attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
-    eprintln!("desktop native-auth request: session.sign_in");
-    sign_in_for_session(
+    let started = native_auth_command_start();
+    let result = sign_in_for_session(
         &state,
         attach_state.desktop_client_session(),
         move || sign_in_blocking(store.as_ref(), &app).map_err(|error| error.to_string()),
         |client| {
-            let response = native_auth_runtime_result(client.sign_in(), |line| eprintln!("{line}"))
-                .map_err(desktop_client_error)?;
+            let response =
+                native_auth_runtime_result(|| client.sign_in(), |line| eprintln!("{line}"))
+                    .map_err(desktop_client_error)?;
             decode_sign_in_status(response)
         },
     )
-    .await
+    .await;
+    native_auth_command_result(result, started)
 }
 
 #[tauri::command]
@@ -208,31 +210,59 @@ pub async fn auth_sign_in(
     state: tauri::State<'_, AuthState>,
 ) -> Result<AuthStatus, String> {
     let store = state.native_store.clone();
-    sign_in_marked(&state, move || {
+    let started = native_auth_command_start();
+    let result = sign_in_marked(&state, move || {
         sign_in_blocking(store.as_ref(), &app).map_err(|error| error.to_string())
     })
-    .await
+    .await;
+    native_auth_command_result(result, started)
+}
+
+fn native_auth_command_start() -> std::time::Instant {
+    let started = std::time::Instant::now();
+    eprintln!("muniment-desktop: native-auth start method=COMMAND path=auth_sign_in");
+    started
+}
+
+fn native_auth_command_result(
+    result: Result<AuthStatus, String>,
+    started: std::time::Instant,
+) -> Result<AuthStatus, String> {
+    let outcome = if result.is_ok() {
+        "status=ok"
+    } else {
+        "error=SignIn"
+    };
+    eprintln!("muniment-desktop: native-auth end method=COMMAND path=auth_sign_in {outcome} elapsed_ms={}", started.elapsed().as_millis());
+    result
 }
 
 #[cfg(unix)]
 fn native_auth_runtime_result(
-    result: Result<serde_json::Value, ClientError>,
+    step: impl FnOnce() -> Result<serde_json::Value, ClientError>,
     mut log: impl FnMut(&str),
 ) -> Result<serde_json::Value, ClientError> {
-    match result {
-        Ok(response) => {
-            log("desktop native-auth response: success");
-            Ok(response)
-        }
-        Err(ClientError::Timeout) => {
-            log("desktop native-auth timeout: session.sign_in");
-            Err(ClientError::Timeout)
-        }
-        Err(error) => {
-            log("desktop native-auth response: error");
-            Err(error)
-        }
-    }
+    let started = std::time::Instant::now();
+    log("muniment-desktop: native-auth start method=RPC path=session.sign_in");
+    let result = step();
+    log(&native_auth_runtime_after_line(
+        &result,
+        started.elapsed().as_millis(),
+    ));
+    result
+}
+
+#[cfg(unix)]
+fn native_auth_runtime_after_line(
+    result: &Result<serde_json::Value, ClientError>,
+    elapsed_ms: u128,
+) -> String {
+    // ClientError contains only fixed variants. The response can contain user data.
+    let outcome = match result {
+        Ok(_) => "status=ok".to_owned(),
+        Err(error) => format!("error={error:?}"),
+    };
+    format!("muniment-desktop: native-auth end method=RPC path=session.sign_in {outcome} elapsed_ms={elapsed_ms}")
 }
 
 #[cfg(unix)]
@@ -773,29 +803,45 @@ mod tests {
         let response = serde_json::json!({"status": {"signed_in": true}});
         let mut success_log = Vec::new();
         assert_eq!(
-            native_auth_runtime_result(Ok(response.clone()), |line| {
-                success_log.push(line.to_owned())
-            }),
+            native_auth_runtime_result(
+                || Ok(response.clone()),
+                |line| { success_log.push(line.to_owned()) }
+            ),
             Ok(response)
         );
-        assert_eq!(success_log, ["desktop native-auth response: success"]);
+        assert_eq!(success_log.len(), 2);
+        assert_eq!(
+            success_log[0],
+            "muniment-desktop: native-auth start method=RPC path=session.sign_in"
+        );
+        assert!(success_log[1].starts_with("muniment-desktop: native-auth end method=RPC path=session.sign_in status=ok elapsed_ms="));
+        assert_eq!(native_auth_runtime_after_line(&Ok(serde_json::json!({"subject": "secret-user", "token": "secret-token"})), 17),
+            "muniment-desktop: native-auth end method=RPC path=session.sign_in status=ok elapsed_ms=17");
 
-        for (error, terminal_line) in [
-            (
-                ClientError::ConnectionClosed,
-                "desktop native-auth response: error",
-            ),
-            (
-                ClientError::Timeout,
-                "desktop native-auth timeout: session.sign_in",
-            ),
+        for error in [
+            ClientError::ConnectionClosed,
+            ClientError::Timeout,
+            ClientError::DesktopUnavailable,
+            ClientError::RequestRejected,
+            ClientError::MalformedFrame,
         ] {
             let mut log = Vec::new();
             assert_eq!(
-                native_auth_runtime_result(Err(error), |line| log.push(line.to_owned())),
+                native_auth_runtime_result(|| Err(error), |line| log.push(line.to_owned())),
                 Err(error)
             );
-            assert_eq!(log, [terminal_line]);
+            assert_eq!(log.len(), 2);
+            assert_eq!(log[0], success_log[0]);
+            let prefix = format!("muniment-desktop: native-auth end method=RPC path=session.sign_in error={error:?} elapsed_ms=");
+            log[1]
+                .strip_prefix(&prefix)
+                .unwrap()
+                .parse::<u128>()
+                .unwrap();
+            assert_eq!(
+                native_auth_runtime_after_line(&Err(error), 0),
+                format!("{prefix}0")
+            );
         }
     }
 

@@ -81,11 +81,11 @@ run_e2e() {
     exit "$run_status"
   ' bash "$portal_log" "$runtime_log" npm run test:e2e)
   if (( run_timeout > 0 )); then
-    timeout "$run_timeout" "${session[@]}" >"$wdio_log" 2>&1 || run_status=$?
+    timeout "$run_timeout" "${session[@]}" >"$wdio_log" 2>>"$raw/driver-app.log" || run_status=$?
   else
-    "${session[@]}" >"$wdio_log" 2>&1 || run_status=$?
+    "${session[@]}" >"$wdio_log" 2>>"$raw/driver-app.log" || run_status=$?
   fi
-  if grep -Fq 'fuse init failed' "$portal_log" "$wdio_log"; then
+  if grep -Fq 'fuse init failed' "$portal_log" "$wdio_log" "$raw/driver-app.log"; then
     echo 'xdg-document-portal failed to initialize FUSE' >&2
     run_status=1
   fi
