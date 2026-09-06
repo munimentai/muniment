@@ -228,6 +228,19 @@ describe('nightly asset identity', () => {
     ['missing', { target_commitish: sha, assets: [] }],
     ['duplicate', { target_commitish: sha, assets: [asset, asset] }],
   ])('rejects %s identity', (_name, release) => expect(validate(release).status).not.toBe(0))
+  it.each(['linux', 'macos', 'windows'])('names the expected %s asset and the release assets', (platform) => {
+    const name = platform === 'windows' ? `nightly-${sha}-windows-muniment_1.2.3_x64_en-US.msi`
+      : platform === 'macos' ? `nightly-${sha}-macos-muniment.app.zip` : asset.name
+    const expected = platform === 'windows'
+      ? `^nightly-${sha}-windows-muniment_[0-9]+\\.[0-9]+\\.[0-9]+_x64_en-US\\.msi$` : name
+    for (const count of [0, 2]) {
+      const assets = [{ name: 'unrelated.zip', id: 1 }, ...Array.from({ length: count }, () => ({ name, id: 42 }))]
+      const result = validate({ assets }, sha, platform)
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain(`missing or duplicate ${platform} artifact: expected ${expected}, matches=${count}, release assets=${JSON.stringify(assets.map((entry) => entry.name))}`)
+    }
+    expect(validate({ assets: [] }, sha, platform).stderr).toContain('matches=0, release assets=[]')
+  })
   it('rejects a noncanonical SHA', () => expect(validate({ target_commitish: sha, assets: [asset] }, 'A'.repeat(40)).status).not.toBe(0))
   it('accepts only the per-user Windows MSI', () => {
     const perUser = { name: `nightly-${sha}-windows-muniment_0.0.1_x64_en-US.msi`, id: 84 }
@@ -580,7 +593,9 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
     expect(runner.indexOf('New-Item -ItemType Directory -Force $raw, $stateRoot')).toBeGreaterThan(boundary)
     expect(runner.indexOf('New-Item -ItemType File -Force $cleanupLog')).toBeGreaterThan(boundary)
     expect(runner).toContain('$diagnosticFile = Join-Path $artifacts "runner-failure.txt"')
-    expect(runner).toMatch(/catch \{[\s\S]+message:[\s\S]+category:[\s\S]+line:[\s\S]+Set-Content -LiteralPath \$diagnosticFile[\s\S]+Write-Output[\s\S]+finally \{/)
+    expect(runner).toMatch(/catch \{[\s\S]+message:[\s\S]+category:[\s\S]+line:[\s\S]+Set-Content -LiteralPath \(Join-Path \$raw "runner-failure.txt"\)[\s\S]+Write-Output[\s\S]+finally \{/)
+    expect(runner).toContain('-Value $diagnostic -Encoding UTF8 -ErrorAction SilentlyContinue\n    $diagnosticStaged = $?')
+    expect(runner).toContain('Copy-Item -LiteralPath (Join-Path $diagnosticSafe "runner-failure.txt") -Destination $diagnosticFile -Force')
   })
 
   const runWindowsFinalizer = (failed = '', setupFail = '', extraEnv = {}) => {
@@ -785,6 +800,120 @@ describe.skipIf(process.platform === 'win32')('Linux early abort reporting', () 
   })
 })
 
+describe.skipIf(process.platform === 'win32')('runner setup causes', () => {
+  it.each(['linux', 'macos'])('carries a missing %s asset through redaction into JUnit', (platform) => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const bin = path.join(directory, 'bin')
+    fs.mkdirSync(bin)
+    for (const [name, content] of Object.entries({
+      gh: '#!/bin/sh\nprintf \'{"assets":[{"name":"other-platform.zip","id":1}]}\\n\'\n',
+      stat: '#!/bin/sh\necho test-user\n',
+      id: '#!/bin/sh\necho test-user\n',
+    })) {
+      fs.writeFileSync(path.join(bin, name), content, { mode: 0o700 })
+    }
+    const sha = 'a'.repeat(40)
+    const result = spawnSync('bash', [path.join(root, `test/e2e/runner/${platform}.sh`)], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, DCI_ARTIFACTS_DIR: artifacts,
+        MUNIMENT_E2E_SOURCE_SHA: sha, GH_TOKEN: 'injected-token', GITHUB_REPOSITORY: 'test/repo',
+        MUNIMENT_E2E_USERNAME: 'injected-user', MUNIMENT_E2E_PASSWORD: 'injected-password' },
+    })
+    expect(result.status).toBe(1)
+    const cause = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+    const expected = `nightly-${sha}-${platform}-${platform === 'macos' ? 'muniment.app.zip' : 'muniment.deb'}`
+    expect(cause).toContain(expected)
+    expect(cause).toContain('matches=0, release assets=["other-platform.zip"]')
+    const junit = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, `installed-${platform}`, '1', '0'], { encoding: 'utf8' })
+    expect(junit.status, junit.stderr).toBe(0)
+    const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
+    expect(report).toContain(expected)
+    expect(report).toContain('matches=0, release assets=[&quot;other-platform.zip&quot;]')
+    expect(report).not.toContain('desktop-ci failed before producing a JUnit report')
+  })
+
+  it.each(['stdout', 'both', 'empty'])('carries %s setup errors into JUnit', (output) => {
+    const raw = temp()
+    const fatal = 'fatal: installer rejected package signature'
+    const result = spawnSync('bash', ['-c', `
+      source test/e2e/support/runner-failure.sh
+      raw=$1
+      status=0
+      run_setup bash -c '${output !== 'empty' ? `printf "${fatal}";` : ''} ${output === 'both' ? 'echo warning >&2;' : ''} exit 7'
+      exit "$?"
+    `, 'bash', raw], { encoding: 'utf8' })
+    expect(result.status).toBe(7)
+    expect(result.stdout).toBe(output === 'empty' ? '' : fatal)
+    const cause = fs.readFileSync(path.join(raw, 'runner-failure.txt'), 'utf8')
+    expect(cause).toBe(`bash failed (exit code 7)${output === 'empty' ? '' : `: ${fatal}`}${output === 'both' ? '\nwarning' : ''}\n`)
+    const junit = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), raw, 'installed-linux', '1', '0'], { encoding: 'utf8' })
+    expect(junit.status, junit.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(raw, 'junit-infrastructure.xml'), 'utf8'))
+      .toContain(`<failure message="${cause.trim().replaceAll('\n', ' ')}"/>`)
+  })
+
+  it.each(['stdout', 'stderr'])('keeps both streams in JUnit with long %s progress', (stream) => {
+    const raw = temp()
+    const progress = 'p'.repeat(1800)
+    const fatal = 'fatal: installer rejected package signature'
+    const stdout = stream === 'stdout' ? progress : fatal
+    const stderr = stream === 'stderr' ? progress : fatal
+    const result = spawnSync('bash', ['-c', `
+      source test/e2e/support/runner-failure.sh
+      raw=$1
+      status=0
+      run_setup bash -c 'printf "%s" "$1"; printf "%s" "$2" >&2; exit 7' bash "$2" "$3"
+    `, 'bash', raw, stdout, stderr], { encoding: 'utf8' })
+    expect(result.status).toBe(7)
+    expect(result.stdout).toBe(stdout)
+    expect(result.stderr).toContain(stderr)
+    expect(fs.readFileSync(path.join(raw, 'setup-stdout.log'), 'utf8')).toBe(stdout)
+    expect(fs.readFileSync(path.join(raw, 'setup-stderr.log'), 'utf8')).toBe(stderr)
+    const cause = fs.readFileSync(path.join(raw, 'runner-failure.txt'), 'utf8')
+    expect(cause.length).toBeLessThanOrEqual(1000)
+    const junit = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), raw, 'installed-linux', '1', '0'], { encoding: 'utf8' })
+    expect(junit.status, junit.stderr).toBe(0)
+    const report = fs.readFileSync(path.join(raw, 'junit-infrastructure.xml'), 'utf8')
+    expect(report).toContain('bash failed (exit code 7)')
+    expect(report).toContain(fatal)
+    expect(report).toContain('p'.repeat(100))
+    expect(report).toContain(' ... ')
+  })
+
+  it('preserves successful binary output and stderr without a cause file', () => {
+    const raw = temp()
+    const result = spawnSync('bash', ['-c', `
+      source test/e2e/support/runner-failure.sh
+      raw=$1
+      status=0
+      run_setup bash -c 'printf "a\\\\0b\\\\n\\\\n"; printf warning >&2'
+    `, 'bash', raw])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toEqual(Buffer.from('a\0b\n\n'))
+    expect(result.stderr.toString()).toBe('warning')
+    expect(fs.existsSync(path.join(raw, 'runner-failure.txt'))).toBe(false)
+    expect(fs.existsSync(path.join(raw, 'setup-stdout.log'))).toBe(false)
+  })
+
+  it('keeps command output separate and records only failures', () => {
+    const raw = temp()
+    const result = spawnSync('bash', ['-c', `
+      source test/e2e/support/runner-failure.sh
+      raw=$1
+      status=0
+      run_setup bash -c 'echo result; echo warning >&2'
+      test ! -e "$raw/runner-failure.txt" || exit 2
+      run_setup bash -c 'echo "lookup <failed> & stopped" >&2; exit 7'
+      exit "$?"
+    `, 'bash', raw], { encoding: 'utf8' })
+    expect(result.status).toBe(7)
+    expect(result.stdout).toBe('result\n')
+    expect(fs.readFileSync(path.join(raw, 'runner-failure.txt'), 'utf8'))
+      .toBe('bash failed (exit code 7): lookup <failed> & stopped\n')
+  })
+})
+
 describe('JUnit infrastructure fallback', () => {
   it.skipIf(process.platform === 'win32')('includes and escapes the captured runner reason', () => {
     const artifacts = temp()
@@ -792,7 +921,8 @@ describe('JUnit infrastructure fallback', () => {
     const result = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, 'installed-windows', '1', '1'], { encoding: 'utf8' })
     expect(result.status, result.stderr).toBe(0)
     const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
-    expect(report).toContain('desktop-ci did not return a valid artifact envelope: message: setup &lt;failed&gt; &amp; stopped category: InvalidOperation line: 42')
+    expect(report).toContain('<failure message="message: setup &lt;failed&gt; &amp; stopped category: InvalidOperation line: 42"/>')
+    expect(report).not.toContain('desktop-ci did not return a valid artifact envelope')
   })
 
   it.skipIf(process.platform === 'win32')('does not copy the desktop-ci transcript into JUnit', () => {
@@ -1307,19 +1437,58 @@ describe('Windows native command contract', { timeout: 30_000 }, () => { // A Po
   })
 
   it.skipIf(process.platform !== 'win32').each([
-    ['0', 0],
-    ['7', 1],
-  ])('gates a stderr-writing command on exit code %s', (exitCode, expectedStatus) => {
+    ['0', 0, 'stderr'],
+    ['7', 1, 'stderr'],
+    ['0', 0, 'stdout'],
+    ['7', 1, 'stdout'],
+    ['0', 0, 'both'],
+    ['7', 1, 'both'],
+  ])('gates exit code %s with expected status %s and %s output', (exitCode, expectedStatus, output) => {
     const directory = temp()
     const artifacts = path.join(directory, 'artifacts')
     const runner = path.join(root, 'test/e2e/runner/windows.ps1')
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
       encoding: 'utf8',
-      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE: exitCode },
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts,
+        MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE: exitCode, MUNIMENT_E2E_NATIVE_COMMAND_TEST_OUTPUT: output },
     })
     expect(result.status).toBe(expectedStatus)
-    expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('native warning')
+    const messages = output === 'stderr' ? ['native warning'] : ['fatal: installer rejected package signature']
+    if (output === 'both') messages.push('native warning')
+    const log = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')
+    for (const message of messages) expect(log).toContain(message)
+    if (expectedStatus) {
+      const cause = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+      expect(cause).toContain(`native command test failed (exit code 7): ${messages.join('\n')}`)
+    } else {
+      expect(fs.existsSync(path.join(artifacts, 'runner-failure.txt'))).toBe(false)
+      if (output !== 'stderr') expect(result.stdout).toContain(messages[0])
+    }
   })
+
+  it.skipIf(process.platform !== 'win32').each(['long-stdout', 'long-stderr'])(
+    'keeps both streams within the JUnit cap with %s progress', (output) => {
+      const directory = temp()
+      const artifacts = path.join(directory, 'artifacts')
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'test/e2e/runner/windows.ps1')], {
+        encoding: 'utf8',
+        env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts,
+          MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE: '7', MUNIMENT_E2E_NATIVE_COMMAND_TEST_OUTPUT: output },
+      })
+      expect(result.status).toBe(1)
+      const fatal = 'fatal: installer rejected package signature'
+      const log = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')
+      expect(log).toContain('p'.repeat(1800))
+      expect(log).toContain(fatal)
+      const cause = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+      expect(cause.length).toBeLessThanOrEqual(1000)
+      const message = Array.from(cause.replace(/\s+/gu, ' ').trim()).slice(0, 1000).join('')
+      expect(message).toContain('native command test failed (exit code 7)')
+      expect(message).toContain(fatal)
+      expect(message).toContain('p'.repeat(100))
+      expect(message).toContain(' ... ')
+    },
+  )
 
   it.skipIf(process.platform !== 'win32')('fails when PowerShell cannot invoke the command', () => {
     const directory = temp()
@@ -1331,6 +1500,23 @@ describe('Windows native command contract', { timeout: 30_000 }, () => { // A Po
     })
     expect(result.status).toBe(1)
     expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('muniment-command-that-does-not-exist')
+    expect(fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8'))
+      .toContain('native command test failed: could not resolve muniment-command-that-does-not-exist')
+  })
+
+  it.skipIf(process.platform !== 'win32')('redacts the terminating cause before publication', () => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts')
+    const secret = 'muniment-command-that-does-not-exist'
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'test/e2e/runner/windows.ps1')], {
+      encoding: 'utf8',
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts,
+        MUNIMENT_E2E_NATIVE_COMMAND_TEST_INVOCATION_ERROR: '1', MUNIMENT_E2E_PASSWORD: secret },
+    })
+    expect(result.status).toBe(1)
+    const cause = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+    expect(cause).toContain('could not resolve [REDACTED]')
+    expect(cause).not.toContain(secret)
   })
 
   it.skipIf(process.platform !== 'win32')('does not resolve a command from the working directory', () => {
