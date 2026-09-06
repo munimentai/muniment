@@ -147,7 +147,8 @@ jobs:
               "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" \
               "APPLE_API_ISSUER=$APPLE_API_ISSUER")
           fi
-          { printf '%s\n' "GH_TOKEN=$REPO_TOKEN"; if [ -n "${signing_env:-}" ]; then printf '%s\n' "$signing_env"; fi; } \
+          # Compile the candidate into the app and runtime for installed E2E.
+          { printf '%s\n' "GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1"; if [ -n "${signing_env:-}" ]; then printf '%s\n' "$signing_env"; fi; } \
           | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
                 desktopci@10.1.10.10 "$ssh_cmd --env-stdin"
@@ -297,6 +298,7 @@ jobs:
           remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
           set +e
           printf '%s\n' \
+            "MUNIMENT_PI_CANDIDATE=1" \
             "GH_TOKEN=$RELEASE_TOKEN" \
             "GITHUB_REPOSITORY=$REPOSITORY" \
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
@@ -421,6 +423,7 @@ jobs:
           remote="sudo desktop-ci windows --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
           set +e
           printf '%s\n' \
+            "MUNIMENT_PI_CANDIDATE=1" \
             "GH_TOKEN=$RELEASE_TOKEN" \
             "GITHUB_REPOSITORY=$REPOSITORY" \
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
@@ -537,6 +540,7 @@ jobs:
           remote="sudo desktop-ci macos --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts --screendump"
           set +e
           printf '%s\n' \
+            "MUNIMENT_PI_CANDIDATE=1" \
             "GH_TOKEN=$RELEASE_TOKEN" \
             "GITHUB_REPOSITORY=$REPOSITORY" \
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \

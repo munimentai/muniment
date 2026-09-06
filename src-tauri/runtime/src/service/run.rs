@@ -26,7 +26,7 @@ use muniment_core::run_preparation::{
 };
 use muniment_core::run_start::{accepted_time_now, ActiveRun};
 use muniment_core::session_thread::SessionThread;
-use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
+use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -284,7 +284,7 @@ pub fn drive_prompt(launch: PromptLaunch) {
             launch.thread_id,
             launch.grant.workspace.clone(),
         )
-        .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_ARTIFACT)),
+        .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT)),
         launch.storage,
         launch.runtime,
         launch.runtime_activity,
@@ -451,7 +451,7 @@ pub fn resume_run(
             thread_id,
             grant.workspace.clone(),
         )
-        .with_pi_artifact(pi_artifact.unwrap_or(PI_ARTIFACT)),
+        .with_pi_artifact(pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT)),
         storage,
         runtime,
         runtime_activity: runtime_activity.clone(),

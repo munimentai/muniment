@@ -178,6 +178,9 @@ for promotion. Neither track follows npm `latest`, a semver range, or a mutable
 release manifest. The pin moves to the version the factory runs, and a pin
 move keeps exactly one verified predecessor resolvable for rollback.
 
+The production executable pin is 0.73.1. The candidate is 0.85.1 with 0.73.1 as its verified predecessor.
+The nightly selects the candidate with the build-time switch `MUNIMENT_PI_CANDIDATE=1`.
+
 The harness installs only packages listed on [pi.dev/packages](https://pi.dev/packages)
 and executables from the official [earendil-works/pi repository](https://github.com/earendil-works/pi)
 or a Muniment-controlled mirror that preserves ADR 0008's provenance checks.
