@@ -5,8 +5,8 @@ Tickets in Plane carry the slices. No dates.
 
 ## The desktop works
 
-An installed build on all three platforms launches, enters local mode on the
-thread surface, sends a message and sees a reply begin, proven by a green
+An installed build on all three platforms launches, enters local mode on
+the thread surface, sends a message and sees a reply begin, proven by a green
 nightly rather than asserted. This lands before any graph work starts.
 
 - A local-mode chat smoke is the first installed e2e spec. Real sign-in gates
