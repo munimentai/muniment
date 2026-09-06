@@ -36,7 +36,8 @@ Set the `MACOS_SIGNING_ENABLED` repository variable to `true` after all six secr
 `build-macos-app.mjs` (macOS build VM only):
 1. Builds the universal `.app` (identical bits to the unsigned path).
 2. Imports the `.p12` and finds both Developer ID identities by SHA-1.
-3. Imports the vendored Apple Developer ID G2 intermediate certificate.
+3. The build imports the vendored Apple Developer ID G2 intermediate certificate.
+   The build skips the import when the keychain already holds the intermediate.
 4. `codesign`s the nested ASR runtime dylibs, then the `.app`, with the
    hardened runtime (`--options runtime`) and a secure `--timestamp`.
 5. `xcrun notarytool submit … --wait` using the API key. A rejected build fails
