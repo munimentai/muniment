@@ -275,8 +275,9 @@ is open work: closing it is a gate change first and a symptom ticket second.
 6. UI copy obeys the forbidden-vocabulary law, records render in mono, and the
    provenance line is present on every reply. Enforcers: the UI copy law,
    record font law, and provenance line law steps in the `ci.yml` smoke job.
-7. An update path exists or an ADR defers it. Enforcer: gap. No updater exists
-   and no ADR records the deferral.
+7. The update path is the per-platform package manager until the first public
+   release, per ADR 0029. Enforcer: `test/smoke.sh` asserts the ADR exists and
+   states the trigger.
 8. The steering files obey the rules in `AGENTS.md`. Enforcer:
    `scripts/check-steering.sh .` in the `ci.yml` smoke job.
 

@@ -71,7 +71,6 @@ the permission-gate card, and approving a proposal from the phone is that card.
 
 ## Release
 
-- An update path exists or an ADR defers it.
 - macOS builds are signed, notarized and stapled. Owner-gated on Apple
   enrollment, and switching signing on is secrets-only.
 - WinGet publication, Homebrew tap seeding, distribution accounts, store
