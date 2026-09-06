@@ -9,14 +9,6 @@ An installed build on all three platforms launches, enters local mode on
 the thread surface, sends a message and sees a reply begin, proven by a green
 nightly rather than asserted. This lands before any graph work starts.
 
-- A local-mode chat smoke is the first installed e2e spec. Real sign-in gates
-  no other spec.
-- The runtime logs its startup and the desktop logs the native-auth call, so a
-  silent auth path names its cause from an envelope.
-- The Pi sidecar carries the three factory extension packages and
-  `npm:pi-mcp-adapter`, rendered into `settings.json` with `defaultTools` set
-  to the full built-in set.
-- The Pi system prompt carries the bash timeout paragraph.
 - The production pin moves to the version the factory runs, with its Node
   floor, and keeps one verified predecessor for rollback.
 - The nightly is green on Linux, Windows and macOS with a readable evidence
