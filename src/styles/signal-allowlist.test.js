@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 
-// docs/spec/design-spec.md §1.2 is a LAW with an exhaustive allowed list, and it
+// DESIGN.md law 1 is a LAW with an exhaustive allowed list, and it
 // asks for exactly this check: "the `--signal` token may only be referenced by
 // components on the allowed list". Every entry names the clause that permits it;
 // adding one is a spec decision, not a styling one.

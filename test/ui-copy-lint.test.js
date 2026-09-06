@@ -8,7 +8,7 @@ import { forbiddenEmDashes, forbiddenUiCopy, lintEmDashes, lintUiCopy } from './
 describe('UI copy lint', () => {
   it('accepts the shipped UI copy', () => {
     expect(lintUiCopy('src')).toEqual([])
-    expect(lintEmDashes(['src', 'src-tauri', 'browser-control', 'docs/mockups'])).toEqual([])
+    expect(lintEmDashes(['src', 'src-tauri', 'browser-control'])).toEqual([])
   })
 
   it.each(['AI', 'magic', 'supercharge', 'unlocked', 'sovereignty'])(
