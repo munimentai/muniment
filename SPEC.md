@@ -43,15 +43,15 @@ asking anyone, and they already run a harness such as Claude Code.
 
 ## Interfaces
 
-**The public core.** The graph, the read-only SQL tool, the Go importers, the
-local report and the generated UI belong to the public core repo. The desktop
-embeds them. The runtime opens the SQLite graph through rusqlite and serves the
-SQL tool to a harness. These crates port into the core with their tests: the
-runtime service, attach, the run journal, the Pi sidecar integration, the
-per-thread permission policy, the CAS store, the memory index, the code-diff
-crates, ACP interop, and the voice stack. Nothing ports from the cloud-native
-auth flow, the entitlement projection UI, the browser-control extension, or the
-remote-control design study.
+**The public core.** One app, one download. The graph, the read-only SQL
+tool, the Go importers, the local report and the generated UI are built in this
+repo beside the runtime service, attach, the run journal, the Pi sidecar
+integration, the per-thread permission policy, the CAS store, the memory index,
+the code-diff crates, ACP interop and the voice stack. The runtime opens the
+SQLite graph through rusqlite and serves the SQL tool to a harness. The cloud
+client code stays in the app, because sign-in is the upgrade path. At the FSL
+release this repo becomes `munimentai/muniment` by transfer, history included,
+so every workflow and every commit here is written as public.
 
 **muniment-cloud.** Sign-in gates cloud features only. Cloud-backed use passes
 short-lived session tokens and the user's gateway virtual endpoint.
