@@ -1015,7 +1015,7 @@
   {#if !workspaceMode() || onboarding.name !== 'complete'}
     <div class="lockup">
       <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true">
-        <path d={markD} stroke-width="4.5" />
+        <path d={markD} stroke-width="5.6" />
       </svg>
       {#if onboarding.name === 'complete' && (auth.name === 'signed-out' || auth.name === 'signing-in')}
         <h1 class="name">muniment</h1>
@@ -1051,7 +1051,7 @@
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
             {#if !sidebarCollapsed}
-              <svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="5" /></svg>
+              <svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="6.3" /></svg>
               <strong>muniment</strong>
             {/if}
             <!-- One persistent element across both states so activating it never drops keyboard focus. -->

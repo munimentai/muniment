@@ -11,8 +11,8 @@ export function ringPath() {
 }
 
 const CENTER = 24
-const BASE_RADIUS = 16.5
-const MILL_DEPTH = 1.6
+const BASE_RADIUS = 20.2
+const MILL_DEPTH = 1.15
 const TOOTH_COUNT = 22
 const REDUCTION_WIDTH = 5
 const REDUCTION_SAMPLES = TOOTH_COUNT * 12
