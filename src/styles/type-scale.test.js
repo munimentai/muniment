@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 
-// docs/spec/design-spec.md §1.4 requires every component type size to resolve
+// DESIGN.md requires every component type size to resolve
 // through the named --text-* register. There are no component exceptions; any
 // future entry must cite the spec clause that requires it, as the shape guard does.
 const TYPE_EXCEPTIONS = {}

@@ -78,7 +78,7 @@ test -z "$(grep -RilE \
   src src-tauri/src src-tauri/core/src test/probe 2>/dev/null)"
 grep -Fq -- '- Status: superseded by the 2026-07-29 cloud ingress ruling' \
   docs/decisions/0017-resident-model-artifact-pin.md
-grep -Fq 'The desktop sends no classification metadata.' docs/spec/harness-spec.md
+grep -Fq 'The desktop sends no classification metadata.' SPEC.md
 # SPEC law 13 permits the bundled local classifier but keeps its result off the
 # cloud-bound wire. Reserved classification fields remain forbidden in source.
 # `chat_grant.rs` names these fields only in tests that reject them from both

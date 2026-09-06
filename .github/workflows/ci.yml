@@ -181,6 +181,9 @@ jobs:
       - name: Structure smoke
         run: test/smoke.sh
 
+      - name: Steering check
+        run: scripts/check-steering.sh .
+
       - name: Rust formatting
         if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: cargo fmt --manifest-path src-tauri/core/Cargo.toml --check

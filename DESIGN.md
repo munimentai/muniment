@@ -1,30 +1,91 @@
 # muniment-desktop — Design standard
 
-1. **Owner mockups (ground truth): [docs/mockups/desktop/](docs/mockups/desktop/)**
-   — adhere closely. Mobile mockups ([docs/mockups/mobile/](docs/mockups/mobile/))
-   are design ground truth for the phased mobile companion app (harness-spec §12).
-2. **The written system:** [docs/spec/design-spec.md](docs/spec/design-spec.md)
-   §1 (tokens/laws/identity) + §2 (desktop app) and
-   [docs/spec/02-desktop-app.md](docs/spec/02-desktop-app.md).
-3. **The ring:** [docs/design-reference/ring/muniment-ring-pulse-spin.html](docs/design-reference/ring/muniment-ring-pulse-spin.html)
-   is the reference geometry + thinking-animation engine (§1.8). At rest:
-   static ink. Thinking: verdigris breath/spin/trace, all visible instances
-   in sync. ≤20px: solid two-edge reduction.
-4. **Remote Control:** [docs/design-reference/remote-control-ux.md](docs/design-reference/remote-control-ux.md) records the pending desktop session UX reference.
+muniment desktop is the local app for muniment, the company system of record.
+The interface is the user's territory and the model is a visitor. The design
+language comes from institutions that hold things in trust: registries,
+standards bodies, ledgers. Calm, permanent, meticulous about records. The
+thread surface, the provenance line, the tool cards and the local report all
+render the same graph, and nothing in the shell is decoration.
 
-Key grammar (short form; design-spec §2 is authoritative): sidebar /
-thread / artifact rail (⌘J) layout; user messages right in `faint` bubbles,
-responses plain on `paper` (no bubble, no avatar); streaming = 2px signal
-underline + caret, never dots; tool activity = inline mono cards with
-status-dot pulse while running; provenance line under every response (mono,
-11.5px, route in signal); composer focus shifts border to `muted`, never
-signal. Radius 2/6/10. Both themes first-class; `prefers-reduced-motion`
-respected everywhere.
+## Tokens
+
+`src/styles/tokens.css` is the token source. Light and dark are both
+first-class, the OS picks the default, and a user override persists per device.
+
+| Token | Light | Dark | Use |
+| --- | --- | --- | --- |
+| `--paper` | `#F6F7F6` | `#141716` | App background |
+| `--surface` | `#FFFFFF` | `#1C201E` | Cards, composer, bars |
+| `--faint` | `#EDEFEE` | `#222624` | User bubbles, kbd chips, hover |
+| `--ink` | `#1A1D1C` | `#E8EBE9` | Text, primary buttons |
+| `--muted` | `#5C6461` | `#8A928E` | Secondary text, icons at rest |
+| `--border` | `#E2E5E3` | `#2A2F2C` | Hairlines |
+| `--signal` | `#2A7264` | `#58B39F` | Computation only |
+| `--signal-soft` | `rgba(47,126,109,.10)` | `rgba(88,179,159,.12)` | Signal backgrounds |
+| `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
+| `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
+
+Every neutral carries a faint green cast that ties it to signal. Never pure
+`#FFF` or `#000`.
+
+Type: Schibsted Grotesk for everything human, Commit Mono for everything that
+is evidence. Every component type size resolves through the named `--text-*`
+register. Desktop scale 12 / 13 / 15 body / 17 / 22 / 28, mono one step
+smaller than adjacent body text, line-height 1.55 body and 1.3 headings. No
+display serif. No italic except semantic emphasis in user content.
+
+Shape: radius `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
+Nothing pill-shaped. Hairline borders do the work, and `--shadow-window` and
+`--shadow-overlay` are the only two depth tokens. Motion is purposeful and
+rare: the mark's thinking state, the streaming underline, the tool pulse, the
+panel slide. `prefers-reduced-motion` removes all of it.
+
+## Laws
+
+1. **Color means computation.** `--signal` appears only on the mark's thinking
+   state, the running-tool status pulse, the streaming underline and caret on
+   the active line, the route segment of the provenance line, the live voice
+   polish flash, and workflow-run indicators. Buttons, links, focus rings,
+   selection, icons at rest, badges and the mark at rest are ink on paper.
+   `src/styles/signal-allowlist.test.js` enforces the list.
+2. **If it is a record, it is mono.** Provenance lines, tool activity, audit
+   entries, costs, model names, file paths and keyboard chips render in Commit
+   Mono. Conversation renders in Schibsted Grotesk.
+3. **Anti-patterns are hard fails.** No gradients, no violet, no glassmorphism
+   or backdrop blur, no orbs or ambient animation, no assistant avatar, no
+   typing dots, no sparkles or wand iconography, no emoji in UI copy, no pill
+   radius, no "AI", "magic", "supercharge" or "unlock" in copy.
+4. **Voice.** Sentence case everywhere. Buttons say what happens. Errors state
+   what happened and the next step and never apologize. Empty states are one
+   line and no illustration. No em dash in user-facing text.
+
+## The ring
+
+The mark is a ring with a milled edge: a circle whose radius is modulated by a
+uniform 22-tooth wave, `r(t) = 16.5 + 1.6·sin(22t)` in a 48-unit viewBox,
+monoline stroke, round caps. At rest it is static ink. Thinking, it is
+verdigris and animated: an irregular breath that flexes scale, stroke and
+milling depth together, a spin that eases toward a new random target and often
+stops, and a rare trace that runs the outline once. All visible instances
+animate in sync as one organism. At 20px and below it renders as a solid
+two-edge reduction. [docs/design-reference/ring/muniment-ring-pulse-spin.html](docs/design-reference/ring/muniment-ring-pulse-spin.html)
+is the reference geometry and animation engine.
+
+## Grammar
+
+Layout is sidebar, thread, and artifact rail (⌘J, closed by default). User
+messages sit right in `faint` bubbles at radius 10. Responses sit plain on
+`paper` with no bubble and no avatar. Streaming is a 2px signal underline and a
+signal caret, never dots. Tool activity is an inline mono card with a status
+dot that pulses while running and collapses to its header when done. The
+provenance line sits under every response in mono at `--text-provenance`, with
+the route in signal. Composer focus shifts the border to `muted`, never signal.
+Platform chrome follows the OS and brand tokens stay identical across platforms.
 
 Conversation, tool, permission, and receipt state is rebuilt from the
-append-only local run journal (ADR 0002). Reopen reduces committed events;
-snapshots are disposable, and uncertain external effects require explicit
-attention rather than silent replay.
+append-only local run journal. Reopen reduces committed events; snapshots are
+disposable, and uncertain external effects require explicit attention rather
+than silent replay.
 A memory recall renders as one row with its query inside the expanded receipt and nowhere else.
 Each saved attachment shows its media type when the record provides one. The image delivery rule appears once under the attachment list.
 A code-diff gate renders the stored diff. It never re-reads the workspace for display.
@@ -39,3 +100,6 @@ An error that rejects one item from a set names that item.
 A surface that renders model or user text wraps an unbreakable string.
 A control renders as a control at rest.
 A control presents a hit area of at least 24 by 24 CSS pixels.
+
+Remote control: [docs/design-reference/remote-control-ux.md](docs/design-reference/remote-control-ux.md)
+records the desktop session UX reference that mobile drives.
