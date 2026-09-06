@@ -10,7 +10,7 @@ use muniment_core::chat_profile::ChatProfile;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{ChatEvent, ChatEventSink, ChatEventSubscription};
-use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
+use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 
 pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 
@@ -175,7 +175,7 @@ impl RuntimeChatEventSink {
         Self {
             profile: ChatProfile::new(profile_directory.as_ref()),
             target: Mutex::new(target),
-            pi_artifact: PI_ARTIFACT,
+            pi_artifact: PI_SELECTED_ARTIFACT,
             memory_runtime,
             thread_id,
             workspace,
