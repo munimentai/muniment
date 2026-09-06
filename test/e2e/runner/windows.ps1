@@ -299,7 +299,13 @@ try {
   }
 
   # Resolve all identity checks before mutating installer or per-user state.
-  $release = Invoke-NativeCommand "gh" "api repos/$($env:GITHUB_REPOSITORY)/releases/tags/nightly" $installerLog "nightly release lookup failed"
+  try {
+    $release = (Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/vnd.github+json"; Authorization = "Bearer $($env:GH_TOKEN)" } `
+      -Uri "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/releases/tags/nightly").Content
+  } catch {
+    throw "nightly release lookup failed: $($_.Exception.Message)"
+  }
+  Add-Content -LiteralPath $installerLog -Value $release -NoNewline
   $assetId = Invoke-NativeCommand "node" "test/e2e/support/asset-identity.mjs $sha windows" $installerLog "Windows artifact identity validation failed" $release
   if ($assetId -notmatch '^[1-9][0-9]*$') { throw "Windows artifact identity validation failed" }
   Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/octet-stream"; Authorization = "Bearer $($env:GH_TOKEN)" } `
