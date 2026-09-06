@@ -101,7 +101,7 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
   if ($stdout) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
   if ($stderr) { Add-Content -LiteralPath $(if ($ErrorLog) { $ErrorLog } else { $Log }) -Value $stderr -NoNewline }
   if ($process.ExitCode -ne 0) {
-    $detail = if ($stderr) { $stderr.Trim() } else { $stdout.Trim() }
+    $detail = (@($stdout.Trim(), $stderr.Trim()) | Where-Object { $_ }) -join "`n"
     throw "$FailureMessage (exit code $($process.ExitCode)): $detail"
   }
   return $stdout
@@ -263,7 +263,12 @@ try {
   New-Item -ItemType File -Force $cleanupLog | Out-Null
   if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE) {
     $nativeTestExitCode = [int]$env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE
-    Invoke-NativeCommand "cmd.exe" "/d /c `"echo native warning 1>&2 & exit /b $nativeTestExitCode`"" $installerLog "native command test failed"
+    $nativeTestOutput = switch ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_OUTPUT) {
+      "stdout" { "echo fatal: installer rejected package signature" }
+      "both" { "echo fatal: installer rejected package signature & echo native warning 1>&2" }
+      default { "echo native warning 1>&2" }
+    }
+    Invoke-NativeCommand "cmd.exe" "/d /c `"$nativeTestOutput & exit /b $nativeTestExitCode`"" $installerLog "native command test failed"
     return
   }
   if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_INVOCATION_ERROR -eq "1") {

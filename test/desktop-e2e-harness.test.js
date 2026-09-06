@@ -833,6 +833,41 @@ describe.skipIf(process.platform === 'win32')('runner setup causes', () => {
     expect(report).not.toContain('desktop-ci failed before producing a JUnit report')
   })
 
+  it.each(['stdout', 'both', 'empty'])('carries %s setup errors into JUnit', (output) => {
+    const raw = temp()
+    const fatal = 'fatal: installer rejected package signature'
+    const result = spawnSync('bash', ['-c', `
+      source test/e2e/support/runner-failure.sh
+      raw=$1
+      status=0
+      run_setup bash -c '${output !== 'empty' ? `printf "${fatal}";` : ''} ${output === 'both' ? 'echo warning >&2;' : ''} exit 7'
+      exit "$?"
+    `, 'bash', raw], { encoding: 'utf8' })
+    expect(result.status).toBe(7)
+    expect(result.stdout).toBe(output === 'empty' ? '' : fatal)
+    const cause = fs.readFileSync(path.join(raw, 'runner-failure.txt'), 'utf8')
+    expect(cause).toBe(`bash failed (exit code 7)${output === 'empty' ? '' : `: ${fatal}`}${output === 'both' ? '\nwarning' : ''}\n`)
+    const junit = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), raw, 'installed-linux', '1', '0'], { encoding: 'utf8' })
+    expect(junit.status, junit.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(raw, 'junit-infrastructure.xml'), 'utf8'))
+      .toContain(`<failure message="${cause.trim().replaceAll('\n', ' ')}"/>`)
+  })
+
+  it('preserves successful binary output and stderr without a cause file', () => {
+    const raw = temp()
+    const result = spawnSync('bash', ['-c', `
+      source test/e2e/support/runner-failure.sh
+      raw=$1
+      status=0
+      run_setup bash -c 'printf "a\\\\0b\\\\n\\\\n"; printf warning >&2'
+    `, 'bash', raw])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toEqual(Buffer.from('a\0b\n\n'))
+    expect(result.stderr.toString()).toBe('warning')
+    expect(fs.existsSync(path.join(raw, 'runner-failure.txt'))).toBe(false)
+    expect(fs.existsSync(path.join(raw, 'setup-stdout.log'))).toBe(false)
+  })
+
   it('keeps command output separate and records only failures', () => {
     const raw = temp()
     const result = spawnSync('bash', ['-c', `
@@ -1374,23 +1409,32 @@ describe('Windows native command contract', { timeout: 30_000 }, () => { // A Po
   })
 
   it.skipIf(process.platform !== 'win32').each([
-    ['0', 0],
-    ['7', 1],
-  ])('gates a stderr-writing command on exit code %s', (exitCode, expectedStatus) => {
+    ['0', 0, 'stderr'],
+    ['7', 1, 'stderr'],
+    ['0', 0, 'stdout'],
+    ['7', 1, 'stdout'],
+    ['0', 0, 'both'],
+    ['7', 1, 'both'],
+  ])('gates exit code %s with expected status %s and %s output', (exitCode, expectedStatus, output) => {
     const directory = temp()
     const artifacts = path.join(directory, 'artifacts')
     const runner = path.join(root, 'test/e2e/runner/windows.ps1')
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runner], {
       encoding: 'utf8',
-      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts, MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE: exitCode },
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts,
+        MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE: exitCode, MUNIMENT_E2E_NATIVE_COMMAND_TEST_OUTPUT: output },
     })
     expect(result.status).toBe(expectedStatus)
-    expect(fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')).toContain('native warning')
+    const messages = output === 'stderr' ? ['native warning'] : ['fatal: installer rejected package signature']
+    if (output === 'both') messages.push('native warning')
+    const log = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')
+    for (const message of messages) expect(log).toContain(message)
     if (expectedStatus) {
-      expect(fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8'))
-        .toContain('native command test failed (exit code 7): native warning')
+      const cause = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+      expect(cause).toContain(`native command test failed (exit code 7): ${messages.join('\n')}`)
     } else {
       expect(fs.existsSync(path.join(artifacts, 'runner-failure.txt'))).toBe(false)
+      if (output !== 'stderr') expect(result.stdout).toContain(messages[0])
     }
   })
 
