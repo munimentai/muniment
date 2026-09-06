@@ -61,6 +61,9 @@ const LOCAL_MODE_ENV_REMOVE: &[&str] = &[
 pub trait PiLaunchBoundaries {
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError>;
     fn memory_agent_extension_path(&self) -> Option<PathBuf>;
+    fn prepare_pi_settings(&self, artifact: PiArtifactDescriptor) -> Result<(), PiLaunchError> {
+        crate::pi_settings::prepare_pi_settings(artifact).map_err(|_| PiLaunchError::RejectedConfig)
+    }
     fn pi_artifact(&self) -> PiArtifactDescriptor {
         PI_SELECTED_ARTIFACT
     }
@@ -95,6 +98,12 @@ pub fn pi_launch_config_for_executable(
     let session_root = boundaries.pi_session_root()?;
     let mut config = pi_sidecar_config(executable.to_string_lossy(), &session_root, reopen)
         .map_err(|_| PiLaunchError::RejectedConfig)?;
+    boundaries.prepare_pi_settings(boundaries.pi_artifact())?;
+    if boundaries.pi_artifact().version == crate::sidecar::pi_install::PI_CANDIDATE_ARTIFACT.version
+    {
+        // A cold candidate launch resolves the four pinned packages before RPC starts.
+        config.startup_timeout = std::time::Duration::from_secs(120);
+    }
     config.args.extend([
         "--append-system-prompt".into(),
         BASH_TIMEOUT_INSTRUCTIONS.into(),

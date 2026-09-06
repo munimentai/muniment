@@ -591,6 +591,10 @@ impl PiLaunchBoundaries for FakeCoordinateSink {
     fn pi_artifact(&self) -> PiArtifactDescriptor {
         self.pi_artifact
     }
+
+    fn prepare_pi_settings(&self, _artifact: PiArtifactDescriptor) -> Result<(), PiLaunchError> {
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "linux")]

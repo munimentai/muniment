@@ -9,6 +9,8 @@ use tauri::Manager;
 use uuid::Uuid;
 
 use muniment_core::local_mode::LOCAL_MODE_MARKER;
+use muniment_core::pi_settings::{merge_pi_settings, pi_agent_directory};
+use muniment_core::sidecar::pi_install::PI_SELECTED_ARTIFACT;
 
 const CLOUD_PROVIDERS: [&str; 3] = ["anthropic", "google", "openai"];
 const PROVIDERS: [&str; 4] = ["anthropic", "google", "openai", "ollama"];
@@ -81,17 +83,6 @@ fn set_local_mode(config_directory: &Path, enabled: bool) -> Result<(), String> 
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(_) => Err("Local mode could not be changed.".into()),
         }
-    }
-}
-
-fn pi_agent_directory(home_directory: &Path, agent_directory: Option<&std::ffi::OsStr>) -> PathBuf {
-    match agent_directory.filter(|value| !value.is_empty()) {
-        Some(value) if value == "~" => home_directory.to_owned(),
-        Some(value) => match value.to_str() {
-            Some(value) if value.starts_with("~/") => home_directory.join(&value[2..]),
-            _ => PathBuf::from(value),
-        },
-        None => home_directory.join(".pi").join("agent"),
     }
 }
 
@@ -267,6 +258,7 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
     );
     settings.insert("defaultProvider".to_owned(), OLLAMA_PROVIDER.into());
     settings.insert("defaultModel".to_owned(), OLLAMA_MODEL.into());
+    merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
 
     // Write the route first. A later models write failure cannot fall back to a cloud model.
     write_json_for_update(&settings_file, &settings)?;

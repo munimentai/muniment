@@ -1,6 +1,27 @@
 import path from 'node:path'
-import { access } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { access, readFile } from 'node:fs/promises'
 import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'
+
+async function checkCandidatePackages() {
+  if (process.env.MUNIMENT_PI_CANDIDATE !== '1') return
+  const configured = process.env.PI_CODING_AGENT_DIR || path.join(homedir(), '.pi', 'agent')
+  const agentDirectory = configured === '~' ? homedir()
+    : configured.startsWith('~/') ? path.join(homedir(), configured.slice(2)) : configured
+  const packages = [
+    ['pi-web-access', '0.28.0'],
+    ['pi-subagents', '0.65.1'],
+    ['pi-background-tasks', '2.5.0'],
+    ['pi-mcp-adapter', '2.32.1'],
+  ]
+  const settings = JSON.parse(await readFile(path.join(agentDirectory, 'settings.json'), 'utf8'))
+  expect(settings.packages).toEqual(packages.map(([name, version]) => `npm:${name}@${version}`))
+  expect(settings.defaultTools).toEqual(['read', 'bash', 'powershell', 'edit', 'write', 'grep', 'find', 'ls'])
+  for (const [name, version] of packages) {
+    const manifest = JSON.parse(await readFile(path.join(agentDirectory, 'npm', 'node_modules', name, 'package.json'), 'utf8'))
+    expect(manifest.version).toBe(version)
+  }
+}
 
 async function completeOnboarding() {
   const location = await $('[data-testid="onboarding-home-path"]')
@@ -60,6 +81,7 @@ describe('installed local-mode chat', () => {
     await waitForDesktopClient()
     const prompt = `Muniment local E2E chat ${Date.now()}`
     await composer.setValue(prompt)
+    const launchStarted = Date.now()
     await (await $('button=Send')).click()
 
     const userMessage = await $(`//div[contains(concat(' ', normalize-space(@class), ' '), ' user-turn ')]//p[normalize-space()="${prompt}"]`)
@@ -73,5 +95,7 @@ describe('installed local-mode chat', () => {
       timeout: 180000,
       timeoutMsg: `local-mode chat did not render its first reply for prompt: ${prompt}`,
     })
+    console.log(`The first local-mode reply took ${((Date.now() - launchStarted) / 1000).toFixed(1)} seconds.`)
+    await checkCandidatePackages()
   }).timeout(300000)
 })
