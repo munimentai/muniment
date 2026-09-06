@@ -101,8 +101,16 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
   if ($stdout) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
   if ($stderr) { Add-Content -LiteralPath $(if ($ErrorLog) { $ErrorLog } else { $Log }) -Value $stderr -NoNewline }
   if ($process.ExitCode -ne 0) {
-    $detail = (@($stdout.Trim(), $stderr.Trim()) | Where-Object { $_ }) -join "`n"
-    throw "$FailureMessage (exit code $($process.ExitCode)): $detail"
+    # Reserve space for both streams before JUnit applies its 1000-character cap.
+    $streams = @(@($stdout.Trim(), $stderr.Trim()) | Where-Object { $_ })
+    $budget = if ($streams.Count -gt 1) { 400 } else { 850 }
+    $detail = ($streams | ForEach-Object {
+      if ($_.Length -gt $budget) {
+        $_.Substring(0, $budget / 2) + " ... " + $_.Substring($_.Length - ($budget / 2 - 5))
+      } else { $_ }
+    }) -join "`n"
+    $label = $FailureMessage.Substring(0, [Math]::Min(100, $FailureMessage.Length))
+    throw "$label (exit code $($process.ExitCode)): $detail"
   }
   return $stdout
 }
@@ -266,6 +274,8 @@ try {
     $nativeTestOutput = switch ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_OUTPUT) {
       "stdout" { "echo fatal: installer rejected package signature" }
       "both" { "echo fatal: installer rejected package signature & echo native warning 1>&2" }
+      "long-stdout" { "echo $('p' * 1800) & echo fatal: installer rejected package signature 1>&2" }
+      "long-stderr" { "echo fatal: installer rejected package signature & echo $('p' * 1800) 1>&2" }
       default { "echo native warning 1>&2" }
     }
     Invoke-NativeCommand "cmd.exe" "/d /c `"$nativeTestOutput & exit /b $nativeTestExitCode`"" $installerLog "native command test failed"

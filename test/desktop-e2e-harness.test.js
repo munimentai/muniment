@@ -853,6 +853,34 @@ describe.skipIf(process.platform === 'win32')('runner setup causes', () => {
       .toContain(`<failure message="${cause.trim().replaceAll('\n', ' ')}"/>`)
   })
 
+  it.each(['stdout', 'stderr'])('keeps both streams in JUnit with long %s progress', (stream) => {
+    const raw = temp()
+    const progress = 'p'.repeat(1800)
+    const fatal = 'fatal: installer rejected package signature'
+    const stdout = stream === 'stdout' ? progress : fatal
+    const stderr = stream === 'stderr' ? progress : fatal
+    const result = spawnSync('bash', ['-c', `
+      source test/e2e/support/runner-failure.sh
+      raw=$1
+      status=0
+      run_setup bash -c 'printf "%s" "$1"; printf "%s" "$2" >&2; exit 7' bash "$2" "$3"
+    `, 'bash', raw, stdout, stderr], { encoding: 'utf8' })
+    expect(result.status).toBe(7)
+    expect(result.stdout).toBe(stdout)
+    expect(result.stderr).toContain(stderr)
+    expect(fs.readFileSync(path.join(raw, 'setup-stdout.log'), 'utf8')).toBe(stdout)
+    expect(fs.readFileSync(path.join(raw, 'setup-stderr.log'), 'utf8')).toBe(stderr)
+    const cause = fs.readFileSync(path.join(raw, 'runner-failure.txt'), 'utf8')
+    expect(cause.length).toBeLessThanOrEqual(1000)
+    const junit = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), raw, 'installed-linux', '1', '0'], { encoding: 'utf8' })
+    expect(junit.status, junit.stderr).toBe(0)
+    const report = fs.readFileSync(path.join(raw, 'junit-infrastructure.xml'), 'utf8')
+    expect(report).toContain('bash failed (exit code 7)')
+    expect(report).toContain(fatal)
+    expect(report).toContain('p'.repeat(100))
+    expect(report).toContain(' ... ')
+  })
+
   it('preserves successful binary output and stderr without a cause file', () => {
     const raw = temp()
     const result = spawnSync('bash', ['-c', `
@@ -1437,6 +1465,30 @@ describe('Windows native command contract', { timeout: 30_000 }, () => { // A Po
       if (output !== 'stderr') expect(result.stdout).toContain(messages[0])
     }
   })
+
+  it.skipIf(process.platform !== 'win32').each(['long-stdout', 'long-stderr'])(
+    'keeps both streams within the JUnit cap with %s progress', (output) => {
+      const directory = temp()
+      const artifacts = path.join(directory, 'artifacts')
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'test/e2e/runner/windows.ps1')], {
+        encoding: 'utf8',
+        env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts,
+          MUNIMENT_E2E_NATIVE_COMMAND_TEST_EXIT_CODE: '7', MUNIMENT_E2E_NATIVE_COMMAND_TEST_OUTPUT: output },
+      })
+      expect(result.status).toBe(1)
+      const fatal = 'fatal: installer rejected package signature'
+      const log = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')
+      expect(log).toContain('p'.repeat(1800))
+      expect(log).toContain(fatal)
+      const cause = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+      expect(cause.length).toBeLessThanOrEqual(1000)
+      const message = Array.from(cause.replace(/\s+/gu, ' ').trim()).slice(0, 1000).join('')
+      expect(message).toContain('native command test failed (exit code 7)')
+      expect(message).toContain(fatal)
+      expect(message).toContain('p'.repeat(100))
+      expect(message).toContain(' ... ')
+    },
+  )
 
   it.skipIf(process.platform !== 'win32')('fails when PowerShell cannot invoke the command', () => {
     const directory = temp()
