@@ -17,3 +17,14 @@ Windows-specific code CANNOT be compiled or tested in the agent's Linux checkout
 ## CI logs
 
 CI logs land in the GitHub Actions run linked from the pull request's Checks tab. Open the failed `Desktop compile preflight (windows)` check. Expand `Check (windows) via desktop-ci`, then read the first compiler error and its command output.
+## Steering files
+
+This repo's steering files are `AGENTS.md`, `README.md`, `SPEC.md`,
+`ROADMAP.md`, `DESIGN.md`, and `docs/decisions/`. They are instruction, not
+record: present tense, stating what is. No dates, ticket ids, commit shas, pull
+request numbers, or history phrases such as "decided", "superseded",
+"previously", or "no longer". No ledger file under any name: no open-items,
+build-history, decision-log, handoff, journal, notes, or todo file. A finished
+roadmap phase is deleted, not marked done. Caps: `SPEC.md` 400 lines,
+`DESIGN.md` 250, `ROADMAP.md` 150, `AGENTS.md` 120. State lives in Plane and
+history lives in git.
