@@ -84,6 +84,29 @@ The candidate descriptors are:
 | Linux x64 | `pi-linux-x64.tar.gz` | 42,560,927 | `494e498f47d74d21f40b3386f6a5e921a3d49531a169cab55bbdaca0ea1fe25a` |
 | Windows x64 | `pi-windows-x64.zip` | 45,009,021 | `002fa95b90d521245b9985d8f168caebc237ad56e7e30b319807dee1b2e17e1c` |
 
+The candidate pins these four packages from [pi.dev/packages](https://pi.dev/packages):
+
+| Package | Version |
+| --- | --- |
+| [pi-web-access](https://pi.dev/packages/pi-web-access) | `0.28.0` |
+| [pi-subagents](https://pi.dev/packages/pi-subagents) | `0.65.1` |
+| [pi-background-tasks](https://pi.dev/packages/pi-background-tasks) | `2.5.0` |
+| [pi-mcp-adapter](https://pi.dev/packages/pi-mcp-adapter) | `2.32.1` |
+
+Every candidate chat launch merges these exact npm sources into the Pi agent directory's `settings.json`.
+The same merge sets `defaultTools` to `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`.
+The names match the candidate's [built-in registry](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/src/core/tools/index.ts#L96-L105).
+The desktop never passes `--tools`.
+The merge preserves other keys, including `defaultProvider`, and shares Pi's directory lock with local provider writes.
+The lock follows proper-lockfile's ten-second stale threshold and five-second heartbeat.
+The directory resolver follows the candidate's [`normalizePath`](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/src/utils/paths.ts#L78-L107), including file URLs and Windows shell drive paths.
+Production adds neither key and leaves existing settings untouched.
+
+The web package supports an Anthropic `claude-haiku` model for summaries and requires a Bright Data `serp` zone for Bright Data search.
+The desktop configures neither requirement.
+A missing Bright Data zone produces a tool error message without stopping Pi.
+The package also supports keyless search providers.
+
 The build-time environment switch `MUNIMENT_PI_CANDIDATE=1` selects the candidate.
 Every other value, including an absent switch, selects production 0.73.1.
 A runtime environment variable cannot change the compiled track.
@@ -102,8 +125,15 @@ The candidate package's [`engines.node`](https://registry.npmjs.org/@earendil-wo
 The selected Node line is **24, Active LTS**, which satisfies that floor.
 The [Node release schedule](https://github.com/nodejs/Release/blob/main/schedule.json) governs the Active LTS requirement.
 Node 22 defines the minimum, not the selected Active LTS line.
-The standalone executable includes its runtime and adds no system Node dependency.
-This candidate adopts no extension package or `defaultTools` setting.
+The standalone executable includes its runtime.
+The desktop acquires the four packages through the verified executable's embedded Bun package manager before RPC starts.
+It sets [`BUN_BE_BUN=1`](https://bun.com/docs/bundler/executables#act-as-the-bun-cli) only for acquisition and disables install scripts and peer dependencies.
+The package cache lives in the Pi agent directory's `npm` directory.
+An OS lock excludes concurrent desktop installs and releases after a crash.
+A completion marker admits the cache only after acquisition succeeds and all four manifests match the pins.
+The first launch needs network access, not system Node or npm.
+The candidate allows 120 seconds for acquisition and 120 seconds for the first readiness response.
+Later health probes keep their 10-second deadline.
 
 The candidate's [RPC contract](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/rpc.md) uses newline-delimited JSON over stdio.
 The installed nightly tests qualify the dispatcher against the candidate before promotion.
@@ -116,8 +146,8 @@ the desktop installer. The user is told that the agent engine is missing and
 shown its version, source, license, download size and disk impact before an
 explicit install. This is an honest recoverable feature state: the shell and
 control-plane features remain usable, while chat is unavailable until Pi is
-installed. Once installed, launching Pi itself is offline; model traffic still
-uses the product's configured control plane.
+installed. After Pi resolves its packages, later launches can use the local package cache.
+Model traffic uses the configured provider.
 
 Acquisition reuses the shared bounded HTTPS transport, verified staging,
 install coordinator, lock/free-space protections, atomic publication,
