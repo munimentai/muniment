@@ -953,15 +953,13 @@ describe('workspace composer entry', () => {
     expect(screen.getByText('Ollama', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
     expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
 
-    const provider = screen.getByRole('combobox', { name: 'Provider' })
-    expect(provider).toHaveValue('google')
-    expect([...provider.options].map(({ text, value }) => [text, value])).toEqual([
-      ['Anthropic', 'anthropic'],
-      ['Google', 'google'],
-      ['OpenAI', 'openai'],
-      ['Ollama (local)', 'ollama'],
-    ])
-    await fireEvent.change(provider, { target: { value: 'anthropic' } })
+    const provider = screen.getByRole('group', { name: 'Provider' })
+    expect(provider.tagName).toBe('FIELDSET')
+    const radios = within(provider).getAllByRole('radio')
+    expect(radios.map((radio) => radio.value)).toEqual(['anthropic', 'google', 'openai', 'ollama'])
+    for (const radio of radios) expect(radio).toHaveAttribute('name', 'provider')
+    expect(within(provider).getByRole('radio', { name: 'Google' })).toBeChecked()
+    await fireEvent.click(within(provider).getByRole('radio', { name: 'Anthropic' }))
     await fireEvent.input(screen.getByLabelText('Provider API key'), { target: { value: 'secret-key' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
 
@@ -969,7 +967,7 @@ describe('workspace composer entry', () => {
     expect(await screen.findByText('Pi saved the Anthropic key.')).toBeInTheDocument()
     expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Saved')
 
-    await fireEvent.change(provider, { target: { value: 'ollama' } })
+    await fireEvent.click(within(provider).getByRole('radio', { name: 'Ollama (local)' }))
     await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save Ollama server' }))
     expect(invoke).toHaveBeenCalledWith('local_mode_store_local_provider', { baseUrl: 'http://localhost:11434/v1' })
@@ -981,16 +979,66 @@ describe('workspace composer entry', () => {
     localModeStatus = true
     render(App)
 
-    const provider = await screen.findByRole('combobox', { name: 'Provider' })
-    await fireEvent.change(provider, { target: { value: 'ollama' } })
+    const ollama = await screen.findByRole('radio', { name: 'Ollama (local)' })
+    await fireEvent.click(ollama)
+    expect(ollama).toBeChecked()
     expect(screen.getByLabelText('Ollama server URL')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Save Ollama server' })).toBeDisabled()
     expect(screen.queryByLabelText('Provider API key')).not.toBeInTheDocument()
 
-    await fireEvent.change(provider, { target: { value: 'anthropic' } })
+    for (const name of ['Anthropic', 'Google', 'OpenAI']) {
+      const radio = screen.getByRole('radio', { name })
+      await fireEvent.click(radio)
+      expect(radio).toBeChecked()
+      expect(ollama).not.toBeChecked()
+      expect(screen.getByLabelText('Provider API key')).toBeVisible()
+      expect(screen.getByRole('button', { name: 'Save key' })).toBeDisabled()
+      expect(screen.queryByLabelText('Ollama server URL')).not.toBeInTheDocument()
+    }
+  })
+
+  it.each([false, true])('disables the provider radios until a save settles with failure %s', async (fails) => {
+    localModeStatus = true
+    const save = deferred()
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'local_mode_store_local_provider') return save.promise
+      if (command === 'local_mode_provider_status') return []
+      return defaultInvoke(command, ...args)
+    })
+    render(App)
+    const ollama = await screen.findByRole('radio', { name: 'Ollama (local)' })
+    await fireEvent.click(ollama)
+    await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Save Ollama server' }))
+    for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
+    expect(ollama).toBeChecked()
+
+    if (fails) save.reject(new Error('Save failed.'))
+    else save.resolve()
+    await waitFor(() => {
+      for (const radio of screen.getAllByRole('radio')) expect(radio).toBeEnabled()
+    })
+    await fireEvent.click(screen.getByRole('radio', { name: 'Anthropic' }))
     expect(screen.getByLabelText('Provider API key')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Save key' })).toBeDisabled()
-    expect(screen.queryByLabelText('Ollama server URL')).not.toBeInTheDocument()
+  })
+
+  it('disables the provider radios during an active reply', async () => {
+    localModeStatus = true
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'chat_thread_open') return [{ runId: 'run-local', phase: 'streaming', text: 'A', prompt: 'A question', receipt: null, toolActivity: [] }]
+      return defaultInvoke(command, ...args)
+    })
+    render(App)
+    await screen.findByRole('radio', { name: 'Google' })
+    await waitFor(() => {
+      for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
+    })
+    chatListener({ payload: { runId: 'run-local', phase: 'complete', text: 'An answer', receipt: {}, toolActivity: [] } })
+    await waitFor(() => {
+      for (const radio of screen.getAllByRole('radio')) expect(radio).toBeEnabled()
+    })
   })
 
   it('blocks sign-in while local mode entry is pending', async () => {
