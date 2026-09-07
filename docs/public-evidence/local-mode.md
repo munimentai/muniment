@@ -14,4 +14,14 @@ Pi can also use provider credentials that the Pi CLI saved in the same store. Lo
 
 Local mode writes run input, model output, tool activity, and completion records to the local run journal. A completed local run records its elapsed time and no cloud receipt. These records use the same event shapes as cloud-backed runs.
 
+## Cloud sign-in
+
 Select **Sign in for cloud features** to leave local mode. Sign-in remains available for features that need the Muniment control plane.
+
+The installed runtime uses HTTPS for cloud sign-in at `api.muniment.ai`. Its HTTP client uses rustls, the operating system certificate store, and proxy settings from the environment.
+
+Run the local TLS handshake test from the repository root:
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml -p muniment-runtime --locked --test native_https
+```
