@@ -6,12 +6,15 @@ import {
   codesignArguments,
   intermediateCertificateImportArguments,
   intermediateCertificateImportSucceeded,
+  keychainSearchListArguments,
   notarytoolSubmitArguments,
   parseInstallerIdentity,
   parseSigningIdentity,
   productbuildArguments,
+  requireSigningIdentity,
   resolveSigningConfiguration,
   signingEnabled,
+  signingIdentityArguments,
   stapleArguments,
 } from "./macos-signing.mjs";
 
@@ -71,6 +74,72 @@ describe("macOS signing configuration", () => {
       apiKeyId: completeEnvironment.APPLE_API_KEY_ID,
       apiIssuer: completeEnvironment.APPLE_API_ISSUER,
     });
+  });
+});
+
+describe("Keychain search list", () => {
+  const roots = "/System/Library/Keychains/SystemRootCertificates.keychain";
+  const keychain = "/tmp/signing work/muniment-signing.keychain-db";
+  const login = "/Users/builder/Library/Keychains/login.keychain-db";
+
+  it("prepends the signing keychain and adds System Roots to an empty list", () => {
+    for (const currentList of ["", "\n  \r\n"]) {
+      expect(keychainSearchListArguments(keychain, currentList)).toEqual([
+        "list-keychains", "-d", "user", "-s", keychain, roots,
+      ]);
+    }
+  });
+
+  it("preserves existing keychains and paths with spaces", () => {
+    expect(keychainSearchListArguments(keychain,
+      `    "${login}"\r\n    "/Library/Keychains/System.keychain"\r\n    "/tmp/other signing.keychain-db"\r\n`,
+    )).toEqual([
+      "list-keychains", "-d", "user", "-s", keychain, login,
+      "/Library/Keychains/System.keychain", "/tmp/other signing.keychain-db", roots,
+    ]);
+  });
+
+  it("keeps one copy of each keychain when the list already includes System Roots", () => {
+    expect(keychainSearchListArguments(keychain,
+      `"${login}"\n"${keychain}"\n"${roots}"\n"${login}"\n`,
+    )).toEqual(["list-keychains", "-d", "user", "-s", keychain, login, roots]);
+  });
+});
+
+describe("Signing identity preflight", () => {
+  const valid = '  1) A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4 "Developer ID Application: Muniment (Y5DUNHQA74)"';
+
+  it("requests only valid code signing identities from the signing keychain", () => {
+    expect(signingIdentityArguments("/tmp/signing work/keychain")).toEqual([
+      "find-identity", "-v", "-p", "codesigning", "/tmp/signing work/keychain",
+    ]);
+  });
+
+  it("accepts a valid identity after a successful command", () => {
+    expect(requireSigningIdentity({ status: 0, stdout: `${valid}\r\n     1 valid identities found\r\n` }))
+      .toEqual(parseSigningIdentity(valid));
+  });
+
+  it("names the chain check and includes stdout and stderr when no identity is valid", () => {
+    const result = { status: 0, stdout: "     0 valid identities found", stderr: "Trust evaluation failed" };
+    expect(() => requireSigningIdentity(result)).toThrow("Check the certificate chain and keychain access before codesign.");
+    expect(() => requireSigningIdentity(result)).toThrow(result.stdout);
+    expect(() => requireSigningIdentity(result)).toThrow(result.stderr);
+  });
+
+  it("rejects empty output and identities with a trust error", () => {
+    for (const stdout of [undefined, null, "", `${valid} (CSSMERR_TP_NOT_TRUSTED)\n     0 valid identities found`]) {
+      expect(() => requireSigningIdentity({ status: 0, stdout })).toThrow("No valid Developer ID Application identity.");
+    }
+  });
+
+  it("rejects command failures even when stdout contains an identity", () => {
+    for (const status of [1, 2, -1, null, undefined]) {
+      expect(() => requireSigningIdentity({ status, stdout: valid, stderr: "security failed" }))
+        .toThrow("security failed");
+    }
+    expect(() => requireSigningIdentity({ status: 0, stdout: valid, error: new Error("spawn failed") }))
+      .toThrow("spawn failed");
   });
 });
 
