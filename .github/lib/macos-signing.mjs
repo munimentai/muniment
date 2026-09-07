@@ -120,8 +120,7 @@ export const codesignArguments = (identityHash, file) => [
   file,
 ];
 
-// Both submissions share a deadline from the build script start, including compilation.
-// Leave 1200 seconds of desktop-ci's 3600-second bound for setup and failure reporting.
+// Cap both submissions and compilation together. The remaining desktop-ci budget can shorten this bound.
 export const NOTARIZATION_DEADLINE_SECONDS = 2400;
 
 const notarytoolArguments = (configuration, keyPath) => [

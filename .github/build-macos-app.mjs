@@ -19,7 +19,15 @@ import {
   stapleArguments,
 } from "./lib/macos-signing.mjs";
 
-const notarizationDeadline = performance.now() + NOTARIZATION_DEADLINE_SECONDS * 1000;
+const remainingBuildBudget = process.env.MACOS_BUILD_REMAINING_SECONDS ?? "3600";
+const remainingBuildSeconds = Number(remainingBuildBudget);
+if (!/^-?\d+$/.test(remainingBuildBudget) || !Number.isSafeInteger(remainingBuildSeconds) || remainingBuildSeconds > 3600) {
+  throw new Error("MACOS_BUILD_REMAINING_SECONDS must be an integer at most 3600");
+}
+// Keep 1200 seconds of the full desktop-ci build budget for failure reporting and process startup.
+const notarizationDeadline = performance.now() + (
+  remainingBuildSeconds - (3600 - NOTARIZATION_DEADLINE_SECONDS)
+) * 1000;
 
 const bundleDir = join("src-tauri", "target", "universal-apple-darwin", "release", "bundle", "macos");
 const app = join(bundleDir, "muniment.app");
