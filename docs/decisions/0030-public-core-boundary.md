@@ -110,6 +110,9 @@ The runtime also enables core default features through its dependency declaratio
 These two feature edges remain exceptions until callers use port-owned contracts.
 The check reports these exceptions rather than claiming a shell-free build also excludes staying modules.
 
+The runtime enables `tls` for HTTPS cloud calls, including native certificates and environment proxies.
+Its TLS regression test imports the native-auth transport through a named source exception.
+
 The named source edges in `scripts/check-core-boundary.py` form the follow-up list, including test callers.
 Each entry names one source file and one staying module.
 The check rejects new edges and stale entries, so a removed edge requires removal of its exception.

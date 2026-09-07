@@ -70,6 +70,8 @@ SOURCE_EXCEPTIONS = {
     ("src-tauri/runtime/tests/devices.rs", "auth"),
     ("src-tauri/runtime/tests/entitlement.rs", "auth"),
     ("src-tauri/runtime/tests/grant.rs", "chat_grant"),
+    # The TLS regression test needs the native-auth transport used by the runtime.
+    ("src-tauri/runtime/tests/native_https.rs", "auth"),
     ("src-tauri/runtime/tests/permission.rs", "auth"),
     ("src-tauri/runtime/tests/run.rs", "auth"),
     ("src-tauri/runtime/tests/run_boundaries.rs", "auth"),
@@ -212,7 +214,8 @@ def check_tree(text, staying_crates, package):
             if package in (CORE, "muniment-runtime"):
                 allowed.add(STAY_FEATURE)
             if package == "muniment-runtime":
-                allowed.add("default")
+                # The installed runtime needs TLS for native-auth cloud calls.
+                allowed.update({"default", "tls"})
             require(features <= allowed,
                     f"{package} enables unexpected core features: {sorted(features - allowed)}")
 
