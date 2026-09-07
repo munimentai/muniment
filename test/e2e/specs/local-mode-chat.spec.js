@@ -67,8 +67,8 @@ describe('installed local-mode chat', () => {
 
     const composer = await $('textarea[placeholder="Ask anything"]')
     await composer.waitForDisplayed({ timeout: 120000 })
-    const provider = await $('select[aria-label="Provider"]')
-    await provider.selectByAttribute('value', 'ollama')
+    const provider = await $('input[name="provider"][value="ollama"]')
+    await provider.click()
     const baseUrlInput = await $('#provider-base-url')
     await baseUrlInput.waitForDisplayed()
     expect(await baseUrlInput.isDisplayed()).toBe(true)
