@@ -13,7 +13,7 @@ fi
 
 shopt -s nullglob
 reports=("$artifacts_dir"/junit-*.xml)
-if (( ${#reports[@]} != 0 )); then
+if (( ${#reports[@]} != 0 )) && { (( run_status == 0 && extract_status == 0 )) || [[ ! -s "$artifacts_dir/runner-failure.txt" ]]; }; then
   exit 0
 fi
 

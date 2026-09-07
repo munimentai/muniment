@@ -14,7 +14,6 @@ try {
   exit 1
 }
 $diagnostic = $null
-$diagnosticStaged = $false
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -42,6 +41,16 @@ $httpsKey = "HKCU:\Software\Classes\https"
 $testRegistration = $null
 $testProcess = $null
 $redactor = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../support/redact.mjs"))
+
+function Save-RunnerFailure([System.Management.Automation.ErrorRecord]$Failure) {
+  $message = "message: $($Failure.Exception.Message)`ncategory: $($Failure.CategoryInfo.Category)`nline: $($Failure.InvocationInfo.ScriptLineNumber)"
+  $script:diagnostic = if ($diagnostic) { "$diagnostic`n$message" } else { $message }
+  if ($raw -and (Test-Path -LiteralPath $raw)) {
+    Set-Content -LiteralPath (Join-Path $raw "runner-failure.txt") -Value $diagnostic -Encoding UTF8 -ErrorAction SilentlyContinue
+  }
+  Write-Output $message
+  $script:status = 1
+}
 
 function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutSeconds, [string]$Log) {
   $errorLog = $Log + ".err"
@@ -269,6 +278,7 @@ try {
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL -eq "before-directories") { throw "injected setup failure" }
   New-Item -ItemType Directory -Force $raw, $stateRoot | Out-Null
   New-Item -ItemType File -Force $cleanupLog | Out-Null
+  if ($env:MUNIMENT_E2E_RUNNER_TEST_ERROR) { throw $env:MUNIMENT_E2E_RUNNER_TEST_ERROR }
   if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT) {
     Invoke-NativeCommand "node" "`"$($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT)`"" $installerLog "native command test failed"
     return
@@ -335,12 +345,14 @@ try {
     -Uri "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/releases/assets/$assetId" -OutFile $msi
 
   $installer = New-Object -ComObject WindowsInstaller.Installer
-  $database = $installer.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $installer, @($msi, 0))
-  $view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, @("SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductName'"))
+  $database = $installer.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $installer, @([string]$msi, [int]0))
+  $view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, @([string]"SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductName'"))
   $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
   $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
-  $productName = $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
-  if ($productName -ne "muniment") { throw "package identity mismatch" }
+  if ($null -eq $record) { throw "package ProductName is missing" }
+  $productName = $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, @([int]1))
+  if ($productName -cne "muniment") { throw "package identity mismatch" }
+  Write-Output "MSI ProductName: $productName"
 
   $env:APPDATA = Join-Path $stateRoot "Roaming"
   $env:LOCALAPPDATA = Join-Path $stateRoot "Local"
@@ -398,7 +410,7 @@ try {
   try {
     Invoke-NativeCommand "npm.cmd" "run test:e2e" $wdioLog "Windows end-to-end tests failed" $null $driverAppLog
   } catch {
-    $status = 1
+    Save-RunnerFailure $_
   }
 
   $runtimeConnectionLog = Join-Path $raw "runtime-connection.log"
@@ -440,6 +452,7 @@ namespace MunimentE2e {
     $waitSeconds = [Math]::Min(60, [Math]::Ceiling(([DateTime]::UtcNow - $waitStarted).TotalSeconds))
   } catch {
     $runtimeProbeError = $_.Exception.Message
+    Save-RunnerFailure $_
   }
 
   @(
@@ -453,7 +466,7 @@ namespace MunimentE2e {
     try {
       Invoke-NativeCommand "node" "`"test/e2e/support/probe-companion-pairing.mjs`" `"$pipePath`" installed-windows-smoke" (Join-Path $raw "companion-pairing.log") "Windows companion pairing probe failed"
     } catch {
-      $status = 1
+      Save-RunnerFailure $_
     }
   } else {
     $status = 1
@@ -466,16 +479,11 @@ namespace MunimentE2e {
   try {
     Invoke-NativeCommand "npm.cmd" "run test:e2e" (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed"
   } catch {
-    $status = 1
+    Save-RunnerFailure $_
   }
   Remove-Item Env:MUNIMENT_E2E_ONBOARDING_ONLY -ErrorAction SilentlyContinue
 } catch {
-  $diagnostic = "message: $($_.Exception.Message)`ncategory: $($_.CategoryInfo.Category)`nline: $($_.InvocationInfo.ScriptLineNumber)"
-  if ($raw -and (Test-Path -LiteralPath $raw)) {
-    Set-Content -LiteralPath (Join-Path $raw "runner-failure.txt") -Value $diagnostic -Encoding UTF8 -ErrorAction SilentlyContinue
-    $diagnosticStaged = $?
-  }
-  Write-Output $diagnostic
+  Save-RunnerFailure $_
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL) { $script:redacted = $false }
   if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }
   $status = 1
@@ -484,10 +492,14 @@ namespace MunimentE2e {
   if ($raw -and (Test-Path -LiteralPath $raw)) {
     Copy-Item -LiteralPath $transcriptPath -Destination (Join-Path $raw "runner-transcript.log") -Force -ErrorAction SilentlyContinue
   }
-  Finalize-Run
+  try {
+    Finalize-Run
+  } catch {
+    Save-RunnerFailure $_
+  }
   New-Item -ItemType Directory -Force $artifacts -ErrorAction SilentlyContinue | Out-Null
-  if ($diagnostic -and -not $diagnosticStaged) {
-    # Redact early errors separately when the runner could not create raw staging.
+  if ($diagnostic) {
+    # Publish the cause independently so cleanup cannot discard it.
     $diagnosticRoot = Join-Path $env:TEMP ([guid]::NewGuid().ToString("N"))
     try {
       $diagnosticRaw = Join-Path $diagnosticRoot "raw"

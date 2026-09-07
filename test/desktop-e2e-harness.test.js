@@ -561,6 +561,58 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
   })
 })
 
+describe('Windows MSI identity contract', { timeout: 30_000 }, () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+  const start = runner.indexOf('  $installer = New-Object -ComObject WindowsInstaller.Installer')
+  const identity = runner.slice(start, runner.indexOf('\n  $env:APPDATA', start))
+
+  it('Passes typed COM arguments and checks the product name before installation.', () => {
+    expect(identity).toContain('@([string]$msi, [int]0)')
+    expect(identity).toContain('@([string]"SELECT')
+    expect(identity).toContain('@([int]1)')
+    expect(identity).toContain('if ($null -eq $record) { throw "package ProductName is missing" }')
+    expect(identity).toContain('if ($productName -cne "muniment") { throw "package identity mismatch" }')
+    expect(identity).toContain('Write-Output "MSI ProductName: $productName"')
+    expect(start).toBeLessThan(runner.indexOf('Invoke-BoundedProcess "msiexec.exe" "/i'))
+  })
+
+  it.skipIf(process.platform !== 'win32').each([
+    ['muniment', 0, 'MSI ProductName: muniment'],
+    ['another product', 1, 'package identity mismatch'],
+    ['Muniment', 1, 'package identity mismatch'],
+    ['', 1, 'package ProductName is missing'],
+  ])('Reads an MSI fixture with ProductName "%s".', (name, status, message) => {
+    const directory = temp()
+    const script = path.join(directory, 'identity.ps1')
+    fs.writeFileSync(script, `param([string]$DatabasePath, [string]$FixtureName)
+$ErrorActionPreference = "Stop"
+$seed = New-Object -ComObject WindowsInstaller.Installer
+$db = $seed.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $seed, @([string]$DatabasePath, [int]3))
+$sql = 'CREATE TABLE \`Property\` (\`Property\` CHAR(72) NOT NULL, \`Value\` CHAR(255) PRIMARY KEY \`Property\`)'
+$v = $db.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $db, @($sql))
+$v.GetType().InvokeMember("Execute", "InvokeMethod", $null, $v, $null)
+# Release each view before reopening the fixture database.
+$v.GetType().InvokeMember("Close", "InvokeMethod", $null, $v, $null)
+[Runtime.InteropServices.Marshal]::FinalReleaseComObject($v) | Out-Null
+if ($FixtureName) {
+  $sql = "INSERT INTO Property (Property, Value) VALUES ('ProductName', '$FixtureName')"
+  $v = $db.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $db, @($sql))
+  $v.GetType().InvokeMember("Execute", "InvokeMethod", $null, $v, $null)
+  $v.GetType().InvokeMember("Close", "InvokeMethod", $null, $v, $null)
+  [Runtime.InteropServices.Marshal]::FinalReleaseComObject($v) | Out-Null
+}
+$db.GetType().InvokeMember("Commit", "InvokeMethod", $null, $db, $null)
+[Runtime.InteropServices.Marshal]::FinalReleaseComObject($db) | Out-Null
+$msi = Get-Item -LiteralPath $DatabasePath
+${identity}
+`)
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, path.join(directory, 'product fixture.msi'), name], { encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(status)
+    expect(result.stdout + result.stderr).toContain(message)
+    expect(result.stdout + result.stderr).not.toContain('DISP_E_TYPEMISMATCH')
+  })
+})
+
 describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
   const runnerPath = path.join(root, 'test/e2e/runner/windows.ps1')
   const runner = fs.readFileSync(runnerPath, 'utf8')
@@ -593,8 +645,11 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
     expect(runner.indexOf('New-Item -ItemType Directory -Force $raw, $stateRoot')).toBeGreaterThan(boundary)
     expect(runner.indexOf('New-Item -ItemType File -Force $cleanupLog')).toBeGreaterThan(boundary)
     expect(runner).toContain('$diagnosticFile = Join-Path $artifacts "runner-failure.txt"')
-    expect(runner).toMatch(/catch \{[\s\S]+message:[\s\S]+category:[\s\S]+line:[\s\S]+Set-Content -LiteralPath \(Join-Path \$raw "runner-failure.txt"\)[\s\S]+Write-Output[\s\S]+finally \{/)
-    expect(runner).toContain('-Value $diagnostic -Encoding UTF8 -ErrorAction SilentlyContinue\n    $diagnosticStaged = $?')
+    expect(runner).toMatch(/function Save-RunnerFailure[\s\S]+message:[\s\S]+category:[\s\S]+line:[\s\S]+Set-Content -LiteralPath \(Join-Path \$raw "runner-failure.txt"\)[\s\S]+Write-Output/)
+    expect(runner).toContain('-Value $diagnostic -Encoding UTF8 -ErrorAction SilentlyContinue')
+    expect(runner).toMatch(/Remove-Item Env:MUNIMENT_E2E_ONBOARDING_ONLY[^\n]+\n} catch \{\n  Save-RunnerFailure \$_/)
+    expect(runner).toMatch(/try \{\n    Finalize-Run\n  } catch \{\n    Save-RunnerFailure \$_/)
+    expect(runner).toContain('if ($diagnostic) {\n    # Publish the cause independently')
     expect(runner).toContain('Copy-Item -LiteralPath (Join-Path $diagnosticSafe "runner-failure.txt") -Destination $diagnosticFile -Force')
   })
 
@@ -611,6 +666,26 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
   }
 
   const runWindowsAbsenceFailure = (variable) => runWindowsFinalizer('', '', { [variable]: '1' })
+
+  it.skipIf(process.platform !== 'win32').each(['', 'redact-artifacts', 'publish-artifacts'])(
+    'Preserves the terminating cause after cleanup failure "%s".', (failed) => {
+      const cause = 'Type mismatch. (Exception from HRESULT: 0x80020005 (DISP_E_TYPEMISMATCH))'
+      const secret = 'injected-runner-secret'
+      const { result, artifacts } = runWindowsFinalizer(failed, '', {
+        MUNIMENT_E2E_RUNNER_TEST_ERROR: `${cause} ${secret}`,
+        MUNIMENT_E2E_PASSWORD: secret,
+      })
+      expect(result.status, result.stderr).toBe(1)
+      expect(result.stdout).not.toContain('=== DESKTOP-CI ARTIFACTS BEGIN ===')
+      const diagnostic = fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')
+      expect(diagnostic).toContain(`message: ${cause} [REDACTED]`)
+      expect(diagnostic).not.toContain(secret)
+      expect(diagnostic).toMatch(/category: \w+/)
+      expect(diagnostic).toMatch(/line: [1-9]\d*/)
+      expect(fs.existsSync(path.join(artifacts, 'stale-or-partial'))).toBe(false)
+      expect(fs.existsSync(path.join(artifacts, 'partial-publication'))).toBe(false)
+    },
+  )
 
   it.skipIf(process.platform !== 'win32')('writes stdout when artifact directory creation fails', () => {
     const directory = temp()
@@ -925,6 +1000,33 @@ describe('JUnit infrastructure fallback', () => {
     expect(report).not.toContain('desktop-ci did not return a valid artifact envelope')
   })
 
+  it.skipIf(process.platform === 'win32')('Reports a runner error without replacing an existing spec report.', () => {
+    const artifacts = temp()
+    const specs = '<testsuites tests="1" failures="0"/>'
+    fs.writeFileSync(path.join(artifacts, 'junit-specs.xml'), specs)
+    fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), 'message: Windows onboarding tests failed\n')
+    const result = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, 'installed-windows', '1', '0'], { encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'junit-specs.xml'), 'utf8')).toBe(specs)
+    expect(fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8'))
+      .toContain('<failure message="message: Windows onboarding tests failed"/>')
+  })
+
+  it.skipIf(process.platform === 'win32').each([
+    ['1', '0', ''],
+    ['0', '1', ''],
+    ['0', '0', 'stale cause'],
+  ])('Preserves an existing report for statuses %s/%s and cause "%s".', (runStatus, extractStatus, cause) => {
+    const artifacts = temp()
+    const specs = '<testsuites tests="1" failures="0"/>'
+    fs.writeFileSync(path.join(artifacts, 'junit-specs.xml'), specs)
+    fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), cause)
+    const result = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), artifacts, 'installed-windows', runStatus, extractStatus, '1'], { encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'junit-specs.xml'), 'utf8')).toBe(specs)
+    expect(fs.readdirSync(artifacts).filter((name) => name.endsWith('.xml'))).toEqual(['junit-specs.xml'])
+  })
+
   it.skipIf(process.platform === 'win32')('does not copy the desktop-ci transcript into JUnit', () => {
     const artifacts = temp()
     const transcript = '-----DESKTOP-CI-ARTIFACTS-BEGIN-----\nc2Vuc2l0aXZl\n-----DESKTOP-CI-ARTIFACTS-END-----\n'
@@ -1026,6 +1128,22 @@ describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction', (
     const source = temp(); fs.writeFileSync(path.join(source, 'file'), 'unsafe')
     const encoded = execFileSync('tar', ['-czf', '-', '--transform=s,^,../,', '-C', source, 'file']).toString('base64')
     expect(extract(markers(encoded)).status).not.toBe(0)
+  })
+
+  it('Carries a terminating Windows error through the driver envelope into JUnit.', () => {
+    const cause = 'message: Exception calling "InvokeMember" with "5" argument(s): "Type mismatch. (Exception from HRESULT: 0x80020005 (DISP_E_TYPEMISMATCH))"\r\ncategory: NotSpecified\r\nline: 355\r\n'
+    const { result, destination } = extractInto(
+      `${cause}[desktop-ci] BUILD FAILED (windows) rc=1\n${driverMarkers(logArchive('runner-failure.txt', `\ufeff${cause}`))}`,
+      1,
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(destination, 'runner-failure.txt'), 'utf8')).toContain(cause)
+    const junit = spawnSync('bash', [path.join(root, 'test/e2e/support/ensure-junit-report.sh'), destination, 'installed-windows', '1', String(result.status)], { encoding: 'utf8' })
+    expect(junit.status, junit.stderr).toBe(0)
+    const report = fs.readFileSync(path.join(destination, 'junit-infrastructure.xml'), 'utf8')
+    expect(report).toContain('Type mismatch. (Exception from HRESULT: 0x80020005 (DISP_E_TYPEMISMATCH))')
+    expect(report).toContain('&quot;InvokeMember&quot;')
+    expect(report).not.toContain('desktop-ci did not return a valid artifact envelope')
   })
 
   it('falls back to the driver envelope when the guest published none', () => {
