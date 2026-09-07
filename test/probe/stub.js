@@ -319,7 +319,8 @@ export function buildProbeCommandTable(fixtureName) {
         organization_display_name: 'Acme',
         role: 'owner',
         territory: 'us',
-        groups: [],
+        capabilities: [],
+        grants: [],
       }
     }
     if (command === 'auth_devices') return accessFixture

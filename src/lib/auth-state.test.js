@@ -57,9 +57,17 @@ describe('device list state', () => {
 })
 
 describe('access snapshot state', () => {
-  it('projects empty grants as stable empty categories', () => {
-    const state = accessReadyState({ groups: [{ name: 'everyone' }] })
-    expect(state.groups[0]).toMatchObject({ models: [], connections: [], capabilities: [] })
+  it('keeps empty capabilities and grants as empty lists', () => {
+    const state = accessReadyState({ capabilities: [], grants: [] })
+    expect(state.capabilities).toEqual([])
+    expect(state.grants).toEqual([])
+  })
+
+  it('preserves allow and deny records without inferring access', () => {
+    const grants = [{ effect: 'allow', action: 'use' }, { effect: 'deny', action: 'use' }]
+    const state = accessReadyState({ capabilities: ['mcp.local_stdio'], grants })
+    expect(state.capabilities).toEqual(['mcp.local_stdio'])
+    expect(state.grants).toEqual(grants)
   })
 
   it('keeps loading and retryable failure local to access state', () => {
