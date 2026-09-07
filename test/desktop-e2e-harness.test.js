@@ -591,13 +591,17 @@ $db = $seed.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $seed,
 $sql = 'CREATE TABLE \`Property\` (\`Property\` CHAR(72) NOT NULL, \`Value\` CHAR(255) PRIMARY KEY \`Property\`)'
 $v = $db.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $db, @($sql))
 $v.GetType().InvokeMember("Execute", "InvokeMethod", $null, $v, $null)
+# Release each view before reopening the fixture database.
+$v.GetType().InvokeMember("Close", "InvokeMethod", $null, $v, $null)
+[Runtime.InteropServices.Marshal]::FinalReleaseComObject($v) | Out-Null
 if ($FixtureName) {
   $sql = "INSERT INTO Property (Property, Value) VALUES ('ProductName', '$FixtureName')"
   $v = $db.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $db, @($sql))
   $v.GetType().InvokeMember("Execute", "InvokeMethod", $null, $v, $null)
+  $v.GetType().InvokeMember("Close", "InvokeMethod", $null, $v, $null)
+  [Runtime.InteropServices.Marshal]::FinalReleaseComObject($v) | Out-Null
 }
 $db.GetType().InvokeMember("Commit", "InvokeMethod", $null, $db, $null)
-[Runtime.InteropServices.Marshal]::FinalReleaseComObject($v) | Out-Null
 [Runtime.InteropServices.Marshal]::FinalReleaseComObject($db) | Out-Null
 $msi = Get-Item -LiteralPath $DatabasePath
 ${identity}
