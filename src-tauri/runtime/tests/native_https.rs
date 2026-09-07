@@ -3,10 +3,8 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use muniment_core::auth::{
-    NativeDeviceRegistrationRequest, NativeRegistrationError, RegistrationTransport,
-    UreqRegistrationTransport,
-};
+use muniment_core::attach::{evaluate_quiesce, RuntimeActivityRegistry};
+use muniment_runtime::sign_in;
 
 #[test]
 fn native_registration_sends_a_tls_client_hello() {
@@ -25,9 +23,10 @@ fn native_registration_sends_a_tls_client_hello() {
     let timeout = Duration::from_secs(5);
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
-    let url = format!(
-        "https://{}/v1/auth/native/devices",
-        listener.local_addr().unwrap()
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    std::env::set_var(
+        "MUNIMENT_API_BASE_URL",
+        format!("https://{}", listener.local_addr().unwrap()),
     );
     let server = thread::spawn(move || {
         let deadline = Instant::now() + timeout;
@@ -64,16 +63,14 @@ fn native_registration_sends_a_tls_client_hello() {
         stream.write_all(&[21, 3, 3, 0, 2, 2, 40]).unwrap();
     });
 
-    let client = UreqRegistrationTransport::new(timeout);
-    let result = client.register(
-        &url,
-        &NativeDeviceRegistrationRequest {
-            client_id: "muniment-desktop".into(),
-            client_role: "desktop".into(),
-            platform: "desktop".into(),
-            installation_public_key: "test-key".into(),
-        },
-    );
+    let activity = RuntimeActivityRegistry::new();
+    let browser = |_: &str| panic!("A failed TLS handshake must not open the browser.");
+    let result = sign_in(&browser, &Default::default(), &activity);
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
     server.join().unwrap();
-    assert!(matches!(result, Err(NativeRegistrationError::Transport(_))));
+    assert!(
+        result.is_err(),
+        "The listener must reject the TLS handshake."
+    );
+    assert!(evaluate_quiesce(activity.snapshot()).is_ok());
 }
