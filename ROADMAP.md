@@ -14,14 +14,16 @@ nightly rather than asserted. This lands before any graph work starts.
 - The nightly is green on Linux, Windows and macOS with a readable evidence
   envelope on each.
 
-## The crates port into the public core
+## The repo goes public under FSL
 
-The runtime service, attach, the run journal, the Pi sidecar integration, the
-per-thread permission policy, the CAS store, the memory index, the code-diff
-crates, ACP interop, and the ASR and read-aloud stack live in the public core
-under FSL with their tests, and the desktop consumes them from there. The
-cloud-native auth flow, the entitlement projection UI, the browser-control
-extension and the remote-control design study stay behind.
+This repo is the public core and the one app. At the FSL release it becomes
+`munimentai/muniment` by transfer, history included, and the MUNICORE lane
+takes over. Before the transfer: no workflow names the artifact bucket, the
+registry host or a runner label; the whole history passes the secret scan;
+`CONTRIBUTING.md`, `SECURITY.md` and a code of conduct exist; releases are
+tagged with a changelog; installers are signed on every platform. Outside pull
+requests never reach the reviewer's merge path, and a fork gets no preview
+build.
 
 ## The graph runs in the runtime
 
