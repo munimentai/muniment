@@ -1107,12 +1107,15 @@
                   <div><dt>{providerNames[status.provider]}</dt><dd>{status.configured ? 'Saved' : 'Not set'}</dd></div>
                 {/each}
               </dl>
-              <select aria-label="Provider" value={selectedProvider} onchange={(event) => { selectedProvider = event.currentTarget.value }} disabled={!!active || providerKeyPending}>
-                <option value="anthropic">Anthropic</option>
-                <option value="google">Google</option>
-                <option value="openai">OpenAI</option>
-                <option value="ollama">Ollama (local)</option>
-              </select>
+              <fieldset class="provider-choice" disabled={!!active || providerKeyPending}>
+                <legend>Provider</legend>
+                {#each Object.entries(providerNames) as [provider, name]}
+                  <label for="provider-{provider}">
+                    <input id="provider-{provider}" type="radio" name="provider" value={provider} bind:group={selectedProvider}>
+                    {name}{provider === 'ollama' ? ' (local)' : ''}
+                  </label>
+                {/each}
+              </fieldset>
               {#if selectedProvider === 'ollama'}
                 <label for="provider-base-url">Ollama server URL</label>
                 <input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={providerBaseUrl} disabled={!!active || providerKeyPending}>
@@ -1560,7 +1563,14 @@
   .provider-statuses div { display: flex; justify-content: space-between; gap: 8px; }
   .provider-statuses dd { margin: 0; color: var(--muted); }
   .local-account label { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .local-account input, .local-account select { min-width: 0; padding: 6px 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; }
+  .local-account > input { min-width: 0; padding: 6px 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; }
+  .provider-choice { min-width: 0; margin: 0; padding: 0; border: 0; }
+  .provider-choice legend { margin-bottom: 4px; padding: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .provider-choice label { display: flex; align-items: center; gap: 8px; min-height: 32px; border-radius: var(--radius-control); color: var(--ink); font: inherit; cursor: pointer; }
+  .provider-choice:not(:disabled) label:hover { background: var(--faint); }
+  .provider-choice:disabled label { opacity: .55; cursor: default; }
+  .provider-choice input { flex: none; width: 24px; height: 24px; margin: 0; accent-color: var(--ink); cursor: inherit; }
+  .provider-choice input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   .local-account .support { margin: 0; font: var(--text-12) var(--font-mono); }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
   .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
