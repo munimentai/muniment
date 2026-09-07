@@ -7,12 +7,14 @@ import {
   codesignArguments,
   intermediateCertificateImportArguments,
   intermediateCertificateImportSucceeded,
+  keychainSearchListArguments,
   notarytoolSubmitArguments,
   parseInstallerIdentity,
-  parseSigningIdentity,
   productbuildArguments,
+  requireSigningIdentity,
   resolveSigningConfiguration,
   signingEnabled,
+  signingIdentityArguments,
   stapleArguments,
 } from "./lib/macos-signing.mjs";
 
@@ -65,10 +67,9 @@ if (signing && signingConfig === null) {
   throw new Error("MACOS_SIGNING_ENABLED is true but Apple credentials are absent");
 }
 
-// Always build the universal .app first; signing (when enabled) operates on the
-// finished bundle so the unsigned and signed paths build identical bits.
+// Build the universal app without Tauri signing so this script checks trust before the first codesign call.
 mustRun("build universal runtime", process.execPath, [join(".github", "build-macos-runtime.mjs")]);
-tauri("build", "--target", "universal-apple-darwin", "--bundles", "app");
+tauri("build", "--target", "universal-apple-darwin", "--bundles", "app", "--no-sign");
 
 if (!signing) {
   console.log("macOS signing SKIPPED: MACOS_SIGNING_ENABLED is false (unsigned build)");
@@ -95,9 +96,8 @@ process.on("exit", cleanup);
 writeFileSync(certPath, Buffer.from(signingConfig.certificate, "base64"), { mode: 0o600 });
 writeFileSync(keyPath, Buffer.from(signingConfig.apiKey, "base64"), { mode: 0o600 });
 
-// A dedicated keychain holds ONLY the Developer ID cert, so identity discovery
-// is unambiguous and the login keychain is never touched. Prepend it to the
-// search list (keeping the existing entries) so codesign can find the key.
+// The dedicated keychain holds the Developer ID identities and G2 intermediate.
+// Keep existing keychains and System Roots searchable so codesign can reach the Apple root.
 mustRun("create keychain", "security", ["create-keychain", "-p", keychainPassword, keychain]);
 mustRun("keychain settings", "security", ["set-keychain-settings", keychain]);
 mustRun("unlock keychain", "security", ["unlock-keychain", "-p", keychainPassword, keychain]);
@@ -124,19 +124,21 @@ mustRun("show Developer ID G2 intermediate", "security",
 console.log("imported intermediate: Developer ID Certification Authority, G2");
 mustRun("authorize codesign", "security",
   ["set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", keychainPassword, keychain]);
-const priorKeychains = (spawnSync("security", ["list-keychains", "-d", "user"], { encoding: "utf8" }).stdout || "")
-  .split(/\r?\n/).map((line) => line.trim().replace(/^"|"$/g, "")).filter(Boolean);
+const priorKeychains = spawnSync("security", ["list-keychains", "-d", "user"], { encoding: "utf8" });
+if (priorKeychains.error) throw priorKeychains.error;
+if (priorKeychains.status !== 0) {
+  console.error("Cannot read the keychain search list.");
+  if (priorKeychains.stdout) process.stdout.write(priorKeychains.stdout);
+  if (priorKeychains.stderr) process.stderr.write(priorKeychains.stderr);
+  process.exit(priorKeychains.status ?? 1);
+}
 mustRun("register keychain", "security",
-  ["list-keychains", "-d", "user", "-s", keychain, ...priorKeychains]);
+  keychainSearchListArguments(keychain, priorKeychains.stdout || ""));
 
-const found = spawnSync("security", ["find-identity", "-v", "-p", "codesigning", keychain], { encoding: "utf8" });
-const identity = parseSigningIdentity(found.stdout || "");
+const found = spawnSync("security", signingIdentityArguments(keychain), { encoding: "utf8" });
+const identity = requireSigningIdentity(found);
 const installerIdentities = spawnSync("security", ["find-identity", "-v", keychain], { encoding: "utf8" });
 const installerIdentity = parseInstallerIdentity(installerIdentities.stdout || "");
-if (!identity) {
-  console.error("no Developer ID Application identity found in the imported certificate");
-  process.exit(1);
-}
 if (!installerIdentity) {
   console.error("no Developer ID Installer identity found in the imported certificate");
   process.exit(1);

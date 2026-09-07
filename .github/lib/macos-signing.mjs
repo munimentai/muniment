@@ -47,14 +47,42 @@ export const resolveSigningConfiguration = (env) => {
   };
 };
 
-// `security find-identity -v -p codesigning <keychain>` lists importable
+export const keychainSearchListArguments = (keychain, currentList) => {
+  const currentKeychains = currentList.split(/\r?\n/)
+    .map((line) => line.trim().replace(/^"|"$/g, "")).filter(Boolean);
+  return ["list-keychains", "-d", "user", "-s", ...new Set([
+    keychain,
+    ...currentKeychains,
+    "/System/Library/Keychains/SystemRootCertificates.keychain",
+  ])];
+};
+
+export const signingIdentityArguments = (keychain) => [
+  "find-identity", "-v", "-p", "codesigning", keychain,
+];
+
+// `security find-identity -v -p codesigning <keychain>` lists valid
 // identities as `  1) <40-hex SHA-1>  "Developer ID Application: Name (TEAM)"`.
 // Return the SHA-1 hash of the first Developer ID Application identity so
 // codesign selects it unambiguously (a substring name match can collide when a
 // keychain holds several certs). null when none is present.
 export const parseSigningIdentity = (findIdentityOutput) => {
-  const match = findIdentityOutput.match(/\b([0-9A-F]{40})\b\s+"(Developer ID Application:[^"]*)"/);
+  const match = findIdentityOutput.match(/^\s*\d+\) ([0-9A-F]{40})[ \t]+"(Developer ID Application:[^"\r\n]+)"[ \t]*\r?$/m);
   return match ? { hash: match[1], name: match[2] } : null;
+};
+
+export const requireSigningIdentity = (result) => {
+  const identity = parseSigningIdentity(result.stdout || "");
+  if (result.error || result.status !== 0 || !identity) {
+    throw new Error([
+      "No valid Developer ID Application identity. Check the certificate chain and keychain access before codesign.",
+      `security find-identity exited with status ${result.status ?? "unknown"}.`,
+      result.error?.message,
+      result.stdout,
+      result.stderr,
+    ].filter(Boolean).join("\n"));
+  }
+  return identity;
 };
 
 export const parseInstallerIdentity = (findIdentityOutput) => {

@@ -34,21 +34,42 @@ Set the `MACOS_SIGNING_ENABLED` repository variable to `true` after all six secr
 ## 2. What the build does once the flag is true
 
 `build-macos-app.mjs` (macOS build VM only):
-1. Builds the universal `.app` (identical bits to the unsigned path).
-2. Imports the `.p12` and finds both Developer ID identities by SHA-1.
+1. The build creates the universal `.app` with Tauri's `--no-sign` flag.
+2. The build imports the `.p12` into a throwaway keychain.
 3. The build imports the vendored Apple Developer ID G2 intermediate certificate.
    The build skips the import when the keychain already holds the intermediate.
-4. `codesign`s the nested ASR runtime dylibs, then the `.app`, with the
-   hardened runtime (`--options runtime`) and a secure `--timestamp`.
-5. `xcrun notarytool submit … --wait` using the API key. A rejected build fails
-   the job instead of shipping.
-6. `xcrun stapler staple` staples the ticket so Gatekeeper validates offline.
-7. Packages `muniment.app.zip` from the signed and stapled bundle.
-8. Builds the signed `.pkg`, notarizes it, and staples its ticket.
+4. The build prepends the throwaway keychain to the user search list and includes the System Roots keychain.
+5. The build checks for a valid Developer ID Application identity before any `codesign` call.
+6. The build finds the Developer ID Installer identity by SHA-1.
+7. The build signs the ASR runtime dylibs, runtime, and `.app` with the hardened runtime and a secure timestamp.
+8. The build submits the app archive through `xcrun notarytool submit … --wait` with the API key.
+   A rejected build fails the job.
+9. The build staples the ticket with `xcrun stapler staple` so Gatekeeper validates offline.
+10. The build packages `muniment.app.zip` from the signed and stapled bundle.
+11. The build creates the signed `.pkg`, notarizes it, and staples its ticket.
+
+The throwaway keychain holds both Developer ID identities, their private keys, and the Developer ID G2 intermediate.
+The search list preserves existing keychains and includes `/System/Library/Keychains/SystemRootCertificates.keychain` exactly once.
+That keychain supplies the trusted Apple root for the Developer ID chain without changing root trust settings.
+The build does not import a root certificate or change the login keychain contents.
+The macOS VM must supply the Apple Root CA in System Roots.
+
+Tauri skips its own signing so it cannot sign the bundle before the script checks trust.
+Before signing any dylib, the build runs `security find-identity -v -p codesigning <keychain>`.
+If that command fails or lists no valid Developer ID Application identity, the build stops with its stdout and stderr.
+The error names the certificate chain and keychain access checks.
+This preflight does not replace the signed nightly check.
 
 The nightly release notes state whether the macOS artifacts have signatures.
 
-## 3. Verify a signed + notarized artifact
+## 3. Verify the signed nightly
+
+Open the nightly `build (macos)` job log.
+Confirm that the log shows the Developer ID Application identity before the first ASR dylib signature.
+Check that `replacing existing signature` has no following `errSecInternalComponent` or chain warning.
+Confirm that the app signature passes and the job reaches `notarytool submit`.
+
+## 4. Verify a signed + notarized artifact
 
 Download `nightly-<sha>-macos-muniment.app.zip`, then on a Mac:
 
