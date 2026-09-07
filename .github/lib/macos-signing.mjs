@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
+
 // The env contract for macOS Developer ID signing + notarization. These arrive
 // through the SAME desktop-ci env-injection seam Windows signing uses (secrets
 // injected at deploy from the vault, never committed). The config flag stays
@@ -117,16 +120,70 @@ export const codesignArguments = (identityHash, file) => [
   file,
 ];
 
-// notarytool authenticates with the App Store Connect API key (no Apple ID /
-// app-specific password). `--wait` blocks until Apple returns Accepted/Invalid
-// so a rejected build fails the job instead of shipping unnotarized.
-export const notarytoolSubmitArguments = (configuration, archive, keyPath) => [
-  "notarytool", "submit", archive,
+// Both submissions share a deadline from the build script start, including compilation.
+// Leave 1200 seconds of desktop-ci's 3600-second bound for setup and failure reporting.
+export const NOTARIZATION_DEADLINE_SECONDS = 2400;
+
+const notarytoolArguments = (configuration, keyPath) => [
   "--key", keyPath,
   "--key-id", configuration.apiKeyId,
   "--issuer", configuration.apiIssuer,
-  "--wait",
+  "--output-format", "json", "--no-progress",
 ];
+
+export const notarytoolSubmitArguments = (configuration, archive, keyPath) => [
+  "notarytool", "submit", archive,
+  ...notarytoolArguments(configuration, keyPath),
+  "--no-wait",
+];
+
+// Poll structured status so a stalled queue leaves the submission id and last status in the build log.
+export const notarize = async (configuration, archive, keyPath, deadline) => {
+  const started = performance.now();
+  let submissionId = "unknown";
+  let lastStatus = "unknown";
+  const fail = (cause) => {
+    const waited = Math.ceil((performance.now() - started) / 1000);
+    throw new Error(`macOS notarization FAILED cause=${cause} submission_id=${submissionId} last_status=${JSON.stringify(lastStatus)} waited_seconds=${waited} archive=${JSON.stringify(archive)}`);
+  };
+  if (!Number.isFinite(deadline)) fail("invalid-deadline");
+  const remaining = () => deadline - performance.now();
+  const request = (args, timeout) => {
+    if (remaining() <= 0) fail("notarization-timeout");
+    const result = spawnSync("xcrun", args, {
+      encoding: "utf8",
+      timeout: Math.max(1, Math.ceil(Math.min(timeout, remaining()))),
+      killSignal: "SIGKILL",
+    });
+    if (result.error || result.status !== 0) {
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      fail(remaining() <= 0 ? "notarization-timeout" : "notarytool-failed");
+    }
+    try {
+      return JSON.parse(result.stdout);
+    } catch {
+      fail("invalid-response");
+    }
+  };
+  const submission = request(notarytoolSubmitArguments(configuration, archive, keyPath), 300_000);
+  if (typeof submission?.id !== "string" ||
+      !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(submission.id)) fail("invalid-response");
+  submissionId = submission.id;
+  console.log(`macOS notarization submission_id=${submissionId} archive=${JSON.stringify(archive)}`);
+  while (true) {
+    const info = request([
+      "notarytool", "info", submissionId, ...notarytoolArguments(configuration, keyPath),
+    ], 60_000);
+    if (info?.id !== submissionId ||
+        !["In Progress", "Accepted", "Invalid", "Rejected"].includes(info.status)) fail("invalid-response");
+    lastStatus = info.status;
+    if (remaining() <= 0) fail("notarization-timeout");
+    if (lastStatus === "Accepted") return;
+    if (lastStatus !== "In Progress") fail("notarization-rejected");
+    await sleep(Math.min(15_000, remaining()));
+  }
+};
 
 // Staple the Apple ticket into the bundle so Gatekeeper validates offline.
 export const stapleArguments = (bundle) => ["stapler", "staple", bundle];

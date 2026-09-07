@@ -8,7 +8,8 @@ import {
   intermediateCertificateImportArguments,
   intermediateCertificateImportSucceeded,
   keychainSearchListArguments,
-  notarytoolSubmitArguments,
+  NOTARIZATION_DEADLINE_SECONDS,
+  notarize,
   parseInstallerIdentity,
   productbuildArguments,
   requireSigningIdentity,
@@ -17,6 +18,8 @@ import {
   signingIdentityArguments,
   stapleArguments,
 } from "./lib/macos-signing.mjs";
+
+const notarizationDeadline = performance.now() + NOTARIZATION_DEADLINE_SECONDS * 1000;
 
 const bundleDir = join("src-tauri", "target", "universal-apple-darwin", "release", "bundle", "macos");
 const app = join(bundleDir, "muniment.app");
@@ -162,11 +165,19 @@ mustRun("codesign runtime", "codesign", codesignArguments(identity.hash, runtime
 mustRun("codesign app", "codesign", codesignArguments(identity.hash, app));
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
-// Notarize the signed bundle. notarytool submits a zip; --wait blocks until
-// Apple accepts or rejects, so a rejected build fails here instead of shipping.
+const mustNotarize = async (archive) => {
+  try {
+    await notarize(signingConfig, archive, keyPath, notarizationDeadline);
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+};
+
+// Notarize both artifacts within the shared deadline. Only Accepted status permits stapling.
 const submissionZip = join(workDir, "muniment-notarize.zip");
 mustRun("zip for notarization", "ditto", ["-c", "-k", "--keepParent", app, submissionZip]);
-mustRun("notarize", "xcrun", notarytoolSubmitArguments(signingConfig, submissionZip, keyPath));
+await mustNotarize(submissionZip);
 
 // Staple the ticket into the bundle so Gatekeeper validates offline, then
 // verify the staple before packaging the release archive.
@@ -177,7 +188,7 @@ packageApp();
 mustRun("make package directory", "mkdir", ["-p", pkgDir]);
 mustRun("build signed installer", "productbuild",
   productbuildArguments(app, pkg, installerIdentity.hash, keychain));
-mustRun("notarize installer", "xcrun", notarytoolSubmitArguments(signingConfig, pkg, keyPath));
+await mustNotarize(pkg);
 mustRun("staple installer", "xcrun", stapleArguments(pkg));
 mustRun("validate installer staple", "xcrun", ["stapler", "validate", pkg]);
 console.log(`kept ${appZip} (signed + notarized + stapled)`);
