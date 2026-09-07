@@ -13,9 +13,10 @@ The graph and the report are the product. The local product is published under
 FSL-1.1-Apache-2.0, and each version converts to Apache 2.0 two years after its
 own release.
 
-The first audience is developers who run a side business, then managers and
-executives who have come back to coding. They install a local app without
-asking anyone, and they already run a harness such as Claude Code.
+The audience is anyone who runs a business, or wants to, with intelligence and
+the company data together in one app. Nobody has to be a developer. They
+install a local app without asking anyone, and they run a harness such as
+Claude Code.
 
 ## What this repo is
 
