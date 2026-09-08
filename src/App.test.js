@@ -72,7 +72,13 @@ vi.mock('@tauri-apps/api/webview', () => ({
   }),
 }))
 
-const snapshot = (groups = []) => ({
+const grant = (overrides = {}) => ({
+  id: 'grt_stub', principal_type: 'org', principal_id: 'org-123',
+  resource_type: 'model', resource_id: 'gpt', action: 'use', effect: 'allow',
+  expires_at: null, ...overrides,
+})
+
+const snapshot = (grants = []) => ({
   snapshot_version: 2,
   subject: 'user-123',
   user_display_name: 'Alice',
@@ -80,7 +86,8 @@ const snapshot = (groups = []) => ({
   organization_display_name: 'Acme',
   role: 'owner',
   territory: 'us',
-  groups,
+  capabilities: [],
+  grants,
 })
 
 const device = (device_id, overrides = {}) => ({
@@ -5044,7 +5051,7 @@ describe('signed-in access popover', () => {
     expect(screen.queryByText('Acme · owner')).not.toBeInTheDocument()
   })
 
-  it('keeps fetch states local, retries, expands duplicate groups independently, and closes accessibly', async () => {
+  it('keeps fetch states local, retries, expands duplicate grants independently, and closes accessibly', async () => {
     let rejectOpen
     const pendingOpen = new Promise((_, reject) => { rejectOpen = reject })
     let accessCalls = 0
@@ -5056,8 +5063,8 @@ describe('signed-in access popover', () => {
         if (accessCalls === 1) return snapshot()
         if (accessCalls === 2) return pendingOpen
         return snapshot([
-          { name: 'members', models: [], connections: [], capabilities: [] },
-          { name: 'members', models: ['gpt'], connections: ['warehouse'], capabilities: ['chat'] },
+          grant({ principal_id: null }),
+          grant({ id: 'grt_second', principal_type: 'group', principal_id: 'members' }),
         ])
       }
       if (command === 'auth_devices') return []
@@ -5081,14 +5088,16 @@ describe('signed-in access popover', () => {
     await fireEvent.click(retry)
     expect(accessCalls).toBe(3)
 
-    const toggles = await within(dialog).findAllByRole('button', { name: 'members' })
+    const toggles = await within(dialog).findAllByRole('button', { name: 'allow use · gpt' })
     expect(toggles).toHaveLength(2)
     expect(toggles[0]).toHaveAttribute('aria-expanded', 'false')
     expect(toggles[1]).toHaveAttribute('aria-expanded', 'false')
     await fireEvent.click(toggles[0])
     expect(toggles[0]).toHaveAttribute('aria-expanded', 'true')
     expect(toggles[1]).toHaveAttribute('aria-expanded', 'false')
-    expect(within(dialog).getAllByText('None granted')).toHaveLength(3)
+    expect(within(dialog).getByText('org · Not specified')).toBeInTheDocument()
+    expect(within(dialog).getByText('The grant has no expiration.')).toBeInTheDocument()
+    expect(within(dialog).queryByText('group · members')).not.toBeInTheDocument()
 
     document.body.focus()
     await fireEvent.keyDown(document, { key: 'Escape' })
@@ -5103,11 +5112,11 @@ describe('signed-in access popover', () => {
     expect(profile).toHaveFocus()
   })
 
-  it('renders mixed device states in deterministic order without disturbing groups', async () => {
+  it('renders mixed device states in deterministic order without disturbing grants', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot([{ name: 'members', models: ['gpt'], connections: [], capabilities: [] }])
+      if (command === 'auth_entitlement_snapshot') return snapshot([grant()])
       if (command === 'auth_devices') return [
         device('revoked-newest', { platform: 'ios', revoked_at: '2026-06-01T00:00:00Z', last_active_at: '2026-07-01T00:00:00Z' }),
         device('active-old', { platform: 'android', last_active_at: '2026-05-01T00:00:00Z' }),
@@ -5135,7 +5144,7 @@ describe('signed-in access popover', () => {
     expect(revokedRule).toMatch(/text-decoration:\s*line-through/)
     expect(revokedRule).toMatch(/font-weight:\s*400/)
     expect(within(rows[2]).getByText('Revoked')).toBeVisible()
-    expect(within(dialog).getByRole('button', { name: 'members' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'allow use · gpt' })).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('revoked-newest')
   })
 
@@ -5184,7 +5193,7 @@ describe('signed-in access popover', () => {
       'companions-heading',
       'voice-heading',
     ])
-    expect(content.querySelector('.entitlements-section')).toHaveTextContent('Access is set by your admins.')
+    expect(content.querySelector('.entitlements-section')).toHaveTextContent('Your admins set access.')
   })
 
   it('identifies the profile and keeps access snapshot metadata in its section', async () => {
@@ -5205,12 +5214,12 @@ describe('signed-in access popover', () => {
     expect(dialog).not.toHaveTextContent('Your groups')
   })
 
-  it('retries only a failed device request and keeps entitlement groups rendered', async () => {
+  it('retries only a failed device request and keeps entitlement grants rendered', async () => {
     let deviceCalls = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot([{ name: 'members', models: [], connections: [], capabilities: [] }])
+      if (command === 'auth_entitlement_snapshot') return snapshot([grant()])
       if (command === 'auth_devices') {
         deviceCalls += 1
         if (deviceCalls === 1) throw new Error('raw backend secret')
@@ -5225,7 +5234,7 @@ describe('signed-in access popover', () => {
     const dialog = screen.getByRole('dialog', { name: 'Profile' })
     expect(await within(dialog).findByText('Devices could not be loaded.')).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('raw backend secret')
-    expect(within(dialog).getByRole('button', { name: 'members' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'allow use · gpt' })).toBeInTheDocument()
     const entitlementCalls = invoke.mock.calls.filter(([command]) => command === 'auth_entitlement_snapshot').length
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }))
     expect(await within(dialog).findByText('Active')).toBeInTheDocument()

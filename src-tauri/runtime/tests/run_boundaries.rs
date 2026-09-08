@@ -687,7 +687,7 @@ fn attach_submit_reaches_a_chat_event_subscriber() {
 }
 
 fn session_body() -> String {
-    r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":7,"user_display_name":"User","organization_display_name":"Muniment","groups":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#.into()
+    r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop","expires_at":"2099-01-01T00:00:00Z"},"user":{"id":"30000000-0000-4000-8000-000000000003","email":"user@example.com","status":"active","role":"owner","entitlement_version":7},"org":{"id":"20000000-0000-4000-8000-000000000002","display_name":"Muniment"},"entitlement_snapshot":{"payload":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","entitlement_version":7,"issued_at":"2026-08-01T00:00:00Z","capabilities":[],"grants":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#.into()
 }
 
 fn grant_body() -> String {

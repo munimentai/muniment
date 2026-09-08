@@ -235,7 +235,7 @@ fn runtime_state_answers_entitlement_and_replays_sign_out() {
 
     let session_body = |version| {
         format!(
-            r#"{{"session":{{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"}},"entitlement_snapshot":{{"payload":{{"version":{version},"user_display_name":"User","organization_display_name":"Muniment","groups":[]}},"signature":"signature-secret","algorithm":"hmac-sha256"}}}}"#
+            r#"{{"session":{{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop","expires_at":"2099-01-01T00:00:00Z"}},"user":{{"id":"30000000-0000-4000-8000-000000000003","email":"user@example.com","status":"active","role":"owner","entitlement_version":{version}}},"org":{{"id":"20000000-0000-4000-8000-000000000002","display_name":"Muniment"}},"entitlement_snapshot":{{"payload":{{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","entitlement_version":{version},"issued_at":"2026-08-01T00:00:00Z","capabilities":[],"grants":[]}},"signature":"signature-secret","algorithm":"hmac-sha256"}}}}"#
         )
     };
     let (base_url, server) = spawn_server(200, session_body(7));
@@ -429,7 +429,7 @@ fn runtime_boundaries_answer_all_attach_reads() {
     assert!(status.signed_in);
     assert_eq!(status.subject.as_deref(), Some("user"));
 
-    let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop"},"entitlement_snapshot":{"payload":{"version":7,"user_display_name":"User","organization_display_name":"Muniment","groups":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
+    let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop","expires_at":"2099-01-01T00:00:00Z"},"user":{"id":"30000000-0000-4000-8000-000000000003","email":"user@example.com","status":"active","role":"owner","entitlement_version":7},"org":{"id":"20000000-0000-4000-8000-000000000002","display_name":"Muniment"},"entitlement_snapshot":{"payload":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","entitlement_version":7,"issued_at":"2026-08-01T00:00:00Z","capabilities":[],"grants":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
     let (base_url, summaries_server) = spawn_server(200, session_body.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let summaries = boundaries

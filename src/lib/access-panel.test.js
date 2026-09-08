@@ -27,7 +27,8 @@ const snapshot = {
   organization_display_name: 'Acme',
   org_id: 'acme',
   role: 'owner',
-  groups: [],
+  capabilities: [],
+  grants: [],
 }
 const companion = { identity: 'client-1', claimed_kind: 'cli', claimed_version: '1.2.3', approved_at: '2026-08-04T12:00:00Z' }
 
@@ -72,6 +73,53 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+})
+
+describe('contract entitlement snapshot', () => {
+  it('shows the profile, capabilities, and allow and deny grants without resolving policy', async () => {
+    const grant = {
+      id: 'grt_allow', principal_type: 'org', principal_id: 'org_acme',
+      resource_type: 'model', resource_id: 'muniment-stub-chat',
+      action: 'use', effect: 'allow', expires_at: null,
+    }
+    const invoke = companionInvoke()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_entitlement_snapshot') return {
+        ...snapshot, snapshot_version: 42, user_display_name: 'ada@example.test', role: 'user',
+        capabilities: ['mcp.local_stdio'], grants: [grant, {
+          ...grant, id: 'grt_deny', effect: 'deny', principal_type: 'group', principal_id: null,
+          resource_id: null, expires_at: '2000-01-01T00:00:00Z',
+        }],
+      }
+      if (command === 'attach_listener_status') return { started: true, failure: null }
+      return []
+    })
+    renderPanel(invoke)
+    const profile = await screen.findByRole('button', { name: /ada@example.test/ })
+    expect(profile).toHaveAttribute('title', 'Acme · user')
+    await fireEvent.click(profile)
+    const section = screen.getByRole('dialog', { name: 'Profile' }).querySelector('.entitlements-section')
+    expect(section).toHaveTextContent('Snapshot v42')
+    expect(section).toHaveTextContent('mcp.local_stdio')
+    expect(section).toHaveTextContent('The server checks each request.')
+    const allow = within(section).getByRole('button', { name: 'allow use · muniment-stub-chat' })
+    const deny = within(section).getByRole('button', { name: 'deny use · model' })
+    await fireEvent.click(deny)
+    expect(deny).toHaveAttribute('aria-expanded', 'true')
+    expect(allow).toHaveAttribute('aria-expanded', 'false')
+    expect(section).toHaveTextContent('group · Not specified')
+    expect(section.querySelector('time')).toHaveAttribute('datetime', '2000-01-01T00:00:00Z')
+    await fireEvent.click(allow)
+    expect(section).toHaveTextContent('org · org_acme')
+    expect(section).toHaveTextContent('The grant has no expiration.')
+  })
+
+  it('shows empty capabilities and grants without inventing access', async () => {
+    renderPanel(companionInvoke())
+    await fireEvent.click(await screen.findByRole('button', { name: /Alice/ }))
+    expect(screen.getByText('The snapshot lists no capabilities.')).toBeInTheDocument()
+    expect(screen.getByText('The snapshot lists no grants.')).toBeInTheDocument()
+  })
 })
 
 describe('access popover layout', () => {
