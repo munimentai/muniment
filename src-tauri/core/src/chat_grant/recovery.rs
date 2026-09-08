@@ -28,6 +28,7 @@ impl GrantFailure {
 
 #[cfg(any(feature = "keyring", test))]
 pub(crate) trait GrantRecovery {
+    fn session_needs_renewal(&self) -> bool;
     fn issue(&mut self) -> Result<ChatGrant, GrantFailure>;
     fn refresh(&mut self) -> Result<(), FetchGrantError>;
     fn inspect(&mut self) -> Result<(), GrantFailure>;
@@ -111,6 +112,13 @@ pub(crate) fn recover_grant(
 ) -> Result<ChatGrant, FetchGrantError> {
     let mut budget = RecoveryBudget::default();
     loop {
+        if recovery.session_needs_renewal() {
+            if budget.refreshed {
+                return Err(FetchGrantError::Unavailable);
+            }
+            budget.recover(recovery, GrantFailure::SessionInvalid)?;
+            continue;
+        }
         match recovery.issue() {
             Ok(grant) if !grant.needs_renewal() => return Ok(grant),
             Ok(_) if !budget.stale => budget.stale = true,
@@ -118,6 +126,11 @@ pub(crate) fn recover_grant(
             Err(failure) => budget.recover(recovery, failure)?,
         }
     }
+}
+
+#[cfg(any(feature = "keyring", test))]
+pub(super) fn session_needs_renewal(expires_at: Option<u64>, now: u64) -> bool {
+    expires_at.is_some_and(|expiry| expiry <= now.saturating_add(super::SAFE_LIFE_SECONDS))
 }
 
 #[cfg(any(feature = "keyring", test))]
@@ -283,6 +296,12 @@ mod native {
     }
 
     impl GrantRecovery for NativeRecovery<'_> {
+        fn session_needs_renewal(&self) -> bool {
+            session_needs_renewal(
+                self.credentials.tokens.expires_at,
+                chrono::Utc::now().timestamp().max(0) as u64,
+            )
+        }
         fn issue(&mut self) -> Result<ChatGrant, GrantFailure> {
             self.current().map_err(GrantFailure::Other)?;
             if self
@@ -390,6 +409,54 @@ pub use native::{fetch_native, inspect_native_chat_session};
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn session_safe_life_matches_the_grant_threshold() {
+        for (expiry, expected) in [
+            (None, false),
+            (Some(0), true),
+            (Some(1_079), true),
+            (Some(1_080), true),
+            (Some(1_090), true),
+            (Some(1_091), false),
+            (Some(u64::MAX), false),
+        ] {
+            assert_eq!(session_needs_renewal(expiry, 1_000), expected);
+        }
+        assert!(session_needs_renewal(Some(u64::MAX), u64::MAX));
+    }
+
+    #[test]
+    fn a_short_refreshed_session_cannot_trigger_another_refresh() {
+        struct ShortSession(usize);
+        impl GrantRecovery for ShortSession {
+            fn session_needs_renewal(&self) -> bool {
+                true
+            }
+            fn refresh(&mut self) -> Result<(), FetchGrantError> {
+                self.0 += 1;
+                Ok(())
+            }
+            fn issue(&mut self) -> Result<ChatGrant, GrantFailure> {
+                panic!("The session cannot support a grant.")
+            }
+            fn inspect(&mut self) -> Result<(), GrantFailure> {
+                unreachable!()
+            }
+            fn clear(&mut self, _: bool) -> Result<(), FetchGrantError> {
+                unreachable!()
+            }
+            fn wait(&mut self, _: u64, _: bool) -> Result<(), FetchGrantError> {
+                unreachable!()
+            }
+        }
+        let mut session = ShortSession(0);
+        assert_eq!(
+            recover_grant(&mut session).unwrap_err(),
+            FetchGrantError::Unavailable
+        );
+        assert_eq!(session.0, 1);
+    }
 
     #[test]
     fn inspection_recovery_requires_matching_status_and_code() {

@@ -5,6 +5,17 @@ use serde::Deserialize;
 
 use crate::sidecar::pi_chat::Receipt;
 
+mod gateway;
+mod recovery;
+
+pub(crate) use gateway::{answer_grant_request, grant_error_message};
+#[cfg(feature = "keyring")]
+pub(crate) use recovery::inspect_native_chat_session;
+#[cfg(test)]
+pub(crate) use recovery::refresh_chat_credentials;
+
+const SAFE_LIFE_SECONDS: u64 = 90;
+
 const GRANT_PATH: &str = "/v1/chat/grants";
 const PROTOCOL: &str = "muniment.desktop-access/1";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -39,8 +50,9 @@ impl ChatGrant {
 
     pub fn needs_renewal(&self) -> bool {
         // Safe life excludes the contract's 30-second clock-skew margin.
-        self.expires_at
-            .is_some_and(|expiry| expiry <= Utc::now() + chrono::Duration::seconds(90))
+        self.expires_at.is_some_and(|expiry| {
+            expiry <= Utc::now() + chrono::Duration::seconds(SAFE_LIFE_SECONDS as i64)
+        })
     }
 
     pub fn is_local(&self) -> bool {
@@ -97,7 +109,12 @@ pub fn fetch_native_grant(
     issuer_base_url: &str,
     access_token: &str,
 ) -> Result<ChatGrant, FetchGrantError> {
-    crate::chat_grant_recovery::fetch_native(issuer_base_url, access_token)
+    recovery::fetch_native(issuer_base_url, access_token)
+}
+
+#[cfg(feature = "keyring")]
+pub(crate) fn renew_native_grant(access_token: &str) -> Result<ChatGrant, FetchGrantError> {
+    fetch_native_grant(&crate::auth::api_base_url(), access_token)
 }
 
 pub fn fetch_grant(
@@ -130,8 +147,8 @@ pub(crate) fn issue_grant(
     issuer_base_url: &str,
     access_token: &str,
     expected_device_id: &str,
-) -> Result<ChatGrant, crate::chat_grant_recovery::GrantFailure> {
-    use crate::chat_grant_recovery::GrantFailure;
+) -> Result<ChatGrant, recovery::GrantFailure> {
+    use recovery::GrantFailure;
     if !is_control_plane_endpoint(issuer_base_url) {
         return Err(GrantFailure::Other(FetchGrantError::InvalidResponse));
     }
@@ -284,11 +301,8 @@ pub fn fetch_receipt(
         .map_err(|_| FetchReceiptError)
 }
 
-fn grant_status_error(
-    status: u16,
-    response: ureq::Response,
-) -> crate::chat_grant_recovery::GrantFailure {
-    use crate::chat_grant_recovery::GrantFailure;
+fn grant_status_error(status: u16, response: ureq::Response) -> recovery::GrantFailure {
+    use recovery::GrantFailure;
     let invalid = GrantFailure::Other(FetchGrantError::InvalidResponse);
     if status >= 500 && status != 503 {
         return GrantFailure::Other(FetchGrantError::Unavailable);
@@ -555,11 +569,18 @@ mod tests {
         token: String,
         actions: Vec<String>,
         refresh_fails: bool,
-        inspection_failures: std::collections::VecDeque<crate::chat_grant_recovery::GrantFailure>,
+        inspection_failures: std::collections::VecDeque<recovery::GrantFailure>,
+        session_expires_at: Option<u64>,
     }
 
-    impl crate::chat_grant_recovery::GrantRecovery for RecoveryProbe {
-        fn issue(&mut self) -> Result<ChatGrant, crate::chat_grant_recovery::GrantFailure> {
+    impl recovery::GrantRecovery for RecoveryProbe {
+        fn session_needs_renewal(&self) -> bool {
+            recovery::session_needs_renewal(
+                self.session_expires_at,
+                Utc::now().timestamp().max(0) as u64,
+            )
+        }
+        fn issue(&mut self) -> Result<ChatGrant, recovery::GrantFailure> {
             self.actions.push("issue".into());
             issue_grant(&self.base, &self.token, "dev_desktop_1")
         }
@@ -568,10 +589,11 @@ mod tests {
             if self.refresh_fails {
                 return Err(FetchGrantError::Unauthorized);
             }
+            self.session_expires_at = None;
             self.token = "refreshed-token".into();
             Ok(())
         }
-        fn inspect(&mut self) -> Result<(), crate::chat_grant_recovery::GrantFailure> {
+        fn inspect(&mut self) -> Result<(), recovery::GrantFailure> {
             self.actions.push("inspect".into());
             self.inspection_failures.pop_front().map_or(Ok(()), Err)
         }
@@ -606,7 +628,7 @@ mod tests {
 
     #[test]
     fn issuance_recovers_before_shell_mapping() {
-        use crate::chat_grant_recovery::recover_grant;
+        use recovery::recover_grant;
         for (status, code, wait, actions, succeeds) in [
             (400, "invalid_request", None, vec!["issue"], false),
             (
@@ -671,6 +693,7 @@ mod tests {
                 actions: Vec::new(),
                 refresh_fails: false,
                 inspection_failures: Default::default(),
+                session_expires_at: None,
             };
             assert_eq!(recover_grant(&mut probe).is_ok(), succeeds, "{code}");
             assert_eq!(probe.actions, actions, "{code}");
@@ -688,8 +711,37 @@ mod tests {
     }
 
     #[test]
+    fn near_expiry_session_refresh_shares_the_recovery_budget() {
+        for denied in [false, true] {
+            let response = if denied {
+                issuance_failure(401, "session_invalid", None)
+            } else {
+                (201, current_response().to_string())
+            };
+            let (base, stub) = serve(vec![response]);
+            let mut probe = RecoveryProbe {
+                base,
+                token: "near-expiry-token".into(),
+                actions: Vec::new(),
+                refresh_fails: false,
+                inspection_failures: Default::default(),
+                session_expires_at: Some(Utc::now().timestamp() as u64 + 80),
+            };
+            assert_eq!(recovery::recover_grant(&mut probe).is_ok(), !denied);
+            if denied {
+                assert_eq!(probe.actions, ["refresh", "issue", "clear-session"]);
+            } else {
+                assert_eq!(probe.actions, ["refresh", "issue"]);
+            }
+            let requests = stub.join().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(requests[0].contains("Bearer refreshed-token"));
+        }
+    }
+
+    #[test]
     fn issuance_limits_refresh_inspection_and_backoff() {
-        use crate::chat_grant_recovery::{recover_grant, GrantFailure};
+        use recovery::{recover_grant, GrantFailure};
         for (responses, refresh_fails, inspections, expected) in [
             (
                 vec![issuance_failure(401, "session_invalid", None)],
@@ -738,6 +790,7 @@ mod tests {
                 actions: Vec::new(),
                 refresh_fails,
                 inspection_failures: inspections.into(),
+                session_expires_at: None,
             };
             assert!(recover_grant(&mut probe).is_err());
             assert_eq!(probe.actions, expected);

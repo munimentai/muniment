@@ -41,8 +41,6 @@ export default function (pi) {
   let ui
   pi.on('session_start', (_event, context) => {
     ui = context.ui
-    // Bypass stored OAuth as well as stored API keys without persisting the grant.
-    context.modelRegistry.authStorage.setRuntimeApiKey('muniment', 'muniment-runtime-boundary')
   })
   pi.registerProvider('muniment', {
     baseUrl: process.env.OPENAI_BASE_URL,

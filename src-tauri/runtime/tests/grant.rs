@@ -1,4 +1,3 @@
-use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_grant::FetchGrantError;
 use muniment_runtime::{configure_run, ConfigureRunError};
 
@@ -8,9 +7,8 @@ use common::{credentials, grant_body, spawn_server};
 #[test]
 fn configure_run_checks_the_requested_workspace() {
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
-    let store = KeyringNativeCredentialStore::new();
     let credentials = credentials();
-    store.save_credentials(&credentials).unwrap();
+    common::save_credentials(&credentials);
     let access_token = &credentials.tokens.access_token;
     let valid_grant = grant_body();
     let (base_url, server) = spawn_server(201, valid_grant.clone());
@@ -60,7 +58,7 @@ fn configure_run_checks_the_requested_workspace() {
         ConfigureRunError::Grant(FetchGrantError::Unauthorized)
     );
     let (base_url, server) = common::spawn_server_with(201, valid_grant, || {
-        KeyringNativeCredentialStore::new().clear_session().unwrap();
+        common::clear_credentials();
     });
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     assert_eq!(
@@ -68,6 +66,54 @@ fn configure_run_checks_the_requested_workspace() {
         ConfigureRunError::Grant(FetchGrantError::Unauthorized)
     );
     server.join().unwrap();
-    store.clear_session().unwrap();
+    near_expiry_session_refreshes_before_grant_issuance();
+    common::clear_credentials();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
+}
+
+fn near_expiry_session_refreshes_before_grant_issuance() {
+    for seconds in [80, 0] {
+        let now = chrono::Utc::now().timestamp() as u64;
+        let mut credentials = common::credentials_with_expiry(now + seconds);
+        credentials.installation.device_challenge =
+            "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM".into();
+        common::save_credentials(&credentials);
+        let response = serde_json::json!({
+            "access_token": "refreshed-access", "token_type": "Bearer", "expires_in": 900,
+            "refresh_token": "refreshed-refresh", "refresh_expires_in": 86400,
+            "session": {"org_id": "20000000-0000-4000-8000-000000000002",
+                "user_id": "30000000-0000-4000-8000-000000000003", "role": "user",
+                "device_id": credentials.installation.device_id, "client_role": "desktop"},
+            "entitlement_snapshot": {"payload": {}, "signature": "signature", "algorithm": "hmac-sha256"},
+            "device_challenge": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU"
+        });
+        let (base, server) =
+            common::spawn_server_sequence(vec![(200, response.to_string()), (201, grant_body())]);
+        std::env::set_var("MUNIMENT_API_BASE_URL", base);
+        let grant = configure_run(&credentials.tokens.access_token, None).unwrap();
+        assert!(!grant.needs_renewal());
+        assert_eq!(
+            grant.native_access_token.as_deref(),
+            Some("refreshed-access")
+        );
+        assert_eq!(
+            common::load_credentials().tokens.access_token,
+            "refreshed-access"
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("POST /v1/auth/native/token HTTP/1.1\r\n"));
+        let refresh: serde_json::Value =
+            serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(refresh["grant_type"], "refresh_token");
+        assert_eq!(refresh["refresh_token"], "refresh-secret");
+        assert!(requests[1].starts_with("POST /v1/chat/grants HTTP/1.1\r\n"));
+        assert!(requests[1].contains("Authorization: Bearer refreshed-access\r\n"));
+        let body: serde_json::Value =
+            serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"protocol": "muniment.desktop-access/1"})
+        );
+    }
 }

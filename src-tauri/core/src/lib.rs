@@ -17,10 +17,8 @@ pub mod auth;
 pub mod browser_control;
 pub mod cas;
 pub mod chat_coordinate;
-pub mod chat_gateway;
 #[cfg(feature = "desktop-integration")]
 pub mod chat_grant;
-pub mod chat_grant_recovery;
 pub mod chat_profile;
 #[cfg(feature = "keyring")]
 pub mod chat_prompt;

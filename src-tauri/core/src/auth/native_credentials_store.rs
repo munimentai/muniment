@@ -380,7 +380,7 @@ mod tests {
                 refresh_expires_at: 9000,
             };
             store.save_credentials(&expected).unwrap();
-            let result = crate::chat_grant_recovery::refresh_chat_credentials(
+            let result = crate::chat_grant::refresh_chat_credentials(
                 &store,
                 &DuringRefresh {
                     store: &store,

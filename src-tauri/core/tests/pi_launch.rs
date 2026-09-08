@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use muniment_core::chat_grant::ChatGrant;
+use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
+
+#[path = "pi_launch/gateway_coordinate.rs"]
+mod gateway_coordinate;
 use muniment_core::pi_launch::{
     pi_launch_config, pi_launch_config_for_executable, PiLaunchBoundaries, PiLaunchError,
 };
@@ -113,6 +116,13 @@ fn every_launch_renders_the_selected_track_before_spawn() {
                     assert!(settings.get("defaultTools").is_none());
                     assert_eq!(config.startup_timeout, Duration::from_secs(30));
                 }
+                assert_eq!(
+                    config
+                        .args
+                        .windows(2)
+                        .any(|args| args == ["--api-key", "muniment-runtime-boundary"]),
+                    !grant.is_local()
+                );
                 assert!(!config.args.iter().any(|arg| arg == "--tools"));
                 assert!(config.env_remove.iter().any(|name| name == "BUN_BE_BUN"));
                 assert!(!config.env.contains_key("BUN_BE_BUN"));
@@ -147,7 +157,7 @@ fn rejects_a_candidate_launch_when_settings_cannot_be_saved() {
 #[cfg(unix)]
 fn pinned_pi_cloud_wire_contract() {
     let Ok(executable) = std::env::var("MUNIMENT_PI_WIRE_EXECUTABLE") else {
-        eprintln!("The wire test requires MUNIMENT_PI_WIRE_EXECUTABLE for Pi 0.73.1.");
+        eprintln!("The wire test requires MUNIMENT_PI_WIRE_EXECUTABLE for Pi 0.73.1 or 0.85.1.");
         return;
     };
     let output = std::process::Command::new("python3")

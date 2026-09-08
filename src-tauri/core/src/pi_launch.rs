@@ -66,7 +66,7 @@ pub trait PiLaunchBoundaries {
         access_token: &str,
     ) -> Result<ChatGrant, crate::chat_grant::FetchGrantError> {
         #[cfg(feature = "keyring")]
-        return crate::chat_grant::fetch_native_grant(&crate::auth::api_base_url(), access_token);
+        return crate::chat_grant::renew_native_grant(access_token);
         #[cfg(not(feature = "keyring"))]
         {
             let _ = access_token;
@@ -79,7 +79,7 @@ pub trait PiLaunchBoundaries {
         access_token: &str,
     ) -> Result<String, crate::chat_grant::FetchGrantError> {
         #[cfg(feature = "keyring")]
-        return crate::chat_grant_recovery::inspect_native_chat_session(access_token);
+        return crate::chat_grant::inspect_native_chat_session(access_token);
         #[cfg(not(feature = "keyring"))]
         {
             let _ = access_token;
@@ -180,6 +180,9 @@ pub fn pi_launch_config_for_executable(
                 "muniment".into(),
                 "--model".into(),
                 model.clone(),
+                // Pi's CLI sets a runtime override on both tracks. This marker is not a credential.
+                "--api-key".into(),
+                "muniment-runtime-boundary".into(),
             ]);
         }
     }

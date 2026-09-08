@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use super::{ChatGrant, FetchGrantError};
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::cas::LocalCas;
 use muniment_core::chat_coordinate::coordinate;
-use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
 use muniment_core::journal::RunJournal;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
@@ -55,6 +55,7 @@ impl PiLaunchBoundaries for Boundary {
 
 #[test]
 fn terminal_gateway_denials_fail_the_run_without_a_receipt_or_secret_journal_entry() {
+    let _environment = super::ENVIRONMENT.lock().unwrap();
     let root = std::env::temp_dir().join(format!(
         "muniment-gateway-coordinate-{}",
         uuid::Uuid::new_v4()

@@ -24,7 +24,8 @@ class CloudWire(unittest.TestCase):
             (root / 'provider.mjs').write_text(SOURCE.read_text())
             credential = ({'type': 'oauth', 'access': 'stored-access', 'refresh': 'stored-refresh', 'expires': 0}
                           if oauth else {'type': 'api_key', 'key': 'conflicting-stored-key'})
-            (root / 'agent/auth.json').write_text(json.dumps({'muniment': credential}))
+            stored_credentials = json.dumps({'muniment': credential})
+            (root / 'agent/auth.json').write_text(stored_credentials)
             requests = []
             failure_queue = list(failures)
             tool_sent = False
@@ -73,7 +74,8 @@ class CloudWire(unittest.TestCase):
             env.update(HOME=str(root), PI_CODING_AGENT_DIR=str(root / 'agent'),
                        OPENAI_BASE_URL=gateway_url, PI_DEFAULT_MODEL='allowed-model')
             command = [EXECUTABLE, '--mode', 'rpc', '--session-dir', str(root / 'sessions'),
-                       '--extension', str(root / 'provider.mjs'), '--provider', 'muniment', '--model', 'allowed-model']
+                       '--extension', str(root / 'provider.mjs'), '--provider', 'muniment', '--model', 'allowed-model',
+                       '--api-key', 'muniment-runtime-boundary']
             process = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             lines = queue.Queue()
@@ -112,6 +114,7 @@ class CloudWire(unittest.TestCase):
                     self.assertNotEqual(event.get('type'), 'auto_retry_start', event)
                     self.assertNotEqual(event.get('type'), 'extension_ui_request', event)
                     events.append(event)
+                self.assertEqual((root / 'agent/auth.json').read_text(), stored_credentials)
                 self.assertTrue(requests)
                 self.assertTrue(all(path == '/v1/chat/completions' for path, _, _ in requests))
                 self.assertTrue(all(key.startswith('Bearer ephemeral-wire-key-') for _, key, _ in requests))
@@ -175,6 +178,6 @@ class CloudWire(unittest.TestCase):
 
 if __name__ == '__main__':
     version = subprocess.check_output([EXECUTABLE, '--version'], text=True, stderr=subprocess.STDOUT).strip()
-    if version != '0.73.1':
-        raise SystemExit(f'The wire test requires Pi 0.73.1. The executable reports {version}.')
+    if version not in ('0.73.1', '0.85.1'):
+        raise SystemExit(f'The wire test requires Pi 0.73.1 or 0.85.1. The executable reports {version}.')
     unittest.main()

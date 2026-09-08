@@ -12,6 +12,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{InstallationRecord, NativeCredentials, TokenSet};
+use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 
@@ -164,6 +165,23 @@ pub fn read_request(stream: &mut TcpStream) -> String {
         }
     }
     String::from_utf8(bytes).unwrap()
+}
+
+pub fn save_credentials(credentials: &NativeCredentials) {
+    KeyringNativeCredentialStore::new()
+        .save_credentials(credentials)
+        .unwrap();
+}
+
+pub fn clear_credentials() {
+    KeyringNativeCredentialStore::new().clear_session().unwrap();
+}
+
+pub fn load_credentials() -> NativeCredentials {
+    KeyringNativeCredentialStore::new()
+        .load_credentials()
+        .unwrap()
+        .unwrap()
 }
 
 pub fn credentials() -> NativeCredentials {

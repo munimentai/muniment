@@ -634,7 +634,7 @@ pub fn coordinate(
                 &run_id,
                 &mut seq,
                 &mut open_effects,
-                crate::chat_gateway::grant_error_message(error),
+                crate::chat_grant::grant_error_message(error),
                 subject.as_deref(),
             );
             break;
@@ -912,13 +912,13 @@ fn answer_gateway_boundary(
             return false;
         }
         let answer = ExtensionUiAnswer::Editor(
-            json!({"error": crate::chat_gateway::grant_error_message(error)}).to_string(),
+            json!({"error": crate::chat_grant::grant_error_message(error)}).to_string(),
         );
         let _ = adapter.answer_extension_ui(transport, request, answer);
         return true;
     }
     let Some((answer, error)) =
-        crate::chat_gateway::answer_grant_request(boundaries, grant, access_token, request)
+        crate::chat_grant::answer_grant_request(boundaries, grant, access_token, request)
     else {
         return false;
     };
