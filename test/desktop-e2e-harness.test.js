@@ -1037,7 +1037,7 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
     expect(finalizer).toMatch(/installed-files-gone[^\n]+Test-Path -LiteralPath \$installDirectory/)
     expect(finalizer).toMatch(/processes-gone[\s\S]+Get-HarnessProcesses/)
     expect(runner).toMatch(/function Get-HarnessProcesses[\s\S]+Get-Process muniment/)
-    expect(finalizer).toMatch(/publicationStatus = \$cleanupStatus[\s\S]+cleanupStatus -ne \$publicationStatus[\s\S]+suppress-artifacts/)
+    expect(finalizer).toMatch(/Invoke-Cleanup "publish-artifacts"[^\n]+\n\s+if \(\$script:cleanupLastStatus -ne 0\) \{ Invoke-Cleanup "suppress-artifacts"/)
   })
 
   it('defaults the artifact directory to the path desktop-ci actually collects', () => {
@@ -1109,7 +1109,7 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
   ])('Publishes count %s and the installer log after cleanup failure "%s".', (count, failed) => {
     const { fixture, registrations } = registrationFixture(count)
     const secret = 'installer-fixture-secret'
-    const { result, artifacts, invoked } = runWindowsFinalizer(failed, '', {
+    const { result, artifacts, invoked, statuses } = runWindowsFinalizer(failed, '', {
       MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE: fixture,
       MUNIMENT_E2E_PASSWORD: secret,
     })
@@ -1131,6 +1131,14 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
       expect(snapshot.machineUninstallEntries[0].PSChildName).toBe('machine-product')
     }
     expect(invoked).toContain('remove-raw')
+    expect(statuses.uninstall).toBe(count === 2 ? '1' : '0')
+    if (failed === 'publish-artifacts') {
+      expect(statuses['publish-artifacts']).toBe('1')
+      expect(statuses['suppress-artifacts']).toBe('0')
+    } else if (!failed) {
+      expect(statuses['publish-artifacts']).toBe('0')
+      expect(invoked).not.toContain('suppress-artifacts')
+    }
     expect(fs.existsSync(path.join(artifacts, 'stale-or-partial'))).toBe(false)
     expect(fs.existsSync(path.join(artifacts, 'partial-publication'))).toBe(false)
   })
