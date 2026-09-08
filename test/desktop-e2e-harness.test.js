@@ -474,7 +474,7 @@ sleep() {
   printf 'wait\\n' >>"$cleanup_log"
   if [[ $STOP_MODE == delayed ]]; then
     for key in ${processes.join(' ')}; do
-      if [[ $key != "$STUCK_PROCESS" || ! -e "$raw/first-spec" ]]; then rm -f "$process_root/$key"; fi
+      if [[ -e "$process_root/$key" && ( $key != "$STUCK_PROCESS" || ! -e "$raw/first-spec" ) ]]; then rm -f "$process_root/$key"; fi
     done
   fi
 }
