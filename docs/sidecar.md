@@ -70,12 +70,18 @@ or `Failed` is delivered, all receiver channels disconnect.
 
 ## Signed-in Pi chat
 
-Chat requests a strict `{ gatewayUrl, virtualKey, model?, receiptUrl }` grant
-from `POST /v1/desktop/chat/config` at the configured control-plane issuer,
-using the refreshed OIDC access token. Both URLs must be HTTPS and unknown
-members are rejected. The scoped LiteLLM virtual key and gateway URL exist
-only in the supervised Pi child's environment; neither is returned to the
-webview nor written to the run journal.
+Chat posts `{"protocol":"muniment.desktop-access/1"}` to `/v1/chat/grants`
+with the native access token. The desktop reads the `chat_grant` envelope
+and ignores compatible fields. It checks the installation binding, model
+aliases, HTTPS gateway URL, timestamps, and entitlement version.
+The desktop selects the first allowed model alias through a Pi provider extension.
+The key stays in memory and the supervised Pi child's environment.
+The extension file contains no key. The webview and run journal receive no key.
+
+The desktop uses its `local` workspace and an 8,192-character memory limit.
+Each new run and resume requests a new grant. Before launch, the desktop
+renews a grant with at most 60 seconds of safe life.
+Safe life excludes 30 seconds for clock skew. A stale issuance gets one retry.
 
 Each local run launches a new persistent Pi conversation beneath the app data
 directory's owned `pi-sessions` root. Launch always supplies `--session-dir`;
@@ -96,9 +102,10 @@ The presence of a valid binding does not submit a prompt, resolve a permission
 gate, or repeat a tool effect. Automatic continuation is deliberately deferred
 to the next resume slice.
 
-After Pi emits `agent_end`, the desktop posts `{ runId }` to `receiptUrl` with
-the OIDC access token. Only that authoritative response supplies optional
-route, model, cost, time, and capability provenance. Pi event members are not
+After Pi emits `agent_end`, the desktop posts `{ runId }` to
+`/v1/chat/receipts` at the configured issuer with the native access token.
+The grant contract does not define the receipt route.
+Only the receipt response supplies optional route, model, cost, time, and capability provenance. Pi event members are not
 treated as billing or routing authority.
 
 ## JSON-RPC framing

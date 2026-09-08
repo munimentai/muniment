@@ -1,7 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -216,16 +216,7 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
     let base_url = format!("http://{}", server.local_addr().unwrap());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let responses = std::thread::spawn(move || {
-        for body in [session_body(), grant_body(), session_body(), grant_body()] {
-            let (mut stream, _) = server.accept().unwrap();
-            read_request(&mut stream);
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .unwrap();
-        }
+        serve_grants(server, 2);
     });
 
     let profile = TemporaryProfile::new("attach-submit", true);
@@ -267,7 +258,7 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
             .approval()
             .unwrap()
             .workspace,
-        "workspace-a"
+        "local"
     );
 
     let boundaries = state.boundaries();
@@ -280,7 +271,7 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
 
     let second = service
         .submit_run(
-            "workspace-a",
+            "local",
             RunSubmitRequest {
                 text: "hello again".into(),
                 files: Vec::new(),
@@ -343,16 +334,7 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
     let base_url = format!("http://{}", server.local_addr().unwrap());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let responses = std::thread::spawn(move || {
-        for body in [session_body(), grant_body(), session_body(), grant_body()] {
-            let (mut stream, _) = server.accept().unwrap();
-            read_request(&mut stream);
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .unwrap();
-        }
+        serve_grants(server, 2);
     });
 
     let profile = TemporaryProfile::new("attach-explicit-thread", true);
@@ -367,7 +349,7 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
     .unwrap();
     let first = service
         .submit_run(
-            "workspace-a",
+            "local",
             RunSubmitRequest {
                 text: "first".into(),
                 files: Vec::new(),
@@ -393,7 +375,7 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
 
     let accepted = service
         .submit_run(
-            "workspace-a",
+            "local",
             RunSubmitRequest {
                 text: "hello".into(),
                 files: Vec::new(),
@@ -446,16 +428,7 @@ fn runtime_boundaries_prepare_a_desktop_run() {
     let base_url = format!("http://{}", server.local_addr().unwrap());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let responses = std::thread::spawn(move || {
-        for body in [session_body(), grant_body()] {
-            let (mut stream, _) = server.accept().unwrap();
-            read_request(&mut stream);
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .unwrap();
-        }
+        serve_grants(server, 1);
     });
 
     let temporary_profile = TemporaryProfile::new("run-boundaries", true);
@@ -465,7 +438,7 @@ fn runtime_boundaries_prepare_a_desktop_run() {
     let storage = open_profile_storage(&profile).unwrap();
     let thread_id = create_thread_now(
         &mut storage.lock().unwrap().journal,
-        "workspace-a",
+        "local",
         Provenance {
             source: "test".into(),
             source_version: "1".into(),
@@ -512,7 +485,7 @@ fn runtime_boundaries_prepare_a_desktop_run() {
         RunStartRequest {
             prompt: "hello".into(),
             files: Vec::new(),
-            workspace: Some("workspace-a".into()),
+            workspace: Some("local".into()),
             provenance: Some(Provenance {
                 source: "test".into(),
                 source_version: "1".into(),
@@ -557,16 +530,7 @@ fn runtime_service_broadcasts_a_driven_prompts_chat_events() {
     let base_url = format!("http://{}", server.local_addr().unwrap());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let responses = std::thread::spawn(move || {
-        for body in [session_body(), grant_body()] {
-            let (mut stream, _) = server.accept().unwrap();
-            read_request(&mut stream);
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .unwrap();
-        }
+        serve_grants(server, 1);
     });
 
     let profile = TemporaryProfile::new("run-chat-events", true);
@@ -582,7 +546,7 @@ fn runtime_service_broadcasts_a_driven_prompts_chat_events() {
         RunStartRequest {
             prompt: "hello".into(),
             files: Vec::new(),
-            workspace: Some("workspace-a".into()),
+            workspace: Some("local".into()),
             provenance: None,
             thread_id: None,
         },
@@ -622,16 +586,7 @@ fn attach_submit_reaches_a_chat_event_subscriber() {
     let base_url = format!("http://{}", server.local_addr().unwrap());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let responses = std::thread::spawn(move || {
-        for body in [session_body(), grant_body()] {
-            let (mut stream, _) = server.accept().unwrap();
-            read_request(&mut stream);
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .unwrap();
-        }
+        serve_grants(server, 1);
     });
 
     let profile = TemporaryProfile::new("attach-submit-chat-events", true);
@@ -649,7 +604,7 @@ fn attach_submit_reaches_a_chat_event_subscriber() {
     .unwrap();
     let accepted = service
         .submit_run(
-            "workspace-a",
+            "local",
             RunSubmitRequest {
                 text: "hello".into(),
                 files: Vec::new(),
@@ -690,15 +645,33 @@ fn session_body() -> String {
     r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop","expires_at":"2099-01-01T00:00:00Z"},"user":{"id":"30000000-0000-4000-8000-000000000003","email":"user@example.com","status":"active","role":"owner","entitlement_version":7},"org":{"id":"20000000-0000-4000-8000-000000000002","display_name":"Muniment"},"entitlement_snapshot":{"payload":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","entitlement_version":7,"issued_at":"2026-08-01T00:00:00Z","capabilities":[],"grants":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#.into()
 }
 
-fn grant_body() -> String {
-    r#"{"workspace":"workspace-a","gatewayUrl":"https://gateway.example.com","virtualKey":"key","minimumCacheablePrefixCharacters":8192,"receiptUrl":"https://receipts.example.com"}"#.into()
+fn serve_grants(server: TcpListener, runs: usize) {
+    for _ in 0..runs {
+        for (status, body, path) in [
+            (200, session_body(), "GET /v1/auth/native/session "),
+            (201, common::grant_body(), "POST /v1/chat/grants "),
+        ] {
+            loop {
+                let (mut stream, _) = server.accept().unwrap();
+                let request = read_request(&mut stream);
+                let receipt = request.starts_with("POST /v1/chat/receipts ");
+                if !receipt {
+                    assert!(request.starts_with(path), "{request}");
+                }
+                let (status, body) = if receipt {
+                    (200, "{\"route\":\"test\",\"model\":\"muniment-stub-chat\"}")
+                } else {
+                    (status, body.as_str())
+                };
+                write!(stream, "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                if !receipt {
+                    break;
+                }
+            }
+        }
+    }
 }
 
-fn read_request(stream: &mut std::net::TcpStream) {
-    let mut bytes = Vec::new();
-    while !bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-        let mut buffer = [0; 1024];
-        let read = stream.read(&mut buffer).unwrap();
-        bytes.extend_from_slice(&buffer[..read]);
-    }
+fn read_request(stream: &mut std::net::TcpStream) -> String {
+    common::read_request(stream)
 }
