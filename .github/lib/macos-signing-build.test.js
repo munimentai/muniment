@@ -102,6 +102,47 @@ it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (se
   expect(process.exit).not.toHaveBeenCalled();
 });
 
+it("authorizes every signing tool before it uses the imported keys", async () => {
+  await import("../build-macos-app.mjs");
+  const calls = spawn.mock.calls;
+  const imported = calls.findIndex(([command, args]) => command === "security" && args[0] === "import");
+  const partitioned = calls.findIndex(([command, args]) => command === "security" && args[0] === "set-key-partition-list");
+  const importArgs = calls[imported][1];
+  const keychain = importArgs[importArgs.indexOf("-k") + 1];
+  const trustedTools = importArgs.flatMap((arg, index) => arg === "-T" ? [importArgs[index + 1]] : []);
+  const signers = calls.filter(([, args]) => args.includes("--sign"));
+  expect([...new Set(signers.map(([command]) => `/usr/bin/${command}`))]).toEqual(trustedTools);
+  expect(trustedTools).toEqual(["/usr/bin/codesign", "/usr/bin/productbuild"]);
+  expect(importArgs).not.toContain("-A");
+  expect(calls[partitioned][1]).toEqual([
+    "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", "muniment-ci-signing", keychain,
+  ]);
+  expect(imported).toBeLessThan(partitioned);
+  for (const call of signers) expect(partitioned).toBeLessThan(calls.indexOf(call));
+  const installerArgs = signers.find(([command]) => command === "productbuild")[1];
+  expect(installerArgs[installerArgs.indexOf("--sign") + 1]).toBe("B1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4");
+  expect(installerArgs[installerArgs.indexOf("--keychain") + 1]).toBe(keychain);
+});
+
+it.each(["import", "set-key-partition-list"])("stops before signing when %s fails", async (step) => {
+  const defaultSpawn = spawn.getMockImplementation();
+  spawn.mockImplementation((command, args, options) => {
+    if (command === "security" && args[0] === step) return { status: 1 };
+    return defaultSpawn(command, args, options);
+  });
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
+  expect(spawn.mock.calls.some(([command]) => ["codesign", "productbuild", "xcrun"].includes(command))).toBe(false);
+});
+
+it("keeps unsigned packaging free of keychain access", async () => {
+  vi.stubEnv("MACOS_SIGNING_ENABLED", "false");
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 0");
+  expect(spawn.mock.calls.some(([command]) => ["security", "codesign", "xcrun"].includes(command))).toBe(false);
+  const installerCall = spawn.mock.calls.find(([command]) => command === "productbuild");
+  expect(installerCall[1]).not.toContain("--sign");
+  expect(installerCall[1].at(-1)).toMatch(/muniment\.pkg$/);
+});
+
 it.each([
   [false, 0], [true, 0], [false, 700], [true, 700],
 ])("names a queue timeout for installer=%s after %s seconds of setup", async (installer, setupSeconds) => {

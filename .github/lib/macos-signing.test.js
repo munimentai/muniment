@@ -14,8 +14,10 @@ import {
   productbuildArguments,
   requireSigningIdentity,
   resolveSigningConfiguration,
+  signingCertificateImportArguments,
   signingEnabled,
   signingIdentityArguments,
+  signingKeyPartitionListArguments,
   stapleArguments,
 } from "./macos-signing.mjs";
 
@@ -198,6 +200,24 @@ describe("Intermediate certificate import results", () => {
     expect(intermediateCertificateImportSucceeded({
       status: 1, stderr: duplicate, error: new Error("spawn failed"),
     })).toBe(false);
+  });
+});
+
+describe("Signing key access", () => {
+  const keychain = "/tmp/signing work/keychain";
+  const password = 'p12 "pass"';
+
+  it("trusts only codesign and productbuild during the private key import", () => {
+    expect(signingCertificateImportArguments("/tmp/signing work/certificate.p12", keychain, password)).toEqual([
+      "import", "/tmp/signing work/certificate.p12", "-k", keychain, "-P", password,
+      "-T", "/usr/bin/codesign", "-T", "/usr/bin/productbuild",
+    ]);
+  });
+
+  it("keeps Apple partitions for codesign and productbuild on the signing keys", () => {
+    expect(signingKeyPartitionListArguments(keychain, password)).toEqual([
+      "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", password, keychain,
+    ]);
   });
 });
 
