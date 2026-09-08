@@ -115,7 +115,7 @@ it("authorizes every signing tool before it uses the imported keys", async () =>
   expect(trustedTools).toEqual(["/usr/bin/codesign", "/usr/bin/productbuild"]);
   expect(importArgs).not.toContain("-A");
   expect(calls[partitioned][1]).toEqual([
-    "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", "muniment-ci-signing", keychain,
+    "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:,productbuild:", "-s", "-k", "muniment-ci-signing", keychain,
   ]);
   expect(imported).toBeLessThan(partitioned);
   for (const call of signers) expect(partitioned).toBeLessThan(calls.indexOf(call));

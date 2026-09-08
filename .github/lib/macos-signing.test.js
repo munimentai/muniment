@@ -214,9 +214,9 @@ describe("Signing key access", () => {
     ]);
   });
 
-  it("keeps Apple partitions for codesign and productbuild on the signing keys", () => {
+  it("includes Apple, codesign, and productbuild partitions on the signing keys", () => {
     expect(signingKeyPartitionListArguments(keychain, password)).toEqual([
-      "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", password, keychain,
+      "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:,productbuild:", "-s", "-k", password, keychain,
     ]);
   });
 });
