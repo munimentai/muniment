@@ -1941,6 +1941,73 @@ describe('Windows nightly release lookup', () => {
   })
 })
 
+describe('Windows bounded process contract', { timeout: 30_000 }, () => {
+  const runnerPath = path.join(root, 'test/e2e/runner/windows.ps1')
+  const runner = fs.readFileSync(runnerPath, 'utf8')
+  const helper = runner.slice(runner.indexOf('function Invoke-BoundedProcess'), runner.indexOf('function Resolve-NativeCommand'))
+
+  it('Caches the process handle before the bounded wait.', () => {
+    expect(helper).toMatch(/\$null = \$process\.Handle\s+\$timedOut = -not \$process\.WaitForExit\(\$TimeoutSeconds \* 1000\)/)
+    expect(helper).toContain('$stopped = $process.WaitForExit(10000)')
+    expect(helper).not.toContain('-Wait')
+    expect(helper).toContain('if ($null -eq $exitCode) { throw "$File did not report an exit code" }')
+    expect(helper).toContain('throw "$File failed with exit code $exitCode"')
+    expect(helper).toMatch(/finally \{\s+\$process\.Dispose\(\)/)
+  })
+
+  it.skipIf(process.platform !== 'win32').each([0, 3010, 7, 1603, 3011, -1])(
+    'Reports exit code %s and publishes the runner artifacts.', (exitCode) => {
+      const directory = temp()
+      const artifacts = path.join(directory, 'artifacts')
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
+        encoding: 'utf8', timeout: 25_000,
+        env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts,
+          MUNIMENT_E2E_FINALIZER_TEST_MODE: '1', MUNIMENT_E2E_BOUNDED_PROCESS_TEST_EXIT_CODE: String(exitCode) },
+      })
+      const succeeds = exitCode === 0 || exitCode === 3010
+      expect(result.status, result.stdout + result.stderr).toBe(succeeds ? 0 : 1)
+      const log = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')
+      expect(log).toContain('bounded stdout')
+      expect(log).toContain('bounded stderr')
+      expect(log).toContain(`cmd.exe exited with code ${exitCode}`)
+      const failure = path.join(artifacts, 'runner-failure.txt')
+      if (succeeds) {
+        expect(fs.existsSync(failure)).toBe(false)
+      } else {
+        const message = `cmd.exe failed with exit code ${exitCode}`
+        expect(result.stdout).toContain(message)
+        expect(fs.readFileSync(failure, 'utf8')).toContain(`message: ${message}`)
+      }
+    },
+  )
+
+  it.skipIf(process.platform !== 'win32')('Stops a process that exceeds the timeout.', () => {
+    const directory = temp()
+    const script = path.join(directory, 'timeout.ps1')
+    const child = path.join(directory, 'slow child.ps1')
+    const log = path.join(directory, 'timeout.log')
+    fs.writeFileSync(child, 'Start-Sleep -Seconds 60\n')
+    fs.writeFileSync(script, `param([string]$Child, [string]$Log)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+${helper}
+try {
+  Invoke-BoundedProcess 'powershell.exe' "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \`"$Child\`"" 1 $Log
+  exit 0
+} catch {
+  Write-Output $_.Exception.Message
+  exit 1
+}
+`)
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, child, log], {
+      encoding: 'utf8', timeout: 20_000,
+    })
+    expect(result.status, result.stdout + result.stderr).toBe(1)
+    expect(result.stdout).toContain('powershell.exe timed out')
+    expect(fs.readFileSync(log, 'utf8')).toMatch(/powershell\.exe exited with code -?\d+/)
+  })
+})
+
 describe('Windows native command contract', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
   it('routes native commands through the process helpers', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
