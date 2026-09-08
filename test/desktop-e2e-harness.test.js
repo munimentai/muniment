@@ -311,6 +311,7 @@ dbus-run-session() {
   fi
   printf 'session: %s\\n' "$spec" >>"$cleanup_log"
   touch "$raw/xdg-desktop-portal.log" "$raw/driver-app.log"
+  printf 'muniment-runtime: run_id=fixture-%s pi_stderr_tail=["provider failed"]\\n' "$spec" >>"$raw/muniment-runtime.log"
   mkdir -p "$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions"
   printf '{"message":{"provider":"ollama","stopReason":"error","errorMessage":"%s provider failed"}}\\n' "$spec" >"$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions/session.jsonl"
   for key in app desktop runtime driver wdio; do touch "$process_root/$key"; done
@@ -337,6 +338,17 @@ ${sequence}
     const safe = path.join(directory, 'safe')
     expect(runNode('test/e2e/support/redact.mjs', [directory, safe]).status).toBe(0)
     expect(fs.readFileSync(path.join(safe, 'pi-local-mode-chat.log'), 'utf8')).toBe(piLog)
+    const stderrLog = fs.readFileSync(path.join(safe, 'pi-local-mode-stderr.log'), 'utf8')
+    expect(stderrLog).toContain('run_id=fixture-local-mode-chat pi_stderr_tail=["provider failed"]')
+    expect(stderrLog).not.toContain('real-sign-in')
+    expect(stderrLog).not.toContain('onboarding')
+    const emitter = runner.slice(runner.indexOf('emit_artifacts()'), runner.indexOf('\nemit_minimal_artifacts()'))
+    const envelope = spawnSync('bash', ['-c', `${emitter}\nemit_artifacts "$1"`, 'bash', safe], { encoding: 'utf8' })
+    expect(envelope.status, envelope.stderr).toBe(0)
+    const archive = Buffer.from(envelope.stdout.split('\n')[1], 'base64')
+    const files = execFileSync('tar', ['-tzf', '-'], { input: archive, encoding: 'utf8' })
+    expect(files).toContain('./muniment-runtime.log')
+    expect(files).toContain('./pi-local-mode-stderr.log')
   })
 
   it.each(['missing', 'empty', 'multiple', 'copy-failure'])('Collects Pi log evidence with %s session state.', (state) => {
@@ -366,6 +378,8 @@ collect_local_mode_pi_log`, 'bash', directory, data], { encoding: 'utf8' })
     })
     expect(redaction.status, redaction.stderr).toBe(0)
     const piLog = fs.readFileSync(path.join(safe, 'pi-local-mode-chat.log'), 'utf8')
+    expect(fs.readFileSync(path.join(safe, 'pi-local-mode-stderr.log'), 'utf8'))
+      .toBe('No runtime log exists for the local mode run.\n')
     if (state === 'multiple') {
       expect(piLog).toContain('provider failed with [REDACTED]')
       expect(piLog).toContain('"stopReason":"stop"')

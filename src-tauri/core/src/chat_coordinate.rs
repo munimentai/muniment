@@ -1,3 +1,6 @@
+mod diagnostics;
+
+use diagnostics::RunDiagnostics;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,7 +31,7 @@ use crate::run_events::{
 };
 use crate::sidecar::pi_chat::{
     cancel_command, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent,
-    PiRunAdapter,
+    PiRunAdapter, FIRST_EVENT_TIMEOUT_REASON,
 };
 use crate::sidecar::{PiRpcTransport, PiRpcWiring, SidecarStatus, SidecarSupervisor};
 use serde_json::{json, Value};
@@ -224,6 +227,7 @@ pub fn coordinate(
     prepared: Option<(u64, ChatProjector)>,
 ) {
     let run_started = Instant::now();
+    let mut diagnostics = RunDiagnostics::new(&run_id);
     let mut resume_attempt = ResumeAttempt::new(resume_result);
     let (mut seq, mut projector) = prepared.unwrap_or_else(|| {
         (
@@ -307,6 +311,7 @@ pub fn coordinate(
         let config = match config {
             Ok(config) => config,
             Err(PiLaunchError::MissingRoot) => {
+                eprintln!("muniment-runtime: run_id={run_id} pi_spawn missing_root");
                 fail_start(
                     &app,
                     &journal,
@@ -319,7 +324,8 @@ pub fn coordinate(
                 );
                 return;
             }
-            Err(_) => {
+            Err(error) => {
+                eprintln!("muniment-runtime: run_id={run_id} pi_spawn config_error={error:?}");
                 fail_start(
                     &app,
                     &journal,
@@ -340,7 +346,8 @@ pub fn coordinate(
             wiring.readiness_probe_with_startup_timeout(startup_timeout, Duration::from_secs(10)),
         ) {
             Ok(value) => value,
-            Err(_) => {
+            Err(error) => {
+                eprintln!("muniment-runtime: run_id={run_id} pi_spawn error={error:?}");
                 fail_start(
                     &app,
                     &journal,
@@ -354,6 +361,7 @@ pub fn coordinate(
                 return;
             }
         };
+        diagnostics.spawned(&supervisor);
         *runtime = Some(PiRuntime { supervisor, wiring });
         startup_timeout
     };
@@ -362,6 +370,7 @@ pub fn coordinate(
     while runtime.supervisor.status() == SidecarStatus::Starting
         && std::time::Instant::now() < deadline
     {
+        diagnostics.log_lifecycle();
         if cancelled.load(Ordering::SeqCst) {
             if resume.is_none() {
                 let _ = append_emit(
@@ -378,6 +387,22 @@ pub fn coordinate(
             return;
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+    diagnostics.log_lifecycle();
+    if runtime.supervisor.status() != SidecarStatus::Healthy {
+        diagnostics.outcome = "not_started_pi_not_ready";
+        fail_start(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "Pi did not become ready within its startup bound. Try again.",
+            subject.as_deref(),
+            resume.is_some(),
+        );
+        let _ = runtime.supervisor.shutdown();
+        return;
     }
     let Some(transport) = runtime.wiring.transport() else {
         fail_start(
@@ -410,18 +435,20 @@ pub fn coordinate(
         }
         return;
     }
+    diagnostics.prompt_submitted = true;
     let (adapter, buffered_events) = if resume.is_some() {
         let (adapter, _) =
             match PiRunAdapter::start(run_id.clone(), &transport, &prompt, RPC_TIMEOUT) {
                 Ok(value) => value,
-                Err(_) => {
+                Err(error) => {
+                    diagnostics.prompt_failed(&error);
                     fail_start(
                         &app,
                         &journal,
                         &mut projector,
                         &run_id,
                         &mut seq,
-                        "The reply could not be started.",
+                        "Pi did not acknowledge the prompt. Try again.",
                         subject.as_deref(),
                         true,
                     );
@@ -495,7 +522,10 @@ pub fn coordinate(
                     prepared_prompt.images,
                     RPC_TIMEOUT,
                 )
-                .map_err(|_| PreparedPromptError::Start)?;
+                .map_err(|error| {
+                    diagnostics.prompt_failed(&error);
+                    PreparedPromptError::Start
+                })?;
                 let adapter = Arc::new(adapter);
                 *active_adapter
                     .lock()
@@ -506,7 +536,13 @@ pub fn coordinate(
                     .map_err(|_| PreparedPromptError::SessionRoot)?;
                 let (locator, events) = adapter
                     .await_session_binding(&transport, &session_root, RPC_TIMEOUT)
-                    .map_err(|_| PreparedPromptError::Binding)?;
+                    .map_err(|error| {
+                        if error == FIRST_EVENT_TIMEOUT_REASON {
+                            PreparedPromptError::FirstEventTimeout
+                        } else {
+                            PreparedPromptError::Binding
+                        }
+                    })?;
                 Ok((adapter, locator, events))
             },
         );
@@ -537,7 +573,22 @@ pub fn coordinate(
                 }
                 return;
             }
+            Err(PreparedPromptError::FirstEventTimeout) => {
+                diagnostics.outcome = "unknown_no_first_event";
+                fail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    FIRST_EVENT_TIMEOUT_REASON,
+                    subject.as_deref(),
+                );
+                let _ = runtime.supervisor.shutdown();
+                return;
+            }
             Err(PreparedPromptError::Binding) => {
+                diagnostics.outcome = "unknown_session_binding_failed";
                 // `await_session_binding` aborts and drains first. Reaping the
                 // supervised child is the final containment boundary if Pi did
                 // not acknowledge cancellation.
@@ -554,15 +605,17 @@ pub fn coordinate(
                 return;
             }
             Err(PreparedPromptError::Start) => {
+                diagnostics.outcome = "unknown_prompt_not_acknowledged";
                 fail(
                     &app,
                     &journal,
                     &mut projector,
                     &run_id,
                     &mut seq,
-                    "The reply could not be started.",
+                    "Pi did not acknowledge the prompt. Try again.",
                     subject.as_deref(),
                 );
+                let _ = runtime.supervisor.shutdown();
                 return;
             }
         }
@@ -572,6 +625,7 @@ pub fn coordinate(
     let mut open_effects = MarkedEffects::open_effects(Some(runtime_activity.clone()));
     let mut pending_permission = MarkedGate::pending_permission(Some(runtime_activity));
     'coordinate: loop {
+        diagnostics.log_lifecycle();
         if cancelled.swap(false, Ordering::SeqCst) {
             aborting = true;
             let _ = transport.call(cancel_command(), Duration::from_secs(2));
@@ -648,6 +702,7 @@ pub fn coordinate(
                 }
             }
             Ok(PiChatEvent::Completed) if aborting => {
+                diagnostics.outcome = "cancelled";
                 let _ = append_terminal(
                     &app,
                     &journal,
@@ -662,6 +717,7 @@ pub fn coordinate(
                 break;
             }
             Ok(PiChatEvent::Completed) => {
+                diagnostics.outcome = "completed";
                 let receipt = if grant.is_local() {
                     Ok(local_receipt(run_started.elapsed()))
                 } else {
@@ -669,7 +725,7 @@ pub fn coordinate(
                 };
                 match receipt {
                     Ok(receipt) => {
-                        let _ = append_terminal(
+                        diagnostics.failed = append_terminal(
                             &app,
                             &journal,
                             &mut projector,
@@ -679,7 +735,8 @@ pub fn coordinate(
                             "run.completed",
                             json!({"receipt": receipt}),
                             subject.as_deref(),
-                        );
+                        )
+                        .is_err();
                         break;
                     }
                     Err(_) => {
@@ -698,6 +755,7 @@ pub fn coordinate(
                 }
             }
             Ok(PiChatEvent::Cancelled) => {
+                diagnostics.outcome = "cancelled";
                 let _ = append_terminal(
                     &app,
                     &journal,
@@ -712,6 +770,7 @@ pub fn coordinate(
                 break;
             }
             Ok(PiChatEvent::Failed) => {
+                diagnostics.outcome = "failed";
                 fail_with_open_effects(
                     &app,
                     &journal,
@@ -780,6 +839,21 @@ pub fn coordinate(
                 }
             }
             Ok(PiChatEvent::Interleaved | PiChatEvent::PromptAccepted) => {}
+            Err(error) if error == FIRST_EVENT_TIMEOUT_REASON => {
+                diagnostics.outcome = "unknown_no_first_event";
+                fail_with_open_effects(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    &mut open_effects,
+                    FIRST_EVENT_TIMEOUT_REASON,
+                    subject.as_deref(),
+                );
+                let _ = runtime.supervisor.shutdown();
+                break;
+            }
             Err(error) if error == "timed out waiting for Pi stream" => {
                 if matches!(
                     runtime.supervisor.status(),

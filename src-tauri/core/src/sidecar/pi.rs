@@ -300,10 +300,20 @@ impl PiRpcTransport {
     /// Sends a Pi command and waits for its correlated response. The command
     /// must be a JSON object with a `type`; the transport supplies its own ID.
     pub fn call(&self, mut command: Value, timeout: Duration) -> Result<Value, String> {
-        let guard = self
-            .call_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let deadline = std::time::Instant::now() + timeout;
+        let guard = loop {
+            match self.call_lock.try_lock() {
+                Ok(guard) => break guard,
+                Err(TryLockError::Poisoned(error)) => break error.into_inner(),
+                Err(TryLockError::WouldBlock) => {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        return Err("timed out waiting for Pi RPC call lock".into());
+                    }
+                    std::thread::sleep(remaining.min(Duration::from_millis(1)));
+                }
+            }
+        };
         let id = format!(
             "muniment-pi-{}",
             self.next_id.fetch_add(1, Ordering::Relaxed)
@@ -315,7 +325,12 @@ impl PiRpcTransport {
             return Err("Pi RPC command must contain a string `type`".into());
         }
         object.insert("id".into(), Value::String(id.clone()));
-        self.call_locked(command, &id, timeout, guard)
+        self.call_locked(
+            command,
+            &id,
+            deadline.saturating_duration_since(std::time::Instant::now()),
+            guard,
+        )
     }
 
     /// Sends one pre-correlated Pi frame without waiting for a response.

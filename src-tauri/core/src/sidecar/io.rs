@@ -142,6 +142,23 @@ pub(super) enum LineReaderInner {
 }
 
 impl LineReader {
+    pub(crate) fn stderr_tail(&self) -> Vec<String> {
+        match &self.0 {
+            LineReaderInner::Stderr(ring) => {
+                let lines = ring.snapshot();
+                lines
+                    .into_iter()
+                    .rev()
+                    .take(20)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect()
+            }
+            LineReaderInner::Channel(_) => Vec::new(),
+        }
+    }
+
     pub fn read_line(&self) -> Result<String, SidecarError> {
         if let LineReaderInner::Stderr(ring) = &self.0 {
             return ring.read(None)?.ok_or(SidecarError::Disconnected);
@@ -246,4 +263,36 @@ pub struct SidecarIo {
     pub stdin: LineWriter,
     pub stdout: LineReader,
     pub stderr: LineReader,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_tail_keeps_the_last_twenty_lines_without_consuming_stderr() {
+        let ring = Arc::new(StderrRing {
+            state: Mutex::new(StderrState {
+                lines: VecDeque::new(),
+                first_sequence: 0,
+                next_sequence: 0,
+                read_sequence: 0,
+                generation: 1,
+            }),
+            available: Condvar::new(),
+            capacity: 25,
+        });
+        let reader = LineReader(LineReaderInner::Stderr(Arc::clone(&ring)));
+        assert!(reader.stderr_tail().is_empty());
+        for index in 0..30 {
+            ring.push(1, format!("Pi stderr {index}"));
+        }
+        let expected: Vec<_> = (10..30).map(|index| format!("Pi stderr {index}")).collect();
+        assert_eq!(reader.stderr_tail(), expected);
+        assert_eq!(reader.read_line().unwrap(), "Pi stderr 5");
+        assert_eq!(reader.stderr_tail(), expected);
+        ring.begin_generation(2);
+        ring.push(1, "stale stderr".into());
+        assert!(reader.stderr_tail().is_empty());
+    }
 }
