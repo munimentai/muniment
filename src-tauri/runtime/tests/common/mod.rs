@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{InstallationRecord, NativeCredentials, TokenSet};
+use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 
@@ -64,9 +65,39 @@ pub fn fixture_grant() -> ChatGrant {
         gateway_url: "https://gateway.example.com".into(),
         virtual_key: "virtual-key".into(),
         model: None,
+        expires_at: None,
+        native_access_token: None,
         minimum_cacheable_prefix_characters: 8_192,
         receipt_url: "https://receipts.example.com".into(),
     }
+}
+
+pub fn grant_body() -> String {
+    let grant = ChatGrant {
+        expires_at: Some(SystemTime::now().into()),
+        ..fixture_grant()
+    };
+    let issued_at = grant.expires_at.unwrap();
+    let expires_at = issued_at + Duration::from_secs(14 * 60);
+    let device_id = credentials().installation.device_id;
+    format!(
+        r#"{{
+            "protocol": "muniment.desktop-access/1",
+            "chat_grant": {{
+                "grant_id": "grant-1",
+                "gateway_url": "https://gateway.example.com",
+                "virtual_key": "key",
+                "allowed_models": ["muniment-stub-chat"],
+                "issued_at": "{}",
+                "expires_at": "{}",
+                "native_session_id": "session-1",
+                "device_id": "{device_id}",
+                "entitlement_version": 42
+            }}
+        }}"#,
+        issued_at.to_rfc3339(),
+        expires_at.to_rfc3339(),
+    )
 }
 
 pub fn spawn_server(status: u16, body: String) -> (String, thread::JoinHandle<String>) {
@@ -127,12 +158,40 @@ pub fn read_request(stream: &mut TcpStream) -> String {
     loop {
         let mut buffer = [0; 1024];
         let read = stream.read(&mut buffer).unwrap();
+        assert_ne!(read, 0, "the client sends the complete request");
         bytes.extend_from_slice(&buffer[..read]);
-        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
+        if let Some(head_length) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&bytes[..head_length]).to_ascii_lowercase();
+            let length: usize = head
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("content-length:")
+                        .map(|value| value.trim().parse().unwrap())
+                })
+                .unwrap_or(0);
+            if bytes.len() >= head_length + 4 + length {
+                break;
+            }
         }
     }
     String::from_utf8(bytes).unwrap()
+}
+
+pub fn save_credentials(credentials: &NativeCredentials) {
+    KeyringNativeCredentialStore::new()
+        .save_credentials(credentials)
+        .unwrap();
+}
+
+pub fn clear_credentials() {
+    KeyringNativeCredentialStore::new().clear_session().unwrap();
+}
+
+pub fn load_credentials() -> NativeCredentials {
+    KeyringNativeCredentialStore::new()
+        .load_credentials()
+        .unwrap()
+        .unwrap()
 }
 
 pub fn credentials() -> NativeCredentials {

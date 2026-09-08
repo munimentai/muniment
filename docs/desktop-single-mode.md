@@ -22,10 +22,10 @@ muniment-cloud. That file states the rule for outside readers: "Desktop, mobile,
 and agent callers cannot supply routing classifications."
 
 Two desktop requests reach the cloud directly. `fetch_grant` posts to
-`/v1/desktop/chat/config` with no body. `fetch_receipt` posts one field,
+`/v1/chat/grants` with `{"protocol":"muniment.desktop-access/1"}`. `fetch_receipt` posts one field,
 `runId`. Every model call rides the grant the cloud issued.
 `chat_coordinate.rs:203` passes only the scoped virtual key, the gateway URL,
-and the optional pinned model into the sidecar environment.
+and the first allowed model alias into the sidecar environment.
 
 ## The routing-surface name, raised with MUNICLOUD
 

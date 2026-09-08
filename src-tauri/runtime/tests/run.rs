@@ -474,7 +474,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
             continue_existing: false,
         },
         run_id,
-        "workspace-a",
+        "local",
         Some("user"),
         Vec::new(),
         None,
@@ -499,7 +499,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     .unwrap();
     drop(storage);
     let (base_url, server) =
-        spawn_server_sequence(vec![(200, session_body()), (200, grant_body())]);
+        spawn_server_sequence(vec![(200, session_body()), (201, grant_body())]);
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let state = RuntimeAttachState::open(&profile, &config).unwrap();
     let mut subscription_service = state.attach_service().unwrap();
@@ -513,7 +513,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     .unwrap();
     let accepted = service
         .resume_run(
-            "workspace-a",
+            "local",
             RunResumeRequest {
                 run_id: run_id.into(),
             },
@@ -559,5 +559,5 @@ fn session_body() -> String {
 }
 
 fn grant_body() -> String {
-    r#"{"workspace":"workspace-a","gatewayUrl":"https://gateway.example.com","virtualKey":"key","minimumCacheablePrefixCharacters":8192,"receiptUrl":"https://receipts.example.com"}"#.into()
+    common::grant_body()
 }

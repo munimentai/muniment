@@ -29,6 +29,16 @@ impl RunDiagnostics {
             "muniment-runtime: run_id={} first_event absent prompt_error={error:?}",
             self.run_id
         );
+        self.log_stderr();
+    }
+
+    fn log_stderr(&self) {
+        let tail = self
+            .stderr
+            .as_ref()
+            .map(LineReader::stderr_tail)
+            .unwrap_or_default();
+        eprintln!("{}", stderr_line(&self.run_id, tail));
     }
 
     pub fn spawned(&mut self, supervisor: &SidecarSupervisor) {
@@ -69,12 +79,7 @@ impl Drop for RunDiagnostics {
             self.run_id, self.outcome
         );
         if self.failed {
-            let tail = self
-                .stderr
-                .as_ref()
-                .map(LineReader::stderr_tail)
-                .unwrap_or_default();
-            eprintln!("{}", stderr_line(&self.run_id, tail));
+            self.log_stderr();
         }
     }
 }

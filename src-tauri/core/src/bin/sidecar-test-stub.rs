@@ -12,6 +12,10 @@ fn main() {
         return;
     }
     if first.as_deref() == Some("--mode") {
+        if std::env::var_os("PI_STUB_BLOCK_STDIN").is_some() {
+            pi_rpc_blocked_stdin();
+            return;
+        }
         pi_resume(args.collect());
         return;
     }
@@ -19,6 +23,7 @@ fn main() {
         Some("echo") => echo(),
         Some("json-rpc") => json_rpc(args.next()),
         Some("pi-rpc-interleaved") => pi_rpc_interleaved(),
+        Some("pi-rpc-blocked-stdin") => pi_rpc_blocked_stdin(),
         Some("pi-rpc-slow-probes") => {
             for line in io::stdin().lock().lines() {
                 let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
@@ -141,6 +146,23 @@ fn main() {
     }
 }
 
+fn pi_rpc_blocked_stdin() {
+    let line = io::stdin().lock().lines().next().unwrap().unwrap();
+    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["type"], "get_state");
+    eprintln!("Pi stub stopped reading stdin.");
+    io::stderr().flush().unwrap();
+    println!(
+        "{}",
+        serde_json::json!({
+            "type": "response", "command": "get_state", "success": true, "id": request["id"]
+        })
+    );
+    io::stdout().flush().unwrap();
+    // Exit after the test deadline so a regression fails instead of hanging the suite.
+    thread::sleep(Duration::from_secs(60));
+}
+
 fn pi_resume(args: Vec<String>) {
     if let Ok(path) = std::env::var("PI_RESUME_STUB_ARGS") {
         fs::write(path, args.join("\n")).unwrap();
@@ -213,6 +235,14 @@ fn pi_resume(args: Vec<String>) {
                         serde_json::json!({
                             "type":"extension_ui_request", "id":"permission-1", "method":"confirm",
                             "title":"Allow this action?", "message":"The test stub needs permission."
+                        })
+                    );
+                } else if let Ok(denial) = std::env::var("PI_RESUME_STUB_GRANT_DENIAL") {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "extension_ui_request", "id": "grant-1", "method": "editor",
+                            "title": "muniment:chat-grant", "prefill": denial
                         })
                     );
                 } else if let Ok(query) = std::env::var("PI_RESUME_STUB_MEMORY_QUERY") {

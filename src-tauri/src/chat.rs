@@ -29,7 +29,7 @@ use muniment_core::auth::{api_base_url, TokenSet};
 use muniment_core::cas::LocalCas;
 use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::{
-    fetch_grant as core_fetch_grant, grant_authorizes_workspace,
+    fetch_native_grant as core_fetch_grant, grant_authorizes_workspace,
     validate_grant as core_validate_grant, ChatGrant, FetchGrantError,
 };
 use muniment_core::chat_profile::ChatProfile;
