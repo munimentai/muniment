@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   SIGNING_VARIABLES,
+  NOTARIZATION_DEADLINE_SECONDS,
   codesignArguments,
   intermediateCertificateImportArguments,
   intermediateCertificateImportSucceeded,
@@ -232,14 +233,20 @@ describe("Signing, notarization, and stapling commands", () => {
     ]);
   });
 
-  it("submits to notarytool with the App Store Connect API key and waits", () => {
+  it("reserves at least ten minutes before the desktop-ci build bound", () => {
+    expect(NOTARIZATION_DEADLINE_SECONDS).toBeGreaterThan(0);
+    expect(NOTARIZATION_DEADLINE_SECONDS).toBeLessThanOrEqual(3600 - 600);
+  });
+
+  it("submits with the App Store Connect API key and requests JSON without a wait", () => {
     const configuration = resolveSigningConfiguration(completeEnvironment);
     expect(notarytoolSubmitArguments(configuration, "muniment.app.zip", "/tmp/key.p8")).toEqual([
       "notarytool", "submit", "muniment.app.zip",
       "--key", "/tmp/key.p8",
       "--key-id", "ABC123DEF4",
       "--issuer", "57246542-96fe-1a63-e053-0824d011072a",
-      "--wait",
+      "--output-format", "json", "--no-progress",
+      "--no-wait",
     ]);
   });
 

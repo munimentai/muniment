@@ -43,6 +43,32 @@ const conditionResult = ({ eventName, platform, cancelled = false, prepare = 'su
 }
 
 describe('nightly macOS package build', () => {
+  it.skipIf(process.platform === 'win32')('passes the remaining full build budget after Git and dependency setup', () => {
+    const commands = workflow.slice(workflow.indexOf("          build='"), workflow.indexOf('          repo_url='))
+    const result = spawnSync('bash', ['-c', `
+      set -eu
+      PLATFORM=macos
+      SOURCE_SHA=test-sha
+      REPOSITORY=test/repo
+      date() { echo 'The host must not start the build clock.' >&2; return 1; }
+      ${commands}
+      elapsed=0
+      date() { echo $((1000000 + elapsed)); }
+      git() { elapsed=$((elapsed + 100)); }
+      npm() { elapsed=$((elapsed + 300)); }
+      rustup() { elapsed=$((elapsed + 200)); }
+      node() {
+        if [ "$1" = .github/build-macos-app.mjs ]; then
+          printf '%s %s\\n' "$elapsed" "$MACOS_BUILD_REMAINING_SECONDS"
+        fi
+      }
+      eval "$cmd"
+    `], { encoding: 'utf8' })
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe('700 2900\n')
+  })
+
   it('builds and publishes the package while signing stays disabled', () => {
     expect(workflow).toContain('node .github/build-macos-app.mjs')
     expect(workflow).toContain('[".pkg"]')
