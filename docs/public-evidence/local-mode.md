@@ -18,6 +18,15 @@ After Pi becomes ready, a prompt has 30 seconds to produce its first reply event
 
 The runtime log records run lifecycle outcomes and Pi's stderr tail for failed replies. The Linux evidence envelope keeps this log in `pi-local-mode-stderr.log` beside `muniment-runtime.log`.
 
+On macOS, the bundled runtime resolves the desktop executable at `Contents/MacOS/muniment-desktop` from `Contents/Library/LaunchServices/muniment-runtime`.
+Attach setup failures record `step=desktop_executable_check`, `step=socket_bind`, or `step=state_open` in `~/Library/Logs/Muniment/runtime.log` and the unified log.
+
+Read the macOS runtime log:
+
+```sh
+cat ~/Library/Logs/Muniment/runtime.log
+```
+
 ## Cloud sign-in
 
 Select **Sign in for cloud features** to leave local mode. Sign-in remains available for features that need the Muniment control plane.

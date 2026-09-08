@@ -20,6 +20,37 @@ fn maps_the_installed_runtime_to_the_desktop_executable() {
 }
 
 #[test]
+fn maps_the_bundled_macos_runtime_to_the_desktop_executable() {
+    for bundle in [
+        "/Applications/muniment.app",
+        "/Users/person/My Apps/muniment.app",
+    ] {
+        assert_eq!(
+            installed_desktop_executable_from(
+                &Path::new(bundle).join("Contents/Library/LaunchServices/muniment-runtime")
+            ),
+            Some(Path::new(bundle).join("Contents/MacOS/muniment-desktop"))
+        );
+    }
+}
+
+#[test]
+fn rejects_runtime_paths_outside_the_macos_bundle_layout() {
+    for path in [
+        "",
+        "muniment.app/Contents/Library/LaunchServices/muniment-runtime",
+        "/Applications/muniment.app/Contents/Library/LaunchServices/another-runtime",
+        "/Applications/muniment.app/Contents/Library/Other/muniment-runtime",
+        "/Applications/muniment.app/Contents/Other/LaunchServices/muniment-runtime",
+        "/Applications/muniment.app/Other/Library/LaunchServices/muniment-runtime",
+        "/Applications/muniment.app/Contents/LaunchServices/muniment-runtime",
+        "/Applications/muniment.app/Contents/MacOS/muniment-runtime",
+    ] {
+        assert_eq!(installed_desktop_executable_from(Path::new(path)), None);
+    }
+}
+
+#[test]
 fn rejects_runtime_paths_outside_the_installed_layout() {
     assert_eq!(
         installed_desktop_executable_from(Path::new("lib/muniment/muniment-runtime")),
