@@ -39,12 +39,8 @@ export function accessReadyState(snapshot) {
   return {
     name: 'ready',
     snapshot,
-    groups: snapshot.groups.map((group) => ({
-      ...group,
-      models: group.models ?? [],
-      connections: group.connections ?? [],
-      capabilities: group.capabilities ?? [],
-    })),
+    capabilities: snapshot.capabilities,
+    grants: snapshot.grants,
   }
 }
 

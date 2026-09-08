@@ -1235,7 +1235,8 @@ mod tests {
                         "role": "owner",
                         "user_display_name": "User",
                         "organization_display_name": "Muniment",
-                        "groups": []
+                        "capabilities": [],
+                        "grants": []
                     },
                     "changed_snapshot_version": 7
                 }),

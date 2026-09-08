@@ -13,7 +13,7 @@
   let attachListener = $state({ started: false, failure: null, pending: true, stopped: false })
   let profileSnapshot = $state(null)
   let accessOpen = $state(false)
-  let expandedGroups = $state(new Set())
+  let expandedGrants = $state(new Set())
   let profileButton = $state()
   let accessPopover = $state()
   let capturingShortcut = $state(false)
@@ -62,7 +62,7 @@
   async function loadAccess(open = false) {
     if (open) accessOpen = true
     access = accessLoadingState()
-    expandedGroups = new Set()
+    expandedGrants = new Set()
     if (open) requestAnimationFrame(() => accessPopover?.focus())
     try {
       const snapshot = await tauri.invoke('auth_entitlement_snapshot')
@@ -255,10 +255,10 @@
     else shortcutStatus = 'That shortcut is unavailable. Your previous shortcut still works.'
   }
 
-  function toggleGroup(index) {
-    const next = new Set(expandedGroups)
+  function toggleGrant(index) {
+    const next = new Set(expandedGrants)
     next.has(index) ? next.delete(index) : next.add(index)
-    expandedGroups = next
+    expandedGrants = next
   }
 
   onMount(() => {
@@ -320,20 +320,23 @@
           {:else if access.name === 'error'}
             <div class="access-status" role="alert"><p>Your access could not be loaded.</p><button onclick={openAccess}>Try again</button></div>
           {:else if access.name === 'ready'}
-            {#if access.groups.length === 0}<p class="empty-grant">No groups granted</p>{/if}
-            {#each access.groups as group, index}
-              {@const open = expandedGroups.has(index)}
+            <div class="grant-grid">
+              <div><h3>Capabilities</h3>{#if access.capabilities.length}<ul>{#each access.capabilities as capability}<li>{capability}</li>{/each}</ul>{:else}<p class="empty-grant">The snapshot lists no capabilities.</p>{/if}</div>
+            </div>
+            {#if access.grants.length === 0}<p class="empty-grant">The snapshot lists no grants.</p>{/if}
+            {#each access.grants as grant, index}
+              {@const open = expandedGrants.has(index)}
               <div class="access-group">
-                <button class="group-toggle" aria-expanded={open} aria-controls={`access-group-${index}`} onclick={() => toggleGroup(index)}><span>{group.name}</span><span aria-hidden="true">{open ? '−' : '+'}</span></button>
-                {#if open}<div class="grant-grid" id={`access-group-${index}`}>
-                  {#each [['Models', group.models], ['Connections', group.connections], ['Capabilities', group.capabilities]] as category}
-                    <div><h3>{category[0]}</h3>{#if category[1].length}<ul>{#each category[1] as item}<li>{item}</li>{/each}</ul>{:else}<p class="empty-grant">None granted</p>{/if}</div>
-                  {/each}
+                <button class="group-toggle" aria-expanded={open} aria-controls={`access-grant-${index}`} onclick={() => toggleGrant(index)}><span>{grant.effect} {grant.action} · {grant.resource_id ?? grant.resource_type}</span><span aria-hidden="true">{open ? '−' : '+'}</span></button>
+                {#if open}<div class="grant-grid" id={`access-grant-${index}`}>
+                  <div><h3>Principal</h3><p>{grant.principal_type} · {grant.principal_id ?? 'Not specified'}</p></div>
+                  <div><h3>Resource type</h3><p>{grant.resource_type}</p></div>
+                  <div><h3>Expiration</h3>{#if grant.expires_at}<time datetime={grant.expires_at}>{lastActive(grant.expires_at)}</time>{:else}<p>The grant has no expiration.</p>{/if}</div>
                 </div>{/if}
               </div>
             {/each}
           {/if}
-          <p class="access-note">Access is set by your admins.</p>
+          <p class="access-note">Your admins set access. The snapshot is a display hint. The server checks each request.</p>
         </section>
         <section class="devices-section" aria-labelledby="devices-heading">
           <h3 id="devices-heading" class="access-label">Devices</h3>
@@ -433,10 +436,11 @@
   .access-content { min-height: 0; overflow-y: auto; padding: 14px; }
   .access-label { margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
   .access-group { border-top: 1px solid var(--border); }
-  .group-toggle { width: 100%; display: flex; justify-content: space-between; padding: 9px 2px; border: 0; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); text-align: left; }
+  .group-toggle { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 9px 2px; border: 0; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); text-align: left; }
+  .group-toggle > span:first-child { min-width: 0; overflow-wrap: anywhere; }
   .grant-grid { display: grid; gap: 10px; padding: 1px 2px 12px 12px; }
   .grant-grid h3 { margin: 0 0 3px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .grant-grid ul { margin: 0; padding: 0; list-style: none; font: var(--text-12) var(--font-mono); }
+  .grant-grid ul, .grant-grid p, .grant-grid time { margin: 0; padding: 0; list-style: none; font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .grant-grid li + li { margin-top: 2px; }
   .empty-grant, .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-status p { margin: 0 0 6px; }
