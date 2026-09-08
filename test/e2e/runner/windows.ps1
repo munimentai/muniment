@@ -55,17 +55,27 @@ function Save-RunnerFailure([System.Management.Automation.ErrorRecord]$Failure) 
 function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutSeconds, [string]$Log) {
   $errorLog = $Log + ".err"
   $process = Start-Process $File -ArgumentList $Arguments -PassThru -RedirectStandardOutput $Log -RedirectStandardError $errorLog
-  $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
-  if ($timedOut) {
-    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+  try {
+    # Cache the handle before waiting so Windows PowerShell can read ExitCode.
+    $null = $process.Handle
+    $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
+    if ($timedOut) {
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
+    $stopped = $process.WaitForExit(10000)
+    if (Test-Path -LiteralPath $errorLog) {
+      Get-Content -LiteralPath $errorLog | Add-Content -LiteralPath $Log
+      Remove-Item -LiteralPath $errorLog -Force
+    }
+    if (-not $stopped) { throw "$File timed out" }
+    $exitCode = $process.ExitCode
+    if ($null -eq $exitCode) { throw "$File did not report an exit code" }
+    Add-Content -LiteralPath $Log -Value "$File exited with code $exitCode"
+    if ($timedOut) { throw "$File timed out" }
+    if ($exitCode -notin @(0, 3010)) { throw "$File failed with exit code $exitCode" }
+  } finally {
+    $process.Dispose()
   }
-  $stopped = $process.WaitForExit(10000)
-  if (Test-Path -LiteralPath $errorLog) {
-    Get-Content -LiteralPath $errorLog | Add-Content -LiteralPath $Log
-    Remove-Item -LiteralPath $errorLog -Force
-  }
-  if ($timedOut -or -not $stopped) { throw "$File timed out" }
-  if ($process.ExitCode -notin @(0, 3010)) { throw "$File failed with exit code $($process.ExitCode)" }
 }
 
 function Resolve-NativeCommand([string]$File, [string]$FailureMessage) {
@@ -313,6 +323,11 @@ try {
   New-Item -ItemType Directory -Force $raw, $stateRoot | Out-Null
   New-Item -ItemType File -Force $cleanupLog | Out-Null
   if ($env:MUNIMENT_E2E_RUNNER_TEST_ERROR) { throw $env:MUNIMENT_E2E_RUNNER_TEST_ERROR }
+  if ($env:MUNIMENT_E2E_BOUNDED_PROCESS_TEST_EXIT_CODE) {
+    $boundedTestExitCode = [int]$env:MUNIMENT_E2E_BOUNDED_PROCESS_TEST_EXIT_CODE
+    Invoke-BoundedProcess "cmd.exe" "/d /c `"echo bounded stdout & echo bounded stderr 1>&2 & exit /b $boundedTestExitCode`"" 10 $installerLog
+    return
+  }
   if ($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT) {
     Invoke-NativeCommand "node" "`"$($env:MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT)`"" $installerLog "native command test failed"
     return
