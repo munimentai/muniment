@@ -376,6 +376,21 @@ mod cases {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn macos_desktop_client_starts_without_a_managed_companion_state() {
+        let app = tauri::test::mock_app();
+        app.manage(AttachApprovalState::default());
+
+        start_desktop_client(app.handle());
+
+        let state = app
+            .try_state::<AttachCompanionState>()
+            .expect("start_desktop_client manages the companion state it reads");
+        state.stop_approval_presenter();
+        state.stop_desktop_client();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn macos_desktop_supervisor_restart_does_not_duplicate_presenter() {
         use std::sync::atomic::Ordering;
 
