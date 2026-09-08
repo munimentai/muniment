@@ -64,6 +64,24 @@ index_failure_artifacts() {
     >"$raw/failure-artifacts.log"
 }
 
+collect_local_mode_pi_log() {
+  local session_root="$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions"
+  local destination="$raw/pi-local-mode-chat.log" session count=0
+  # Pi writes provider outcomes to its session JSONL, not the runtime stderr log.
+  : >"$destination" || return 1
+  for session in "$session_root"/*.jsonl; do
+    [[ -f $session && ! -L $session ]] || continue
+    printf 'Pi wrote session log %s.\n' "${session##*/}" >>"$destination" || return 1
+    cat -- "$session" >>"$destination" || return 1
+    printf '\n' >>"$destination" || return 1
+    count=$((count + 1))
+  done
+  if (( count == 0 )); then
+    printf 'No Pi session log exists for the local mode run.\n' >>"$destination" || return 1
+  fi
+  printf 'The runner saved pi-local-mode-chat.log.\n' >>"$cleanup_log"
+}
+
 # shellcheck source=../support/runner-failure.sh
 source test/e2e/support/runner-failure.sh
 
@@ -302,6 +320,7 @@ ready=1
 export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
 export MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
 run_e2e "$raw/wdio.log" 0 test/e2e/specs/local-mode-chat.spec.js || status=1
+collect_local_mode_pi_log || runner_failure 'The runner could not collect the Pi local mode log.'
 # Remove $state_root/ready/config/ai.muniment.desktop/local-mode before sign-in.
 if rm -f -- "$XDG_CONFIG_HOME/ai.muniment.desktop/local-mode"; then
   run_e2e "$raw/wdio-sign-in.log" 0 test/e2e/specs/real-sign-in.spec.js || status=1
