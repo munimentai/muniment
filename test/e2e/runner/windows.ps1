@@ -138,7 +138,8 @@ function Get-UninstallEntries([ValidateSet("HKCU", "HKLM")][string]$Hive = "HKCU
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
     if ($env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE) {
       if (Test-Path -LiteralPath $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE) {
-        return @(Get-Content -LiteralPath $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE -Raw | ConvertFrom-Json | Where-Object { $_.Hive -eq $Hive })
+        $entries = Get-Content -LiteralPath $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE -Raw | ConvertFrom-Json
+        return @($entries | Where-Object { $_.Hive -eq $Hive })
       }
       return @()
     }
