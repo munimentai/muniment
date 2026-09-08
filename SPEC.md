@@ -118,16 +118,20 @@ local or custom endpoint into Pi's `models.json`, so Pi uses it at once and
 nothing leaves the machine except to that provider. The catalog is the
 models.dev shape, `id`, `name`, `env`, `npm`, `api` and `models` with cost
 and limits, shipped as a pinned snapshot and refreshed on a cache. The panel
-opens on featured tiles, Anthropic, OpenAI, Google, OpenRouter, Ollama, LM
-Studio and a custom endpoint, with a search over the rest. Each provider
-offers an API key field, and a browser or device sign-in only where the
-provider permits it for third-party tools. The custom endpoint form takes a
-base URL, an optional key and a model list, and covers a LiteLLM proxy
-without a dedicated entry. The panel lists connected providers first, each with
-its source tag, `Pi` for a key typed here, `Environment` for a catalog
-variable found at launch and `Custom` for an endpoint in `models.json`, and
-one control to disconnect it. The model picker carries the same tag on each
-row.
+opens on featured tiles, Anthropic, OpenAI, Google, xAI, OpenRouter, Ollama,
+LM Studio and a custom endpoint, with a search over the rest. Most users
+connect one hosted provider with a key, and the panel is built for that
+first. A local server is a first-class citizen beside them, never a fallback:
+it connects in the same panel, appears in the same picker, and runs the same
+composer. Each provider offers an API key field, and a browser or device
+sign-in only where the provider permits it for third-party tools. The custom
+endpoint form takes a base URL, an optional key and a model list, and covers
+a LiteLLM proxy without a dedicated entry. The panel lists connected
+providers, each with its source tag, `Pi` for a key typed here,
+`Environment` for a catalog variable found at launch, `Local` for a server
+on this machine and `Custom` for an endpoint in `models.json`, and one
+control to disconnect it. The model picker carries the same tag on each row
+and orders rows by the user's last use, not by source.
 
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one
 control to change it. A configured Home keeps its path. The four folders are
