@@ -2883,10 +2883,8 @@ dependencies = [
 name = "muniment-runtime"
 version = "0.0.1"
 dependencies = [
- "chrono",
  "muniment-attach",
  "muniment-core",
- "serde_json",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::auth::{InstallationRecord, NativeCredentials, TokenSet};
 use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
@@ -73,21 +73,31 @@ pub fn fixture_grant() -> ChatGrant {
 }
 
 pub fn grant_body() -> String {
-    serde_json::json!({
-        "protocol": "muniment.desktop-access/1",
-        "chat_grant": {
-            "grant_id": "grant-1",
-            "gateway_url": "https://gateway.example.com",
-            "virtual_key": "key",
-            "allowed_models": ["muniment-stub-chat"],
-            "issued_at": chrono::Utc::now(),
-            "expires_at": chrono::Utc::now() + chrono::Duration::minutes(14),
-            "native_session_id": "session-1",
-            "device_id": credentials().installation.device_id,
-            "entitlement_version": 42
-        }
-    })
-    .to_string()
+    let grant = ChatGrant {
+        expires_at: Some(SystemTime::now().into()),
+        ..fixture_grant()
+    };
+    let issued_at = grant.expires_at.unwrap();
+    let expires_at = issued_at + Duration::from_secs(14 * 60);
+    let device_id = credentials().installation.device_id;
+    format!(
+        r#"{{
+            "protocol": "muniment.desktop-access/1",
+            "chat_grant": {{
+                "grant_id": "grant-1",
+                "gateway_url": "https://gateway.example.com",
+                "virtual_key": "key",
+                "allowed_models": ["muniment-stub-chat"],
+                "issued_at": "{}",
+                "expires_at": "{}",
+                "native_session_id": "session-1",
+                "device_id": "{device_id}",
+                "entitlement_version": 42
+            }}
+        }}"#,
+        issued_at.to_rfc3339(),
+        expires_at.to_rfc3339(),
+    )
 }
 
 pub fn spawn_server(status: u16, body: String) -> (String, thread::JoinHandle<String>) {
