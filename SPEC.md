@@ -96,6 +96,12 @@ checkable in the diff:
   never a cloud virtual key.
 - The runtime logs its startup and the desktop logs the native-auth call, so a
   silent auth path names its cause from an envelope.
+- After Pi readiness, each prompt has a 30-second first reply event bound.
+  A prompt acknowledgment or unrelated lifecycle frame does not satisfy the bound.
+  A timeout records a failed reply with its cause in the run journal and shell.
+  The runtime logs the run start, Pi spawn outcome, first reply event, provider
+  outcome, and failure stderr tail with the run id. The Linux envelope keeps
+  `pi-local-mode-stderr.log` beside `muniment-runtime.log`.
 - Pi sidecar parity with the factory harness, below.
 
 ## First run
