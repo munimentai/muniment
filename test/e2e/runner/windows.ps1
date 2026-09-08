@@ -150,7 +150,35 @@ function Get-HarnessProcesses {
     if ($testProcess -and (Test-Path -LiteralPath $testProcess)) { return @([pscustomobject]@{ ProcessName = "muniment" }) }
     return @()
   }
-  return @(Get-Process muniment -ErrorAction SilentlyContinue)
+  $automation = @(Get-CimInstance Win32_Process | Where-Object {
+    $_.CommandLine -like '*wdio*test/e2e/wdio.conf.js*' -or $_.CommandLine -like '*@wdio*local-runner*run.js*'
+  } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+  return @(Get-Process muniment, muniment-desktop, muniment-runtime, msedgedriver -ErrorAction SilentlyContinue) + $automation
+}
+
+function Stop-HarnessProcesses {
+  # Stop the runtime task so its restart policy cannot race the next spec.
+  $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  $task = Get-ScheduledTask -TaskPath "\Muniment\" -TaskName "Runtime-$sid" -ErrorAction SilentlyContinue
+  if ($task) { Stop-ScheduledTask -InputObject $task }
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  do {
+    $processes = @(Get-HarnessProcesses)
+    $task = Get-ScheduledTask -TaskPath "\Muniment\" -TaskName "Runtime-$sid" -ErrorAction SilentlyContinue
+    if ($processes.Count -eq 0 -and (-not $task -or $task.State -ne 'Running')) { return }
+    $processes | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "Spec processes did not stop."
+}
+
+function Invoke-E2e([string]$Log, [string]$FailureMessage, [string]$Spec = '') {
+  Invoke-Cleanup "stop-before-spec" { Stop-HarnessProcesses }
+  if ($script:cleanupLastStatus -ne 0) { throw "Spec process cleanup failed. The runner did not start the next spec." }
+  Add-Content $cleanupLog "start-spec: $([IO.Path]::GetFileName($Log))"
+  $arguments = "run test:e2e"
+  if ($Spec) { $arguments += " -- --spec $Spec" }
+  Invoke-NativeCommand "npm.cmd" $arguments $Log $FailureMessage $null (Join-Path $raw "driver-app.log")
 }
 
 function Invoke-Cleanup([string]$Name, [scriptblock]$Action) {
@@ -173,6 +201,7 @@ function Invoke-Cleanup([string]$Name, [scriptblock]$Action) {
     if ($cleanupLog) { Add-Content $cleanupLog "$Name`: failed" -ErrorAction SilentlyContinue }
     $script:cleanupStatus = 1
   } finally {
+    $script:cleanupLastStatus = $phaseStatus
     if ($cleanupStatusLedger) {
       Add-Content $cleanupStatusLedger "$Name`: $(if ($phaseStatus) { 'failed' } else { 'ok' })" -ErrorAction SilentlyContinue
     }
@@ -193,9 +222,14 @@ function Remove-AuthHandler {
 function Finalize-Run {
   Invoke-Cleanup "stop-wdio" { Get-CimInstance Win32_Process | Where-Object CommandLine -Like '*wdio.conf.js*' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
   if ($ready) {
-    Invoke-Cleanup "revoke-session" { $env:MUNIMENT_E2E_CLEANUP_ONLY = "1"; Invoke-BoundedProcess "npm.cmd" "run test:e2e" 45 (Join-Path $raw "cleanup-wdio.log") }
+    Invoke-Cleanup "revoke-session" {
+      Stop-HarnessProcesses
+      Write-Output 'stop-before-spec: ok'
+      $env:MUNIMENT_E2E_CLEANUP_ONLY = "1"
+      Invoke-BoundedProcess "npm.cmd" "run test:e2e" 45 (Join-Path $raw "cleanup-wdio.log")
+    }
   }
-  Invoke-Cleanup "stop-app" { Get-Process muniment -ErrorAction SilentlyContinue | Stop-Process -Force }
+  Invoke-Cleanup "stop-app" { Stop-HarnessProcesses }
   if ($installAttempted) {
     Invoke-Cleanup "uninstall" {
       $registration = @(Get-ProductRegistration)
@@ -405,10 +439,15 @@ try {
   $env:APPDATA = Join-Path $stateRoot "Degraded\Roaming"
   $env:LOCALAPPDATA = Join-Path $stateRoot "Degraded\Local"
   $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'degraded-home'
-  $wdioLog = Join-Path $raw "wdio.log"
-  $driverAppLog = Join-Path $raw "driver-app.log"
   try {
-    Invoke-NativeCommand "npm.cmd" "run test:e2e" $wdioLog "Windows end-to-end tests failed" $null $driverAppLog
+    Invoke-E2e (Join-Path $raw "wdio.log") "Windows local-mode tests failed" 'test/e2e/specs/local-mode-chat.spec.js'
+  } catch {
+    Save-RunnerFailure $_
+  }
+  try {
+    $localModeMarker = Join-Path $env:APPDATA 'ai.muniment.desktop\local-mode'
+    if (Test-Path -LiteralPath $localModeMarker) { Remove-Item -LiteralPath $localModeMarker -Force }
+    Invoke-E2e (Join-Path $raw "wdio-sign-in.log") "Windows sign-in tests failed" 'test/e2e/specs/real-sign-in.spec.js'
   } catch {
     Save-RunnerFailure $_
   }
@@ -477,7 +516,7 @@ namespace MunimentE2e {
   $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'ready-home'
   $env:MUNIMENT_E2E_ONBOARDING_ONLY = "1"
   try {
-    Invoke-NativeCommand "npm.cmd" "run test:e2e" (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed"
+    Invoke-E2e (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed"
   } catch {
     Save-RunnerFailure $_
   }

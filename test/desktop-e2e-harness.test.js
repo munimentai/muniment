@@ -79,7 +79,7 @@ describe('installed production chat contract', () => {
     expect(linux).toContain('/usr/lib/muniment/muniment-runtime >>"$2" 2>&1 &')
     expect(linux).toContain('kill "$runtime_pid" 2>/dev/null || true')
     expect(linux).toContain('if ! kill -0 "$runtime_pid" 2>/dev/null; then')
-    expect(linux).toContain("pkill -f '^/usr/lib/muniment/muniment-runtime( |$)'")
+    expect(linux).toContain('pkill -"$signal" -f \'^/usr/lib/muniment/muniment-runtime( |$)\'')
     expect(linux).toContain("! pgrep -f '^/usr/lib/muniment/muniment-runtime( |$)'")
   })
 
@@ -216,6 +216,111 @@ describe('WDIO Tauri driver contract', () => {
     expect(runE2e).toMatch(/dbus-run-session[\s\S]+xdg-desktop-portal[\s\S]+npm run test:e2e/)
     expect(runner).not.toMatch(/tauri-driver|4444|MUNIMENT_E2E_EXTERNAL_DRIVER/)
     expect(runner.match(/run_e2e "\$raw\/wdio-(?:onboarding|cleanup|sign-in)\.log"|run_e2e "\$raw\/wdio\.log"/g)).toHaveLength(4)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('Linux spec process isolation', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+  const functions = runner.slice(runner.indexOf('cleanup_absent()'), runner.indexOf('\nemit_artifacts()'))
+  const sequence = runner.slice(runner.indexOf('# Run the installed chat specs first.'))
+  const processes = ['app', 'desktop', 'runtime', 'driver', 'wdio']
+  const runSequence = (failedSpec = 'local-mode-chat', stopMode = 'delayed') => {
+    const directory = temp()
+    const script = path.join(directory, 'sequence.sh')
+    fs.writeFileSync(script, `set -uo pipefail
+raw="$1"
+state_root="$raw/state"
+process_root="$raw/processes"
+cleanup_log="$raw/cleanup.log"
+cleanup_status_ledger="$raw/cleanup-status.log"
+cleanup_status=0
+status=0
+trap 'exit "$status"' EXIT
+mkdir -p "$process_root"
+source test/e2e/support/cleanup-ledger.sh
+${functions}
+process_key() {
+  case "$*" in
+    *muniment-runtime*) key=runtime ;;
+    *muniment-desktop*) key=desktop ;;
+    *WebKitWebDriver*) key=driver ;;
+    *wdio*) key=wdio ;;
+    *muniment*) key=app ;;
+    *) exit 99 ;;
+  esac
+}
+pgrep() { local key; process_key "$@"; [[ -e "$process_root/$key" ]]; }
+pkill() {
+  local key; process_key "$@"
+  printf 'signal: %s %s\\n' "$1" "$key" >>"$cleanup_log"
+  if [[ $STOP_MODE == immediate || ( $STOP_MODE == force && $1 == -KILL ) ]]; then
+    rm -f "$process_root/$key"
+  fi
+}
+sleep() {
+  printf 'wait\\n' >>"$cleanup_log"
+  if [[ $STOP_MODE == delayed ]]; then rm -f "$process_root/"*; fi
+}
+dbus-run-session() {
+  local spec=onboarding
+  case "$*" in
+    *local-mode-chat.spec.js*) spec=local-mode-chat ;;
+    *real-sign-in.spec.js*) spec=real-sign-in ;;
+  esac
+  if [[ -n $(ls -A "$process_root") ]]; then
+    printf 'stale-processes: %s\\n' "$spec" >>"$cleanup_log"
+    return 91
+  fi
+  printf 'session: %s\\n' "$spec" >>"$cleanup_log"
+  touch "$raw/xdg-desktop-portal.log" "$raw/driver-app.log"
+  for key in app desktop runtime driver wdio; do touch "$process_root/$key"; done
+  [[ $spec != "$FAILED_SPEC" ]]
+}
+${sequence}
+`)
+    const result = spawnSync('bash', [script, directory], {
+      encoding: 'utf8', timeout: 10_000,
+      env: { ...process.env, FAILED_SPEC: failedSpec, STOP_MODE: stopMode, MUNIMENT_E2E_FINALIZER_TEST_MODE: '0' },
+    })
+    return { result, log: fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8') }
+  }
+
+  it.each(['', 'local-mode-chat', 'real-sign-in'])('Stops all spec processes before the next spec after failure "%s".', (failedSpec) => {
+    const { result, log } = runSequence(failedSpec)
+    expect(result.status, result.stderr).toBe(failedSpec ? 1 : 0)
+    expect(log).not.toContain('stale-processes')
+    expect(log.match(/^session: .+$/gm)).toEqual(['session: local-mode-chat', 'session: real-sign-in', 'session: onboarding'])
+    for (const [previous, next] of [['local-mode-chat', 'real-sign-in'], ['real-sign-in', 'onboarding']]) {
+      const boundary = log.slice(log.indexOf(`session: ${previous}`), log.indexOf(`session: ${next}`))
+      for (const process of processes) expect(boundary).toContain(`signal: -TERM ${process}`)
+      expect(boundary).toMatch(/wait\nstop-before-spec: ok\nstart-spec:/)
+    }
+  })
+
+  it('Uses a forced stop when a process ignores the first signal.', () => {
+    const { result, log } = runSequence('real-sign-in', 'force')
+    expect(result.status, result.stderr).toBe(1)
+    const boundary = log.slice(log.indexOf('session: real-sign-in'), log.indexOf('session: onboarding'))
+    for (const process of processes) expect(boundary).toContain(`signal: -KILL ${process}`)
+    expect(boundary).toContain('stop-before-spec: ok')
+    expect(log).not.toContain('stale-processes')
+  })
+
+  it('Does not start another spec when a process remains after the forced stop.', () => {
+    const { result, log } = runSequence('local-mode-chat', 'stuck')
+    expect(result.status, result.stderr).toBe(1)
+    expect(log).toContain('stop-before-spec: failed')
+    expect(log).not.toContain('session: real-sign-in')
+    expect(log).not.toContain('session: onboarding')
+    expect(log).not.toContain('start-spec: wdio-onboarding.log')
+    expect(result.stderr).toContain('Spec process cleanup failed.')
+  })
+
+  it('Accepts an empty process set and immediate process exit.', () => {
+    const { result, log } = runSequence('', 'immediate')
+    expect(result.status, result.stderr).toBe(0)
+    expect(log).not.toContain('wait\n')
+    expect(log.match(/stop-before-spec: ok/g)).toHaveLength(3)
   })
 })
 
@@ -559,6 +664,65 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
     expect(report).toBe('file: unknown\ncategory: redactor-process\n')
     expect(report).not.toContain(plantedSecret)
   })
+})
+
+describe('Windows spec process isolation', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+  const functions = runner.slice(runner.indexOf('function Get-HarnessProcesses'), runner.indexOf('function Remove-AuthHandler'))
+
+  it('Runs each spec through the process cleanup gate.', () => {
+    expect(runner).toContain("Invoke-E2e (Join-Path $raw \"wdio.log\") \"Windows local-mode tests failed\" 'test/e2e/specs/local-mode-chat.spec.js'")
+    expect(runner).toContain("Invoke-E2e (Join-Path $raw \"wdio-sign-in.log\") \"Windows sign-in tests failed\" 'test/e2e/specs/real-sign-in.spec.js'")
+    expect(runner).toContain('Invoke-E2e (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed"')
+    expect(runner).toMatch(/Invoke-Cleanup "revoke-session" \{\s+Stop-HarnessProcesses[\s\S]+Invoke-BoundedProcess "npm.cmd" "run test:e2e" 45/)
+    expect(functions).toContain('Get-Process muniment, muniment-desktop, muniment-runtime, msedgedriver')
+    expect(functions).toContain("'*@wdio*local-runner*run.js*'")
+    expect(functions).toContain('Stop-ScheduledTask -InputObject $task')
+    expect(functions).toContain("$processes.Count -eq 0 -and (-not $task -or $task.State -ne 'Running')")
+  })
+
+  it.skipIf(process.platform !== 'win32').each([false, true])('Stops the failed spec before the next spec with stop failure %s.', (stopFails) => {
+    const directory = temp()
+    const script = path.join(directory, 'sequence.ps1')
+    fs.writeFileSync(script, `param([string]$Directory, [string]$StopFails)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$raw = $Directory
+$cleanupLog = Join-Path $Directory 'cleanup.log'
+$cleanupStatusLedger = Join-Path $Directory 'cleanup-status.log'
+$cleanupStatus = 0
+$script:active = $false
+$script:starts = 0
+${functions}
+function Stop-HarnessProcesses {
+  if ($script:active -and $StopFails -eq 'true') { throw 'Fixture process did not stop.' }
+  $script:active = $false
+}
+function Invoke-NativeCommand {
+  if ($script:active) { throw 'Fixture found a stale process.' }
+  $script:active = $true
+  $script:starts++
+  Add-Content $cleanupLog "fixture-start: $script:starts"
+  if ($script:starts -eq 1) { throw 'Fixture spec failed.' }
+}
+try { Invoke-E2e (Join-Path $raw 'first.log') 'First spec failed.' } catch { Add-Content $cleanupLog $_.Exception.Message }
+try { Invoke-E2e (Join-Path $raw 'second.log') 'Second spec failed.' } catch { Add-Content $cleanupLog $_.Exception.Message }
+`)
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, directory, String(stopFails)], {
+      encoding: 'utf8', timeout: 20_000,
+      env: { ...process.env, MUNIMENT_E2E_FINALIZER_TEST_MODE: '0', MUNIMENT_E2E_FINALIZER_TEST_FAIL: '' },
+    })
+    expect(result.status, result.stderr).toBe(0)
+    const log = fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8').replaceAll('\r\n', '\n')
+    expect(log).toContain('Fixture spec failed.')
+    expect(log).not.toContain('Fixture found a stale process.')
+    if (stopFails) {
+      expect(log).toContain('stop-before-spec: failed')
+      expect(log).not.toContain('fixture-start: 2')
+    } else {
+      expect(log).toContain('stop-before-spec: ok\nstart-spec: second.log\nfixture-start: 2')
+    }
+  }, 30_000)
 })
 
 describe('Windows MSI identity contract', { timeout: 30_000 }, () => {
@@ -1404,10 +1568,10 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'revoke-session', 'stop-app', 'remove-package', 'remove-state'])
     expect(command['stop-wdio']).toBe("stop_matching \\[w\\]dio.\\\*test/e2e/wdio.conf.js ")
     expect(command['revoke-session']).toBe('run_cleanup_e2e ')
-    expect(command['stop-app']).toBe("bash -c pkill\\ -f\\ \\\'\\^/usr/lib/muniment/muniment-runtime\\(\\ \\|\\$\\)\\'\\ 2\\>/dev/null\\ \\|\\|\\ true\\;\\ pkill\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\$\\)\\'\\ 2\\>/dev/null\\ \\|\\|\\ true\\;\\ pkill\\ -x\\ muniment\\ 2\\>/dev/null\\ \\|\\|\\ true\\;\\ \\!\\ pgrep\\ -f\\ \\\'\\^/usr/lib/muniment/muniment-runtime\\(\\ \\|\\$\\)\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\$\\)\\'\\ \\>/dev/null\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\>/dev/null ")
+    expect(command['stop-app']).toBe('stop_app ')
     expect(command['remove-package']).toBe('sudo apt-get remove -y muniment ')
     expect(command['package-gone']).toBe('package_absent ')
-    expect(command['processes-gone']).toBe("bash -c \\!\\ pgrep\\ -f\\ \\\'\\^/usr/lib/muniment/muniment-runtime\\(\\ \\|\\$\\)\\'\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\(\\^\\|/\\)muniment-desktop\\(\\ \\|\\$\\)\\'\\ \\&\\&\\ \\!\\ pgrep\\ -x\\ muniment\\ \\&\\&\\ \\!\\ pgrep\\ -f\\ \\\'\\[w\\]dio.\\*test/e2e/wdio.conf.js\\' ")
+    expect(command['processes-gone']).toBe('harness_processes_gone ')
 
     const target = (label, operation) => {
       const match = command[label].match(new RegExp(`^${operation} ((?:/tmp/[^ ]+)) $`))
