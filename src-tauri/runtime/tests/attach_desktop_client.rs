@@ -30,6 +30,8 @@ use muniment_runtime::{run_attach_listener, AttachListenerInputs};
 mod common;
 use common::{credentials, spawn_server_sequence, stage_pi_stub, TemporaryProfile};
 
+static ENVIRONMENT: Mutex<()> = Mutex::new(());
+
 #[derive(Default)]
 struct TestService;
 
@@ -192,6 +194,7 @@ fn desktop_client_gets_session_status_without_a_recorded_workspace() {
 
 #[test]
 fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
+    let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let profile = TemporaryProfile::new("attach-desktop-submit-no-workspace", true);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -206,9 +209,9 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
     credential_store.clear_session().unwrap();
     credential_store.save_credentials(&credentials()).unwrap();
     let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop","expires_at":"2099-01-01T00:00:00Z"},"user":{"id":"30000000-0000-4000-8000-000000000003","email":"user@example.com","status":"active","role":"owner","entitlement_version":7},"org":{"id":"20000000-0000-4000-8000-000000000002","display_name":"Muniment"},"entitlement_snapshot":{"payload":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","entitlement_version":7,"issued_at":"2026-08-01T00:00:00Z","capabilities":[],"grants":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
-    let grant_body = r#"{"workspace":"workspace-a","gatewayUrl":"https://gateway.example.com","virtualKey":"key","minimumCacheablePrefixCharacters":8192,"receiptUrl":"https://receipts.example.com"}"#;
+    let grant_body = common::grant_body();
     let (base_url, server) =
-        spawn_server_sequence(vec![(200, session_body.into()), (200, grant_body.into())]);
+        spawn_server_sequence(vec![(200, session_body.into()), (201, grant_body)]);
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let (stop_tx, stop_rx) = mpsc::channel();
 
@@ -247,7 +250,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
         assert!(client.workspace_scopes().is_empty());
         let accepted = client.run_submit("hello", &[], None).unwrap();
         assert!(!accepted.run_id.is_empty());
-        assert_eq!(approval.approval().unwrap().workspace, "workspace-a");
+        assert_eq!(approval.approval().unwrap().workspace, "local");
 
         drop(client);
         stop_tx.send(()).unwrap();
@@ -262,6 +265,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
 
 #[test]
 fn desktop_client_selects_only_an_owned_thread() {
+    let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let profile = TemporaryProfile::new("attach-thread-select", true);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -406,6 +410,7 @@ fn retention_event(run_id: &str, event_id: &str, run_seq: u64, event_type: &str)
 
 #[test]
 fn desktop_client_recheck_applies_the_recorded_retention() {
+    let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let profile = TemporaryProfile::new("attach-retention-recheck", false);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();

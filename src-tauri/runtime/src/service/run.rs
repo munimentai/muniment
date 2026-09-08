@@ -7,7 +7,7 @@ use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{api_base_url, TokenSet};
 use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::{
-    fetch_grant, grant_authorizes_workspace, validate_grant, ChatGrant, FetchGrantError,
+    fetch_native_grant, grant_authorizes_workspace, validate_grant, ChatGrant, FetchGrantError,
 };
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::chat_resume::{
@@ -77,7 +77,8 @@ pub fn configure_run(
     access_token: &str,
     requested_workspace: Option<&str>,
 ) -> Result<ChatGrant, ConfigureRunError> {
-    let grant = fetch_grant(&api_base_url(), access_token).map_err(ConfigureRunError::Grant)?;
+    let grant =
+        fetch_native_grant(&api_base_url(), access_token).map_err(ConfigureRunError::Grant)?;
     validate_grant(&grant).map_err(ConfigureRunError::Grant)?;
     if !grant_authorizes_workspace(&grant, requested_workspace) {
         return Err(ConfigureRunError::Unauthorized);
