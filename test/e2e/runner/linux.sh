@@ -34,6 +34,31 @@ stop_matching() {
   ! pgrep -f "$1" >/dev/null
 }
 
+harness_processes_gone() {
+  ! pgrep -f '^/usr/lib/muniment/muniment-runtime( |$)' >/dev/null &&
+    ! pgrep -f '(^|/)muniment-desktop( |$)' >/dev/null &&
+    ! pgrep -x muniment >/dev/null &&
+    ! pgrep -x WebKitWebDriver >/dev/null &&
+    ! pgrep -f '[w]dio.*test/e2e/wdio.conf.js|[@]wdio/local-runner/.*/run.js' >/dev/null
+}
+
+stop_app() {
+  local signal attempt
+  for signal in TERM KILL; do
+    # Stop automation first so it cannot restart the app during cleanup.
+    pkill -"$signal" -f '[w]dio.*test/e2e/wdio.conf.js|[@]wdio/local-runner/.*/run.js' 2>/dev/null || true
+    pkill -"$signal" -f '(^|/)muniment-desktop( |$)' 2>/dev/null || true
+    pkill -"$signal" -x muniment 2>/dev/null || true
+    pkill -"$signal" -f '^/usr/lib/muniment/muniment-runtime( |$)' 2>/dev/null || true
+    pkill -"$signal" -x WebKitWebDriver 2>/dev/null || true
+    for attempt in {1..20}; do
+      harness_processes_gone && return 0
+      sleep 0.25
+    done
+  done
+  harness_processes_gone
+}
+
 index_failure_artifacts() {
   find "$raw" -maxdepth 1 -type f \( -name 'page-source-*.html' -o -name 'screenshot-*.png' \) -print \
     >"$raw/failure-artifacts.log"
@@ -44,6 +69,12 @@ source test/e2e/support/runner-failure.sh
 
 run_e2e() {
   local wdio_log=$1 run_timeout=${2:-0} run_status=0 portal_log="$raw/xdg-desktop-portal.log" runtime_log="$raw/muniment-runtime.log"
+  cleanup_step stop-before-spec stop_app
+  if (( cleanup_last_status != 0 )); then
+    runner_failure 'Spec process cleanup failed. The runner did not start the next spec.'
+    return 1
+  fi
+  printf 'start-spec: %s\n' "${wdio_log##*/}" >>"$cleanup_log"
   local -a session=(dbus-run-session -- xvfb-run -a bash -c '
     portal=$(command -v xdg-desktop-portal || true)
     if [[ -z $portal ]]; then
@@ -58,6 +89,11 @@ run_e2e() {
     cleanup_session() {
       if [[ -n $runtime_pid ]]; then
         kill "$runtime_pid" 2>/dev/null || true
+        for _ in {1..20}; do
+          kill -0 "$runtime_pid" 2>/dev/null || break
+          sleep 0.25
+        done
+        kill -9 "$runtime_pid" 2>/dev/null || true
         wait "$runtime_pid" 2>/dev/null || true
       fi
       kill "$portal_pid" 2>/dev/null || true
@@ -79,7 +115,7 @@ run_e2e() {
   ' bash "$portal_log" "$runtime_log" npm run test:e2e)
   if [[ -n ${3:-} ]]; then session+=(-- --spec "$3"); fi
   if (( run_timeout > 0 )); then
-    timeout "$run_timeout" "${session[@]}" >"$wdio_log" 2>>"$raw/driver-app.log" || run_status=$?
+    timeout --kill-after=10 "$run_timeout" "${session[@]}" >"$wdio_log" 2>>"$raw/driver-app.log" || run_status=$?
   else
     "${session[@]}" >"$wdio_log" 2>>"$raw/driver-app.log" || run_status=$?
   fi
@@ -143,17 +179,16 @@ emit_minimal_artifacts() {
 finalize() {
   trap - EXIT INT TERM
   # A crashed run may leave the official driver session owning its ports.
-  # Clear stale automation before opening the bounded recovery session, while
-  # retaining the app, browser driver, and state that recovery needs.
+  # Stop stale automation before the recovery session starts with the same state.
   cleanup_step stop-wdio stop_matching '[w]dio.*test/e2e/wdio.conf.js'
   # Launch a fresh embedded-driver session against the same app state. This is
   # bounded and idempotent, and still runs if the main WDIO process crashed.
   if (( ready )); then cleanup_step revoke-session run_cleanup_e2e; fi
-  cleanup_step stop-app bash -c "pkill -f '^/usr/lib/muniment/muniment-runtime( |$)' 2>/dev/null || true; pkill -f '(^|/)muniment-desktop( |$)' 2>/dev/null || true; pkill -x muniment 2>/dev/null || true; ! pgrep -f '^/usr/lib/muniment/muniment-runtime( |$)' >/dev/null && ! pgrep -f '(^|/)muniment-desktop( |$)' >/dev/null && ! pgrep -x muniment >/dev/null"
+  cleanup_step stop-app stop_app
   if (( installed )); then cleanup_step remove-package sudo apt-get remove -y muniment; fi
   cleanup_step remove-state rm -rf -- "$state_root"
   cleanup_step package-gone package_absent
-  cleanup_step processes-gone bash -c "! pgrep -f '^/usr/lib/muniment/muniment-runtime( |$)' && ! pgrep -f '(^|/)muniment-desktop( |$)' && ! pgrep -x muniment && ! pgrep -f '[w]dio.*test/e2e/wdio.conf.js'"
+  cleanup_step processes-gone harness_processes_gone
   cleanup_step state-gone cleanup_absent "$state_root"
 
   cleanup_step stage-cleanup-log cp "$cleanup_log" "$raw/cleanup.log"
