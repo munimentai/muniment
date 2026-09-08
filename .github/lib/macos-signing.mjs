@@ -99,6 +99,16 @@ export const productbuildArguments = (application, output, identityHash, keychai
   return [...args, output];
 };
 
+export const signingCertificateImportArguments = (certificate, keychain, password) => [
+  "import", certificate, "-k", keychain, "-P", password,
+  "-T", "/usr/bin/codesign", "-T", "/usr/bin/productbuild",
+];
+
+// Include both signing tools in the key partition list.
+export const signingKeyPartitionListArguments = (keychain, password) => [
+  "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:,productbuild:", "-s", "-k", password, keychain,
+];
+
 export const intermediateCertificateImportArguments = (certificate, keychain) => [
   "import", certificate, "-k", keychain,
 ];

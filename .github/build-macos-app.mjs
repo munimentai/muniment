@@ -14,8 +14,10 @@ import {
   productbuildArguments,
   requireSigningIdentity,
   resolveSigningConfiguration,
+  signingCertificateImportArguments,
   signingEnabled,
   signingIdentityArguments,
+  signingKeyPartitionListArguments,
   stapleArguments,
 } from "./lib/macos-signing.mjs";
 
@@ -113,7 +115,7 @@ mustRun("create keychain", "security", ["create-keychain", "-p", keychainPasswor
 mustRun("keychain settings", "security", ["set-keychain-settings", keychain]);
 mustRun("unlock keychain", "security", ["unlock-keychain", "-p", keychainPassword, keychain]);
 mustRun("import certificate", "security",
-  ["import", certPath, "-k", keychain, "-P", signingConfig.certificatePassword, "-T", "/usr/bin/codesign"]);
+  signingCertificateImportArguments(certPath, keychain, signingConfig.certificatePassword));
 const intermediate = spawnSync("security",
   ["find-certificate", "-c", "Developer ID Certification Authority", keychain], { encoding: "utf8" });
 if (intermediate.error) throw intermediate.error;
@@ -133,8 +135,8 @@ if (intermediate.status === 0) {
 mustRun("show Developer ID G2 intermediate", "security",
   ["find-certificate", "-c", "Developer ID Certification Authority", keychain]);
 console.log("imported intermediate: Developer ID Certification Authority, G2");
-mustRun("authorize codesign", "security",
-  ["set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", keychainPassword, keychain]);
+mustRun("authorize signing tools", "security",
+  signingKeyPartitionListArguments(keychain, keychainPassword));
 const priorKeychains = spawnSync("security", ["list-keychains", "-d", "user"], { encoding: "utf8" });
 if (priorKeychains.error) throw priorKeychains.error;
 if (priorKeychains.status !== 0) {
