@@ -123,9 +123,11 @@ Studio and a custom endpoint, with a search over the rest. Each provider
 offers an API key field, and a browser or device sign-in only where the
 provider permits it for third-party tools. The custom endpoint form takes a
 base URL, an optional key and a model list, and covers a LiteLLM proxy
-without a dedicated entry. The model picker lists local models first under a
-`Local` tag, then connected providers, and marks each source `Environment`,
-`Pi` or `Custom`.
+without a dedicated entry. The panel lists connected providers first, each with
+its source tag, `Pi` for a key typed here, `Environment` for a catalog
+variable found at launch and `Custom` for an endpoint in `models.json`, and
+one control to disconnect it. The model picker carries the same tag on each
+row.
 
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one
 control to change it. A configured Home keeps its path. The four folders are
