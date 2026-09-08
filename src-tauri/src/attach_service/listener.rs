@@ -169,6 +169,9 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
     let presenter_endpoint = endpoint.clone();
     #[cfg(target_os = "macos")]
     let presenter_app = app.clone();
+    if app.try_state::<AttachCompanionState>().is_none() {
+        app.manage(AttachCompanionState::default());
+    }
     let state = app.state::<AttachCompanionState>();
     let start_supervisors = || {
         state.start_desktop_supervisors(
