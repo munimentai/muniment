@@ -324,6 +324,144 @@ ${sequence}
   })
 })
 
+describe.skipIf(process.platform === 'win32')('macOS WDIO spec process isolation', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
+  const functions = runner.slice(runner.indexOf('harness_processes_gone()'), runner.indexOf('\nmkdir -p'))
+  const sequence = runner.slice(runner.indexOf('# Each spec starts'))
+  const processes = ['app', 'desktop', 'runtime', 'tauri-driver', 'safaridriver', 'wdio', 'worker', 'job']
+  const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
+  const runSequence = (failedSpec = '', stopMode = 'delayed', stuckProcess = '') => {
+    const directory = temp()
+    const script = path.join(directory, 'sequence.sh')
+    fs.writeFileSync(script, `set -uo pipefail
+raw="$1"
+state_root="$raw/state"
+process_root="$raw/processes"
+cleanup_log="$raw/cleanup.log"
+cleanup_status=0
+status=0
+trap 'exit "$status"' EXIT
+mkdir -p "$process_root"
+source test/e2e/support/cleanup-ledger.sh
+source test/e2e/support/runner-failure.sh
+${functions}
+process_key() {
+  case "$*" in
+    *muniment-runtime*) key=runtime ;;
+    *muniment-desktop*) key=desktop ;;
+    *tauri-driver*) key=tauri-driver ;;
+    *safaridriver*) key=safaridriver ;;
+    *wdio*) key=wdio ;;
+    *muniment*) key=app ;;
+    *) exit 99 ;;
+  esac
+}
+pgrep() {
+  local key; process_key "$@"
+  [[ -e "$process_root/$key" ]] || { [[ $key == wdio && -e "$process_root/worker" ]]; }
+}
+pkill() {
+  local key; process_key "$@"
+  printf 'signal: %s %s\\n' "$1" "$key" >>"$cleanup_log"
+  if [[ $STOP_MODE == immediate || ( $STOP_MODE == force && $1 == -KILL ) ]]; then
+    rm -f "$process_root/$key"
+    if [[ $key == wdio ]]; then rm -f "$process_root/worker"; fi
+  fi
+}
+launchctl() {
+  if [[ $1 == print ]]; then
+    if [[ -e "$process_root/job" ]]; then printf 'state = running\\npid = 123\\n'; else return 1; fi
+  else
+    printf 'signal: %s job\\n' "$2" >>"$cleanup_log"
+    if [[ $STOP_MODE == immediate || ( $STOP_MODE == force && $2 == SIGKILL ) ]]; then
+      rm -f "$process_root/job"
+    fi
+  fi
+}
+sleep() {
+  printf 'wait\\n' >>"$cleanup_log"
+  if [[ $STOP_MODE == delayed ]]; then
+    for key in ${processes.join(' ')}; do
+      if [[ $key != "$STUCK_PROCESS" || ! -e "$raw/first-spec" ]]; then rm -f "$process_root/$key"; fi
+    done
+  fi
+}
+npm() {
+  local spec
+  case "$*" in
+    'run test:e2e -- --spec test/e2e/specs/local-mode-chat.spec.js') spec=local-mode-chat ;;
+    'run test:e2e -- --spec test/e2e/specs/real-sign-in.spec.js') spec=real-sign-in ;;
+    'run test:e2e')
+      if [[ \${MUNIMENT_E2E_CLEANUP_ONLY:-0} == 1 ]]; then spec=cleanup
+      elif [[ \${MUNIMENT_E2E_ONBOARDING_ONLY:-0} == 1 ]]; then spec=onboarding
+      else return 98; fi ;;
+    *) return 99 ;;
+  esac
+  if [[ -n $(ls -A "$process_root") ]]; then
+    printf 'stale-processes: %s\\n' "$spec" >>"$cleanup_log"
+    return 91
+  fi
+  printf 'session: %s\\n' "$spec" >>"$cleanup_log"
+  touch "$raw/first-spec"
+  for key in ${processes.join(' ')}; do touch "$process_root/$key"; done
+  [[ $spec != "$FAILED_SPEC" ]]
+}
+# Include processes from the installed-build runner before the first spec.
+for key in ${processes.join(' ')}; do touch "$process_root/$key"; done
+${sequence}
+`)
+    const result = spawnSync('bash', [script, directory], {
+      encoding: 'utf8', timeout: 10_000,
+      env: {
+        ...process.env, FAILED_SPEC: failedSpec, STOP_MODE: stopMode, STUCK_PROCESS: stuckProcess,
+        MUNIMENT_E2E_FINALIZER_TEST_MODE: '0', MUNIMENT_E2E_ONBOARDING_ONLY: '0', MUNIMENT_E2E_CLEANUP_ONLY: '0',
+      },
+    })
+    return { result, log: fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8') }
+  }
+
+  it.each(['', ...specs])('Stops all processes before each spec after failure "%s".', (failedSpec) => {
+    const { result, log } = runSequence(failedSpec)
+    expect(result.status, result.stderr).toBe(failedSpec ? 1 : 0)
+    expect(log).not.toContain('stale-processes')
+    expect(log.match(/^session: .+$/gm)).toEqual(specs.map((spec) => `session: ${spec}`))
+    let start = 0
+    for (const spec of specs) {
+      const end = log.indexOf(`session: ${spec}`, start)
+      const boundary = log.slice(start, end)
+      for (const process of processes.filter((value) => value !== 'worker' && value !== 'job')) {
+        expect(boundary).toContain(`signal: -TERM ${process}`)
+      }
+      expect(boundary).toContain('signal: SIGTERM job')
+      expect(boundary).toMatch(/wait\nstop-before-spec: ok\nstart-spec:/)
+      start = end
+    }
+  })
+
+  it.each(['immediate', 'force'])('Waits for process exit with stop mode "%s".', (mode) => {
+    const { result, log } = runSequence('real-sign-in', mode)
+    expect(result.status, result.stderr).toBe(1)
+    expect(log).not.toContain('stale-processes')
+    expect(log.match(/stop-before-spec: ok/g)).toHaveLength(4)
+    if (mode === 'force') expect(log).toContain('signal: -KILL runtime')
+    else expect(log).not.toContain('wait\n')
+  })
+
+  it.each(processes)('Blocks later specs when %s remains after a failed spec.', (process) => {
+    const { result, log } = runSequence('local-mode-chat', 'delayed', process)
+    expect(result.status, result.stderr).toBe(1)
+    expect(log).toContain('stop-before-spec: failed')
+    expect(log.match(/^session: .+$/gm)).toEqual(['session: local-mode-chat'])
+    expect(log).not.toContain('stale-processes')
+    expect(result.stderr).toContain('Spec process cleanup failed.')
+  })
+
+  it('Checks the same process set during final cleanup.', () => {
+    expect(runner).toContain('cleanup_step stop-app stop_app\n  if (( cleanup_status != 0 )); then status=1; fi')
+    expect(runner.indexOf('cleanup_step stop-app stop_app')).toBeLessThan(runner.indexOf('if node test/e2e/support/redact.mjs'))
+  })
+})
+
 describe('nightly asset identity', () => {
   const sha = 'a'.repeat(40)
   const asset = { name: `nightly-${sha}-linux-muniment.deb`, id: 42 }
