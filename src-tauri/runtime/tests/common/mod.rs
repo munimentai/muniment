@@ -65,6 +65,7 @@ pub fn fixture_grant() -> ChatGrant {
         virtual_key: "virtual-key".into(),
         model: None,
         expires_at: None,
+        native_access_token: None,
         minimum_cacheable_prefix_characters: 8_192,
         receipt_url: "https://receipts.example.com".into(),
     }

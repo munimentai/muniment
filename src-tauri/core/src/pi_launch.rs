@@ -4,29 +4,7 @@ use crate::chat_grant::ChatGrant;
 use crate::sidecar::pi_install::{resolve_current_for, PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 use crate::sidecar::{pi_sidecar_config, PiSessionLocator, SidecarConfig};
 
-const CLOUD_PROVIDER_EXTENSION: &str = r#"export default function (pi) {
-  pi.registerProvider('muniment', {
-    baseUrl: process.env.OPENAI_BASE_URL,
-    apiKey: 'OPENAI_API_KEY',
-    api: 'openai-completions',
-    models: [{
-      id: process.env.PI_DEFAULT_MODEL,
-      name: process.env.PI_DEFAULT_MODEL,
-      reasoning: false,
-      input: ['text', 'image'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
-      compat: {
-        supportsDeveloperRole: false,
-        supportsStore: false,
-        supportsUsageInStreaming: false,
-        maxTokensField: 'max_tokens'
-      }
-    }]
-  })
-}
-"#;
+const CLOUD_PROVIDER_EXTENSION: &str = include_str!("muniment_cloud_provider.mjs");
 
 const BASH_TIMEOUT_INSTRUCTIONS: &str =
     "- `bash` reads its `timeout` in SECONDS, never milliseconds, and applies
@@ -89,6 +67,19 @@ pub trait PiLaunchBoundaries {
     ) -> Result<ChatGrant, crate::chat_grant::FetchGrantError> {
         #[cfg(feature = "keyring")]
         return crate::chat_grant::fetch_native_grant(&crate::auth::api_base_url(), access_token);
+        #[cfg(not(feature = "keyring"))]
+        {
+            let _ = access_token;
+            Err(crate::chat_grant::FetchGrantError::Unavailable)
+        }
+    }
+
+    fn inspect_chat_session(
+        &self,
+        access_token: &str,
+    ) -> Result<String, crate::chat_grant::FetchGrantError> {
+        #[cfg(feature = "keyring")]
+        return crate::chat_grant_recovery::inspect_native_chat_session(access_token);
         #[cfg(not(feature = "keyring"))]
         {
             let _ = access_token;
@@ -173,9 +164,7 @@ pub fn pi_launch_config_for_executable(
             .env_remove
             .extend(LOCAL_MODE_ENV_REMOVE.iter().map(|name| (*name).to_owned()));
     } else {
-        config
-            .env
-            .insert("OPENAI_API_KEY".into(), grant.virtual_key.clone());
+        config.env_remove.push("OPENAI_API_KEY".into());
         config
             .env
             .insert("OPENAI_BASE_URL".into(), grant.gateway_url.clone());

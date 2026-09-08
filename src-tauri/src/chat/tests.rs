@@ -1317,6 +1317,7 @@ fn coordinator_sends_exact_ordered_images_and_preserves_text_only_prompt_shape()
             "token".into(),
             Some("owner".into()),
             ChatGrant {
+                native_access_token: None,
                 expires_at: None,
                 workspace: "workspace-a".into(),
                 gateway_url: "https://gateway.invalid".into(),
@@ -1494,6 +1495,7 @@ fn missing_oversized_and_ambiguous_images_fail_before_prompt_with_non_leaking_co
             "token".into(),
             Some("owner".into()),
             ChatGrant {
+                native_access_token: None,
                 expires_at: None,
                 workspace: "workspace-a".into(),
                 gateway_url: "https://gateway.invalid".into(),
@@ -1725,6 +1727,7 @@ fn resume_runtime_failure_leaves_the_existing_journal_event_for_event_unchanged(
             minimum_cacheable_prefix_characters: 8_192,
             receipt_url: "https://receipt.invalid".into(),
             expires_at: None,
+            native_access_token: None,
         },
         Arc::new(AtomicBool::new(false)),
         Arc::new(Mutex::new(None)),
@@ -1851,6 +1854,7 @@ fn resume_reopens_the_stub_session_and_completes_the_same_contiguous_run() {
             minimum_cacheable_prefix_characters: 8_192,
             receipt_url,
             expires_at: None,
+            native_access_token: None,
         },
         Arc::new(AtomicBool::new(false)),
         Arc::new(Mutex::new(None)),
@@ -2048,6 +2052,7 @@ fn resumed_run_answers_a_memory_search_and_ends_without_a_session() {
             subject: Some("owner".into()),
         },
         grant: ChatGrant {
+            native_access_token: None,
             expires_at: None,
             workspace: "workspace-a".into(),
             gateway_url: "https://gateway.invalid".into(),

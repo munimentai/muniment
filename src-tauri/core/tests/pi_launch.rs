@@ -42,6 +42,7 @@ fn grant() -> ChatGrant {
         virtual_key: "secret-key".into(),
         model: Some("model".into()),
         expires_at: None,
+        native_access_token: None,
         minimum_cacheable_prefix_characters: 8_192,
         receipt_url: "https://receipts.example.com".into(),
     }
@@ -143,6 +144,28 @@ fn rejects_a_candidate_launch_when_settings_cannot_be_saved() {
 }
 
 #[test]
+#[cfg(unix)]
+fn pinned_pi_cloud_wire_contract() {
+    let Ok(executable) = std::env::var("MUNIMENT_PI_WIRE_EXECUTABLE") else {
+        eprintln!("The wire test requires MUNIMENT_PI_WIRE_EXECUTABLE for Pi 0.73.1.");
+        return;
+    };
+    let output = std::process::Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/pi_cloud_wire.py"
+        ))
+        .arg(executable)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn rejects_a_missing_root() {
     let boundaries = Boundaries {
         session_root: Err(PiLaunchError::UnavailableSessionRoot),
@@ -193,10 +216,8 @@ fn appends_a_present_extension_file_and_environment() {
         extension: Some(extension.clone()),
     };
     let config = pi_launch_config_for_executable(&boundaries, "pi".into(), &grant(), None).unwrap();
-    assert_eq!(
-        config.env.get("OPENAI_API_KEY").map(String::as_str),
-        Some("secret-key")
-    );
+    assert!(!config.env.contains_key("OPENAI_API_KEY"));
+    assert!(!config.args.iter().any(|arg| arg.contains("secret-key")));
     assert_eq!(
         config.env.get("OPENAI_BASE_URL").map(String::as_str),
         Some("https://gateway.example.com")
@@ -220,7 +241,7 @@ fn appends_a_present_extension_file_and_environment() {
     let provider = fs::read_to_string(root.join("muniment-cloud-provider.mjs")).unwrap();
     assert!(provider.contains("pi.registerProvider('muniment'"));
     assert!(provider.contains("process.env.OPENAI_BASE_URL"));
-    assert!(provider.contains("apiKey: 'OPENAI_API_KEY'"));
+    assert!(provider.contains("apiKey: 'muniment-runtime-boundary'"));
     assert!(provider.contains("process.env.PI_DEFAULT_MODEL"));
     assert!(!provider.contains("secret-key"));
     fs::remove_dir_all(root).unwrap();

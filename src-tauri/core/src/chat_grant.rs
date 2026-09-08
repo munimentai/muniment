@@ -18,6 +18,7 @@ pub struct ChatGrant {
     pub virtual_key: String,
     pub model: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
+    pub native_access_token: Option<String>,
     pub minimum_cacheable_prefix_characters: usize,
     pub receipt_url: String,
 }
@@ -30,6 +31,7 @@ impl ChatGrant {
             virtual_key: String::new(),
             model: None,
             expires_at: None,
+            native_access_token: None,
             minimum_cacheable_prefix_characters: 8_192,
             receipt_url: String::new(),
         }
@@ -95,31 +97,7 @@ pub fn fetch_native_grant(
     issuer_base_url: &str,
     access_token: &str,
 ) -> Result<ChatGrant, FetchGrantError> {
-    use crate::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
-
-    let store = KeyringNativeCredentialStore::new();
-    let credentials = store
-        .load_credentials()
-        .map_err(|_| FetchGrantError::Unavailable)?
-        .filter(|credentials| credentials.tokens.access_token == access_token)
-        .ok_or(FetchGrantError::Unauthorized)?;
-    let grant = fetch_grant(
-        issuer_base_url,
-        access_token,
-        &credentials.installation.device_id.to_string(),
-    )?;
-    // Do not publish a key after sign-out or a concurrent native-session rotation.
-    if store
-        .load_credentials()
-        .map_err(|_| FetchGrantError::Unavailable)?
-        .is_none_or(|current| {
-            current.tokens.access_token != access_token
-                || current.installation.device_id != credentials.installation.device_id
-        })
-    {
-        return Err(FetchGrantError::Unauthorized);
-    }
-    Ok(grant)
+    crate::chat_grant_recovery::fetch_native(issuer_base_url, access_token)
 }
 
 pub fn fetch_grant(
@@ -135,31 +113,9 @@ pub fn fetch_grant(
     }
     // Each run requests a new key. Retry a stale issuance once, never reuse it.
     for attempt in 0..2 {
-        let response = ureq::AgentBuilder::new()
-            .redirects(0)
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .post(&format!(
-                "{}{GRANT_PATH}",
-                issuer_base_url.trim_end_matches('/')
-            ))
-            .set("Authorization", &format!("Bearer {access_token}"))
-            .send_json(serde_json::json!({"protocol": PROTOCOL}))
-            .map_err(|error| match error {
-                ureq::Error::Status(status, response) => grant_status_error(status, response),
-                ureq::Error::Transport(_) => FetchGrantError::Unavailable,
-            })?;
-        if response.status() != 201 {
-            return Err(FetchGrantError::InvalidResponse);
-        }
-        let envelope: GrantResponse = response
-            .into_json()
-            .map_err(|_| FetchGrantError::InvalidResponse)?;
-        let grant = parse_grant(envelope, issuer_base_url, expected_device_id)?;
-        if grant
-            .expires_at
-            .is_some_and(|expiry| expiry <= Utc::now() + chrono::Duration::seconds(30))
-        {
+        let grant = issue_grant(issuer_base_url, access_token, expected_device_id)
+            .map_err(|failure| failure.shell_error())?;
+        if grant.needs_renewal() {
             if attempt == 0 {
                 continue;
             }
@@ -168,6 +124,41 @@ pub fn fetch_grant(
         return Ok(grant);
     }
     unreachable!()
+}
+
+pub(crate) fn issue_grant(
+    issuer_base_url: &str,
+    access_token: &str,
+    expected_device_id: &str,
+) -> Result<ChatGrant, crate::chat_grant_recovery::GrantFailure> {
+    use crate::chat_grant_recovery::GrantFailure;
+    if !is_control_plane_endpoint(issuer_base_url) {
+        return Err(GrantFailure::Other(FetchGrantError::InvalidResponse));
+    }
+    if access_token.trim().is_empty() || expected_device_id.trim().is_empty() {
+        return Err(GrantFailure::SessionInvalid);
+    }
+    let response = ureq::AgentBuilder::new()
+        .redirects(0)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .post(&format!(
+            "{}{GRANT_PATH}",
+            issuer_base_url.trim_end_matches('/')
+        ))
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .send_json(serde_json::json!({"protocol": PROTOCOL}))
+        .map_err(|error| match error {
+            ureq::Error::Status(status, response) => grant_status_error(status, response),
+            ureq::Error::Transport(_) => GrantFailure::Other(FetchGrantError::Unavailable),
+        })?;
+    if response.status() != 201 {
+        return Err(GrantFailure::Other(FetchGrantError::InvalidResponse));
+    }
+    let envelope: GrantResponse = response
+        .into_json()
+        .map_err(|_| GrantFailure::Other(FetchGrantError::InvalidResponse))?;
+    parse_grant(envelope, issuer_base_url, expected_device_id).map_err(GrantFailure::Other)
 }
 
 fn parse_grant(
@@ -293,9 +284,14 @@ pub fn fetch_receipt(
         .map_err(|_| FetchReceiptError)
 }
 
-fn grant_status_error(status: u16, response: ureq::Response) -> FetchGrantError {
+fn grant_status_error(
+    status: u16,
+    response: ureq::Response,
+) -> crate::chat_grant_recovery::GrantFailure {
+    use crate::chat_grant_recovery::GrantFailure;
+    let invalid = GrantFailure::Other(FetchGrantError::InvalidResponse);
     if status >= 500 && status != 503 {
-        return FetchGrantError::Unavailable;
+        return GrantFailure::Other(FetchGrantError::Unavailable);
     }
     #[derive(Deserialize)]
     struct ErrorEnvelope {
@@ -315,7 +311,7 @@ fn grant_status_error(status: u16, response: ureq::Response) -> FetchGrantError 
         u64::deserialize(deserializer).map(Some)
     }
     let Ok(envelope) = response.into_json::<ErrorEnvelope>() else {
-        return FetchGrantError::InvalidResponse;
+        return invalid;
     };
     let error = envelope.error;
     if envelope.protocol != PROTOCOL
@@ -329,19 +325,20 @@ fn grant_status_error(status: u16, response: ureq::Response) -> FetchGrantError 
                 "rate_limited" | "temporarily_unavailable"
             ))
     {
-        return FetchGrantError::InvalidResponse;
+        return invalid;
     }
     match (status, error.code.as_str()) {
-        (401, "session_invalid") | (403, "device_removed" | "chat_not_entitled") => {
-            FetchGrantError::Unauthorized
-        }
-        (409, "entitlement_changed") | (503, "temporarily_unavailable") => {
-            FetchGrantError::Unavailable
+        (401, "session_invalid") => GrantFailure::SessionInvalid,
+        (403, "device_removed") => GrantFailure::DeviceRemoved,
+        (403, "chat_not_entitled") => GrantFailure::NotEntitled,
+        (409, "entitlement_changed") => GrantFailure::EntitlementChanged,
+        (503, "temporarily_unavailable") => {
+            GrantFailure::Wait(error.retry_after_seconds.unwrap_or(1))
         }
         (429, "rate_limited") if error.retry_after_seconds.is_some() => {
-            FetchGrantError::Unavailable
+            GrantFailure::Wait(error.retry_after_seconds.unwrap())
         }
-        _ => FetchGrantError::InvalidResponse,
+        _ => invalid,
     }
 }
 
@@ -542,15 +539,210 @@ mod tests {
             let body = json!({"protocol": PROTOCOL, "error": {"code": code, "message": "Denied."}});
             let response = ureq::Response::new(status, "Error", &body.to_string()).unwrap();
             assert_eq!(
-                grant_status_error(status, response),
+                grant_status_error(status, response).shell_error(),
                 FetchGrantError::Unauthorized
             );
         }
         let response = ureq::Response::new(500, "Error", "").unwrap();
         assert_eq!(
-            grant_status_error(500, response),
+            grant_status_error(500, response).shell_error(),
             FetchGrantError::Unavailable
         );
+    }
+
+    struct RecoveryProbe {
+        base: String,
+        token: String,
+        actions: Vec<String>,
+        refresh_fails: bool,
+        inspection_failures: std::collections::VecDeque<crate::chat_grant_recovery::GrantFailure>,
+    }
+
+    impl crate::chat_grant_recovery::GrantRecovery for RecoveryProbe {
+        fn issue(&mut self) -> Result<ChatGrant, crate::chat_grant_recovery::GrantFailure> {
+            self.actions.push("issue".into());
+            issue_grant(&self.base, &self.token, "dev_desktop_1")
+        }
+        fn refresh(&mut self) -> Result<(), FetchGrantError> {
+            self.actions.push("refresh".into());
+            if self.refresh_fails {
+                return Err(FetchGrantError::Unauthorized);
+            }
+            self.token = "refreshed-token".into();
+            Ok(())
+        }
+        fn inspect(&mut self) -> Result<(), crate::chat_grant_recovery::GrantFailure> {
+            self.actions.push("inspect".into());
+            self.inspection_failures.pop_front().map_or(Ok(()), Err)
+        }
+        fn clear(&mut self, installation: bool) -> Result<(), FetchGrantError> {
+            self.actions.push(
+                if installation {
+                    "clear-installation"
+                } else {
+                    "clear-session"
+                }
+                .into(),
+            );
+            Ok(())
+        }
+        fn wait(&mut self, seconds: u64, retry: bool) -> Result<(), FetchGrantError> {
+            self.actions.push(format!("wait:{seconds}:{retry}"));
+            if retry && seconds <= 30 {
+                Ok(())
+            } else {
+                Err(FetchGrantError::Unavailable)
+            }
+        }
+    }
+
+    fn issuance_failure(status: u16, code: &str, wait: Option<u64>) -> (u16, String) {
+        let mut body = json!({"protocol": PROTOCOL, "error": {"code": code, "message": "The request failed."}});
+        if let Some(wait) = wait {
+            body["error"]["retry_after_seconds"] = json!(wait);
+        }
+        (status, body.to_string())
+    }
+
+    #[test]
+    fn issuance_recovers_before_shell_mapping() {
+        use crate::chat_grant_recovery::recover_grant;
+        for (status, code, wait, actions, succeeds) in [
+            (400, "invalid_request", None, vec!["issue"], false),
+            (
+                401,
+                "session_invalid",
+                None,
+                vec!["issue", "refresh", "issue"],
+                true,
+            ),
+            (
+                403,
+                "device_removed",
+                None,
+                vec!["issue", "clear-installation"],
+                false,
+            ),
+            (403, "chat_not_entitled", None, vec!["issue"], false),
+            (
+                409,
+                "entitlement_changed",
+                None,
+                vec!["issue", "inspect", "issue"],
+                true,
+            ),
+            (
+                429,
+                "rate_limited",
+                Some(5),
+                vec!["issue", "wait:5:true", "issue"],
+                true,
+            ),
+            (
+                503,
+                "temporarily_unavailable",
+                None,
+                vec!["issue", "wait:1:true", "issue"],
+                true,
+            ),
+            (
+                503,
+                "temporarily_unavailable",
+                Some(7),
+                vec!["issue", "wait:7:true", "issue"],
+                true,
+            ),
+            (
+                429,
+                "rate_limited",
+                Some(31),
+                vec!["issue", "wait:31:true"],
+                false,
+            ),
+        ] {
+            let mut responses = vec![issuance_failure(status, code, wait)];
+            if succeeds {
+                responses.push((201, current_response().to_string()));
+            }
+            let (base, stub) = serve(responses);
+            let mut probe = RecoveryProbe {
+                base,
+                token: "initial-token".into(),
+                actions: Vec::new(),
+                refresh_fails: false,
+                inspection_failures: Default::default(),
+            };
+            assert_eq!(recover_grant(&mut probe).is_ok(), succeeds, "{code}");
+            assert_eq!(probe.actions, actions, "{code}");
+            let requests = stub.join().unwrap();
+            if code == "session_invalid" {
+                assert!(requests[1].contains("Bearer refreshed-token"));
+            }
+            for request in requests {
+                assert_eq!(
+                    serde_json::from_str::<Value>(request_body(&request)).unwrap(),
+                    json!({"protocol": PROTOCOL})
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn issuance_limits_refresh_inspection_and_backoff() {
+        use crate::chat_grant_recovery::{recover_grant, GrantFailure};
+        for (responses, refresh_fails, inspections, expected) in [
+            (
+                vec![issuance_failure(401, "session_invalid", None)],
+                true,
+                vec![],
+                vec!["issue", "refresh", "clear-session"],
+            ),
+            (
+                vec![issuance_failure(401, "session_invalid", None); 2],
+                false,
+                vec![],
+                vec!["issue", "refresh", "issue", "clear-session"],
+            ),
+            (
+                vec![issuance_failure(409, "entitlement_changed", None); 2],
+                false,
+                vec![],
+                vec!["issue", "inspect", "issue"],
+            ),
+            (
+                vec![
+                    issuance_failure(429, "rate_limited", Some(5)),
+                    issuance_failure(429, "rate_limited", Some(8)),
+                ],
+                false,
+                vec![],
+                vec!["issue", "wait:5:true", "issue", "wait:8:false"],
+            ),
+            (
+                vec![issuance_failure(409, "entitlement_changed", None)],
+                false,
+                vec![GrantFailure::SessionInvalid; 2],
+                vec!["issue", "inspect", "refresh", "inspect", "clear-session"],
+            ),
+            (
+                vec![issuance_failure(409, "entitlement_changed", None)],
+                false,
+                vec![GrantFailure::DeviceRemoved],
+                vec!["issue", "inspect", "clear-installation"],
+            ),
+        ] {
+            let (base, stub) = serve(responses);
+            let mut probe = RecoveryProbe {
+                base,
+                token: "token".into(),
+                actions: Vec::new(),
+                refresh_fails,
+                inspection_failures: inspections.into(),
+            };
+            assert!(recover_grant(&mut probe).is_err());
+            assert_eq!(probe.actions, expected);
+            stub.join().unwrap();
+        }
     }
 
     #[test]
@@ -589,7 +781,7 @@ mod tests {
         ] {
             let response = ureq::Response::new(429, "Error", &body.to_string()).unwrap();
             assert_eq!(
-                grant_status_error(429, response),
+                grant_status_error(429, response).shell_error(),
                 FetchGrantError::InvalidResponse
             );
         }
