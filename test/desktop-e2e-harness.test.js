@@ -3,6 +3,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const root = process.cwd()
 const temporary = []
@@ -186,6 +187,43 @@ describe('WDIO Tauri driver contract', () => {
     }
   }, 15_000)
 
+  it.skipIf(process.platform === 'win32')('Keeps distinct captures after two failed spec runs.', () => {
+    const directory = temp()
+    const capture = path.join(directory, 'capture.mjs')
+    fs.writeFileSync(capture, `
+import fs from 'node:fs/promises'
+import { config } from ${JSON.stringify(pathToFileURL(path.join(root, 'test/e2e/wdio.conf.js')).href)}
+const spec = process.argv[2]
+globalThis.browser = {
+  getPageSource: async () => '<main>' + spec + ' failed after Send</main>',
+  saveScreenshot: async (destination) => fs.copyFile(process.argv[3], destination),
+}
+config.before({}, [spec])
+await config.afterTest({}, {}, { passed: false })
+`)
+    const screenshot = path.join(directory, 'fixture.png')
+    fs.writeFileSync(screenshot, Buffer.from(fs.readFileSync(path.join(root, 'test/e2e/fixtures/image-token.png.base64'), 'utf8'), 'base64'))
+    for (const spec of ['local-mode-chat', 'real-sign-in']) {
+      const result = spawnSync(process.execPath, [capture, `test/e2e/specs/${spec}.spec.js`, screenshot], {
+        encoding: 'utf8', timeout: 10_000,
+        env: { ...process.env, MUNIMENT_E2E_APP_BINARY: path.join(directory, 'app'), MUNIMENT_E2E_RAW_DIR: directory },
+      })
+      expect(result.status, result.stderr).toBe(0)
+    }
+    for (const spec of ['local-mode-chat', 'real-sign-in']) {
+      expect(fs.readFileSync(path.join(directory, `page-source-${spec}.html`), 'utf8'))
+        .toBe(`<main>test/e2e/specs/${spec}.spec.js failed after Send</main>`)
+      expect(fs.readFileSync(path.join(directory, `screenshot-${spec}.png`))).toEqual(fs.readFileSync(screenshot))
+    }
+    expect(fs.existsSync(path.join(directory, 'page-source-installed.html'))).toBe(false)
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+    const index = runner.slice(runner.indexOf('index_failure_artifacts()'), runner.indexOf('\ncollect_local_mode_pi_log()'))
+    const result = spawnSync('bash', ['-c', `raw=$1\n${index}\nindex_failure_artifacts`, 'bash', directory], { encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(directory, 'failure-artifacts.log'), 'utf8').trim().split('\n').map((file) => path.basename(file)).sort())
+      .toEqual(['page-source-local-mode-chat.html', 'page-source-real-sign-in.html', 'screenshot-local-mode-chat.png', 'screenshot-real-sign-in.png'])
+  })
+
   it('loads the installed ESM entry with compatible transitive named exports', async () => {
     await expect(import('@wdio/tauri-service')).resolves.toBeDefined()
   }, 15_000)
@@ -273,6 +311,8 @@ dbus-run-session() {
   fi
   printf 'session: %s\\n' "$spec" >>"$cleanup_log"
   touch "$raw/xdg-desktop-portal.log" "$raw/driver-app.log"
+  mkdir -p "$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions"
+  printf '{"message":{"provider":"ollama","stopReason":"error","errorMessage":"%s provider failed"}}\\n' "$spec" >"$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions/session.jsonl"
   for key in app desktop runtime driver wdio; do touch "$process_root/$key"; done
   [[ $spec != "$FAILED_SPEC" ]]
 }
@@ -282,8 +322,60 @@ ${sequence}
       encoding: 'utf8', timeout: 10_000,
       env: { ...process.env, FAILED_SPEC: failedSpec, STOP_MODE: stopMode, MUNIMENT_E2E_FINALIZER_TEST_MODE: '0' },
     })
-    return { result, log: fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8') }
+    return { result, directory, log: fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8') }
   }
+
+  it('Keeps the local mode Pi log before sign-in replaces the session log.', () => {
+    const { result, directory, log } = runSequence('local-mode-chat')
+    expect(result.status, result.stderr).toBe(1)
+    const piLog = fs.readFileSync(path.join(directory, 'pi-local-mode-chat.log'), 'utf8')
+    expect(piLog).toContain('local-mode-chat provider failed')
+    expect(piLog).not.toContain('real-sign-in provider failed')
+    expect(piLog).not.toContain('onboarding provider failed')
+    expect(log).toContain('The runner saved pi-local-mode-chat.log.')
+    expect(log.indexOf('The runner saved')).toBeLessThan(log.indexOf('session: real-sign-in'))
+    const safe = path.join(directory, 'safe')
+    expect(runNode('test/e2e/support/redact.mjs', [directory, safe]).status).toBe(0)
+    expect(fs.readFileSync(path.join(safe, 'pi-local-mode-chat.log'), 'utf8')).toBe(piLog)
+  })
+
+  it.each(['missing', 'empty', 'multiple', 'copy-failure'])('Collects Pi log evidence with %s session state.', (state) => {
+    const directory = temp()
+    const data = path.join(directory, 'data')
+    const sessions = path.join(data, 'ai.muniment.desktop/pi-sessions')
+    if (state !== 'missing') fs.mkdirSync(sessions, { recursive: true })
+    if (state === 'multiple' || state === 'copy-failure') {
+      fs.writeFileSync(path.join(sessions, 'first.jsonl'), '{"errorMessage":"provider failed with fixture-secret"}\n')
+      fs.writeFileSync(path.join(sessions, 'second.jsonl'), '{"stopReason":"stop"}\n')
+      fs.writeFileSync(path.join(sessions, 'auth.json'), 'Do not collect credentials.')
+      fs.symlinkSync(path.join(sessions, 'auth.json'), path.join(sessions, 'linked.jsonl'))
+    }
+    const collector = runner.slice(runner.indexOf('collect_local_mode_pi_log()'), runner.indexOf('\n# shellcheck source=../support/runner-failure.sh'))
+    const result = spawnSync('bash', ['-c', `set -uo pipefail
+raw=$1
+XDG_DATA_HOME=$2
+cleanup_log="$raw/cleanup.log"
+${collector}
+${state === 'copy-failure' ? 'cat() { return 1; }' : ''}
+collect_local_mode_pi_log`, 'bash', directory, data], { encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(state === 'copy-failure' ? 1 : 0)
+    if (state === 'copy-failure') return
+    const safe = path.join(directory, 'safe')
+    const redaction = runNode('test/e2e/support/redact.mjs', [directory, safe], {
+      env: { ...process.env, MUNIMENT_E2E_PASSWORD: 'fixture-secret' },
+    })
+    expect(redaction.status, redaction.stderr).toBe(0)
+    const piLog = fs.readFileSync(path.join(safe, 'pi-local-mode-chat.log'), 'utf8')
+    if (state === 'multiple') {
+      expect(piLog).toContain('provider failed with [REDACTED]')
+      expect(piLog).toContain('"stopReason":"stop"')
+      expect(piLog).not.toContain('fixture-secret')
+      expect(piLog).not.toContain('credentials')
+      expect(piLog).not.toContain('linked.jsonl')
+    } else {
+      expect(piLog).toBe('No Pi session log exists for the local mode run.\n')
+    }
+  })
 
   it.each(['', 'local-mode-chat', 'real-sign-in'])('Stops all spec processes before the next spec after failure "%s".', (failedSpec) => {
     const { result, log } = runSequence(failedSpec)

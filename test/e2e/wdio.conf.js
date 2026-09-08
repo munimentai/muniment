@@ -4,7 +4,7 @@ import path from 'node:path'
 const appBinary = process.env.MUNIMENT_E2E_APP_BINARY
 const artifactDir = process.env.MUNIMENT_E2E_RAW_DIR
 const reportName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? 'onboarding' : null
-const specName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? 'onboarding' : 'installed'
+let specName = 'unknown'
 
 if (!appBinary || !path.isAbsolute(appBinary)) throw new Error('MUNIMENT_E2E_APP_BINARY must be an absolute path')
 if (!artifactDir || !path.isAbsolute(artifactDir)) throw new Error('MUNIMENT_E2E_RAW_DIR must be an absolute path')
@@ -48,6 +48,9 @@ export const config = {
       ? ['./specs/onboarding.spec.js']
       : ['./specs/local-mode-chat.spec.js', './specs/real-sign-in.spec.js'],
   bail: 0,
+  before: (_capabilities, specs) => {
+    specName = path.basename(specs[0], '.spec.js').replace(/[^A-Za-z0-9._-]/g, '_')
+  },
   maxInstances: 1,
   capabilities: [{ browserName: 'tauri' }],
   logLevel: 'info',

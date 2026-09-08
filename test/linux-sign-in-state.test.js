@@ -11,7 +11,7 @@ afterEach(() => {
 
 describe.skipIf(process.platform === 'win32')('Linux sign-in state cleanup', () => {
   const runner = fs.readFileSync('test/e2e/runner/linux.sh', 'utf8')
-  const phases = runner.slice(runner.indexOf('\nready=1\n'))
+  const phases = runner.slice(runner.indexOf('collect_local_mode_pi_log()'), runner.indexOf('\n# shellcheck source=../support/runner-failure.sh')) + runner.slice(runner.indexOf('\nready=1\n'))
 
   it.each(['absent', 'stale', 'failed-chat', 'cleanup-error'])('handles a %s marker before sign-in', (scenario) => {
     const state = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-sign-in-state-'))
@@ -20,6 +20,7 @@ describe.skipIf(process.platform === 'win32')('Linux sign-in state cleanup', () 
       set -uo pipefail
       state_root=$1
       raw=$1
+      cleanup_log="$raw/cleanup.log"
       scenario=$2
       status=0
       trap 'exit "$status"' EXIT
