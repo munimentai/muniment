@@ -144,6 +144,7 @@ export default function (pi) {
         gateway_url: "http://127.0.0.1:1".into(),
         virtual_key: "test-key".into(),
         model: None,
+        expires_at: None,
         minimum_cacheable_prefix_characters: 8192,
         receipt_url: "http://127.0.0.1:1".into(),
     };

@@ -64,9 +64,28 @@ pub fn fixture_grant() -> ChatGrant {
         gateway_url: "https://gateway.example.com".into(),
         virtual_key: "virtual-key".into(),
         model: None,
+        expires_at: None,
         minimum_cacheable_prefix_characters: 8_192,
         receipt_url: "https://receipts.example.com".into(),
     }
+}
+
+pub fn grant_body() -> String {
+    serde_json::json!({
+        "protocol": "muniment.desktop-access/1",
+        "chat_grant": {
+            "grant_id": "grant-1",
+            "gateway_url": "https://gateway.example.com",
+            "virtual_key": "key",
+            "allowed_models": ["muniment-stub-chat"],
+            "issued_at": chrono::Utc::now(),
+            "expires_at": chrono::Utc::now() + chrono::Duration::minutes(14),
+            "native_session_id": "session-1",
+            "device_id": credentials().installation.device_id,
+            "entitlement_version": 42
+        }
+    })
+    .to_string()
 }
 
 pub fn spawn_server(status: u16, body: String) -> (String, thread::JoinHandle<String>) {
@@ -127,9 +146,20 @@ pub fn read_request(stream: &mut TcpStream) -> String {
     loop {
         let mut buffer = [0; 1024];
         let read = stream.read(&mut buffer).unwrap();
+        assert_ne!(read, 0, "the client sends the complete request");
         bytes.extend_from_slice(&buffer[..read]);
-        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
+        if let Some(head_length) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&bytes[..head_length]).to_ascii_lowercase();
+            let length: usize = head
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("content-length:")
+                        .map(|value| value.trim().parse().unwrap())
+                })
+                .unwrap_or(0);
+            if bytes.len() >= head_length + 4 + length {
+                break;
+            }
         }
     }
     String::from_utf8(bytes).unwrap()

@@ -214,7 +214,7 @@ pub fn coordinate(
     prompt: String,
     access_token: String,
     subject: Option<String>,
-    grant: ChatGrant,
+    mut grant: ChatGrant,
     cancelled: Arc<AtomicBool>,
     active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
     active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
@@ -297,6 +297,32 @@ pub fn coordinate(
     // active session into this prompt.
     *runtime = None;
     let startup_timeout = {
+        if let Err(error) = crate::chat_grant::renew_grant_if_needed(&mut grant, || {
+            app.renew_chat_grant(&access_token)
+        }) {
+            let message = match error {
+                crate::chat_grant::FetchGrantError::Unauthorized => {
+                    "The capability is not authorized."
+                }
+                crate::chat_grant::FetchGrantError::Unavailable => {
+                    "Chat configuration is temporarily unavailable."
+                }
+                crate::chat_grant::FetchGrantError::InvalidResponse => {
+                    "The chat configuration response was invalid."
+                }
+            };
+            fail_start(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                message,
+                subject.as_deref(),
+                resume.is_some(),
+            );
+            return;
+        }
         let root = std::env::var("MUNIMENT_PI_ROOT").ok();
         let config = pi_launch_config(
             &app,

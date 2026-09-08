@@ -41,6 +41,7 @@ fn grant() -> ChatGrant {
         gateway_url: "https://gateway.example.com".into(),
         virtual_key: "secret-key".into(),
         model: Some("model".into()),
+        expires_at: None,
         minimum_cacheable_prefix_characters: 8_192,
         receipt_url: "https://receipts.example.com".into(),
     }
@@ -208,6 +209,20 @@ fn appends_a_present_extension_file_and_environment() {
         .args
         .windows(2)
         .any(|args| args == ["--extension", extension.to_string_lossy().as_ref()]));
+    assert!(config
+        .args
+        .windows(2)
+        .any(|args| args == ["--provider", "muniment"]));
+    assert!(config
+        .args
+        .windows(2)
+        .any(|args| args == ["--model", "model"]));
+    let provider = fs::read_to_string(root.join("muniment-cloud-provider.mjs")).unwrap();
+    assert!(provider.contains("pi.registerProvider('muniment'"));
+    assert!(provider.contains("process.env.OPENAI_BASE_URL"));
+    assert!(provider.contains("apiKey: 'OPENAI_API_KEY'"));
+    assert!(provider.contains("process.env.PI_DEFAULT_MODEL"));
+    assert!(!provider.contains("secret-key"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -356,6 +371,19 @@ fn omits_an_absent_extension_file() {
         extension: Some(root.join("missing.js")),
     };
     let config = pi_launch_config_for_executable(&boundaries, "pi".into(), &grant(), None).unwrap();
-    assert!(!config.args.iter().any(|arg| arg == "--extension"));
+    let extensions: Vec<_> = config
+        .args
+        .windows(2)
+        .filter(|args| args[0] == "--extension")
+        .map(|args| args[1].as_str())
+        .collect();
+    assert_eq!(
+        extensions,
+        [root.join("muniment-cloud-provider.mjs").to_str().unwrap()]
+    );
+    let local =
+        pi_launch_config_for_executable(&boundaries, "pi".into(), &ChatGrant::local(), None)
+            .unwrap();
+    assert!(!local.args.iter().any(|arg| arg == "--extension"));
     fs::remove_dir_all(root).unwrap();
 }

@@ -4,6 +4,30 @@ use crate::chat_grant::ChatGrant;
 use crate::sidecar::pi_install::{resolve_current_for, PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 use crate::sidecar::{pi_sidecar_config, PiSessionLocator, SidecarConfig};
 
+const CLOUD_PROVIDER_EXTENSION: &str = r#"export default function (pi) {
+  pi.registerProvider('muniment', {
+    baseUrl: process.env.OPENAI_BASE_URL,
+    apiKey: 'OPENAI_API_KEY',
+    api: 'openai-completions',
+    models: [{
+      id: process.env.PI_DEFAULT_MODEL,
+      name: process.env.PI_DEFAULT_MODEL,
+      reasoning: false,
+      input: ['text', 'image'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+      compat: {
+        supportsDeveloperRole: false,
+        supportsStore: false,
+        supportsUsageInStreaming: false,
+        maxTokensField: 'max_tokens'
+      }
+    }]
+  })
+}
+"#;
+
 const BASH_TIMEOUT_INSTRUCTIONS: &str =
     "- `bash` reads its `timeout` in SECONDS, never milliseconds, and applies
   NO timeout at all when you omit it. Pass one on every call: 60 for a
@@ -59,6 +83,19 @@ const LOCAL_MODE_ENV_REMOVE: &[&str] = &[
 ];
 
 pub trait PiLaunchBoundaries {
+    fn renew_chat_grant(
+        &self,
+        access_token: &str,
+    ) -> Result<ChatGrant, crate::chat_grant::FetchGrantError> {
+        #[cfg(feature = "keyring")]
+        return crate::chat_grant::fetch_native_grant(&crate::auth::api_base_url(), access_token);
+        #[cfg(not(feature = "keyring"))]
+        {
+            let _ = access_token;
+            Err(crate::chat_grant::FetchGrantError::Unavailable)
+        }
+    }
+
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError>;
     fn memory_agent_extension_path(&self) -> Option<PathBuf>;
     fn prepare_pi_settings(
@@ -80,6 +117,23 @@ pub enum PiLaunchError {
     UnresolvableExecutable,
     UnavailableSessionRoot,
     RejectedConfig,
+}
+
+fn install_cloud_provider(path: &Path) -> Result<(), PiLaunchError> {
+    use std::io::Write;
+    let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(CLOUD_PROVIDER_EXTENSION.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, path)
+    })();
+    let _ = std::fs::remove_file(&temporary);
+    result.map_err(|_| PiLaunchError::RejectedConfig)
 }
 
 pub fn pi_launch_config(
@@ -127,6 +181,17 @@ pub fn pi_launch_config_for_executable(
             .insert("OPENAI_BASE_URL".into(), grant.gateway_url.clone());
         if let Some(model) = &grant.model {
             config.env.insert("PI_DEFAULT_MODEL".into(), model.clone());
+            // Register the cloud alias without storing its key in Pi settings.
+            let extension = session_root.join("muniment-cloud-provider.mjs");
+            install_cloud_provider(&extension)?;
+            config.args.extend([
+                "--extension".into(),
+                extension.to_string_lossy().into_owned(),
+                "--provider".into(),
+                "muniment".into(),
+                "--model".into(),
+                model.clone(),
+            ]);
         }
     }
     if let Some(extension) = boundaries

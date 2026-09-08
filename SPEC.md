@@ -60,8 +60,8 @@ written as public.
 **muniment-cloud.** Sign-in gates cloud features only. Cloud-backed use passes
 short-lived session tokens and the user's gateway virtual endpoint.
 The desktop sends no classification metadata. The cloud classifies every
-request at ingress. Two desktop requests reach the cloud directly: the grant request with
-no body, and the receipt request with the run id alone. The relay is one
+request at ingress. The desktop posts the protocol alone to `/v1/chat/grants`.
+The receipt request carries the run id alone. The relay is one
 outbound HTTPS leg from the runtime to MUNICLOUD, direct-first with relay
 fallback, end-to-end encrypted, and it needs a free MUNICLOUD account.
 
