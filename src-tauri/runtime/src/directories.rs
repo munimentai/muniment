@@ -11,6 +11,14 @@ pub fn installed_desktop_executable_from(runtime_executable: &Path) -> Option<Pa
     }
 
     let resource_directory = runtime_executable.parent()?;
+    if resource_directory.ends_with("Contents/Library/LaunchServices") {
+        return Some(
+            resource_directory
+                .parent()?
+                .parent()?
+                .join("MacOS/muniment-desktop"),
+        );
+    }
     if resource_directory.file_name() != Some(OsStr::new("muniment")) {
         return None;
     }

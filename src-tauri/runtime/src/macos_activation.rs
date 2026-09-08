@@ -11,6 +11,9 @@ pub const MACOS_UNIFIED_LOG_CATEGORY: &str = "runtime";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosDiagnosticEvent {
     ActivationFailed,
+    DesktopExecutableCheckFailed,
+    SocketBindFailed,
+    StateOpenFailed,
     ArgumentsInvalid,
     InstanceLockWait,
     StartRecordFailed,
@@ -22,6 +25,15 @@ impl MacosDiagnosticEvent {
         match self {
             Self::ActivationFailed => {
                 b"event=activation_failed message=runtime activation failed\n"
+            }
+            Self::DesktopExecutableCheckFailed => {
+                b"event=activation_failed step=desktop_executable_check message=runtime desktop executable check failed\n"
+            }
+            Self::SocketBindFailed => {
+                b"event=activation_failed step=socket_bind message=runtime socket bind failed\n"
+            }
+            Self::StateOpenFailed => {
+                b"event=activation_failed step=state_open message=runtime state open failed\n"
             }
             Self::ArgumentsInvalid => {
                 b"event=arguments_invalid message=runtime arguments invalid\n"

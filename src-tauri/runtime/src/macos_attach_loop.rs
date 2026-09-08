@@ -35,6 +35,22 @@ const MACOS_ATTACH_SOCKET: &str = "attach-v1.sock";
 pub enum MacosAttachBindFailure {
     Contended,
     Unavailable,
+    DesktopExecutableCheckFailed,
+    StateOpenFailed,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl MacosAttachBindFailure {
+    fn diagnostic_event(self) -> crate::MacosDiagnosticEvent {
+        match self {
+            Self::Contended => crate::MacosDiagnosticEvent::InstanceLockWait,
+            Self::Unavailable => crate::MacosDiagnosticEvent::SocketBindFailed,
+            Self::DesktopExecutableCheckFailed => {
+                crate::MacosDiagnosticEvent::DesktopExecutableCheckFailed
+            }
+            Self::StateOpenFailed => crate::MacosDiagnosticEvent::StateOpenFailed,
+        }
+    }
 }
 
 /// Returns the attach socket path for a profile.
@@ -92,7 +108,7 @@ impl<B> MacosAttachAcceptorWithBoundary<B> {
             .map_err(|error| classify_bind_failure(&error))?;
         let state = Arc::new(
             RuntimeAttachState::open(profile_directory, config_directory)
-                .map_err(|_| MacosAttachBindFailure::Unavailable)?,
+                .map_err(|_| MacosAttachBindFailure::StateOpenFailed)?,
         );
         Ok(Self { boundary, state })
     }
@@ -147,9 +163,21 @@ impl WindowsAttachFactory for SystemMacosAttachFactory {
 
     fn bind(&self) -> Result<Self::Acceptor, WindowsAttachBindFailure> {
         MacosAttachAcceptor::bind(&self.profile_directory, &self.config_directory).map_err(
-            |error| match error {
-                MacosAttachBindFailure::Contended => WindowsAttachBindFailure::Contended,
-                MacosAttachBindFailure::Unavailable => WindowsAttachBindFailure::Unavailable,
+            |error| {
+                let event = error.diagnostic_event();
+                if let Ok(directory) = crate::effective_user_macos_log_directory() {
+                    let _ = crate::write_macos_diagnostic(directory, event);
+                } else {
+                    crate::emit_macos_unified_log(event);
+                }
+                match error {
+                    MacosAttachBindFailure::Contended => WindowsAttachBindFailure::Contended,
+                    MacosAttachBindFailure::Unavailable
+                    | MacosAttachBindFailure::DesktopExecutableCheckFailed
+                    | MacosAttachBindFailure::StateOpenFailed => {
+                        WindowsAttachBindFailure::Unavailable
+                    }
+                }
             },
         )
     }
@@ -171,8 +199,8 @@ impl MacosAttachAcceptorWithBoundary<SystemMacosAttachBoundary> {
         profile_directory: impl AsRef<Path>,
         config_directory: impl AsRef<Path>,
     ) -> Result<Self, MacosAttachBindFailure> {
-        let expected_desktop_executable =
-            installed_desktop_executable().ok_or(MacosAttachBindFailure::Unavailable)?;
+        let expected_desktop_executable = installed_desktop_executable()
+            .ok_or(MacosAttachBindFailure::DesktopExecutableCheckFailed)?;
         Self::bind_with(profile_directory, config_directory, move |path| {
             let listener = MacosAttachListener::bind(path)?;
             let stop = Arc::new(MacosAttachStopEvent::new()?);
@@ -265,6 +293,32 @@ mod tests {
             macos_attach_socket_path(Path::new("/profiles/current")),
             Path::new("/profiles/current/muniment/attach-v1.sock")
         );
+    }
+
+    #[test]
+    fn names_each_activation_failure_step() {
+        use crate::MacosDiagnosticEvent;
+
+        for (failure, event) in [
+            (
+                MacosAttachBindFailure::DesktopExecutableCheckFailed,
+                MacosDiagnosticEvent::DesktopExecutableCheckFailed,
+            ),
+            (
+                MacosAttachBindFailure::Unavailable,
+                MacosDiagnosticEvent::SocketBindFailed,
+            ),
+            (
+                MacosAttachBindFailure::StateOpenFailed,
+                MacosDiagnosticEvent::StateOpenFailed,
+            ),
+            (
+                MacosAttachBindFailure::Contended,
+                MacosDiagnosticEvent::InstanceLockWait,
+            ),
+        ] {
+            assert_eq!(failure.diagnostic_event(), event);
+        }
     }
 
     #[test]

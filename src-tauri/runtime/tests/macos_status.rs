@@ -226,6 +226,15 @@ fn expected_unified_message(event: MacosDiagnosticEvent) -> &'static str {
         MacosDiagnosticEvent::ActivationFailed => {
             "event=activation_failed message=runtime activation failed"
         }
+        MacosDiagnosticEvent::DesktopExecutableCheckFailed => {
+            "event=activation_failed step=desktop_executable_check message=runtime desktop executable check failed"
+        }
+        MacosDiagnosticEvent::SocketBindFailed => {
+            "event=activation_failed step=socket_bind message=runtime socket bind failed"
+        }
+        MacosDiagnosticEvent::StateOpenFailed => {
+            "event=activation_failed step=state_open message=runtime state open failed"
+        }
         MacosDiagnosticEvent::ArgumentsInvalid => {
             "event=arguments_invalid message=runtime arguments invalid"
         }
@@ -241,9 +250,12 @@ fn expected_unified_message(event: MacosDiagnosticEvent) -> &'static str {
     }
 }
 
-fn diagnostic_events() -> [MacosDiagnosticEvent; 5] {
+fn diagnostic_events() -> [MacosDiagnosticEvent; 8] {
     [
         MacosDiagnosticEvent::ActivationFailed,
+        MacosDiagnosticEvent::DesktopExecutableCheckFailed,
+        MacosDiagnosticEvent::SocketBindFailed,
+        MacosDiagnosticEvent::StateOpenFailed,
         MacosDiagnosticEvent::ArgumentsInvalid,
         MacosDiagnosticEvent::InstanceLockWait,
         MacosDiagnosticEvent::StartRecordFailed,
