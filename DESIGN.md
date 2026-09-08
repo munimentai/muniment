@@ -100,6 +100,7 @@ An error that rejects one item from a set names that item.
 A surface that renders model or user text wraps an unbreakable string.
 A control renders as a control at rest.
 A control presents a hit area of at least 24 by 24 CSS pixels.
+The first-run setup shows `Step N of 4` as a mono eyebrow above its title. A scan row reads `Name: N files` in mono with a checkbox at rest.
 
 Remote control: [docs/design-reference/remote-control-ux.md](docs/design-reference/remote-control-ux.md)
 records the desktop session UX reference that mobile drives.
