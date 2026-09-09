@@ -5,7 +5,7 @@ import { MILLED_RING_PATH, ringPath, solidMilledRingPath } from './mark.js'
 describe('ringPath', () => {
   it('returns the canonical vendored geometry', () => {
     expect(ringPath()).toBe(MILLED_RING_PATH)
-    expect(ringPath()).toMatch(/^M40\.50,24\.00 .+ L40\.50,24\.00 Z$/)
+    expect(ringPath()).toMatch(/^M44\.20,24\.00 .+ L44\.20,24\.00 Z$/)
   })
 
   it('preserves all owner-supplied vertices', () => {
@@ -32,10 +32,10 @@ describe('solidMilledRingPath', () => {
     const edges = solidMilledRingPath().split(' Z').slice(0, 2).map(coordinates)
     const radii = edges.map((points) => points.map(([x, y]) => Math.hypot(x - 24, y - 24)))
 
-    expect(Math.min(...radii[0])).toBeCloseTo(17.4, 2)
-    expect(Math.max(...radii[0])).toBeCloseTo(20.6, 2)
-    expect(Math.min(...radii[1])).toBeCloseTo(12.4, 2)
-    expect(Math.max(...radii[1])).toBeCloseTo(15.6, 2)
+    expect(Math.min(...radii[0])).toBeCloseTo(21.55, 2)
+    expect(Math.max(...radii[0])).toBeCloseTo(23.85, 2)
+    expect(Math.min(...radii[1])).toBeCloseTo(16.55, 2)
+    expect(Math.max(...radii[1])).toBeCloseTo(18.85, 2)
   })
 
   it('preserves all 22 milling teeth on each edge', () => {
