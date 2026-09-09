@@ -111,7 +111,8 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
         "1",
     )
     .unwrap();
-    let descriptor = stage_pi_stub(&profile.root);
+    let descriptor = stage_pi_stub(&profile.profile);
+    std::env::remove_var("MUNIMENT_PI_ROOT");
     let prompt_capture = profile.root.join("prompt.txt");
     std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_capture);
     std::env::set_var("PI_RESUME_STUB_TOOL_EVENTS", "1");
@@ -530,13 +531,18 @@ fn runtime_service_broadcasts_a_driven_prompts_chat_events() {
     let base_url = format!("http://{}", server.local_addr().unwrap());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let responses = std::thread::spawn(move || {
-        serve_grants(server, 1);
+        serve_grants(server.try_clone().unwrap(), 1);
+        let (mut stream, _) = server.accept().unwrap();
+        let request = read_request(&mut stream);
+        assert!(request.starts_with("POST /v1/chat/receipts "), "{request}");
+        let body = r#"{"route":"test","model":"muniment-stub-chat"}"#;
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
     });
 
     let profile = TemporaryProfile::new("run-chat-events", true);
-    stage_pi_stub(&profile.root);
+    let descriptor = stage_pi_stub(&profile.root);
     let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
-    let boundaries = state.boundaries();
+    let boundaries = state.boundaries().with_pi_artifact(descriptor);
     let mut subscription_service = state.attach_service().unwrap();
     let events = subscription_service.subscribe_chat_events().unwrap();
     let mut second_subscription_service = state.attach_service().unwrap();
@@ -567,6 +573,7 @@ fn runtime_service_broadcasts_a_driven_prompts_chat_events() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(!boundaries.active_run_exists());
+    assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| event.phase == "complete"));
 
     responses.join().unwrap();
     store.clear_session().unwrap();

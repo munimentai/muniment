@@ -62,7 +62,7 @@ use muniment_core::run_start::{
 };
 use muniment_core::run_start::{ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch};
 use muniment_core::session_thread::SessionThread;
-use muniment_core::sidecar::pi_install::PiArtifactDescriptor;
+use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 
 use crate::service::{self, ConfigureRunError};
 #[cfg(any(unix, target_os = "windows"))]
@@ -468,6 +468,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         let memory_runtime = Arc::clone(&self.memory_runtime);
         let active = Arc::clone(&self.active);
         let chat_events = self.chat_events.clone();
+        let pi_artifact = self.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT);
         std::thread::spawn(move || {
             muniment_core::chat_coordinate::coordinate(
                 RuntimeChatEventSink::new(
@@ -476,7 +477,8 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                     Arc::clone(&memory_runtime),
                     thread_id,
                     launch.grant.workspace.clone(),
-                ),
+                )
+                .with_pi_artifact(pi_artifact),
                 storage,
                 runtime,
                 runtime_activity,
