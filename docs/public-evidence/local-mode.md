@@ -21,10 +21,21 @@ The runtime log records run lifecycle outcomes and Pi's stderr tail for failed r
 On macOS, the bundled runtime resolves the desktop executable at `Contents/MacOS/muniment-desktop` from `Contents/Library/LaunchServices/muniment-runtime`.
 Attach setup failures record `step=desktop_executable_check`, `step=socket_bind`, or `step=state_open` in `~/Library/Logs/Muniment/runtime.log` and the unified log.
 
+The desktop attempts registration once when macOS reports the runtime service as `NotFound` or `NotRegistered`.
+Registration failures record the native error domain, code, and description in `runtime.log`.
+The macOS evidence envelope includes `runtime.log` and `runtime-launchctl.log`.
+The runner captures these logs before cleanup stops the runtime.
+
 Read the macOS runtime log:
 
 ```sh
 cat ~/Library/Logs/Muniment/runtime.log
+```
+
+Inspect the runtime agent:
+
+```sh
+launchctl print "gui/$(id -u)/ai.muniment.runtime"
 ```
 
 ## Cloud sign-in

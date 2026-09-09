@@ -87,6 +87,9 @@ enum RegistrationError {
 trait RuntimeServiceAdapter {
     fn status(&self) -> Result<ServiceStatus, ()>;
     fn register(&self) -> Result<(), RegistrationError>;
+    fn registration_diagnostic_written(&self) -> bool {
+        false
+    }
 }
 
 trait RuntimeStartAdapter {
@@ -113,7 +116,7 @@ fn request_enabled_runtime_start(
 
 fn activate_runtime_service(adapter: &impl RuntimeServiceAdapter) -> RuntimeServiceActivation {
     match adapter.status() {
-        Ok(ServiceStatus::NotRegistered) => {
+        Ok(ServiceStatus::NotRegistered | ServiceStatus::NotFound) => {
             let registration = adapter.register();
             let rechecked_status = adapter.status();
             if registration == Err(RegistrationError::Denied) {
@@ -128,16 +131,35 @@ fn activate_runtime_service(adapter: &impl RuntimeServiceAdapter) -> RuntimeServ
     }
 }
 
+fn activate_and_diagnose_runtime_service(
+    adapter: &impl RuntimeServiceAdapter,
+    log_directory: Option<&Path>,
+) -> RuntimeServiceActivation {
+    let activation = activate_runtime_service(adapter);
+    // A second failure record can rotate the log and erase the native error.
+    if !adapter.registration_diagnostic_written() {
+        if let Some(log_directory) = log_directory {
+            let _ = write_activation_diagnostic(log_directory, activation);
+        }
+    }
+    activation
+}
+
 #[cfg(target_os = "macos")]
 fn activate_runtime_service_at_startup(
     adapter: &impl RuntimeServiceAdapter,
+    log_directory: Option<&Path>,
 ) -> Option<RuntimeServiceActivation> {
-    Some(activate_runtime_service(adapter))
+    Some(activate_and_diagnose_runtime_service(
+        adapter,
+        log_directory,
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]
 fn activate_runtime_service_at_startup(
     _adapter: &impl RuntimeServiceAdapter,
+    _log_directory: Option<&Path>,
 ) -> Option<RuntimeServiceActivation> {
     None
 }
@@ -174,6 +196,31 @@ fn write_activation_diagnostic(
     )
 }
 
+fn write_registration_diagnostic(
+    log_directory: &Path,
+    domain: &str,
+    code: isize,
+    description: &str,
+) -> io::Result<()> {
+    // Bound each field before JSON escaping to keep the record below the log cap.
+    let bounded_domain: String = domain.chars().take(4096).collect();
+    let bounded_description: String = description.chars().take(4096).collect();
+    let truncated =
+        bounded_domain.len() != domain.len() || bounded_description.len() != description.len();
+    // JSON strings keep native error text on one line without dumping userInfo.
+    let record = format!(
+        "event=runtime_service_registration_failed domain={} code={code} truncated={truncated} description={}\n",
+        serde_json::to_string(&bounded_domain)?,
+        serde_json::to_string(&bounded_description)?,
+    );
+    muniment_core::user_diagnostics::append_owner_only_record(
+        log_directory,
+        c"runtime.log",
+        MACOS_RUNTIME_LOG_MAX_BYTES,
+        record.as_bytes(),
+    )
+}
+
 fn write_start_diagnostic(log_directory: &Path, outcome: RuntimeStartOutcome) -> io::Result<()> {
     if !matches!(
         outcome,
@@ -191,11 +238,15 @@ fn write_start_diagnostic(log_directory: &Path, outcome: RuntimeStartOutcome) ->
 
 #[cfg(target_os = "macos")]
 pub(crate) fn activate_bundled_runtime_service() -> RuntimeServiceActivation {
-    let activation = activate_runtime_service_at_startup(&MacosRuntimeServiceAdapter::new())
-        .expect("macOS startup activates the runtime service");
-    if let Ok(home) = muniment_core::user_diagnostics::effective_user_home() {
-        let log_directory = home.join("Library/Logs/Muniment");
-        let _ = write_activation_diagnostic(&log_directory, activation);
+    let log_directory = muniment_core::user_diagnostics::effective_user_home()
+        .ok()
+        .map(|home| home.join("Library/Logs/Muniment"));
+    let activation = activate_runtime_service_at_startup(
+        &MacosRuntimeServiceAdapter::new(),
+        log_directory.as_deref(),
+    )
+    .expect("macOS startup activates the runtime service");
+    if let Some(log_directory) = log_directory {
         if let Ok(profile_directory) = muniment_runtime::profile_directory() {
             let start_adapter = MacosRuntimeStartAdapter::new(profile_directory);
             let outcome = request_enabled_runtime_start(activation, &start_adapter);
@@ -249,6 +300,7 @@ impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
 #[cfg(target_os = "macos")]
 struct MacosRuntimeServiceAdapter {
     service: objc2::rc::Retained<objc2_service_management::SMAppService>,
+    registration_diagnostic_written: std::cell::Cell<bool>,
 }
 
 #[cfg(target_os = "macos")]
@@ -261,6 +313,7 @@ impl MacosRuntimeServiceAdapter {
         Self {
             // SAFETY: The plist name is a valid NSString and names a bundled LaunchAgent.
             service: unsafe { SMAppService::agentServiceWithPlistName(&plist) },
+            registration_diagnostic_written: std::cell::Cell::new(false),
         }
     }
 }
@@ -283,14 +336,30 @@ impl RuntimeServiceAdapter for MacosRuntimeServiceAdapter {
     fn register(&self) -> Result<(), RegistrationError> {
         use objc2_service_management::kSMErrorLaunchDeniedByUser;
 
+        self.registration_diagnostic_written.set(false);
         // SAFETY: The service comes from agentServiceWithPlistName and remains retained.
         unsafe { self.service.registerAndReturnError() }.map_err(|error| {
+            if let Ok(home) = muniment_core::user_diagnostics::effective_user_home() {
+                self.registration_diagnostic_written.set(
+                    write_registration_diagnostic(
+                        &home.join("Library/Logs/Muniment"),
+                        &error.domain().to_string(),
+                        error.code(),
+                        &error.localizedDescription().to_string(),
+                    )
+                    .is_ok(),
+                );
+            }
             if error.code() == kSMErrorLaunchDeniedByUser as isize {
                 RegistrationError::Denied
             } else {
                 RegistrationError::Failed
             }
         })
+    }
+
+    fn registration_diagnostic_written(&self) -> bool {
+        self.registration_diagnostic_written.get()
     }
 }
 
@@ -309,6 +378,8 @@ mod tests {
         registration: Result<(), RegistrationError>,
         status_calls: Cell<usize>,
         registration_calls: Cell<usize>,
+        diagnostic_directory: Option<PathBuf>,
+        diagnostic_written: Cell<bool>,
     }
 
     struct FakeStartAdapter {
@@ -351,6 +422,8 @@ mod tests {
                 registration,
                 status_calls: Cell::new(0),
                 registration_calls: Cell::new(0),
+                diagnostic_directory: None,
+                diagnostic_written: Cell::new(false),
             }
         }
     }
@@ -364,7 +437,25 @@ mod tests {
         fn register(&self) -> Result<(), RegistrationError> {
             self.registration_calls
                 .set(self.registration_calls.get() + 1);
+            self.diagnostic_written.set(false);
+            if self.registration.is_err() {
+                if let Some(directory) = &self.diagnostic_directory {
+                    self.diagnostic_written.set(
+                        write_registration_diagnostic(
+                            directory,
+                            "SMAppServiceErrorDomain",
+                            -108,
+                            "The plist is invalid.",
+                        )
+                        .is_ok(),
+                    );
+                }
+            }
             self.registration
+        }
+
+        fn registration_diagnostic_written(&self) -> bool {
+            self.diagnostic_written.get()
         }
     }
 
@@ -385,7 +476,6 @@ mod tests {
                 ServiceStatus::RequiresApproval,
                 RuntimeServiceActivation::RequiresApproval,
             ),
-            (ServiceStatus::NotFound, RuntimeServiceActivation::NotFound),
         ] {
             let adapter = FakeAdapter::new([Ok(status)], Ok(()));
             assert_eq!(activate_runtime_service(&adapter), expected);
@@ -499,6 +589,56 @@ mod tests {
     }
 
     #[test]
+    fn registers_not_found_once_and_maps_the_rechecked_status() {
+        for (status, expected) in [
+            (
+                Ok(ServiceStatus::Enabled),
+                RuntimeServiceActivation::Enabled,
+            ),
+            (
+                Ok(ServiceStatus::RequiresApproval),
+                RuntimeServiceActivation::RequiresApproval,
+            ),
+            (
+                Ok(ServiceStatus::NotFound),
+                RuntimeServiceActivation::NotFound,
+            ),
+            (
+                Ok(ServiceStatus::NotRegistered),
+                RuntimeServiceActivation::Failed,
+            ),
+            (Err(()), RuntimeServiceActivation::Failed),
+        ] {
+            let adapter = FakeAdapter::new([Ok(ServiceStatus::NotFound), status], Ok(()));
+            assert_eq!(activate_runtime_service(&adapter), expected);
+            assert_eq!(adapter.registration_calls.get(), 1);
+            assert_eq!(adapter.status_calls.get(), 2);
+        }
+    }
+
+    #[test]
+    fn not_found_registration_errors_override_the_rechecked_status() {
+        for (error, expected) in [
+            (
+                RegistrationError::Denied,
+                RuntimeServiceActivation::RequiresApproval,
+            ),
+            (RegistrationError::Failed, RuntimeServiceActivation::Failed),
+        ] {
+            for status in [
+                Ok(ServiceStatus::Enabled),
+                Ok(ServiceStatus::NotFound),
+                Err(()),
+            ] {
+                let adapter = FakeAdapter::new([Ok(ServiceStatus::NotFound), status], Err(error));
+                assert_eq!(activate_runtime_service(&adapter), expected);
+                assert_eq!(adapter.registration_calls.get(), 1);
+                assert_eq!(adapter.status_calls.get(), 2);
+            }
+        }
+    }
+
+    #[test]
     fn registration_denial_requires_approval_and_still_rechecks() {
         let adapter = FakeAdapter::new(
             [
@@ -606,6 +746,135 @@ mod tests {
     }
 
     #[test]
+    fn registration_diagnostic_keeps_native_fields_in_one_owner_only_record() {
+        let root = directory();
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let logs = root.join("logs");
+        let description = "The plist \"ai.muniment.runtime\" is invalid.\nCheck BundleProgram.\r\t";
+        write_registration_diagnostic(&logs, "SMAppServiceErrorDomain", -108, description).unwrap();
+        let record = fs::read_to_string(logs.join("runtime.log")).unwrap();
+        assert_eq!(record.lines().count(), 1);
+        assert!(record.starts_with(
+            "event=runtime_service_registration_failed domain=\"SMAppServiceErrorDomain\" code=-108 truncated=false description="
+        ));
+        let (_, encoded) = record.split_once(" description=").unwrap();
+        assert_eq!(
+            serde_json::from_str::<String>(encoded).unwrap(),
+            description
+        );
+        assert_eq!(
+            fs::metadata(logs.join("runtime.log"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        fs::write(
+            logs.join("runtime.log"),
+            vec![b'x'; MACOS_RUNTIME_LOG_MAX_BYTES as usize],
+        )
+        .unwrap();
+        write_registration_diagnostic(&logs, "", 0, "").unwrap();
+        assert_eq!(fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            "event=runtime_service_registration_failed domain=\"\" code=0 truncated=false description=\"\"\n");
+
+        fs::write(logs.join("runtime.log"), []).unwrap();
+        write_registration_diagnostic(&logs, &"\0".repeat(5000), isize::MAX, &"é\n".repeat(5000))
+            .unwrap();
+        let record = fs::read_to_string(logs.join("runtime.log")).unwrap();
+        assert!(record.len() < MACOS_RUNTIME_LOG_MAX_BYTES as usize);
+        assert_eq!(record.lines().count(), 1);
+        assert!(record.contains("truncated=true"));
+        let (_, encoded) = record.split_once(" description=").unwrap();
+        assert_eq!(
+            serde_json::from_str::<String>(encoded).unwrap(),
+            "é\n".repeat(2048)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_preserves_native_registration_error_at_the_log_limit() {
+        let root = directory();
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let logs = root.join("logs");
+        let log = logs.join("runtime.log");
+        let record = b"event=runtime_service_registration_failed domain=\"SMAppServiceErrorDomain\" code=-108 truncated=false description=\"The plist is invalid.\"\n";
+
+        for status in [ServiceStatus::NotFound, ServiceStatus::NotRegistered] {
+            for (error, expected) in [
+                (RegistrationError::Failed, RuntimeServiceActivation::Failed),
+                (
+                    RegistrationError::Denied,
+                    RuntimeServiceActivation::RequiresApproval,
+                ),
+            ] {
+                for remaining in [
+                    0,
+                    record.len() - 1,
+                    record.len(),
+                    record.len() + 1,
+                    record.len() + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len() - 1,
+                    record.len() + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len(),
+                    MACOS_RUNTIME_LOG_MAX_BYTES as usize,
+                ] {
+                    write_activation_diagnostic(&logs, RuntimeServiceActivation::Failed).unwrap();
+                    let prefix = vec![b'x'; MACOS_RUNTIME_LOG_MAX_BYTES as usize - remaining];
+                    fs::write(&log, &prefix).unwrap();
+                    let mut adapter =
+                        FakeAdapter::new([Ok(status), Ok(ServiceStatus::NotFound)], Err(error));
+                    adapter.diagnostic_directory = Some(logs.clone());
+                    assert_eq!(
+                        activate_and_diagnose_runtime_service(&adapter, Some(&logs)),
+                        expected
+                    );
+                    let start_adapter = FakeStartAdapter::new(Ok(false), Ok(()));
+                    let outcome = request_enabled_runtime_start(expected, &start_adapter);
+                    write_start_diagnostic(&logs, outcome).unwrap();
+                    assert_eq!(outcome, RuntimeStartOutcome::SkippedActivation);
+                    assert_eq!(adapter.registration_calls.get(), 1);
+                    assert_eq!(adapter.status_calls.get(), 2);
+                    assert!(adapter.registration_diagnostic_written());
+                    let expected_log = if remaining < record.len() {
+                        record.to_vec()
+                    } else {
+                        [prefix.as_slice(), record].concat()
+                    };
+                    assert_eq!(fs::read(&log).unwrap(), expected_log);
+                }
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_keeps_generic_diagnostic_when_native_diagnostic_fails() {
+        let root = directory();
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let logs = root.join("logs");
+        let mut adapter = FakeAdapter::new(
+            [Ok(ServiceStatus::NotFound), Ok(ServiceStatus::NotFound)],
+            Err(RegistrationError::Failed),
+        );
+        adapter.diagnostic_directory = Some(root.join("missing/logs"));
+        assert_eq!(
+            activate_and_diagnose_runtime_service(&adapter, Some(&logs)),
+            RuntimeServiceActivation::Failed
+        );
+        assert!(!adapter.registration_diagnostic_written());
+        assert_eq!(
+            fs::read(logs.join("runtime.log")).unwrap(),
+            RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn not_registered_after_registration_is_a_failure() {
         let adapter = FakeAdapter::new(
             [
@@ -626,7 +895,7 @@ mod tests {
     fn non_macos_startup_does_not_query_or_register() {
         let adapter = FakeAdapter::new([], Ok(()));
 
-        assert_eq!(activate_runtime_service_at_startup(&adapter), None);
+        assert_eq!(activate_runtime_service_at_startup(&adapter, None), None);
         assert_eq!(adapter.status_calls.get(), 0);
         assert_eq!(adapter.registration_calls.get(), 0);
     }
