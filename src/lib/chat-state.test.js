@@ -243,6 +243,12 @@ describe('chat composer and projection', () => {
     expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Done' }])[0].run.appliedDiffs).toEqual([])
   })
 
+  it('preserves Pi acquisition when history restores an active run', () => {
+    const messages = historyMessages([{ runId: 'r', phase: 'acquiring-pi', text: '' }])
+    expect(unsettledRun(messages).phase).toBe('acquiring-pi')
+    expect(runAnnouncement(messages[0].run)).toBe('Pi installation is in progress. The reply will start when Pi is ready.')
+  })
+
   it('announces one coarse in-progress state for a whole generation', () => {
     expect(runAnnouncement({ phase: 'thinking', text: '' })).toBe('Generating a reply.')
     expect(runAnnouncement({ phase: 'streaming', text: 'Half an ans' })).toBe('Generating a reply.')

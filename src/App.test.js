@@ -4144,6 +4144,22 @@ describe('thread announcements', () => {
     expect(region.textContent).toBe('')
   })
 
+  it('shows Pi acquisition before the first reply event', async () => {
+    signedIn([], { runId: 'run-9', attachments: [] })
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const progress = 'Pi installation is in progress. The reply will start when Pi is ready.'
+    chatListener({ payload: { runId: 'run-9', phase: 'acquiring-pi', text: '', toolActivity: [] } })
+    await waitFor(() => expect(document.querySelector('.response')).toHaveTextContent(progress))
+    expect(screen.getByTestId('run-announcement')).toHaveTextContent(progress)
+    expect(screen.queryByText('Reply failed.')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+    chatListener({ payload: { runId: 'run-9', phase: 'streaming', text: 'A reply', toolActivity: [] } })
+    await waitFor(() => expect(document.querySelector('.response')).toHaveTextContent('A reply'))
+    expect(document.querySelector('.response')).not.toHaveTextContent(progress)
+  })
+
   it('announces a permission pause during a streamed run', async () => {
     signedIn([], { runId: 'run-9', attachments: [] })
     const composer = await screen.findByPlaceholderText('Ask anything')

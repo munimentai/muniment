@@ -1155,7 +1155,9 @@
             {@const groupedTools = activity.filter((tool) => groupedIds.includes(tool.effectId))}
             {@const singleTools = activity.filter((tool) => !groupedIds.includes(tool.effectId))}
             <div class="response">
-              {#if message.run.phase === 'thinking'}
+              {#if message.run.phase === 'acquiring-pi'}
+                <p class="thinking">{runAnnouncement(message.run)}</p>
+              {:else if message.run.phase === 'thinking'}
                 <span class="thinking" out:thinkingSettle><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={thinkingMarkD} fill-rule="evenodd" /></svg><span>Routing</span></span>
               {:else if message.run.phase === 'streaming'}<p class="response-prose streaming" use:streamingUnderline={message.run.text}>{message.run.text}<span class="caret" aria-hidden="true"></span><span class="streaming-rule" aria-hidden="true"></span></p>
               {:else if ['complete', 'failed', 'interrupted', 'cancelled'].includes(message.run.phase)}<AssistantMarkdown text={message.run.text} />
