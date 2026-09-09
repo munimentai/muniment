@@ -13,7 +13,9 @@ state_root="$run_root/state"
 runtime_state=${MUNIMENT_E2E_RUNTIME_STATE:-"$HOME/.local/share/ai.muniment.desktop"}
 runtime_log="$HOME/Library/Logs/Muniment/runtime.log"
 cleanup_log="$run_root/cleanup.log"
-cleanup_status_ledger="$run_root/cleanup-status.log"
+cleanup_status_ledger=
+cleanup_status_entries=
+first_failed_step=none
 redaction_report="$run_root/redaction-failure.txt"
 window_probe="$run_root/window-count"
 installed_bundle=/Applications/muniment.app
@@ -101,9 +103,14 @@ index_failure_artifacts() {
 }
 
 finalize() {
+  local runner_status=$?
   (( finalized == 0 )) || return
   finalized=1
   trap - EXIT INT TERM
+  # The runner finishes its stderr log before redaction reads it.
+  exec 2>&3
+  if (( runner_status != 0 )); then status=1; fi
+  if (( status != 0 )); then first_failed_step=runner; fi
   if (( runtime_touched )); then
     cleanup_step collect-runtime-diagnostics collect_macos_runtime_diagnostics "gui/$(id -u)/ai.muniment.runtime" "$runtime_log" "$raw"
   fi
@@ -138,13 +145,12 @@ finalize() {
     if (( collection_status != 0 )); then cleanup_step suppress-artifacts rm -rf -- "$artifacts"; fi
   else
     cleanup_step suppress-artifacts rm -rf -- "$artifacts"
-    mkdir -p "$artifacts" || cleanup_status=1
-    printf 'envelope: minimal\nwithheld: guest artifacts\nreason: redaction-failed\n' >"$artifacts/envelope-reason.txt" || cleanup_status=1
-    cp -- "$cleanup_status_ledger" "$artifacts/cleanup-status.log" 2>/dev/null || : >"$artifacts/cleanup-status.log"
+    mkdir -p "$artifacts" || record_cleanup_status prepare-minimal-artifacts failed
+    printf 'envelope: minimal\nwithheld: guest artifacts\nreason: redaction-failed\n' >"$artifacts/envelope-reason.txt" || record_cleanup_status write-envelope-reason failed
     if [[ -s $redaction_report ]]; then
-      cp -- "$redaction_report" "$artifacts/redaction-failure.txt" || cleanup_status=1
+      cp -- "$redaction_report" "$artifacts/redaction-failure.txt" || record_cleanup_status write-redaction-report failed
     else
-      printf 'file: unknown\ncategory: redactor-process\n' >"$artifacts/redaction-failure.txt" || cleanup_status=1
+      printf 'file: unknown\ncategory: redactor-process\n' >"$artifacts/redaction-failure.txt" || record_cleanup_status write-redaction-report failed
     fi
   fi
   cleanup_step remove-safe rm -rf -- "$safe"
@@ -153,11 +159,24 @@ finalize() {
   cleanup_step expanded-gone cleanup_absent "$expanded"
   cleanup_step window-probe-gone cleanup_absent "$window_probe"
   cleanup_step safe-gone cleanup_absent "$safe"
-  cleanup_step remove-cleanup-log rm -f -- "$cleanup_log"
-  rm -f -- "$cleanup_status_ledger" "$redaction_report"
-  if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} != 1 && ${MUNIMENT_E2E_PAYLOAD_TEST_MODE:-0} != 1 ]]; then
-    rmdir "$run_root" 2>/dev/null || cleanup_status=1
+  cleanup_step remove-redaction-report rm -f -- "$redaction_report"
+  local log_to_remove=$cleanup_log
+  # Later steps must not recreate the log inside the run root.
+  cleanup_log=/dev/null
+  cleanup_step remove-cleanup-log rm -f -- "$log_to_remove"
+  cleanup_step remove-run-root rmdir "$run_root"
+
+  mkdir -p "$artifacts" || record_cleanup_status prepare-exit-diagnostics failed
+  if (( redaction_status != 0 || ${collection_status:-0} != 0 )); then
+    printf 'withheld: guest stderr\n' >"$artifacts/runner-stderr.log" || record_cleanup_status write-stderr-placeholder failed
   fi
+  # These files contain only runner-owned labels and statuses, never guest output.
+  printf '%s' "$cleanup_status_entries" >"$artifacts/cleanup-status.log" || record_cleanup_status write-cleanup-status failed
+  printf 'status=%s\ncleanup_status=%s\nredaction_status=%s\nfirst_failed_step=%s\n' \
+    "$status" "$cleanup_status" "$redaction_status" "$first_failed_step" >"$artifacts/exit-reason.txt" || {
+    record_cleanup_status write-exit-reason failed
+    printf '%s' "$cleanup_status_entries" >"$artifacts/cleanup-status.log"
+  }
   if (( status != 0 || cleanup_status != 0 || redaction_status != 0 )); then exit 1; fi
 }
 
@@ -166,10 +185,12 @@ handle_signal() {
   finalize
 }
 
+exec 3>&2
 trap finalize EXIT
 trap 'handle_signal' INT TERM
 mkdir -p "$raw" "$safe" "$expanded" "$state_root" || { status=1; exit; }
 : >"$cleanup_log" || { status=1; exit; }
+exec 2>>"$raw/runner-stderr.log" || { status=1; exit; }
 
 if [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE:-0} == 1 ]]; then
   installed=${MUNIMENT_E2E_FINALIZER_TEST_INSTALLED:-1}
