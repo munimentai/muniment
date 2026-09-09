@@ -200,7 +200,12 @@ function Assert-ProductRegistration([object[]]$Registrations, [object[]]$Machine
 }
 
 function Install-Product {
-  Save-RegistrationSnapshot "before" | Out-Null
+  $before = Save-RegistrationSnapshot "before"
+  $productCodes = [ordered]@{
+    hkcu = @($before.hkcu.entries | ForEach-Object { $_.PSChildName })
+    hklm = @($before.hklm.entries | ForEach-Object { $_.PSChildName })
+  } | ConvertTo-Json -Depth 3 -Compress
+  Write-Output "registration before install: hkcu=$($before.hkcu.count) hklm=$($before.hklm.count) productCodes=$productCodes"
   $msiLog = Join-Path $runRoot "msi-verbose.log"
   $script:installAttempted = $true
   try {

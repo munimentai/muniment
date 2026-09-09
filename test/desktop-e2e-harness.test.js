@@ -1211,7 +1211,9 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
 
   it('Saves registration snapshots and an MSI log before the registration check.', () => {
     const install = runner.slice(runner.indexOf('function Install-Product'), runner.indexOf('function Get-HarnessProcesses'))
-    expect(install.indexOf('Save-RegistrationSnapshot "before"')).toBeLessThan(install.indexOf('Invoke-BoundedProcess'))
+    expect(install.indexOf('Save-RegistrationSnapshot "before"')).toBeLessThan(install.indexOf('Write-Output "registration before install:'))
+    expect(install.indexOf('Write-Output "registration before install:')).toBeGreaterThan(-1)
+    expect(install.indexOf('Write-Output "registration before install:')).toBeLessThan(install.indexOf('Invoke-BoundedProcess'))
     expect(install).toContain('/qn /norestart /L*V `"$msiLog`"')
     expect(install).toContain('(Join-Path $raw "installer-process.log")')
     expect(install).toMatch(/finally \{[\s\S]+Get-Content -LiteralPath \$msiLog -Raw[\s\S]+Set-Content -LiteralPath \(Join-Path \$raw "msi-verbose.log"\) -Encoding UTF8[\s\S]+Add-Content -LiteralPath \$installerLog -Encoding UTF8[\s\S]+Save-RegistrationSnapshot "after"/)
@@ -1292,6 +1294,15 @@ function Get-ItemProperty { param($Path, $ErrorAction) return [pscustomobject]@{
     const detail = `hkcu=${hkcu} hklm=${hklm} entries=${JSON.stringify(entries)}`
     const message = `per-user MSI registration requires hkcu=1 hklm=0: ${detail}`
     expect(result.status, result.stdout + result.stderr).toBe(1)
+    const productCodes = {
+      hkcu: registrations.map((entry) => entry.PSChildName),
+      hklm: machineRegistrations.map((entry) => entry.PSChildName),
+    }
+    const before = `registration before install: hkcu=${hkcu} hklm=${hklm} productCodes=${JSON.stringify(productCodes)}`
+    expect(result.stdout.split(/\r?\n/)).toContain(before)
+    const transcript = result.stdout.slice(result.stdout.indexOf('dci: Windows runner transcript tail'))
+    expect(transcript.split(/\r?\n/)).toContain(before)
+    expect(result.stdout.indexOf(before)).toBeLessThan(result.stdout.indexOf(`per-user MSI registration: ${detail}`))
     expect(result.stdout).toContain(`per-user MSI registration: ${detail}`)
     expect(result.stdout).toContain(message)
     expect(fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')).toContain(`message: ${message}`)
@@ -1326,6 +1337,7 @@ function Get-ItemProperty { param($Path, $ErrorAction) return [pscustomobject]@{
     const { fixture } = registrationFixture(1, 0)
     const { result, artifacts } = runWindowsFinalizer('', '', { MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE: fixture })
     expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout.split(/\r?\n/)).toContain('registration before install: hkcu=1 hklm=0 productCodes={"hkcu":["HKCU-product-0"],"hklm":[]}')
     expect(result.stdout).toContain('per-user MSI registration: hkcu=1 hklm=0 entries={"hkcu":[{"DisplayName":"muniment","PSChildName":"HKCU-product-0"')
     expect(fs.existsSync(path.join(artifacts, 'runner-failure.txt'))).toBe(false)
   })

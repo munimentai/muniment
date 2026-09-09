@@ -23,19 +23,42 @@ $uninstallRoots = @(
   "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
   "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
 )
-function Get-MunimentRegistrations {
-  return @($uninstallRoots | ForEach-Object {
-    Get-ChildItem $_ | Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -eq "muniment" }
-  })
+function Get-UninstallEntries([ValidateSet("HKCU", "HKLM")][string]$Hive = "HKCU") {
+  $roots = @(
+    "$Hive`:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+    "$Hive`:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+  )
+  return @($roots | Where-Object { Test-Path $_ } | ForEach-Object { Get-ChildItem $_ | ForEach-Object {
+    $properties = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+    if ($properties) {
+      $displayName = $properties.PSObject.Properties["DisplayName"]
+      [pscustomobject]@{ PSChildName = $_.PSChildName; PSPath = $_.PSPath; DisplayName = $(if ($displayName) { $displayName.Value } else { $null }) }
+    }
+  } })
+}
+
+function Get-MunimentRegistrations([ValidateSet("HKCU", "HKLM")][string]$Hive = "HKLM") {
+  return @(Get-UninstallEntries $Hive | Where-Object { $_.DisplayName -eq "muniment" })
+}
+
+function Assert-MunimentRegistrations([int]$UserCount, [int]$MachineCount, [string]$Description) {
+  $userRegistrations = @(Get-MunimentRegistrations "HKCU")
+  $machineRegistrations = @(Get-MunimentRegistrations "HKLM")
+  $entries = [ordered]@{ hkcu = $userRegistrations; hklm = $machineRegistrations } | ConvertTo-Json -Depth 4 -Compress
+  Write-Host "$Description`: hkcu=$($userRegistrations.Count) hklm=$($machineRegistrations.Count) entries=$entries"
+  if ($userRegistrations.Count -ne $UserCount -or $machineRegistrations.Count -ne $MachineCount) {
+    throw "$Description requires hkcu=$UserCount hklm=$MachineCount."
+  }
 }
 
 Invoke-Msi "/i" $upgradeBaseMsi "Silent base MSI install"
-$baseRegistration = Get-MunimentRegistrations
+# PowerShell 5.1 gives a single PSCustomObject no Count property. Keep the results as arrays.
+$baseRegistration = @(Get-MunimentRegistrations)
 if ($baseRegistration.Count -ne 1) { throw "Base MSI is not registered exactly once under HKLM uninstall registration" }
 $oldProductCode = $baseRegistration[0].PSChildName
 
 Invoke-Msi "/i" $machineMsi.FullName "Silent MSI in-place upgrade"
-$newRegistration = Get-MunimentRegistrations
+$newRegistration = @(Get-MunimentRegistrations)
 if ($newRegistration.Count -ne 1) { throw "Upgraded MSI is not registered exactly once under HKLM uninstall registration" }
 $newProductCode = $newRegistration[0].PSChildName
 if ($oldProductCode -eq $newProductCode) {
@@ -57,7 +80,7 @@ if (Test-Path "HKCU:\Software\Muniment\muniment") {
 
 Invoke-Msi "/x" $machineMsi.FullName "Silent MSI uninstall"
 if (Test-Path $machineKey) { throw "Machine registration remains after MSI uninstall" }
-if ((Get-MunimentRegistrations).Count -ne 0) {
+if (@(Get-MunimentRegistrations).Count -ne 0) {
   throw "Machine uninstall registration remains after MSI uninstall"
 }
 Remove-Item $upgradeBaseMsi -Force
@@ -74,8 +97,26 @@ $nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassTh
 if ($nsisUninstall.ExitCode -ne 0) { throw "Silent NSIS uninstall failed: $($nsisUninstall.ExitCode)" }
 if (Test-Path $userRuntime) { throw "NSIS runtime remains after uninstall at $userRuntime" }
 
-Invoke-Msi "/i" $regularMsi[0].FullName "Silent regular MSI install"
-if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
-Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
+Assert-MunimentRegistrations 0 0 "Registration before per-user MSI install"
+Invoke-Msi "/i" $regularMsi[0].FullName "Silent per-user MSI install"
+Assert-MunimentRegistrations 1 0 "Per-user MSI registration"
+$userKey = "HKCU:\Software\Muniment\muniment"
+$userInstallDir = Get-ItemPropertyValue $userKey InstallDir
+if ([string]::IsNullOrWhiteSpace($userInstallDir) -or -not [IO.Path]::IsPathRooted($userInstallDir)) {
+  throw "The per-user MSI did not register an absolute install directory."
+}
+$userInstallDir = [IO.Path]::GetFullPath($userInstallDir)
+$userProfile = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\') + '\'
+if (-not $userInstallDir.StartsWith($userProfile, [StringComparison]::OrdinalIgnoreCase)) {
+  throw "The per-user MSI install directory is outside the user profile: $userInstallDir"
+}
+if (-not (Test-Path $userRuntime)) { throw "The per-user MSI runtime is missing at $userRuntime" }
+if (-not (Test-Path -LiteralPath (Join-Path $userInstallDir "muniment-runtime.exe") -PathType Leaf)) {
+  throw "The per-user MSI runtime is missing from its registered install directory: $userInstallDir"
+}
+Invoke-Msi "/x" $regularMsi[0].FullName "Silent per-user MSI uninstall"
+Assert-MunimentRegistrations 0 0 "Registration after per-user MSI uninstall"
+if (Test-Path $userKey) { throw "The per-user MSI left its application registration after uninstall." }
+if (Test-Path $userRuntime) { throw "The per-user MSI left its runtime after uninstall: $userRuntime" }
 
 Write-Host "Windows silent installer verification OK"

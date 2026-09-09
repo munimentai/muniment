@@ -104,9 +104,60 @@ describe('Windows runtime bundle paths', () => {
   it('checks each installed runtime path', () => {
     expect(windowsInstallerTest).toContain('Join-Path $env:LOCALAPPDATA "muniment\\muniment-runtime.exe"')
     expect(windowsInstallerTest).toContain('throw "NSIS runtime not found at $userRuntime"')
-    expect(windowsInstallerTest).toContain('throw "Regular MSI runtime not found at $userRuntime"')
+    expect(windowsInstallerTest).toContain('throw "The per-user MSI runtime is missing at $userRuntime"')
     expect(windowsInstallerTest).toContain('Join-Path $env:ProgramFiles "muniment\\muniment-runtime.exe"')
     expect(windowsInstallerTest).toContain('throw "Machine MSI runtime not found at $machineRuntime"')
+  })
+
+  it('Reads the same uninstall roots and properties as the Windows e2e runner.', () => {
+    const windowsRunner = readFileSync('test/e2e/runner/windows.ps1', 'utf8')
+    const nativeReader = (script) => script.slice(script.indexOf('  $roots = @(', script.indexOf('function Get-UninstallEntries')))
+      .split('\n}\n')[0]
+    expect(nativeReader(windowsInstallerTest)).toContain('$properties.PSObject.Properties["DisplayName"]')
+    expect(nativeReader(windowsInstallerTest)).toBe(nativeReader(windowsRunner))
+    expect(windowsInstallerTest).toContain('Get-UninstallEntries $Hive | Where-Object { $_.DisplayName -eq "muniment" }')
+    expect(windowsInstallerTest).toContain('$userRegistrations = @(Get-MunimentRegistrations "HKCU")')
+    expect(windowsInstallerTest).toContain('$machineRegistrations = @(Get-MunimentRegistrations "HKLM")')
+    expect(windowsInstallerTest).toContain('$userRegistrations.Count -ne $UserCount -or $machineRegistrations.Count -ne $MachineCount')
+  })
+
+  it('Keeps registration counts valid for zero, one, and multiple products in PowerShell 5.1.', () => {
+    expect(windowsInstallerTest).toContain('$baseRegistration = @(Get-MunimentRegistrations)')
+    expect(windowsInstallerTest).toContain('$newRegistration = @(Get-MunimentRegistrations)')
+    expect(windowsInstallerTest).toContain('if (@(Get-MunimentRegistrations).Count -ne 0)')
+    expect(windowsInstallerTest).toContain('if ($baseRegistration.Count -ne 1) { throw')
+    expect(windowsInstallerTest).toContain('if ($newRegistration.Count -ne 1) { throw')
+  })
+
+  it('Checks both hives across the silent per-user MSI install and uninstall.', () => {
+    const steps = [
+      'Assert-MunimentRegistrations 0 0 "Registration before per-user MSI install"',
+      'Invoke-Msi "/i" $regularMsi[0].FullName "Silent per-user MSI install"',
+      'Assert-MunimentRegistrations 1 0 "Per-user MSI registration"',
+      '$userInstallDir = Get-ItemPropertyValue $userKey InstallDir',
+      'Invoke-Msi "/x" $regularMsi[0].FullName "Silent per-user MSI uninstall"',
+      'Assert-MunimentRegistrations 0 0 "Registration after per-user MSI uninstall"',
+    ]
+    let previous = -1
+    for (const step of steps) {
+      const index = windowsInstallerTest.indexOf(step)
+      expect(index, step).toBeGreaterThan(previous)
+      previous = index
+    }
+    expect(windowsInstallerTest).toContain('/qn /norestart')
+    expect(windowsInstallerTest).toContain('[string]::IsNullOrWhiteSpace($userInstallDir) -or -not [IO.Path]::IsPathRooted($userInstallDir)')
+    expect(windowsInstallerTest).toContain('$userInstallDir = [IO.Path]::GetFullPath($userInstallDir)')
+    expect(windowsInstallerTest).toContain("$userProfile = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\\') + '\\'")
+    expect(windowsInstallerTest).toContain('$userInstallDir.StartsWith($userProfile, [StringComparison]::OrdinalIgnoreCase)')
+    expect(windowsInstallerTest).toContain('Test-Path -LiteralPath (Join-Path $userInstallDir "muniment-runtime.exe") -PathType Leaf')
+    expect(windowsInstallerTest).toContain('if (Test-Path $userKey) { throw')
+    expect(windowsInstallerTest).toContain('if (Test-Path $userRuntime) { throw "The per-user MSI')
+  })
+
+  it('Runs the installer test in the Windows build jobs.', () => {
+    for (const workflow of [ci, readFileSync('.github/workflows/nightly.yml', 'utf8')]) {
+      expect(workflow).toContain('node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1')
+    }
   })
 
   it('builds and signs the runtime before the first installer pass', () => {
