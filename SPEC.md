@@ -96,12 +96,10 @@ checkable in the diff:
   never a cloud virtual key.
 - The runtime logs its startup and the desktop logs the native-auth call, so a
   silent auth path names its cause from an envelope.
-- After Pi readiness, each prompt has a 30-second first reply event bound.
-  A prompt acknowledgment or unrelated lifecycle frame does not satisfy the bound.
-  A timeout records a failed reply with its cause in the run journal and shell.
-  The runtime logs the run start, Pi spawn outcome, first reply event, provider
-  outcome, and failure stderr tail with the run id. The Linux envelope keeps
-  `pi-local-mode-stderr.log` beside `muniment-runtime.log`.
+- After Pi readiness each prompt has a 30-second bound to its first reply
+  event, and an acknowledgment does not satisfy it. A timeout records a failed
+  reply with its cause in the run journal and shell, and the runtime logs the
+  run start, Pi spawn, first reply, provider outcome and stderr tail by run id.
 - Pi sidecar parity with the factory harness, below.
 
 ## First run
@@ -127,12 +125,11 @@ and limits, shipped as a pinned snapshot and refreshed on a cache. The panel
 opens on featured tiles, Anthropic, OpenAI, Google, xAI, OpenRouter, Ollama,
 LM Studio and a custom endpoint, with a search over the rest. Most users
 connect one hosted provider with a key, and the panel is built for that
-first. A local server is a first-class citizen beside them, never a fallback:
-it connects in the same panel, appears in the same picker, and runs the same
-composer. Each provider offers an API key field, and a browser or device
-sign-in only where the provider permits it for third-party tools. The custom
-endpoint form takes a base URL, an optional key and a model list, and covers
-a LiteLLM proxy without a dedicated entry. The panel lists connected
+first. A local server is a first-class provider beside them, never a
+fallback: same panel, same picker, same composer. Each provider offers a key
+field, and a browser or device sign-in only where the provider permits it for
+third-party tools. The custom endpoint form takes a base URL, an optional key
+and a model list, and covers a LiteLLM proxy. The panel lists connected
 providers, each with its source tag, `Pi` for a key typed here,
 `Environment` for a catalog variable found at launch, `Local` for a server
 on this machine and `Custom` for an endpoint in `models.json`, and one
@@ -141,9 +138,8 @@ and orders rows by the user's last use, not by source.
 
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one
 control to change it. A configured Home keeps its path. The four folders are
-created on the first Send, the first moment they are needed. When one
-Obsidian vault holds most of the files the scan found, the chip offers that
-vault's parent and says why.
+created on the first Send. When one Obsidian vault holds most of the files
+the scan found, the chip offers that vault's parent and says why.
 
 **The scan chip.** It reads the scan's summary, `Claude Code: 12 files · Pi:
 3 files`, or `No assistant memory found`. Its panel lists one row per
@@ -160,8 +156,7 @@ panel. Imported text is untrusted data under
 The scan reads names, never file bodies. It walks only the user-level roots
 below, honors each root's environment override, stops at a depth of six, a
 two second budget per root and 20,000 files per root, and says when it hit a
-cap. It counts durable memory and instruction files only. Session
-transcripts, settings and credentials stay where they are, and the scan never
+cap. It counts durable memory and instruction files only. The scan never
 opens, counts or copies a file in the never column.
 
 | Assistant | Root and override | Counted | Never |
