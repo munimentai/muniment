@@ -684,6 +684,32 @@ describe.skipIf(process.platform === 'win32')('macOS installed launch harness', 
     return fixture.outcome(spawnSync('bash', [runnerPath], { encoding: 'utf8', env: fixture.env }))
   }
 
+  const runMacosEnvelope = (failed = '', extraEnv = {}) => {
+    const fixture = macosFixture(failed, { MUNIMENT_E2E_FINALIZER_TEST_EXECUTE: '1', ...extraEnv })
+    const setup = runner.slice(0, runner.indexOf('\nif [[ ${MUNIMENT_E2E_FINALIZER_TEST_MODE'))
+    const result = spawnSync('bash', ['-c', `${setup}
+# The fixture uses real files and replaces only macOS process probes.
+stop_app() { :; }
+stop_runtime() { :; }
+process_absent() { :; }
+runtime_process_absent() { :; }
+runtime_job_stopped() { :; }
+collect_macos_runtime_diagnostics() { :; }
+installed_bundle="$expanded/test.app"
+installed=1
+mkdir -p "$installed_bundle" "$artifacts"
+printf 'stale token=%s\\n' "$GH_TOKEN" >"$artifacts/stale.log"
+printf 'healthy first window was not visible\\n' >&2
+printf 'diagnostic token=%s\\n' "$GH_TOKEN" >&2
+if [[ \${FIXTURE_RUNNER_FAILURE:-0} == 1 ]]; then status=1; fi
+if [[ \${FIXTURE_LEFTOVER:-0} == 1 ]]; then touch "$run_root/leftover"; fi
+if [[ \${FIXTURE_REDACTION_FAILURE:-0} == 1 ]]; then printf '%s' "$GH_TOKEN" >"$raw/screenshot-fixture.png"; fi
+if [[ \${FIXTURE_UNEXPECTED_EXIT:-0} == 1 ]]; then exit 7; fi
+finalize
+`], { encoding: 'utf8', env: fixture.env })
+    return { ...fixture.outcome(result), directory: fixture.directory }
+  }
+
   const runMacosPayload = ({ runtime = 'ok', rpath = 'ok', agent = true, field = '', value = '' } = {}) => {
     const directory = temp(); const bundle = path.join(directory, 'muniment.app'); const artifacts = path.join(directory, 'artifacts')
     const runtimePath = path.join(bundle, 'Contents/Library/LaunchServices/muniment-runtime')
@@ -938,13 +964,79 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
     },
   )
 
+  it.each(['', 'remove-raw', 'remove-cleanup-log', 'remove-run-root', 'redact-artifacts', 'replace-artifacts', 'publish-artifacts'])(
+    'Publishes the full macOS exit diagnostics after %s.', (failed) => {
+      const secret = 'macos-stderr-secret'
+      const { result, artifacts, directory, invoked, statuses } = runMacosEnvelope(failed, { GH_TOKEN: secret })
+      expect(result.status, result.stderr).toBe(failed ? 1 : 0)
+      const ledger = fs.readFileSync(path.join(artifacts, 'cleanup-status.log'), 'utf8')
+      expect(ledger).toBe(invoked.map((label) => `${label}: ${statuses[label] === '0' ? 'ok' : 'failed'}\n`).join(''))
+      expect(ledger).toContain(`remove-run-root: ${statuses['remove-run-root'] === '0' ? 'ok' : 'failed'}\n`)
+      expect(invoked.at(-1)).toBe('remove-run-root')
+      expect(fs.readFileSync(path.join(artifacts, 'exit-reason.txt'), 'utf8')).toBe(
+        `status=0\ncleanup_status=${failed ? 1 : 0}\nredaction_status=${failed === 'redact-artifacts' ? 1 : 0}\nfirst_failed_step=${failed || 'none'}\n`,
+      )
+      const stderr = fs.readFileSync(path.join(artifacts, 'runner-stderr.log'), 'utf8')
+      if (['redact-artifacts', 'replace-artifacts', 'publish-artifacts'].includes(failed)) {
+        expect(stderr).toBe('withheld: guest stderr\n')
+      } else {
+        expect(stderr).toContain('healthy first window was not visible\n')
+        expect(stderr).toContain('diagnostic token=')
+      }
+      expect(fs.existsSync(path.join(artifacts, 'stale.log'))).toBe(false)
+      for (const file of fs.readdirSync(artifacts)) {
+        expect(fs.readFileSync(path.join(artifacts, file), 'utf8')).not.toContain(secret)
+      }
+      if (!failed) expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-e2e-macos.'))).toEqual([])
+    },
+  )
+
+  it('Publishes fixed diagnostics when the redactor rejects a screenshot.', () => {
+    const secret = 'macos-screenshot-secret'
+    const { result, artifacts } = runMacosEnvelope('', { GH_TOKEN: secret, FIXTURE_REDACTION_FAILURE: '1' })
+    expect(result.status).toBe(1)
+    expect(fs.readFileSync(path.join(artifacts, 'exit-reason.txt'), 'utf8')).toBe(
+      'status=0\ncleanup_status=1\nredaction_status=1\nfirst_failed_step=redact-artifacts\n',
+    )
+    expect(fs.readFileSync(path.join(artifacts, 'cleanup-status.log'), 'utf8')).toContain('remove-run-root: ok\n')
+    expect(fs.readFileSync(path.join(artifacts, 'runner-stderr.log'), 'utf8')).toBe('withheld: guest stderr\n')
+    expect(fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')).toContain('category: screenshot-format\n')
+    expect(fs.existsSync(path.join(artifacts, 'stale.log'))).toBe(false)
+    for (const file of fs.readdirSync(artifacts)) {
+      expect(fs.readFileSync(path.join(artifacts, file), 'utf8')).not.toContain(secret)
+    }
+  })
+
+  it('Names an unexpected runner exit.', () => {
+    const { result, artifacts } = runMacosEnvelope('', { GH_TOKEN: 'fixture-secret', FIXTURE_UNEXPECTED_EXIT: '1' })
+    expect(result.status).toBe(1)
+    expect(fs.readFileSync(path.join(artifacts, 'exit-reason.txt'), 'utf8')).toBe(
+      'status=1\ncleanup_status=0\nredaction_status=0\nfirst_failed_step=runner\n',
+    )
+  })
+
+  it('Names a real run-root removal failure.', () => {
+    const { result, artifacts } = runMacosEnvelope('', { GH_TOKEN: 'fixture-secret', FIXTURE_LEFTOVER: '1' })
+    expect(result.status).toBe(1)
+    expect(fs.readFileSync(path.join(artifacts, 'cleanup-status.log'), 'utf8')).toContain('remove-run-root: failed\n')
+    expect(fs.readFileSync(path.join(artifacts, 'exit-reason.txt'), 'utf8')).toContain('first_failed_step=remove-run-root\n')
+  })
+
+  it('Keeps the runner failure ahead of a cleanup failure.', () => {
+    const { result, artifacts } = runMacosEnvelope('remove-raw', { GH_TOKEN: 'fixture-secret', FIXTURE_RUNNER_FAILURE: '1' })
+    expect(result.status).toBe(1)
+    expect(fs.readFileSync(path.join(artifacts, 'exit-reason.txt'), 'utf8')).toBe(
+      'status=1\ncleanup_status=1\nredaction_status=0\nfirst_failed_step=runner\n',
+    )
+  })
+
   it('publishes a minimal report without the planted secret after redaction fails', () => {
     const plantedSecret = 'macos-planted-secret'
     const { result, artifacts } = runMacosFinalizer('redact-artifacts', {
       MUNIMENT_E2E_PASSWORD: plantedSecret,
     })
     expect(result.status).not.toBe(0)
-    expect(fs.readdirSync(artifacts).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt', 'redaction-failure.txt'])
+    expect(fs.readdirSync(artifacts).sort()).toEqual(['cleanup-status.log', 'envelope-reason.txt', 'exit-reason.txt', 'redaction-failure.txt', 'runner-stderr.log'])
     expect(fs.readFileSync(path.join(artifacts, 'envelope-reason.txt'), 'utf8')).toContain('reason: redaction-failed')
     const report = fs.readFileSync(path.join(artifacts, 'redaction-failure.txt'), 'utf8')
     expect(report).toBe('file: unknown\ncategory: redactor-process\n')
