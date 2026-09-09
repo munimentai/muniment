@@ -22,7 +22,7 @@ grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
 grep -Fq "if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'" "$ci"
 grep -Fq "needs.changes.outputs.installer == 'true'" "$ci"
 grep -Fq 'platform: [linux, windows, macos]' "$ci"
-grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
+grep -Fq "cmd='export CARGO_TARGET_DIR=\"\$HOME/.cache/cargo-target\"; cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
 windows_preflight=$(
   awk '
     index($0, "- name: Check (${{ matrix.platform }}) via desktop-ci") { in_check = 1 }
