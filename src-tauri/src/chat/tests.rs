@@ -1704,7 +1704,8 @@ fn resume_runtime_failure_leaves_the_existing_journal_event_for_event_unchanged(
         cas: LocalCas::open(&directory.join("cas")).unwrap(),
     }));
     let previous_root = std::env::var_os("MUNIMENT_PI_ROOT");
-    std::env::remove_var("MUNIMENT_PI_ROOT");
+    // An unset override selects the profile root. An empty override rejects the launch before acquisition.
+    std::env::set_var("MUNIMENT_PI_ROOT", "");
     let (sender, receiver) = std::sync::mpsc::channel();
     coordinate(
         FakeCoordinateSink::new(&directory),
@@ -1742,8 +1743,11 @@ fn resume_runtime_failure_leaves_the_existing_journal_event_for_event_unchanged(
     );
     if let Some(root) = previous_root {
         std::env::set_var("MUNIMENT_PI_ROOT", root);
+    } else {
+        std::env::remove_var("MUNIMENT_PI_ROOT");
     }
     assert!(receiver.recv().unwrap().is_err());
+    assert!(!ChatProfile::new(&directory).pi_install_root().exists());
     assert_eq!(
         shared.lock().unwrap().journal.events(&run_id).unwrap(),
         before
