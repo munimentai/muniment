@@ -3,11 +3,13 @@ name: CI
 # Desktop builds run through the pve01 desktop-ci driver (SSH-driven VM
 # clones; see homelab docs/infra-notes.md "Desktop-CI GLUE built"). The
 # runner container carries DESKTOP_CI_SSH_KEY, a restricted key whose only
-# capability on pve01 is `sudo desktop-ci`. Builds are serialized by the
-# driver's one-VM-at-a-time lock; matrix jobs also serialize on the single
-# repo runner, so a code PR gate is smoke (structure check + unit tests) plus
-# native Windows and macOS compile preflights, then three sequential platform
-# builds. Markdown-only PRs also run the public core boundary.
+# capability on pve01 is `sudo desktop-ci`. The driver runs two VM slots.
+# The PR gate: `changes` classifies the diff in about a minute, then smoke
+# (structure check + unit tests) and the three native compile preflights run
+# in parallel off it. The three-platform desktop-build matrix runs only when
+# the diff touches installer, packaging, workflow or e2e paths; the nightly
+# builds and proves every merge on all three platforms. Markdown-only PRs
+# also run the public core boundary.
 # Push-to-main runs smoke only — merges are already PR-gated.
 # NOTE: the driver clones `--branch <ref>`, so we pass the branch NAME (the
 # PR head ref), which builds the branch TIP, not necessarily the triggering
@@ -24,7 +26,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  smoke:
+  changes:
+    name: changes
     runs-on: self-hosted
     outputs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
@@ -32,6 +35,8 @@ jobs:
       attach_fixtures: ${{ steps.changes.outputs.attach_fixtures }}
       code_diff_fixtures: ${{ steps.changes.outputs.code_diff_fixtures }}
       desktop: ${{ steps.changes.outputs.desktop }}
+      installer: ${{ steps.changes.outputs.installer }}
+      resident_model_adr: ${{ steps.changes.outputs.resident_model_adr }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -50,6 +55,7 @@ jobs:
           attach_fixtures=false
           code_diff_fixtures=false
           desktop=false
+          installer=false
           resident_model_adr=false
           while IFS= read -r path; do
             case "$path" in
@@ -106,16 +112,35 @@ jobs:
                 desktop=true
                 ;;
             esac
+            case "$path" in
+              src-tauri/tauri*.conf.json|src-tauri/windows/*|src-tauri/packaging/*|src-tauri/capabilities/*|.github/build-*.mjs|.github/build-*.sh|.github/upload-nightly-assets.mjs|.github/workflows/ci.yml|test/e2e/*)
+                # The installer, packaging, workflow and e2e paths are the ones
+                # the nightly cannot prove one merge later without a red run,
+                # so only these run the three-platform build on the PR.
+                installer=true
+                ;;
+            esac
           done < <(git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA")
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
           echo "companion=$companion" >> "$GITHUB_OUTPUT"
           echo "attach_fixtures=$attach_fixtures" >> "$GITHUB_OUTPUT"
           echo "code_diff_fixtures=$code_diff_fixtures" >> "$GITHUB_OUTPUT"
           echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
+          echo "installer=$installer" >> "$GITHUB_OUTPUT"
           echo "resident_model_adr=$resident_model_adr" >> "$GITHUB_OUTPUT"
 
+
+  smoke:
+    needs: changes
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Node 24 (bootstrap if missing)
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: |
           node_dir="$HOME/.local/node-24"
           if { ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null)" != 24 ]; } \
@@ -133,30 +158,30 @@ jobs:
           echo "$HOME/.local/node-24/bin" >> "$GITHUB_PATH"
 
       - name: Frontend unit tests
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: |
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
           npm test
 
       - name: Probe fixtures
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm run probe:check
 
       - name: UI copy law
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm run lint:copy
 
       - name: Record font law
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm run test:records
 
       - name: Provenance line law
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm run test:provenance
 
       - name: Browser control relay core
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: npm ci --prefix browser-control --no-audit --no-fund && npm run browser-control
 
       # Unit tests cover src-tauri/core (muniment-core), which is kept free of
@@ -190,64 +215,64 @@ jobs:
         run: scripts/check-core-boundary.sh
 
       - name: Rust formatting
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         run: cargo fmt --manifest-path src-tauri/core/Cargo.toml --check
 
       - name: Rust lint
-        if: steps.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
         env:
           CARGO_INCREMENTAL: "0"
         run: cargo clippy --manifest-path src-tauri/core/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Core and ACP lint
-        if: steps.changes.outputs.desktop == 'true' || steps.changes.outputs.companion == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request'
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-core --package muniment-acp --all-targets --locked -- -D warnings
 
       - name: Rust unit tests
-        if: steps.changes.outputs.desktop == 'true' || steps.changes.outputs.resident_model_adr == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.resident_model_adr == 'true' || github.event_name != 'pull_request'
         # The shared runner can starve stub child processes under default test parallelism.
         run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked --features network-tests -- --test-threads=1
 
       - name: Core and ACP unit tests
-        if: steps.changes.outputs.desktop == 'true' || steps.changes.outputs.companion == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request'
         run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --package muniment-acp --locked
 
       - name: Companion formatting
-        if: steps.changes.outputs.companion == 'true'
+        if: needs.changes.outputs.companion == 'true'
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --check
 
       - name: Companion lint
-        if: steps.changes.outputs.companion == 'true'
+        if: needs.changes.outputs.companion == 'true'
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings
 
       - name: Companion unit tests
-        if: steps.changes.outputs.companion == 'true'
+        if: needs.changes.outputs.companion == 'true'
         run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --locked
 
       - name: CLI dependency boundary
-        if: steps.changes.outputs.companion == 'true'
+        if: needs.changes.outputs.companion == 'true'
         run: test/cli-dependency-boundary.sh
 
       - name: Runtime formatting
-        if: steps.changes.outputs.companion == 'true'
+        if: needs.changes.outputs.companion == 'true'
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-runtime --check
 
       - name: Runtime lint
-        if: steps.changes.outputs.companion == 'true'
+        if: needs.changes.outputs.companion == 'true'
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-runtime --all-targets --locked -- -D warnings
 
       - name: Runtime unit tests
-        if: steps.changes.outputs.companion == 'true'
+        if: needs.changes.outputs.companion == 'true'
         run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked
 
       - name: Runtime dependency boundary
-        if: steps.changes.outputs.companion == 'true'
+        if: needs.changes.outputs.companion == 'true'
         run: test/runtime-dependency-boundary.sh
 
   attach-fixtures-current:
     name: attach-fixtures-current
-    if: github.event_name == 'pull_request' && needs.smoke.outputs.attach_fixtures == 'true'
-    needs: smoke
+    if: github.event_name == 'pull_request' && needs.changes.outputs.attach_fixtures == 'true'
+    needs: changes
     runs-on: self-hosted
     steps:
       - name: Checkout
@@ -296,8 +321,8 @@ jobs:
 
   code-diff-fixtures-current:
     name: code-diff-fixtures-current
-    if: github.event_name == 'pull_request' && needs.smoke.outputs.code_diff_fixtures == 'true'
-    needs: smoke
+    if: github.event_name == 'pull_request' && needs.changes.outputs.code_diff_fixtures == 'true'
+    needs: changes
     runs-on: self-hosted
     steps:
       - name: Checkout
@@ -320,8 +345,8 @@ jobs:
 
   desktop-compile:
     name: Desktop compile preflight (${{ matrix.platform }})
-    if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'
-    needs: smoke
+    if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'
+    needs: changes
     runs-on: self-hosted
     timeout-minutes: 30
     strategy:
@@ -390,8 +415,8 @@ jobs:
           done
 
   desktop-build:
-    if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'
-    needs: [smoke, desktop-compile]
+    if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true' && needs.changes.outputs.installer == 'true'
+    needs: [changes, desktop-compile]
     runs-on: self-hosted
     timeout-minutes: 75
     strategy:
