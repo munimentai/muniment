@@ -96,42 +96,67 @@ checkable in the diff:
   never a cloud virtual key.
 - The runtime logs its startup and the desktop logs the native-auth call, so a
   silent auth path names its cause from an envelope.
-- After Pi readiness, each prompt has a 30-second first reply event bound.
-  A prompt acknowledgment or unrelated lifecycle frame does not satisfy the bound.
-  A timeout records a failed reply with its cause in the run journal and shell.
-  The runtime logs the run start, Pi spawn outcome, first reply event, provider
-  outcome, and failure stderr tail with the run id. The Linux envelope keeps
-  `pi-local-mode-stderr.log` beside `muniment-runtime.log`.
+- After Pi readiness each prompt has a 30-second bound to its first reply
+  event, and an acknowledgment does not satisfy it. A timeout records a failed
+  reply with its cause in the run journal and shell, and the runtime logs the
+  run start, Pi spawn, first reply, provider outcome and stderr tail by run id.
 - Pi sidecar parity with the factory harness, below.
 
 ## First run
 
-The first run is four steps. Step 1 is the install. The window opens on step 2
-and shows `Step N of 4` as a mono eyebrow above each title.
+The first run is one screen, and the composer is on top, ready or one line
+from ready. Nothing asks a question before the first message. Under the
+composer sit three chips in mono, each opening its own panel, and none blocks
+Send.
 
-1. **Install.** Complete when the window opens.
-2. **Scan.** The app finds the memory files existing assistants keep on this
-   machine and shows one row per assistant with a count, `Claude Code: 12
-   files`, and a checkbox per row. The scan reads names, never file bodies. It
-   walks only the user-level roots in the table below, honors each root's
-   environment override, stops at a depth of six, a two second budget per root
-   and 20,000 files per root, and says when it hit a cap. Nothing found is one
-   sentence.
-3. **Home.** The default is `~/Documents/muniment`, lowercase. A configured
-   Home keeps its path. When one Obsidian vault holds most of the files found,
-   the screen offers that vault's parent as the Home and says why.
-4. **Import.** Each selected assistant carries a mode. *Copy* writes the files
-   under `memory/imports/<assistant>/` through the onboarding write plan with
-   its secret rejection and size caps. *Use in place* records the root as a
-   read-only source in `home.json`, and the memory index reads it beside
-   `memory/`. Copy is the default under 128 files. In place is the default for
-   vaults and for any store over the copy caps. Muniment never writes into an
-   in-place source. An export ZIP from ChatGPT or claude.ai is a second source
-   on the same screen. Imported text is untrusted data under
-   [ADR 0018](docs/decisions/0018-untrusted-content-boundary.md).
+**The model source chip.** At launch the app resolves a model in this order:
+a key in Pi's credential store, a local server that answers on Ollama's port
+or the one Pi's `models.json` names, and a provider whose environment
+variable from the catalog is set. The chip names the source it found, `Pi ·
+Anthropic key`, `Local · Ollama` or `Environment · OPENAI_API_KEY`. When none
+answers it reads `Connect a model`, and the first Send opens its panel. There
+is no free hosted model at the no-account tier, and the chip says so plainly.
 
-The scan counts durable memory and instruction files only. Session
-transcripts, settings and credentials stay where they are. The scan never
+**The provider panel.** A key added here goes into Pi's `auth.json` and a
+local or custom endpoint into Pi's `models.json`, so Pi uses it at once and
+nothing leaves the machine except to that provider. The catalog is the
+models.dev shape, `id`, `name`, `env`, `npm`, `api` and `models` with cost
+and limits, shipped as a pinned snapshot and refreshed on a cache. The panel
+opens on featured tiles, Anthropic, OpenAI, Google, xAI, OpenRouter, Ollama,
+LM Studio and a custom endpoint, with a search over the rest. Most users
+connect one hosted provider with a key, and the panel is built for that
+first. A local server is a first-class provider beside them, never a
+fallback: same panel, same picker, same composer. Each provider offers a key
+field, and a browser or device sign-in only where the provider permits it for
+third-party tools. The custom endpoint form takes a base URL, an optional key
+and a model list, and covers a LiteLLM proxy. The panel lists connected
+providers, each with its source tag, `Pi` for a key typed here,
+`Environment` for a catalog variable found at launch, `Local` for a server
+on this machine and `Custom` for an endpoint in `models.json`, and one
+control to disconnect it. The model picker carries the same tag on each row
+and orders rows by the user's last use, not by source.
+
+**The Home chip.** It shows `~/Documents/muniment`, lowercase, with one
+control to change it. A configured Home keeps its path. The four folders are
+created on the first Send. When one Obsidian vault holds most of the files
+the scan found, the chip offers that vault's parent and says why.
+
+**The scan chip.** It reads the scan's summary, `Claude Code: 12 files · Pi:
+3 files`, or `No assistant memory found`. Its panel lists one row per
+assistant with a checkbox and a mode. *Copy* writes the files under
+`memory/imports/<assistant>/` through the onboarding write plan with its
+secret rejection and size caps. *Use in place* records the root as a
+read-only source in `home.json`, and the memory index reads it beside
+`memory/`. Copy is the default under 128 files, in place for vaults and for
+any store over the copy caps. Muniment never writes into an in-place source.
+An export ZIP from ChatGPT or claude.ai is a second source in the same
+panel. Imported text is untrusted data under
+[ADR 0018](docs/decisions/0018-untrusted-content-boundary.md).
+
+The scan reads names, never file bodies. It walks only the user-level roots
+below, honors each root's environment override, stops at a depth of six, a
+two second budget per root and 20,000 files per root, and says when it hit a
+cap. It counts durable memory and instruction files only. The scan never
 opens, counts or copies a file in the never column.
 
 | Assistant | Root and override | Counted | Never |
@@ -155,7 +180,7 @@ The scan skips files inside repositories, such as a project `AGENTS.md`,
 `CLAUDE.md`, `CONVENTIONS.md` or `.cursor/rules`. The importers read them one
 repository at a time. The registry is data in the core crate, and its tests
 plant a credential file in every fixture root that must stay uncounted. The
-e2e onboarding spec proves the four steps in order.
+e2e onboarding spec proves the composer, the three chips and a first Send.
 
 ## Operating constraints (LAW — the reviewer holds every diff against these)
 
