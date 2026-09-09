@@ -70,16 +70,20 @@ live tool stream, the permission-gate card that becomes a run receipt, Stop,
 and queued follow-ups. Approving a proposal from the phone is that card.
 
 **muniment-qa.** The nightly runs the installed build on Linux, Windows and
-macOS and writes a readable evidence envelope per platform. The local-mode chat
-smoke is the first installed spec. Real sign-in gates no other spec.
+macOS with a readable evidence envelope per platform. The local-mode chat smoke
+is the first installed spec, and real sign-in gates no other spec.
 
-**homebrew-muniment.** The nightly bumps the cask version and hashes. The
-publish step skips cleanly while the tap is unseeded. Seeding the tap is a
-human step.
+**homebrew-muniment.** The nightly bumps the cask version and hashes, and the
+publish step skips cleanly while the tap is unseeded. Seeding the tap is human.
 
 **muniment-site.** `docs/public-evidence/` is lifted verbatim into the public
-docs. A change to what an outside user can see or do updates that directory in
-the same pull request.
+docs. A change to what an outside user sees updates it in the same pull request.
+
+**Updates.** The package manager is the update path before the first public
+release, ADR 0029. That release adds the in-app updater: the app reads the
+public release feed the nightly publishes, sends nothing that names the user or
+the machine, shows one control in the app row once a build is downloaded, and
+installs on the click.
 
 ## The definition of working
 
@@ -112,8 +116,8 @@ Send.
 **The model source chip.** At launch the app resolves a model in this order:
 a key in Pi's credential store, a local server that answers on Ollama's port
 or the one Pi's `models.json` names, and a provider whose environment
-variable from the catalog is set. The chip names the source it found, `Pi ·
-Anthropic key`, `Local · Ollama` or `Environment · OPENAI_API_KEY`. When none
+variable from the catalog is set. The chip names the source it found,
+`Anthropic key`, `Local · Ollama` or `Environment · OPENAI_API_KEY`. When none
 answers it reads `Connect a model`, and the first Send opens its panel. There
 is no free hosted model at the no-account tier, and the chip says so plainly.
 
@@ -130,7 +134,7 @@ fallback: same panel, same picker, same composer. Each provider offers a key
 field, and a browser or device sign-in only where the provider permits it for
 third-party tools. The custom endpoint form takes a base URL, an optional key
 and a model list, and covers a LiteLLM proxy. The panel lists connected
-providers, each with its source tag, `Pi` for a key typed here,
+providers, each with its source tag, `Key` for a key typed here,
 `Environment` for a catalog variable found at launch, `Local` for a server
 on this machine and `Custom` for an endpoint in `models.json`, and one
 control to disconnect it. The model picker carries the same tag on each row
@@ -205,9 +209,9 @@ e2e onboarding spec proves the composer, the three chips and a first Send.
    model names and paths render in Commit Mono. Conversation renders in
    Schibsted Grotesk.
 6. **Forbidden vocabulary in UI copy.** No "AI", "magic", "supercharge",
-   "unlock", or "sovereignty". Errors state what happened and the next step and
-   never apologize. No em dash in user-facing text, in any form. Enforcer:
-   `npm run lint:copy`.
+   "unlock", or "sovereignty", and no harness name in prose. Errors state what
+   happened and the next step and never apologize. No em dash in user-facing
+   text, in any form. Enforcer: `npm run lint:copy`.
 7. **The provenance line ships under every response and is never optional.**
    The expanded receipt reads `route · model · cost · time ·
    capability@version[, ...]`. A local reply carries no cloud receipt and says
@@ -289,7 +293,8 @@ is weaker than the one that built it. Four items:
    `npm:pi-subagents`, `npm:pi-background-tasks`. They give Pi web search and
    fetch, child agents, and `bg_run` with `bg_status`, `bg_logs` and
    `bg_result`. They render into `settings.json` as
-   `{"packages": [...], "defaultTools": [...]}`.
+   `{"packages": [...], "defaultTools": [...]}`. `pi-web-access` needs an
+   Anthropic `claude-haiku` model and a Bright Data zone of type `serp`.
 2. **`npm:pi-mcp-adapter`** (MIT). One proxy tool that discovers MCP tools on
    demand. It reads `.pi/mcp.json` as the project override and supports stdio,
    HTTP with SSE fallback, and Unix sockets. This is how the local harness
@@ -300,9 +305,6 @@ is weaker than the one that built it. Four items:
    paragraph: pass a timeout on every call, 60 for a quick command, up to 600
    for a build, and send anything longer to `bg_run`.
 4. **The version pin** moves to the version the factory runs.
-
-The `pi-web-access` adoption records its runtime requirements: an Anthropic
-`claude-haiku` model and a Bright Data zone of type `serp`.
 
 ### Built-in tool selection
 
@@ -360,12 +362,10 @@ is open work: closing it is a gate change first and a symptom ticket second.
    fail-fast behavior in `.github/lib/macos-signing.mjs`.
 5. A release promotes only the exact bytes of a green nightly SHA. Enforcer:
    `.github/lib/release-promotion.mjs`.
-6. UI copy obeys the forbidden-vocabulary law, records render in mono, and the
-   provenance line is present on every reply. Enforcers: the UI copy law,
-   record font law, and provenance line law steps in the `ci.yml` smoke job.
-7. The update path is the per-platform package manager until the first public
-   release, per ADR 0029. Enforcer: `test/smoke.sh` asserts the ADR exists and
-   states the trigger.
+6. UI copy obeys the vocabulary law, records render in mono, and the provenance
+   line is on every reply. Enforcers: the three law steps in the `ci.yml` smoke job.
+7. The update path follows the Updates paragraph above and ADR 0029. Enforcer:
+   `test/smoke.sh` asserts the ADR exists and states the trigger.
 8. The steering files obey the rules in `AGENTS.md`. Enforcer:
    `scripts/check-steering.sh .` in the `ci.yml` smoke job.
 
@@ -396,5 +396,5 @@ is open work: closing it is a gate change first and a symptom ticket second.
 
 Desktop builds run on ephemeral pve01 VM clones through the `desktop-ci`
 driver, one VM at a time: linux 10012, windows 10011, macos 10013 templates.
-The lint and structure smoke runs on the shared self-hosted runners, which
-have no Docker and no GUI. Real builds happen in the VMs.
+The lint and structure smoke runs on the shared self-hosted runners with no
+Docker and no GUI. Real builds happen in the VMs.

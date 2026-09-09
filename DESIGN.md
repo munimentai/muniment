@@ -57,7 +57,9 @@ panel slide. `prefers-reduced-motion` removes all of it.
    radius, no "AI", "magic", "supercharge" or "unlock" in copy.
 4. **Voice.** Sentence case everywhere. Buttons say what happens. Errors state
    what happened and the next step and never apologize. Empty states are one
-   line and no illustration. No em dash in user-facing text.
+   line and no illustration. No em dash in user-facing text. The shell never
+   names its harness. A state line, an empty state and a composer hint are one
+   line each and under twelve words.
 
 ## The ring
 
@@ -81,6 +83,14 @@ dot that pulses while running and collapses to its header when done. The
 provenance line sits under every response in mono at `--text-provenance`, with
 the route in signal. Composer focus shifts the border to `muted`, never signal.
 Platform chrome follows the OS and brand tokens stay identical across platforms.
+On macOS the app row sits in the title bar band beside the native traffic
+lights, is the drag region, and holds the sidebar toggle, New thread, the
+thread title, Artifacts and the update control. Windows keeps its native
+caption controls and Linux keeps its decorations. Sidebar, thread and rail sit
+on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
+the frame shows at every edge and between panels. The update control is a 20px
+ink glyph that widens on hover or focus to read `Update` in mono, and it
+appears only when a newer build is downloaded.
 
 Conversation, tool, permission, and receipt state is rebuilt from the
 append-only local run journal. Reopen reduces committed events; snapshots are
