@@ -91,6 +91,13 @@ on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
 the frame shows at every edge and between panels. The update control is a 20px
 ink glyph that widens on hover or focus to read `Update` in mono, and it
 appears only when a newer build is downloaded.
+The composer band is one mono row under the composer: the model source chip,
+the Home path, the context meter and the running cost, with the scan chip
+beside them on the first run. The provenance line stays under each reply.
+The launcher is a 600 by 80 window on `surface` with a hairline and one
+composer line, nothing else. A global shortcut opens it above every app,
+centered in the upper third of the screen. Enter sends the line as the first
+message of a new thread and brings the shell forward. Escape closes it.
 
 Conversation, tool, permission, and receipt state is rebuilt from the
 append-only local run journal. Reopen reduces committed events; snapshots are
@@ -105,6 +112,7 @@ A card that cannot show a stored change says whether Muniment applied the change
 The signed-in shell has one workspace `h1`, a headed thread list, and a transcript region named for the open thread.
 An error message names the failure. The control beside it names and repeats the action that failed.
 The background service notice reuses the auth error state's mono record register.
+One owner starts, watches and stops the runtime for every window. When the runtime exits, every window shows the same one-sentence notice and one control that starts it again.
 The notice waits out a two second dwell, so a drop shorter than that leaves the workspace on screen. A first status that already reports the service unreachable shows the notice at once.
 An error that rejects one item from a set names that item.
 A surface that renders model or user text wraps an unbreakable string.

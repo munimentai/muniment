@@ -21,10 +21,13 @@ Claude Code.
 ## What this repo is
 
 - The shell: the thread surface, the composer, the artifact rail, the
-  provenance line under every reply, and the generated local UI.
+  provenance line under every reply, and the generated local UI. The shell is
+  an ACP client of the runtime service, and mobile and any web client speak
+  the same protocol to the same server.
 - The runtime service: the single local executor. It runs with no window open,
   hosts the local graph, serves the SQL tool, runs local workflows, and holds
-  the one relay leg that mobile drives.
+  the one relay leg that mobile drives. One component in the shell owns its
+  lifecycle for every window.
 - The Pi sidecar: the agent harness, at parity with the factory's Pi.
 - The two local models: a bundled router classifier and an optional extractor
   download.
@@ -91,10 +94,9 @@ An installed build on all three platforms launches, enters local mode, sends a
 message and sees a reply begin, proven by a green nightly. Each item is
 checkable in the diff:
 
-- `muniment-runtime` carries the ASR rpath on macOS. The runtime lives one
-  directory deeper than the app binary, so its path is `../../Resources`. The
-  Linux e2e runner exports no `LD_LIBRARY_PATH`, so the probe proves the real
-  install.
+- `muniment-runtime` carries the ASR rpath on macOS. It lives one directory
+  deeper than the app binary, so its path is `../../Resources`. The Linux e2e
+  runner exports no `LD_LIBRARY_PATH`, so the probe proves the real install.
 - The signed-out shell offers a control that enters the thread surface with no
   cloud session. The Pi sidecar authenticates with Pi's own credential store,
   never a cloud virtual key.
@@ -111,7 +113,9 @@ checkable in the diff:
 The first run is one screen, and the composer is on top, ready or one line
 from ready. Nothing asks a question before the first message. Under the
 composer sit three chips in mono, each opening its own panel, and none blocks
-Send.
+Send. After the first run the chips are the composer band: the model source,
+Home, the context meter and the running cost. A global shortcut opens a
+one-line launcher that starts a new thread with what the user typed.
 
 **The model source chip.** At launch the app resolves a model in this order:
 a key in Pi's credential store, a local server that answers on Ollama's port
@@ -375,15 +379,12 @@ is open work: closing it is a gate change first and a symptom ticket second.
   along the largest naming family.
 - **Floor:** a new folder needs at least 5 files or a machine reader named in
   the pull request.
-- **Depth:** the source layout has at most 3 directory levels below the source
-  root.
+- **Depth:** at most 3 directory levels below the source root.
 - **Naming families first:** related files share a prefix stem. A family of 15
   or more files is the designated split when the ceiling hits.
 - **Tests mirror source,** except layouts a test harness requires.
-- **Ceiling exemptions:** append-only stores, generated trees, vendored trees,
-  and asset directories.
-- **Frozen machine-read paths:** `docs/public-evidence/`, `protocol-fixtures/`,
-  and `docs/decisions/`. Never move or rename one without a consumer sweep.
+- **Ceiling exemptions:** append-only stores, generated, vendored and asset trees.
+- **Frozen machine-read paths:** `docs/public-evidence/`, `protocol-fixtures/`, `docs/decisions/`. Move one only with a consumer sweep.
 - **Recorded gaps:** a directory over the ceiling is a recorded gap. A gap
   closes gate-first: the split ships with a check that holds the new shape. New
   files must not push a recorded directory past its recorded count.
@@ -395,6 +396,5 @@ is open work: closing it is a gate change first and a symptom ticket second.
 ## CI
 
 Desktop builds run on ephemeral pve01 VM clones through the `desktop-ci`
-driver, one VM at a time: linux 10012, windows 10011, macos 10013 templates.
-The lint and structure smoke runs on the shared self-hosted runners with no
-Docker and no GUI. Real builds happen in the VMs.
+driver, two at a time. The lint and structure smoke runs on the shared
+self-hosted runners with no Docker and no GUI. Real builds happen in the VMs.
