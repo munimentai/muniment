@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 
+collect_macos_runtime_diagnostics() {
+  local target=$1 runtime_log=$2 output=$3
+  local launchctl_command=${MUNIMENT_E2E_LAUNCHCTL:-/bin/launchctl}
+  local launchctl_status=0
+  "$launchctl_command" print "$target" >"$output/runtime-launchctl.log" 2>&1 || launchctl_status=$?
+  printf '\nlaunchctl_exit_status=%s\n' "$launchctl_status" >>"$output/runtime-launchctl.log" || return 1
+  if [[ -f $runtime_log ]]; then
+    tail -c 262144 "$runtime_log" >"$output/runtime.log" || return 1
+  else
+    printf 'No runtime log exists for this user.\n' >"$output/runtime.log" || return 1
+  fi
+}
+
 probe_macos_runtime() {
   local target=$1 app_pid=$2 app_log=$3 endpoint=$4 diagnostic=$5
   local launchctl_command=${MUNIMENT_E2E_LAUNCHCTL:-/bin/launchctl}
