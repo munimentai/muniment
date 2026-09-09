@@ -8,6 +8,8 @@ mod dictation;
 mod home;
 mod local_mode;
 #[cfg(any(target_os = "macos", all(test, unix)))]
+mod macos_run_start_probe;
+#[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos_runtime_service;
 mod memory;
 mod model_install;
@@ -30,6 +32,26 @@ fn restart_muniment(app: tauri::AppHandle) {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    {
+        let mut args = std::env::args_os().skip(1);
+        if args.next().as_deref() == Some(std::ffi::OsStr::new("--probe-local-run")) {
+            let result = match (args.next(), args.next()) {
+                (Some(endpoint), None) => {
+                    macos_run_start_probe::run(std::path::Path::new(&endpoint))
+                }
+                _ => Err("The run-start probe requires one attach socket path."),
+            };
+            match result {
+                Ok(run_id) => println!("{run_id}"),
+                Err(message) => {
+                    eprintln!("{message}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+    }
     let runtime_activity = RuntimeActivityRegistry::new();
     let builder = tauri::Builder::default()
         .manage(runtime_activity.clone())

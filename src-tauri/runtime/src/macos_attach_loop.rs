@@ -26,7 +26,7 @@ use crate::{
 };
 
 #[cfg(target_os = "macos")]
-const MACOS_ATTACH_SESSION_TIMEOUT: Duration = Duration::from_secs(5);
+const MACOS_ATTACH_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const MACOS_ATTACH_DIRECTORY: &str = "muniment";
 const MACOS_ATTACH_SOCKET: &str = "attach-v1.sock";
 
@@ -267,7 +267,7 @@ impl MacosAttachServeBoundary for SystemMacosAttachBoundary {
                         stream,
                         &expected_desktop_executable,
                         env!("CARGO_PKG_VERSION"),
-                        MACOS_ATTACH_SESSION_TIMEOUT,
+                        MACOS_ATTACH_HANDSHAKE_TIMEOUT,
                         &mut service,
                         approval.approval(),
                         coordinator,
