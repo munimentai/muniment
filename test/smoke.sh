@@ -162,7 +162,7 @@ grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' "$ci"
 grep -Fq 'src-tauri/attach/*|src-tauri/attach/**)' "$ci"
 grep -Fq 'protocol-fixtures/*|protocol-fixtures/**)' "$ci"
 grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
-grep -Fq "if: steps.changes.outputs.companion == 'true'" "$ci"
+grep -Fq "if: needs.changes.outputs.companion == 'true'" "$ci"
 grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --check' "$ci"
 grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings' "$ci"
 grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --locked' "$ci"
@@ -233,7 +233,7 @@ for forbidden in muniment-desktop muniment-cli muniment-acp tauri tauri-plugin-d
   ! test/runtime-dependency-boundary.sh muniment-runtime muniment-core "$forbidden" \
     >/dev/null 2>&1
 done
-grep -Fq "needs.smoke.outputs.desktop == 'true'" "$ci"
+grep -Fq "needs.changes.outputs.desktop == 'true'" "$ci"
 test -f src-tauri/tauri.machine.conf.json
 grep -Fq '"upgradeCode": "c75b4a56-7d8b-5b99-9fc7-61ef0aabe84b"' src-tauri/tauri.machine.conf.json
 grep -Fq '"template": "./windows/per-machine.wxs"' src-tauri/tauri.machine.conf.json
@@ -246,7 +246,7 @@ grep -Fq '<Directory Id="CommonProgramsFolder"' src-tauri/windows/per-machine.wx
 grep -Fq 'build-windows-installers.mjs' .github/workflows/nightly.yml
 grep -Fq 'windows-installers.ps1' .github/workflows/nightly.yml
 test -f docs/windows-installers.md
-grep -Fq 'needs: [smoke, desktop-compile]' "$ci"
-test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'" "$ci")" -eq 2
+grep -Fq 'needs: [changes, desktop-compile]' "$ci"
+test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'" "$ci")" -eq 2
 test -z "$(git ls-files 'protocol-fixtures/muniment.attach/**' | grep -v '^protocol-fixtures/muniment.attach/1/')"
 echo "smoke OK"
