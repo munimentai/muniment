@@ -14,11 +14,13 @@ test -f vite.config.js
 # fonts are vendored (CSP is default-src 'self'; no CDN requests)
 test -f src/fonts/SchibstedGrotesk-latin.woff2
 test -f src/fonts/CommitMono-VF.woff2
-# desktop CI: native checks gate bundles, while docs-only PRs and main pushes
-# remain smoke-only
+# desktop CI: a changes job classifies the diff, the native preflights gate
+# every code PR beside smoke, the installer builds run only for installer
+# paths, and docs-only PRs and main pushes remain smoke-only
 ci=.github/workflows/ci.yml
 grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
-grep -Fq "if: github.event_name == 'pull_request' && needs.smoke.outputs.desktop == 'true'" "$ci"
+grep -Fq "if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'" "$ci"
+grep -Fq "needs.changes.outputs.installer == 'true'" "$ci"
 grep -Fq 'platform: [linux, windows, macos]' "$ci"
 grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
 windows_preflight=$(
