@@ -432,7 +432,7 @@ collect_local_mode_pi_log`, 'bash', directory, data], { encoding: 'utf8' })
 
 describe.skipIf(process.platform === 'win32')('macOS WDIO spec process isolation', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
-  const functions = runner.slice(runner.indexOf('harness_processes_gone()'), runner.indexOf('\nmkdir -p'))
+  const functions = runner.slice(runner.indexOf('harness_processes_gone()'), runner.indexOf('\nfinalize()'))
   const sequence = runner.slice(runner.indexOf('# Each spec starts'))
   const processes = ['app', 'desktop', 'runtime', 'tauri-driver', 'safaridriver', 'wdio', 'worker', 'job']
   const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
@@ -446,6 +446,7 @@ process_root="$raw/processes"
 cleanup_log="$raw/cleanup.log"
 cleanup_status=0
 status=0
+first_failed_step=none
 trap 'exit "$status"' EXIT
 mkdir -p "$process_root"
 source test/e2e/support/cleanup-ledger.sh
@@ -565,6 +566,163 @@ ${sequence}
   it('Checks the same process set during final cleanup.', () => {
     expect(runner).toContain('cleanup_step stop-app stop_app\n  if (( cleanup_status != 0 )); then status=1; fi')
     expect(runner.indexOf('cleanup_step stop-app stop_app')).toBeLessThan(runner.indexOf('if node test/e2e/support/redact.mjs'))
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('macOS WDIO startup diagnostics', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
+  const setup = runner.slice(0, runner.indexOf('\ncurrent_step=validate-environment'))
+  const sequence = runner.slice(runner.indexOf('# Each spec starts'))
+  const launcher = path.join(root, 'test/e2e/support/macos-wdio-app.sh')
+  const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
+
+  it('Captures an immediate abort and preserves the PID, signal, arguments, and environment.', () => {
+    const directory = temp()
+    const app = path.join(directory, 'app with spaces')
+    const log = path.join(directory, 'driver-app-local-mode-chat.log')
+    fs.writeFileSync(app, `#!/bin/sh
+ulimit -c 0
+printf 'pid=%s port=%s embedded=%s backtrace=%s home=%s\\n' "$$" "$TAURI_WEBDRIVER_PORT" "$WDIO_EMBEDDED_SERVER" "$RUST_BACKTRACE" "$HOME"
+printf '<%s>\\n' "$@"
+printf 'thread main panicked: fixture startup panic' >&2
+kill -ABRT "$$"
+`, { mode: 0o700 })
+    const result = spawnSync(launcher, ['two words', '', '--flag'], {
+      encoding: 'utf8', cwd: directory, timeout: 10_000,
+      env: {
+        ...process.env, MUNIMENT_E2E_REAL_APP_BINARY: app, MUNIMENT_E2E_DRIVER_APP_LOG: log,
+        TAURI_WEBDRIVER_PORT: '4445', WDIO_EMBEDDED_SERVER: 'true', HOME: directory,
+      },
+    })
+    expect(result.status).toBeNull()
+    expect(result.signal).toBe('SIGABRT')
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toBe('')
+    const output = fs.readFileSync(log, 'utf8')
+    expect(output).toContain(`pid=${result.pid} port=4445 embedded=true backtrace=1 home=${directory}`)
+    expect(output).toContain('<two words>\n<>\n<--flag>\n')
+    expect(output).toContain('thread main panicked: fixture startup panic')
+  })
+
+  const runEnvelope = (mode = 'pass') => {
+    const directory = temp()
+    const home = path.join(directory, 'login-home')
+    const reports = path.join(home, 'Library/Logs/DiagnosticReports')
+    const artifacts = path.join(directory, 'artifacts')
+    fs.mkdirSync(reports, { recursive: true })
+    const stale = path.join(reports, 'muniment-desktop-stale.ips')
+    fs.writeFileSync(stale, 'Stale report.\n')
+    fs.utimesSync(stale, new Date(0), new Date(0))
+    fs.writeFileSync(path.join(reports, 'other-app.ips'), 'Unrelated report.\n')
+    fs.symlinkSync(stale, path.join(reports, 'muniment-desktop-linked.ips'))
+    fs.mkdirSync(path.join(reports, 'muniment-desktop-directory.ips'))
+    const app = path.join(directory, 'app')
+    fs.writeFileSync(app, '#!/bin/sh\nprintf "fixture panic: %s fixture-secret\\n" "$1" >&2\nexit 7\n', { mode: 0o700 })
+    const result = spawnSync('bash', ['-c', `${setup}
+stop_app() { stop_calls=$(( \${stop_calls:-0} + 1 )); [[ $FIXTURE_MODE != cleanup-failure && ( $FIXTURE_MODE != final-cleanup-only || $stop_calls != 5 ) ]]; }
+sleep() {
+  if [[ $FIXTURE_MODE == delayed-report ]]; then
+    printf 'Late crash report.\\n' >"$diagnostic_reports/muniment-desktop-late.ips"
+  fi
+}
+npm() {
+  printf 'WDIO fixture output.\\n'
+  if [[ $FIXTURE_MODE == pass || $FIXTURE_MODE == final-cleanup-only ]]; then return 0; fi
+  "$MUNIMENT_E2E_APP_BINARY" "$current_step"
+}
+export MUNIMENT_E2E_APP_BINARY="$FIXTURE_LAUNCHER"
+export MUNIMENT_E2E_REAL_APP_BINARY="$FIXTURE_APP"
+if [[ $FIXTURE_MODE == missing-reports ]]; then rm -rf "$diagnostic_reports"; fi
+if [[ $FIXTURE_MODE == startup-failure ]]; then
+  run_step build-app bash -c 'echo "Build failed with fixture-secret." >&2; exit 7'
+  exit
+fi
+if [[ $FIXTURE_MODE == signal ]]; then
+  current_step=spec-local-mode-chat
+  kill -TERM "$$"
+fi
+if [[ $FIXTURE_MODE == unexpected-exit ]]; then
+  current_step=webdriver-marker
+  exit 9
+fi
+${sequence}
+if [[ -d $diagnostic_reports ]]; then
+  printf 'Crash report with fixture-secret.\\n' >"$diagnostic_reports/muniment-desktop-current.ips"
+fi
+mkdir -p "$HOME/Library/Logs/DiagnosticReports"
+printf 'Isolated home crash report.\\n' >"$HOME/Library/Logs/DiagnosticReports/muniment-desktop-isolated.ips"
+if [[ $FIXTURE_MODE == redaction-failure ]]; then printf bad >"$raw/screenshot-invalid.png"; fi
+if [[ $FIXTURE_MODE == collection-failure ]]; then find() { return 1; }; elif [[ $FIXTURE_MODE == copy-failure ]]; then cp() { return 1; }; fi
+if [[ $FIXTURE_MODE == publication-failure ]]; then mv() { return 1; }; fi
+`], {
+      encoding: 'utf8', timeout: 10_000,
+      env: {
+        ...process.env, HOME: home, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts,
+        FIXTURE_MODE: mode, FIXTURE_APP: app, FIXTURE_LAUNCHER: launcher,
+        MUNIMENT_E2E_PASSWORD: 'fixture-secret', MUNIMENT_E2E_FINALIZER_TEST_MODE: '0',
+      },
+    })
+    return { result, artifacts, directory, reason: fs.readFileSync(path.join(artifacts, 'exit-reason.txt'), 'utf8') }
+  }
+
+  it('Keeps each failed spec log and redacts current crash reports.', () => {
+    const { result, artifacts, directory, reason } = runEnvelope('abort')
+    expect(result.status, result.stderr).toBe(1)
+    expect(reason).toBe('status=1\ncleanup_status=0\nredaction_status=0\nfirst_failed_step=spec-local-mode-chat\n')
+    for (const spec of specs) {
+      const file = path.join(artifacts, `driver-app-${spec}.log`)
+      expect(fs.readFileSync(file, 'utf8')).toBe(`fixture panic: spec-${spec} [REDACTED]\n`)
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600)
+    }
+    expect(fs.readFileSync(path.join(artifacts, 'muniment-desktop-current.ips'), 'utf8')).toBe('Crash report with [REDACTED].\n')
+    expect(fs.readFileSync(path.join(artifacts, 'muniment-desktop-isolated.ips'), 'utf8')).toBe('Isolated home crash report.\n')
+    for (const name of ['muniment-desktop-stale.ips', 'muniment-desktop-linked.ips', 'muniment-desktop-directory.ips', 'other-app.ips']) {
+      expect(fs.existsSync(path.join(artifacts, name))).toBe(false)
+    }
+    expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-wdio-macos.'))).toEqual([])
+  })
+
+  it('Publishes empty app logs and a successful exit reason when all specs pass.', () => {
+    const { result, artifacts, reason } = runEnvelope()
+    expect(result.status, result.stderr).toBe(0)
+    expect(reason).toBe('status=0\ncleanup_status=0\nredaction_status=0\nfirst_failed_step=none\n')
+    for (const spec of specs) expect(fs.readFileSync(path.join(artifacts, `driver-app-${spec}.log`), 'utf8')).toBe('')
+  })
+
+  it.each(['missing-reports', 'delayed-report'])('Handles the %s crash report case.', (mode) => {
+    const { result, artifacts, reason } = runEnvelope(mode)
+    expect(result.status, result.stderr).toBe(1)
+    expect(reason).toContain('cleanup_status=0')
+    if (mode === 'delayed-report') {
+      expect(fs.readFileSync(path.join(artifacts, 'muniment-desktop-late.ips'), 'utf8')).toBe('Late crash report.\n')
+    }
+  })
+
+  it.each([
+    ['startup-failure', 'build-app'],
+    ['signal', 'spec-local-mode-chat'],
+    ['unexpected-exit', 'webdriver-marker'],
+    ['cleanup-failure', 'stop-before-spec'], ['final-cleanup-only', 'stop-app'],
+  ])('Names the first failed step after %s.', (mode, step) => {
+    const { result, artifacts, reason } = runEnvelope(mode)
+    expect(result.status, result.stderr).toBe(1)
+    expect(reason).toContain(`first_failed_step=${step}\n`)
+    if (mode === 'startup-failure') {
+      expect(fs.readFileSync(path.join(artifacts, 'runner-stderr.log'), 'utf8')).toBe('Build failed with [REDACTED].\n')
+    }
+  })
+
+  it.each(['redaction-failure', 'collection-failure', 'copy-failure', 'publication-failure'])('Keeps exit diagnostics after %s.', (mode) => {
+    const { result, artifacts, reason } = runEnvelope(mode)
+    expect(result.status, result.stderr).toBe(1)
+    expect(reason).toContain('cleanup_status=1\n')
+    expect(reason).toContain('first_failed_step=spec-local-mode-chat\n')
+    expect(reason).toContain(`redaction_status=${mode === 'redaction-failure' ? 1 : 0}\n`)
+    expect(fs.readFileSync(path.join(artifacts, 'cleanup-status.log'), 'utf8')).toContain(': failed')
+    if (mode === 'redaction-failure') {
+      expect(fs.existsSync(path.join(artifacts, 'driver-app-local-mode-chat.log'))).toBe(false)
+      expect(fs.readFileSync(path.join(artifacts, 'envelope-reason.txt'), 'utf8')).toContain('reason: redaction-failed')
+    }
   })
 })
 

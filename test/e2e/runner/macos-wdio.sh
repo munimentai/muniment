@@ -13,6 +13,12 @@ redaction_report="$run_root/redaction-failure.txt"
 status=0
 cleanup_status=0
 cleanup_log="$raw/cleanup.log"
+cleanup_status_entries=
+first_failed_step=none
+current_step=prepare-state
+# Keep the login home before a spec changes HOME.
+diagnostic_reports="$HOME/Library/Logs/DiagnosticReports"
+crash_start="$run_root/crash-start"
 
 # shellcheck source=../support/cleanup-ledger.sh
 source test/e2e/support/cleanup-ledger.sh
@@ -53,65 +59,120 @@ stop_app() {
   harness_processes_gone && runtime_job_stopped
 }
 
-run_e2e() {
-  local wdio_log=$1
+run_step() {
+  current_step=$1
   shift
+  local result=0
+  "$@" || result=$?
+  if (( result != 0 )); then
+    status=1
+    if [[ $first_failed_step == none ]]; then first_failed_step=$current_step; fi
+  fi
+  return "$result"
+}
+
+log_command() {
+  local log=$1
+  shift
+  "$@" >>"$log" 2>&1
+}
+
+collect_crash_reports() {
+  local directory report
+  # macOS can finish a crash report after the app exits.
+  if (( status != 0 )); then sleep 5; fi
+  for directory in "$diagnostic_reports" "$state_root/degraded/Library/Logs/DiagnosticReports" "$state_root/ready/Library/Logs/DiagnosticReports"; do
+    [[ -d $directory ]] || continue
+    find "$directory" -maxdepth 1 -type f -name 'muniment-desktop-*.ips' -newer "$crash_start" -print0 >"$run_root/crash-reports" || return 1
+    while IFS= read -r -d '' report; do
+      cp -- "$report" "$raw/${report##*/}" || return 1
+    done <"$run_root/crash-reports"
+  done
+}
+
+run_e2e() {
+  local spec=$1 wdio_log=$2
+  shift 2
+  export MUNIMENT_E2E_DRIVER_APP_LOG="$raw/driver-app-$spec.log"
+  run_step "prepare-log-$spec" touch "$MUNIMENT_E2E_DRIVER_APP_LOG" || return 1
   cleanup_step stop-before-spec stop_app
   if (( cleanup_last_status != 0 )); then
     runner_failure 'Spec process cleanup failed. The runner did not start the next spec.'
     return 1
   fi
   printf 'start-spec: %s\n' "${wdio_log##*/}" >>"$cleanup_log"
-  npm run test:e2e "$@" >"$wdio_log" 2>&1
+  run_step "spec-$spec" log_command "$wdio_log" npm run test:e2e "$@"
 }
 
-mkdir -p "$raw" "$state_root/ready" "$state_root/degraded" || exit 1
-
 finalize() {
+  local runner_status=$? redaction_status=0
   trap - EXIT INT TERM
+  exec 2>&3
+  if (( runner_status != 0 )); then status=1; fi
+  if (( status != 0 )) && [[ $first_failed_step == none ]]; then first_failed_step=$current_step; fi
   cleanup_step stop-app stop_app
   if (( cleanup_status != 0 )); then status=1; fi
+  cleanup_step collect-crash-reports collect_crash_reports
   if node test/e2e/support/redact.mjs "$raw" "$safe" "$redaction_report"; then
-    rm -rf -- "$artifacts"
-    mv -- "$safe" "$artifacts" || status=1
+    cleanup_step replace-artifacts rm -rf -- "$artifacts"
+    if (( cleanup_last_status == 0 )); then
+      cleanup_step publish-artifacts mv -- "$safe" "$artifacts"
+    fi
   else
-    status=1
+    redaction_status=1
+    record_cleanup_status redact-artifacts failed
     rm -rf -- "$artifacts" "$safe"
     mkdir -p "$artifacts"
     printf 'envelope: minimal\nwithheld: guest artifacts\nreason: redaction-failed\n' >"$artifacts/envelope-reason.txt"
-    : >"$artifacts/cleanup-status.log"
     cp -- "$redaction_report" "$artifacts/redaction-failure.txt" 2>/dev/null || printf 'file: unknown\ncategory: redactor-process\n' >"$artifacts/redaction-failure.txt"
   fi
-  rm -rf -- "$raw" "$state_root"
-  rm -f -- "$auth_url_file" "$redaction_report"
-  rmdir "$run_root" 2>/dev/null || true
+  # Keep cleanup outcomes after removing the raw log.
+  cleanup_log=/dev/null
+  cleanup_step remove-raw rm -rf -- "$raw" "$state_root" "$safe"
+  cleanup_step remove-run-files rm -f -- "$auth_url_file" "$redaction_report" "$crash_start" "$run_root/crash-reports"
+  cleanup_step remove-run-root rmdir "$run_root"
+  if (( cleanup_status != 0 || redaction_status != 0 )); then status=1; fi
+  mkdir -p "$artifacts" || exit 1
+  printf '%s' "$cleanup_status_entries" >"$artifacts/cleanup-status.log" || status=1
+  # These fields contain only runner-owned labels and statuses.
+  printf 'status=%s\ncleanup_status=%s\nredaction_status=%s\nfirst_failed_step=%s\n' \
+    "$status" "$cleanup_status" "$redaction_status" "$first_failed_step" >"$artifacts/exit-reason.txt" || status=1
   exit "$status"
 }
-trap finalize EXIT INT TERM
+exec 3>&2
+trap finalize EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -p "$raw" "$state_root/ready" "$state_root/degraded" || exit 1
+exec 2>>"$raw/runner-stderr.log" || exit 1
+run_step prepare-crash-marker touch "$crash_start" || exit
+current_step=validate-environment
 
 [[ -n ${MUNIMENT_E2E_USERNAME:-} && -n ${MUNIMENT_E2E_PASSWORD:-} ]] || {
   echo 'required injected environment is unavailable' >&2
   status=1
   exit
 }
-npm ci --no-audit --no-fund >"$raw/installer.log" 2>&1 || { status=1; exit; }
-npm run tauri build -- --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$raw/installer.log" 2>&1 || { status=1; exit; }
+run_step install-dependencies log_command "$raw/installer.log" npm ci --no-audit --no-fund || exit
+run_step build-app log_command "$raw/installer.log" npm run tauri build -- --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json || exit
 app_binary="$PWD/src-tauri/target/release/muniment-desktop"
+current_step=validate-app
 [[ -x $app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
-node test/e2e/support/webdriver-release-guard.mjs present "$app_binary" || { status=1; exit; }
+run_step webdriver-marker node test/e2e/support/webdriver-release-guard.mjs present "$app_binary" || exit
 
-export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
+export MUNIMENT_E2E_APP_BINARY="$PWD/test/e2e/support/macos-wdio-app.sh" MUNIMENT_E2E_RAW_DIR="$raw"
+export MUNIMENT_E2E_REAL_APP_BINARY="$app_binary"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
-openssl base64 -d -A -in test/e2e/fixtures/image-token.png.base64 -out "$state_root/image-token.png" || { status=1; exit; }
+run_step image-fixture openssl base64 -d -A -in test/e2e/fixtures/image-token.png.base64 -out "$state_root/image-token.png" || exit
 export MUNIMENT_E2E_IMAGE_PATH="$state_root/image-token.png"
 
 # Each spec starts with no app, runtime, or driver from the last spec.
 export HOME="$state_root/degraded" MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
-run_e2e "$raw/wdio.log" -- --spec test/e2e/specs/local-mode-chat.spec.js || status=1
-run_e2e "$raw/wdio-sign-in.log" -- --spec test/e2e/specs/real-sign-in.spec.js || status=1
+run_e2e local-mode-chat "$raw/wdio-local-mode-chat.log" -- --spec test/e2e/specs/local-mode-chat.spec.js || status=1
+run_e2e real-sign-in "$raw/wdio-sign-in.log" -- --spec test/e2e/specs/real-sign-in.spec.js || status=1
 export HOME="$state_root/ready" MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
 export MUNIMENT_E2E_ONBOARDING_ONLY=1
-run_e2e "$raw/wdio-onboarding.log" || status=1
+run_e2e onboarding "$raw/wdio-onboarding.log" || status=1
 unset MUNIMENT_E2E_ONBOARDING_ONLY
 export MUNIMENT_E2E_CLEANUP_ONLY=1
-run_e2e "$raw/wdio-cleanup.log" || status=1
+run_e2e cleanup "$raw/wdio-cleanup.log" || status=1
