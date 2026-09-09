@@ -103,6 +103,12 @@ const device = (device_id, overrides = {}) => ({
   ...overrides,
 })
 
+async function findWorkspaceComposer() {
+  const composer = await screen.findByLabelText('Message', { selector: '#composer-message' })
+  expect(composer).toHaveAttribute('placeholder', 'Ask anything')
+  return composer
+}
+
 async function stopClickCapture(voice) {
   await fireEvent.click(voice)
   await fireEvent.click(voice)
@@ -352,7 +358,7 @@ describe('pairing decisions', () => {
 
   it('denies with Escape and restores focus', async () => {
     render(App)
-    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    const composer = await findWorkspaceComposer()
     composer.focus()
     await waitFor(() => expect(pairingListener).toBeDefined())
 
@@ -446,7 +452,7 @@ describe('workspace composer entry', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await screen.findByRole('textbox', { name: 'Message' })
+    await findWorkspaceComposer()
 
     const button = screen.queryByRole('button', { name: 'Open Login Items' })
     expect(Boolean(button)).toBe(visible)
@@ -504,7 +510,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
 
-    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+    expect(await findWorkspaceComposer()).toBeInTheDocument()
     expect(statusReads).toBe(2)
   })
 
@@ -577,7 +583,7 @@ describe('workspace composer entry', () => {
   it('keeps the workspace mounted through a drop shorter than the notice dwell', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     render(App)
-    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    const composer = await findWorkspaceComposer()
 
     desktopClientListener({ payload: { connected: true, chat_events_connected: false, supervisor_running: true } })
     await vi.advanceTimersByTimeAsync(250)
@@ -609,7 +615,7 @@ describe('workspace composer entry', () => {
   it('re-reads the open thread in place after the chat-event connection recovers', async () => {
     mockChatEventsStatus(true)
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     invoke.mockClear()
 
     desktopClientListener({ payload: chatEventsStatus(false) })
@@ -671,7 +677,7 @@ describe('workspace composer entry', () => {
   it('re-reads no thread while a status keeps the chat-event connection up', async () => {
     mockChatEventsStatus(true)
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     invoke.mockClear()
 
     desktopClientListener({ payload: chatEventsStatus(true) })
@@ -708,7 +714,7 @@ describe('workspace composer entry', () => {
   it('updates the surface when the desktop client supervisor starts and stops', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     render(App)
-    await screen.findByRole('textbox', { name: 'Message' })
+    await findWorkspaceComposer()
 
     desktopClientListener({ payload: { connected: false, supervisor_running: true } })
     await vi.advanceTimersByTimeAsync(2_000)
@@ -860,7 +866,7 @@ describe('workspace composer entry', () => {
   it('holds Queue follow-up when the runtime upgrade starts during a live run', async () => {
     mockRuntimeUpgrade({ pending: false })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     const queue = await screen.findByRole('button', { name: 'Queue follow-up' })
@@ -877,7 +883,7 @@ describe('workspace composer entry', () => {
   it('names and describes the composer in its default state', async () => {
     render(App)
 
-    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    const composer = await findWorkspaceComposer()
     expect(composer).toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
     expect(composer).toHaveAttribute('placeholder', 'Ask anything')
   })
@@ -885,7 +891,7 @@ describe('workspace composer entry', () => {
   it('renders only the sidebar brand in the signed-in workspace', async () => {
     const { container } = render(App)
 
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
 
     expect(container.querySelector('.lockup')).not.toBeInTheDocument()
     expect(screen.queryByText(/shell v/)).not.toBeInTheDocument()
@@ -895,7 +901,7 @@ describe('workspace composer entry', () => {
 
   it('focuses the primary composer action once when the workspace appears', async () => {
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     const send = screen.getByRole('button', { name: 'Send' })
 
     expect(composer).toHaveFocus()
@@ -1240,7 +1246,7 @@ describe('workspace composer entry', () => {
 
   it('releases composer focus in Home settings and restores it on workspace re-entry', async () => {
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     expect(composer).toHaveFocus()
 
     await fireEvent.click(screen.getByText('Home settings'))
@@ -1408,7 +1414,7 @@ describe('artifact rail', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Original draft' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Voice' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-pressed', 'true'))
@@ -1711,7 +1717,7 @@ describe('thread name', () => {
 
   it('shows the empty name in the titlebar and current thread record', async () => {
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
 
     const titlebarName = document.querySelector('.thread-title')
     const sidebarName = document.querySelector('.thread-row')
@@ -1903,7 +1909,7 @@ describe('thread row shortcuts', () => {
       updatedAt: '2026-01-01T00:00:00Z',
     }))
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await waitFor(() => expect(document.querySelectorAll('.thread-row')).toHaveLength(10))
     invoke.mockClear()
 
@@ -1928,7 +1934,7 @@ describe('thread row shortcuts', () => {
       { threadId: 'thread-2', title: 'Other', updatedAt: '' },
     ]
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     invoke.mockClear()
 
     await fireEvent.keyDown(document, rowShortcut(1))
@@ -1983,7 +1989,7 @@ describe('new thread', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await waitFor(() => expect(document.querySelector('.thread-row[aria-current="true"]')).toBeInTheDocument())
     composer.focus()
 
@@ -2027,7 +2033,7 @@ describe('new thread', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     const newThread = screen.getByRole('button', { name: 'New thread' })
     await waitFor(() => expect(newThread).toBeEnabled())
     await fireEvent.click(newThread)
@@ -2084,6 +2090,53 @@ describe('Home onboarding', () => {
     expect(source).toMatch(/\.chips button\s*\{[^}]*font:[^}]*var\(--font-mono\)/)
   })
 
+  it('keeps the composer and draft while Home loads and retries an early Send without launch writes', async () => {
+    const status = deferred()
+    homeStatus = status.promise
+    render(App)
+    const composer = screen.getByRole('textbox', { name: 'Message' })
+    const send = screen.getByRole('button', { name: 'Send' })
+    const chips = screen.getByLabelText('First-run settings')
+    expect(composer).toBeEnabled()
+    expect(send).toBeEnabled()
+    expect(send).not.toHaveAttribute('aria-disabled', 'true')
+    expect(within(chips).getAllByRole('button')).toHaveLength(3)
+    expect(composer.compareDocumentPosition(chips) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('Finding Home…')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+
+    await fireEvent.input(composer, { target: { value: 'My early draft' } })
+    await fireEvent.click(send)
+    expect(screen.getByRole('alert')).toHaveTextContent('Home is unavailable. Retry or choose a folder.')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer)
+    expect(composer).toHaveValue('My early draft')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+
+    status.resolve({ configured: false, homePath: '/Documents/Muniment' })
+    await waitFor(() => expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment'))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer)
+    expect(composer).toHaveValue('My early draft')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    await fireEvent.click(send)
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    expect(await screen.findByRole('button', { name: 'Open model settings' })).toBeEnabled()
+  })
+
+  it('preserves an early draft when Home resolves to a configured path', async () => {
+    const status = deferred()
+    homeStatus = status.promise
+    render(App)
+    await firstSend('My early draft')
+    status.resolve({ configured: true, homePath: '/Saved/Home' })
+    await waitFor(() => expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument())
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('My early draft')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    await fireEvent.click(screen.getByText('Home settings'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
+  })
+
   it('creates Home on the first Send and preserves the draft through model settings', async () => {
     firstRun()
     render(App)
@@ -2119,6 +2172,42 @@ describe('Home onboarding', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
     expect(await screen.findByText('Local mode')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
+    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
+  })
+
+  it.each([false, true])('retries startup status after failure and preserves the draft with signed_in=%s', async (signedIn) => {
+    firstRun()
+    threadSummaryResult = []
+    const original = invoke.getMockImplementation()
+    let fail = true
+    const recovered = deferred()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'auth_status') return fail ? Promise.reject('unavailable') : recovered.promise
+      if (command === 'local_mode_enter') return Promise.resolve()
+      if (command === 'local_mode_provider_status') return Promise.resolve([])
+      return original(command, payload)
+    })
+    render(App)
+    await firstSend()
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(1)
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not open model settings. Try again.')
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(2)
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
+
+    fail = false
+    const openSettings = screen.getByRole('button', { name: 'Open model settings' })
+    await fireEvent.click(openSettings)
+    expect(openSettings).toBeDisabled()
+    await fireEvent.click(openSettings)
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(3)
+    recovered.resolve({ signed_in: signedIn, subject: signedIn ? 'token-subject' : null })
+    await waitFor(() => expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument())
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    if (signedIn) expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
+    else expect(await screen.findByText('Local mode')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
     expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
   })
@@ -2326,7 +2415,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space', expect.any(Function)))
 
     globalShortcutHandler({ state: 'Released' })
@@ -2352,7 +2441,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     await waitFor(() => expect(globalShortcutHandler).toBeTypeOf('function'))
 
     globalShortcutHandler({ state: 'Pressed' })
@@ -2720,7 +2809,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Before' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
 
@@ -2758,7 +2847,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Original draft' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
 
@@ -2800,7 +2889,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Exact draft  ' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
 
@@ -2843,7 +2932,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Snapshot' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
 
@@ -2911,7 +3000,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Exact draft  ' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.pointerDown(voice, { button: 0, pointerId: 1 })
@@ -2946,7 +3035,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Existing draft' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
@@ -3282,7 +3371,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     const view = render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
@@ -3292,7 +3381,7 @@ describe('voice dictation', () => {
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
 
     render(App)
-    const nextComposer = await screen.findByPlaceholderText('Ask anything')
+    const nextComposer = await findWorkspaceComposer()
     await fireEvent.input(nextComposer, { target: { value: 'Question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(screen.getByRole('button', { name: 'Voice' })).toBeDisabled()
@@ -3678,7 +3767,7 @@ describe('chat submission settlement', () => {
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'New question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
@@ -3705,7 +3794,7 @@ describe('chat submission settlement', () => {
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'New question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
@@ -4888,7 +4977,7 @@ describe('composer auto-grow', () => {
 
   it('grows to the ten-line cap, then scrolls instead of growing further', async () => {
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     expect(composer.style.height).toBe(resting)
 
     await fireEvent.input(composer, { target: { value: lines(5) } })
@@ -4913,7 +5002,7 @@ describe('composer auto-grow', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: lines(8) } })
     expect(composer.style.height).toBe(`${8 * row}px`)
 
@@ -4936,7 +5025,7 @@ describe('composer auto-grow', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: lines(3) } })
     expect(composer.style.height).toBe(`${3 * row}px`)
 
@@ -4961,7 +5050,7 @@ describe('composer auto-grow', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     composer.focus()
 
     composer.scrollTop = 37
@@ -4994,7 +5083,7 @@ describe('composer auto-grow', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     expect(composer.style.height).toBe(resting)
 
     // Retry writes the four-line prompt into the draft with no input event,
@@ -5014,7 +5103,7 @@ describe('composer auto-grow', () => {
       disconnect() { this.disconnected = true }
     }
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: lines(6) } })
     expect(composer.style.height).toBe(`${6 * row}px`)
 

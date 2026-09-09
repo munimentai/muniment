@@ -120,16 +120,14 @@
         <button class="primary" onclick={send} disabled={busy || picking}>Save Home</button>
       </div>
     {:else}
-      {#if onboarding.name !== 'loading'}
-        <div class="composer">
-          <label class="visually-hidden" for="first-message">Message</label>
-          <textarea id="first-message" use:focusMessage bind:value={draft} onkeydown={keydown} rows="3" placeholder="Ask anything" aria-describedby="first-message-hint"></textarea>
-          <div class="composer-row">
-            <span id="first-message-hint">Your memory stays on this device.</span>
-            <button class="primary" onclick={send} aria-disabled={busy || picking ? 'true' : undefined}>Send</button>
-          </div>
+      <div class="composer">
+        <label class="visually-hidden" for="first-message">Message</label>
+        <textarea id="first-message" use:focusMessage bind:value={draft} onkeydown={keydown} rows="3" placeholder="Ask anything" aria-describedby="first-message-hint"></textarea>
+        <div class="composer-row">
+          <span id="first-message-hint">Your memory stays on this device.</span>
+          <button class="primary" onclick={send} aria-disabled={busy || picking ? 'true' : undefined}>Send</button>
         </div>
-      {/if}
+      </div>
       <div class="chips" aria-label="First-run settings">
         <button data-testid="onboarding-model" aria-expanded={panel === 'model'} aria-controls="onboarding-model-panel" onclick={() => { panel = panel === 'model' ? null : 'model' }}>Connect a model</button>
         <button class="home-chip" data-testid="onboarding-home-path" title={onboarding.homePath} aria-expanded={panel === 'home'} aria-controls="onboarding-home-panel" onclick={() => { panel = panel === 'home' ? null : 'home' }}>{onboarding.homePath || (onboarding.name === 'loading' ? 'Finding Home…' : 'Home unavailable')}</button>

@@ -989,6 +989,7 @@
 
   async function openFirstRunModelSettings() {
     await startupReady
+    if (auth.name === 'error' && auth.retry === 'status') await run('status')
     if (auth.name === 'signed-out') await enterLocalMode()
     if (!workspaceMode()) throw new Error('Model settings are unavailable.')
     onboarding = { name: 'complete', homePath: onboarding.homePath }
