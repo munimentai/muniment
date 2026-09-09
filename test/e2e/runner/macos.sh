@@ -11,6 +11,7 @@ archive="$run_root/muniment-nightly.app.zip"
 expanded="$run_root/expanded"
 state_root="$run_root/state"
 runtime_state=${MUNIMENT_E2E_RUNTIME_STATE:-"$HOME/.local/share/ai.muniment.desktop"}
+runtime_config=${MUNIMENT_E2E_RUNTIME_CONFIG:-"$HOME/.config/ai.muniment.desktop"}
 runtime_log="$HOME/Library/Logs/Muniment/runtime.log"
 cleanup_log="$run_root/cleanup.log"
 cleanup_status_ledger=
@@ -254,6 +255,8 @@ runtime_endpoint="$runtime_state/muniment/attach-v1.sock"
 runtime_target="gui/$(id -u)/ai.muniment.runtime"
 if probe_macos_runtime "$runtime_target" "$app_pid" "$raw/driver-app.log" "$runtime_endpoint" "$raw/runtime-connection.log"; then
   node test/e2e/support/probe-companion-pairing.mjs "$runtime_endpoint" >"$raw/companion-pairing.log" 2>&1 || status=1
+  node test/e2e/support/probe-run-start.mjs "$installed_bundle/Contents/MacOS/$process_name" \
+    "$runtime_endpoint" "$runtime_state" "$runtime_config" "$raw/driver-app.log" >"$raw/run-start.log" 2>&1 || status=1
 else
   status=1
 fi
