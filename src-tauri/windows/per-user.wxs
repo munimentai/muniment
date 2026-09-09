@@ -29,6 +29,9 @@
                  InstallScope="perUser"
                  SummaryCodepage="!(loc.TauriCodepage)"/>
 
+        <!-- InstallScope sets limited privileges. Clear ALLUSERS to enforce per-user registration in both silent and interactive installs. -->
+        <SetProperty Id="ALLUSERS" Value="" Before="FindRelatedProducts" Sequence="both">1</SetProperty>
+
         <!-- https://docs.microsoft.com/en-us/windows/win32/msi/reinstallmode -->
         <!-- reinstall all files; rewrite all registry entries; reinstall all shortcuts -->
         <Property Id="REINSTALLMODE" Value="amus" />

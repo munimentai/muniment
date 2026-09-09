@@ -94,6 +94,13 @@ describe('Windows runtime bundle paths', () => {
     expect(userTemplate).toContain('{{resources}}')
   })
 
+  it('Clears machine scope before upgrade detection in silent and interactive per-user installs.', () => {
+    expect(userTemplate).toContain('<SetProperty Id="ALLUSERS" Value="" Before="FindRelatedProducts" Sequence="both">1</SetProperty>')
+    expect(userTemplate).not.toMatch(/<Property\b[^>]*\bId="ALLUSERS"[^>]*\bValue="[^"]+"/)
+    expect(machineTemplate).toContain('InstallScope="perMachine"')
+    expect(machineTemplate).not.toContain('<SetProperty Id="ALLUSERS"')
+  })
+
   it('configures the machine MSI for the Program Files install root', () => {
     expect(machineConfig.bundle.resources).toMatchObject(runtimeResource)
     expect(machineTemplate).toContain('<Directory Id="$(var.PlatformProgramFilesFolder)" Name="PFiles">')
