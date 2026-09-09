@@ -128,6 +128,36 @@ fn maps_a_live_endpoint_bind_to_contended() {
 }
 
 #[test]
+fn distinguishes_a_socket_bind_failure_from_a_state_open_failure() {
+    let profile = TemporaryProfile::new("macos-acceptor-bind-failed", true);
+    let result = MacosAttachAcceptorWithBoundary::<StoppedBoundary>::bind_with(
+        &profile.profile,
+        &profile.config,
+        |_| Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+    );
+    assert!(matches!(result, Err(MacosAttachBindFailure::Unavailable)));
+
+    let blocked_profile = profile.root.join("blocked-profile");
+    std::fs::write(&blocked_profile, "not a directory").unwrap();
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    struct DropBoundary(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for DropBoundary {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let result =
+        MacosAttachAcceptorWithBoundary::bind_with(&blocked_profile, &profile.config, |_| {
+            Ok(DropBoundary(Arc::clone(&dropped)))
+        });
+    assert!(matches!(
+        result,
+        Err(MacosAttachBindFailure::StateOpenFailed)
+    ));
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
 fn retains_the_single_opened_activation_state() {
     let profile = TemporaryProfile::new("macos-acceptor-state", true);
     let acceptor =

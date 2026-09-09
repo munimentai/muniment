@@ -67,7 +67,12 @@ index_failure_artifacts() {
 collect_local_mode_pi_log() {
   local session_root="$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions"
   local destination="$raw/pi-local-mode-chat.log" session count=0
-  # Pi writes provider outcomes to its session JSONL, not the runtime stderr log.
+  # Keep the local run diagnostics before another spec starts Pi.
+  if [[ -f "$raw/muniment-runtime.log" ]]; then
+    cp -- "$raw/muniment-runtime.log" "$raw/pi-local-mode-stderr.log" || return 1
+  else
+    printf 'No runtime log exists for the local mode run.\n' >"$raw/pi-local-mode-stderr.log" || return 1
+  fi
   : >"$destination" || return 1
   for session in "$session_root"/*.jsonl; do
     [[ -f $session && ! -L $session ]] || continue

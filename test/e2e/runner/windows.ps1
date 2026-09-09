@@ -80,7 +80,7 @@ function Invoke-BoundedProcess([string]$File, [string]$Arguments, [int]$TimeoutS
 
 function Resolve-NativeCommand([string]$File, [string]$FailureMessage) {
   try {
-    return (Get-Command $File -CommandType Application -ErrorAction Stop).Source
+    return (Get-Command $File -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
   } catch {
     throw "$FailureMessage`: could not resolve $File`: $($_.Exception.Message)"
   }
@@ -134,25 +134,72 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
   return $stdout
 }
 
-function Get-UninstallEntries {
+function Get-UninstallEntries([ValidateSet("HKCU", "HKLM")][string]$Hive = "HKCU") {
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
+    if ($env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE) {
+      if (Test-Path -LiteralPath $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE) {
+        $entries = Get-Content -LiteralPath $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE -Raw | ConvertFrom-Json
+        return @($entries | Where-Object { $_.Hive -eq $Hive })
+      }
+      return @()
+    }
+    if ($Hive -eq "HKLM") { return @() }
     if ($testRegistration -and (Test-Path -LiteralPath $testRegistration)) {
       return @([pscustomobject]@{ PSChildName = "test-product"; DisplayName = (Get-Content -LiteralPath $testRegistration -Raw) })
     }
     return @()
   }
   $roots = @(
-    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
-    "HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+    "$Hive`:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+    "$Hive`:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
   )
   return @($roots | Where-Object { Test-Path $_ } | ForEach-Object { Get-ChildItem $_ | ForEach-Object {
     $properties = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-    if ($properties) { [pscustomobject]@{ PSChildName = $_.PSChildName; PSPath = $_.PSPath; DisplayName = $properties.DisplayName } }
+    if ($properties) {
+      $displayName = $properties.PSObject.Properties["DisplayName"]
+      [pscustomobject]@{ PSChildName = $_.PSChildName; PSPath = $_.PSPath; DisplayName = $(if ($displayName) { $displayName.Value } else { $null }) }
+    }
   } })
 }
 
-function Get-ProductRegistration {
-  return @(Get-UninstallEntries | Where-Object { $_.DisplayName -eq "muniment" })
+function Get-ProductRegistration([object[]]$Entries = @(Get-UninstallEntries)) {
+  return @($Entries | Where-Object { $_.DisplayName -eq "muniment" })
+}
+
+function Save-RegistrationSnapshot([string]$Phase) {
+  $entries = @(Get-UninstallEntries)
+  $registrations = @(Get-ProductRegistration $entries)
+  $snapshot = [ordered]@{
+    count = $registrations.Count
+    entries = $registrations
+    userUninstallEntries = $entries
+    machineUninstallEntries = @(Get-UninstallEntries "HKLM")
+  }
+  ConvertTo-Json -InputObject $snapshot -Depth 4 | Set-Content -LiteralPath (Join-Path $raw "registration-$Phase.json") -Encoding UTF8
+  return $registrations
+}
+
+function Assert-ProductRegistration([object[]]$Registrations) {
+  $entries = ConvertTo-Json -InputObject @($Registrations | Select-Object DisplayName, PSChildName, PSPath) -Compress
+  $detail = "count=$($Registrations.Count) entries=$entries"
+  Write-Output "per-user MSI registration: $detail"
+  if ($Registrations.Count -ne 1) { throw "per-user MSI is not registered exactly once: $detail" }
+}
+
+function Install-Product {
+  Save-RegistrationSnapshot "before" | Out-Null
+  $msiLog = Join-Path $runRoot "msi-verbose.log"
+  $script:installAttempted = $true
+  try {
+    Invoke-BoundedProcess "msiexec.exe" "/i `"$msi`" /qn /norestart /L*V `"$msiLog`"" 180 (Join-Path $raw "installer-process.log")
+  } finally {
+    # Decode the MSI log before the UTF-8 redactor reads it.
+    if (Test-Path -LiteralPath $msiLog) {
+      Get-Content -LiteralPath $msiLog -Raw | Add-Content -LiteralPath $installerLog -Encoding UTF8
+    }
+    $script:registrations = @(Save-RegistrationSnapshot "after")
+  }
+  Assert-ProductRegistration $registrations
 }
 
 function Get-HarnessProcesses {
@@ -246,6 +293,7 @@ function Finalize-Run {
       if ($registration.Count -gt 1) { throw "product is registered more than once" }
       $code = if ($registration.Count -eq 1) { $registration[0].PSChildName } else { $productCode }
       if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
+        if ($env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE) { Remove-Item -LiteralPath $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE -Force }
         if ($env:MUNIMENT_E2E_FINALIZER_TEST_REMAIN_REGISTRATION -ne "1" -and $testRegistration) { Remove-Item $testRegistration -Force }
         if ($env:MUNIMENT_E2E_FINALIZER_TEST_REMAIN_FILES -ne "1" -and $installDirectory) { Remove-Item $installDirectory -Recurse -Force }
       } elseif ($code) { Invoke-BoundedProcess "msiexec.exe" "/x $code /qn /norestart" 180 (Join-Path $raw "uninstaller.log") }
@@ -278,9 +326,8 @@ function Finalize-Run {
   Invoke-Cleanup "remove-msi" { if ($msi) { Remove-Item $msi -Force -ErrorAction SilentlyContinue } }
   Invoke-Cleanup "remove-auth-url" { if ($authUrlFile) { Remove-Item $authUrlFile -Force -ErrorAction SilentlyContinue } }
   if ($script:redacted) {
-    $publicationStatus = $cleanupStatus
     Invoke-Cleanup "publish-artifacts" { if (-not $safe -or -not (Test-Path $safe)) { throw "safe staging is unavailable" }; Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue; Move-Item $safe $artifacts }
-    if ($cleanupStatus -ne $publicationStatus) { Invoke-Cleanup "suppress-artifacts" { Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue; if ($safe) { Remove-Item $safe -Recurse -Force -ErrorAction SilentlyContinue } } }
+    if ($script:cleanupLastStatus -ne 0) { Invoke-Cleanup "suppress-artifacts" { Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue; if ($safe) { Remove-Item $safe -Recurse -Force -ErrorAction SilentlyContinue } } }
   } else {
     Invoke-Cleanup "suppress-artifacts" { if ($artifacts) { Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue }; if ($safe) { Remove-Item $safe -Recurse -Force -ErrorAction SilentlyContinue } }
     try {
@@ -353,6 +400,13 @@ try {
     Add-Content -LiteralPath $installerLog -Value $resolvedNpm
     return
   }
+  if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1" -and $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE) {
+    function Invoke-BoundedProcess {
+      Set-Content -LiteralPath (Join-Path $runRoot "msi-verbose.log") -Value "MSI fixture: caf$([char]0xE9) $env:MUNIMENT_E2E_PASSWORD" -Encoding Unicode
+    }
+    Install-Product
+    return
+  }
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
     if ($env:MUNIMENT_E2E_FINALIZER_TEST_TRANSCRIPT_TEXT) { Write-Output $env:MUNIMENT_E2E_FINALIZER_TEST_TRANSCRIPT_TEXT }
     $installDirectory = Join-Path $runRoot "installed"
@@ -407,11 +461,7 @@ try {
   $env:LOCALAPPDATA = Join-Path $stateRoot "Local"
   $env:npm_config_cache = Join-Path $runRoot "npm-cache"
   New-Item -ItemType Directory -Force $env:APPDATA, $env:LOCALAPPDATA | Out-Null
-  $installAttempted = $true
-  Invoke-BoundedProcess "msiexec.exe" "/i `"$msi`" /qn /norestart" 180 $installerLog
-
-  $registrations = @(Get-ProductRegistration)
-  if ($registrations.Count -ne 1) { throw "per-user MSI is not registered exactly once" }
+  Install-Product
   $registration = Get-ItemProperty $registrations[0].PSPath
   $productCode = $registrations[0].PSChildName
   $installDirectory = $registration.InstallLocation
@@ -546,6 +596,19 @@ namespace MunimentE2e {
   if ($raw -and (Test-Path -LiteralPath $raw)) {
     Copy-Item -LiteralPath $transcriptPath -Destination (Join-Path $raw "runner-transcript.log") -Force -ErrorAction SilentlyContinue
   }
+  $diagnosticRoot = Join-Path $env:TEMP ([guid]::NewGuid().ToString("N"))
+  $diagnosticRaw = Join-Path $diagnosticRoot "raw"
+  try {
+    if ($diagnostic -and $raw -and (Test-Path -LiteralPath $raw)) {
+      New-Item -ItemType Directory -Force $diagnosticRaw | Out-Null
+      foreach ($name in @("installer.log", "registration-before.json", "registration-after.json")) {
+        $source = Join-Path $raw $name
+        if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $diagnosticRaw }
+      }
+    }
+  } catch {
+    Save-RunnerFailure $_
+  }
   try {
     Finalize-Run
   } catch {
@@ -554,14 +617,13 @@ namespace MunimentE2e {
   New-Item -ItemType Directory -Force $artifacts -ErrorAction SilentlyContinue | Out-Null
   if ($diagnostic) {
     # Publish the cause independently so cleanup cannot discard it.
-    $diagnosticRoot = Join-Path $env:TEMP ([guid]::NewGuid().ToString("N"))
     try {
-      $diagnosticRaw = Join-Path $diagnosticRoot "raw"
       $diagnosticSafe = Join-Path $diagnosticRoot "safe"
       New-Item -ItemType Directory -Force $diagnosticRaw | Out-Null
       Set-Content -LiteralPath (Join-Path $diagnosticRaw "runner-failure.txt") -Value $diagnostic -Encoding UTF8
       Invoke-NativeCommand "node" "`"$redactor`" `"$diagnosticRaw`" `"$diagnosticSafe`"" (Join-Path $diagnosticRoot "redaction.log") "runner failure redaction failed" | Out-Null
       Copy-Item -LiteralPath (Join-Path $diagnosticSafe "runner-failure.txt") -Destination $diagnosticFile -Force
+      Get-ChildItem -LiteralPath $diagnosticSafe -File | Where-Object Name -NE "runner-failure.txt" | Copy-Item -Destination $artifacts -Force
     } catch {
       $status = 1
     } finally {
