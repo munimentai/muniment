@@ -11,6 +11,7 @@ archive="$run_root/muniment-nightly.app.zip"
 expanded="$run_root/expanded"
 state_root="$run_root/state"
 runtime_state=${MUNIMENT_E2E_RUNTIME_STATE:-"$HOME/.local/share/ai.muniment.desktop"}
+runtime_log="$HOME/Library/Logs/Muniment/runtime.log"
 cleanup_log="$run_root/cleanup.log"
 cleanup_status_ledger="$run_root/cleanup-status.log"
 redaction_report="$run_root/redaction-failure.txt"
@@ -103,6 +104,9 @@ finalize() {
   (( finalized == 0 )) || return
   finalized=1
   trap - EXIT INT TERM
+  if (( runtime_touched )); then
+    cleanup_step collect-runtime-diagnostics collect_macos_runtime_diagnostics "gui/$(id -u)/ai.muniment.runtime" "$runtime_log" "$raw"
+  fi
   cleanup_step stop-app stop_app
   if (( runtime_touched )); then cleanup_step stop-runtime stop_runtime; fi
   if (( installed )); then cleanup_step remove-bundle rm -rf -- "$installed_bundle"; fi
