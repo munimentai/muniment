@@ -143,9 +143,8 @@ function Get-UninstallEntries([ValidateSet("HKCU", "HKLM")][string]$Hive = "HKCU
       }
       return @()
     }
-    if ($Hive -eq "HKLM") { return @() }
-    if ($testRegistration -and (Test-Path -LiteralPath $testRegistration)) {
-      return @([pscustomobject]@{ PSChildName = "test-product"; DisplayName = (Get-Content -LiteralPath $testRegistration -Raw) })
+    if ($Hive -eq "HKCU" -and $testRegistration -and (Test-Path -LiteralPath $testRegistration)) {
+      return @([pscustomobject]@{ PSChildName = "test-product"; PSPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\test-product"; DisplayName = (Get-Content -LiteralPath $testRegistration -Raw) })
     }
     return @()
   }
@@ -167,23 +166,37 @@ function Get-ProductRegistration([object[]]$Entries = @(Get-UninstallEntries)) {
 }
 
 function Save-RegistrationSnapshot([string]$Phase) {
-  $entries = @(Get-UninstallEntries)
-  $registrations = @(Get-ProductRegistration $entries)
+  $userEntries = @(Get-UninstallEntries "HKCU")
+  $machineEntries = @(Get-UninstallEntries "HKLM")
+  $userRegistrations = @(Get-ProductRegistration $userEntries)
+  $machineRegistrations = @(Get-ProductRegistration $machineEntries)
   $snapshot = [ordered]@{
-    count = $registrations.Count
-    entries = $registrations
-    userUninstallEntries = $entries
-    machineUninstallEntries = @(Get-UninstallEntries "HKLM")
+    hkcu = @{ count = $userRegistrations.Count; entries = $userRegistrations }
+    hklm = @{ count = $machineRegistrations.Count; entries = $machineRegistrations }
+    userUninstallEntries = $userEntries
+    machineUninstallEntries = $machineEntries
   }
-  ConvertTo-Json -InputObject $snapshot -Depth 4 | Set-Content -LiteralPath (Join-Path $raw "registration-$Phase.json") -Encoding UTF8
-  return $registrations
+  ConvertTo-Json -InputObject $snapshot -Depth 5 | Set-Content -LiteralPath (Join-Path $raw "registration-$Phase.json") -Encoding UTF8
+  return $snapshot
 }
 
-function Assert-ProductRegistration([object[]]$Registrations) {
-  $entries = ConvertTo-Json -InputObject @($Registrations | Select-Object DisplayName, PSChildName, PSPath) -Compress
-  $detail = "count=$($Registrations.Count) entries=$entries"
+function Assert-ProductRegistration([object[]]$Registrations, [object[]]$MachineRegistrations) {
+  $entries = [ordered]@{
+    hkcu = @($Registrations | Select-Object DisplayName, PSChildName, PSPath)
+    hklm = @($MachineRegistrations | Select-Object DisplayName, PSChildName, PSPath)
+  } | ConvertTo-Json -Depth 4 -Compress
+  $detail = "hkcu=$($Registrations.Count) hklm=$($MachineRegistrations.Count) entries=$entries"
   Write-Output "per-user MSI registration: $detail"
-  if ($Registrations.Count -ne 1) { throw "per-user MSI is not registered exactly once: $detail" }
+  if ($Registrations.Count -ne 1 -or $MachineRegistrations.Count -ne 0) {
+    # Publish redacted evidence before the assertion throws.
+    try {
+      Invoke-NativeCommand "node" "`"$redactor`" `"$raw`" `"$safe`"" $cleanupLog "registration artifact redaction failed" | Out-Null
+      Get-ChildItem -LiteralPath $safe -File | Copy-Item -Destination $artifacts -Force
+    } catch {
+      Write-Output "Registration artifact publication failed."
+    }
+    throw "per-user MSI registration requires hkcu=1 hklm=0: $detail"
+  }
 }
 
 function Install-Product {
@@ -195,11 +208,14 @@ function Install-Product {
   } finally {
     # Decode the MSI log before the UTF-8 redactor reads it.
     if (Test-Path -LiteralPath $msiLog) {
-      Get-Content -LiteralPath $msiLog -Raw | Add-Content -LiteralPath $installerLog -Encoding UTF8
+      $msiText = Get-Content -LiteralPath $msiLog -Raw
+      $msiText | Set-Content -LiteralPath (Join-Path $raw "msi-verbose.log") -Encoding UTF8
+      $msiText | Add-Content -LiteralPath $installerLog -Encoding UTF8
     }
-    $script:registrations = @(Save-RegistrationSnapshot "after")
+    $snapshot = Save-RegistrationSnapshot "after"
+    $script:registrations = @($snapshot.hkcu.entries)
   }
-  Assert-ProductRegistration $registrations
+  Assert-ProductRegistration $registrations @($snapshot.hklm.entries)
 }
 
 function Get-HarnessProcesses {
@@ -601,7 +617,7 @@ namespace MunimentE2e {
   try {
     if ($diagnostic -and $raw -and (Test-Path -LiteralPath $raw)) {
       New-Item -ItemType Directory -Force $diagnosticRaw | Out-Null
-      foreach ($name in @("installer.log", "registration-before.json", "registration-after.json")) {
+      foreach ($name in @("installer.log", "msi-verbose.log", "registration-before.json", "registration-after.json")) {
         $source = Join-Path $raw $name
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $diagnosticRaw }
       }

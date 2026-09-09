@@ -12,6 +12,7 @@ mod macos_runtime_service;
 mod memory;
 mod model_install;
 mod onboarding_import;
+mod onboarding_scan;
 #[cfg(test)]
 mod test_support;
 mod thread_retention;
@@ -127,6 +128,7 @@ fn main() {
             home::home_confirm_import,
             onboarding_import::onboarding_import_preview,
             onboarding_import::onboarding_import_extract,
+            onboarding_scan::onboarding_scan,
             model_install::parakeet_install_facts,
             model_install::parakeet_install_start,
             model_install::parakeet_install_status,
