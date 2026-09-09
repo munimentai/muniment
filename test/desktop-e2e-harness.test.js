@@ -793,6 +793,48 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
     expect(report).not.toContain(directory)
   })
 
+  const collectMacosDiagnostics = ({ job = 'missing', log, secret = '' } = {}) => {
+    const directory = temp(); const raw = path.join(directory, 'raw'); const artifacts = path.join(directory, 'safe')
+    const launchctl = path.join(directory, 'launchctl'); const runtimeLog = path.join(directory, 'runtime.log')
+    fs.mkdirSync(raw)
+    fs.writeFileSync(launchctl, job === 'active'
+      ? '#!/bin/sh\nprintf "state = running\\npid = 42\\n"\n'
+      : '#!/bin/sh\nprintf "Could not find service ai.muniment.runtime\\n" >&2\nexit 113\n', { mode: 0o700 })
+    if (log !== undefined) fs.writeFileSync(runtimeLog, log)
+    const result = spawnSync('bash', ['-c', 'source "$1"; collect_macos_runtime_diagnostics gui/501/ai.muniment.runtime "$2" "$3" && node test/e2e/support/redact.mjs "$3" "$4"', 'bash', path.join(root, 'test/e2e/support/macos-runtime-probe.sh'), runtimeLog, raw, artifacts], {
+      encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_LAUNCHCTL: launchctl, GH_TOKEN: secret },
+    })
+    return { result, artifacts }
+  }
+
+  it.each(['active', 'missing'])('publishes native registration errors and launchctl output when the agent is %s', (job) => {
+    const reason = 'event=runtime_service_registration_failed domain="SMAppServiceErrorDomain" code=2 description="The plist is invalid."\n'
+    const { result, artifacts } = collectMacosDiagnostics({ job, log: reason })
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'runtime.log'), 'utf8')).toBe(reason)
+    const launchctlLog = fs.readFileSync(path.join(artifacts, 'runtime-launchctl.log'), 'utf8')
+    expect(launchctlLog).toContain(job === 'active' ? 'state = running\npid = 42' : 'Could not find service ai.muniment.runtime')
+    expect(launchctlLog).toContain(`launchctl_exit_status=${job === 'active' ? 0 : 113}`)
+    expect(finalizerPhases.indexOf('collect-runtime-diagnostics')).toBeLessThan(finalizerPhases.indexOf('stop-app'))
+    expect(fs.statSync(path.join(artifacts, 'runtime.log')).mode & 0o777).toBe(0o600)
+  })
+
+  it('names a missing runtime log in the envelope', () => {
+    const { result, artifacts } = collectMacosDiagnostics()
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'runtime.log'), 'utf8')).toBe('No runtime log exists for this user.\n')
+  })
+
+  it('bounds and redacts runtime diagnostics before publication', () => {
+    const secret = 'fixture-registration-secret'
+    const { result, artifacts } = collectMacosDiagnostics({ log: `${'x'.repeat(300000)}\nAuthorization: Bearer ${secret}\n`, secret })
+    expect(result.status, result.stderr).toBe(0)
+    const log = fs.readFileSync(path.join(artifacts, 'runtime.log'), 'utf8')
+    expect(Buffer.byteLength(log)).toBeLessThanOrEqual(262144)
+    expect(log).not.toContain(secret)
+    expect(log).toContain('[REDACTED:credential-header]')
+  })
+
   it('verifies the installed runtime and LaunchAgent without registering the agent', () => {
     const { result, artifacts } = runMacosPayload()
     const payloadLog = fs.existsSync(path.join(artifacts, 'payload.log')) ? fs.readFileSync(path.join(artifacts, 'payload.log'), 'utf8') : ''
@@ -863,7 +905,7 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
 
   it('cleans processes, the installed bundle, and state before redaction and publication', () => {
     const phases = finalizerPhases
-    expect(phases.slice(0, 12)).toEqual(['stop-app', 'stop-runtime', 'remove-bundle', 'remove-runtime-state', 'remove-state', 'bundle-gone', 'processes-gone', 'runtime-process-gone', 'runtime-job-stopped', 'runtime-state-gone', 'state-gone', 'stage-cleanup-log'])
+    expect(phases.slice(0, 13)).toEqual(['collect-runtime-diagnostics', 'stop-app', 'stop-runtime', 'remove-bundle', 'remove-runtime-state', 'remove-state', 'bundle-gone', 'processes-gone', 'runtime-process-gone', 'runtime-job-stopped', 'runtime-state-gone', 'state-gone', 'stage-cleanup-log'])
     expect(phases.indexOf('processes-gone')).toBeLessThan(phases.indexOf('redact-artifacts'))
     expect(phases.indexOf('redact-artifacts')).toBeLessThan(phases.indexOf('publish-artifacts'))
     expect(finalizer).toContain('suppress-artifacts')
