@@ -28,9 +28,13 @@ describe('PR gate shape', () => {
     expect(changes).toContain('installer: ${{ steps.changes.outputs.installer }}')
     expect(changes).toContain('desktop: ${{ steps.changes.outputs.desktop }}')
     expect(changes).toContain('echo "installer=$installer" >> "$GITHUB_OUTPUT"')
-    const installerCase = changes.match(/case "\$path" in\n\s+([^)]+)\)\n[\s\S]*?installer=true/)
-    expect(installerCase).not.toBeNull()
-    for (const p of installerPaths) expect(installerCase[1].split('|')).toContain(p)
+    const lines = changes.split('\n')
+    const flag = lines.findIndex((line) => line.trim() === 'installer=true')
+    expect(flag).toBeGreaterThan(0)
+    let patternLine = flag - 1
+    while (lines[patternLine].trim().startsWith('#')) patternLine -= 1
+    const patterns = lines[patternLine].trim().replace(/\)$/, '').split('|')
+    for (const p of installerPaths) expect(patterns).toContain(p)
   })
 
   it('runs smoke and the preflights off the changes job, not off each other', () => {
