@@ -1122,58 +1122,103 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
     expect(install.indexOf('Save-RegistrationSnapshot "before"')).toBeLessThan(install.indexOf('Invoke-BoundedProcess'))
     expect(install).toContain('/qn /norestart /L*V `"$msiLog`"')
     expect(install).toContain('(Join-Path $raw "installer-process.log")')
-    expect(install).toMatch(/finally \{[\s\S]+Get-Content -LiteralPath \$msiLog -Raw \| Add-Content -LiteralPath \$installerLog -Encoding UTF8[\s\S]+Save-RegistrationSnapshot "after"/)
+    expect(install).toMatch(/finally \{[\s\S]+Get-Content -LiteralPath \$msiLog -Raw[\s\S]+Set-Content -LiteralPath \(Join-Path \$raw "msi-verbose.log"\) -Encoding UTF8[\s\S]+Add-Content -LiteralPath \$installerLog -Encoding UTF8[\s\S]+Save-RegistrationSnapshot "after"/)
     expect(install.indexOf('Save-RegistrationSnapshot "after"')).toBeLessThan(install.indexOf('Assert-ProductRegistration $registrations'))
-    const backup = runner.lastIndexOf('foreach ($name in @("installer.log", "registration-before.json", "registration-after.json"))')
+    const backup = runner.lastIndexOf('foreach ($name in @("installer.log", "msi-verbose.log", "registration-before.json", "registration-after.json"))')
     expect(backup).toBeGreaterThan(0)
     expect(backup).toBeLessThan(runner.lastIndexOf('\n    Finalize-Run'))
   })
 
-  const registrationFixture = (count) => {
+  it('Reads both uninstall roots for each hive and publishes redacted evidence before the throw.', () => {
+    const reader = runner.slice(runner.indexOf('function Get-UninstallEntries'), runner.indexOf('function Get-ProductRegistration'))
+    expect(reader).not.toContain('if ($Hive -eq "HKLM") { return @() }')
+    expect(reader).toContain('"$Hive`:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"')
+    expect(reader).toContain('"$Hive`:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"')
+    const assertion = runner.slice(runner.indexOf('function Assert-ProductRegistration'), runner.indexOf('function Install-Product'))
+    expect(assertion).toContain('$Registrations.Count -ne 1 -or $MachineRegistrations.Count -ne 0')
+    expect(assertion.indexOf('Invoke-NativeCommand "node"')).toBeLessThan(assertion.indexOf('Copy-Item -Destination $artifacts'))
+    expect(assertion.indexOf('Copy-Item -Destination $artifacts')).toBeLessThan(assertion.indexOf('throw "per-user MSI'))
+  })
+
+  it.skipIf(process.platform !== 'win32')('Walks both native registry roots for each hive outside fixture mode.', () => {
+    const directory = temp()
+    const script = path.join(directory, 'registry-reader.ps1')
+    const reader = runner.slice(runner.indexOf('function Get-UninstallEntries'), runner.indexOf('function Get-ProductRegistration'))
+    fs.writeFileSync(script, `
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+${reader}
+function Test-Path { param($Path) return $true }
+function Get-ChildItem { param($Path) return [pscustomobject]@{ PSChildName = 'product'; PSPath = "$Path\\product" } }
+function Get-ItemProperty { param($Path, $ErrorAction) return [pscustomobject]@{ DisplayName = 'muniment' } }
+@{ hkcu = @(Get-UninstallEntries 'HKCU'); hklm = @(Get-UninstallEntries 'HKLM') } | ConvertTo-Json -Depth 4 -Compress
+`)
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
+      encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_FINALIZER_TEST_MODE: '0' },
+    })
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    const inventory = JSON.parse(result.stdout)
+    for (const Hive of ['HKCU', 'HKLM']) {
+      expect(inventory[Hive.toLowerCase()].map((entry) => entry.PSPath)).toEqual([
+        `${Hive}:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\product`,
+        `${Hive}:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\product`,
+      ])
+    }
+  })
+
+  const registrationFixture = (hkcu, hklm) => {
     const fixture = path.join(temp(), 'registrations.json')
-    const registrations = Array.from({ length: count }, (_, index) => ({
-      Hive: 'HKCU', DisplayName: 'muniment', PSChildName: `user-product-${index}`,
-      PSPath: `HKCU:\\Software\\${index ? 'WOW6432Node\\' : ''}Microsoft\\Windows\\CurrentVersion\\Uninstall\\user-product-${index}`,
+    const entries = (Hive, count) => Array.from({ length: count }, (_, index) => ({
+      Hive, DisplayName: 'muniment', PSChildName: `${Hive}-product-${index}`,
+      PSPath: `${Hive}:\\Software\\${index ? 'WOW6432Node\\' : ''}Microsoft\\Windows\\CurrentVersion\\Uninstall\\${Hive}-product-${index}`,
     }))
+    const registrations = entries('HKCU', hkcu)
+    const machineRegistrations = entries('HKLM', hklm)
     const inventory = [
-      ...registrations,
-      { Hive: 'HKCU', DisplayName: 'another product', PSChildName: 'unrelated', PSPath: 'HKCU:\\unrelated' },
-      { Hive: 'HKCU', DisplayName: null, PSChildName: 'unnamed', PSPath: 'HKCU:\\unnamed' },
-      { Hive: 'HKLM', DisplayName: 'muniment', PSChildName: 'machine-product', PSPath: 'HKLM:\\machine-product' },
+      ...registrations, ...machineRegistrations,
+      ...['HKCU', 'HKLM'].flatMap((Hive) => [
+        { Hive, DisplayName: 'another product', PSChildName: 'unrelated', PSPath: `${Hive}:\\unrelated` },
+        { Hive, DisplayName: null, PSChildName: 'unnamed', PSPath: `${Hive}:\\unnamed` },
+      ]),
     ]
     fs.writeFileSync(fixture, JSON.stringify(inventory))
-    return { fixture, registrations }
+    return { fixture, registrations, machineRegistrations }
   }
 
-  it.skipIf(process.platform !== 'win32').each([
-    [0, ''], [2, ''], [0, 'redact-artifacts'], [2, 'redact-artifacts'],
-    [0, 'publish-artifacts'], [2, 'publish-artifacts'],
-  ])('Publishes count %s and the installer log after cleanup failure "%s".', (count, failed) => {
-    const { fixture, registrations } = registrationFixture(count)
+  it.skipIf(process.platform !== 'win32').each(
+    [0, 1, 2].flatMap((hkcu) => [0, 1, 2].filter((hklm) => hkcu !== 1 || hklm !== 0)
+      .flatMap((hklm) => ['', 'redact-artifacts', 'publish-artifacts'].map((failed) => [hkcu, hklm, failed]))),
+  )('Publishes hkcu=%s hklm=%s after cleanup failure "%s".', (hkcu, hklm, failed) => {
+    const { fixture, registrations, machineRegistrations } = registrationFixture(hkcu, hklm)
     const secret = 'installer-fixture-secret'
     const { result, artifacts, invoked, statuses } = runWindowsFinalizer(failed, '', {
       MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE: fixture,
       MUNIMENT_E2E_PASSWORD: secret,
     })
-    const entries = registrations.map(({ DisplayName, PSChildName, PSPath }) => ({ DisplayName, PSChildName, PSPath }))
-    const message = `per-user MSI is not registered exactly once: count=${count} entries=${JSON.stringify(entries)}`
+    const select = (entries) => entries.map(({ DisplayName, PSChildName, PSPath }) => ({ DisplayName, PSChildName, PSPath }))
+    const entries = { hkcu: select(registrations), hklm: select(machineRegistrations) }
+    const detail = `hkcu=${hkcu} hklm=${hklm} entries=${JSON.stringify(entries)}`
+    const message = `per-user MSI registration requires hkcu=1 hklm=0: ${detail}`
     expect(result.status, result.stdout + result.stderr).toBe(1)
+    expect(result.stdout).toContain(`per-user MSI registration: ${detail}`)
     expect(result.stdout).toContain(message)
     expect(fs.readFileSync(path.join(artifacts, 'runner-failure.txt'), 'utf8')).toContain(`message: ${message}`)
     if (!failed) expect(fs.readFileSync(path.join(artifacts, 'runner-transcript.log'), 'utf8')).toContain(message)
-    const log = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')
-    expect(log).toContain('MSI fixture: café [REDACTED]')
-    expect(log).not.toContain(secret)
-    expect(log).not.toContain('\0')
+    for (const name of ['installer.log', 'msi-verbose.log']) {
+      const log = fs.readFileSync(path.join(artifacts, name), 'utf8')
+      expect(log).toContain('MSI fixture: café [REDACTED]')
+      expect(log).not.toContain(secret)
+      expect(log).not.toContain('\0')
+    }
     for (const phase of ['before', 'after']) {
       const snapshot = JSON.parse(fs.readFileSync(path.join(artifacts, `registration-${phase}.json`), 'utf8').replace(/^\uFEFF/, ''))
-      expect(snapshot.count).toBe(count)
-      expect(snapshot.entries).toEqual(registrations)
-      expect(snapshot.userUninstallEntries).toHaveLength(count + 2)
-      expect(snapshot.machineUninstallEntries[0].PSChildName).toBe('machine-product')
+      expect(snapshot.hkcu).toEqual({ count: hkcu, entries: registrations })
+      expect(snapshot.hklm).toEqual({ count: hklm, entries: machineRegistrations })
+      expect(snapshot.userUninstallEntries).toHaveLength(hkcu + 2)
+      expect(snapshot.machineUninstallEntries).toHaveLength(hklm + 2)
     }
     expect(invoked).toContain('remove-raw')
-    expect(statuses.uninstall).toBe(count === 2 ? '1' : '0')
+    expect(statuses.uninstall).toBe(hkcu === 2 ? '1' : '0')
     if (failed === 'publish-artifacts') {
       expect(statuses['publish-artifacts']).toBe('1')
       expect(statuses['suppress-artifacts']).toBe('0')
@@ -1185,12 +1230,58 @@ describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerSh
     expect(fs.existsSync(path.join(artifacts, 'partial-publication'))).toBe(false)
   })
 
-  it.skipIf(process.platform !== 'win32')('Accepts one per-user registration and excludes the machine registration.', () => {
-    const { fixture } = registrationFixture(1)
+  it.skipIf(process.platform !== 'win32')('Accepts only one HKCU registration without an HKLM registration.', () => {
+    const { fixture } = registrationFixture(1, 0)
     const { result, artifacts } = runWindowsFinalizer('', '', { MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE: fixture })
     expect(result.status, result.stdout + result.stderr).toBe(0)
-    expect(result.stdout).toContain('per-user MSI registration: count=1 entries=[{"DisplayName":"muniment","PSChildName":"user-product-0"')
+    expect(result.stdout).toContain('per-user MSI registration: hkcu=1 hklm=0 entries={"hkcu":[{"DisplayName":"muniment","PSChildName":"HKCU-product-0"')
     expect(fs.existsSync(path.join(artifacts, 'runner-failure.txt'))).toBe(false)
+  })
+
+  it.skipIf(process.platform !== 'win32').each([false, true])('Publishes evidence before the assertion throws with an empty fixture: %s.', (empty) => {
+    const directory = temp()
+    const script = path.join(directory, 'registration-assertion.ps1')
+    const { fixture } = registrationFixture(0, 1)
+    if (empty) fs.writeFileSync(fixture, '[]')
+    const definitions = runner.slice(runner.indexOf('function Resolve-NativeCommand'), runner.indexOf('function Get-HarnessProcesses'))
+    fs.writeFileSync(script, `
+param($runRoot, $redactor)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$raw = Join-Path $runRoot 'raw'
+$safe = Join-Path $runRoot 'safe'
+$artifacts = Join-Path $runRoot 'artifacts'
+$cleanupLog = Join-Path $runRoot 'cleanup.log'
+$installerLog = Join-Path $raw 'installer.log'
+$msi = Join-Path $runRoot 'fixture.msi'
+New-Item -ItemType Directory -Force $raw, $artifacts | Out-Null
+${definitions}
+function Invoke-BoundedProcess {
+  Set-Content -LiteralPath (Join-Path $runRoot 'msi-verbose.log') -Value "MSI fixture: $env:MUNIMENT_E2E_PASSWORD" -Encoding Unicode
+}
+try { Install-Product } catch { Write-Output $_.Exception.Message; exit 1 }
+exit 0
+`)
+    const secret = 'registration-publication-secret'
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+      directory, path.join(root, 'test/e2e/support/redact.mjs')], {
+      encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_FINALIZER_TEST_MODE: '1',
+        MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE: fixture, MUNIMENT_E2E_PASSWORD: secret },
+    })
+    expect(result.status, result.stdout + result.stderr).toBe(1)
+    expect(result.stdout).toContain(`per-user MSI registration requires hkcu=1 hklm=0: hkcu=0 hklm=${empty ? 0 : 1}`)
+    for (const name of ['registration-before.json', 'registration-after.json', 'msi-verbose.log']) {
+      const text = fs.readFileSync(path.join(directory, 'artifacts', name), 'utf8')
+      expect(text).not.toContain(secret)
+      if (name.endsWith('.json')) {
+        const snapshot = JSON.parse(text.replace(/^\uFEFF/, ''))
+        expect(snapshot.hkcu.count).toBe(0)
+        expect(snapshot.hklm.count).toBe(empty ? 0 : 1)
+      } else {
+        expect(text).toContain('MSI fixture: [REDACTED]')
+        expect(text).not.toContain('\0')
+      }
+    }
   })
 
   it.skipIf(process.platform !== 'win32').each(['', 'redact-artifacts', 'publish-artifacts'])(
