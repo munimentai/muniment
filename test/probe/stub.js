@@ -1,7 +1,7 @@
 export const historyFixtures = {
   'signed-out': [],
   onboarding: [],
-  approved: [],
+  scan: [],
   access: [],
   empty: [],
   'local-mode': [
@@ -222,8 +222,8 @@ export function buildProbeCommandTable(fixtureName) {
   const fixtureHistory = historyFixtures[fixtureName]
   if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
   const history = structuredClone(fixtureHistory)
-  const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'approved'
-  const approvedFixture = fixtureName === 'approved'
+  const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'scan'
+  const scanFixture = fixtureName === 'scan'
   const accessFixture = fixtureName === 'access'
   const signedOutFixture = fixtureName === 'signed-out'
   const onboardingHomePath = '/Users/alice/Documents/Muniment'
@@ -258,15 +258,13 @@ export function buildProbeCommandTable(fixtureName) {
       return { configured: true, homePath: '/Documents/Muniment' }
     }
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
-    if (command === 'onboarding_import_preview') return {
-      entries: [
-        { name: 'profile.json', kind: 'json', byteSize: 24, excerpt: '{"name":"Alice"}', excerptTruncated: false },
+    if (command === 'onboarding_scan') return {
+      findings: [
+        { assistantId: 'claude-code', displayName: 'Claude Code', root: '/Users/alice/.claude', fileCount: 12, byteTotal: 1024, capped: false, warnings: [] },
+        { assistantId: 'pi', displayName: 'Pi', root: '/Users/alice/.pi/agent', fileCount: 3, byteTotal: 512, capped: true, warnings: ['timeCap'] },
       ],
-      totalByteSize: 24,
+      errors: [],
     }
-    if (command === 'onboarding_import_extract') return [
-      { sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export:profile.json' },
-    ]
     if (command === 'auth_status') {
       if (signedOutFixture) return { signed_in: false, subject: null }
       return { signed_in: true, subject: 'probe-user' }
@@ -370,7 +368,7 @@ export function buildProbeCommandTable(fixtureName) {
     invoke,
     history,
     onboardingFixture,
-    approvedFixture,
+    scanFixture,
     accessFixture,
     signedOutFixture,
     onboardingHomePath,
@@ -392,7 +390,7 @@ let callbackId = 0
 const {
   history,
   onboardingFixture,
-  approvedFixture,
+  scanFixture,
   accessFixture,
   signedOutFixture,
   onboardingHomePath,
@@ -413,15 +411,14 @@ function fixtureRendered() {
     const signIn = document.querySelector('.auth-state button')
     return heading?.textContent === 'muniment' && signIn?.textContent === 'Sign in'
   }
-  if (approvedFixture) {
-    const heading = document.querySelector('#onboarding-title')
-    const save = document.querySelector('[data-testid="onboarding-import-save"]')
-    return heading?.textContent === 'Save approved files' && save?.textContent === 'Save Home and finish'
-  }
   if (onboardingFixture) {
-    const heading = document.querySelector('#onboarding-title')
+    const composer = document.querySelector('#first-message')
     const homePath = document.querySelector('[data-testid="onboarding-home-path"]')
-    return heading?.textContent === 'Choose your Muniment Home' && homePath?.textContent === onboardingHomePath
+    const scan = document.querySelector('[data-testid="onboarding-scan"]')
+    return composer && homePath?.textContent === onboardingHomePath
+      && document.querySelectorAll('.chips button').length === 3
+      && scan?.textContent === 'Claude Code: 12 files · Pi: 3 files'
+      && (!scanFixture || document.querySelector('#onboarding-scan-panel li'))
   }
   if (accessFixture) {
     const popover = document.querySelector('.access-popover')
@@ -446,25 +443,9 @@ function fixtureRendered() {
     && renderedText.includes(run.text.replaceAll(/\s/g, '')))
 }
 
-function advanceApprovedFixture() {
-  if (!approvedFixture || fixtureRendered()) return
-  const confirm = document.querySelector('[data-testid="onboarding-confirm"]')
-  if (confirm) {
-    confirm.click()
-    return
-  }
-  const archivePicker = document.querySelector('[data-testid="onboarding-import-picker"]')
-  if (archivePicker && !document.querySelector('[aria-label="Export manifest"]')) {
-    archivePicker.click()
-    return
-  }
-  const checkbox = document.querySelector('[aria-label="Export manifest"] input[type="checkbox"]')
-  if (checkbox && !checkbox.checked) {
-    checkbox.click()
-    queueMicrotask(advanceApprovedFixture)
-    return
-  }
-  document.querySelector('[data-testid="onboarding-import-continue"]')?.click()
+function advanceScanFixture() {
+  if (!scanFixture || fixtureRendered()) return
+  document.querySelector('[data-testid="onboarding-scan"][aria-expanded="false"]')?.click()
 }
 
 function advanceAccessFixture() {
@@ -478,14 +459,14 @@ async function markProbeReady() {
 }
 
 function markReadyAfterFixtureRender() {
-  advanceApprovedFixture()
+  advanceScanFixture()
   advanceAccessFixture()
   if (fixtureRendered()) {
     void markProbeReady()
     return
   }
   const observer = new MutationObserver(() => {
-    advanceApprovedFixture()
+    advanceScanFixture()
     advanceAccessFixture()
     if (!fixtureRendered()) return
     observer.disconnect()
@@ -554,7 +535,7 @@ window.__TAURI_INTERNALS__ = {
   },
   async invoke(command, payload) {
     recordInvoke('internal', command, payload)
-    if (approvedFixture && command.includes('open')) return '/Users/alice/Downloads/assistant-export.zip'
+    if (onboardingFixture && command.includes('open')) return '/Users/alice/Documents/Muniment'
     return null
   },
   transformCallback(callback, once = false) {
