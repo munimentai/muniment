@@ -703,7 +703,7 @@
       return true
     } catch (_) {
       if (version === providerStatusRequestVersion) {
-        providerKeyStatus = "Pi's credential store could not be read."
+        providerKeyStatus = 'Muniment cannot read provider settings. Restart the app to retry.'
       }
       return false
     }
@@ -750,17 +750,17 @@
       if (provider === 'ollama') {
         await tauri.invoke('local_mode_store_local_provider', { baseUrl: providerBaseUrl })
         providerBaseUrl = ''
-        providerKeyStatus = 'Pi saved the Ollama server.'
+        providerKeyStatus = 'Muniment saved the Ollama server. Send a message.'
       } else {
         await tauri.invoke('local_mode_store_provider_key', { provider, key: providerKey })
         providerKey = ''
-        providerKeyStatus = `Pi saved the ${providerNames[provider]} key.`
+        providerKeyStatus = `Muniment saved the ${providerNames[provider]} key. Send a message.`
       }
       await refreshProviderStatuses()
     } catch (_) {
       providerKeyStatus = provider === 'ollama'
-        ? 'Pi could not save the Ollama server. Check the URL and try again.'
-        : 'Pi could not save the provider key. Try again.'
+        ? 'Ollama setup failed. Check the URL, then retry.'
+        : 'Muniment could not save the provider key. Try again.'
     } finally {
       providerKeyPending = false
     }
@@ -1141,7 +1141,7 @@
         <div class="thread-shell">
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
-          {#if messages.length === 0}<p class="empty">{auth.name === 'local' ? 'Ask anything. Pi uses a provider from its credential store.' : "Ask anything. Your org's routing decides which model answers."}</p>{/if}
+          {#if messages.length === 0}<p class="empty">{auth.name === 'local' ? 'Your model answers here. Ask anything.' : "Ask anything. Your org's routing decides which model answers."}</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
               <div class="user-turn">
@@ -1316,7 +1316,7 @@
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
               </span>
             {:else}
-              <span id="composer-hint">{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : auth.name === 'local' ? 'Pi answers with the provider settings you saved. Local replies carry no cloud receipt.' : 'Routing is automatic. Every reply carries its receipt.'}</span>
+              <span id="composer-hint">{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : auth.name === 'local' ? 'Local replies have no cloud receipt. Ask anything.' : 'Routing is automatic. Every reply carries its receipt.'}</span>
             {/if}
             <div class="composer-actions">
               <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
