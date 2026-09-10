@@ -2278,9 +2278,15 @@ describe('chat controller', () => {
     first.reject('stale failure')
     await older
     expect(context.errors).toEqual([])
+    expect(context.active()).toMatchObject({ phase: 'thinking', prompt: 'Newer' })
+    expect(context.announced()).toMatchObject({ phase: 'thinking', prompt: 'Newer' })
+    expect(context.messages()[1].run.failureReason).toBe('stale failure')
 
     second.reject('latest failure')
     await newer
-    expect(context.errors).toEqual(['latest failure'])
+    expect(context.errors).toEqual([])
+    expect(context.messages()[3].run.failureReason).toBe('latest failure')
+    expect(context.announced()).toMatchObject({ phase: 'failed', failureReason: 'latest failure' })
+    expect(context.active()).toBeNull()
   })
 })

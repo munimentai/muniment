@@ -107,15 +107,33 @@ const runPhaseAnnouncements = {
   'pending-permission': 'Waiting for your decision.',
   resuming: 'Resuming the interrupted reply.',
   cancelled: 'Reply stopped.',
-  failed: 'Reply failed.',
   interrupted: 'Reply interrupted.',
 }
 
-// What a screen reader hears about a run. Streamed text never reaches the live
-// region: every in-progress phase maps to the same coarse string, so the
-// announcement changes once when a run starts and once when it settles.
+// Strip known retry guidance, not punctuation inside file names or recorded causes.
+const retryGuidance = new RegExp(`(?:^|(?<=[.!?])\\s)(?:${[
+  'Try again',
+  'Check the key and try again',
+  'Check the files and try again',
+  'Choose a smaller image before sending again',
+  'Remove an image before sending again',
+  'Remove images or choose smaller images before sending again',
+  'Choose a PNG, JPEG, GIF, or WebP image before sending again',
+].join('|')})\\.?$`, 'i')
+
+// The retry button carries the next step, not the recorded cause.
+export function runFailureMessage(run) {
+  const reason = typeof run?.failureReason === 'string'
+    ? run.failureReason.trim().replace(/\s+/g, ' ').replace(retryGuidance, '').trim()
+    : ''
+  if (!reason) return 'Reply failed.'
+  return /[.!?]$/.test(reason) ? reason : `${reason}.`
+}
+
+// Streamed text never reaches the live region until the run settles.
 export function runAnnouncement(run) {
   if (!run) return ''
+  if (run.phase === 'failed') return runFailureMessage(run)
   if (run.phase === 'complete') return `Reply complete. ${run.text ?? ''}`.trim()
   return runPhaseAnnouncements[run.phase] ?? ''
 }
@@ -136,12 +154,12 @@ export function formatByteSize(bytes) {
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
   const pendingPermission = event.pendingPermission ?? null
-  if (event.phase) return { ...run, phase: event.phase, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
+  if (event.phase) return { ...run, phase: event.phase, failureReason: event.failureReason ?? null, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
   if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text, pendingPermission }
   if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {}, recalls: event.recalls ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'cancelled') return { ...run, phase: 'cancelled', pendingPermission }
-  if (event.type === 'failed') return { ...run, phase: 'failed', pendingPermission }
+  if (event.type === 'failed') return { ...run, phase: 'failed', failureReason: event.failureReason ?? null, pendingPermission }
   return run
 }
 
@@ -152,7 +170,7 @@ export function applyBufferedChatEvents(run, events) {
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, phase: entry.phase, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, phase: entry.phase, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
 

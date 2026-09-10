@@ -604,11 +604,10 @@ export function createChatController({
       if (settled) await refreshThreads()
     } catch (error) {
       if (destroyed) return
-      const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed' }
+      const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed', failureReason: typeof error === 'string' ? error : 'The message could not be sent.' }
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: failed } : message))
       if (submissionId !== submissionSequence) return
       onAnnounce(failed)
-      onSubmitError(typeof error === 'string' ? error : 'The message could not be sent. Try again.')
       onActive(null)
     } finally {
       releaseBuffer()
