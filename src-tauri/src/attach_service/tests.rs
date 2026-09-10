@@ -9,6 +9,21 @@ mod cases {
     };
     use muniment_core::journal::RunJournal;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn runtime_start_waits_for_commands_and_chat_events() {
+        let app = tauri::test::mock_app();
+        app.manage(AttachCompanionState::default());
+        let state = app.state::<AttachCompanionState>();
+        assert!(!runtime_clients_ready(app.handle()));
+        state.record_connected(true);
+        assert!(!runtime_clients_ready(app.handle()));
+        state.record_chat_events_connected(true);
+        assert!(runtime_clients_ready(app.handle()));
+        state.record_connected(false);
+        assert!(!runtime_clients_ready(app.handle()));
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_status_uses_live_desktop_client_state_and_start_is_idempotent() {

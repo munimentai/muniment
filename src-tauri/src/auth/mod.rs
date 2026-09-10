@@ -1,27 +1,19 @@
-//! Tauri-side auth surface: the `auth_*` commands, client configuration,
-//! and the keychain-backed token store. All protocol logic lives in
-//! `muniment_core::auth` (see docs/auth.md), which keeps it testable
-//! without the GUI stack; this module only wires it to the webview.
+//! The desktop sends auth commands to the runtime over the attach socket.
+//! Only the runtime reads credentials, renews tokens, and requests chat grants.
 //!
-//! Nothing here logs or returns token material: commands hand the webview
-//! an `AuthStatus` (signed-in flag, subject, expiry) and error strings that
-//! `muniment_core::auth::AuthError` guarantees are token-free.
+//! Commands return display-only session state and errors without token material.
 
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::Duration;
 
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
-use muniment_core::auth::{
-    self, AuthStatus, BrowserOpenError, EntitlementSnapshotTracker, KeyringNativeCredentialStore,
-    NativeCredentialStore, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
-    UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
-};
+use muniment_core::auth::{self, AuthStatus, EntitlementSnapshotTracker};
 #[cfg(any(unix, target_os = "windows"))]
 use serde::Deserialize;
 use serde::Serialize;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[cfg(any(unix, target_os = "windows"))]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
@@ -30,13 +22,8 @@ use muniment_core::attach::ClientError;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::DesktopClientHolder;
 
-/// How long the loopback listener waits for the user to finish in the
-/// browser before the sign-in attempt is abandoned.
-const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
-
 /// Managed by Tauri; shared across the `auth_*` commands.
 pub struct AuthState {
-    native_store: Arc<KeyringNativeCredentialStore>,
     sign_in_running: Arc<AtomicBool>,
     entitlement_snapshot_tracker: EntitlementSnapshotTracker,
     runtime_activity: RuntimeActivityRegistry,
@@ -57,25 +44,6 @@ struct EntitlementSnapshotResponse {
     changed_snapshot_version: Option<u64>,
 }
 
-fn observe_snapshot<R: tauri::Runtime>(
-    state: &AuthState,
-    app: &tauri::AppHandle<R>,
-    session: &auth::FreshNativeSession,
-) -> Result<(), String> {
-    let next = session
-        .entitlement_snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.snapshot_version);
-    if let Some(snapshot_version) = state.entitlement_snapshot_tracker.observe(next) {
-        app.emit(
-            "entitlement-changed",
-            EntitlementChanged { snapshot_version },
-        )
-        .map_err(|error| format!("entitlement event failed: {error}"))?;
-    }
-    Ok(())
-}
-
 pub(crate) fn fresh_tokens<R: tauri::Runtime>(
     state: &AuthState,
     app: &tauri::AppHandle<R>,
@@ -84,33 +52,27 @@ pub(crate) fn fresh_tokens<R: tauri::Runtime>(
     if let Some(tokens) = &state.test_tokens {
         return Ok(tokens.clone());
     }
-    let result = state.marked_refresh_blocking(state.native_store.as_ref())?;
-    observe_snapshot(state, app, &result)?;
-    result
-        .into_credentials()
-        .map(|credentials| credentials.tokens)
-        .ok_or_else(|| "Sign in before sending a message.".into())
+    let status = state.marked_refresh_blocking(|| {
+        runtime_status(app.state::<AttachCompanionState>().desktop_client_session())
+    })?;
+    status_projection(status)
 }
 
 pub(crate) async fn fresh_tokens_async<R: tauri::Runtime>(
     state: &AuthState,
     app: &tauri::AppHandle<R>,
 ) -> Result<muniment_core::auth::TokenSet, String> {
-    let result = state
-        .marked_refresh(state.native_store.clone())
+    let session = app.state::<AttachCompanionState>().desktop_client_session();
+    let status = state
+        .marked_refresh(move || runtime_status(session))
         .await
-        .map_err(|_| "Sign in before sending a message.".to_string())??;
-    observe_snapshot(state, app, &result)?;
-    result
-        .into_credentials()
-        .map(|credentials| credentials.tokens)
-        .ok_or_else(|| "Sign in before sending a message.".into())
+        .map_err(|_| background_service_error())??;
+    status_projection(status)
 }
 
 impl AuthState {
     pub fn new(runtime_activity: RuntimeActivityRegistry) -> Self {
         AuthState {
-            native_store: Arc::new(KeyringNativeCredentialStore::new()),
             sign_in_running: Arc::new(AtomicBool::new(false)),
             entitlement_snapshot_tracker: EntitlementSnapshotTracker::new(),
             runtime_activity,
@@ -139,25 +101,21 @@ impl AuthState {
         self.runtime_activity.mark_session_refresh()
     }
 
-    /// Refreshes the native session on the blocking pool. The mark covers the
-    /// whole call, so every async refresh call site goes through here.
-    async fn marked_refresh(
+    /// Runs a session request on the blocking pool under the refresh mark.
+    async fn marked_refresh<T: Send + 'static>(
         &self,
-        store: Arc<dyn NativeCredentialStore>,
-    ) -> Result<Result<auth::FreshNativeSession, String>, tauri::Error> {
-        marked_blocking(self.mark_session_refresh(), move || {
-            ensure_native_session(store.as_ref())
-        })
-        .await
+        step: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<Result<T, String>, tauri::Error> {
+        marked_blocking(self.mark_session_refresh(), step).await
     }
 
     /// The blocking twin of [`AuthState::marked_refresh`], for the one call
     /// site that already runs on the blocking pool.
-    fn marked_refresh_blocking(
+    fn marked_refresh_blocking<T>(
         &self,
-        store: &dyn NativeCredentialStore,
-    ) -> Result<auth::FreshNativeSession, String> {
-        while_marked(self.mark_session_refresh(), || ensure_native_session(store))
+        step: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        while_marked(self.mark_session_refresh(), step)
     }
 }
 
@@ -177,42 +135,19 @@ async fn marked_blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(move || while_marked(mark, step)).await
 }
 
-/// Run the browser sign-in flow, persist the tokens, and report the new
-/// status. Concurrent invocations are rejected while one is in flight.
+/// Asks the runtime to sign in and returns its status.
+/// Rejects concurrent sign-in requests.
 #[tauri::command]
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 pub async fn auth_sign_in(
-    app: tauri::AppHandle,
     state: tauri::State<'_, AuthState>,
     attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<AuthStatus, String> {
-    let store = state.native_store.clone();
     let started = native_auth_command_start();
-    let result = sign_in_for_session(
-        &state,
-        attach_state.desktop_client_session(),
-        move || sign_in_blocking(store.as_ref(), &app).map_err(|error| error.to_string()),
-        |client| {
-            let response =
-                native_auth_runtime_result(|| client.sign_in(), |line| eprintln!("{line}"))
-                    .map_err(desktop_client_error)?;
-            decode_sign_in_status(response)
-        },
-    )
-    .await;
-    native_auth_command_result(result, started)
-}
-
-#[tauri::command]
-#[cfg(not(unix))]
-pub async fn auth_sign_in(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AuthState>,
-) -> Result<AuthStatus, String> {
-    let store = state.native_store.clone();
-    let started = native_auth_command_start();
-    let result = sign_in_marked(&state, move || {
-        sign_in_blocking(store.as_ref(), &app).map_err(|error| error.to_string())
+    let result = sign_in_for_session(&state, attach_state.desktop_client_session(), |client| {
+        let response = native_auth_runtime_result(|| client.sign_in(), |line| eprintln!("{line}"))
+            .map_err(desktop_client_error)?;
+        decode_sign_in_status(response)
     })
     .await;
     native_auth_command_result(result, started)
@@ -237,7 +172,7 @@ fn native_auth_command_result(
     result
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn native_auth_runtime_result(
     step: impl FnOnce() -> Result<serde_json::Value, ClientError>,
     mut log: impl FnMut(&str),
@@ -252,7 +187,7 @@ fn native_auth_runtime_result(
     result
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn native_auth_runtime_after_line(
     result: &Result<serde_json::Value, ClientError>,
     elapsed_ms: u128,
@@ -265,28 +200,26 @@ fn native_auth_runtime_after_line(
     format!("muniment-desktop: native-auth end method=RPC path=session.sign_in {outcome} elapsed_ms={elapsed_ms}")
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn decode_sign_in_status(response: serde_json::Value) -> Result<AuthStatus, String> {
     let status = response
         .get("status")
         .cloned()
-        .ok_or_else(|| "missing status field".to_string())?;
-    serde_json::from_value(status).map_err(|error| error.to_string())
+        .ok_or_else(background_service_error)?;
+    serde_json::from_value(status).map_err(|_| background_service_error())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 async fn sign_in_for_session(
     state: &AuthState,
     session: DesktopClientSession,
-    local_step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
     connected_step: impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
 ) -> Result<AuthStatus, String> {
     match session {
-        DesktopClientSession::NoSupervisor => sign_in_marked(state, local_step).await,
         DesktopClientSession::Connected(client) => {
             sign_in_marked(state, move || connected_step(client)).await
         }
-        DesktopClientSession::Disconnected => {
+        DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
             eprintln!("desktop native-auth response: runtime unavailable");
             Err(background_service_error())
         }
@@ -329,73 +262,49 @@ impl Drop for SignInPermit {
     }
 }
 
-fn sign_in_blocking(
-    store: &KeyringNativeCredentialStore,
-    app: &tauri::AppHandle,
-) -> Result<AuthStatus, auth::NativeSignInError> {
-    let network_timeout = Duration::from_secs(30);
-    auth::run_native_sign_in(
-        store,
-        &UreqRegistrationTransport::new(network_timeout),
-        &UreqAuthorizationTransport::new(network_timeout),
-        &UreqTokenTransport::new(network_timeout),
-        &|url: &str| spawn_browser(url).map_err(|_| BrowserOpenError),
-        &auth::api_base_url(),
-        &unix_time,
-        SIGN_IN_TIMEOUT,
-        &|delay| {
-            let _ = app.emit(
-                "auth-registration-retry",
-                RegistrationRetryStatus {
-                    delay_seconds: delay.as_secs(),
-                },
-            );
-            std::thread::sleep(delay);
-        },
-    )
+// Legacy local run interfaces accept TokenSet. The shell supplies display fields only.
+// The runtime keeps every bearer and refresh token.
+fn status_projection(status: AuthStatus) -> Result<auth::TokenSet, String> {
+    if !status.signed_in {
+        return Err("Sign in before sending a message.".into());
+    }
+    Ok(auth::TokenSet {
+        access_token: String::new(),
+        refresh_token: None,
+        expires_at: status.expires_at,
+        subject: status.subject,
+    })
 }
 
-#[derive(Clone, Copy, Serialize)]
-struct RegistrationRetryStatus {
-    delay_seconds: u64,
+fn runtime_status(session: DesktopClientSession) -> Result<AuthStatus, String> {
+    let client = connected_client(session)?;
+    serde_json::from_value(client.session_status().map_err(desktop_client_error)?)
+        .map_err(|_| background_service_error())
 }
 
-fn unix_time() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
-}
-
-/// Signed-in subject/expiry from the stored tokens; no network.
+/// Asks the runtime for session status without a cloud request.
 #[tauri::command]
 #[cfg(any(unix, target_os = "windows"))]
 pub async fn auth_status(
-    state: tauri::State<'_, AuthState>,
     attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<AuthStatus, String> {
-    let store = state.native_store.clone();
-    status_for_session(
-        attach_state.desktop_client_session(),
-        move || auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string()),
-        |client| {
-            serde_json::from_value(client.session_status().map_err(desktop_client_error)?)
-                .map_err(|error| error.to_string())
-        },
-    )
+    status_for_session(attach_state.desktop_client_session(), |client| {
+        serde_json::from_value(client.session_status().map_err(desktop_client_error)?)
+            .map_err(|_| background_service_error())
+    })
     .await
 }
 
 #[cfg(any(unix, target_os = "windows"))]
 async fn status_for_session(
     session: DesktopClientSession,
-    local_step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
     connected_step: impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
 ) -> Result<AuthStatus, String> {
     let step: Box<dyn FnOnce() -> Result<AuthStatus, String> + Send> = match session {
-        DesktopClientSession::NoSupervisor => Box::new(local_step),
         DesktopClientSession::Connected(client) => Box::new(move || connected_step(client)),
-        DesktopClientSession::Disconnected => return Err(background_service_error()),
+        DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
+            return Err(background_service_error())
+        }
     };
     tauri::async_runtime::spawn_blocking(step)
         .await
@@ -419,35 +328,21 @@ async fn auth_entitlement_snapshot_with_state<R: tauri::Runtime>(
     state: tauri::State<'_, AuthState>,
     #[cfg(any(unix, target_os = "windows"))] attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<auth::EntitlementSnapshotView, String> {
-    #[cfg(any(unix, target_os = "windows"))]
-    match attach_state.desktop_client_session() {
-        DesktopClientSession::Connected(client) => {
-            let response: EntitlementSnapshotResponse = serde_json::from_value(
-                client
-                    .entitlement_snapshot()
-                    .map_err(desktop_client_error)?,
-            )
-            .map_err(|_| background_service_error())?;
-            if let Some(snapshot_version) = response.changed_snapshot_version {
-                app.emit(
-                    "entitlement-changed",
-                    EntitlementChanged { snapshot_version },
-                )
-                .map_err(|_| background_service_error())?;
-            }
-            return Ok(response.snapshot);
-        }
-        DesktopClientSession::Disconnected => return Err(background_service_error()),
-        DesktopClientSession::NoSupervisor => {}
-    }
-    let result = state
-        .marked_refresh(state.native_store.clone())
+    let client = connected_client(attach_state.desktop_client_session())?;
+    let response = state
+        .marked_refresh(move || client.entitlement_snapshot().map_err(desktop_client_error))
         .await
-        .map_err(|e| format!("access task failed: {e}"))??;
-    observe_snapshot(&state, &app, &result)?;
-    result
-        .entitlement_snapshot
-        .ok_or_else(|| "Sign in to view your access.".into())
+        .map_err(|_| background_service_error())??;
+    let response: EntitlementSnapshotResponse =
+        serde_json::from_value(response).map_err(|_| background_service_error())?;
+    if let Some(snapshot_version) = response.changed_snapshot_version {
+        app.emit(
+            "entitlement-changed",
+            EntitlementChanged { snapshot_version },
+        )
+        .map_err(|_| background_service_error())?;
+    }
+    Ok(response.snapshot)
 }
 
 /// List display-only metadata for this account's native installations.
@@ -466,33 +361,13 @@ async fn auth_devices_with_state<R: tauri::Runtime>(
     state: tauri::State<'_, AuthState>,
     #[cfg(any(unix, target_os = "windows"))] attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<Vec<auth::NativeDevice>, String> {
-    #[cfg(any(unix, target_os = "windows"))]
-    match attach_state.desktop_client_session() {
-        DesktopClientSession::Connected(client) => {
-            let response: auth::NativeDeviceList =
-                serde_json::from_value(client.list_devices().map_err(desktop_client_error)?)
-                    .map_err(|_| background_service_error())?;
-            return Ok(response.devices);
-        }
-        DesktopClientSession::Disconnected => return Err(background_service_error()),
-        DesktopClientSession::NoSupervisor => {}
-    }
-    let session = state
-        .marked_refresh(state.native_store.clone())
+    let _ = app;
+    let client = connected_client(attach_state.desktop_client_session())?;
+    let response = state
+        .marked_refresh(move || client.list_devices().map_err(desktop_client_error))
         .await
-        .map_err(|_| device_list_error())?
-        .map_err(|_| device_list_error())?;
-    observe_snapshot(&state, &app, &session).map_err(|_| device_list_error())?;
-    let credentials = session.into_credentials().ok_or_else(device_list_error)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        list_devices(
-            Some(&credentials.tokens.access_token),
-            &UreqNativeDeviceListTransport::new(Duration::from_secs(30)),
-            &auth::api_base_url(),
-        )
-    })
-    .await
-    .map_err(|_| device_list_error())?
+        .map_err(|_| background_service_error())??;
+    decode_devices(response)
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -514,26 +389,19 @@ pub(crate) fn desktop_client_error(error: ClientError) -> String {
     }
 }
 
-fn list_devices(
-    access_token: Option<&str>,
-    transport: &dyn auth::NativeDeviceListTransport,
-    base_url: &str,
-) -> Result<Vec<auth::NativeDevice>, String> {
-    let access_token = access_token.ok_or_else(device_list_error)?;
-    auth::list_native_devices(transport, base_url, access_token)
+fn decode_devices(response: serde_json::Value) -> Result<Vec<auth::NativeDevice>, String> {
+    serde_json::from_value::<auth::NativeDeviceList>(response)
         .map(|list| list.devices)
-        .map_err(|_| device_list_error())
+        .map_err(|_| background_service_error())
 }
 
-fn device_list_error() -> String {
-    "Your devices could not be loaded.".to_string()
-}
-
-fn ensure_native_session(
-    store: &dyn NativeCredentialStore,
-) -> Result<auth::FreshNativeSession, String> {
-    auth::ensure_native_session(store, &auth::api_base_url(), unix_time())
-        .map_err(|error| error.to_string())
+fn connected_client(session: DesktopClientSession) -> Result<DesktopClientHolder, String> {
+    match session {
+        DesktopClientSession::Connected(client) => Ok(client),
+        DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
+            Err(background_service_error())
+        }
+    }
 }
 
 /// Clear the local native session while preserving the installation identity.
@@ -542,66 +410,36 @@ pub async fn auth_sign_out(
     state: tauri::State<'_, AuthState>,
     attach_state: tauri::State<'_, crate::attach_service::AttachCompanionState>,
 ) -> Result<AuthStatus, String> {
-    let store = state.native_store.clone();
-
-    #[cfg(unix)]
-    return sign_out_for_session(
+    sign_out_for_session(
         &state,
         attach_state.desktop_client_session(),
         || attach_state.clear_workspace(),
-        move || local_sign_out(store),
         |client| {
             let response = client.sign_out().map_err(desktop_client_error)?;
             decode_sign_out_status(response)
         },
     )
-    .await;
-
-    #[cfg(not(unix))]
-    sign_out_marked(
-        &state,
-        || attach_state.clear_workspace(),
-        move || local_sign_out(store),
-    )
     .await
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 fn decode_sign_out_status(response: serde_json::Value) -> Result<AuthStatus, String> {
-    let status = response
-        .get("status")
-        .cloned()
-        .ok_or_else(|| "missing status field".to_string())?;
-    serde_json::from_value(status).map_err(|error| error.to_string())
+    decode_sign_in_status(response)
 }
 
-fn local_sign_out(store: Arc<KeyringNativeCredentialStore>) -> Result<AuthStatus, String> {
-    auth::sign_out_native_session(
-        store.as_ref(),
-        &UreqRevocationTransport::new(Duration::from_secs(2)),
-        &auth::api_base_url(),
-    )
-    .map_err(|error| error.to_string())?;
-    auth::native_status(store.as_ref(), unix_time()).map_err(|error| error.to_string())
-}
-
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 async fn sign_out_for_session(
     state: &AuthState,
     session: DesktopClientSession,
     clear_workspace: impl FnOnce(),
-    local_step: impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
     connected_step: impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
 ) -> Result<AuthStatus, String> {
     match session {
-        DesktopClientSession::NoSupervisor => {
-            sign_out_marked(state, clear_workspace, local_step).await
-        }
         DesktopClientSession::Connected(client) => {
             sign_out_marked(state, clear_workspace, move || connected_step(client)).await
         }
-        DesktopClientSession::Disconnected => {
-            Err("Muniment cannot reach its background service.".into())
+        DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
+            Err(background_service_error())
         }
     }
 }
@@ -622,91 +460,9 @@ async fn sign_out_marked(
     Ok(status)
 }
 
-#[cfg(target_os = "macos")]
-fn spawn_browser(url: &str) -> std::io::Result<()> {
-    Command::new("open").arg(url).spawn().map(drop)
-}
-
-#[cfg(target_os = "windows")]
-fn spawn_browser(url: &str) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    // rundll32 takes the URL as a plain argument, sidestepping cmd.exe's
-    // parsing of `&` in the query string.
-    Command::new("rundll32")
-        .args(["url.dll,FileProtocolHandler", url])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map(drop)
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn spawn_browser(url: &str) -> std::io::Result<()> {
-    Command::new("xdg-open").arg(url).spawn().map(drop)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A signed-out store that records the session-refresh mark it sees
-    /// while `ensure_native_session` reads it.
-    struct ObservingCredentialStore {
-        runtime_activity: RuntimeActivityRegistry,
-        marked_during_load: AtomicBool,
-    }
-
-    impl ObservingCredentialStore {
-        fn new(runtime_activity: RuntimeActivityRegistry) -> Self {
-            Self {
-                runtime_activity,
-                marked_during_load: AtomicBool::new(false),
-            }
-        }
-    }
-
-    impl NativeCredentialStore for ObservingCredentialStore {
-        fn load_installation(
-            &self,
-        ) -> Result<Option<auth::InstallationRecord>, auth::NativeTokenError> {
-            Ok(None)
-        }
-
-        fn save_credentials(
-            &self,
-            _: &auth::NativeCredentials,
-        ) -> Result<(), auth::NativeTokenError> {
-            Ok(())
-        }
-
-        fn load_credentials(
-            &self,
-        ) -> Result<Option<auth::NativeCredentials>, auth::NativeTokenError> {
-            self.marked_during_load.store(
-                self.runtime_activity.snapshot().session_refresh,
-                Ordering::SeqCst,
-            );
-            Ok(None)
-        }
-
-        fn clear_session(&self) -> Result<(), auth::NativeTokenError> {
-            Ok(())
-        }
-    }
-
-    struct FailingDeviceTransport;
-
-    impl auth::NativeDeviceListTransport for FailingDeviceTransport {
-        fn list(
-            &self,
-            _: &str,
-            _: &auth::NativeDeviceListRequest,
-        ) -> Result<auth::NativeDeviceList, auth::NativeDeviceListError> {
-            Err(auth::NativeDeviceListError::Transport(
-                "backend-secret".into(),
-            ))
-        }
-    }
 
     #[test]
     fn concurrent_sign_in_is_rejected_and_guard_releases_on_drop() {
@@ -865,148 +621,87 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn status_handles_each_desktop_client_session() {
-        use std::sync::atomic::AtomicUsize;
-
-        fn steps() -> (
-            Arc<AtomicUsize>,
-            Arc<AtomicUsize>,
-            impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
-            impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
-        ) {
-            let local_calls = Arc::new(AtomicUsize::new(0));
-            let connected_calls = Arc::new(AtomicUsize::new(0));
-            let local_step_calls = local_calls.clone();
-            let connected_step_calls = connected_calls.clone();
-            (
-                local_calls,
-                connected_calls,
-                move || {
-                    local_step_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(signed_out_status())
-                },
-                move |_| {
-                    connected_step_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(signed_out_status())
-                },
-            )
-        }
-
-        let (local_calls, connected_calls, local, connected) = steps();
-        tauri::async_runtime::block_on(status_for_session(
+        for session in [
             DesktopClientSession::NoSupervisor,
-            local,
-            connected,
-        ))
-        .unwrap();
-        assert_eq!(local_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(connected_calls.load(Ordering::SeqCst), 0);
-
-        let (local_calls, connected_calls, local, connected) = steps();
-        tauri::async_runtime::block_on(status_for_session(
-            DesktopClientSession::Connected(DesktopClientHolder::new()),
-            local,
-            connected,
-        ))
-        .unwrap();
-        assert_eq!(local_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(connected_calls.load(Ordering::SeqCst), 1);
-
-        let (local_calls, connected_calls, local, connected) = steps();
-        let error = tauri::async_runtime::block_on(status_for_session(
             DesktopClientSession::Disconnected,
-            local,
-            connected,
+        ] {
+            let error = tauri::async_runtime::block_on(status_for_session(session, |_| {
+                panic!("An unavailable runtime must not receive a request.")
+            }))
+            .unwrap_err();
+            assert_eq!(error, background_service_error());
+        }
+        let calls = Arc::new(AtomicBool::new(false));
+        let observed = calls.clone();
+        let status = tauri::async_runtime::block_on(status_for_session(
+            DesktopClientSession::Connected(DesktopClientHolder::new()),
+            move |_| {
+                observed.store(true, Ordering::SeqCst);
+                Ok(signed_out_status())
+            },
         ))
-        .unwrap_err();
-        assert_eq!(error, "Muniment cannot reach its background service.");
-        assert_eq!(local_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(connected_calls.load(Ordering::SeqCst), 0);
+        .unwrap();
+        assert!(!status.signed_in);
+        assert!(calls.load(Ordering::SeqCst));
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn sign_in_handles_each_desktop_client_session() {
-        use std::sync::atomic::AtomicUsize;
-
-        fn steps() -> (
-            Arc<AtomicUsize>,
-            impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
-            impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
-        ) {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let local_calls = calls.clone();
-            let connected_calls = calls.clone();
-            (
-                calls,
-                move || {
-                    local_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(signed_out_status())
-                },
-                move |_| {
-                    connected_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(signed_out_status())
-                },
-            )
-        }
-
         let state = AuthState::new(RuntimeActivityRegistry::new());
         state.entitlement_snapshot_tracker.observe(Some(1));
-        let (calls, local, connected) = steps();
-        tauri::async_runtime::block_on(sign_in_for_session(
-            &state,
+        for session in [
             DesktopClientSession::NoSupervisor,
-            local,
-            connected,
-        ))
-        .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(state.entitlement_snapshot_tracker.observe(Some(2)), None);
-
-        let (calls, local, connected) = steps();
+            DesktopClientSession::Disconnected,
+        ] {
+            let error =
+                tauri::async_runtime::block_on(sign_in_for_session(&state, session, |_| {
+                    panic!("An unavailable runtime must not receive a request.")
+                }))
+                .unwrap_err();
+            assert_eq!(error, background_service_error());
+            assert_eq!(state.entitlement_snapshot_tracker.observe(Some(1)), None);
+        }
+        let calls = Arc::new(AtomicBool::new(false));
+        let observed = calls.clone();
         tauri::async_runtime::block_on(sign_in_for_session(
             &state,
             DesktopClientSession::Connected(DesktopClientHolder::new()),
-            local,
-            connected,
+            move |_| {
+                observed.store(true, Ordering::SeqCst);
+                Ok(signed_out_status())
+            },
         ))
         .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-
-        let (calls, local, connected) = steps();
-        let error = tauri::async_runtime::block_on(sign_in_for_session(
-            &state,
-            DesktopClientSession::Disconnected,
-            local,
-            connected,
-        ))
-        .unwrap_err();
-        assert_eq!(error, "Muniment cannot reach its background service.");
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(calls.load(Ordering::SeqCst));
+        assert_eq!(state.entitlement_snapshot_tracker.observe(Some(2)), None);
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn sign_in_permit_rejects_both_served_routes() {
-        fn local() -> Result<AuthStatus, String> {
-            panic!("the rejected sign-in must not run")
-        }
-
-        fn connected(_: DesktopClientHolder) -> Result<AuthStatus, String> {
-            panic!("the rejected sign-in must not run")
-        }
-
+    fn sign_in_permit_rejects_the_served_route_and_missing_runtime() {
         let state = AuthState::new(RuntimeActivityRegistry::new());
         let _permit = SignInPermit::acquire(state.sign_in_running.clone()).unwrap();
-
-        for session in [
-            DesktopClientSession::NoSupervisor,
-            DesktopClientSession::Connected(DesktopClientHolder::new()),
+        for (session, expected) in [
+            (
+                DesktopClientSession::NoSupervisor,
+                background_service_error(),
+            ),
+            (
+                DesktopClientSession::Disconnected,
+                background_service_error(),
+            ),
+            (
+                DesktopClientSession::Connected(DesktopClientHolder::new()),
+                "a sign-in is already in progress".into(),
+            ),
         ] {
-            let error = tauri::async_runtime::block_on(sign_in_for_session(
-                &state, session, local, connected,
-            ))
-            .unwrap_err();
-            assert_eq!(error, "a sign-in is already in progress");
+            let error =
+                tauri::async_runtime::block_on(sign_in_for_session(&state, session, |_| {
+                    panic!("The rejected sign-in must not run.")
+                }))
+                .unwrap_err();
+            assert_eq!(error, expected);
         }
     }
 
@@ -1014,81 +709,49 @@ mod tests {
     #[test]
     fn sign_out_handles_each_desktop_client_session() {
         use std::sync::atomic::AtomicUsize;
-
-        fn steps() -> (
-            Arc<AtomicUsize>,
-            impl FnOnce(),
-            impl FnOnce() -> Result<AuthStatus, String> + Send + 'static,
-            impl FnOnce(DesktopClientHolder) -> Result<AuthStatus, String> + Send + 'static,
-        ) {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let clear_calls = calls.clone();
-            let local_calls = calls.clone();
-            let connected_calls = calls.clone();
-            (
-                calls,
-                move || assert_eq!(clear_calls.fetch_add(1, Ordering::SeqCst), 0),
-                move || {
-                    assert_eq!(local_calls.fetch_add(1, Ordering::SeqCst), 1);
-                    Ok(signed_out_status())
-                },
-                move |_| {
-                    assert_eq!(connected_calls.fetch_add(1, Ordering::SeqCst), 1);
-                    Ok(signed_out_status())
-                },
-            )
-        }
-
         let state = AuthState::new(RuntimeActivityRegistry::new());
-        let (calls, clear, local, connected) = steps();
-        let status = tauri::async_runtime::block_on(sign_out_for_session(
-            &state,
+        for session in [
             DesktopClientSession::NoSupervisor,
-            clear,
-            local,
-            connected,
-        ))
-        .unwrap();
-        assert!(!status.signed_in);
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-
-        let (calls, clear, local, connected) = steps();
+            DesktopClientSession::Disconnected,
+        ] {
+            let error = tauri::async_runtime::block_on(sign_out_for_session(
+                &state,
+                session,
+                || panic!("A rejected sign-out must not clear the workspace."),
+                |_| panic!("An unavailable runtime must not receive a request."),
+            ))
+            .unwrap_err();
+            assert_eq!(error, background_service_error());
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let clear_calls = calls.clone();
+        let connected_calls = calls.clone();
         let status = tauri::async_runtime::block_on(sign_out_for_session(
             &state,
             DesktopClientSession::Connected(DesktopClientHolder::new()),
-            clear,
-            local,
-            connected,
+            move || assert_eq!(clear_calls.fetch_add(1, Ordering::SeqCst), 0),
+            move |_| {
+                assert_eq!(connected_calls.fetch_add(1, Ordering::SeqCst), 1);
+                Ok(signed_out_status())
+            },
         ))
         .unwrap();
         assert!(!status.signed_in);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-
-        let (calls, clear, local, connected) = steps();
-        let error = tauri::async_runtime::block_on(sign_out_for_session(
-            &state,
-            DesktopClientSession::Disconnected,
-            clear,
-            local,
-            connected,
-        ))
-        .unwrap_err();
-        assert_eq!(error, "Muniment cannot reach its background service.");
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn a_session_refresh_marks_the_refresh_until_it_returns() {
         let runtime_activity = RuntimeActivityRegistry::new();
         let state = AuthState::new(runtime_activity.clone());
-        let store = Arc::new(ObservingCredentialStore::new(runtime_activity.clone()));
-
-        let session = tauri::async_runtime::block_on(state.marked_refresh(store.clone()))
-            .unwrap()
-            .unwrap();
-
-        assert!(!session.status.signed_in);
-        assert!(store.marked_during_load.load(Ordering::SeqCst));
+        let observed = runtime_activity.clone();
+        let session = tauri::async_runtime::block_on(state.marked_refresh(move || {
+            assert!(observed.snapshot().session_refresh);
+            Ok(signed_out_status())
+        }))
+        .unwrap()
+        .unwrap();
+        assert!(!session.signed_in);
         assert!(!runtime_activity.snapshot().session_refresh);
     }
 
@@ -1096,12 +759,13 @@ mod tests {
     fn a_blocking_session_refresh_marks_the_refresh_until_it_returns() {
         let runtime_activity = RuntimeActivityRegistry::new();
         let state = AuthState::new(runtime_activity.clone());
-        let store = ObservingCredentialStore::new(runtime_activity.clone());
-
-        let session = state.marked_refresh_blocking(&store).unwrap();
-
-        assert!(!session.status.signed_in);
-        assert!(store.marked_during_load.load(Ordering::SeqCst));
+        let session = state
+            .marked_refresh_blocking(|| {
+                assert!(runtime_activity.snapshot().session_refresh);
+                Ok(signed_out_status())
+            })
+            .unwrap();
+        assert!(!session.signed_in);
         assert!(!runtime_activity.snapshot().session_refresh);
     }
 
@@ -1119,6 +783,36 @@ mod tests {
     }
 
     #[test]
+    fn malformed_status_is_redacted_and_signed_out_has_no_projection() {
+        for response in [
+            serde_json::json!({}),
+            serde_json::json!({"status": {"signed_in": "secret"}}),
+        ] {
+            assert_eq!(
+                decode_sign_in_status(response.clone()).unwrap_err(),
+                background_service_error()
+            );
+            assert_eq!(
+                decode_sign_out_status(response).unwrap_err(),
+                background_service_error()
+            );
+        }
+        assert!(status_projection(signed_out_status()).is_err());
+    }
+
+    #[test]
+    fn a_failed_session_refresh_releases_its_activity_mark() {
+        let activity = RuntimeActivityRegistry::new();
+        let state = AuthState::new(activity.clone());
+        let result = tauri::async_runtime::block_on(
+            state.marked_refresh(|| Err::<(), _>(background_service_error())),
+        )
+        .unwrap();
+        assert_eq!(result, Err(background_service_error()));
+        assert!(!activity.snapshot().session_refresh);
+    }
+
+    #[test]
     fn entitlement_changed_payload_contains_only_the_version() {
         let payload = serde_json::to_value(EntitlementChanged {
             snapshot_version: 42,
@@ -1129,20 +823,20 @@ mod tests {
 
     #[test]
     fn device_listing_rejects_a_missing_fresh_session_without_calling_the_client() {
-        let error =
-            list_devices(None, &FailingDeviceTransport, "https://api.muniment.ai").unwrap_err();
-        assert_eq!(error, "Your devices could not be loaded.");
+        assert_eq!(
+            connected_client(DesktopClientSession::NoSupervisor).err(),
+            Some(background_service_error())
+        );
+        assert_eq!(
+            connected_client(DesktopClientSession::Disconnected).err(),
+            Some(background_service_error())
+        );
     }
 
     #[test]
     fn device_listing_redacts_client_errors() {
-        let error = list_devices(
-            Some("access-secret"),
-            &FailingDeviceTransport,
-            "https://api.muniment.ai",
-        )
-        .unwrap_err();
-        assert_eq!(error, "Your devices could not be loaded.");
+        let error = decode_devices(serde_json::json!({"devices": "backend-secret"})).unwrap_err();
+        assert_eq!(error, background_service_error());
         assert!(!error.contains("secret"));
     }
 
@@ -1197,11 +891,11 @@ mod tests {
         }
 
         let local_app = app_with_state(AttachCompanionState::default());
-        assert_ne!(
+        assert_eq!(
             entitlement(&local_app).unwrap_err(),
             background_service_error()
         );
-        assert_eq!(devices(&local_app).unwrap_err(), device_list_error());
+        assert_eq!(devices(&local_app).unwrap_err(), background_service_error());
 
         let endpoint = crate::test_support::socket_temp_path();
         let listener = UnixListener::bind(&endpoint).unwrap();
@@ -1249,6 +943,8 @@ mod tests {
                     "last_active_at": "2026-01-02T00:00:00Z",
                     "current": true
                 }]}),
+                json!({"signed_in": true, "subject": "owner", "expires_at": 42}),
+                json!({"signed_in": true, "subject": "owner", "expires_at": 900}),
             ];
             let mut operations = Vec::new();
             for body in bodies {
@@ -1299,13 +995,29 @@ mod tests {
         });
         assert_eq!(entitlement(&live_app).unwrap().snapshot_version, 7);
         assert_eq!(devices(&live_app).unwrap().len(), 1);
+        for expiry in [42, 900] {
+            let projection = tauri::async_runtime::block_on(fresh_tokens_async(
+                &live_app.state::<AuthState>(),
+                live_app.handle(),
+            ))
+            .unwrap();
+            assert_eq!(projection.subject.as_deref(), Some("owner"));
+            assert_eq!(projection.expires_at, Some(expiry));
+            assert!(projection.access_token.is_empty());
+            assert!(projection.refresh_token.is_none());
+        }
         assert_eq!(
             event_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
             json!({"snapshot_version": 7}).to_string()
         );
         assert_eq!(
             server.join().unwrap(),
-            [json!("entitlement.snapshot"), json!("device.list")]
+            [
+                json!("entitlement.snapshot"),
+                json!("device.list"),
+                json!("session.status"),
+                json!("session.status")
+            ]
         );
         live_app
             .state::<AttachCompanionState>()

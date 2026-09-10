@@ -61,6 +61,7 @@ fn attach_provenance() -> Provenance {
 
 #[test]
 fn creates_a_thread_for_a_run_and_rejects_invalid_inputs_without_events() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("thread-create", false);
     let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();

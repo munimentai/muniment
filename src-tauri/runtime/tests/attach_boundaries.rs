@@ -34,6 +34,8 @@ use muniment_runtime::{
 };
 
 mod common;
+#[path = "../../src/linux_runtime_service/activation.rs"]
+mod desktop_activation;
 use common::{
     credentials, credentials_with_expiry, spawn_server, spawn_server_sequence, TemporaryProfile,
 };
@@ -170,6 +172,323 @@ fn send_callback(attempt: AuthorizationAttempt) {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     assert!(response.starts_with("HTTP/1.1 200"));
+}
+
+struct StopRuntime(std::sync::mpsc::Sender<()>);
+
+impl Drop for StopRuntime {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+#[test]
+fn desktop_starts_the_deb_runtime_and_reconnects_after_a_stale_socket() {
+    desktop_starts_runtime_in_layout("usr/lib/muniment", "usr/bin", true);
+}
+
+#[test]
+fn desktop_starts_the_appimage_runtime_without_a_deb_alias() {
+    desktop_starts_runtime_in_layout("usr/lib/muniment", "usr/bin", false);
+}
+
+#[test]
+fn desktop_starts_the_development_runtime_and_reconnects_after_a_stale_socket() {
+    desktop_starts_runtime_in_layout("target/debug", "target/debug", false);
+}
+
+fn desktop_starts_runtime_in_layout(resources: &str, bin: &str, deb_alias: bool) {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::time::Duration;
+
+    use muniment_attach::connect_desktop_client_at;
+    use muniment_core::attach::linux::AttachFilesystem;
+
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for Environment {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    let _guard = TEST_LOCK.lock().unwrap();
+    let profile = TemporaryProfile::new("packaged-desktop-start", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let resources = profile.root.join(resources);
+    let bin = profile.root.join(bin);
+    fs::create_dir_all(&resources).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    let desktop = bin.join("muniment-desktop");
+    symlink(std::env::current_exe().unwrap(), &desktop).unwrap();
+    if deb_alias {
+        symlink("muniment-desktop", bin.join("muniment")).unwrap();
+    } else {
+        assert!(!bin.join("muniment").exists());
+    }
+    let executable = resources.join("muniment-runtime");
+    fs::copy(env!("CARGO_BIN_EXE_muniment-runtime"), &executable).unwrap();
+    symlink(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../third-party/sherpa-onnx-v1.13.2/linux-x86_64"),
+        resources.join("asr-runtime"),
+    )
+    .unwrap();
+    let _environment = Environment(
+        ["XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME"]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect(),
+    );
+    std::env::set_var("XDG_RUNTIME_DIR", &profile.root);
+    std::env::set_var("XDG_DATA_HOME", &profile.profile);
+    std::env::set_var("XDG_CONFIG_HOME", &profile.config);
+    let config = profile.config.join("ai.muniment.desktop");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(
+        config.join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+        "1",
+    )
+    .unwrap();
+    assert!(!filesystem.endpoint_path().exists());
+    for _ in 0..2 {
+        let mut child = None;
+        let mut client = None;
+        let mut events = None;
+        desktop_activation::activate_runtime(
+            &filesystem,
+            || {
+                child = Some(Child(desktop_activation::spawn_runtime(&executable)?));
+                Ok(())
+            },
+            || {
+                client = connect_desktop_client_at(
+                    filesystem.endpoint_path(),
+                    "1.0.0",
+                    Duration::from_secs(1),
+                )
+                .ok();
+                events = connect_desktop_client_at(
+                    filesystem.endpoint_path(),
+                    "1.0.0",
+                    Duration::from_secs(1),
+                )
+                .ok()
+                .and_then(|mut client| {
+                    client.subscribe_chat_events().ok()?;
+                    Some(client)
+                });
+                client.is_some() && events.is_some()
+            },
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let mut client = client.unwrap();
+        let events = events.unwrap();
+        assert_eq!(client.runtime_version(), env!("CARGO_PKG_VERSION"));
+        assert!(client.thread_summaries(20, None).unwrap()["summaries"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        client.recheck_retention().unwrap();
+        desktop_activation::activate_runtime(
+            &filesystem,
+            || panic!("A connected runtime must not start twice."),
+            || true,
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        // Both connections use the same handshake. Reject missing and mismatched executables.
+        for replacement in [None, Some("/bin/true")] {
+            fs::remove_file(&desktop).unwrap();
+            if let Some(replacement) = replacement {
+                symlink(replacement, &desktop).unwrap();
+            }
+            assert!(connect_desktop_client_at(
+                filesystem.endpoint_path(),
+                "1.0.0",
+                Duration::from_secs(1),
+            )
+            .is_err());
+            if replacement.is_some() {
+                fs::remove_file(&desktop).unwrap();
+            }
+            symlink(std::env::current_exe().unwrap(), &desktop).unwrap();
+        }
+        drop(events);
+        drop(client);
+        drop(child);
+        assert!(filesystem.endpoint_path().exists());
+    }
+}
+
+#[test]
+fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    use muniment_attach::connect_desktop_client_at;
+    use muniment_core::attach::linux::AttachFilesystem;
+    use muniment_core::retention_record::{write_retention_choice, RetentionChoice};
+
+    let _guard = TEST_LOCK.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let store = KeyringNativeCredentialStore::new();
+    store.clear_session().unwrap();
+    let profile = TemporaryProfile::new("cold-desktop", true);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path();
+    assert!(!endpoint.exists());
+    let artifact = common::stage_pi_stub(&profile.profile);
+    std::env::remove_var("MUNIMENT_PI_ROOT");
+    let (base_url, attempt, server) = spawn_sign_in_server();
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let opener = Arc::new(move |_: &str| -> Result<(), BrowserOpenError> {
+        let callback = attempt.lock().unwrap().clone().unwrap();
+        thread::spawn(move || send_callback(callback));
+        Ok(())
+    });
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    // Open the observer before the runtime starts so it cannot reconcile a live run.
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    let mut client = None;
+    thread::scope(|scope| {
+        let stop = StopRuntime(stop_tx);
+        let mut listener = None;
+        desktop_activation::activate_runtime(
+            &filesystem,
+            || {
+                let root = profile.root.clone();
+                let config = profile.config.clone();
+                let data = profile.profile.clone();
+                listener = Some(scope.spawn(move || {
+                    let state = Arc::new(RuntimeAttachState::open(&data, &config).unwrap());
+                    let service_state = state.clone();
+                    let mut inputs = state.attach_listener_inputs();
+                    inputs.expected_desktop_executable = Some(std::env::current_exe().unwrap());
+                    muniment_runtime::run_attach_listener(
+                        &root,
+                        inputs,
+                        None,
+                        move || {
+                            muniment_runtime::compose_attach_service(
+                                service_state
+                                    .boundaries()
+                                    .with_browser_opener(opener.clone())
+                                    .with_pi_artifact(artifact),
+                                service_state.companion_registry(),
+                                &data,
+                                &config,
+                            )
+                        },
+                        stop_rx,
+                    )
+                    .unwrap();
+                }));
+                Ok(())
+            },
+            || {
+                client = connect_desktop_client_at(endpoint, "1.0.0", Duration::from_secs(1)).ok();
+                client.is_some()
+            },
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let mut client = client.take().unwrap();
+        {
+            assert_eq!(client.sign_in().unwrap()["status"]["signed_in"], true);
+            fs::write(
+                profile
+                    .config
+                    .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+                "1",
+            )
+            .unwrap();
+            assert!(client.thread_summaries(20, None).unwrap()["summaries"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+            let accepted = client.run_submit("cold local prompt", &[], None).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let events = storage
+                    .lock()
+                    .unwrap()
+                    .journal
+                    .events(&accepted.run_id)
+                    .unwrap();
+                assert!(!events.iter().any(|event| event.event_type == "run.failed"));
+                if events
+                    .iter()
+                    .any(|event| event.event_type == "run.completed")
+                {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "The local run did not complete.");
+                thread::sleep(Duration::from_millis(10));
+            }
+            let summaries = client.thread_summaries(20, None).unwrap();
+            let thread_id = summaries["summaries"][0]["threadId"].as_str().unwrap();
+            let history = client.thread_history(thread_id, 20, None).unwrap();
+            assert_eq!(history["entries"][0]["runId"], accepted.run_id);
+            assert_eq!(history["entries"][0]["prompt"], "cold local prompt");
+            let expired = "01900000-0000-7000-8000-000000000031";
+            for (seq, event_type) in [(1, "run.started"), (2, "run.completed")] {
+                let mut event = artifact_event(
+                    &format!("01900000-0000-7000-8000-00000000004{seq}"),
+                    expired,
+                    seq,
+                    EventPayload::Inline {
+                        payload_json: "{}".parse().unwrap(),
+                    },
+                );
+                event.event_type = event_type.into();
+                event.recorded_at = "2000-01-01T00:00:00Z".into();
+                storage
+                    .lock()
+                    .unwrap()
+                    .journal
+                    .append_batch(seq - 1, &[event])
+                    .unwrap();
+            }
+            write_retention_choice(&profile.config, RetentionChoice::DeleteAfter30Days).unwrap();
+            client.recheck_retention().unwrap();
+            assert!(storage
+                .lock()
+                .unwrap()
+                .journal
+                .events(expired)
+                .unwrap()
+                .is_empty());
+            // The retention check preserves this new run.
+            assert!(!storage
+                .lock()
+                .unwrap()
+                .journal
+                .events(&accepted.run_id)
+                .unwrap()
+                .is_empty());
+        }
+        drop(client);
+        drop(stop);
+        listener.unwrap().join().unwrap();
+    });
+    server.join().unwrap();
+    store.clear_session().unwrap();
+    std::env::remove_var("MUNIMENT_API_BASE_URL");
 }
 
 #[test]
@@ -745,6 +1064,7 @@ fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
 
 #[test]
 fn runtime_boundaries_share_owner_approval_and_session_thread() {
+    let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-approval", false);
     let profile = temporary_profile.profile.clone();

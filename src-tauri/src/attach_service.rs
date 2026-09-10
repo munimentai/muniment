@@ -82,10 +82,12 @@ mod state;
 pub use commands::*;
 #[cfg(unix)]
 pub(crate) use listener::start_desktop_client;
+#[cfg(target_os = "linux")]
+pub use listener::stop_attach_listener;
+#[cfg(target_os = "linux")]
+pub(crate) use listener::{runtime_clients_ready, start_runtime_clients};
 #[cfg(target_os = "windows")]
 pub(crate) use listener::{start_approval_presenter, start_desktop_client};
-#[cfg(target_os = "linux")]
-pub use listener::{start_attach_listener, stop_attach_listener};
 #[cfg(target_os = "linux")]
 pub(crate) use migration::control_desktop_migration;
 #[cfg(target_os = "linux")]
