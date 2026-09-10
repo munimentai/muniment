@@ -852,7 +852,6 @@ mod tests {
         use std::os::unix::net::UnixListener;
         use std::sync::mpsc;
         use tauri::{Listener, Manager};
-        use uuid::Uuid;
 
         fn read_value(stream: &mut impl Read) -> Value {
             let mut length = [0; 4];
@@ -898,7 +897,7 @@ mod tests {
         );
         assert_eq!(devices(&local_app).unwrap_err(), background_service_error());
 
-        let endpoint = std::env::temp_dir().join(format!("muniment-auth-{}.sock", Uuid::now_v7()));
+        let endpoint = crate::test_support::socket_temp_path();
         let listener = UnixListener::bind(&endpoint).unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
