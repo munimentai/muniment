@@ -4,14 +4,14 @@ function Get-MsiProductCode([string]$Package) {
     $installer = New-Object -ComObject WindowsInstaller.Installer
     $database = $installer.OpenDatabase((Resolve-Path -LiteralPath $Package).Path, 0)
     $view = $database.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property`` = 'ProductCode'")
-    $view.Execute()
+    [void]$view.Execute()
     $record = $view.Fetch()
     if ($null -eq $record) { throw "The MSI has no ProductCode." }
     $code = $record.StringData(1)
     ConvertTo-PackedProductCode $code | Out-Null
     return $code
   } finally {
-    if ($null -ne $view) { $view.Close() }
+    if ($null -ne $view) { [void]$view.Close() }
     foreach ($comObject in @($record, $view, $database, $installer)) {
       if ($null -ne $comObject) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($comObject) }
     }

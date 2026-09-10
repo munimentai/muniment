@@ -56,6 +56,39 @@ describe('Per-user MSI registration checks', { timeout: 30_000 }, () => {
     expect(helper).toContain('FinalReleaseComObject($comObject)')
   })
 
+  it.skipIf(process.platform !== 'win32')('Returns one GUID string from the real MSI COM reader.', () => {
+    const result = invoke(`
+$package = Join-Path $PSScriptRoot 'product [fixture].msi'
+$installer = $database = $view = $null
+try {
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $database = $installer.OpenDatabase($package, 3)
+  foreach ($sql in @(
+    'CREATE TABLE \`Property\` (\`Property\` CHAR(72) NOT NULL, \`Value\` CHAR(0) LOCALIZABLE PRIMARY KEY \`Property\`)',
+    'INSERT INTO \`Property\` (\`Property\`, \`Value\`) VALUES (''ProductCode'', ''${code}'')'
+  )) {
+    $view = $database.OpenView($sql)
+    [void]$view.Execute()
+    [void]$view.Close()
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
+    $view = $null
+  }
+  [void]$database.Commit()
+} finally {
+  foreach ($comObject in @($view, $database, $installer)) {
+    if ($null -ne $comObject) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($comObject) }
+  }
+}
+$output = @(Get-MsiProductCode $package)
+if ($output.Count -ne 1) { throw "The MSI reader returned $($output.Count) values instead of one." }
+if ($output[0] -isnot [string]) { throw 'The MSI reader did not return a string.' }
+ConvertTo-PackedProductCode $output[0] | Out-Null
+$output[0]
+`)
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe(code)
+  })
+
   it.skipIf(!hasPowerShell)('Packs every GUID field in the Windows Installer order.', () => {
     const result = invoke('ConvertTo-PackedProductCode $args[0]', [code.toLowerCase()])
     expect(result.status, result.stderr).toBe(0)
