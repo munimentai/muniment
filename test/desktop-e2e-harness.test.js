@@ -2781,6 +2781,32 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
     expect(script.indexOf('  Write-MsiProperties $package')).toBeLessThan(script.indexOf('Invoke-Msi "/i"'))
   })
 
+  it('Completes both MSI lifecycles before NSIS can retain the shared HKCU key.', () => {
+    const steps = [
+      'Invoke-Msi "/x" $machineMsi.FullName',
+      'if (Test-Path $machineKey) { throw "Machine registration remains after MSI uninstall" }',
+      'throw "Machine uninstall registration remains after MSI uninstall"',
+      'Remove-Item $upgradeBaseMsi -Force',
+      '$userRuntime = Join-Path $env:LOCALAPPDATA "muniment\\muniment-runtime.exe"',
+      'Invoke-Msi "/i" $regularMsi[0].FullName',
+      'Assert-MsiProductContext $userRegistrations $sessionSid',
+      'Invoke-Msi "/x" $regularMsi[0].FullName',
+      'Assert-PerUserMsiRegistration $userRegistration $env:LOCALAPPDATA -Absent',
+      'throw "The MSI product registration remains after the per-user uninstall."',
+      'if (Test-Path $userRuntime) { throw "The runtime remains after the per-user MSI uninstall." }',
+      'if (Test-Path $userKey) { throw "The application registration remains after the per-user MSI uninstall." }',
+      '$nsisProcess = Start-Process $nsis.FullName',
+      '$nsisUninstall = Start-Process $nsisUninstaller',
+      'if (Test-Path $userRuntime) { throw "NSIS runtime remains after uninstall at $userRuntime" }',
+    ]
+    let previous = -1
+    for (const step of steps) {
+      const position = script.indexOf(step)
+      expect(position, step).toBeGreaterThan(previous)
+      previous = position
+    }
+  })
+
   it('Prints scope evidence before install errors and registration assertions exit.', () => {
     expect(script).toMatch(/Invoke-Msi "\/i" \$regularMsi\[0\]\.FullName "Silent regular MSI install" \$userMsiLog\s*\} finally \{\s*Write-MsiScopeLog \$userMsiLog/)
     expect(script).toContain('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
@@ -2850,7 +2876,7 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
     const msi = path.join(temp(), 'fixture.msi')
     fs.writeFileSync(msi, '')
     // Replace the Windows identity boundary while the fixture runs the install sequence.
-    const sequence = script.slice(script.indexOf('$userProductCode =')).replace(
+    const sequence = script.slice(script.indexOf('$userProductCode ='), script.indexOf('\n# NSIS /S')).replace(
       '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', '"S-1-5-21-123"',
     )
     const result = invoke(`
