@@ -66,8 +66,11 @@ describe('chat composer and projection', () => {
     expect(applyChatEvent(run, { runId: 'r', type: 'failed' }).phase).toBe('failed')
   })
 
-  it('keeps the recorded cause separate from partial reply text across live and restored runs', () => {
-    const failureReason = 'No reply arrived within 30 seconds. Try again.'
+  it.each([
+    ['No reply arrived within 30 seconds. Try again.', 'No reply arrived within 30 seconds.'],
+    ['Acme Inc. logo.png exceeds the 10 MB image limit.', 'Acme Inc. logo.png exceeds the 10 MB image limit.'],
+    ['Acme Inc. logo.png exceeds the 10 MB image limit. Choose a smaller image before sending again.', 'Acme Inc. logo.png exceeds the 10 MB image limit.'],
+  ])('keeps the recorded cause %j across live and restored runs', (failureReason, message) => {
     const entry = { runId: 'r', phase: 'failed', text: 'Partial answer', failureReason }
     const initial = { id: 'r', phase: 'streaming', text: 'Partial answer' }
     const projections = [
@@ -78,8 +81,8 @@ describe('chat composer and projection', () => {
     ]
     for (const run of projections) {
       expect(run).toMatchObject({ phase: 'failed', text: 'Partial answer', failureReason })
-      expect(runFailureMessage(run)).toBe('No reply arrived within 30 seconds.')
-      expect(runAnnouncement(run)).toBe('No reply arrived within 30 seconds.')
+      expect(runFailureMessage(run)).toBe(message)
+      expect(runAnnouncement(run)).toBe(message)
     }
     expect(applyChatEvent(initial, { ...entry, runId: 'other' })).toBe(initial)
     expect(applyChatEvent(projections[0], { runId: 'r', phase: 'thinking' }).failureReason).toBeNull()
@@ -97,6 +100,30 @@ describe('chat composer and projection', () => {
     expect(runFailureMessage({ failureReason: 'The provider refused access!' })).toBe('The provider refused access!')
     expect(runFailureMessage({ failureReason: 'The provider refused access. Check the key and try again.' }))
       .toBe('The provider refused access.')
+  })
+
+  it.each([
+    'Try again.',
+    'Check the key and try again.',
+    'Check the files and try again.',
+    'Choose a smaller image before sending again.',
+    'Remove an image before sending again.',
+    'Remove images or choose smaller images before sending again.',
+    'Choose a PNG, JPEG, GIF, or WebP image before sending again.',
+  ])('removes only the trailing retry guidance %j', (guidance) => {
+    const cause = 'Acme Inc. logo.png exceeds the 10 MB image limit.'
+    expect(runFailureMessage({ failureReason: `${cause} ${guidance}` })).toBe(cause)
+    expect(runFailureMessage({ failureReason: `${cause} ${guidance.slice(0, -1)}` })).toBe(cause)
+  })
+
+  it.each([
+    'Acme! logo.png exceeds the 10 MB image limit.',
+    'Acme? logo.png exceeds the 10 MB image limit.',
+    'Try again.png exceeds the 10 MB image limit.',
+    'Acme Inc. logo.png failed. The provider refused the image.',
+  ])('preserves punctuation and all recorded cause text in %j', (failureReason) => {
+    expect(runFailureMessage({ failureReason })).toBe(failureReason)
+    expect(runAnnouncement({ phase: 'failed', failureReason })).toBe(failureReason)
   })
 
   it('threads projected tool activity into the active run', () => {

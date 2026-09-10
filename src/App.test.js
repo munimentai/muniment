@@ -4361,14 +4361,19 @@ describe('thread announcements', () => {
     expect(region.textContent).toBe('')
   })
 
-  it.each(['', 'Partial answer'])('shows a restored failure cause once beside retry with reply text %j', async (text) => {
+  it.each([
+    ['', 'No reply arrived within 30 seconds.', 'Try again.'],
+    ['Partial answer', 'No reply arrived within 30 seconds.', 'Try again.'],
+    ['', 'Acme Inc. logo.png exceeds the 10 MB image limit.', ''],
+    ['', 'Acme Inc. logo.png exceeds the 10 MB image limit.', 'Choose a smaller image before sending again.'],
+  ])('shows a restored failure cause once beside retry with reply text %j and cause %j', async (text, cause, guidance) => {
     signedIn([{
       runId: 'run-failed', phase: 'failed', text, prompt: 'A question',
-      failureReason: 'No reply arrived within 30 seconds. Try again.',
+      failureReason: `${cause} ${guidance}`.trim(),
     }], { runId: 'retry-run', attachments: [] })
-    const error = await screen.findByText('No reply arrived within 30 seconds.')
+    const error = await screen.findByText(cause)
     expect(error).toHaveClass('run-error')
-    expect(screen.getAllByText('No reply arrived within 30 seconds.')).toHaveLength(1)
+    expect(screen.getAllByText(cause)).toHaveLength(1)
     expect(screen.getByTestId('run-announcement').textContent).toBe('')
     if (text) expect(screen.getByText(text)).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Ask anything')).toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
@@ -4384,7 +4389,12 @@ describe('thread announcements', () => {
     expect(within(error).getByRole('button', { name: 'Try again' })).toBeDisabled()
   })
 
-  it.each([false, true])('shows a live failure cause only in the run when local mode is %s', async (local) => {
+  it.each([
+    [false, 'No reply arrived within 30 seconds.', 'Try again.'],
+    [true, 'No reply arrived within 30 seconds.', 'Try again.'],
+    [false, 'Acme Inc. logo.png exceeds the 10 MB image limit.', ''],
+    [true, 'Acme Inc. logo.png exceeds the 10 MB image limit.', 'Choose a smaller image before sending again.'],
+  ])('shows a live failure cause only in the run when local mode is %s and cause is %j', async (local, cause, guidance) => {
     localModeStatus = local
     signedIn([], { runId: 'run-failed', attachments: [] })
     const composer = await screen.findByPlaceholderText('Ask anything')
@@ -4393,12 +4403,13 @@ describe('thread announcements', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     chatListener({ payload: {
       runId: 'run-failed', phase: 'failed', text: '',
-      failureReason: 'No reply arrived within 30 seconds. Try again.',
+      failureReason: `${cause} ${guidance}`.trim(),
     } })
     const thread = within(document.querySelector('.thread'))
-    const error = await thread.findByText('No reply arrived within 30 seconds.')
+    const error = await thread.findByText(cause)
+    expect(thread.getAllByText(cause)).toHaveLength(1)
     expect(within(error).getByRole('button', { name: 'Try again' })).toBeEnabled()
-    expect(screen.getByTestId('run-announcement')).toHaveTextContent('No reply arrived within 30 seconds.')
+    expect(screen.getByTestId('run-announcement').textContent).toBe(cause)
     expect(document.querySelector('.cancel-error')).not.toBeInTheDocument()
     expect(screen.getByPlaceholderText('Ask anything')).toHaveAccessibleDescription(hint)
     expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()

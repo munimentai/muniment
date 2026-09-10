@@ -110,13 +110,24 @@ const runPhaseAnnouncements = {
   interrupted: 'Reply interrupted.',
 }
 
+// Strip known retry guidance, not punctuation inside file names or recorded causes.
+const retryGuidance = new RegExp(`(?:^|(?<=[.!?])\\s)(?:${[
+  'Try again',
+  'Check the key and try again',
+  'Check the files and try again',
+  'Choose a smaller image before sending again',
+  'Remove an image before sending again',
+  'Remove images or choose smaller images before sending again',
+  'Choose a PNG, JPEG, GIF, or WebP image before sending again',
+].join('|')})\\.?$`, 'i')
+
 // The retry button carries the next step, not the recorded cause.
 export function runFailureMessage(run) {
   const reason = typeof run?.failureReason === 'string'
-    ? run.failureReason.trim().replace(/\s+/g, ' ').replace(/(?:^|\s)Try again\.?$/i, '').trim()
+    ? run.failureReason.trim().replace(/\s+/g, ' ').replace(retryGuidance, '').trim()
     : ''
   if (!reason) return 'Reply failed.'
-  return reason.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? `${reason}.`
+  return /[.!?]$/.test(reason) ? reason : `${reason}.`
 }
 
 // Streamed text never reaches the live region until the run settles.
