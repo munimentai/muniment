@@ -86,6 +86,7 @@ describe('Windows runtime bundle paths', () => {
 
   it('configures the regular MSI for the per-user install root', () => {
     expect(windowsConfig.bundle.resources).toMatchObject(runtimeResource)
+    expect(config.bundle.windows.wix.template).toBe('./windows/per-user.wxs')
     expect(windowsConfig.bundle.windows.wix.template).toBe('./windows/per-user.wxs')
     expect(userTemplate).toContain('InstallScope="perUser"')
     expect(userTemplate).not.toContain('<Directory Id="LocalAppDataFolder">')
@@ -96,6 +97,7 @@ describe('Windows runtime bundle paths', () => {
 
   it('configures the machine MSI for the Program Files install root', () => {
     expect(machineConfig.bundle.resources).toMatchObject(runtimeResource)
+    expect(machineConfig.bundle.windows.wix.template).toBe('./windows/per-machine.wxs')
     expect(machineTemplate).toContain('<Directory Id="$(var.PlatformProgramFilesFolder)" Name="PFiles">')
     expect(machineTemplate).toContain('<Directory Id="INSTALLDIR" Name="{{product_name}}"/>')
     expect(machineTemplate).toContain('{{resources}}')
@@ -107,6 +109,36 @@ describe('Windows runtime bundle paths', () => {
     expect(windowsInstallerTest).toContain('throw "Regular MSI runtime not found at $userRuntime"')
     expect(windowsInstallerTest).toContain('Join-Path $env:ProgramFiles "muniment\\muniment-runtime.exe"')
     expect(windowsInstallerTest).toContain('throw "Machine MSI runtime not found at $machineRuntime"')
+  })
+
+  it('checks the per-user MSI registration before install, after install, and after uninstall', () => {
+    expect(windowsInstallerTest).toContain('Assert-UserMsiRegistrations 0 "before install"')
+    expect(windowsInstallerTest).toContain('Assert-UserMsiRegistrations 1 "after install"')
+    expect(windowsInstallerTest).toContain('Assert-UserMsiRegistrations 0 "after uninstall"')
+    expect(windowsInstallerTest).toContain('$machineRegistrations.Count -ne 0')
+    expect(windowsInstallerTest).toContain('$userInstallDir -notlike "$env:USERPROFILE\\*"')
+  })
+
+  it('finishes both MSI checks before NSIS can retain its HKCU install path', () => {
+    const stages = [
+      'Invoke-Msi "/x" $machineMsi.FullName',
+      'Assert-UserMsiRegistrations 0 "before install"',
+      'Invoke-Msi "/i" $regularMsi[0].FullName',
+      'Assert-UserMsiRegistrations 1 "after install"',
+      'Invoke-Msi "/x" $regularMsi[0].FullName',
+      'Assert-UserMsiRegistrations 0 "after uninstall"',
+      'throw "Application registration remains after the per-user MSI uninstall"',
+      'throw "Per-user MSI runtime remains after uninstall at $userRuntime"',
+      '$nsisProcess = Start-Process',
+      '$nsisUninstall = Start-Process',
+      'throw "NSIS runtime remains after uninstall at $userRuntime"',
+    ]
+    let previousIndex = -1
+    for (const stage of stages) {
+      const index = windowsInstallerTest.indexOf(stage)
+      expect(index, stage).toBeGreaterThan(previousIndex)
+      previousIndex = index
+    }
   })
 
   it('builds and signs the runtime before the first installer pass', () => {

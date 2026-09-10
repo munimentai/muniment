@@ -62,20 +62,59 @@ if ((Get-MunimentRegistrations).Count -ne 0) {
 }
 Remove-Item $upgradeBaseMsi -Force
 
-# NSIS /S is case-sensitive. Run the per-user installer after the machine-scope
-# assertions so its expected HKCU registration cannot be attributed to the MSI.
+$userRuntime = Join-Path $env:LOCALAPPDATA "muniment\muniment-runtime.exe"
+$userKey = "HKCU:\Software\Muniment\muniment"
+$userUninstallRoots = @(
+  "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+  "HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+)
+function Assert-UserMsiRegistrations($ExpectedUserCount, $Stage) {
+  $userRegistrations = @($userUninstallRoots | ForEach-Object {
+    if (Test-Path $_) {
+      Get-ChildItem $_ | Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -eq "muniment" }
+    }
+  })
+  $machineRegistrations = @(Get-MunimentRegistrations)
+  Write-Host "Per-user MSI ${Stage}: hkcu=$($userRegistrations.Count) hklm=$($machineRegistrations.Count)"
+  if ($userRegistrations.Count -ne $ExpectedUserCount -or $machineRegistrations.Count -ne 0) {
+    throw "Per-user MSI ${Stage}: expected hkcu=$ExpectedUserCount hklm=0"
+  }
+}
+
+Assert-UserMsiRegistrations 0 "before install"
+if ((Test-Path $userKey) -or (Test-Path $machineKey)) {
+  throw "Application registration remains before the per-user MSI install"
+}
+try {
+  Invoke-Msi "/i" $regularMsi[0].FullName "Silent regular MSI install"
+  Assert-UserMsiRegistrations 1 "after install"
+  $userInstallDir = Get-ItemPropertyValue $userKey InstallDir
+  $expectedUserInstallDir = Join-Path $env:LOCALAPPDATA "muniment"
+  if ($userInstallDir.TrimEnd('\') -ne $expectedUserInstallDir -or
+      $userInstallDir -notlike "$env:USERPROFILE\*") {
+    throw "Per-user MSI did not register an install directory under the user profile: $userInstallDir"
+  }
+  if (Test-Path $machineKey) { throw "Per-user MSI wrote application registration under HKLM" }
+  if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
+} finally {
+  Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
+}
+Assert-UserMsiRegistrations 0 "after uninstall"
+if ((Test-Path $userKey) -or (Test-Path $machineKey)) {
+  throw "Application registration remains after the per-user MSI uninstall"
+}
+if (Test-Path $userRuntime) { throw "Per-user MSI runtime remains after uninstall at $userRuntime" }
+
+# NSIS keeps its HKCU install-path key after silent uninstall.
+# Run NSIS after both MSI checks so that key cannot affect their clean-state assertions.
+# NSIS /S is case-sensitive.
 $nsisProcess = Start-Process $nsis.FullName -ArgumentList "/S" -Wait -PassThru
 if ($nsisProcess.ExitCode -ne 0) { throw "Silent NSIS install failed: $($nsisProcess.ExitCode)" }
-$userRuntime = Join-Path $env:LOCALAPPDATA "muniment\muniment-runtime.exe"
 if (-not (Test-Path $userRuntime)) { throw "NSIS runtime not found at $userRuntime" }
 $nsisUninstaller = Join-Path $env:LOCALAPPDATA "muniment\uninstall.exe"
 if (-not (Test-Path $nsisUninstaller)) { throw "NSIS uninstaller not found at $nsisUninstaller" }
 $nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassThru
 if ($nsisUninstall.ExitCode -ne 0) { throw "Silent NSIS uninstall failed: $($nsisUninstall.ExitCode)" }
 if (Test-Path $userRuntime) { throw "NSIS runtime remains after uninstall at $userRuntime" }
-
-Invoke-Msi "/i" $regularMsi[0].FullName "Silent regular MSI install"
-if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
-Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
 
 Write-Host "Windows silent installer verification OK"
