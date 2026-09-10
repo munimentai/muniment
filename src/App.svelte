@@ -14,7 +14,7 @@
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
-  import { codeDiffPermissionAnswer, composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, toolName, toolStatus } from './lib/chat-state.js'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage, toolName, toolStatus } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
@@ -1186,7 +1186,7 @@
                   {:else}<p>The changes were applied, but their record is no longer stored.</p>{/if}
                 </div>
               {/each}
-              {#if message.run.phase === 'failed'}<div class="run-error">Reply failed. <button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <button disabled={!message.run.prompt?.trim() || !!active || dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'pending-permission' && message.run.pendingPermission}
@@ -1694,7 +1694,7 @@
   .action-icon { flex: none; display: block; color: inherit; }
   .action-icon rect, .action-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .copy-failure { margin-top: 4px; }
-  .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* The notice keeps the background service register at the composer 12px scale.
      A 15px support line would compete with the draft text. */

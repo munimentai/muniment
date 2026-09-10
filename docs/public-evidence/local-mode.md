@@ -22,6 +22,9 @@ Local mode writes run input, model output, tool activity, and completion records
 
 After Pi becomes ready, a prompt has 30 seconds to produce its first reply event. An acknowledgment alone does not satisfy this bound. If the bound expires, the shell shows the cause and records a failed reply in the local run journal.
 
+A failed reply shows its recorded cause beside **Try again**, including after the desktop restores the thread.
+The composer keeps its rest text instead of repeating the cause.
+
 The runtime log records run lifecycle outcomes and Pi's stderr tail for failed replies. The Linux evidence envelope keeps this log in `pi-local-mode-stderr.log` beside `muniment-runtime.log`.
 
 On macOS, the bundled runtime resolves the desktop executable at `Contents/MacOS/muniment-desktop` from `Contents/Library/LaunchServices/muniment-runtime`.

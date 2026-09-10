@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, settledPhases, toolName, toolStatus, unsettledRun } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage, settledPhases, toolName, toolStatus, unsettledRun } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -64,6 +64,39 @@ describe('chat composer and projection', () => {
     expect(run).toMatchObject({ phase: 'streaming', text: 'Hi' })
     expect(applyChatEvent(run, { runId: 'r', type: 'completed' }).phase).toBe('complete')
     expect(applyChatEvent(run, { runId: 'r', type: 'failed' }).phase).toBe('failed')
+  })
+
+  it('keeps the recorded cause separate from partial reply text across live and restored runs', () => {
+    const failureReason = 'No reply arrived within 30 seconds. Try again.'
+    const entry = { runId: 'r', phase: 'failed', text: 'Partial answer', failureReason }
+    const initial = { id: 'r', phase: 'streaming', text: 'Partial answer' }
+    const projections = [
+      applyChatEvent(initial, entry),
+      applyBufferedChatEvents(initial, [entry]),
+      applyChatEvent(initial, { runId: 'r', type: 'failed', failureReason }),
+      historyMessages([entry])[0].run,
+    ]
+    for (const run of projections) {
+      expect(run).toMatchObject({ phase: 'failed', text: 'Partial answer', failureReason })
+      expect(runFailureMessage(run)).toBe('No reply arrived within 30 seconds.')
+      expect(runAnnouncement(run)).toBe('No reply arrived within 30 seconds.')
+    }
+    expect(applyChatEvent(initial, { ...entry, runId: 'other' })).toBe(initial)
+    expect(applyChatEvent(projections[0], { runId: 'r', phase: 'thinking' }).failureReason).toBeNull()
+  })
+
+  it.each([undefined, null, '', '  \n ', 0, {}, 'Try again.'])(
+    'uses the fallback for an absent or invalid cause: %j', (failureReason) => {
+      expect(runFailureMessage({ failureReason })).toBe('Reply failed.')
+    },
+  )
+
+  it('keeps cause punctuation and folds line breaks without changing addresses or decimals', () => {
+    expect(runFailureMessage({ failureReason: '  Cannot reach\nhttps://example.com after 1.5 seconds  ' }))
+      .toBe('Cannot reach https://example.com after 1.5 seconds.')
+    expect(runFailureMessage({ failureReason: 'The provider refused access!' })).toBe('The provider refused access!')
+    expect(runFailureMessage({ failureReason: 'The provider refused access. Check the key and try again.' }))
+      .toBe('The provider refused access.')
   })
 
   it('threads projected tool activity into the active run', () => {
