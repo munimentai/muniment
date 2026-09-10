@@ -2684,3 +2684,123 @@ describe('installed local-mode chat contract', () => {
     expect(spec).not.toContain('browser.tauri.mock')
   })
 })
+
+describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
+  const script = fs.readFileSync(path.join(root, 'test/windows-installers.ps1'), 'utf8')
+  const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
+  const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+  const helpers = script.slice(script.indexOf('function Write-MsiScopeLog'), script.indexOf('\n$machineKey ='))
+  const invoke = (body, args = []) => {
+    const file = path.join(temp(), 'diagnostics.ps1')
+    fs.writeFileSync(file, `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${helpers}\n${body}\n`)
+    return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
+      encoding: 'utf8', timeout: 15_000,
+    })
+  }
+
+  it('Reads every built MSI before any install starts.', () => {
+    expect(script).toContain('New-Object -ComObject WindowsInstaller.Installer')
+    expect(script).toContain('$installer.OpenDatabase((Resolve-Path -LiteralPath $Package).Path, 0)')
+    expect(script).toContain('SELECT ``Value`` FROM ``Property`` WHERE ``Property``')
+    expect(script).toContain('if ($null -eq $record) { "absent" } else { $record.StringData(1) }')
+    expect(script).toContain('$database.SummaryInformation(0)')
+    expect(script).toContain('([int]$summary.Property(15) -band 8)')
+    expect(script).toContain('msi properties $(Split-Path -Leaf $Package): ALLUSERS=$($values.ALLUSERS) MSIINSTALLPERUSER=$($values.MSIINSTALLPERUSER) InstallScope=$scope')
+    expect(script).toContain('@($regularMsi[0].FullName, $machineMsi[0].FullName, $upgradeBaseMsi)')
+    expect(script.indexOf('  Write-MsiProperties $package')).toBeLessThan(script.indexOf('Invoke-Msi "/i"'))
+  })
+
+  it('Prints scope evidence before install errors and hive assertions exit.', () => {
+    expect(script).toMatch(/Invoke-Msi "\/i" \$regularMsi\[0\]\.FullName "Silent regular MSI install" \$userMsiLog\s*\} finally \{\s*Write-MsiScopeLog \$userMsiLog/)
+    expect(script).toContain('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
+    expect(script).toContain('Get-UserRegistrations "Registry::HKEY_USERS\\$sessionSid"')
+    expect(script).toContain('HKU\\$sessionSid=$($hku.Count) hkcu=$($hkcu.Count) hklm=$($hklm.Count)')
+    expect(script.indexOf('Write-MsiScopeLog $userMsiLog')).toBeLessThan(script.indexOf('if ($hkcu.Count -ne 1 -or $hklm.Count -ne 0)'))
+    expect(script).toContain('throw "Per-user MSI registration requires hkcu=1 hklm=0:')
+    expect(script).toContain('if (Test-Path "HKCU:\\Software\\Muniment\\muniment")')
+    expect(script).toContain('throw "Per-machine MSI wrote application registration under HKCU"')
+    for (const workflow of ['ci.yml', 'nightly.yml']) {
+      expect(fs.readFileSync(path.join(root, '.github/workflows', workflow), 'utf8')).toContain('-File test/windows-installers.ps1')
+    }
+  })
+
+  it.skipIf(!hasPowerShell)('Prints scope changes and the installing user from a Unicode log.', () => {
+    const log = path.join(temp(), 'install [fixture].log')
+    const lines = [
+      "MSI (s) (00:00): PROPERTY CHANGE: Adding ALLUSERS property. Its value is '1'.",
+      "MSI (s) (00:00): PROPERTY CHANGE: Modifying MSIINSTALLPERUSER property. Its current value is '1'. Its new value: '0'.",
+      'MSI (s) (00:00): PROPERTY CHANGE: Deleting ALLUSERS property. Its current value is 1.',
+      "MSI (s) (00:00): PROPERTY CHANGE: Adding UserSID property. Its value is 'S-1-5-21-123'.",
+      'Property(S): UserSID = S-1-5-21-123',
+      'Property(C): LogonUser = Jos\u00e9',
+      'Property(S): ALLUSERS = 1',
+    ]
+    fs.writeFileSync(log, '\uFEFF' + [...lines,
+      'PROPERTY CHANGE: Adding NOTALLUSERS property. Its value is 1.',
+      'PROPERTY CHANGE: Adding Other property. Its value is ALLUSERS.',
+      'Property(S): Unrelated = private',
+    ].join('\r\n'), 'utf16le')
+    const result = invoke('Write-MsiScopeLog $args[0]', [log])
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    for (const line of lines) expect(result.stdout).toContain(line)
+    expect(result.stdout).not.toMatch(/NOTALLUSERS|Other property|Unrelated|private/)
+  })
+
+  it.skipIf(!hasPowerShell).each(['missing', 'empty'])('Names the %s log state.', (state) => {
+    const log = path.join(temp(), 'install.log')
+    if (state === 'empty') fs.writeFileSync(log, '')
+    const result = invoke('Write-MsiScopeLog $args[0]', [log])
+    expect(result.status, result.stderr).toBe(0)
+    if (state === 'missing') expect(result.stdout).toContain('The per-user MSI verbose log is absent.')
+    else for (const name of ['ALLUSERS', 'MSIINSTALLPERUSER', 'UserSID', 'LogonUser']) {
+      expect(result.stdout).toContain(`The per-user MSI log has no ${name} lines.`)
+    }
+  })
+
+  it.skipIf(!hasPowerShell).each([
+    [1, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 0], [2, 0, 2, 0], [1, 1, 1, 0], [1, 0, 0, 1603],
+  ])('Prints counts before exit for HKCU=%s HKLM=%s HKU=%s and install code %s.', (hkcu, hklm, hku, code) => {
+    const msi = path.join(temp(), 'fixture.msi')
+    fs.writeFileSync(msi, '')
+    // Replace the Windows identity boundary while the fixture runs the install sequence.
+    const sequence = script.slice(script.indexOf('$userMsiLog =')).replace(
+      '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', '"S-1-5-21-123"',
+    )
+    const result = invoke(`
+$regularMsi = @([PSCustomObject]@{ FullName = $args[0] })
+$userRuntime = $args[0]
+function Get-UserRegistrations($Hive) {
+  if ($Hive -eq "HKCU:") { @("fixture") * ${hkcu} } else { @("fixture") * ${hku} }
+}
+function Get-MunimentRegistrations { @("fixture") * ${hklm} }
+function Start-Process($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru) {
+  if ($ArgumentList -match '/i ') {
+    Set-Content -LiteralPath $userMsiLog -Value "Property(S): UserSID = S-1-5-21-456"
+  }
+  return [PSCustomObject]@{ ExitCode = ${code} }
+}
+${sequence}`, [msi])
+    expect(result.status, result.stdout + result.stderr).toBe(hkcu === 1 && hklm === 0 && code === 0 ? 0 : 1)
+    expect(result.stdout).toContain('Property(S): UserSID = S-1-5-21-456')
+    expect(result.stdout).toContain(`session SID=S-1-5-21-123 HKU\\S-1-5-21-123=${hku} hkcu=${hkcu} hklm=${hklm}`)
+    if (code !== 0) expect(result.stderr).toContain(`Silent regular MSI install failed: ${code}`)
+    else if (hkcu !== 1 || hklm !== 0) expect(result.stderr).toContain('Per-user MSI registration requires hkcu=1 hklm=0')
+  })
+
+  it.skipIf(!hasPowerShell).each([0, 3010, 1603])('Keeps installer exit code %s and quotes the log path.', (code) => {
+    const directory = temp()
+    const msi = path.join(directory, 'package [fixture].msi')
+    const log = path.join(directory, 'verbose log.txt')
+    fs.writeFileSync(msi, '')
+    const result = invoke(`
+function Start-Process($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru) {
+  Write-Host "$FilePath $ArgumentList wait=$Wait passThru=$PassThru"
+  return [PSCustomObject]@{ ExitCode = ${code} }
+}
+Invoke-Msi "/i" $args[0] "Fixture install" $args[1]`, [msi, log])
+    expect(result.status, result.stdout + result.stderr).toBe(code === 1603 ? 1 : 0)
+    expect(result.stdout).toContain(`msiexec.exe /i "${msi}" /qn /norestart /L*V "${log}" wait=True passThru=True`)
+    expect(result.stdout).not.toMatch(/ALLUSERS=|MSIINSTALLPERUSER=/)
+    if (code === 1603) expect(result.stderr).toContain('Fixture install failed: 1603')
+  })
+})
