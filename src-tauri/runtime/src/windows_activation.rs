@@ -1,3 +1,4 @@
+use muniment_core::runtime_eprintln as eprintln;
 use std::io;
 use std::path::Path;
 use std::time::Duration;

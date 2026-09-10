@@ -977,7 +977,7 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
     expect(report).not.toContain(directory)
   })
 
-  const collectMacosDiagnostics = ({ job = 'missing', log, secret = '' } = {}) => {
+  const collectMacosDiagnostics = ({ job = 'missing', log, serviceLog, secret = '' } = {}) => {
     const directory = temp(); const raw = path.join(directory, 'raw'); const artifacts = path.join(directory, 'safe')
     const launchctl = path.join(directory, 'launchctl'); const runtimeLog = path.join(directory, 'runtime.log')
     fs.mkdirSync(raw)
@@ -985,6 +985,7 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
       ? '#!/bin/sh\nprintf "state = running\\npid = 42\\n"\n'
       : '#!/bin/sh\nprintf "Could not find service ai.muniment.runtime\\n" >&2\nexit 113\n', { mode: 0o700 })
     if (log !== undefined) fs.writeFileSync(runtimeLog, log)
+    if (serviceLog !== undefined) fs.writeFileSync(path.join(directory, 'runtime-service.log'), serviceLog)
     const result = spawnSync('bash', ['-c', 'source "$1"; collect_macos_runtime_diagnostics gui/501/ai.muniment.runtime "$2" "$3" && node test/e2e/support/redact.mjs "$3" "$4"', 'bash', path.join(root, 'test/e2e/support/macos-runtime-probe.sh'), runtimeLog, raw, artifacts], {
       encoding: 'utf8', env: { ...process.env, MUNIMENT_E2E_LAUNCHCTL: launchctl, GH_TOKEN: secret },
     })
@@ -1007,16 +1008,36 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
     const { result, artifacts } = collectMacosDiagnostics()
     expect(result.status, result.stderr).toBe(0)
     expect(fs.readFileSync(path.join(artifacts, 'runtime.log'), 'utf8')).toBe('No runtime log exists for this user.\n')
+    expect(fs.readFileSync(path.join(artifacts, 'runtime-service.log'), 'utf8')).toBe('No runtime service log exists for this user.\n')
+  })
+
+  it('The envelope carries runtime service diagnostics beside the desktop activation log.', () => {
+    const serviceLog = 'muniment-runtime: started version=test\nmuniment-runtime: run_id=test run_start\n'
+    const log = 'event=runtime_service_registered\n'
+    const { result, artifacts } = collectMacosDiagnostics({ log, serviceLog })
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'runtime.log'), 'utf8')).toBe(log)
+    expect(fs.readFileSync(path.join(artifacts, 'runtime-service.log'), 'utf8')).toBe(serviceLog)
+    expect(fs.statSync(path.join(artifacts, 'runtime-service.log')).mode & 0o777).toBe(0o600)
+  })
+
+  it('The envelope keeps an empty runtime service log.', () => {
+    const { result, artifacts } = collectMacosDiagnostics({ serviceLog: '' })
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'runtime-service.log'), 'utf8')).toBe('')
   })
 
   it('bounds and redacts runtime diagnostics before publication', () => {
     const secret = 'fixture-registration-secret'
-    const { result, artifacts } = collectMacosDiagnostics({ log: `${'x'.repeat(300000)}\nAuthorization: Bearer ${secret}\n`, secret })
+    const contents = `${'x'.repeat(300000)}\nAuthorization: Bearer ${secret}\n`
+    const { result, artifacts } = collectMacosDiagnostics({ log: contents, serviceLog: contents, secret })
     expect(result.status, result.stderr).toBe(0)
-    const log = fs.readFileSync(path.join(artifacts, 'runtime.log'), 'utf8')
-    expect(Buffer.byteLength(log)).toBeLessThanOrEqual(262144)
-    expect(log).not.toContain(secret)
-    expect(log).toContain('[REDACTED:credential-header]')
+    for (const name of ['runtime.log', 'runtime-service.log']) {
+      const log = fs.readFileSync(path.join(artifacts, name), 'utf8')
+      expect(Buffer.byteLength(log)).toBeLessThanOrEqual(262144)
+      expect(log).not.toContain(secret)
+      expect(log).toContain('[REDACTED:credential-header]')
+    }
   })
 
   it('verifies the installed runtime and LaunchAgent without registering the agent', () => {
