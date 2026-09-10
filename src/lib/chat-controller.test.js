@@ -538,6 +538,9 @@ describe('chat controller', () => {
     expect(invoke).toHaveBeenCalledOnce()
     expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20 })
     expect(context.messages()).toEqual([])
+    expect(context.onHistoryError.mock.calls).toEqual([['']])
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith(null)
+    expect(context.onFreshThread).toHaveBeenLastCalledWith(true)
   })
 
   it('opens the newest thread on the first load after sign-in', async () => {
@@ -1187,10 +1190,10 @@ describe('chat controller', () => {
       onHistoryError,
     })
 
-    await controller.openThread('thread-2')
+    await controller.openThread('thread-2', true)
 
     expect(context.messages()).toBe(previous)
-    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored.', expect.objectContaining({ label: 'Restore history' }))
+    expect(onHistoryError).toHaveBeenLastCalledWith('Muniment could not restore conversation history. offline', expect.objectContaining({ label: 'Restore history' }))
   })
 
   it('restores the previous backend thread when the selected thread fails to load', async () => {
@@ -1647,36 +1650,78 @@ describe('chat controller', () => {
     )
   })
 
-  it.each(['chat_thread_summaries', 'chat_thread_open'])('reports a %s failure with the current copy', async (failedCommand) => {
-    const onHistoryError = vi.fn()
-    const invoke = vi.fn(async (command) => {
-      if (command === 'chat_thread_summaries') {
-        if (failedCommand === command) throw new Error('offline')
-        return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
-      }
-      throw new Error('offline')
-    })
-    const controller = createChatController({
-      invoke,
-      listen: vi.fn(),
-      readMessages: () => [],
-      readActive: () => null,
-      readAnnounced: () => null,
-      readDraft: () => '',
-      readFiles: () => [],
-      onMessages: vi.fn(),
-      onActive: vi.fn(),
-      onAnnounce: vi.fn(),
-      onDraft: vi.fn(),
-      onFiles: vi.fn(),
-      onSubmitError: vi.fn(),
-      onCancelError: vi.fn(),
-      onQueueError: vi.fn(),
-      onHistoryError,
-    })
-    await controller.loadHistory()
+  describe.each(['chat_thread_summaries', 'chat_thread_open'])('%s failures', (failedCommand) => {
+    it.each([
+      ['The journal is locked.', 'The journal is locked.'],
+      [new Error('Permission denied.'), 'Permission denied.'],
+      [{ message: 'The journal is corrupt.' }, 'The journal is corrupt.'],
+      [undefined, ''],
+      [null, ''],
+      [{}, ''],
+      ['', ''],
+      ['  ', ''],
+    ])('shows the reader cause for %j and clears it after a retry', async (error, cause) => {
+      let failing = true
+      const invoke = vi.fn(async (command) => {
+        if (command === failedCommand && failing) throw error
+        return command === 'chat_thread_summaries'
+          ? { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+          : { entries: [], nextCursor: null }
+      })
+      const context = setup(invoke)
+      await context.controller.loadHistory()
 
-    expect(onHistoryError).toHaveBeenLastCalledWith('Conversation history could not be restored.', expect.objectContaining({ label: 'Restore history' }))
+      expect(context.onHistoryError).toHaveBeenLastCalledWith(
+        `Muniment could not restore conversation history.${cause ? ` ${cause}` : ''}`,
+        expect.objectContaining({ label: 'Restore history', run: expect.any(Function) }),
+      )
+      const action = context.onHistoryError.mock.lastCall[1]
+      failing = false
+      await action.run()
+
+      expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+      expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-1')
+    })
+  })
+
+  it('clears a failed read when the next read finds an empty journal', async () => {
+    const invoke = vi.fn()
+      .mockRejectedValueOnce('The journal is locked.')
+      .mockResolvedValue({ summaries: [], nextCursor: null })
+    const context = setup(invoke)
+
+    await context.controller.loadHistory()
+    expect(context.onHistoryError.mock.lastCall[0]).toContain('The journal is locked.')
+    await context.onHistoryError.mock.lastCall[1].run()
+
+    expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+    expect(context.messages()).toEqual([])
+    expect(context.onFreshThread).toHaveBeenLastCalledWith(true)
+    expect(invoke.mock.calls.every(([command]) => command === 'chat_thread_summaries')).toBe(true)
+  })
+
+  it('retries the failed thread selection and read instead of opening the newest thread', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce('Permission denied.')
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ entries: [], nextCursor: null })
+    const context = setup(invoke, { threadId: 'thread-1' })
+
+    await context.controller.openThread('thread-2', true)
+    expect(context.onHistoryError.mock.lastCall[0]).toContain('Permission denied.')
+    await context.onHistoryError.mock.lastCall[1].run()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_select_thread', { threadId: 'thread-2' }],
+      ['chat_thread_open', { threadId: 'thread-2', limit: 100 }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
+      ['chat_select_thread', { threadId: 'thread-2' }],
+      ['chat_thread_open', { threadId: 'thread-2', limit: 100 }],
+    ])
+    expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-2')
   })
 
   it('replays events buffered before a submitted run id is known', async () => {

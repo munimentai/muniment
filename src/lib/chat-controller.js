@@ -5,6 +5,12 @@ const historyPageLimit = 100
 const signaledThreadCap = 256
 const signaledRunCap = 256
 
+function historyReadError(error) {
+  const cause = typeof error === 'string' ? error : error?.message
+  const failure = 'Muniment could not restore conversation history.'
+  return typeof cause === 'string' && cause.trim() ? `${failure} ${cause}` : failure
+}
+
 export function createChatController({
   invoke,
   listen,
@@ -261,8 +267,8 @@ export function createChatController({
         return
       }
       await openThread(newest, switchBlocked)
-    } catch (_) {
-      if (!destroyed) onHistoryError('Conversation history could not be restored.', { label: 'Restore history', run: loadHistory })
+    } catch (error) {
+      if (!destroyed) onHistoryError(historyReadError(error), { label: 'Restore history', run: loadHistory })
     }
   }
 
@@ -347,7 +353,7 @@ export function createChatController({
       // loadHistory reads this back: false means the thread did not load, so the
       // caller can fall back. A skipped call returns undefined instead.
       return true
-    } catch (_) {
+    } catch (error) {
       if (!destroyed) {
         if (wasBlocked) {
           switchBlocked = true
@@ -363,7 +369,10 @@ export function createChatController({
             }
           }
         }
-        onHistoryError('Conversation history could not be restored.', { label: 'Restore history', run: loadHistory })
+        onHistoryError(historyReadError(error), {
+          label: 'Restore history',
+          run: () => openThread(threadId, select || switchBlocked),
+        })
       }
       return false
     } finally {
