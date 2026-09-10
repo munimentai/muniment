@@ -18,6 +18,10 @@ Pi can also use provider credentials that the Pi CLI saved in the same store. Lo
 
 ## Local records
 
+An empty journal shows the composer without a history alert.
+If a history read fails, the alert includes the reader's cause. **Restore history** repeats the failed action.
+A successful history read clears the alert.
+
 Local mode writes run input, model output, tool activity, and completion records to the local run journal. A completed local run records its elapsed time and no cloud receipt. These records use the same event shapes as cloud-backed runs.
 
 After Pi becomes ready, a prompt has 30 seconds to produce its first reply event. An acknowledgment alone does not satisfy this bound. If the bound expires, the shell shows the cause and records a failed reply in the local run journal.
