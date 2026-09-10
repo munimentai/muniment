@@ -11,12 +11,15 @@ mod linux_runtime_service;
 mod local_mode;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos_run_start_probe;
+#[cfg(target_os = "macos")]
+mod macos_runtime_notice_probe;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos_runtime_service;
 mod memory;
 mod model_install;
 mod onboarding_import;
 mod onboarding_scan;
+mod runtime_owner;
 #[cfg(test)]
 mod test_support;
 mod thread_retention;
@@ -75,25 +78,17 @@ fn main() {
         .manage(auth::AuthState::new(runtime_activity.clone()))
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(attach_service::AttachApprovalState::default())
+        .on_page_load(|webview, payload| {
+            #[cfg(target_os = "macos")]
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                macos_runtime_notice_probe::install(webview);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (webview, payload);
+        })
         .setup(move |app| {
             window_state::restore_main_window(app)?;
-            #[cfg(target_os = "macos")]
-            {
-                let activation = macos_runtime_service::activate_bundled_runtime_service();
-                app.manage(activation);
-            }
             let app_data = app.path().app_data_dir()?;
-            #[cfg(target_os = "windows")]
-            {
-                let state_directory = app_data.clone();
-                std::thread::spawn(move || {
-                    windows_runtime_service::register_runtime_task_at_startup(&state_directory);
-                    windows_runtime_service::start_runtime_task_at_startup(&state_directory);
-                });
-                app.manage(attach_service::AttachCompanionState::default());
-                attach_service::start_approval_presenter(app.handle());
-                attach_service::start_desktop_client(app.handle());
-            }
             let app_config = app.path().app_config_dir()?;
             let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
                 app_config,
@@ -104,16 +99,11 @@ fn main() {
             {
                 app.manage(chat::ChatState::new(runtime_activity.clone()));
             }
-            #[cfg(target_os = "linux")]
-            {
-                linux_runtime_service::start_runtime(app.handle());
-            }
             #[cfg(target_os = "windows")]
             {
                 app.manage(chat::ChatState::new(runtime_activity.clone()));
             }
-            #[cfg(target_os = "macos")]
-            attach_service::start_desktop_client(app.handle());
+            runtime_owner::setup(app.handle());
             let parakeet_root = app.path().app_data_dir()?.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
@@ -166,10 +156,13 @@ fn main() {
             dictation::dictation_start,
             dictation::dictation_stop,
             dictation::dictation_status,
+            runtime_owner::runtime_state,
+            runtime_owner::runtime_start,
+            runtime_owner::runtime_stop,
             #[cfg(target_os = "macos")]
-            macos_runtime_service::runtime_service_activation,
+            macos_runtime_service::open_login_items,
             #[cfg(target_os = "macos")]
-            macos_runtime_service::open_login_items
+            macos_runtime_notice_probe::runtime_notice_observed
         ])
         .run(tauri::generate_context!())
         .expect("error while running muniment");

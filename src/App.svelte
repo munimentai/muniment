@@ -145,8 +145,8 @@
   let pairingRequests = $state([])
   let desktopClientStatus = $state(null)
   let desktopClientStatusVersion = 0
-  let backgroundServiceNoticeVisible = $state(false)
-  let runtimeServiceActivation = $state(null)
+  let runtimeNotice = $state(null)
+  let backgroundServiceNoticeVisible = $derived(runtimeNotice?.visible === true)
   let authRequestVersion = 0
   let localEntryPending = $state(false)
   let markerStartupLocalMode = null
@@ -247,12 +247,11 @@
   })
 
   const backgroundServiceNotice = createBackgroundServiceNotice({
-    onVisible: (visible) => { backgroundServiceNoticeVisible = visible },
+    invoke: (...args) => tauri.invoke(...args),
+    listen: (...args) => window.__TAURI__?.event?.listen(...args),
+    onChange: (notice) => { runtimeNotice = notice },
   })
 
-  // The notice decides its own visibility, so every status reaches it beside
-  // the field the rest of the shell reads. Both status paths call this one
-  // function, so the listener and the poll act alike.
   function applyDesktopClientStatus(status) {
     // The runtime drops a chat-event subscriber whose queue fills, and the
     // desktop resubscribes after a retry. No window saw the events inside that
@@ -262,7 +261,6 @@
     const chatEventsRecovered = desktopClientStatus?.chat_events_connected === false
       && status?.chat_events_connected === true
     desktopClientStatus = status
-    backgroundServiceNotice.update(status)
     if (chatEventsRecovered) {
       void startupReady.then(() => chatController.refreshOpenThread())
       void startupReady.then(() => chatController.refreshThreads())
@@ -773,10 +771,6 @@
     }
   }
 
-  function openLoginItems() {
-    void tauri.invoke('open_login_items').catch(() => console.error('Login Items failed to open.'))
-  }
-
   function startWorkspace() {
     markerStartupReady = tauri.invoke('local_mode_status')
     startupReady = markerStartupReady.then(async (active) => {
@@ -872,11 +866,7 @@
     if (tauri) {
       void startDesktopClientStatus()
       startWorkspace()
-      if (navigator.userAgent.includes('Macintosh')) {
-        void tauri.invoke('runtime_service_activation').then((activation) => {
-          runtimeServiceActivation = activation
-        }).catch(() => console.error('Runtime service activation failed.'))
-      }
+      void backgroundServiceNotice.start()
       chatController.start()
       entitlementToast.start()
       voiceShortcutManager.start()
@@ -1057,8 +1047,13 @@
   {/if}
 
   {#if tauri}
-    <Onboarding {tauri} bind:onboarding bind:draft onready={openFirstRunModelSettings} />
-    {#if onboarding.name === 'complete'}
+    <Onboarding {tauri} bind:onboarding bind:draft onready={openFirstRunModelSettings} runtimeUnavailable={backgroundServiceNoticeVisible} />
+    {#if backgroundServiceNoticeVisible}
+      <section class="auth-state" aria-live="polite" data-testid="runtime-notice">
+        <p class="record error-record">{runtimeNotice.text}</p>
+        <button type="button" disabled={runtimeNotice.busy} onclick={() => backgroundServiceNotice.retry()}>{runtimeNotice.control}</button>
+      </section>
+    {:else if onboarding.name === 'complete'}
       {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
       <section class="auth-state">
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in for cloud features, or use local mode.'}</p>
@@ -1067,12 +1062,6 @@
           <button disabled={localEntryPending} aria-disabled={auth.name === 'signing-in' || localEntryPending ? 'true' : undefined} onclick={enterLocalMode}>Use local mode</button>
         </div>
         {#if localEntryError}<p class="record error-record" role="alert">{localEntryError}</p>{/if}
-      </section>
-    {:else if (workspaceMode() || (auth.name === 'error' && auth.retry === 'status'))
-      && backgroundServiceNoticeVisible}
-      <section class="auth-state" aria-live="polite">
-        <p class="record error-record">Muniment cannot reach its background service.</p>
-        <p class="support">Muniment reconnects on its own.</p>
       </section>
     {:else if workspaceMode() && desktopClientStatus}
       <section class="workspace" class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
@@ -1314,12 +1303,6 @@
         <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
         </div>
         <div class="composer">
-          {#if runtimeServiceActivation === 'requiresApproval'}
-            <section class="update-notice approval-notice" aria-live="polite">
-              <p class="record error-record">Muniment needs approval to run in the background.</p>
-              <button type="button" class="quiet" onclick={openLoginItems}>Open Login Items</button>
-            </section>
-          {/if}
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
@@ -1723,7 +1706,6 @@
      A 15px support line would compete with the draft text. */
   .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
   .update-notice .support { font-size: var(--text-12); }
-  .approval-notice { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .composer:focus-within { border-color: var(--muted); }

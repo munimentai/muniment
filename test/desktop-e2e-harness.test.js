@@ -2856,6 +2856,17 @@ $argsPath = $args[0]
     }
   })
 
+  it('Checks machine scope and regular MSI cleanup before NSIS starts.', () => {
+    const machineCleanup = script.indexOf('Remove-Item $upgradeBaseMsi -Force')
+    const regularInstall = script.indexOf('$userProductCode =')
+    const regularCleanup = script.indexOf('if (Test-Path $userRuntime) { throw "The regular MSI runtime remains after uninstall." }')
+    const nsisInstall = script.indexOf('$nsisProcess = Start-Process')
+    expect(machineCleanup).toBeGreaterThan(0)
+    expect(regularInstall).toBeGreaterThan(machineCleanup)
+    expect(regularCleanup).toBeGreaterThan(regularInstall)
+    expect(nsisInstall).toBeGreaterThan(regularCleanup)
+  })
+
   it.skipIf(!hasPowerShell)('Prints scope changes and the installing user from a Unicode log.', () => {
     const log = path.join(temp(), 'install [fixture].log')
     const lines = [
@@ -2893,28 +2904,35 @@ $argsPath = $args[0]
 
   it.skipIf(!hasPowerShell).each([
     [1, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 0], [2, 0, 2, 0], [1, 1, 1, 0], [1, 0, 0, 1603],
-    ...['userProduct', 'userData', 'managed', 'machineProduct', 'leftover'].map((invalid) => [0, 1, 0, 0, invalid]),
+    ...['userProduct', 'userData', 'managed', 'machineProduct', 'leftover', 'application-leftover'].map((invalid) => [0, 1, 0, 0, invalid]),
   ])('Prints counts before exit for HKCU=%s HKLM=%s HKU=%s and install code %s.', (hkcu, hklm, hku, code, invalid = '') => {
     const msi = path.join(temp(), 'fixture.msi')
     fs.writeFileSync(msi, '')
-    const runtime = path.join(path.dirname(msi), 'muniment-runtime.exe')
+    const runtime = path.join(path.dirname(msi), 'muniment', 'muniment-runtime.exe')
+    fs.mkdirSync(path.dirname(runtime))
     fs.writeFileSync(runtime, '')
-    // Replace the Windows identity boundary while the fixture runs the install sequence.
-    const sequence = script.slice(script.indexOf('$userProductCode =')).replace(
+    // Replace the Windows identity boundary while the fixture runs both per-user installer cycles.
+    const sequence = script.slice(script.indexOf('\n', script.indexOf('Remove-Item $upgradeBaseMsi -Force'))).replace(
       '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', '"S-1-5-21-123"',
     )
     const result = invoke(`
 ${comFixture}
 $regularMsi = @([PSCustomObject]@{ FullName = $args[0] })
+$nsis = @([PSCustomObject]@{ FullName = 'fixture-setup.exe' })
 $userRuntime = $args[1]
+$env:LOCALAPPDATA = Split-Path (Split-Path $userRuntime)
+$script:applicationValues = @{}
 $machineKey = "HKLM:\\Software\\Muniment\\muniment"
 function Test-Path($Path, $LiteralPath) {
   if ($Path -eq $machineKey) { return $false }
-  if ($Path -eq "HKCU:\\Software\\Muniment\\muniment") { return $script:fixtureInstalled }
+  if ($Path -eq "HKCU:\\Software\\Muniment\\muniment") {
+    if (-not $script:fixtureInstalled) { Write-Host 'MSI application cleanup check.' }
+    return $script:applicationValues.Count -ne 0
+  }
   if ($LiteralPath) { return Microsoft.PowerShell.Management\\Test-Path -LiteralPath $LiteralPath }
   return Microsoft.PowerShell.Management\\Test-Path $Path
 }
-function Get-ItemPropertyValue($Path, $Name) { return (Split-Path $userRuntime) + '\\' }
+function Get-ItemPropertyValue($Path, $Name) { return $script:applicationValues[$Name] }
 function Get-UserRegistrations($Hive) {
   if ($Hive -eq "HKCU:") { @("fixture") * ${hkcu} } else { @("fixture") * ${hku} }
 }
@@ -2938,10 +2956,27 @@ function Get-PerUserMsiRegistration($ProductCode, $Sid) {
   }
 }
 function Start-Process($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru) {
+  if ($FilePath -ne 'msiexec.exe') {
+    if ($ArgumentList -cne '/S') { throw 'NSIS requires /S.' }
+    if ($FilePath -eq $nsis[0].FullName) {
+      Write-Host 'NSIS install.'
+      $script:applicationValues[''] = Split-Path $userRuntime
+      Set-Content -LiteralPath $userRuntime -Value ''
+      Set-Content -LiteralPath (Join-Path (Split-Path $userRuntime) 'uninstall.exe') -Value ''
+    } elseif ($FilePath -eq $nsisUninstaller) {
+      Remove-Item -LiteralPath $userRuntime, $nsisUninstaller
+      # Silent NSIS uninstall keeps the default install path under the shared application key.
+      Write-Host "NSIS retained values: $($script:applicationValues | ConvertTo-Json -Compress)"
+    } else { throw "Unexpected installer: $FilePath" }
+    return [PSCustomObject]@{ ExitCode = 0 }
+  }
   $script:fixtureInstalled = $ArgumentList -match '/i '
   if ($script:fixtureInstalled) {
+    $script:applicationValues['InstallDir'] = (Split-Path $userRuntime) + '\\'
+    Set-Content -LiteralPath $userRuntime -Value ''
     Set-Content -LiteralPath $userMsiLog -Value "Property(S): UserSID = S-1-5-21-456"
   } else {
+    if ('${invalid}' -ne 'application-leftover') { $script:applicationValues.Remove('InstallDir') }
     Remove-Item -LiteralPath $userRuntime
   }
   return [PSCustomObject]@{ ExitCode = ${code} }
@@ -2952,8 +2987,10 @@ ${sequence}`, [msi, runtime])
     expect(result.stdout).toContain(`hkcu=${hkcu} HKU\\S-1-5-21-123=${hku} hklm=${hklm}`)
     if (code !== 0) expect(result.stderr).toContain(`Silent regular MSI install failed: ${code}`)
     else if (invalid) {
-      expect(result.stderr).toContain('Per-user MSI registration failed')
+      expect(result.stderr).toContain(invalid === 'application-leftover'
+        ? 'Application registration remains after regular MSI uninstall.' : 'Per-user MSI registration failed')
       expect(result.stdout).toContain('per-user MSI uninstalled ProductCode=')
+      expect(result.stdout).not.toContain('NSIS install.')
     } else {
       if (hkcu + hklm !== 1) expect(result.stderr).toContain('The regular MSI must have exactly one uninstall registration.')
       expect(result.stdout).toContain('The regular MSI has 1 Windows Installer registrations.')
@@ -2962,6 +2999,14 @@ ${sequence}`, [msi, runtime])
       expect(result.stdout).toContain('hkcu=0 HKU\\S-1-5-21-123=0 hklm=0')
       for (const key of ['userProduct', 'userData', 'managed', 'machineProduct']) {
         expect(result.stdout).toContain(`fixture-${key} present=0`)
+      }
+      if (hkcu + hklm === 1) {
+        const cleanup = result.stdout.indexOf('MSI application cleanup check.')
+        expect(cleanup).toBeGreaterThan(0)
+        expect(result.stdout.indexOf('NSIS install.')).toBeGreaterThan(cleanup)
+        const retained = result.stdout.match(/NSIS retained values: (.+)/)
+        expect(retained).not.toBeNull()
+        expect(JSON.parse(retained[1])).toEqual({ '': path.dirname(runtime) })
       }
     }
   })

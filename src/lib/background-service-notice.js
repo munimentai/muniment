@@ -1,58 +1,79 @@
-// The runtime drops a chat-event subscriber whose queue fills, and the desktop
-// resubscribes after a 250 millisecond retry. A drop that short must leave the
-// workspace on screen, so the notice waits out a two second dwell first.
-const dwell = 2000
-
-function serviceUnreachable(status) {
-  return Boolean(status?.supervisor_running)
-    && (status.connected === false || status.chat_events_connected === false)
+const messages = {
+  starting: 'The runtime received a start request.',
+  connected: '',
+  disconnected: 'The runtime connection closed.',
+  exited: 'The runtime exited.',
+  startFailed: 'The runtime start failed.',
+  requiresApproval: 'The runtime registration needs approval.',
+  approved: 'The runtime registration has approval.',
+  notFound: 'The runtime registration found no service.',
+  registrationFailed: 'The runtime registration failed.',
+  stopped: 'The runtime stopped.',
+  stopFailed: 'The runtime stop failed.',
 }
 
-export function createBackgroundServiceNotice({
-  setTimer = setTimeout,
-  clearTimer = clearTimeout,
-  onVisible,
-}) {
-  let timer
-  let visible = false
-  let readAnyStatus = false
+export function runtimeNotice(state) {
+  if (!state || !Object.hasOwn(messages, state.lastEvent)) return null
+  return {
+    visible: state.lastEvent !== 'connected' && state.visible === true,
+    text: messages[state.lastEvent],
+    control: state.lastEvent === 'requiresApproval' ? 'Open Login Items' : 'Start runtime',
+    command: state.lastEvent === 'requiresApproval' ? 'open_login_items' : 'runtime_start',
+    busy: state.busy === true,
+  }
+}
 
-  function show(next) {
-    if (visible === next) return
-    visible = next
-    onVisible(next)
+// Windows read the shell owner's snapshot. No window owns a lifecycle timer.
+export function createBackgroundServiceNotice({ invoke, listen, onChange, setPoll = setInterval, clearPoll = clearInterval }) {
+  let revision = -1
+  let started = false
+  let stopped = false
+  let unlisten
+  let poll
+  let current
+  let pending = false
+
+  function update(state) {
+    if (stopped || !Number.isSafeInteger(state?.revision) || state.revision < 0 || state.revision < revision) return
+    const notice = runtimeNotice(state)
+    if (!notice) return
+    revision = state.revision
+    current = notice
+    onChange(notice)
   }
 
-  // A null status means the window has read no status yet.
-  function update(status) {
-    if (!status) return
-    const first = !readAnyStatus
-    readAnyStatus = true
+  async function read() {
+    try { update(await invoke('runtime_state')) } catch { console.error('The runtime status failed.') }
+  }
 
-    if (!serviceUnreachable(status)) {
-      clearTimer(timer)
-      timer = undefined
-      show(false)
-      return
+  async function start() {
+    if (started || stopped) return
+    started = true
+    try {
+      const stop = await listen('runtime-state-changed', ({ payload }) => update(payload))
+      if (stopped) { stop?.(); return }
+      unlisten = stop
+    } catch { console.error('The runtime listener registration failed.') }
+    if (stopped) return
+    poll = setPoll(read, 1000)
+    await read()
+  }
+
+  async function retry() {
+    if (stopped || pending || !current || current.busy) return
+    pending = true
+    try { await invoke(current.command) } catch { console.error('The runtime control failed.') }
+    finally {
+      pending = false
+      if (!stopped) await read()
     }
-    // A window that opens onto an outage owes the user the notice at once.
-    if (first) {
-      show(true)
-      return
-    }
-    // The dwell measures the outage from its first status. A repeat status
-    // during the dwell never extends it.
-    if (visible || timer !== undefined) return
-    timer = setTimer(() => {
-      timer = undefined
-      show(true)
-    }, dwell)
   }
 
   function cleanup() {
-    clearTimer(timer)
-    timer = undefined
+    stopped = true
+    clearPoll(poll)
+    unlisten?.()
   }
 
-  return { update, cleanup }
+  return { start, retry, cleanup }
 }
