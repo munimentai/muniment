@@ -4,7 +4,7 @@
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
-  import { THEME_STORAGE_KEY, parseTheme, serializeTheme } from './theme-state.js'
+  import Appearance from './Appearance.svelte'
 
   let { tauri, subject, onSignOut, escapeBlocked = () => false, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut } = $props()
   let access = $state(accessIdleState)
@@ -19,7 +19,6 @@
   let capturingShortcut = $state(false)
   let pendingShortcut = $state('')
   let shortcutStatus = $state('')
-  let theme = $state(readTheme())
   let revokingIdentity = $state(null)
   let revokePending = $state(false)
   let revokeError = $state('')
@@ -34,7 +33,6 @@
   let profileName = $derived(profileSnapshot?.user_display_name ?? subject ?? 'Signed in')
   let profileDetails = $derived(profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable')
 
-  const themeOptions = [['System', 'system'], ['Light', 'light'], ['Dark', 'dark']]
   const retentionOptions = [
     ['Keep every thread', 'keep_every_thread'],
     ['Delete after 30 days', 'delete_after_30_days'],
@@ -43,21 +41,6 @@
   ]
 
   onDestroy(() => { attachListenerPoll += 1 })
-
-  function readTheme() {
-    try {
-      return parseTheme(localStorage.getItem(THEME_STORAGE_KEY))
-    } catch (_) {
-      return parseTheme(null)
-    }
-  }
-
-  function chooseTheme(choice) {
-    theme = parseTheme(choice)
-    if (theme === 'system') delete document.documentElement.dataset.theme
-    else document.documentElement.dataset.theme = theme
-    try { localStorage.setItem(THEME_STORAGE_KEY, serializeTheme(theme)) } catch (_) {}
-  }
 
   async function loadAccess(open = false) {
     if (open) accessOpen = true
@@ -295,14 +278,7 @@
     <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Profile" tabindex="-1">
       <header><div><h2>{profileName}</h2><p>{profileDetails}</p></div><button class="quiet close-access" aria-label="Close profile" onclick={closeAccess}>×</button></header>
       <div class="access-content">
-        <section aria-labelledby="appearance-heading">
-          <h3 id="appearance-heading" class="access-label">Appearance</h3>
-          <div class="theme-options" role="group" aria-labelledby="appearance-heading">
-            {#each themeOptions as option}
-              <button aria-pressed={theme === option[1]} onclick={() => chooseTheme(option[1])}>{option[0]}</button>
-            {/each}
-          </div>
-        </section>
+        <Appearance />
         <section class="retention-section" aria-labelledby="retention-heading">
           <h3 id="retention-heading" class="access-label">Thread retention</h3>
           <p class="retention-help">Choose how long Muniment keeps completed threads.</p>
@@ -453,13 +429,6 @@
   .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .companions-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .voice-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .theme-options { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); }
-  .theme-options button { position: relative; border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; }
-  .theme-options button + button { border-left: 1px solid var(--border); }
-  .theme-options button:first-child { border-radius: var(--radius-control) 0 0 var(--radius-control); }
-  .theme-options button:last-child { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
-  .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
-  .theme-options button:focus-visible { z-index: 1; }
   .shortcut-help { margin: 0 0 8px; color: var(--muted); font-size: var(--text-12); }
   .shortcut-capture { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 9px; font-family: var(--font-mono); text-align: left; }
   .shortcut-capture small { color: var(--muted); font: var(--text-12) var(--font-human); }
