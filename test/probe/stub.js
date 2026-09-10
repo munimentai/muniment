@@ -1,5 +1,6 @@
 export const historyFixtures = {
   'signed-out': [],
+  'runtime-exit': [],
   onboarding: [],
   scan: [],
   access: [],
@@ -242,8 +243,19 @@ export function buildProbeCommandTable(fixtureName) {
   const unknownCommands = []
   let currentThreadId = history.length ? 'probe-thread' : null
   let retentionChoice = null
+  let runtimeState = fixtureName === 'runtime-exit'
+    ? { revision: 1, lastEvent: 'exited', visible: true, busy: false }
+    : { revision: 0, lastEvent: 'connected', visible: false, busy: false }
 
   async function invoke(command, payload) {
+    if (command === 'runtime_state') return runtimeState
+    if (command === 'runtime_start') {
+      runtimeState = { revision: 2, lastEvent: 'connected', visible: false, busy: false }
+      for (const entry of eventListeners.filter(({ event }) => event === 'runtime-state-changed')) {
+        entry.listener({ payload: runtimeState })
+      }
+      return null
+    }
     if (command === 'local_mode_status') return fixtureName === 'local-mode'
     if (command === 'local_mode_enter') return null
     if (command === 'local_mode_leave') return null
@@ -410,6 +422,12 @@ function recordInvoke(surface, command, payload) {
 }
 
 function fixtureRendered() {
+  if (fixtureName === 'runtime-exit') {
+    const notice = document.querySelector('[data-testid="runtime-notice"]')
+    return notice?.querySelector('p.record')?.textContent === 'The runtime exited.'
+      && notice.querySelectorAll('button').length === 1
+      && notice.querySelector('button')?.textContent === 'Start runtime'
+  }
   if (signedOutFixture) {
     const heading = document.querySelector('.lockup h1')
     const signIn = document.querySelector('.auth-state button')

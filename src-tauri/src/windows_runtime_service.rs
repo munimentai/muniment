@@ -192,14 +192,52 @@ fn register_runtime_task(
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn start_runtime_task_at_startup(state_directory: &Path) {
-    let _ = start_runtime_task_with_diagnostic(
+pub(crate) fn start_runtime_task_at_startup(
+    state_directory: &Path,
+) -> crate::runtime_owner::RuntimeEvent {
+    let outcome = start_runtime_task_with_diagnostic(
         &WindowsAttachEndpointAdapter,
         &WindowsCrashWindowAdapter { state_directory },
         &WindowsRuntimeTaskStartAdapter,
         &WindowsRuntimeReadinessAdapter,
         &WindowsDiagnosticSink,
     );
+    match outcome {
+        RuntimeTaskStartOutcome::EndpointPresent | RuntimeTaskStartOutcome::Ready => {
+            crate::runtime_owner::RuntimeEvent::Starting
+        }
+        _ => crate::runtime_owner::RuntimeEvent::StartFailed,
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn stop_runtime() -> Result<(), ()> {
+    use muniment_core::windows_payload::resolve_live_windows_payload;
+    use muniment_core::windows_sid::current_process_user_sid;
+    use muniment_core::windows_task::{registration_verdict, RegistrationVerdict, TaskDefinition};
+    use muniment_core::windows_task_service::read_observed_registration;
+    use std::process::{Command, Stdio};
+
+    let sid = current_process_user_sid().map_err(|_| ())?;
+    let payload = resolve_live_windows_payload().map_err(|_| ())?.ok_or(())?;
+    let expected = TaskDefinition::new(sid.as_str(), payload.payload_path).map_err(|_| ())?;
+    let observed = read_observed_registration(sid.as_str())
+        .map_err(|_| ())?
+        .ok_or(())?;
+    if registration_verdict(&expected, &observed) == RegistrationVerdict::Foreign {
+        return Err(());
+    }
+    let system = std::env::var_os("SystemRoot").ok_or(())?;
+    Command::new(std::path::PathBuf::from(system).join("System32/schtasks.exe"))
+        .args(["/End", "/TN", expected.uri.as_str()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|_| ())?
+        .success()
+        .then_some(())
+        .ok_or(())
 }
 
 #[cfg(target_os = "windows")]

@@ -247,7 +247,7 @@ run_setup clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations \
   echo 'window probe did not compile' >&2; status=1; exit;
 }
 
-TMPDIR="$state_root/tmp" "$installed_bundle/Contents/MacOS/$process_name" >"$raw/driver-app.log" 2>&1 &
+TMPDIR="$state_root/tmp" "$installed_bundle/Contents/MacOS/$process_name" --probe-runtime-notice >"$raw/driver-app.log" 2>&1 &
 app_pid=$!
 runtime_touched=1
 
@@ -281,5 +281,29 @@ if (( window_ready == 0 )); then
   status=1
 else
   printf 'process_alive=true\nvisible_windows=%s\nscreendump=requested-by-desktop-ci\n' "$window_count" >"$raw/smoke.log"
+fi
+
+# Read the installed webview after the service leaves its launchd domain.
+if launchctl bootout "$runtime_target" >>"$raw/runtime-connection.log" 2>&1; then
+  notice_offset=$(wc -l <"$raw/driver-app.log")
+  notice_deadline=$((SECONDS + 30))
+  notice_read=0
+  while (( SECONDS < notice_deadline )); do
+    if runtime_process_absent && runtime_job_stopped &&
+      tail -n "+$((notice_offset + 1))" "$raw/driver-app.log" | grep -Fx 'runtime_notice=The runtime connection closed. control=Start runtime controls=1' >/dev/null; then
+      notice_read=1
+      printf 'The runtime connection closed.\nStart runtime\n' >"$raw/runtime-notice.log"
+      break
+    fi
+    kill -0 "$app_pid" 2>/dev/null || break
+    sleep 1
+  done
+  if (( notice_read == 0 )); then
+    echo 'The installed webview did not show the runtime notice.' >&2
+    status=1
+  fi
+else
+  echo 'The runtime service did not stop for the notice probe.' >&2
+  status=1
 fi
 exit
