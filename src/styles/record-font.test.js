@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 const RECORD_SELECTORS = new Map([
   ['src/App.svelte', ['.record', '.tool-card', '.provenance', '.receipt-record']],
-  ['src/lib/Onboarding.svelte', ['.path-card strong']],
+  ['src/lib/Onboarding.svelte', ['.chips button', '.path, li, .error']],
 ])
 
 const styles = (source) => [...source.matchAll(/<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/g)]

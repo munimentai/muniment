@@ -15,9 +15,9 @@ describe('installed onboarding spec contract', () => {
   const onboardingSpec = fs.readFileSync(path.join(root, 'test/e2e/specs/onboarding.spec.js'), 'utf8')
 
   it.each([
-    ['onboarding.spec.js', ['onboarding-home-path', 'onboarding-picker', 'onboarding-confirm']],
-    ['real-sign-in.spec.js', ['onboarding-home-path', 'onboarding-confirm']],
-  ])('%s uses only shipped onboarding controls', (name, expectedSelectors) => {
+    ['onboarding.spec.js', ['onboarding-home-path', 'onboarding-model', 'onboarding-scan', 'onboarding-picker', 'onboarding-confirm']],
+    ...['real-sign-in.spec.js', 'local-mode-chat.spec.js'].map((name) => [name, ['onboarding-home-path']]),
+  ])('%s checks the one-screen onboarding controls', (name, expectedSelectors) => {
     const spec = fs.readFileSync(path.join(root, 'test/e2e/specs', name), 'utf8')
     const selectors = [...spec.matchAll(/data-testid=(["'])(onboarding-[^"']+)\1/g)].map((match) => match[2])
     expect(selectors.length).toBeGreaterThan(0)
@@ -26,7 +26,7 @@ describe('installed onboarding spec contract', () => {
 
   it('bounds the first render wait and names its diagnostic log', () => {
     expect(onboardingSpec).toMatch(/location\.waitForDisplayed\(\{\s*timeout: 120000,/)
-    expect(onboardingSpec).toContain("timeoutMsg: 'model-ready onboarding first render did not show the Home picker'")
+    expect(onboardingSpec).toContain("timeoutMsg: 'model-ready onboarding first render did not show the Home chip'")
     expect(onboardingSpec).toContain("'onboarding-first-render.log'")
   })
 
@@ -35,8 +35,8 @@ describe('installed onboarding spec contract', () => {
     expect(onboardingSpec).toContain('chooseFolder(')
   })
 
-  it('reports the desktop client when the signed-out wait runs out', () => {
-    expect(onboardingSpec).toContain("timeoutMsg: 'the signed-out screen did not appear after onboarding'")
+  it('reports the desktop client when the model settings wait runs out', () => {
+    expect(onboardingSpec).toContain("timeoutMsg: 'model settings did not appear after the first Send'")
     expect(onboardingSpec).toContain('throw new Error(`${waitError.message} ${await shellState()}`)')
     expect(onboardingSpec).toContain('return `desktop client status: ${connection}. shell: ${rendered}`')
     expect(onboardingSpec.indexOf('async function shellState()')).toBeLessThan(onboardingSpec.indexOf("describe('installed nightly model-ready onboarding'"))
@@ -2678,7 +2678,7 @@ describe('installed local-mode chat contract', () => {
     expect(localProvider).toContain('10.1.10.105')
     expect(spec).toContain("import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'")
     expect(spec).not.toContain('MUNIMENT_E2E_PROVIDER_KEY')
-    expect(spec).toContain("$('button=Use local mode')")
+    expect(spec).toContain("$('button=Open model settings')")
     expect(spec).toContain("$('button=Save Ollama server')")
     expect(spec).toContain("response.$('.response-prose.streaming')")
     expect(spec).not.toContain('browser.tauri.mock')

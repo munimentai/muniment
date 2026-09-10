@@ -4,13 +4,6 @@ import path from 'node:path'
 
 const FILES = ['src/App.svelte', 'src/lib/Onboarding.svelte']
 
-// The import consent checkbox gets its name from the text in its wrapping label.
-// This check otherwise requires the explicit naming forms used by text entries.
-const EXCEPTIONS = {
-  'src/lib/Onboarding.svelte': (element) => /\btype\s*=\s*(["'])checkbox\1/.test(element)
-    && /\bchecked\s*=\s*\{onboarding\.selectedNames\.includes\(entry\.name\)\}/.test(element),
-}
-
 const root = process.cwd()
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8')
 const markup = (source) => source
@@ -57,7 +50,7 @@ const unnamedControls = (source, exception = () => false) => {
 
 describe('control names', () => {
   it.each(FILES)('%s names every input and textarea', (file) => {
-    expect(unnamedControls(read(file), EXCEPTIONS[file])).toEqual([])
+    expect(unnamedControls(read(file))).toEqual([])
   })
 
   it('rejects each unsupported naming shape', () => {
@@ -65,9 +58,11 @@ describe('control names', () => {
     expect(unnamedControls(source)).toEqual(['<input placeholder="Prompt">', '<textarea>'])
   })
 
-  it('keeps the consent exception limited to its current checkbox', () => {
+  it('names the first-run composer without a consent exception', () => {
     const source = read('src/lib/Onboarding.svelte')
-    expect(source).toMatch(/<label class="manifest-consent"><input type="checkbox"/)
-    expect(controls(markup(source)).filter(EXCEPTIONS['src/lib/Onboarding.svelte'])).toHaveLength(1)
+    expect(source).toMatch(/<label[^>]*for="first-message">Message<\/label>/)
+    expect(controls(markup(source))).toHaveLength(1)
+    expect(unnamedControls(source)).toEqual([])
+    expect(unnamedControls('<input type="checkbox">')).toEqual(['<input type="checkbox">'])
   })
 })

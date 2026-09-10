@@ -987,6 +987,14 @@
     selectedFiles = [...selectedFiles, ...additions]
   }
 
+  async function openFirstRunModelSettings() {
+    await startupReady
+    if (auth.name === 'error' && auth.retry === 'status') await run('status')
+    if (auth.name === 'signed-out') await enterLocalMode()
+    if (!workspaceMode()) throw new Error('Model settings are unavailable.')
+    onboarding = { name: 'complete', homePath: onboarding.homePath }
+  }
+
   function keydown(event) {
     const action = composerAction(event, draft, active)
     if (action) {
@@ -1027,7 +1035,7 @@
   {/if}
 
   {#if tauri}
-    <Onboarding {tauri} bind:onboarding />
+    <Onboarding {tauri} bind:onboarding bind:draft onready={openFirstRunModelSettings} />
     {#if onboarding.name === 'complete'}
       {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
       <section class="auth-state">
@@ -1426,6 +1434,7 @@
     height: 100vh;
     min-height: 0;
     grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     align-content: center;
     box-sizing: border-box;
     padding: 24px;

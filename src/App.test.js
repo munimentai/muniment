@@ -38,6 +38,7 @@ let dragDropListener
 let dragDropUnlisten
 let dragDropRegistrationError
 let homeStatus
+let scanReport
 let globalShortcutHandler
 let registerGlobalShortcut
 let unregisterGlobalShortcut
@@ -102,6 +103,12 @@ const device = (device_id, overrides = {}) => ({
   ...overrides,
 })
 
+async function findWorkspaceComposer() {
+  const composer = await screen.findByLabelText('Message', { selector: '#composer-message' })
+  expect(composer).toHaveAttribute('placeholder', 'Ask anything')
+  return composer
+}
+
 async function stopClickCapture(voice) {
   await fireEvent.click(voice)
   await fireEvent.click(voice)
@@ -147,6 +154,7 @@ beforeAll(async () => {
         return Promise.resolve(invoke(command, ...args)).then((entries) => ({ entries, nextCursor: null }))
       }
       if (command === 'home_status') return Promise.resolve(homeStatus)
+      if (command === 'onboarding_scan') return invoke(command).then(() => scanReport)
       if (command === 'local_mode_status') return Promise.resolve(localModeStatus)
       return invoke(command, ...args)
     } },
@@ -177,6 +185,7 @@ beforeEach(() => {
   threadSummaryResult = [{ threadId: 'thread-1', title: '', updatedAt: '' }]
   olderThreadSummaryResult = null
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
+  scanReport = { findings: [], errors: [] }
   localModeStatus = false
   chatListener = undefined
   dictationListener = undefined
@@ -204,6 +213,8 @@ beforeEach(() => {
   unregisterGlobalShortcut = vi.fn(async (shortcut) => { registeredShortcuts.delete(shortcut) })
   invoke = vi.fn(async (command, payload) => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+    if (command === 'onboarding_scan') return
+    if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
     if (command === 'chat_thread_open') return []
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -347,7 +358,7 @@ describe('pairing decisions', () => {
 
   it('denies with Escape and restores focus', async () => {
     render(App)
-    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    const composer = await findWorkspaceComposer()
     composer.focus()
     await waitFor(() => expect(pairingListener).toBeDefined())
 
@@ -441,7 +452,7 @@ describe('workspace composer entry', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await screen.findByRole('textbox', { name: 'Message' })
+    await findWorkspaceComposer()
 
     const button = screen.queryByRole('button', { name: 'Open Login Items' })
     expect(Boolean(button)).toBe(visible)
@@ -499,7 +510,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
 
-    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+    expect(await findWorkspaceComposer()).toBeInTheDocument()
     expect(statusReads).toBe(2)
   })
 
@@ -572,7 +583,7 @@ describe('workspace composer entry', () => {
   it('keeps the workspace mounted through a drop shorter than the notice dwell', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     render(App)
-    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    const composer = await findWorkspaceComposer()
 
     desktopClientListener({ payload: { connected: true, chat_events_connected: false, supervisor_running: true } })
     await vi.advanceTimersByTimeAsync(250)
@@ -604,7 +615,7 @@ describe('workspace composer entry', () => {
   it('re-reads the open thread in place after the chat-event connection recovers', async () => {
     mockChatEventsStatus(true)
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     invoke.mockClear()
 
     desktopClientListener({ payload: chatEventsStatus(false) })
@@ -666,7 +677,7 @@ describe('workspace composer entry', () => {
   it('re-reads no thread while a status keeps the chat-event connection up', async () => {
     mockChatEventsStatus(true)
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     invoke.mockClear()
 
     desktopClientListener({ payload: chatEventsStatus(true) })
@@ -703,7 +714,7 @@ describe('workspace composer entry', () => {
   it('updates the surface when the desktop client supervisor starts and stops', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     render(App)
-    await screen.findByRole('textbox', { name: 'Message' })
+    await findWorkspaceComposer()
 
     desktopClientListener({ payload: { connected: false, supervisor_running: true } })
     await vi.advanceTimersByTimeAsync(2_000)
@@ -855,7 +866,7 @@ describe('workspace composer entry', () => {
   it('holds Queue follow-up when the runtime upgrade starts during a live run', async () => {
     mockRuntimeUpgrade({ pending: false })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     const queue = await screen.findByRole('button', { name: 'Queue follow-up' })
@@ -872,7 +883,7 @@ describe('workspace composer entry', () => {
   it('names and describes the composer in its default state', async () => {
     render(App)
 
-    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    const composer = await findWorkspaceComposer()
     expect(composer).toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
     expect(composer).toHaveAttribute('placeholder', 'Ask anything')
   })
@@ -880,7 +891,7 @@ describe('workspace composer entry', () => {
   it('renders only the sidebar brand in the signed-in workspace', async () => {
     const { container } = render(App)
 
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
 
     expect(container.querySelector('.lockup')).not.toBeInTheDocument()
     expect(screen.queryByText(/shell v/)).not.toBeInTheDocument()
@@ -890,7 +901,7 @@ describe('workspace composer entry', () => {
 
   it('focuses the primary composer action once when the workspace appears', async () => {
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     const send = screen.getByRole('button', { name: 'Send' })
 
     expect(composer).toHaveFocus()
@@ -1223,19 +1234,19 @@ describe('workspace composer entry', () => {
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
-  it('does not focus a composer during onboarding', async () => {
+  it('focuses the first-run composer without a setup heading', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     render(App)
 
-    expect(await screen.findByRole('heading', { name: 'Choose your Muniment Home' })).toBeInTheDocument()
-    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toHaveFocus()
+    expect(screen.getByRole('region', { name: 'First run' })).toBeInTheDocument()
     expect(document.querySelector('.lockup .name')?.tagName).toBe('SPAN')
-    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Choose your Muniment Home' })).not.toBeInTheDocument()
   })
 
   it('releases composer focus in Home settings and restores it on workspace re-entry', async () => {
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     expect(composer).toHaveFocus()
 
     await fireEvent.click(screen.getByText('Home settings'))
@@ -1403,7 +1414,7 @@ describe('artifact rail', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Original draft' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Voice' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-pressed', 'true'))
@@ -1456,7 +1467,7 @@ describe('artifact rail', () => {
   it('ignores the rail shortcut during signed-in onboarding', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     render(App)
-    await screen.findByRole('heading', { name: 'Choose your Muniment Home' })
+    await screen.findByRole('textbox', { name: 'Message' })
     const mac = navigator.platform.startsWith('Mac')
     const shortcut = new KeyboardEvent('keydown', { key: 'j', metaKey: mac, ctrlKey: !mac, cancelable: true })
 
@@ -1706,7 +1717,7 @@ describe('thread name', () => {
 
   it('shows the empty name in the titlebar and current thread record', async () => {
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
 
     const titlebarName = document.querySelector('.thread-title')
     const sidebarName = document.querySelector('.thread-row')
@@ -1828,7 +1839,7 @@ describe('sidebar collapse', () => {
   it('ignores the sidebar shortcut outside the signed-in workspace', async () => {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
     render(App)
-    await screen.findByRole('heading', { name: 'Choose your Muniment Home' })
+    await screen.findByRole('textbox', { name: 'Message' })
     const event = new KeyboardEvent('keydown', { ...sidebarShortcut(), cancelable: true })
 
     document.dispatchEvent(event)
@@ -1898,7 +1909,7 @@ describe('thread row shortcuts', () => {
       updatedAt: '2026-01-01T00:00:00Z',
     }))
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await waitFor(() => expect(document.querySelectorAll('.thread-row')).toHaveLength(10))
     invoke.mockClear()
 
@@ -1923,7 +1934,7 @@ describe('thread row shortcuts', () => {
       { threadId: 'thread-2', title: 'Other', updatedAt: '' },
     ]
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     invoke.mockClear()
 
     await fireEvent.keyDown(document, rowShortcut(1))
@@ -1978,7 +1989,7 @@ describe('new thread', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await waitFor(() => expect(document.querySelector('.thread-row[aria-current="true"]')).toBeInTheDocument())
     composer.focus()
 
@@ -2022,7 +2033,7 @@ describe('new thread', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     const newThread = screen.getByRole('button', { name: 'New thread' })
     await waitFor(() => expect(newThread).toBeEnabled())
     await fireEvent.click(newThread)
@@ -2042,258 +2053,351 @@ describe('new thread', () => {
 })
 
 describe('Home onboarding', () => {
-  it('picks a Home after onboarding fails to load', async () => {
-    homeStatus = Promise.reject('The saved Home could not be read.')
+  function firstRun() {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+  }
+
+  async function firstSend(text = 'Keep this draft') {
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    await fireEvent.input(composer, { target: { value: text } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  }
+
+  function finding(assistantId, displayName, fileCount, overrides = {}) {
+    return { assistantId, displayName, fileCount, root: '/assistant', byteTotal: 0, capped: false, warnings: [], ...overrides }
+  }
+
+  it('shows the composer above three mono chips without launch writes or questions', async () => {
+    firstRun()
+    render(App)
+    const composer = await screen.findByRole('textbox', { name: 'Message' })
+    expect(composer).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled', 'true')
+    await waitFor(() => expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment'))
+    const chips = screen.getByLabelText('First-run settings')
+    expect(within(chips).getAllByRole('button')).toHaveLength(3)
+    expect(composer.compareDocumentPosition(chips) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('onboarding-model')).toHaveTextContent('Connect a model')
+    expect(await screen.findByText('No assistant memory found')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('onboarding_scan')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(invoke.mock.calls.some(([command]) => command.startsWith('onboarding_import'))).toBe(false)
+    expect(screen.queryByTestId('onboarding-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByText('Continue without importing')).not.toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sign in')).not.toBeInTheDocument()
+    const source = fs.readFileSync('src/lib/Onboarding.svelte', 'utf8')
+    expect(source).toMatch(/\.chips button\s*\{[^}]*font:[^}]*var\(--font-mono\)/)
+  })
+
+  it('keeps the composer and draft while Home loads and retries an early Send without launch writes', async () => {
+    const status = deferred()
+    homeStatus = status.promise
+    render(App)
+    const composer = screen.getByRole('textbox', { name: 'Message' })
+    const send = screen.getByRole('button', { name: 'Send' })
+    const chips = screen.getByLabelText('First-run settings')
+    expect(composer).toBeEnabled()
+    expect(send).toBeEnabled()
+    expect(send).not.toHaveAttribute('aria-disabled', 'true')
+    expect(within(chips).getAllByRole('button')).toHaveLength(3)
+    expect(composer.compareDocumentPosition(chips) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('Finding Home…')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+
+    await fireEvent.input(composer, { target: { value: 'My early draft' } })
+    await fireEvent.click(send)
+    expect(screen.getByRole('alert')).toHaveTextContent('Home is unavailable. Retry or choose a folder.')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer)
+    expect(composer).toHaveValue('My early draft')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+
+    status.resolve({ configured: false, homePath: '/Documents/Muniment' })
+    await waitFor(() => expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment'))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer)
+    expect(composer).toHaveValue('My early draft')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    await fireEvent.click(send)
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    expect(await screen.findByRole('button', { name: 'Open model settings' })).toBeEnabled()
+  })
+
+  it('preserves an early draft when Home resolves to a configured path', async () => {
+    const status = deferred()
+    homeStatus = status.promise
+    render(App)
+    await firstSend('My early draft')
+    status.resolve({ configured: true, homePath: '/Saved/Home' })
+    await waitFor(() => expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument())
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('My early draft')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    await fireEvent.click(screen.getByText('Home settings'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
+  })
+
+  it('creates Home on the first Send and preserves the draft through model settings', async () => {
+    firstRun()
+    render(App)
+    await screen.findByText('/Documents/Muniment')
+    await firstSend()
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    expect(await screen.findByText('No free hosted model exists at the no-account tier.')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    expect(await screen.findByPlaceholderText('Ask anything')).toHaveValue('Keep this draft')
+    expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument()
+  })
+
+  it('opens existing model settings without an account and preserves a draft after entry failure', async () => {
+    firstRun()
+    threadSummaryResult = []
+    const original = invoke.getMockImplementation()
+    let fail = true
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'auth_status') return Promise.resolve({ signed_in: false, subject: null })
+      if (command === 'local_mode_enter') return fail ? Promise.reject('unavailable') : Promise.resolve()
+      if (command === 'local_mode_provider_status') return Promise.resolve([])
+      return original(command, payload)
+    })
+    render(App)
+    await firstSend()
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not open model settings. Try again.')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    fail = false
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
+    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
+  })
+
+  it.each([false, true])('retries startup status after failure and preserves the draft with signed_in=%s', async (signedIn) => {
+    firstRun()
+    threadSummaryResult = []
+    const original = invoke.getMockImplementation()
+    let fail = true
+    const recovered = deferred()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'auth_status') return fail ? Promise.reject('unavailable') : recovered.promise
+      if (command === 'local_mode_enter') return Promise.resolve()
+      if (command === 'local_mode_provider_status') return Promise.resolve([])
+      return original(command, payload)
+    })
+    render(App)
+    await firstSend()
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(1)
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not open model settings. Try again.')
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(2)
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
+
+    fail = false
+    const openSettings = screen.getByRole('button', { name: 'Open model settings' })
+    await fireEvent.click(openSettings)
+    expect(openSettings).toBeDisabled()
+    await fireEvent.click(openSettings)
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(3)
+    recovered.resolve({ signed_in: signedIn, subject: signedIn ? 'token-subject' : null })
+    await waitFor(() => expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument())
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    if (signedIn) expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
+    else expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
+    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
+  })
+
+  it('lists one row per assistant and combines roots without any import mode controls', async () => {
+    firstRun()
+    scanReport = { findings: [finding('claude', 'Claude Code', 12), finding('pi', 'Pi', 1), finding('pi', 'Pi', 2, { capped: true }), finding('codex', 'Codex CLI', 0)], errors: [] }
+    render(App)
+    const chip = await screen.findByText('Claude Code: 12 files · Pi: 3 files')
+    await fireEvent.click(chip)
+    const list = screen.getByRole('list', { name: 'Assistant memory' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(3)
+    expect(within(list).getByText('Claude Code: 12 files')).toBeInTheDocument()
+    expect(within(list).getByText('Pi: 3 files')).toBeInTheDocument()
+    expect(within(list).getByText('Codex CLI: 0 files')).toBeInTheDocument()
+    expect(within(list).getByText('Scan cap reached. The count may be incomplete.')).toBeInTheDocument()
+    expect(within(list).queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(within(list).queryByRole('combobox')).not.toBeInTheDocument()
+    expect(invoke.mock.calls.some(([command]) => command.startsWith('onboarding_import'))).toBe(false)
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    await firstSend()
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+  })
+
+  it('keeps the composer ready while a scan runs and does not reopen a closed panel', async () => {
+    firstRun()
+    const scan = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'onboarding_scan' ? scan.promise : original(command, payload))
+    render(App)
+    await fireEvent.click(screen.getByTestId('onboarding-scan'))
+    expect(screen.getByTestId('onboarding-scan')).toHaveTextContent('Scanning assistant memory…')
+    await firstSend()
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    scan.resolve()
+    await waitFor(() => expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument())
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+  })
+
+  it('keeps Home and the draft through scan failure and retry', async () => {
+    firstRun()
+    const original = invoke.getMockImplementation()
+    let fail = true
+    invoke.mockImplementation((command, payload) => command === 'onboarding_scan' && fail ? Promise.reject('unavailable') : original(command, payload))
+    render(App)
+    await fireEvent.click(await screen.findByText('Scan unavailable'))
+    expect(screen.getByRole('alert')).toHaveTextContent('Muniment could not scan assistant memory. Retry the scan.')
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'My draft' } })
+    fail = false
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry scan' }))
+    expect(await screen.findAllByText('No assistant memory found')).toHaveLength(2)
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('My draft')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+  })
+
+  it('does not label a partial scan as an empty scan', async () => {
+    firstRun()
+    scanReport = { findings: [finding('pi', 'Pi', 0, { capped: true, warnings: ['timeCap', 'unreadable'] })], errors: [{ assistantId: 'codex', message: 'The root must be absolute.' }] }
+    render(App)
+    await fireEvent.click(await screen.findByText('Assistant memory scan incomplete'))
+    expect(screen.getByText('Pi: 0 files')).toBeInTheDocument()
+    expect(screen.getByText('Scan cap reached. The count may be incomplete.')).toBeInTheDocument()
+    expect(screen.getByText('Some folders could not be read.')).toBeInTheDocument()
+    expect(screen.getByText('codex: The root must be absolute.')).toBeInTheDocument()
+    expect(screen.queryByText('No assistant memory found')).not.toBeInTheDocument()
+  })
+
+  it('changes Home without writes and leaves the path intact after picker cancellation', async () => {
+    firstRun()
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-home-path'))
+    const panel = screen.getByRole('region', { name: 'Home' })
+    expect(within(panel).getAllByRole('button')).toHaveLength(1)
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    dialogResult = '/Other/Muniment'
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Other/Muniment')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    await firstSend()
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Muniment' })
+  })
+
+  it('ignores a stale default after the user chooses Home', async () => {
+    const status = deferred()
+    homeStatus = status.promise
     dialogResult = '/Other/Muniment'
     render(App)
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('The saved Home could not be read.')
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-home-path'))
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
-
-    expect(await screen.findByTestId('onboarding-home-path')).toHaveTextContent('/Other/Muniment')
-    expect(screen.getByTestId('onboarding-confirm')).toBeEnabled()
-    expect(screen.queryByText('The saved Home could not be read.')).not.toBeInTheDocument()
+    status.resolve({ configured: false, homePath: '/Documents/Muniment' })
+    await waitFor(() => expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Other/Muniment'))
+    await firstSend()
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Muniment' })
   })
 
-  it('blocks the shell and confirms the displayed Documents default', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    invoke.mockImplementation(async (command, payload) => {
-      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
+  it('recovers from a Home load failure without hiding the composer', async () => {
+    homeStatus = Promise.reject('unavailable')
+    dialogResult = '/Other/Muniment'
     render(App)
-    expect(await screen.findByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
-    expect(screen.queryByText('Sign in')).not.toBeInTheDocument()
-    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
-    await fireEvent.click(screen.getByTestId('onboarding-confirm'))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    expect(await screen.findByText('Review an assistant export')).toBeInTheDocument()
-    expect(screen.getByText(/Preview happens locally and is read-only/)).toBeInTheDocument()
-    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not read Home.')
+    await firstSend()
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    expect(screen.getByRole('button', { name: 'Retry Home' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Other/Muniment')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Muniment' })
   })
 
-  it('previews the explicitly selected ZIP and lists its bounded manifest', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/assistant.zip'
-    invoke.mockImplementation(async (command, payload) => {
-      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
-      if (command === 'onboarding_import_preview') return {
-        entries: [
-          { name: 'conversations/chat.md', kind: 'markdown', byteSize: 128, excerpt: '# Original\nVerbatim text', excerptTruncated: false },
-          { name: 'profile.json', kind: 'json', byteSize: 5000, excerpt: '{"name":"A…', excerptTruncated: true },
-        ],
-        totalByteSize: 5128,
-      }
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
+  it('keeps the draft after a scaffold failure and retries the new folder', async () => {
+    firstRun()
+    const original = invoke.getMockImplementation()
+    let fail = true
+    invoke.mockImplementation((command, payload) => command === 'home_confirm' && fail ? Promise.reject('read-only') : original(command, payload))
     render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    expect(invoke).not.toHaveBeenCalledWith('onboarding_import_preview', expect.anything())
-    await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
-    expect(invoke).toHaveBeenCalledWith('onboarding_import_preview', { archivePath: '/Exports/assistant.zip' })
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    const manifest = await screen.findByRole('list', { name: 'Export manifest' })
-    expect(within(manifest).getByText('conversations/chat.md')).toBeInTheDocument()
-    expect(within(manifest).getByText('markdown · 128 B · complete excerpt')).toBeInTheDocument()
-    expect(within(manifest).getAllByText((_, element) => element.tagName === 'PRE' && element.textContent === '# Original\nVerbatim text')).toHaveLength(1)
-    expect(within(manifest).getByText('json · 4.9 KB · excerpt truncated')).toBeInTheDocument()
-    expect(screen.getByText('2 · 5.0 KB expanded')).toBeInTheDocument()
-    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    await firstSend()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not create Home.')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    dialogResult = '/Other/Muniment'
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    fail = false
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(invoke).toHaveBeenLastCalledWith('home_confirm', { homePath: '/Other/Muniment' })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('extracts exactly checked entries and saves the approved originals', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/assistant.zip'
-    const extracted = [{ sourceName: 'profile.json', kind: 'json', text: '{"name":"Alice"}', sourceProvenance: 'assistant-export-zip:v1:stable' }]
-    const importSave = deferred()
-    invoke.mockImplementation(async (command, payload) => {
-      if (command === 'home_confirm') return { configured: true, homePath: '/Documents/Muniment' }
-      if (command === 'onboarding_import_preview') return { entries: [
-        { name: 'chat.md', kind: 'markdown', byteSize: 10, excerpt: 'chat', excerptTruncated: false },
-        { name: 'profile.json', kind: 'json', byteSize: 16, excerpt: '{}', excerptTruncated: false },
-      ], totalByteSize: 26 }
-      if (command === 'onboarding_import_extract') return extracted
-      if (command === 'home_confirm_import') return importSave.promise
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
+  it('ignores empty drafts and duplicate Sends while Home saves', async () => {
+    firstRun()
+    const saved = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'home_confirm' ? saved.promise : original(command, payload))
     render(App)
-    expect(await screen.findByText('Home location')).toBeInTheDocument()
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
-    const checks = await screen.findAllByRole('checkbox')
-    expect(checks).toHaveLength(2)
-    expect(checks.every((checkbox) => !checkbox.checked)).toBe(true)
-    expect(screen.getByText(/0 of 2 selected/)).toBeInTheDocument()
-    expect(screen.getByTestId('onboarding-import-continue')).toBeDisabled()
-    await fireEvent.click(checks[1])
-    expect(screen.getByText(/1 of 2 selected/)).toBeInTheDocument()
-    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
-    expect(invoke).toHaveBeenCalledWith('onboarding_import_extract', {
-      archivePath: '/Exports/assistant.zip', selectedNames: ['profile.json'],
-    })
-    expect(await screen.findByText('Save approved files')).toBeInTheDocument()
-    expect(screen.getByText('Home location')).toBeInTheDocument()
-    expect(screen.getByText('1 approved file is ready to save as verbatim originals.')).toBeInTheDocument()
-    expect(screen.getByText('profile.json')).toBeInTheDocument()
-    await fireEvent.click(screen.getByTestId('onboarding-import-recover'))
-    expect(await screen.findByRole('list', { name: 'Export manifest' })).toBeInTheDocument()
-    expect(screen.getAllByRole('checkbox')[1]).toBeChecked()
-    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
-    expect(await screen.findByText('Save approved files')).toBeInTheDocument()
-    await fireEvent.click(screen.getByTestId('onboarding-import-save'))
-    expect(screen.getByTestId('onboarding-import-recover')).toBeDisabled()
-    expect(screen.getByTestId('onboarding-import-save')).toBeDisabled()
-    expect(invoke).toHaveBeenCalledWith('home_confirm_import', {
-      homePath: '/Documents/Muniment',
-      approvedEntries: extracted,
-    })
-    importSave.resolve({ configured: true, importedFileCount: 1 })
-    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    await firstSend('  \n ')
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    const composer = screen.getByRole('textbox', { name: 'Message' })
+    await fireEvent.input(composer, { target: { value: 'Hello' } })
+    await fireEvent.keyDown(composer, { key: 'Enter', shiftKey: true })
+    await fireEvent.keyDown(composer, { key: 'Enter', isComposing: true })
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
+    saved.resolve({ configured: true, homePath: '/Documents/Muniment' })
+    expect(await screen.findByRole('button', { name: 'Open model settings' })).toBeEnabled()
   })
 
-  it('keeps consent for extraction retry and suppresses stale extraction after skip', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/assistant.zip'
-    let extractionAttempt = 0
-    let resolveExtraction
-    invoke.mockImplementation(async (command, payload) => {
-      if (command === 'onboarding_import_preview') return { entries: [
-        { name: 'chat.md', kind: 'markdown', byteSize: 4, excerpt: 'chat', excerptTruncated: false },
-      ], totalByteSize: 4 }
-      if (command === 'onboarding_import_extract') {
-        extractionAttempt += 1
-        if (extractionAttempt === 1) throw { kind: 'invalidArchive', message: 'detail' }
-        return new Promise((resolve) => { resolveExtraction = resolve })
-      }
-      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
+  it('opens each chip panel without changing Home or blocking Send', async () => {
+    firstRun()
     render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
-    await fireEvent.click(await screen.findByRole('checkbox'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
-    expect(await screen.findByRole('alert')).toHaveTextContent('approved files could not be read')
-    expect(screen.getByRole('checkbox')).toBeChecked()
-    await fireEvent.click(screen.getByTestId('onboarding-import-continue'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
-    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    resolveExtraction([{ sourceName: 'chat.md', text: 'chat', sourceProvenance: 'stable' }])
-    await Promise.resolve()
-    expect(screen.queryByText('Create your local proposal')).not.toBeInTheDocument()
+    for (const id of ['onboarding-model', 'onboarding-home-path', 'onboarding-scan']) {
+      const chip = await screen.findByTestId(id)
+      await fireEvent.click(chip)
+      expect(chip).toHaveAttribute('aria-expanded', 'true')
+      expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled', 'true')
+      await fireEvent.click(chip)
+      expect(chip).toHaveAttribute('aria-expanded', 'false')
+    }
+    expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
   })
 
-  it('does not preview on picker cancel and can continue without importing', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    invoke.mockImplementation(async (command, payload) => {
-      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
-    expect(invoke).not.toHaveBeenCalledWith('onboarding_import_preview', expect.anything())
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-  })
-
-  it('does not let a pending preview reopen onboarding after skip', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/slow.zip'
-    let resolvePreview
-    invoke.mockImplementation(async (command, payload) => {
-      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
-      if (command === 'onboarding_import_preview') return new Promise((resolve) => { resolvePreview = resolve })
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
-    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
-    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    resolvePreview({ entries: [], totalByteSize: 0 })
-    await Promise.resolve()
-    expect(screen.queryByText('Review an assistant export')).not.toBeInTheDocument()
-  })
-
-  it('renders a typed rejection and preserves Home while choosing another archive', async () => {
-    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
-    dialogResult = '/Exports/not-an-export.zip'
-    invoke.mockImplementation(async (command, payload) => {
-      if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
-      if (command === 'onboarding_import_preview') throw { kind: 'invalidArchive', message: 'backend detail' }
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    await fireEvent.click(await screen.findByTestId('onboarding-import-picker'))
-    expect(await screen.findByRole('alert')).toHaveTextContent('That file is not a readable ZIP archive. Choose a different export ZIP.')
-    expect(screen.getByText('/Exports/not-an-export.zip')).toBeInTheDocument()
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    await fireEvent.click(screen.getByTestId('onboarding-import-picker'))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    await fireEvent.click(screen.getByTestId('onboarding-import-skip'))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-  })
-
-  it('surfaces a scaffold failure and lets the user choose again', async () => {
-    homeStatus = { configured: false, homePath: '/read-only/Muniment' }
-    dialogResult = '/Documents/Muniment'
-    invoke.mockRejectedValue('Muniment Home could not be created.')
-    render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-confirm'))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/read-only/Muniment' })
-    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment Home could not be created.')
-    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
-    expect(screen.getByTestId('onboarding-picker')).toBeEnabled()
-  })
-
-  it('cancels Home settings back to the configured workspace', async () => {
+  it('saves a changed Home from the existing settings control', async () => {
     render(App)
     await fireEvent.click(await screen.findByText('Home settings'))
-    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    dialogResult = '/Other/Home'
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Save Home' }))
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Home' })
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    await fireEvent.click(screen.getByText('Home settings'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Other/Home')
+  })
+
+  it('keeps a configured Home and cancels settings back to the workspace', async () => {
+    homeStatus = { configured: true, homePath: '/Saved/Home' }
+    render(App)
+    await fireEvent.click(await screen.findByText('Home settings'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
     expect(screen.queryByText('Local AI')).not.toBeInTheDocument()
     expect(screen.queryByText('Starting setup')).not.toBeInTheDocument()
+    dialogResult = '/Other/Home'
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
+    await fireEvent.click(screen.getByText('Home settings'))
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })
 })
 
@@ -2311,7 +2415,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     await waitFor(() => expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space', expect.any(Function)))
 
     globalShortcutHandler({ state: 'Released' })
@@ -2337,7 +2441,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await screen.findByPlaceholderText('Ask anything')
+    await findWorkspaceComposer()
     await waitFor(() => expect(globalShortcutHandler).toBeTypeOf('function'))
 
     globalShortcutHandler({ state: 'Pressed' })
@@ -2705,7 +2809,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Before' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
 
@@ -2743,7 +2847,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Original draft' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
 
@@ -2785,7 +2889,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Exact draft  ' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
 
@@ -2828,7 +2932,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Snapshot' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
 
@@ -2896,7 +3000,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Exact draft  ' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.pointerDown(voice, { button: 0, pointerId: 1 })
@@ -2931,7 +3035,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Existing draft' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
@@ -3267,7 +3371,7 @@ describe('voice dictation', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     const view = render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
@@ -3277,7 +3381,7 @@ describe('voice dictation', () => {
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
 
     render(App)
-    const nextComposer = await screen.findByPlaceholderText('Ask anything')
+    const nextComposer = await findWorkspaceComposer()
     await fireEvent.input(nextComposer, { target: { value: 'Question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(screen.getByRole('button', { name: 'Voice' })).toBeDisabled()
@@ -3663,7 +3767,7 @@ describe('chat submission settlement', () => {
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'New question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
@@ -3690,7 +3794,7 @@ describe('chat submission settlement', () => {
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'New question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
@@ -4873,7 +4977,7 @@ describe('composer auto-grow', () => {
 
   it('grows to the ten-line cap, then scrolls instead of growing further', async () => {
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     expect(composer.style.height).toBe(resting)
 
     await fireEvent.input(composer, { target: { value: lines(5) } })
@@ -4898,7 +5002,7 @@ describe('composer auto-grow', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: lines(8) } })
     expect(composer.style.height).toBe(`${8 * row}px`)
 
@@ -4921,7 +5025,7 @@ describe('composer auto-grow', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: lines(3) } })
     expect(composer.style.height).toBe(`${3 * row}px`)
 
@@ -4946,7 +5050,7 @@ describe('composer auto-grow', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     composer.focus()
 
     composer.scrollTop = 37
@@ -4979,7 +5083,7 @@ describe('composer auto-grow', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     expect(composer.style.height).toBe(resting)
 
     // Retry writes the four-line prompt into the draft with no input event,
@@ -4999,7 +5103,7 @@ describe('composer auto-grow', () => {
       disconnect() { this.disconnected = true }
     }
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: lines(6) } })
     expect(composer.style.height).toBe(`${6 * row}px`)
 
