@@ -35,6 +35,14 @@ impl<R: tauri::Runtime> ChatEventSink for TauriChatEventSink<R> {
 }
 
 impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
+    fn renew_chat_grant(&self, _access_token: &str) -> Result<ChatGrant, FetchGrantError> {
+        Err(FetchGrantError::Unavailable)
+    }
+
+    fn inspect_chat_session(&self, _access_token: &str) -> Result<String, FetchGrantError> {
+        Err(FetchGrantError::Unavailable)
+    }
+
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
         self.app
             .path()
@@ -517,8 +525,11 @@ impl ChatState {
         self.storage
             .set(Arc::clone(&storage))
             .map_err(|_| "Chat storage is already open.")?;
+        // Only the runtime may delete a protected prompt and its journal record.
         self.retention_trigger
-            .install(start_retention_schedule(config_directory, storage));
+            .install(start_retention_schedule(config_directory, storage, |_| {
+                Err(RetentionError::BeforeDelete)
+            }));
         Ok(())
     }
 
@@ -534,6 +545,9 @@ impl ChatState {
 pub(super) fn start_retention_schedule(
     config_directory: PathBuf,
     storage: SharedStorage,
+    mut before_delete: impl FnMut(&muniment_core::journal::retention::DeletedRun) -> Result<(), RetentionError>
+        + Send
+        + 'static,
 ) -> Sender<()> {
     let (trigger, checks) = channel();
     std::thread::spawn(move || {
@@ -550,15 +564,9 @@ pub(super) fn start_retention_schedule(
             |max_age_seconds| {
                 let mut storage = storage.lock().map_err(|_| ())?;
                 let ChatStorage { journal, cas } = &mut *storage;
-                apply_retention_now_with(journal, Some(cas), max_age_seconds, |deleted_run| {
-                    muniment_core::chat_prompt::delete_prompt(
-                        &deleted_run.run_id,
-                        deleted_run.subject.as_deref(),
-                    )
-                    .map_err(|_| RetentionError::BeforeDelete)
-                })
-                .map(|_| ())
-                .map_err(|_| ())
+                apply_retention_now_with(journal, Some(cas), max_age_seconds, &mut before_delete)
+                    .map(|_| ())
+                    .map_err(|_| ())
             },
         );
     });

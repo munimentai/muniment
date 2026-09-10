@@ -19,6 +19,11 @@ pub fn installed_desktop_executable_from(runtime_executable: &Path) -> Option<Pa
                 .join("MacOS/muniment-desktop"),
         );
     }
+    // Tauri stages the release runtime beside the debug desktop, regardless of the runtime's build profile.
+    #[cfg(target_os = "linux")]
+    if resource_directory.ends_with("debug") {
+        return Some(resource_directory.join("muniment-desktop"));
+    }
     if resource_directory.file_name() != Some(OsStr::new("muniment")) {
         return None;
     }
@@ -28,7 +33,7 @@ pub fn installed_desktop_executable_from(runtime_executable: &Path) -> Option<Pa
         return None;
     }
 
-    Some(library_directory.parent()?.join("bin/muniment"))
+    Some(library_directory.parent()?.join("bin/muniment-desktop"))
 }
 
 pub fn installed_desktop_executable() -> Option<PathBuf> {
