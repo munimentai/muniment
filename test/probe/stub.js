@@ -274,6 +274,10 @@ export function buildProbeCommandTable(fixtureName) {
       return { summaries: structuredClone(threadSummaries), nextCursor: history.length ? 'older' : null }
     }
     if (command === 'chat_current_thread') return currentThreadId
+    if (command === 'chat_new_thread') {
+      currentThreadId = null
+      return null
+    }
     if (command === 'chat_rename_thread') {
       const summary = threadSummaries.find(({ threadId }) => threadId === payload.threadId)
       if (summary) summary.title = payload.title

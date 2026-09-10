@@ -1770,12 +1770,53 @@ describe('thread name', () => {
   })
 })
 
+describe('window chrome', () => {
+  it.each(['MacIntel', 'Win32', 'Linux x86_64'])('keeps the row controls on %s', async (platform) => {
+    const platformMock = vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
+    try {
+      render(App)
+      const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
+      const row = document.querySelector('.titlebar')
+      expect(row).toHaveAttribute('data-tauri-drag-region')
+      expect(row.closest('.workspace').classList.contains('macos')).toBe(platform.startsWith('Mac'))
+      expect([...row.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
+        'Collapse sidebar', 'New thread', 'Rename thread', 'Open artifact rail',
+      ])
+      expect(row.querySelector('.title-spacer')).toHaveAttribute('data-tauri-drag-region')
+      expect(row.querySelector('.update-slot')).toBeEmptyDOMElement()
+      expect(row.querySelector('.artifacts-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘J' : 'Ctrl J')
+      for (const control of row.querySelectorAll('button, input, button *')) {
+        expect(control).not.toHaveAttribute('data-tauri-drag-region')
+      }
+      await fireEvent.click(collapse)
+      expect(row).toContainElement(screen.getByRole('button', { name: 'Expand sidebar' }))
+      expect(row).toContainElement(screen.getByRole('button', { name: 'New thread' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Open artifact rail' }))
+      expect(row).toContainElement(screen.getByRole('button', { name: 'Close artifact rail' }))
+    } finally {
+      cleanup()
+      platformMock.mockRestore()
+    }
+  })
+
+  it('keeps native decorations and grants row drag permission', () => {
+    const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
+    const capabilities = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'))
+    expect(config.app.windows[0]).toMatchObject({
+      title: 'muniment', titleBarStyle: 'Overlay', hiddenTitle: true,
+      trafficLightPosition: { x: 14, y: 14 },
+    })
+    expect(config.app.windows[0].decorations).not.toBe(false)
+    expect(capabilities.permissions).toContain('core:window:allow-start-dragging')
+  })
+})
+
 describe('sidebar collapse', () => {
   const sidebarShortcut = () => navigator.platform.startsWith('Mac')
     ? { key: '\\', metaKey: true }
     : { key: '\\', ctrlKey: true }
 
-  it('collapses to an icon rail from the in-sidebar control and expands again', async () => {
+  it('collapses to an icon rail from the app row control and expands again', async () => {
     render(App)
     const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
     expect(collapse).toHaveAttribute('aria-expanded', 'true')
@@ -1791,9 +1832,10 @@ describe('sidebar collapse', () => {
     expect(currentThread).not.toHaveAttribute('tabindex')
     expect(currentThread.tabIndex).toBe(-1)
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(document.querySelectorAll('.side-action')).toHaveLength(2)
+    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action')).toHaveLength(2)
     expect(screen.getByRole('button', { name: 'Home settings' })).toHaveTextContent('Home settings')
-    expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(1)
+    expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(1)
+    expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(0)
 
     collapse.focus()
     await fireEvent.click(collapse)
@@ -1804,7 +1846,7 @@ describe('sidebar collapse', () => {
     expect(document.activeElement).toBe(expand)
     expect(expand).toHaveAttribute('aria-expanded', 'false')
     expect(expand).toHaveAttribute('title', expect.stringContaining('Expand sidebar'))
-    expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', 'New thread')
+    expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'New thread (⌘N)' : 'New thread (Ctrl N)')
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Home settings' })).toHaveAttribute('title', 'Home settings')
     expect(screen.queryByText('Threads')).not.toBeInTheDocument()
