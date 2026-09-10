@@ -14,9 +14,8 @@ FSL-1.1-Apache-2.0, and each version converts to Apache 2.0 two years after its
 own release.
 
 The audience is anyone who runs a business, or wants to, with intelligence and
-the company data together in one app. Nobody has to be a developer. They
-install a local app without asking anyone, and they run a harness such as
-Claude Code.
+the company data in one app. Nobody has to be a developer. They install a local
+app without asking anyone and run a harness such as Claude Code.
 
 ## What this repo is
 
@@ -319,8 +318,6 @@ exact pin, never from another version's list.
 
 ## Local models
 
-Two models, two jobs, never interchangeable.
-
 **The router is an encoder, bundled, never downloaded.** Routing is three
 classes, `route.cloud`, `route.local`, `route.proxy`. The shipped artifact is
 granite-embedding-278m-multilingual, Apache-2.0, int8 per-channel ONNX, with
@@ -359,8 +356,11 @@ is open work: closing it is a gate change first and a symptom ticket second.
    `linux-e2e-report` consumed by the factory tester.
 2. The PR compile and build matrix is green on linux, windows and macos.
    Enforcer: the desktop-compile and desktop-build jobs in `ci.yml`.
-3. Windows installers are signed and verified. Enforcer:
-   `test/windows-installers.ps1` in the desktop-build job.
+3. Windows installers are signed and verified. The per-user MSI and the NSIS
+   setup are the default download, need no administration and register for
+   the user. The `-machine.msi` is the managed install for MDM and RMM and
+   registers for the machine. Enforcer: `test/windows-installers.ps1` in the
+   desktop-build job.
 4. macOS builds are signed, notarized and stapled once Apple clears the
    enrollment. Owner-gated. Enforcer: `docs/macos-signing.md` plus the
    fail-fast behavior in `.github/lib/macos-signing.mjs`.
