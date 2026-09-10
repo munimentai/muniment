@@ -30,7 +30,7 @@ export function createChatController({
   onSubmitError,
   onCancelError,
   onQueueError,
-  onHistoryError,
+  onHistoryError: publishHistoryError,
   onHistoryStart = () => {},
   onThreadSummaries = () => {},
   onMoreThreads = () => {},
@@ -51,6 +51,7 @@ export function createChatController({
   let unlisten
   let registration
   let registrationFailed = false
+  let historyReadFailed = false
   let destroyed = false
   let switchingThread = false
   let switchBlocked = false
@@ -79,6 +80,12 @@ export function createChatController({
   const signaledRuns = new Set()
   let signaledRunRefreshInFlight = false
   let signaledRunRefreshFollowUp = false
+
+  function onHistoryError(message, action, isHistoryRead = false) {
+    historyReadFailed = isHistoryRead
+    if (action) publishHistoryError(message, action)
+    else publishHistoryError(message)
+  }
 
   function holdBuffer() {
     runIdWaits += 1
@@ -268,7 +275,7 @@ export function createChatController({
       }
       await openThread(newest, switchBlocked)
     } catch (error) {
-      if (!destroyed) onHistoryError(historyReadError(error), { label: 'Restore history', run: loadHistory })
+      if (!destroyed) onHistoryError(historyReadError(error), { label: 'Restore history', run: loadHistory }, true)
     }
   }
 
@@ -372,7 +379,7 @@ export function createChatController({
         onHistoryError(historyReadError(error), {
           label: 'Restore history',
           run: () => openThread(threadId, select || switchBlocked),
-        })
+        }, true)
       }
       return false
     } finally {
@@ -402,9 +409,8 @@ export function createChatController({
   // The runtime drops a chat-event subscriber whose queue fills, and the desktop
   // resubscribes after a retry. The open run keeps whatever hole that gap left,
   // so this re-read repairs it in place. It reads the same pages openThread
-  // reads, and it selects no thread, so a run in flight keeps running. It also
-  // leaves a stale history error standing, because a background call owns no
-  // part of the visible error state.
+  // reads, and it selects no thread, so a run in flight keeps running.
+  // A successful re-read clears history-read alerts but keeps unrelated action errors.
   async function refreshOpenThread() {
     const threadId = readThreadId()
     if (!threadId || destroyed || switchingThread || refreshingOpenThread) return
@@ -459,6 +465,7 @@ export function createChatController({
       const announcedId = readAnnounced()?.id
       const tracked = announcedId && republished.find((message) => message.run?.id === announcedId)?.run
       if (tracked) onAnnounce(tracked)
+      if (historyReadFailed) onHistoryError('')
       if (settled) void refreshThreads()
     } catch (_) {
       // A background re-read must not disturb the visible conversation state.

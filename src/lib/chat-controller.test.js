@@ -1395,6 +1395,68 @@ describe('chat controller', () => {
     expect(context.draft()).toBe('Hello')
   })
 
+  it('clears a history-read alert when the open thread re-reads successfully', async () => {
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('journal unavailable'))
+      .mockResolvedValueOnce({ entries: [], nextCursor: null })
+    const context = setup(invoke, { threadId: 'thread-1' })
+
+    await context.controller.openThread('thread-1')
+
+    expect(context.onHistoryError).toHaveBeenLastCalledWith(
+      'Muniment could not restore conversation history. journal unavailable',
+      expect.objectContaining({ label: 'Restore history' }),
+    )
+
+    await context.controller.refreshOpenThread()
+
+    expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+    expect(context.messages()).toEqual([])
+  })
+
+  it('keeps a history-read alert when a later page of the re-read fails', async () => {
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('journal unavailable'))
+      .mockResolvedValueOnce({ entries: [], nextCursor: 'page-2' })
+      .mockRejectedValueOnce(new Error('still unavailable'))
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await context.controller.openThread('thread-1')
+    context.onHistoryError.mockClear()
+
+    await context.controller.refreshOpenThread()
+
+    expect(invoke).toHaveBeenLastCalledWith('chat_thread_open', {
+      threadId: 'thread-1', limit: 100, cursor: 'page-2',
+    })
+    expect(context.onHistoryError).not.toHaveBeenCalled()
+  })
+
+  it.each(['before', 'during'])('keeps an action alert raised %s a successful re-read', async (timing) => {
+    const history = deferred()
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('journal unavailable'))
+      .mockImplementation((command) => {
+        if (command === 'chat_thread_open') return history.promise
+        if (command === 'chat_rename_thread') return Promise.reject(new Error('rename denied'))
+        throw new Error(`unexpected command: ${command}`)
+      })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await context.controller.openThread('thread-1')
+    if (timing === 'before') await context.controller.renameThread('New title', 'Old title')
+    const refreshing = context.controller.refreshOpenThread()
+    if (timing === 'during') await context.controller.renameThread('New title', 'Old title')
+    expect(context.onHistoryError).toHaveBeenLastCalledWith(
+      'The thread name could not be changed.',
+      expect.objectContaining({ label: 'Rename thread again' }),
+    )
+    context.onHistoryError.mockClear()
+
+    history.resolve({ entries: [], nextCursor: null })
+    await refreshing
+
+    expect(context.onHistoryError).not.toHaveBeenCalled()
+  })
+
   it('carries an event that arrives while the open thread re-reads', async () => {
     const history = deferred()
     const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
