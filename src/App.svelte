@@ -1696,6 +1696,7 @@
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .history-error { overflow-wrap: anywhere; }
   /* The notice keeps the background service register at the composer 12px scale.
      A 15px support line would compete with the draft text. */
   .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
