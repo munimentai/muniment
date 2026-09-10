@@ -24,6 +24,7 @@ async function shellState() {
 }
 
 async function verifyInitialHome(location) {
+  await browser.waitUntil(async () => path.isAbsolute(await location.getProperty('textContent')))
   const home = await location.getProperty('textContent')
   expect(path.isAbsolute(home)).toBe(true)
   let homeExists = true
@@ -55,7 +56,7 @@ async function hostedLocation(driver) {
 async function signInCompleted(driver) {
   if (process.platform === 'linux') {
     try {
-      return await (await $('textarea[placeholder="Ask anything"]')).isDisplayed()
+      return await (await $('.profile-button')).isDisplayed()
     } catch {
       return false
     }
@@ -124,10 +125,13 @@ describe('installed nightly', () => {
     let home
     if (await location.isDisplayed()) {
       home = await verifyInitialHome(location)
-      await (await $('[data-testid="onboarding-confirm"]')).click()
-      const skipImport = await $('button=Continue without importing')
-      await skipImport.waitForDisplayed()
-      await skipImport.click()
+      const composer = await $('textarea[placeholder="Ask anything"]')
+      expect(await composer.isDisplayed()).toBe(true)
+      await composer.setValue('Help me organize my notes.')
+      await (await $('button=Send')).click()
+      const modelSettings = await $('button=Open model settings')
+      await modelSettings.waitForDisplayed()
+      await modelSettings.click()
     }
 
     // The desktop client can restore Local mode after onboarding.

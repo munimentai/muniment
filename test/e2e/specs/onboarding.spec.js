@@ -30,7 +30,7 @@ describe('installed nightly model-ready onboarding', () => {
     try {
       await location.waitForDisplayed({
         timeout: 120000,
-        timeoutMsg: 'model-ready onboarding first render did not show the Home picker',
+        timeoutMsg: 'model-ready onboarding first render did not show the Home chip',
       })
     } catch (waitError) {
       let homeStatus = { error: 'home_status diagnostic was unavailable' }
@@ -65,7 +65,16 @@ describe('installed nightly model-ready onboarding', () => {
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
 
+    const composer = await $('textarea[placeholder="Ask anything"]')
+    await composer.waitForDisplayed({ timeout: 120000 })
+    expect(await composer.isDisplayed()).toBe(true)
+    expect(await (await $('button=Send')).isEnabled()).toBe(true)
+    expect(await (await $('[data-testid="onboarding-model"]')).getText()).toBe('Connect a model')
+    expect(await (await $('[data-testid="onboarding-scan"]')).isDisplayed()).toBe(true)
+    expect(await (await $('.chips')).$$('button')).toHaveLength(3)
+    expect(await (await $('[data-testid="onboarding-confirm"]')).isExisting()).toBe(false)
     await mkdir(home, { recursive: true })
+    await location.click()
     await (await $('[data-testid="onboarding-picker"]')).click()
     await chooseFolder(
       home,
@@ -79,21 +88,29 @@ describe('installed nightly model-ready onboarding', () => {
       timeoutMsg: 'the Home picker DOM value did not match the isolated Home',
     })
     expect(await location.getProperty('textContent')).toBe(home)
-    await (await $('[data-testid="onboarding-confirm"]')).click()
-    const skipImport = await $('button=Continue without importing')
-    await skipImport.waitForDisplayed()
-    await skipImport.click()
-    const signedOut = await $('button=Sign in')
+    for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
+      let exists = true
+      try { await access(path.join(home, directory)) } catch { exists = false }
+      expect(exists).toBe(false)
+    }
+    await composer.setValue('Help me organize my notes.')
+    await (await $('button=Send')).click()
+    const modelSettings = await $('button=Open model settings')
+    await modelSettings.waitForDisplayed()
+    expect(await (await $('p=No free hosted model exists at the no-account tier.')).isDisplayed()).toBe(true)
+    await modelSettings.click()
+    const localMode = await $('#local-account-title')
     // The installed runtime answers the session, so this screen waits on the
     // desktop client connection. Report that connection when the wait runs out.
     try {
-      await signedOut.waitForDisplayed({
-        timeoutMsg: 'the signed-out screen did not appear after onboarding',
+      await localMode.waitForDisplayed({
+        timeoutMsg: 'model settings did not appear after the first Send',
       })
     } catch (waitError) {
       throw new Error(`${waitError.message} ${await shellState()}`)
     }
 
+    expect(await (await $('textarea[placeholder="Ask anything"]')).getValue()).toBe('Help me organize my notes.')
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
       expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
     }

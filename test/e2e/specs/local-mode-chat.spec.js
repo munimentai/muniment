@@ -27,15 +27,19 @@ async function completeOnboarding() {
     timeout: 120000,
     timeoutMsg: 'local-mode onboarding did not show the Home path',
   })
+  await browser.waitUntil(async () => path.isAbsolute(await location.getProperty('textContent')))
   const home = await location.getProperty('textContent')
   expect(path.isAbsolute(home)).toBe(true)
   let homeExists = true
   try { await access(home) } catch { homeExists = false }
   expect(homeExists).toBe(false)
-  await (await $('[data-testid="onboarding-confirm"]')).click()
-  const skipImport = await $('button=Continue without importing')
-  await skipImport.waitForDisplayed()
-  await skipImport.click()
+  const composer = await $('textarea[placeholder="Ask anything"]')
+  expect(await composer.isDisplayed()).toBe(true)
+  await composer.setValue('Help me organize my notes.')
+  await (await $('button=Send')).click()
+  const modelSettings = await $('button=Open model settings')
+  await modelSettings.waitForDisplayed()
+  await modelSettings.click()
 }
 
 async function waitForDesktopClient() {
@@ -61,12 +65,12 @@ describe('installed local-mode chat', () => {
 
   it('starts a reply without cloud sign-in', async () => {
     await completeOnboarding()
-    const localMode = await $('button=Use local mode')
+    const localMode = await $('#local-account-title')
     await localMode.waitForDisplayed({ timeout: 120000 })
-    await localMode.click()
 
     const composer = await $('textarea[placeholder="Ask anything"]')
     await composer.waitForDisplayed({ timeout: 120000 })
+    expect(await composer.getValue()).toBe('Help me organize my notes.')
     const provider = await $('input[name="provider"][value="ollama"]')
     await provider.click()
     const baseUrlInput = await $('#provider-base-url')
