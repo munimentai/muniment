@@ -23,6 +23,7 @@ fn event() -> ChatEvent {
         thread_id: None,
         phase: "running".into(),
         text: "hello".into(),
+        failure_reason: None,
         receipt: None,
         tool_activity: Vec::new(),
         attachments: Vec::new(),

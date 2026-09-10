@@ -3618,7 +3618,9 @@ describe('local file selection', () => {
     await fireEvent.input(composer, { target: { value: 'Review this' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
-    await screen.findByRole('alert')
+    const error = await within(document.querySelector('.thread')).findByText('One or more selected files could not be added.')
+    expect(error).toHaveClass('run-error')
+    expect(screen.getByTestId('run-announcement')).toHaveTextContent('One or more selected files could not be added.')
     expect(composer).toHaveValue('Review this')
     expect(screen.getByText('evidence.pdf')).toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('chat_submit', {
@@ -3906,10 +3908,13 @@ describe('chat submission settlement', () => {
     await fireEvent.input(composer, { target: { value: 'New question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('The submission was rejected.')
-    // Scoped to the transcript: the run announcement carries the same sentence.
     const thread = within(document.querySelector('.thread'))
-    expect(thread.getByText('Reply failed.')).toBeInTheDocument()
+    const error = await thread.findByText('The submission was rejected.')
+    expect(error).toHaveClass('run-error')
+    expect(within(error).getByRole('button', { name: 'Try again' })).toBeEnabled()
+    expect(screen.getByTestId('run-announcement')).toHaveTextContent('The submission was rejected.')
+    expect(document.querySelector('.cancel-error')).not.toBeInTheDocument()
+    expect(composer).toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
     expect(thread.getByText('Existing answer')).toBeInTheDocument()
     expectNoProxyEqualityWarning(warn)
   })
@@ -4354,6 +4359,76 @@ describe('thread announcements', () => {
     expect(region).toHaveAttribute('aria-atomic', 'true')
     expect(region).toHaveClass('visually-hidden')
     expect(region.textContent).toBe('')
+  })
+
+  it.each([
+    ['', 'No reply arrived within 30 seconds.', 'Try again.'],
+    ['Partial answer', 'No reply arrived within 30 seconds.', 'Try again.'],
+    ['', 'Acme Inc. logo.png exceeds the 10 MB image limit.', ''],
+    ['', 'Acme Inc. logo.png exceeds the 10 MB image limit.', 'Choose a smaller image before sending again.'],
+  ])('shows a restored failure cause once beside retry with reply text %j and cause %j', async (text, cause, guidance) => {
+    signedIn([{
+      runId: 'run-failed', phase: 'failed', text, prompt: 'A question',
+      failureReason: `${cause} ${guidance}`.trim(),
+    }], { runId: 'retry-run', attachments: [] })
+    const error = await screen.findByText(cause)
+    expect(error).toHaveClass('run-error')
+    expect(screen.getAllByText(cause)).toHaveLength(1)
+    expect(screen.getByTestId('run-announcement').textContent).toBe('')
+    if (text) expect(screen.getByText(text)).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask anything')).toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
+    const retry = within(error).getByRole('button', { name: 'Try again' })
+    await fireEvent.click(retry)
+    expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'A question', files: [] })
+    expect(retry).toBeDisabled()
+  })
+
+  it('keeps retry disabled when the failed run has no saved prompt', async () => {
+    signedIn([{ runId: 'missing-prompt', phase: 'failed', text: '', failureReason: 'The provider refused access.' }])
+    const error = await screen.findByText('The provider refused access.')
+    expect(within(error).getByRole('button', { name: 'Try again' })).toBeDisabled()
+  })
+
+  it.each([
+    [false, 'No reply arrived within 30 seconds.', 'Try again.'],
+    [true, 'No reply arrived within 30 seconds.', 'Try again.'],
+    [false, 'Acme Inc. logo.png exceeds the 10 MB image limit.', ''],
+    [true, 'Acme Inc. logo.png exceeds the 10 MB image limit.', 'Choose a smaller image before sending again.'],
+  ])('shows a live failure cause only in the run when local mode is %s and cause is %j', async (local, cause, guidance) => {
+    localModeStatus = local
+    signedIn([], { runId: 'run-failed', attachments: [] })
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    const hint = local ? 'Local replies have no cloud receipt. Ask anything.' : 'Routing is automatic. Every reply carries its receipt.'
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    chatListener({ payload: {
+      runId: 'run-failed', phase: 'failed', text: '',
+      failureReason: `${cause} ${guidance}`.trim(),
+    } })
+    const thread = within(document.querySelector('.thread'))
+    const error = await thread.findByText(cause)
+    expect(thread.getAllByText(cause)).toHaveLength(1)
+    expect(within(error).getByRole('button', { name: 'Try again' })).toBeEnabled()
+    expect(screen.getByTestId('run-announcement').textContent).toBe(cause)
+    expect(document.querySelector('.cancel-error')).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask anything')).toHaveAccessibleDescription(hint)
+    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+  })
+
+  it.each([false, true])('keeps a rejected service call out of the composer when local mode is %s', async (local) => {
+    localModeStatus = local
+    const submission = deferred()
+    signedIn([], submission.promise)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    submission.reject('Muniment cannot reach its background service.')
+    const error = await within(document.querySelector('.thread')).findByText('Muniment cannot reach its background service.')
+    expect(within(error).getByRole('button', { name: 'Try again' })).toBeEnabled()
+    expect(document.querySelector('.cancel-error')).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask anything')).toHaveAccessibleDescription(local
+      ? 'Local replies have no cloud receipt. Ask anything.'
+      : 'Routing is automatic. Every reply carries its receipt.')
   })
 
   it('shows Pi acquisition before the first reply event', async () => {
