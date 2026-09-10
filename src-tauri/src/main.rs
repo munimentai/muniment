@@ -6,6 +6,7 @@ mod chat;
 mod chat_threads;
 mod dictation;
 mod home;
+mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_runtime_service;
 mod local_mode;
@@ -70,6 +71,7 @@ fn main() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .skip_initial_state("main")
+                .with_denylist(&["launcher"])
                 .build(),
         )
         .manage(auth::AuthState::new(runtime_activity.clone()))
@@ -121,6 +123,7 @@ fn main() {
             app.manage(dictation::DictationState::new(parakeet_root));
             Ok(())
         })
+        .on_window_event(launcher::window_event)
         .invoke_handler(tauri::generate_handler![
             auth::auth_sign_in,
             auth::auth_status,
@@ -153,6 +156,10 @@ fn main() {
             attach_service::attach_listener_status,
             attach_service::attach_revoke_companion,
             restart_muniment,
+            launcher::launcher_register,
+            launcher::launcher_open,
+            launcher::launcher_close,
+            launcher::launcher_present_main,
             home::home_status,
             home::home_confirm,
             home::home_confirm_import,
