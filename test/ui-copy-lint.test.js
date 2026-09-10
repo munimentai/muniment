@@ -53,6 +53,27 @@ describe('UI copy lint', () => {
   })
 
   it.each([
+    'count < 2 ? "Ready" : "Wait"',
+    'count > 2 ? "Ready" : "Wait"',
+    'count < 2 ? { label: "Ready" }.label : "Wait"',
+    'count < 2 ? "}>" : "<{"',
+    'count < 2 /* }> Pi stays in this comment. */ ? "Ready" : "Wait"',
+    'count < 2 // }> Pi stays in this comment.\n ? "Ready" : "Wait"',
+    '() => { return count < 2 ? `Ready ${count}` : "Wait" }',
+  ])('balances the attribute expression %s before rendered text', (expression) => {
+    for (const file of ['src/App.jsx', 'src/App.tsx', 'src/App.js', 'src/App.svelte']) {
+      for (const text of ['Pi answers here.', 'See https://example.com for Pi settings.']) {
+        const source = `const App = () => <p title={${expression}}>\n${text}</p>;`
+        expect(forbiddenHarnessCopy(source, file)).toEqual([
+          { file, line: source.split('\n').length, word: 'Pi' },
+        ])
+      }
+      const source = `const App = () => <p title={${expression}}>Ready.</p>;`
+      expect(forbiddenHarnessCopy(source, file)).toEqual([])
+    }
+  })
+
+  it.each([
     '// Pi starts here.\nconst copy = "Ready."',
     '/* Pi starts here. */ const copy = "Ready."',
     '<!-- Pi starts here. --><p>Ready.</p>',
@@ -77,6 +98,12 @@ describe('UI copy lint', () => {
     ['src/App.jsx', 'const pi = 3.14; const App = () => <p>{pi}</p>;'],
     ['src/status.mjs', 'const pi = 3.14; for (let i = 0; i < 2; i++) { console.log(pi); } const read = () => pi;'],
     ['src/App.jsx', 'const App = () => <p>{count < 2 ? "Ready." : "Wait."}</p>; // Pi starts here.'],
+    ['src/App.jsx', 'const App = () => <p title={count < 2 ? "Ready" : "Wait"} />; const pi = 3.14;'],
+    ['src/App.jsx', 'const App = () => <p title={count < 2 ? "Ready" : "Wait"}></p>; console.info("Pi started.");'],
+    ['src/App.jsx', 'const App = () => <p onClick={() => { if (count < 2) console.info("Pi started.") }}>Ready.</p>;'],
+    ['src/App.jsx', 'const App = () => <p title={count < 2 ? "Ready" : "Wait"}>{pi}</p>;'],
+    ['src/App.jsx', 'const App = () => <p title={count < 2 ? "Ready" : "Wait"}>'],
+    ['src/App.jsx', 'const App = () => <p title={count < 2 ? "Ready" : "Wait"'],
   ])('keeps script comments and logs exempt in %s', (file, source) => {
     expect(forbiddenHarnessCopy(source, file)).toEqual([])
   })
@@ -113,6 +140,8 @@ describe('UI copy lint', () => {
     ['status.rs', 'eprintln!("event=pi_start Pi started.");', 'return Err("Pi failed.".into());'],
     ['App.svelte', '<script>console.info("Pi started.")</script>', '<p>See https://example.com for Pi settings.</p>'],
     ['App.jsx', 'console.info("Pi started.");', 'const App = () => <p>Pi answers here.</p>'],
+    ['App.jsx', 'console.info("Pi started.");', 'const App = () => <p title={count < 2 ? "Ready" : "Wait"}>Pi answers here.</p>;'],
+    ['App.jsx', 'console.info("Pi started.");', 'const App = () => <p title={count < 2 ? "Ready" : "Wait"}>See https://example.com for Pi settings.</p>;'],
   ])('checks every CLI root and returns failure for %s UI copy', (name, log, copy) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-copy-lint-'))
     const frontend = path.join(root, 'src')

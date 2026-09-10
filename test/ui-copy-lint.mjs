@@ -10,11 +10,39 @@ const TOKENS = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->|r(#+)"[\s\S]*?"\1|"(
 const LOG_CALL = /\b(?:console\.(?:debug|info|log|warn|error)|(?:e?println|debug|info|warn|error|trace)!)\s*\(/g
 const blank = (text) => text.replace(/[^\n]/g, ' ')
 
+function markupTag(source, index, scriptToken) {
+  const start = /<\/?(?:([a-zA-Z][\w:.-]*)(?=[\s/>])|(?=>))/y
+  start.lastIndex = index
+  const element = start.exec(source)
+  if (!element) return null
+  let depth = 0
+  let end = start.lastIndex
+  while (end < source.length) {
+    // Strings and comments cannot close an attribute expression or the tag.
+    if (depth || /["']/.test(source[end])) {
+      scriptToken.lastIndex = end
+      const token = scriptToken.exec(source)
+      if (token) {
+        end += token[0].length
+        continue
+      }
+    }
+    const char = source[end++]
+    if (char === '{') depth += 1
+    if (char === '}') {
+      if (!depth) return null
+      depth -= 1
+    }
+    if (!depth && char === '<') return null
+    if (!depth && char === '>') return [source.slice(index, end), element[1]]
+  }
+  return null
+}
+
 // Keep rendered text out of the script tokenizer. URLs and slashes are text there.
 function copyTokens(source, file) {
   if (!/\.(?:svelte|js|mjs|jsx|tsx)$/.test(file) && file !== '<fixture>') return [...source.matchAll(TOKENS)]
   const scriptToken = new RegExp(TOKENS.source, 'y')
-  const tag = /<\/?(?:([a-zA-Z][\w:.-]*)(?:\s+(?:[^<>"']|"[^"]*"|'[^']*')*)?\s*\/?)?>/y
   const contexts = []
   const tokens = []
   let mode = file.endsWith('.svelte') ? 'text' : 'code'
@@ -27,8 +55,7 @@ function copyTokens(source, file) {
       index += value.length
       continue
     }
-    tag.lastIndex = index
-    const element = tag.exec(source)
+    const element = markupTag(source, index, scriptToken)
     if (element) {
       for (const token of element[0].matchAll(TOKENS)) {
         token.index += index
