@@ -5,7 +5,8 @@ use crate::start_record::{self, Start, StartDecision};
 use crate::APPLICATION_IDENTIFIER;
 
 const RECORD_NAME: &str = "macos-starts";
-pub const MACOS_RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
+pub const MACOS_RUNTIME_LOG_MAX_BYTES: u64 =
+    muniment_core::runtime_diagnostics::RUNTIME_LOG_MAX_BYTES;
 pub const MACOS_UNIFIED_LOG_CATEGORY: &str = "runtime";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

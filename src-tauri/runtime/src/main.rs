@@ -1,5 +1,6 @@
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, TerminationSignalWait};
+use muniment_core::runtime_eprintln as eprintln;
 #[cfg(target_os = "linux")]
 use muniment_runtime::{
     config_directory, profile_directory, run_runtime_activation, RuntimeActivationExit,
@@ -265,6 +266,12 @@ fn macos_activation() -> MacosActivationExit {
             return MacosActivationExit::Failed(FAILURE_EXIT_STATUS);
         }
     };
+    eprintln!(
+        "muniment-runtime: started version={} state_directory={} endpoint={}",
+        env!("CARGO_PKG_VERSION"),
+        profile_directory.display(),
+        muniment_runtime::macos_attach_socket_path(&profile_directory).display()
+    );
     let factory = SystemMacosAttachFactory::new(profile_directory, config_directory);
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
     if std::env::var_os(MACOS_TEST_EXIT_ENV).is_some() {
