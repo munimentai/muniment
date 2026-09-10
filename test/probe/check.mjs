@@ -139,6 +139,73 @@ async function checkWindowChrome(browser, baseUrl) {
   }
 }
 
+async function checkComposerActions(browser, baseUrl) {
+  for (const fixture of ['index.html', 'local-mode.html', 'in-flight.html']) {
+    const page = await browser.newPage({ viewport: { width: 960, height: 640 } })
+    try {
+      await page.goto(`${baseUrl}/test/probe/${fixture}`)
+      await page.waitForSelector('[data-probe-ready]')
+      await page.evaluate(() => document.fonts.ready)
+      for (const rail of ['closed', 'open', 'maximum']) {
+        if (rail === 'open') await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
+        for (const width of [960, 1100, 1101, 1280, 1440, 1920, 960]) {
+          await page.setViewportSize({ width, height: 640 })
+          if (rail === 'maximum') {
+            const divider = page.getByRole('separator', { name: 'Artifacts', exact: true })
+            await divider.press('End')
+          }
+          await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+          const layout = await page.locator('.composer-row').evaluate((row) => {
+            const box = row.getBoundingClientRect()
+            const hint = row.querySelector('#composer-hint')
+            const hintBox = hint.getBoundingClientRect()
+            const actions = row.querySelector('.composer-actions')
+            const actionsBox = actions.getBoundingClientRect()
+            const range = document.createRange()
+            range.selectNodeContents(hint)
+            return {
+              width: box.width,
+              hintWidth: range.getBoundingClientRect().width,
+              hintLines: range.getClientRects().length,
+              actionsWidth: actionsBox.width,
+              gap: parseFloat(getComputedStyle(row).columnGap) || 0,
+              separateRows: hintBox.bottom <= actionsBox.top,
+              buttons: [...actions.querySelectorAll('button')].map((button) => {
+                const rect = button.getBoundingClientRect()
+                range.selectNodeContents(button)
+                const textRects = [...range.getClientRects()]
+                return {
+                  label: button.textContent,
+                  lines: new Set(textRects.map((rect) => rect.top)).size,
+                  width: rect.width,
+                  height: rect.height,
+                  inside: rect.left >= box.left && rect.right <= box.right && rect.bottom <= window.innerHeight,
+                  textInside: textRects.every((text) => text.left >= rect.left && text.right <= rect.right),
+                }
+              }),
+            }
+          })
+          const context = JSON.stringify({ fixture, rail, width, layout })
+          assert.deepEqual(layout.buttons.map(({ label }) => label), fixture === 'in-flight.html'
+            ? ['Voice', 'Queue follow-up', 'Stop', 'Send']
+            : ['Voice', 'Add files', 'Send'], context)
+          for (const button of layout.buttons) {
+            assert.equal(button.lines, 1, context)
+            assert.ok(button.width >= 24 && button.height >= 24, context)
+            assert.ok(button.inside && button.textInside, context)
+          }
+          if (layout.hintLines > 1 || layout.hintWidth + layout.actionsWidth + layout.gap > layout.width) {
+            assert.ok(layout.separateRows, context)
+          }
+        }
+      }
+      console.log(`Composer action checks passed for ${fixture}.`)
+    } finally {
+      await page.close()
+    }
+  }
+}
+
 async function main() {
   const fixtures = (await readdir(probeDirectory))
     .filter((entry) => entry.endsWith('.html'))
@@ -152,6 +219,7 @@ async function main() {
   try {
     browser = await chromium.launch({ headless: true })
     await checkWindowChrome(browser, baseUrl)
+    await checkComposerActions(browser, baseUrl)
     for (const fixture of fixtures) {
       const errors = await checkFixture(browser, baseUrl, fixture)
       if (errors.length === 0) {

@@ -1715,8 +1715,10 @@
   textarea { display: block; width: 100%; resize: none; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   /* The input no longer keeps a spare empty row once it grows, so the action
      row carries the gap itself, matching the owner mockup's 8px .comprow rhythm. */
-  .composer-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
-  .composer-actions { display: flex; align-items: center; gap: 6px; }
+  .composer-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
+  .composer-row > span { flex-basis: max-content; }
+  .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
+  .composer-actions button { flex-shrink: 0; white-space: nowrap; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
   .capture-meter { height: 14px; display: flex; align-items: center; gap: 2px; }
   .capture-meter i { width: 2px; height: 6px; background: var(--muted); animation: capture 900ms ease-in-out infinite alternate; }
@@ -1735,11 +1737,6 @@
   .speech-install-card button { margin-top: 7px; padding: 4px 8px; font: inherit; }
   .speech-install-card .speech-install-error { color: var(--oxide); }
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
-  @media (max-width: 1100px) {
-    .workspace.artifact-open .composer-row { flex-wrap: wrap; gap: 8px; }
-    .workspace.artifact-open .composer-row > span { flex-basis: 100%; }
-    .workspace.artifact-open .composer-actions { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
-  }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
