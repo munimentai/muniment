@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
@@ -71,6 +72,73 @@ async function checkFixture(browser, baseUrl, fixture) {
   return errors
 }
 
+async function checkWindowChrome(browser, baseUrl) {
+  for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) {
+    const page = await browser.newPage({ viewport: { width: 960, height: 640 } })
+    try {
+      await page.addInitScript((platform) => {
+        Object.defineProperty(navigator, 'platform', { get: () => platform })
+      }, platform)
+      await page.goto(`${baseUrl}/test/probe/history.html`)
+      await page.waitForSelector('[data-probe-ready]')
+      const checkRow = async () => {
+        const row = await page.locator('.titlebar').evaluate((row) => {
+          const rect = row.getBoundingClientRect()
+          return {
+            height: rect.height,
+            top: rect.top,
+            padding: getComputedStyle(row).paddingLeft,
+            controls: [...row.querySelectorAll('button, input')].map((control) => {
+              const box = control.getBoundingClientRect()
+              const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+              return {
+                name: control.getAttribute('aria-label'),
+                width: box.width,
+                height: box.height,
+                visible: control.contains(target),
+                inside: box.left >= rect.left && box.right <= rect.right && box.top >= rect.top && box.bottom <= rect.bottom,
+                draggable: control.hasAttribute('data-tauri-drag-region'),
+              }
+            }),
+          }
+        })
+        assert.equal(row.height, 36)
+        assert.equal(row.top, 0)
+        assert.equal(row.padding, platform.startsWith('Mac') ? '84px' : '12px')
+        assert.equal(row.controls.length, 4)
+        for (const control of row.controls) {
+          assert.ok(control.width >= 24 && control.height >= 24, JSON.stringify(control))
+          assert.ok(control.visible && control.inside, JSON.stringify(control))
+          assert.equal(control.draggable, false)
+        }
+      }
+      await checkRow()
+      await page.getByRole('button', { name: 'Rename thread', exact: true }).click()
+      await checkRow()
+      await page.getByRole('textbox', { name: 'Thread name', exact: true }).fill('W'.repeat(160))
+      await page.getByRole('textbox', { name: 'Thread name', exact: true }).press('Enter')
+      await checkRow()
+      await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
+      await checkRow()
+      assert.equal(await page.locator('.new-thread').innerText(), platform.startsWith('Mac') ? 'New thread\n⌘N' : 'New thread\nCtrl N')
+      await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
+      await checkRow()
+      await page.getByRole('button', { name: 'New thread', exact: true }).click()
+      await page.waitForFunction(() => document.querySelector('button.thread-title')?.textContent === 'New thread')
+      await checkRow()
+      assert.deepEqual(await page.evaluate(() => window.__PROBE__.unknownCommands), [])
+      await page.goto(`${baseUrl}/test/probe/index.html`)
+      await page.waitForSelector('[data-probe-ready]')
+      await checkRow()
+      assert.equal(await page.getByRole('button', { name: 'Rename thread', exact: true }).isDisabled(), true)
+      assert.deepEqual(await page.evaluate(() => window.__PROBE__.unknownCommands), [])
+      console.log(`Window chrome checks passed for ${platform}.`)
+    } finally {
+      await page.close()
+    }
+  }
+}
+
 async function main() {
   const fixtures = (await readdir(probeDirectory))
     .filter((entry) => entry.endsWith('.html'))
@@ -83,6 +151,7 @@ async function main() {
 
   try {
     browser = await chromium.launch({ headless: true })
+    await checkWindowChrome(browser, baseUrl)
     for (const fixture of fixtures) {
       const errors = await checkFixture(browser, baseUrl, fixture)
       if (errors.length === 0) {

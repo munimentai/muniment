@@ -110,6 +110,18 @@ describe('installed nightly model-ready onboarding', () => {
       throw new Error(`${waitError.message} ${await shellState()}`)
     }
 
+    const row = await $('header.titlebar')
+    expect((await row.getSize()).height).toBe(36)
+    for (const name of ['Collapse sidebar', 'New thread', 'Rename thread', 'Open artifact rail']) {
+      const control = await row.$(`button[aria-label="${name}"]`)
+      expect(await control.isDisplayed()).toBe(true)
+      const size = await control.getSize()
+      expect(size.width).toBeGreaterThanOrEqual(24)
+      expect(size.height).toBeGreaterThanOrEqual(24)
+    }
+    expect(await (await row.$('.artifacts-toggle kbd')).isDisplayed()).toBe(true)
+    expect(await (await row.$('.update-slot')).getProperty('childElementCount')).toBe(0)
+    expect(await row.getAttribute('data-tauri-drag-region')).not.toBeNull()
     expect(await (await $('textarea[placeholder="Ask anything"]')).getValue()).toBe('Help me organize my notes.')
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
       expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
