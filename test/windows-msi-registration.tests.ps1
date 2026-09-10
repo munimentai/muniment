@@ -6,7 +6,7 @@ $user = [PSCustomObject]@{ Context = 2; UserSid = $userSid; State = 5 }
 $machine = [PSCustomObject]@{ Context = 4; UserSid = ""; State = 5 }
 
 # Windows Installer's uninstall entry can occupy either hive without changing the product context.
-Assert-PerUserMsiRegistration @($user) $userSid
+Assert-MsiProductContext @($user) $userSid
 
 $cases = @(
   @{ Name = "empty"; Registrations = @() },
@@ -26,7 +26,7 @@ $cases = @(
 foreach ($case in $cases) {
   $rejected = $false
   try {
-    Assert-PerUserMsiRegistration $case.Registrations $userSid
+    Assert-MsiProductContext $case.Registrations $userSid
   } catch {
     $rejected = $true
   }
@@ -105,6 +105,13 @@ namespace MsiRegistrationFixture {
   $product.Context = 2
   $product.UserSid = $userSid
   $product.InstallState = "5"
+  $rejected = $false
+  try {
+    $product.GetType().InvokeMember('InstallProperty', 'GetProperty', $null, $product, @('ProductState'))
+  } catch {
+    $rejected = $true
+  }
+  if (-not $rejected) { throw "The MSI fixture accepted ProductState instead of State." }
   # Hide the adapted fields while reflection still exposes the underlying properties.
   foreach ($field in @("ProductCode", "Context", "UserSid")) {
     $product | Add-Member -MemberType NoteProperty -Name $field -Value $null -Force
@@ -134,7 +141,7 @@ namespace MsiRegistrationFixture {
       $registrations[0].State -ne 5 -or -not $view.Closed -or $installer.Enumerations -ne 1) {
     throw "The MSI query must return exactly one complete registration and close the view."
   }
-  Assert-PerUserMsiRegistration $registrations $userSid
+  Assert-MsiProductContext $registrations $userSid
 
   $machineProduct = [MsiRegistrationFixture.Product]::new()
   $machineProduct.ProductCode = $code
@@ -149,7 +156,7 @@ namespace MsiRegistrationFixture {
     throw "The MSI query must preserve each product context, user, and install state."
   }
   $rejected = $false
-  try { Assert-PerUserMsiRegistration $registrations $userSid } catch { $rejected = $true }
+  try { Assert-MsiProductContext $registrations $userSid } catch { $rejected = $true }
   if (-not $rejected) { throw "The MSI check accepted a machine registration beside the user registration." }
 
   $installer.Products = @()
