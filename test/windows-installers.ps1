@@ -1,4 +1,5 @@
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "windows-msi-registration.ps1")
 
 $bundleRoot = Join-Path $PSScriptRoot "..\src-tauri\target\release\bundle"
 $nsis = @(Get-ChildItem (Join-Path $bundleRoot "nsis") -Filter "*-setup.exe" -File)
@@ -49,19 +50,10 @@ function Write-MsiScopeLog($LogPath) {
     Write-Host "The per-user MSI verbose log is absent."
     return
   }
-  foreach ($name in @("ALLUSERS", "MSIINSTALLPERUSER", "UserSID", "LogonUser")) {
+  foreach ($name in @("ALLUSERS", "MSIINSTALLPERUSER", "UserSID", "LogonUser", "MsiRunningElevated")) {
     $lines = @(Select-String -LiteralPath $LogPath -Pattern "PROPERTY CHANGE: (Adding|Modifying|Deleting) $name property\b|Property\([CS]\): $name =")
     if ($lines.Count -eq 0) { Write-Host "The per-user MSI log has no $name lines." }
     $lines | ForEach-Object { Write-Host $_.Line }
-  }
-}
-
-function Get-UserRegistrations($Hive) {
-  foreach ($suffix in @("Software\Microsoft\Windows\CurrentVersion\Uninstall", "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")) {
-    $root = "$Hive\$suffix"
-    if (Test-Path -LiteralPath $root) {
-      Get-ChildItem -LiteralPath $root | Where-Object { (Get-ItemProperty -LiteralPath $_.PSPath).DisplayName -eq "muniment" }
-    }
   }
 }
 
@@ -133,25 +125,31 @@ $nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassTh
 if ($nsisUninstall.ExitCode -ne 0) { throw "Silent NSIS uninstall failed: $($nsisUninstall.ExitCode)" }
 if (Test-Path $userRuntime) { throw "NSIS runtime remains after uninstall at $userRuntime" }
 
+$userProductCode = Get-MsiProductCode $regularMsi[0].FullName
+$sessionSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $userMsiLog = [IO.Path]::GetTempFileName()
 try {
   try {
     Invoke-Msi "/i" $regularMsi[0].FullName "Silent regular MSI install" $userMsiLog
   } finally {
     Write-MsiScopeLog $userMsiLog
-    $sessionSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $hkcu = @(Get-UserRegistrations "HKCU:")
-    $hku = @(Get-UserRegistrations "Registry::HKEY_USERS\$sessionSid")
-    $hklm = @(Get-MunimentRegistrations)
-    Write-Host "per-user MSI registration: session SID=$sessionSid HKU\$sessionSid=$($hku.Count) hkcu=$($hkcu.Count) hklm=$($hklm.Count)"
+    $userRegistration = Get-PerUserMsiRegistration $userProductCode $sessionSid
+    Write-PerUserMsiRegistration $userRegistration "installed"
   }
 } finally {
   Remove-Item -LiteralPath $userMsiLog -Force
 }
-if ($hkcu.Count -ne 1 -or $hklm.Count -ne 0) {
-  throw "Per-user MSI registration requires hkcu=1 hklm=0: hkcu=$($hkcu.Count) hklm=$($hklm.Count)"
+try {
+  Assert-PerUserMsiRegistration $userRegistration $env:LOCALAPPDATA
+  if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
+} finally {
+  try {
+    Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
+  } finally {
+    $userRegistration = Get-PerUserMsiRegistration $userProductCode $sessionSid
+    Write-PerUserMsiRegistration $userRegistration "uninstalled"
+    Assert-PerUserMsiRegistration $userRegistration $env:LOCALAPPDATA -Absent
+  }
 }
-if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
-Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
 
 Write-Host "Windows silent installer verification OK"
