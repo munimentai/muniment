@@ -11,12 +11,45 @@ use muniment_runtime::{
 fn maps_the_installed_runtime_to_the_desktop_executable() {
     assert_eq!(
         installed_desktop_executable_from(Path::new("/usr/lib/muniment/muniment-runtime")),
-        Some(Path::new("/usr/bin/muniment").to_path_buf())
+        Some(Path::new("/usr/bin/muniment-desktop").to_path_buf())
     );
     assert_eq!(
         installed_desktop_executable_from(Path::new("/opt/muniment/lib/muniment/muniment-runtime")),
-        Some(Path::new("/opt/muniment/bin/muniment").to_path_buf())
+        Some(Path::new("/opt/muniment/bin/muniment-desktop").to_path_buf())
     );
+}
+
+#[test]
+fn maps_the_appimage_runtime_to_the_desktop_without_a_deb_alias() {
+    let root = Path::new("/tmp/.mount_muniment/usr");
+    assert_eq!(
+        installed_desktop_executable_from(&root.join("lib/muniment/muniment-runtime")),
+        Some(root.join("bin/muniment-desktop"))
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn maps_the_development_runtime_in_every_build_profile() {
+    for directory in [
+        "/workspace/target/debug",
+        "/workspace/target/x86_64-unknown-linux-gnu/debug",
+        "/tmp/custom-target/debug",
+    ] {
+        let directory = Path::new(directory);
+        assert_eq!(
+            installed_desktop_executable_from(&directory.join("muniment-runtime")),
+            Some(directory.join("muniment-desktop"))
+        );
+    }
+    for path in [
+        "target/debug/muniment-runtime",
+        "/workspace/target/debug/another-runtime",
+        "/workspace/target/debug/deps/muniment-runtime",
+        "/workspace/target/muniment-runtime",
+    ] {
+        assert_eq!(installed_desktop_executable_from(Path::new(path)), None);
+    }
 }
 
 #[test]

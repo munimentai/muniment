@@ -9,6 +9,7 @@ use muniment_core::owned_threads::{
     chat_thread_summaries_page as core_chat_thread_summaries_page,
     newest_owned_workspace_thread as core_newest_owned_workspace_thread, OwnedThreadsError,
 };
+#[cfg(test)]
 use muniment_core::thread_history::{
     chat_thread_open_page as core_chat_thread_open_page, ChatThreadOpenPage, ThreadHistoryError,
 };
@@ -313,6 +314,7 @@ fn chat_thread_summaries_command(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn chat_thread_open_page(
     journal: &mut RunJournal,
     subject: Option<&str>,
@@ -333,6 +335,7 @@ pub(crate) fn chat_thread_open_page(
     .map_err(thread_history_error_message)
 }
 
+#[cfg(test)]
 fn thread_history_error_message(_error: ThreadHistoryError) -> String {
     "Conversation history is unavailable.".into()
 }
@@ -349,29 +352,8 @@ fn chat_thread_open_command(
 ) -> Result<serde_json::Value, String> {
     match attach_state.desktop_client_session() {
         DesktopClientSession::NoSupervisor => {
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            return Err(auth::background_service_error());
-            #[cfg(target_os = "linux")]
-            {
-                let mut storage = storage
-                    .ok_or_else(auth::background_service_error)?
-                    .lock()
-                    .map_err(|_| "Conversation history is unavailable.".to_string())?;
-                let muniment_core::run_events::ChatStorage { journal, cas } = &mut *storage;
-                serde_json::to_value(
-                    core_chat_thread_open_page(
-                        journal,
-                        Some(cas),
-                        subject,
-                        session_root,
-                        thread_id,
-                        limit,
-                        cursor,
-                    )
-                    .map_err(thread_history_error_message)?,
-                )
-                .map_err(|_| "Conversation history is unavailable.".to_string())
-            }
+            let _ = (storage, subject, session_root);
+            Err(auth::background_service_error())
         }
         DesktopClientSession::Connected(client) => client
             .thread_history(
@@ -965,9 +947,10 @@ mod tests {
         let summaries = invoke_summaries(&rename_app, 100, None).unwrap();
         assert_eq!(summaries["summaries"][0]["threadId"], rename_id);
         assert!(summaries.get("nextCursor").is_some());
-        let history = invoke_open(&rename_app, &rename_id, 100, None).unwrap();
-        assert!(history["entries"].is_array());
-        assert!(history.get("nextCursor").is_some());
+        assert_eq!(
+            invoke_open(&rename_app, &rename_id, 100, None).unwrap_err(),
+            auth::background_service_error()
+        );
         invoke_rename(&rename_app, &rename_id, "Renamed thread").unwrap();
         assert_eq!(
             rename_app

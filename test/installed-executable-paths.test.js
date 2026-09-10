@@ -43,11 +43,13 @@ function plistValue(key) {
 }
 
 describe('installed desktop executable paths', () => {
-  it('uses the configured product name for the installed desktop executable', () => {
+  it('admits the packaged desktop executable without the deb alias', () => {
     const installedName = resolverFunction?.match(/\.join\("bin\/([^"/]+)"\)/)?.[1]
+    const manifest = readFileSync('src-tauri/Cargo.toml', 'utf8')
+    const binaryName = manifest.match(/^name = "([^"]+)"/m)?.[1]
 
-    expect(installedName, `${resolverPath} bin value ${installedName} disagrees with ${configPath} productName ${config.productName}`)
-      .toBe(config.productName)
+    expect(binaryName).toBe('muniment-desktop')
+    expect(installedName).toBe(binaryName)
   })
 
   it('uses the installed runtime path that the Linux runner probes', () => {

@@ -24,13 +24,12 @@ use muniment_core::attach::{
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
 #[cfg(test)]
 use muniment_core::attachment::AttachmentDeliveryError;
-use muniment_core::auth::{api_base_url, TokenSet};
+use muniment_core::auth::TokenSet;
 #[cfg(test)]
 use muniment_core::cas::LocalCas;
 use muniment_core::chat_coordinate::coordinate;
 use muniment_core::chat_grant::{
-    fetch_native_grant as core_fetch_grant, grant_authorizes_workspace,
-    validate_grant as core_validate_grant, ChatGrant, FetchGrantError,
+    grant_authorizes_workspace, validate_grant as core_validate_grant, ChatGrant, FetchGrantError,
 };
 use muniment_core::chat_profile::ChatProfile;
 pub(crate) use muniment_core::chat_resume::ResumeContext;
