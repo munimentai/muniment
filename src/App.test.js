@@ -1515,6 +1515,44 @@ describe('message grammar', () => {
   })
 })
 
+describe('history alerts', () => {
+  it('wraps an unbroken reader cause inside the alert', () => {
+    expect(appRules.get('.history-error')).toMatch(/overflow-wrap:\s*anywhere/)
+  })
+
+  it('shows no history alert for an empty journal in local mode', async () => {
+    localModeStatus = true
+    threadSummaryResult = []
+    render(App)
+
+    await screen.findByText('Your model answers here. Ask anything.')
+
+    expect(document.querySelector('.history-error')).not.toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+  })
+
+  it.each(['Restore history', 'New thread'])('clears the reader cause after %s succeeds', async (action) => {
+    let failing = true
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'chat_thread_open' && failing) return Promise.reject('Cannot read <journal>: permission denied.')
+      if (command === 'chat_new_thread') return Promise.resolve()
+      return defaultInvoke(command, ...args)
+    })
+    render(App)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Muniment could not restore conversation history. Cannot read <journal>: permission denied.')
+    expect(alert.querySelector('journal')).toBeNull()
+    expect(within(alert).getByRole('button', { name: 'Restore history' })).toBeEnabled()
+
+    failing = false
+    await fireEvent.click(screen.getByRole('button', { name: action, exact: true }))
+
+    await waitFor(() => expect(document.querySelector('.history-error')).not.toBeInTheDocument())
+  })
+})
+
 describe('thread name', () => {
   it('exposes the workspace heading, thread list, and named transcript region', async () => {
     threadSummaryResult = [
