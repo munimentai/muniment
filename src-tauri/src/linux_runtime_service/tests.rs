@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-struct Directory(std::path::PathBuf);
+pub(super) struct Directory(std::path::PathBuf);
 impl Directory {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
             "muniment-desktop-activation-{}-{}",
@@ -18,7 +18,7 @@ impl Directory {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }
-    fn filesystem(&self) -> AttachFilesystem {
+    pub(super) fn filesystem(&self) -> AttachFilesystem {
         AttachFilesystem::from_runtime_directory(&self.0).unwrap()
     }
 }
@@ -26,6 +26,73 @@ impl Drop for Directory {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn a_reopened_owner_stops_its_surviving_runtime_and_can_restart() {
+    use crate::runtime_owner::RuntimeOwner;
+    use std::path::Path;
+
+    let directory = Directory::new();
+    let filesystem = directory.filesystem();
+    let owner = RuntimeOwner::default();
+    // A long-lived process stands in for the runtime without the attach protocol.
+    let child = super::process::spawn_runtime(&filesystem, Path::new("/usr/bin/yes")).unwrap();
+    let pid = child.id() as i32;
+    owner.keep_child(child);
+    drop(owner);
+
+    let owner = RuntimeOwner::default();
+    activate_runtime(
+        &filesystem,
+        || panic!("The reopened desktop must attach without another start."),
+        || true,
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    super::stop_owned_runtime(&owner, &filesystem, || {
+        panic!("A standalone runtime does not use systemd.")
+    })
+    .unwrap();
+    let mut status = 0;
+    assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+    assert!(libc::WIFSIGNALED(status));
+    assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
+
+    let connected = AtomicBool::new(false);
+    activate_runtime(
+        &filesystem,
+        || {
+            owner.keep_child(super::process::spawn_runtime(
+                &filesystem,
+                Path::new("/usr/bin/yes"),
+            )?);
+            connected.store(true, Ordering::Release);
+            Ok(())
+        },
+        || connected.load(Ordering::Acquire),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    super::stop_owned_runtime(&owner, &filesystem, || {
+        panic!("The owner must stop its retained child.")
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_service_stop_and_a_competing_start_keep_their_ownership() {
+    let directory = Directory::new();
+    let filesystem = directory.filesystem();
+    let owner = crate::runtime_owner::RuntimeOwner::default();
+    assert!(super::stop_owned_runtime(&owner, &filesystem, || Err(())).is_err());
+    super::stop_owned_runtime(&owner, &filesystem, || Ok(())).unwrap();
+    let competing_filesystem = directory.filesystem();
+    let _startup_lock = competing_filesystem.acquire_startup_lock().unwrap();
+    assert!(super::stop_owned_runtime(&owner, &filesystem, || {
+        panic!("A stop must not race another desktop start.")
+    })
+    .is_err());
 }
 
 #[test]

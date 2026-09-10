@@ -56,15 +56,16 @@ impl Lifecycle {
         self.snapshot.visible = visible;
     }
 
-    fn observe(&mut self, connected: bool, now: Instant) {
-        if self.snapshot.busy {
-            return;
-        }
+    fn observe(&mut self, connected: bool, disconnected: bool, now: Instant) {
         if self.awaiting_disconnect {
-            if connected {
+            if connected || !disconnected {
                 return;
             }
             self.awaiting_disconnect = false;
+            self.snapshot.busy = false;
+        }
+        if self.snapshot.busy {
+            return;
         }
         if connected {
             self.outage = None;
@@ -95,9 +96,9 @@ impl Lifecycle {
     }
 
     fn started(&mut self, event: RuntimeEvent) {
-        self.snapshot.busy = false;
-        self.outage = None;
         self.awaiting_disconnect = event == RuntimeEvent::Stopped;
+        self.snapshot.busy = self.awaiting_disconnect;
+        self.outage = None;
         let visible = match event {
             RuntimeEvent::Connected => false,
             RuntimeEvent::Starting => self.snapshot.visible,
@@ -128,6 +129,20 @@ impl RuntimeOwner {
     #[cfg(target_os = "linux")]
     pub(crate) fn keep_child(&self, child: std::process::Child) {
         *self.child.lock().unwrap() = Some(child);
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn stop_child(&self) -> Result<bool, ()> {
+        let mut child = self.child.lock().unwrap();
+        let Some(process) = child.as_mut() else {
+            return Ok(false);
+        };
+        process
+            .kill()
+            .and_then(|()| process.wait())
+            .map_err(|_| ())?;
+        *child = None;
+        Ok(true)
     }
 }
 
@@ -184,19 +199,7 @@ pub(crate) async fn runtime_stop(app: tauri::AppHandle) -> Result<(), &'static s
         #[cfg(target_os = "windows")]
         let result = crate::windows_runtime_service::stop_runtime();
         #[cfg(target_os = "linux")]
-        let result = {
-            let mut child = owner.child.lock().unwrap();
-            match child.as_mut() {
-                Some(process) => {
-                    let result = process.kill().and_then(|()| process.wait().map(|_| ()));
-                    if result.is_ok() {
-                        *child = None;
-                    }
-                    result.map_err(|_| ())
-                }
-                None => crate::linux_runtime_service::stop_runtime(&app),
-            }
-        };
+        let result = crate::linux_runtime_service::stop_runtime(&app);
         owner.update(&app, |state| {
             state.started(if result.is_ok() {
                 RuntimeEvent::Stopped
@@ -236,14 +239,17 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                     *child = None;
                     owner.update(&app, |state| {
                         state.snapshot.last_event = RuntimeEvent::Exited;
-                        state.observe(false, Instant::now());
+                        state.observe(false, false, Instant::now());
                     });
                 }
             }
         }
-        let connected = app
-            .state::<crate::attach_service::AttachCompanionState>()
-            .runtime_connected();
+        let companion = app.state::<crate::attach_service::AttachCompanionState>();
+        let connected = companion.runtime_connected();
+        #[cfg(target_os = "linux")]
+        let disconnected = companion.runtime_disconnected();
+        #[cfg(not(target_os = "linux"))]
+        let disconnected = !connected;
         #[cfg(target_os = "macos")]
         let requires_approval = crate::macos_runtime_service::requires_approval();
         owner.update(&app, |state| {
@@ -261,7 +267,7 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             {
                 state.change(RuntimeEvent::Approved, true);
             }
-            state.observe(connected, Instant::now());
+            state.observe(connected, disconnected, Instant::now());
         });
         std::thread::sleep(Duration::from_millis(100));
     });
@@ -275,18 +281,18 @@ mod tests {
     fn exit_restart_and_shared_dwell() {
         let now = Instant::now();
         let mut state = Lifecycle::default();
-        state.observe(true, now);
-        state.observe(false, now);
+        state.observe(true, false, now);
+        state.observe(false, true, now);
         assert!(!state.snapshot.visible);
-        state.observe(false, now + DWELL - Duration::from_millis(1));
+        state.observe(false, true, now + DWELL - Duration::from_millis(1));
         assert!(!state.snapshot.visible);
-        state.observe(false, now + DWELL);
+        state.observe(false, true, now + DWELL);
         assert!(state.snapshot.visible);
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Disconnected);
         assert!(state.start());
         assert!(!state.start());
         state.started(RuntimeEvent::Starting);
-        state.observe(true, now + DWELL);
+        state.observe(true, false, now + DWELL);
         assert!(!state.snapshot.visible);
         state.change(RuntimeEvent::Exited, true);
         assert!(state.snapshot.visible);
@@ -300,16 +306,16 @@ mod tests {
     fn repeated_outages_do_not_extend_the_dwell() {
         let now = Instant::now();
         let mut state = Lifecycle::default();
-        state.observe(true, now);
-        state.observe(false, now);
-        state.observe(false, now + Duration::from_secs(1));
+        state.observe(true, false, now);
+        state.observe(false, true, now);
+        state.observe(false, true, now + Duration::from_secs(1));
         assert!(!state.snapshot.visible);
-        state.observe(false, now + DWELL);
+        state.observe(false, true, now + DWELL);
         assert!(state.snapshot.visible);
-        state.observe(true, now + DWELL);
-        state.observe(false, now + DWELL);
+        state.observe(true, false, now + DWELL);
+        state.observe(false, true, now + DWELL);
         assert!(!state.snapshot.visible);
-        state.observe(false, now + DWELL + DWELL);
+        state.observe(false, true, now + DWELL + DWELL);
         assert!(state.snapshot.visible);
     }
 
@@ -318,28 +324,68 @@ mod tests {
         let now = Instant::now();
         let mut state = Lifecycle::default();
         assert!(state.start());
-        state.observe(false, now);
+        state.observe(false, true, now);
         assert!(!state.snapshot.visible);
         state.started(RuntimeEvent::Starting);
-        state.observe(false, now);
-        state.observe(false, now + Duration::from_millis(9999));
+        state.observe(false, true, now);
+        state.observe(false, true, now + Duration::from_millis(9999));
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Starting);
-        state.observe(false, now + Duration::from_secs(10));
+        state.observe(false, true, now + Duration::from_secs(10));
         assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
         assert!(state.start());
         state.started(RuntimeEvent::Connected);
         assert!(!state.snapshot.visible);
         assert!(state.start());
         state.started(RuntimeEvent::Stopped);
-        state.observe(true, now);
+        state.observe(true, false, now);
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Stopped);
-        state.observe(false, now);
+        assert!(!state.start());
+        state.observe(false, false, now);
+        assert!(state.snapshot.busy);
+        assert!(!state.start());
+        state.observe(false, true, now);
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Stopped);
+        assert!(!state.snapshot.busy);
         assert!(state.start());
         state.started(RuntimeEvent::Starting);
-        state.observe(true, now);
+        state.observe(true, false, now);
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
         assert!(!state.snapshot.visible);
+    }
+
+    #[test]
+    fn stop_blocks_restart_until_both_delayed_connections_close() {
+        let now = Instant::now();
+        for chat_closes_first in [true, false] {
+            let mut state = Lifecycle::default();
+            state.observe(true, false, now);
+            assert!(state.start());
+            state.started(RuntimeEvent::Stopped);
+            for (attach, chat) in [
+                (true, true),
+                (chat_closes_first, !chat_closes_first),
+                (chat_closes_first, !chat_closes_first),
+            ] {
+                state.observe(attach && chat, !attach && !chat, now + DWELL);
+                assert!(state.snapshot.busy);
+                assert_eq!(state.snapshot.last_event, RuntimeEvent::Stopped);
+                assert!(!state.start());
+            }
+            // Reject contradictory samples if the callbacks run between status reads.
+            state.observe(true, true, now + DWELL);
+            assert!(!state.start());
+            state.observe(false, true, now + DWELL);
+            assert!(!state.snapshot.busy);
+            assert_eq!(state.snapshot.last_event, RuntimeEvent::Stopped);
+            assert!(state.start());
+            assert!(!state.start());
+            state.started(RuntimeEvent::Starting);
+            state.observe(false, true, now + DWELL);
+            assert_eq!(state.snapshot.last_event, RuntimeEvent::Starting);
+            state.observe(true, false, now + DWELL);
+            assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+            assert!(!state.snapshot.visible);
+        }
     }
 
     #[test]
@@ -380,14 +426,14 @@ mod tests {
     fn first_outage_shows_at_once_and_short_drop_keeps_workspace() {
         let now = Instant::now();
         let mut state = Lifecycle::default();
-        state.observe(false, now);
+        state.observe(false, true, now);
         assert!(state.snapshot.visible);
-        state.observe(false, now + Duration::from_millis(100));
+        state.observe(false, true, now + Duration::from_millis(100));
         assert!(state.snapshot.visible);
-        state.observe(true, now);
-        state.observe(false, now);
-        state.observe(true, now + Duration::from_millis(250));
-        state.observe(true, now + DWELL);
+        state.observe(true, false, now);
+        state.observe(false, true, now);
+        state.observe(true, false, now + Duration::from_millis(250));
+        state.observe(true, false, now + DWELL);
         assert!(!state.snapshot.visible);
     }
 }

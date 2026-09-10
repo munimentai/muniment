@@ -4,36 +4,41 @@ use muniment_core::attach::linux::AttachFilesystem;
 use tauri::Manager;
 
 mod activation;
+mod process;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) fn stop_runtime<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), ()> {
     use std::process::{Command, Stdio};
-    use std::time::Instant;
+    let filesystem = AttachFilesystem::from_environment().map_err(|_| ())?;
+    let owner = app.state::<crate::runtime_owner::RuntimeOwner>();
+    stop_owned_runtime(&owner, &filesystem, || {
+        Command::new("/usr/bin/systemctl")
+            .args(["--user", "stop", "muniment-runtime.service"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| ())?
+            .success()
+            .then_some(())
+            .ok_or(())
+    })
+}
 
-    if !Command::new("/usr/bin/systemctl")
-        .args(["--user", "stop", "muniment-runtime.service"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|_| ())?
-        .success()
-    {
-        return Err(());
+fn stop_owned_runtime(
+    owner: &crate::runtime_owner::RuntimeOwner,
+    filesystem: &AttachFilesystem,
+    stop_service: impl FnOnce() -> Result<(), ()>,
+) -> Result<(), ()> {
+    // Serialize stop with starts from other desktop processes.
+    let _startup_lock = filesystem.acquire_startup_lock().map_err(|_| ())?;
+    if owner.stop_child()? || process::stop_runtime(filesystem).map_err(|_| ())? {
+        Ok(())
+    } else {
+        stop_service()
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !app
-        .state::<crate::attach_service::AttachCompanionState>()
-        .runtime_disconnected()
-    {
-        if Instant::now() >= deadline {
-            return Err(());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Ok(())
 }
 
 pub(crate) fn start_runtime<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
@@ -47,7 +52,7 @@ pub(crate) fn start_runtime<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Res
         activation::activate_runtime(
             &filesystem,
             || {
-                let child = activation::spawn_runtime(&executable)?;
+                let child = process::spawn_runtime(&filesystem, &executable)?;
                 app.state::<crate::runtime_owner::RuntimeOwner>()
                     .keep_child(child);
                 Ok(())
