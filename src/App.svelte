@@ -151,6 +151,7 @@
   let markerStartupLocalMode = null
   let markerStartupReady = Promise.resolve(false)
   let startupReady = Promise.resolve()
+  const macOS = navigator.platform.startsWith('Mac')
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
   const sidebarWidth = 260
@@ -1053,24 +1054,32 @@
         <p class="support">Muniment reconnects on its own.</p>
       </section>
     {:else if workspaceMode() && desktopClientStatus}
-      <section class="workspace" class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
+      <section class="workspace" class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
-        <header class="titlebar">{#if editingThreadTitle}<input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>{:else}<h1 class="thread-title-heading" aria-label={currentThreadTitle}><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>{/if}<span class="title-spacer"></span><button type="button" class="quiet" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button></header>
+        <header class="titlebar" data-tauri-drag-region>
+          <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
+            <svg class="side-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
+          </button>
+          <button type="button" class="quiet new-thread" aria-label="New thread" title={`New thread (${shortcutDisplayLabel(newThreadKeyShortcut)})`} aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
+            <svg class="side-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            <span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
+          </button>
+          {#if editingThreadTitle}
+            <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
+          {:else}
+            <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>
+          {/if}
+          <span class="title-spacer" data-tauri-drag-region></span>
+          <button type="button" class="quiet artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
+          <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
+        </header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
             {#if !sidebarCollapsed}
               <svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="6.3" /></svg>
               <strong>muniment</strong>
             {/if}
-            <!-- One persistent element across both states so activating it never drops keyboard focus. -->
-            <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
-              <svg class="side-icon" width={sidebarCollapsed ? 18 : 16} height={sidebarCollapsed ? 18 : 16} viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
-            </button>
           </div>
-          <button type="button" class="side-action new-thread" aria-label="New thread" title={sidebarCollapsed ? 'New thread' : null} aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
-            <svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-            {#if !sidebarCollapsed}<span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>{/if}
-          </button>
           {#if !sidebarCollapsed}
             <h2 id="thread-list-title" class="side-label">Threads</h2>
             <ul class="thread-list" aria-labelledby="thread-list-title">
@@ -1521,28 +1530,36 @@
     line-height: var(--leading-body);
   }
 
-  .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 52px 1fr auto; }
+  .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 36px 1fr auto; }
   .workspace { grid-template-columns: 260px minmax(0, 1fr); grid-template-areas: "title title" "side thread" "side composer"; transition: grid-template-columns 180ms ease; }
   .workspace.artifact-resizing { transition: none; }
   .workspace.artifact-open { grid-template-columns: 260px minmax(320px, 1fr) var(--artifact-rail-width); grid-template-areas: "title title title" "side thread rail" "side composer rail"; }
   /* §2.1: the same 180ms grid transition carries the sidebar down to a 52px icon rail. */
   .workspace.sidebar-collapsed { grid-template-columns: 52px minmax(0, 1fr); }
   .workspace.sidebar-collapsed.artifact-open { grid-template-columns: 52px minmax(320px, 1fr) var(--artifact-rail-width); }
-  .workspace.sidebar-collapsed .titlebar { padding-left: 70px; }
   .workspace.sidebar-collapsed .drop-affordance { left: 52px; }
   .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
-  .drop-affordance { position: fixed; z-index: 4; inset: 52px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
+  .drop-affordance { position: fixed; z-index: 4; inset: 36px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .titlebar { grid-area: title; display: flex; align-items: center; padding: 0 18px 0 278px; border-bottom: 1px solid var(--border); background: var(--surface); transition: padding-left 180ms ease; }
-  .thread-title-heading { min-width: 0; max-width: 100%; font: inherit; }
-  .thread-title { min-width: 0; max-width: 100%; overflow: hidden; padding: 2px; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .titlebar { grid-area: title; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--surface); font-size: var(--text-13); user-select: none; }
+  .workspace.macos .titlebar { padding-left: 84px; }
+  .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 28px; padding: 2px 6px; }
+  .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .titlebar button:hover:not(:disabled) { background: var(--faint); border-color: transparent; }
+  .titlebar button:focus-visible, .titlebar input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .new-thread, .artifacts-toggle { white-space: nowrap; }
+  .titlebar kbd { margin-left: 2px; padding: 0 4px; border-radius: var(--radius-chip); background: var(--faint); }
+  .update-slot { flex: 0 0 24px; height: 24px; }
+  .thread-title-heading { min-width: 24px; max-width: 100%; margin: 0; font: inherit; }
+  .thread-title { min-width: 24px; max-width: 100%; overflow: hidden; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  input.thread-title { flex: 0 1 320px; user-select: text; }
   button.thread-title:disabled { opacity: 1; }
   kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .title-spacer { flex: 1; }
+  .title-spacer { flex: 1; align-self: stretch; min-width: 24px; }
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; background: var(--surface); border-right: 1px solid var(--border); }
   .side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 16px; }
   .side-brand path { fill: none; stroke: var(--ink); stroke-linecap: round; }
-  .side-toggle { display: flex; align-items: center; justify-content: center; margin-left: auto; padding: 4px; line-height: 0; }
+  .side-toggle { line-height: 0; }
   .side-toggle:hover:not(:disabled), .side-toggle:focus-visible { border-color: transparent; background: var(--faint); }
   .side-toggle:hover:not(:disabled) .side-icon, .side-toggle:focus-visible .side-icon { color: var(--ink); }
   /* §1.7: one geometric 1.6px-stroke icon set, sized to the mockup's rail. */
@@ -1567,7 +1584,6 @@
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
   .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
   .side-action span { flex: 1; }
-  .new-thread kbd { margin-left: auto; }
   .local-account { display: grid; gap: 7px; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
   .local-account strong { margin-bottom: 3px; }
   .provider-statuses { display: grid; gap: 4px; margin: 0 0 3px; font: var(--text-12) var(--font-mono); }
@@ -1586,7 +1602,6 @@
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
   .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
   .workspace.sidebar-collapsed .side-brand { padding: 0 0 14px; }
-  .workspace.sidebar-collapsed .side-toggle { width: 100%; margin: 0; padding: 9px 0; }
   .workspace.sidebar-collapsed .side-action { justify-content: center; gap: 0; padding: 9px 0; }
   /* The pinned control is its own group once the threads list is gone. */
   .workspace.sidebar-collapsed .home-settings { position: relative; margin-top: auto; }
