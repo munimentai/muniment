@@ -46,6 +46,8 @@ let registeredShortcuts
 let threadSummaryResult
 let olderThreadSummaryResult
 let localModeStatus
+let runtimeState
+let runtimeListener
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: (...args) => registerGlobalShortcut(...args),
@@ -153,12 +155,14 @@ beforeAll(async () => {
       if (command === 'chat_thread_open') {
         return Promise.resolve(invoke(command, ...args)).then((entries) => ({ entries, nextCursor: null }))
       }
+      if (command === 'runtime_state') return Promise.resolve(runtimeState)
       if (command === 'home_status') return Promise.resolve(homeStatus)
       if (command === 'onboarding_scan') return invoke(command).then(() => scanReport)
       if (command === 'local_mode_status') return Promise.resolve(localModeStatus)
       return invoke(command, ...args)
     } },
     event: { listen: vi.fn((event, listener) => {
+      if (event === 'runtime-state-changed') runtimeListener = listener
       if (event === 'chat-event') chatListener = listener
       if (event === 'dictation-event') dictationListener = listener
       if (event === 'entitlement-changed') entitlementListener = listener
@@ -187,6 +191,8 @@ beforeEach(() => {
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
   scanReport = { findings: [], errors: [] }
   localModeStatus = false
+  runtimeState = { revision: 0, lastEvent: 'connected', visible: false, busy: false }
+  runtimeListener = undefined
   chatListener = undefined
   dictationListener = undefined
   entitlementListener = undefined
@@ -431,17 +437,28 @@ describe('pairing decisions', () => {
 })
 
 describe('workspace composer entry', () => {
+  it.each([false, true])('shows the owner notice with Home configured as %s', async (configured) => {
+    homeStatus = { configured, homePath: '/Documents/Muniment' }
+    runtimeState = { revision: 1, lastEvent: 'exited', visible: true, busy: true }
+    render(App)
+    const notice = await screen.findByTestId('runtime-notice')
+    expect(within(notice).getByText('The runtime exited.')).toHaveClass('record', 'error-record')
+    expect(within(notice).getAllByRole('button')).toHaveLength(1)
+    expect(within(notice).getByRole('button', { name: 'Start runtime' })).toBeDisabled()
+    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+  })
+
   it.each([
-    ['enabled', false],
+    ['connected', false],
     ['requiresApproval', true],
     ['notFound', false],
-    ['failed', false],
+    ['registrationFailed', false],
     ['requires_approval', false],
     [null, false],
-  ])('shows the macOS approval notice for the %s state', async (activation, visible) => {
+  ])('offers Login Items only for the approval event %s', async (activation, visible) => {
+    runtimeState = { revision: 1, lastEvent: activation, visible: activation !== 'connected', busy: false }
     vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue('Macintosh')
     invoke.mockImplementation(async (command) => {
-      if (command === 'runtime_service_activation') return activation
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') return { connected: true, supervisor_running: true }
       if (command === 'chat_thread_open') return []
@@ -452,7 +469,11 @@ describe('workspace composer entry', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await findWorkspaceComposer()
+    if (['requiresApproval', 'notFound', 'registrationFailed'].includes(activation)) {
+      await screen.findByTestId('runtime-notice')
+    } else {
+      await findWorkspaceComposer()
+    }
 
     const button = screen.queryByRole('button', { name: 'Open Login Items' })
     expect(Boolean(button)).toBe(visible)
@@ -462,15 +483,16 @@ describe('workspace composer entry', () => {
     }
   })
 
-  it('does not read the runtime activation state outside macOS', async () => {
+  it('reads the owner state outside macOS without an approval control', async () => {
+    runtimeState = { revision: 1, lastEvent: 'startFailed', visible: true }
     render(App)
-    await screen.findByRole('textbox', { name: 'Message' })
-
-    expect(invoke).not.toHaveBeenCalledWith('runtime_service_activation')
+    expect(await screen.findByText('The runtime start failed.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start runtime' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: 'Open Login Items' })).not.toBeInTheDocument()
   })
 
   it('shows the background service notice after the boot status read fails and reads status after recovery', async () => {
+    runtimeState = { revision: 1, lastEvent: 'disconnected', visible: true }
     let statusReads = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') {
@@ -486,9 +508,10 @@ describe('workspace composer entry', () => {
     })
     render(App)
 
-    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    expect(await screen.findByText('The runtime connection closed.')).toBeInTheDocument()
     expect(screen.queryByText('Sign in to continue to your workspace.')).not.toBeInTheDocument()
 
+    runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false } })
     desktopClientListener({ payload: { connected: true, supervisor_running: true } })
     expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
     expect(statusReads).toBe(2)
@@ -543,7 +566,8 @@ describe('workspace composer entry', () => {
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeInTheDocument()
   })
 
-  it('shows the background service notice only while a desktop client has no connection', async () => {
+  it('shows the owner notice and repeats the start after a connection closes', async () => {
+    runtimeState = { revision: 1, lastEvent: 'disconnected', visible: true }
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') return { connected: false, supervisor_running: true }
@@ -554,16 +578,22 @@ describe('workspace composer entry', () => {
     })
     render(App)
 
-    expect(await screen.findByText('Muniment cannot reach its background service.')).toHaveClass('record', 'error-record')
-    expect(screen.getByText('Muniment reconnects on its own.')).toBeInTheDocument()
+    expect(await screen.findByText('The runtime connection closed.')).toHaveClass('record', 'error-record')
+    const notice = screen.getByTestId('runtime-notice')
+    expect(within(notice).getAllByRole('button')).toHaveLength(1)
+    invoke.mockResolvedValueOnce(undefined)
+    await fireEvent.click(within(notice).getByRole('button', { name: 'Start runtime' }))
+    expect(invoke).toHaveBeenCalledWith('runtime_start')
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
 
+    runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false } })
     desktopClientListener({ payload: { connected: true, supervisor_running: true } })
     expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
-    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+    expect(screen.queryByText('The runtime connection closed.')).not.toBeInTheDocument()
   })
 
   it('shows the background service notice while the chat-event connection is down', async () => {
+    runtimeState = { revision: 1, lastEvent: 'disconnected', visible: true }
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') {
@@ -576,7 +606,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
 
-    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    expect(await screen.findByText('The runtime connection closed.')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
   })
 
@@ -585,13 +615,15 @@ describe('workspace composer entry', () => {
     render(App)
     const composer = await findWorkspaceComposer()
 
+    runtimeListener({ payload: { revision: 1, lastEvent: 'disconnected', visible: false } })
     desktopClientListener({ payload: { connected: true, chat_events_connected: false, supervisor_running: true } })
     await vi.advanceTimersByTimeAsync(250)
-    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+    expect(screen.queryByText('The runtime connection closed.')).not.toBeInTheDocument()
 
+    runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false } })
     desktopClientListener({ payload: { connected: true, chat_events_connected: true, supervisor_running: true } })
     await vi.advanceTimersByTimeAsync(5_000)
-    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+    expect(screen.queryByText('The runtime connection closed.')).not.toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer)
   })
 
@@ -711,19 +743,22 @@ describe('workspace composer entry', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
 
-  it('updates the surface when the desktop client supervisor starts and stops', async () => {
+  it('keeps the owner notice when the desktop client supervisor stops', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     render(App)
     await findWorkspaceComposer()
 
     desktopClientListener({ payload: { connected: false, supervisor_running: true } })
     await vi.advanceTimersByTimeAsync(2_000)
-    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    runtimeListener({ payload: { revision: 1, lastEvent: 'disconnected', visible: true } })
+    expect(await screen.findByText('The runtime connection closed.')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
 
     desktopClientListener({ payload: { connected: false, supervisor_running: false } })
+    expect(screen.getByText('The runtime connection closed.')).toBeInTheDocument()
+    runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false } })
     expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument()
-    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+    expect(screen.queryByText('The runtime connection closed.')).not.toBeInTheDocument()
   })
 
   it('reads status after listener registration completes', async () => {
@@ -744,7 +779,9 @@ describe('workspace composer entry', () => {
 
     connected = false
     finishRegistration(desktopClientUnlisten)
-    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    runtimeListener({ payload: { revision: 1, lastEvent: 'disconnected', visible: true } })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_listener_status'))
+    expect(await screen.findByText('The runtime connection closed.')).toBeInTheDocument()
   })
 
   it('hides the workspace until the initial desktop client status arrives', async () => {
@@ -762,7 +799,8 @@ describe('workspace composer entry', () => {
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
 
     finishStatus({ connected: false, supervisor_running: true })
-    expect(await screen.findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    runtimeListener({ payload: { revision: 1, lastEvent: 'disconnected', visible: true } })
+    expect(await screen.findByText('The runtime connection closed.')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
   })
 
@@ -3483,7 +3521,7 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
-    expect(eventUnlisten).toHaveBeenCalledTimes(4)
+    expect(eventUnlisten).toHaveBeenCalledTimes(5)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
