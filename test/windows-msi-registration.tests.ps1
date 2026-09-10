@@ -46,7 +46,7 @@ namespace MsiRegistrationFixture {
     [IndexerName("InstallProperty")]
     public string this[string property] {
       get {
-        if (property != "ProductState") throw new Exception("The query requested an unknown install property.");
+        if (property != "State") throw new Exception("The query requested an unknown install property.");
         if (FailStateQuery) throw new Exception("The product state query failed.");
         return InstallState;
       }

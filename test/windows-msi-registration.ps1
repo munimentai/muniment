@@ -21,7 +21,7 @@ function Get-MsiRegistrations($Package, $UserSid) {
           Context = [int]$type.InvokeMember('Context', 'GetProperty', $null, $product, $null)
           UserSid = $type.InvokeMember('UserSid', 'GetProperty', $null, $product, $null)
           # InstallProperty calls MsiGetProductInfoEx for this product, user, and context.
-          State = [int]$type.InvokeMember('InstallProperty', 'GetProperty', $null, $product, @('ProductState'))
+          State = [int]$type.InvokeMember('InstallProperty', 'GetProperty', $null, $product, @('State'))
         }
       } finally {
         if ([Runtime.InteropServices.Marshal]::IsComObject($product)) {
