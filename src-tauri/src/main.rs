@@ -21,6 +21,7 @@ mod onboarding_scan;
 mod test_support;
 mod thread_retention;
 mod voice_capture;
+mod window_state;
 #[cfg(any(target_os = "windows", all(test, unix)))]
 mod windows_runtime_service;
 
@@ -66,11 +67,16 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .skip_initial_state("main")
+                .build(),
+        )
         .manage(auth::AuthState::new(runtime_activity.clone()))
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(attach_service::AttachApprovalState::default())
         .setup(move |app| {
+            window_state::restore_main_window(app)?;
             #[cfg(target_os = "macos")]
             {
                 let activation = macos_runtime_service::activate_bundled_runtime_service();

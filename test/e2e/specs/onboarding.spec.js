@@ -24,6 +24,15 @@ async function shellState() {
 }
 
 describe('installed nightly model-ready onboarding', () => {
+  it('opens at or above the configured minimum window size', async () => {
+    const config = JSON.parse(await readFile(new URL('../../../src-tauri/tauri.conf.json', import.meta.url), 'utf8'))
+    const { minWidth, minHeight } = config.app.windows[0]
+    await (await $('main')).waitForDisplayed({ timeout: 120000 })
+    const size = await browser.execute(() => ({ width: window.innerWidth, height: window.innerHeight }))
+    expect(size.width).toBeGreaterThanOrEqual(minWidth)
+    expect(size.height).toBeGreaterThanOrEqual(minHeight)
+  })
+
   it('chooses an isolated Home and scaffolds its README files', async () => {
     const home = process.env.MUNIMENT_E2E_HOME_PATH
     const location = await $('[data-testid="onboarding-home-path"]')
