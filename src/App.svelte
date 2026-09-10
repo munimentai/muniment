@@ -152,6 +152,7 @@
   let markerStartupLocalMode = null
   let markerStartupReady = Promise.resolve(false)
   let startupReady = Promise.resolve()
+  let retryStartup = false
   const macOS = navigator.platform.startsWith('Mac')
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
@@ -692,8 +693,10 @@
       if (version !== authRequestVersion) return
       auth = statusState(status)
       if (auth.name === 'signed-in') await chatController.loadHistory()
+      return true
     } catch (err) {
       if (version === authRequestVersion) auth = errorState(action, err)
+      return false
     }
   }
 
@@ -722,8 +725,10 @@
       auth = { name: 'local', subject: null }
       await refreshProviderStatuses()
       await chatController.loadHistory()
+      return true
     } catch (_) {
       localEntryError = 'Local mode could not start. Try again.'
+      return false
     } finally {
       localEntryPending = false
     }
@@ -770,6 +775,25 @@
 
   function openLoginItems() {
     void tauri.invoke('open_login_items').catch(() => console.error('Login Items failed to open.'))
+  }
+
+  function startWorkspace() {
+    markerStartupReady = tauri.invoke('local_mode_status')
+    startupReady = markerStartupReady.then(async (active) => {
+      markerStartupLocalMode = active
+      if (active) {
+        auth = { name: 'local', subject: null }
+        void refreshProviderStatuses()
+        await chatController.loadHistory()
+      } else {
+        await run('status')
+      }
+      return true
+    }).catch(() => {
+      auth = { name: 'signed-out' }
+      localEntryError = 'Local mode could not be checked. Try again.'
+      return false
+    })
   }
 
   onMount(() => {
@@ -847,24 +871,12 @@
     })
     if (tauri) {
       void startDesktopClientStatus()
-      markerStartupReady = tauri.invoke('local_mode_status')
+      startWorkspace()
       if (navigator.userAgent.includes('Macintosh')) {
         void tauri.invoke('runtime_service_activation').then((activation) => {
           runtimeServiceActivation = activation
         }).catch(() => console.error('Runtime service activation failed.'))
       }
-      startupReady = markerStartupReady.then((active) => {
-        markerStartupLocalMode = active
-        if (active) {
-          auth = { name: 'local', subject: null }
-          void refreshProviderStatuses()
-          return chatController.loadHistory()
-        }
-        return run('status')
-      }).catch(() => {
-        auth = { name: 'signed-out' }
-        localEntryError = 'Local mode could not be checked. Try again.'
-      })
       chatController.start()
       entitlementToast.start()
       voiceShortcutManager.start()
@@ -990,10 +1002,18 @@
   }
 
   async function openFirstRunModelSettings() {
-    await startupReady
-    if (auth.name === 'error' && auth.retry === 'status') await run('status')
-    if (auth.name === 'signed-out') await enterLocalMode()
-    if (!workspaceMode()) throw new Error('Model settings are unavailable.')
+    if (retryStartup) startWorkspace()
+    retryStartup = await startupReady === false
+    if (retryStartup) throw new Error('Muniment could not finish startup. Open model settings again.')
+    if (auth.name === 'error' && auth.retry === 'status' && await run('status') === false) {
+      throw new Error('Muniment could not read session status. Open model settings again.')
+    }
+    if (auth.name === 'signed-out' && await enterLocalMode() === false) {
+      throw new Error('Muniment could not enter local mode. Open model settings again.')
+    }
+    if (!workspaceMode() || desktopClientStatus?.connected !== true) {
+      throw new Error('The runtime is not connected yet. Open model settings again.')
+    }
     onboarding = { name: 'complete', homePath: onboarding.homePath }
   }
 

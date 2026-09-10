@@ -8,6 +8,8 @@
   let panel = $state(null)
   let report = $state(null)
   let scanError = $state('')
+  let modelError = $state('')
+  let modelOpening = $state(false)
   let busy = $state(false)
   let picking = $state(false)
   let homeRequest = 0
@@ -37,13 +39,14 @@
   }
 
   async function chooseHome() {
-    if (busy || picking) return
+    if (busy || picking || modelOpening) return
     picking = true
     const request = homeRequest
     try {
       const picked = await open({ directory: true, multiple: false, defaultPath: onboarding.homePath || undefined })
       if (request === homeRequest && typeof picked === 'string' && picked.trim()) {
         homeRequest += 1
+        modelError = ''
         onboarding = { ...onboarding, name: settings ? 'settings' : 'choosing', homePath: picked, configured: false, error: undefined }
       }
     } catch (_) {
@@ -80,14 +83,15 @@
   }
 
   async function openModelSettings() {
-    if (busy) return
-    busy = true
+    if (busy || picking || modelOpening) return
+    modelOpening = true
+    modelError = ''
     try {
       await onready()
-    } catch (_) {
-      onboarding = { ...onboarding, error: 'Muniment could not open model settings. Try again.' }
+    } catch (error) {
+      modelError = error instanceof Error ? error.message : String(error)
     } finally {
-      busy = false
+      modelOpening = false
     }
   }
 
@@ -115,7 +119,7 @@
       <h1>Home settings</h1>
       <p class="path" data-testid="onboarding-home-path">{onboarding.homePath}</p>
       <div class="actions">
-        <button data-testid="onboarding-picker" onclick={chooseHome} disabled={busy || picking}>Change folder…</button>
+        <button data-testid="onboarding-picker" onclick={chooseHome} disabled={busy || picking || modelOpening}>Change folder…</button>
         <button data-testid="onboarding-cancel" onclick={() => { homeRequest += 1; onboarding = onboardingCancelSettingsState(onboarding) }} disabled={busy || picking}>Cancel</button>
         <button class="primary" onclick={send} disabled={busy || picking}>Save Home</button>
       </div>
@@ -138,8 +142,9 @@
           <h2 id="model-title">Connect a model</h2>
           <p>No free hosted model exists at the no-account tier.</p>
           <p>Use your own provider key or a local server.</p>
+          {#if modelError}<p class="error" role="alert">{modelError}</p>{/if}
           {#if onboarding.configured}
-            <button onclick={openModelSettings} disabled={busy}>Open model settings</button>
+            <button onclick={openModelSettings} disabled={busy || picking || modelOpening}>Open model settings</button>
           {/if}
         </section>
       {:else if panel === 'home'}
@@ -147,7 +152,7 @@
           <h2 id="home-title">Home</h2>
           <p class="path">{onboarding.homePath}</p>
           <p>The first Send creates memory/, agents/, projects/, and sessions/.</p>
-          <button data-testid="onboarding-picker" onclick={chooseHome} disabled={busy || picking}>Change folder…</button>
+          <button data-testid="onboarding-picker" onclick={chooseHome} disabled={busy || picking || modelOpening}>Change folder…</button>
           {#if !onboarding.homePath}<button onclick={loadHome} disabled={busy || picking}>Retry Home</button>{/if}
         </section>
       {:else if panel === 'scan'}

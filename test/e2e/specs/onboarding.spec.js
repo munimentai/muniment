@@ -116,8 +116,16 @@ describe('installed nightly model-ready onboarding', () => {
         timeoutMsg: 'model settings did not appear after the first Send',
       })
     } catch (waitError) {
-      throw new Error(`${waitError.message} ${await shellState()}`)
+      let failure = 'Muniment could not read the model settings panel.'
+      try {
+        const panel = await $('#onboarding-model-panel')
+        failure = await panel.isExisting() ? await panel.getText() : 'The model settings panel is absent.'
+      } catch {}
+      throw new Error(`${waitError.message} Model settings: ${failure} ${await shellState()}`)
     }
+    expect(await (await $('#provider-key')).isDisplayed()).toBe(true)
+    expect(await (await $('button=Save key')).isDisplayed()).toBe(true)
+    expect(await (await $('[aria-label="First-run settings"]')).isExisting()).toBe(false)
 
     const row = await $('header.titlebar')
     expect((await row.getSize()).height).toBe(36)

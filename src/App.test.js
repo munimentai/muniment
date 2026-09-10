@@ -2200,6 +2200,14 @@ describe('new thread', () => {
 })
 
 describe('Home onboarding', () => {
+  beforeEach(() => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'attach_listener_status') return Promise.resolve({ connected: true, supervisor_running: true })
+      return original(command, payload)
+    })
+  })
+
   function firstRun() {
     homeStatus = { configured: false, homePath: '/Documents/Muniment' }
   }
@@ -2313,7 +2321,11 @@ describe('Home onboarding', () => {
     render(App)
     await firstSend()
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not open model settings. Try again.')
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Muniment could not enter local mode. Open model settings again.')
+    expect(alert.closest('#onboarding-model-panel')).not.toBeNull()
+    expect(alert).toHaveClass('error')
+    expect(screen.getByRole('button', { name: 'Open model settings' })).toBeEnabled()
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
     fail = false
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
@@ -2337,10 +2349,10 @@ describe('Home onboarding', () => {
     })
     render(App)
     await firstSend()
-    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(1)
-    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not open model settings. Try again.')
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(2)
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not read session status. Open model settings again.')
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(3)
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
     expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
 
@@ -2348,8 +2360,13 @@ describe('Home onboarding', () => {
     const openSettings = screen.getByRole('button', { name: 'Open model settings' })
     await fireEvent.click(openSettings)
     expect(openSettings).toBeDisabled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).not.toHaveAttribute('aria-disabled', 'true')
+    await fireEvent.click(send)
+    expect(screen.getByRole('button', { name: 'Open model settings' })).toBe(openSettings)
     await fireEvent.click(openSettings)
-    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(3)
+    expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(4)
     recovered.resolve({ signed_in: signedIn, subject: signedIn ? 'token-subject' : null })
     await waitFor(() => expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument())
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
@@ -2357,6 +2374,104 @@ describe('Home onboarding', () => {
     else expect(await screen.findByText('Local mode')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
     expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
+  })
+
+  it('names a failed startup wait and retries startup without losing the draft', async () => {
+    firstRun()
+    const startup = deferred()
+    localModeStatus = startup.promise
+    render(App)
+    await firstSend()
+    let openSettings = screen.getByRole('button', { name: 'Open model settings' })
+    await fireEvent.click(openSettings)
+    expect(openSettings).toBeDisabled()
+    await fireEvent.click(screen.getByTestId('onboarding-home-path'))
+    expect(screen.getByTestId('onboarding-picker')).toBeDisabled()
+    await fireEvent.click(screen.getByTestId('onboarding-model'))
+    openSettings = screen.getByRole('button', { name: 'Open model settings' })
+    expect(openSettings).toBeDisabled()
+    expect(invoke).not.toHaveBeenCalledWith('auth_status')
+    expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled', 'true')
+
+    startup.reject(new Error('marker unavailable'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not finish startup. Open model settings again.')
+    expect(openSettings).toBeEnabled()
+    expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+
+    localModeStatus = false
+    await fireEvent.click(openSettings)
+    await waitFor(() => expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument())
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
+  })
+
+  it('keeps the control when local mode succeeds but the workspace is not ready', async () => {
+    firstRun()
+    const providers = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'auth_status') return Promise.resolve({ signed_in: false, subject: null })
+      if (command === 'local_mode_enter') return Promise.resolve()
+      if (command === 'local_mode_provider_status') return providers.promise
+      return original(command, payload)
+    })
+    render(App)
+    await firstSend()
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_provider_status'))
+    desktopClientListener({ payload: { connected: false, supervisor_running: true } })
+    providers.resolve([])
+    expect(await screen.findByRole('alert')).toHaveTextContent('The runtime is not connected yet. Open model settings again.')
+    expect(screen.getByRole('button', { name: 'Open model settings' })).toBeEnabled()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByLabelText('First-run settings')).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+
+    desktopClientListener({ payload: { connected: true, supervisor_running: true } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    expect(invoke.mock.calls.filter(([command]) => command === 'local_mode_enter')).toHaveLength(1)
+  })
+
+  it('keeps the control after local entry while the first runtime status read stays pending', async () => {
+    firstRun()
+    const status = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'attach_listener_status') return status.promise
+      if (command === 'auth_status') return Promise.resolve({ signed_in: false, subject: null })
+      if (command === 'local_mode_enter') return Promise.resolve()
+      if (command === 'local_mode_provider_status') return Promise.resolve([])
+      return original(command, payload)
+    })
+    render(App)
+    await firstSend()
+    await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
+    expect(invoke).toHaveBeenCalledWith('attach_listener_status')
+    expect(invoke).toHaveBeenCalledWith('local_mode_enter')
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('The runtime is not connected yet. Open model settings again.')
+    expect(alert.closest('#onboarding-model-panel')).not.toBeNull()
+    const openSettings = screen.getByRole('button', { name: 'Open model settings' })
+    expect(openSettings).toBeEnabled()
+    expect(screen.getByLabelText('First-run settings')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled', 'true')
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+
+    await fireEvent.click(openSettings)
+    expect(await screen.findByRole('alert')).toHaveTextContent('The runtime is not connected yet. Open model settings again.')
+    expect(openSettings).toBeEnabled()
+    status.resolve({ connected: true, supervisor_running: true })
+    await fireEvent.click(openSettings)
+    expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
+    expect(invoke.mock.calls.filter(([command]) => command === 'local_mode_enter')).toHaveLength(1)
   })
 
   it('lists one row per assistant and combines roots without any import mode controls', async () => {
