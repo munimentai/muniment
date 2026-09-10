@@ -11,6 +11,12 @@ collect_macos_runtime_diagnostics() {
   else
     printf 'No runtime log exists for this user.\n' >"$output/runtime.log" || return 1
   fi
+  local runtime_service_log="${runtime_log%/*}/runtime-service.log"
+  if [[ -f $runtime_service_log ]]; then
+    tail -c 262144 "$runtime_service_log" >"$output/runtime-service.log" || return 1
+  else
+    printf 'No runtime service log exists for this user.\n' >"$output/runtime-service.log" || return 1
+  fi
 }
 
 probe_macos_runtime() {

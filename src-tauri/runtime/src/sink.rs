@@ -10,6 +10,7 @@ use muniment_core::chat_profile::ChatProfile;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{ChatEvent, ChatEventSink, ChatEventSubscription};
+use muniment_core::runtime_eprintln as eprintln;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 
 pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
