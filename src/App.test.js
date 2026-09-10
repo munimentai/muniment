@@ -975,6 +975,45 @@ describe('workspace composer entry', () => {
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
+  it.each(['System', 'Light', 'Dark'])('persists %s from the local appearance control across remounts', async (label) => {
+    localModeStatus = true
+    localStorage.setItem('muniment.theme', 'light')
+    render(App)
+    const appearance = within(await screen.findByRole('group', { name: 'Appearance' }))
+    expect(appearance.getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
+    expect(appearance.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
+
+    await fireEvent.click(appearance.getByRole('button', { name: label }))
+    expect(localStorage.getItem('muniment.theme')).toBe(label.toLowerCase())
+    expect(document.documentElement.dataset.theme).toBe(label === 'System' ? undefined : label.toLowerCase())
+    expect(appearance.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
+
+    cleanup()
+    render(App)
+    const restored = within(await screen.findByRole('group', { name: 'Appearance' }))
+    expect(restored.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    expect(screen.queryByRole('group', { name: 'Appearance' })).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
+    expect(within(screen.getByRole('group', { name: 'Appearance' })).getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
+    expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
+    delete document.documentElement.dataset.theme
+  })
+
+  it('keeps the local appearance control usable when storage is unavailable', async () => {
+    localModeStatus = true
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Storage unavailable') })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage unavailable') })
+    render(App)
+    const appearance = within(await screen.findByRole('group', { name: 'Appearance' }))
+    expect(appearance.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true')
+    await fireEvent.click(appearance.getByRole('button', { name: 'Dark' }))
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(appearance.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true')
+    await fireEvent.click(appearance.getByRole('button', { name: 'System' }))
+    expect(document.documentElement).not.toHaveAttribute('data-theme')
+  })
+
   it('enters local mode and saves a provider key', async () => {
     let providerStatusChecks = 0
     invoke.mockImplementation(async (command) => {
