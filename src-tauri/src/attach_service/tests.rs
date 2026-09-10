@@ -2070,7 +2070,9 @@ mod cases {
                 "0.0.1",
                 identity,
                 credential.as_deref(),
-                Duration::from_secs(1),
+                // Match the production client's five-second I/O budget. Workspace
+                // onboarding syncs scaffold files to disk before it replies.
+                Duration::from_secs(5),
                 Duration::from_secs(1),
                 || {},
             );

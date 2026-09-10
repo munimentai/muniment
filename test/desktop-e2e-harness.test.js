@@ -2666,6 +2666,7 @@ describe('installed local-mode chat contract', () => {
   const config = fs.readFileSync(path.join(root, 'test/e2e/wdio.conf.js'), 'utf8')
   const spec = fs.readFileSync(path.join(root, 'test/e2e/specs/local-mode-chat.spec.js'), 'utf8')
   const localProvider = fs.readFileSync(path.join(root, 'test/e2e/support/local-provider.mjs'), 'utf8')
+  const firstRun = fs.readFileSync(path.join(root, 'test/e2e/support/first-run.mjs'), 'utf8')
 
   it('runs local mode first without bailing after sign-in failures', () => {
     expect(config.indexOf("'./specs/local-mode-chat.spec.js'")).toBeLessThan(config.indexOf("'./specs/real-sign-in.spec.js'"))
@@ -2678,10 +2679,23 @@ describe('installed local-mode chat contract', () => {
     expect(localProvider).toContain('10.1.10.105')
     expect(spec).toContain("import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'")
     expect(spec).not.toContain('MUNIMENT_E2E_PROVIDER_KEY')
-    expect(spec).toContain("$('button=Open model settings')")
+    expect(spec).toContain("import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'")
+    expect(spec).toContain('await openFirstRunModelSettings()')
+    expect(firstRun).toContain("panel.$('button=Open model settings')")
+    expect(firstRun).toContain("$('#onboarding-model-panel')")
     expect(spec).toContain("$('button=Save Ollama server')")
     expect(spec).toContain("response.$('.response-prose.streaming')")
     expect(spec).not.toContain('browser.tauri.mock')
+  })
+})
+
+describe('The installed specs use first-run selectors.', () => {
+  it.each(['local-mode-chat', 'onboarding', 'real-sign-in'])('The %s spec uses the first-run model panel.', (name) => {
+    const spec = fs.readFileSync(path.join(root, `test/e2e/specs/${name}.spec.js`), 'utf8')
+    expect(spec).not.toContain('#local-account-title')
+    expect(spec).not.toContain('input[name="provider"]')
+    expect(spec).toContain('await openFirstRunModelSettings()')
+    expect(spec).toContain('[data-testid="local-mode"]')
   })
 })
 
