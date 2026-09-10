@@ -18,6 +18,12 @@ const OLLAMA_PROVIDER: &str = "ollama";
 const OLLAMA_MODEL: &str = "llama3.2:latest";
 const AUTH_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const AUTH_LOCK_RETRY: Duration = Duration::from_millis(20);
+const READ_SETTINGS_ERROR: &str =
+    "Muniment cannot read provider settings. Check folder access, then retry.";
+const SAVE_SETTINGS_ERROR: &str =
+    "Muniment cannot save provider settings. Check folder access, then retry.";
+const SETTINGS_DIRECTORY_ERROR: &str =
+    "The settings folder is invalid. Check its location, then retry.";
 
 struct PiAuthLock(PathBuf);
 
@@ -51,7 +57,7 @@ fn lock_pi_auth_file(auth_file: &Path) -> Result<PiAuthLock, String> {
             {
                 std::thread::sleep(AUTH_LOCK_RETRY);
             }
-            Err(_) => return Err("Pi credentials could not be saved.".into()),
+            Err(_) => return Err(SAVE_SETTINGS_ERROR.into()),
         }
     }
 }
@@ -92,7 +98,7 @@ fn pi_auth_file(
 ) -> Result<PathBuf, String> {
     pi_agent_directory(home_directory, agent_directory)
         .map(|directory| directory.join("auth.json"))
-        .map_err(|_| "The Pi agent directory is invalid.".to_string())
+        .map_err(|_| SETTINGS_DIRECTORY_ERROR.to_string())
 }
 
 fn pi_models_file(
@@ -101,7 +107,7 @@ fn pi_models_file(
 ) -> Result<PathBuf, String> {
     pi_agent_directory(home_directory, agent_directory)
         .map(|directory| directory.join("models.json"))
-        .map_err(|_| "The Pi agent directory is invalid.".to_string())
+        .map_err(|_| SETTINGS_DIRECTORY_ERROR.to_string())
 }
 
 fn pi_settings_file(models_file: &Path) -> PathBuf {
@@ -118,19 +124,18 @@ fn read_json_store(
         match parent.try_exists() {
             Ok(true) => {}
             Ok(false) => return Ok(None),
-            Err(_) => return Err("Pi credentials could not be read.".into()),
+            Err(_) => return Err(READ_SETTINGS_ERROR.into()),
         }
     }
-    let _lock =
-        lock_pi_auth_file(path).map_err(|_| "Pi credentials could not be read.".to_string())?;
+    let _lock = lock_pi_auth_file(path).map_err(|_| READ_SETTINGS_ERROR.to_string())?;
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("Pi credentials could not be read.".into()),
+        Err(_) => return Err(READ_SETTINGS_ERROR.into()),
     };
     serde_json::from_slice(&bytes)
         .map(Some)
-        .map_err(|_| "Pi credentials could not be read.".to_string())
+        .map_err(|_| READ_SETTINGS_ERROR.to_string())
 }
 
 fn provider_status(auth_file: &Path, models_file: &Path) -> Result<Vec<ProviderStatus>, String> {
@@ -169,8 +174,8 @@ fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(),
     }
     let parent = auth_file
         .parent()
-        .ok_or_else(|| "Pi credentials could not be saved.".to_string())?;
-    fs::create_dir_all(parent).map_err(|_| "Pi credentials could not be saved.".to_string())?;
+        .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
+    fs::create_dir_all(parent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     if !auth_file.exists() {
         let mut options = OpenOptions::new();
         options.create_new(true).write(true);
@@ -185,22 +190,21 @@ fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(),
         {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(_) => return Err("Pi credentials could not be saved.".into()),
+            Err(_) => return Err(SAVE_SETTINGS_ERROR.into()),
         }
     }
     let _lock = lock_pi_auth_file(auth_file)?;
     let mut auth = match fs::read(auth_file) {
         Ok(bytes) => serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&bytes)
-            .map_err(|_| "Pi credentials could not be saved.".to_string())?,
+            .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
-        Err(_) => return Err("Pi credentials could not be saved.".into()),
+        Err(_) => return Err(SAVE_SETTINGS_ERROR.into()),
     };
     auth.insert(
         provider.to_owned(),
         serde_json::json!({"type": "api_key", "key": key}),
     );
-    let bytes = serde_json::to_vec_pretty(&auth)
-        .map_err(|_| "Pi credentials could not be saved.".to_string())?;
+    let bytes = serde_json::to_vec_pretty(&auth).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let temporary = auth_file.with_extension(format!("tmp-{}", Uuid::new_v4()));
     let result = (|| {
         let mut options = OpenOptions::new();
@@ -218,7 +222,7 @@ fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(),
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    result.map_err(|_| "Pi credentials could not be saved.".into())
+    result.map_err(|_| SAVE_SETTINGS_ERROR.into())
 }
 
 fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String> {
@@ -238,21 +242,20 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
 
     let parent = models_file
         .parent()
-        .ok_or_else(|| "Pi provider settings could not be saved.".to_string())?;
-    fs::create_dir_all(parent)
-        .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
+        .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
+    fs::create_dir_all(parent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let settings_file = pi_settings_file(models_file);
-    let _models_lock = lock_pi_auth_file(models_file)
-        .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
+    let _models_lock =
+        lock_pi_auth_file(models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let settings_lock = muniment_core::pi_settings::lock_settings(&settings_file)
-        .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let mut models = read_json_for_update(models_file)?;
     let mut settings = read_json_for_update(&settings_file)?;
     let providers = models
         .entry("providers")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
-        .ok_or_else(|| "Pi provider settings could not be saved.".to_string())?;
+        .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
     providers.insert(
         OLLAMA_PROVIDER.to_owned(),
         serde_json::json!({
@@ -273,17 +276,16 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
     // Write the route first. A later models write failure cannot fall back to a cloud model.
     settings_lock
         .check()
-        .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     write_json_for_update(&settings_file, &settings)?;
     write_json_for_update(models_file, &models)
 }
 
 fn read_json_for_update(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|_| "Pi provider settings could not be saved.".to_string()),
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| SAVE_SETTINGS_ERROR.to_string()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
-        Err(_) => Err("Pi provider settings could not be saved.".into()),
+        Err(_) => Err(SAVE_SETTINGS_ERROR.into()),
     }
 }
 
@@ -291,8 +293,7 @@ fn write_json_for_update(
     path: &Path,
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(root)
-        .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
+    let bytes = serde_json::to_vec_pretty(root).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let temporary = path.with_extension(format!("tmp-{}", Uuid::new_v4()));
     let result = (|| {
         let mut options = OpenOptions::new();
@@ -310,7 +311,7 @@ fn write_json_for_update(
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    result.map_err(|_| "Pi provider settings could not be saved.".into())
+    result.map_err(|_| SAVE_SETTINGS_ERROR.into())
 }
 
 #[tauri::command]
@@ -343,7 +344,7 @@ pub(crate) fn local_mode_provider_status(
     let home_directory = app
         .path()
         .home_dir()
-        .map_err(|_| "Pi credentials could not be read.".to_string())?;
+        .map_err(|_| READ_SETTINGS_ERROR.to_string())?;
     let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
     let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref())?;
     let models_file = pi_models_file(&home_directory, agent_directory.as_deref())?;
@@ -359,7 +360,7 @@ pub(crate) fn local_mode_store_provider_key(
     let home_directory = app
         .path()
         .home_dir()
-        .map_err(|_| "Pi credentials could not be saved.".to_string())?;
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
     let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref())?;
     store_provider_key(&auth_file, &provider, &key)
@@ -373,7 +374,7 @@ pub(crate) fn local_mode_store_local_provider(
     let home_directory = app
         .path()
         .home_dir()
-        .map_err(|_| "Pi provider settings could not be saved.".to_string())?;
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
     let models_file = pi_models_file(&home_directory, agent_directory.as_deref())?;
     store_local_provider(&models_file, &base_url)
@@ -489,7 +490,7 @@ mod tests {
 
         assert_eq!(
             provider_status(&auth_file, &directory.join("models.json")).unwrap_err(),
-            "Pi credentials could not be read."
+            "Muniment cannot read provider settings. Check folder access, then retry."
         );
         fs::remove_dir_all(directory).unwrap();
     }
@@ -502,7 +503,7 @@ mod tests {
 
         assert_eq!(
             provider_status(&auth_file, &directory.join("models.json")).unwrap_err(),
-            "Pi credentials could not be read."
+            "Muniment cannot read provider settings. Check folder access, then retry."
         );
         fs::remove_dir_all(directory).unwrap();
     }

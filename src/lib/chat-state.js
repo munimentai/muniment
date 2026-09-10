@@ -101,7 +101,7 @@ export function toolStatus(activity = {}) {
 const generating = 'Generating a reply.'
 
 const runPhaseAnnouncements = {
-  'acquiring-pi': 'Pi installation is in progress. The reply will start when Pi is ready.',
+  'acquiring-pi': 'Reply setup has started. Please wait.',
   thinking: generating,
   streaming: generating,
   'pending-permission': 'Waiting for your decision.',
