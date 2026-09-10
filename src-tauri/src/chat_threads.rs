@@ -996,8 +996,7 @@ mod tests {
             "thread.deleted"
         );
 
-        let endpoint =
-            std::env::temp_dir().join(format!("muniment-client-{}.sock", Uuid::now_v7()));
+        let endpoint = crate::test_support::socket_temp_path();
         let listener = UnixListener::bind(&endpoint).unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
