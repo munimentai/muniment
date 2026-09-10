@@ -1,5 +1,7 @@
 mod cases {
     use super::super::*;
+    #[cfg(unix)]
+    use crate::test_support::socket_temp_path;
     use crate::test_support::{append_test_event, FakeRunStartBoundaries};
     use muniment_core::attach::{
         decode_frame, encode_frame, Authorization, ErrorCode, ErrorMessage, Id, Protocol, Response,
@@ -291,7 +293,7 @@ mod cases {
     #[test]
     fn macos_starts_both_desktop_supervisors_without_a_listener() {
         let state = AttachCompanionState::default();
-        let endpoint = std::env::temp_dir().join(format!("mt-macos-client-{}", std::process::id()));
+        let endpoint = socket_temp_path();
         let _ = std::fs::remove_file(&endpoint);
         assert!(!endpoint.exists());
         let client_endpoint = endpoint.clone();
@@ -334,10 +336,10 @@ mod cases {
     }
 
     #[cfg(target_os = "linux")]
-    fn handoff_test_runtime(name: &str) -> PathBuf {
+    fn handoff_test_runtime() -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
-        let runtime = std::env::temp_dir().join(format!("mt-{name}-{}", Uuid::now_v7().simple()));
+        let runtime = socket_temp_path();
         std::fs::create_dir(&runtime).unwrap();
         std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
         runtime
@@ -360,8 +362,7 @@ mod cases {
         let state = AttachCompanionState::default();
         let starts = Arc::new(AtomicUsize::new(0));
         let worker = Arc::new(Mutex::new(None));
-        let endpoint =
-            std::env::temp_dir().join(format!("mt-presenter-{}", Uuid::now_v7().simple()));
+        let endpoint = socket_temp_path();
 
         for _ in 0..2 {
             let starts = starts.clone();
@@ -438,7 +439,7 @@ mod cases {
 
         let state = AttachCompanionState::default();
         let starts = Arc::new(AtomicUsize::new(0));
-        let endpoint = std::env::temp_dir().join(format!("mt-client-{}", Uuid::now_v7().simple()));
+        let endpoint = socket_temp_path();
 
         for _ in 0..2 {
             let starts = starts.clone();
@@ -577,8 +578,7 @@ mod cases {
             decode_frame(&frame).unwrap().unwrap().0
         }
 
-        let endpoint =
-            std::env::temp_dir().join(format!("muniment-chat-events-{}.sock", Uuid::now_v7()));
+        let endpoint = socket_temp_path();
         let listener = UnixListener::bind(&endpoint).unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
@@ -667,8 +667,7 @@ mod cases {
             fn listen(socket: i32, backlog: i32) -> i32;
         }
 
-        let endpoint =
-            std::env::temp_dir().join(format!("muniment-chat-events-{}.sock", Uuid::now_v7()));
+        let endpoint = socket_temp_path();
         let listener = UnixListener::bind(&endpoint).unwrap();
         // SAFETY: `listener` owns a valid Unix socket descriptor.
         assert_eq!(unsafe { listen(listener.as_raw_fd(), 0) }, 0);
@@ -809,7 +808,7 @@ mod cases {
     fn release_step_confirms_a_runtime_listener_after_desktop_release() {
         use std::os::unix::net::UnixListener;
 
-        let runtime = handoff_test_runtime("handoff-confirmed");
+        let runtime = handoff_test_runtime();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         let endpoint = filesystem.endpoint_path().to_owned();
         let listener = Arc::new(
@@ -877,7 +876,7 @@ mod cases {
         use std::os::unix::net::UnixStream;
         use std::sync::mpsc;
 
-        let runtime = handoff_test_runtime("handoff-restart");
+        let runtime = handoff_test_runtime();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         let endpoint = filesystem.endpoint_path().to_owned();
         let listener = Arc::new(
@@ -978,7 +977,7 @@ mod cases {
     fn listener_stop_releases_transport_and_instance_lock() {
         use std::os::unix::fs::PermissionsExt;
 
-        let runtime = std::env::temp_dir().join(format!("mt-stop-{}", Uuid::now_v7().simple()));
+        let runtime = socket_temp_path();
         std::fs::create_dir(&runtime).unwrap();
         std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
@@ -1024,7 +1023,7 @@ mod cases {
     #[cfg(target_os = "linux")]
     #[test]
     fn held_instance_lock_leaves_chat_storage_deferred_without_reconciliation() {
-        let runtime = handoff_test_runtime("storage-deferred");
+        let runtime = handoff_test_runtime();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         let instance_lock = filesystem.acquire_instance_lock().unwrap();
         let listener = Arc::new(
@@ -1054,7 +1053,7 @@ mod cases {
     #[cfg(target_os = "linux")]
     #[test]
     fn listener_ownership_opens_chat_storage_and_reconciles_once() {
-        let runtime = handoff_test_runtime("storage-owned");
+        let runtime = handoff_test_runtime();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         let listener = Arc::new(
             AttachListenerState::load(&runtime.join(COMPANION_CREDENTIAL_FILE_NAME)).unwrap(),
@@ -1100,7 +1099,7 @@ mod cases {
         use muniment_attach::connect_approval_presenter_at;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let runtime = handoff_test_runtime("presenter-refused");
+        let runtime = handoff_test_runtime();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
         let endpoint = filesystem.endpoint_path().to_owned();
         let listener = Arc::new(
@@ -1144,7 +1143,7 @@ mod cases {
     fn listener_stop_requested_before_publication_closes_listener_and_waits_for_release() {
         use std::os::unix::fs::PermissionsExt;
 
-        let runtime = std::env::temp_dir().join(format!("mt-early-stop-{}", Uuid::now_v7()));
+        let runtime = socket_temp_path();
         std::fs::create_dir(&runtime).unwrap();
         std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
@@ -1193,7 +1192,7 @@ mod cases {
         use std::os::unix::fs::PermissionsExt;
         use std::sync::mpsc;
 
-        let runtime = std::env::temp_dir().join(format!("mt-bind-stop-{}", Uuid::now_v7()));
+        let runtime = socket_temp_path();
         std::fs::create_dir(&runtime).unwrap();
         std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
         let filesystem = AttachFilesystem::from_runtime_directory(&runtime).unwrap();
@@ -1320,8 +1319,7 @@ mod cases {
             decode_frame(&frame).unwrap().unwrap().0
         }
 
-        let endpoint =
-            std::env::temp_dir().join(format!("muniment-companion-client-{}.sock", Uuid::now_v7()));
+        let endpoint = socket_temp_path();
         let listener = UnixListener::bind(&endpoint).unwrap();
         let (request_tx, request_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -2027,8 +2025,7 @@ mod cases {
         let connect = |identity: &'static str,
                        credential: Option<String>,
                        boundaries: FakeRunStartBoundaries| {
-            let runtime =
-                std::env::temp_dir().join(format!("mt-attach-{}", Uuid::now_v7().simple()));
+            let runtime = socket_temp_path();
             std::fs::create_dir(&runtime).unwrap();
             std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
             runtime_dirs.borrow_mut().push(runtime.clone());
