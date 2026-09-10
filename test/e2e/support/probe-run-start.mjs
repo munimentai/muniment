@@ -33,21 +33,21 @@ export function probeRunStart(executable, endpoint, profile, config, desktopLog,
       encoding: 'utf8', timeout: 80_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
     })
     if (result.error || result.status !== 0 || result.signal) {
-      throw new Error('The installed desktop run-start probe failed.')
+      throw new Error(`The executable check failed: status=${result.status ?? null} signal=${JSON.stringify(result.signal ?? null)} error=${JSON.stringify(result.error?.message ?? null)} stderr_tail=${JSON.stringify((result.stderr ?? '').slice(-4096))}`)
     }
     const runId = result.stdout.trim()
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(runId)) {
-      throw new Error('The run-start probe returned an invalid run ID.')
+      throw new Error(`The run ID check failed: run_id=${JSON.stringify(runId)}`)
     }
     const { count } = journal.prepare(
       "SELECT COUNT(*) AS count FROM events WHERE rowid > ? AND run_id = ? AND event_type = 'run.started'",
     ).get(lastRow, runId)
-    if (count !== 1) throw new Error('The journal has no new run.started row for the probe.')
+    if (count !== 1) throw new Error(`The journal check failed: run_started_rows=${count}`)
 
     const connections = fs.readFileSync(desktopLog, 'utf8').split(/\r?\n/)
       .filter((line) => line.startsWith('desktop runtime client connected='))
     if (connections.length !== 1 || connections[0] !== 'desktop runtime client connected=true') {
-      throw new Error('The desktop connection did not stay open for the idle probe.')
+      throw new Error(`The connection check failed: connections=${JSON.stringify(connections)}`)
     }
   } finally {
     try {
@@ -58,12 +58,16 @@ export function probeRunStart(executable, endpoint, profile, config, desktopLog,
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function main(args, execute = spawnSync) {
   try {
-    probeRunStart(...process.argv.slice(2))
+    probeRunStart(...args, execute)
     process.stdout.write('run_start_probe=passed\n')
-  } catch {
-    process.stderr.write('run_start_probe=failed\n')
+  } catch (error) {
+    process.stderr.write(`run_start_probe=failed\nrun_start_probe_error=${error.message}\n`)
     process.exitCode = 1
   }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2))
 }
