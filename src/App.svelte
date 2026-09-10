@@ -6,6 +6,7 @@
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
 
   import AccessPanel from './lib/AccessPanel.svelte'
+  import Appearance from './lib/Appearance.svelte'
   import AssistantMarkdown from './lib/AssistantMarkdown.svelte'
   import CodeDiff from './lib/CodeDiff.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
@@ -1119,6 +1120,7 @@
           {:else if !sidebarCollapsed && auth.name === 'local'}
             <section class="local-account" aria-labelledby="local-account-title">
               <strong id="local-account-title">Local mode</strong>
+              <Appearance />
               <dl class="provider-statuses">
                 {#each providerStatuses as status (status.provider)}
                   <div><dt>{providerNames[status.provider]}</dt><dd>{status.configured ? 'Saved' : 'Not set'}</dd></div>
@@ -1584,7 +1586,7 @@
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
   .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
   .side-action span { flex: 1; }
-  .local-account { display: grid; gap: 7px; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
+  .local-account { display: grid; min-height: 0; overflow-y: auto; gap: 7px; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
   .local-account strong { margin-bottom: 3px; }
   .provider-statuses { display: grid; gap: 4px; margin: 0 0 3px; font: var(--text-12) var(--font-mono); }
   .provider-statuses div { display: flex; justify-content: space-between; gap: 8px; }
