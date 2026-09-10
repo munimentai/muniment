@@ -1,5 +1,8 @@
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "windows-msi-registration.ps1")
+& (Join-Path $PSScriptRoot "windows-msi-registration.tests.ps1")
+
 $bundleRoot = Join-Path $PSScriptRoot "..\src-tauri\target\release\bundle"
 $nsis = @(Get-ChildItem (Join-Path $bundleRoot "nsis") -Filter "*-setup.exe" -File)
 $machineMsi = @(Get-ChildItem (Join-Path $bundleRoot "msi") -Filter "*-machine.msi" -File)
@@ -148,10 +151,24 @@ try {
 } finally {
   Remove-Item -LiteralPath $userMsiLog -Force
 }
-if ($hkcu.Count -ne 1 -or $hklm.Count -ne 0) {
-  throw "Per-user MSI registration requires hkcu=1 hklm=0: hkcu=$($hkcu.Count) hklm=$($hklm.Count)"
+# Windows Installer can store a per-user product's uninstall entry under HKLM.
+# Check its registered context, not the uninstall entry's hive: https://github.com/wixtoolset/issues/issues/9323
+$userRegistrations = @(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid)
+$userRegistrations | ForEach-Object {
+  Write-Host "MSI registration: ProductCode=$($_.ProductCode) Context=$($_.Context) UserSid=$($_.UserSid) State=$($_.State)"
 }
+Assert-PerUserMsiRegistration $userRegistrations $sessionSid
+$userKey = "HKCU:\Software\Muniment\muniment"
+if ((Get-ItemPropertyValue $userKey InstallDir).TrimEnd('\') -ne (Split-Path $userRuntime)) {
+  throw "The per-user MSI must register its LocalAppData install path under HKCU."
+}
+if (Test-Path $machineKey) { throw "The per-user MSI wrote application registration under HKLM." }
 if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
 Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
+if (@(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid).Count -ne 0) {
+  throw "The MSI product registration remains after the per-user uninstall."
+}
+if (Test-Path $userRuntime) { throw "The runtime remains after the per-user MSI uninstall." }
+if (Test-Path $userKey) { throw "The application registration remains after the per-user MSI uninstall." }
 
 Write-Host "Windows silent installer verification OK"
