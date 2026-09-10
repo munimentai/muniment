@@ -2164,6 +2164,18 @@ fn wait_for_empty_journal(storage: &SharedStorage) {
 }
 
 #[test]
+fn desktop_prompt_persistence_requires_the_runtime() {
+    assert_eq!(
+        super::resume::protect_prompt("run", "prompt", Some("owner")).unwrap_err(),
+        auth::background_service_error()
+    );
+    assert!(matches!(
+        super::run_preparation::fetch_grant("access"),
+        Err(FetchGrantError::Unavailable)
+    ));
+}
+
+#[test]
 fn an_uninstalled_retention_trigger_takes_no_check() {
     assert!(!RetentionTrigger::default().check_now());
     let (trigger, checks) = RetentionTrigger::for_test();
@@ -2189,7 +2201,13 @@ fn the_retention_schedule_checks_again_when_a_save_triggers_it() {
     }));
     append_expired_run(&storage, 1);
 
-    let trigger = start_retention_schedule(config_directory, Arc::clone(&storage));
+    let trigger = start_retention_schedule(config_directory, Arc::clone(&storage), |deleted_run| {
+        muniment_core::chat_prompt::delete_prompt(
+            &deleted_run.run_id,
+            deleted_run.subject.as_deref(),
+        )
+        .map_err(|_| RetentionError::BeforeDelete)
+    });
     wait_for_empty_journal(&storage);
 
     append_expired_run(&storage, 2);

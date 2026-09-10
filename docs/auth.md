@@ -2,8 +2,9 @@
 
 The production Muniment handshake is installation-bound native auth. The Rust
 core implements registration, browser authorization, token exchange, refresh,
-session inspection, and coherent keychain persistence. The Tauri `auth_sign_in`
-command composes the live registration, browser, and exchange path. The older generic OIDC flow remains as tested groundwork, but it
+session inspection, and coherent keychain persistence. The runtime owns the credential store and the live native-auth flow.
+The Tauri `auth_sign_in` command sends `session.sign_in` over the attach socket.
+The older generic OIDC flow remains as tested groundwork, but it
 is not the live production handshake (`/.well-known/openid-configuration`
 returns 404 on the control plane).
 
@@ -58,20 +59,22 @@ Tauri command boundary.
 
 ## Tauri native sign-in
 
-`auth_sign_in` runs keychain, network, loopback-listener, browser-launch,
-clock, and random-proof work on a blocking worker. It reuses or registers the
-installation, completes external-browser authorization, exchanges the code,
-and atomically saves the coherent native credential record. Concurrent attempts
-are rejected until the worker exits, including failure paths. Only the existing
-secret-free `AuthStatus` shape is returned to the webview.
+The desktop sends sign-in, sign-out, status, entitlement, and device requests to the runtime over the attach socket.
+It opens no keychain item. A missing runtime returns a service error without a local credential-store fallback.
 
-`auth_status` reads subject and expiry only from that coherent native record
-and performs no network request. `ensure_native_session` and the pre-chat
-credential path refresh at the existing 60-second skew, persist the complete
-rotation, and validate the authoritative native session before reporting a
-signed-in state or using its access token. Missing or refresh-expired native
-credentials report signed out; refresh, transport, and validation failures
-preserve the last coherent record and surface only redacted errors.
+The runtime owns registration, browser authorization, token exchange, renewal, and chat-grant recovery.
+Chat commands use `run.submit` and `run.resume` on that same socket.
+The desktop receives display-only session state. The runtime keeps the tokens and chat grants.
+
+`auth_sign_in` holds its concurrency permit until the blocking attach request ends, including failure paths.
+The webview receives only the secret-free `AuthStatus` shape.
+
+`auth_status` requests `session.status` from the runtime without a cloud request.
+The runtime reads the subject and expiry from the coherent native record.
+Its pre-chat path refreshes at the 60-second skew and persists the complete rotation.
+It validates the authoritative native session before using the access token.
+Missing or refresh-expired native credentials report signed out.
+Refresh, transport, and validation failures preserve the last coherent record and surface only redacted errors.
 
 `auth_entitlement_snapshot` always runs the same authoritative refresh and
 session-inspection path, then returns a display-only projection:
@@ -100,6 +103,26 @@ The native API base defaults to `https://api.muniment.ai` and may be overridden
 for loopback development with `MUNIMENT_API_BASE_URL`. `MUNIMENT_ISSUER` remains
 the legacy OIDC configuration and is accepted as a native fallback during the
 transition.
+
+## macOS keychain verification
+
+The runtime updates an existing item with `SecKeychainItemModifyAttributesAndData`, which preserves its access list.
+Only `errSecItemNotFound` allows creation. A denied lookup or failed update returns an error without deleting the item.
+The core boundary test checks desktop source, including inactive platform code, for credential-store paths and inherited grant-recovery defaults.
+Existing items with a desktop-only access list can still require approval for the runtime.
+
+1. Use a test macOS account with a fresh login keychain.
+2. Install one signed nightly.
+3. Install the next signed nightly over it.
+4. Sign in through the desktop.
+5. After the access token reaches its renewal window, send a cloud message.
+6. Confirm the runtime log shows the native token request.
+7. Restart the app and send another cloud message.
+8. Run `security dump-keychain -a "$HOME/Library/Keychains/login.keychain-db"`.
+9. Attach the `ai.muniment.desktop` / `native-credentials` access entries and the prompt count to the ticket.
+
+The expected count is zero. The decrypt entry trusts the runtime and retains its access list after renewal and restart.
+The Linux tests cannot prove signed macOS keychain behavior.
 
 ## Legacy generic OIDC groundwork
 

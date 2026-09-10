@@ -6,6 +6,8 @@ mod chat;
 mod chat_threads;
 mod dictation;
 mod home;
+#[cfg(target_os = "linux")]
+mod linux_runtime_service;
 mod local_mode;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos_run_start_probe;
@@ -98,7 +100,7 @@ fn main() {
             }
             #[cfg(target_os = "linux")]
             {
-                attach_service::start_attach_listener(app.handle().clone());
+                linux_runtime_service::start_runtime(app.handle());
             }
             #[cfg(target_os = "windows")]
             {

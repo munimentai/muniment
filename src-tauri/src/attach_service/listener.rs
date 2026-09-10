@@ -1,6 +1,22 @@
 use super::*;
 
 #[cfg(target_os = "linux")]
+pub(crate) fn start_runtime_clients<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if app.try_state::<AttachCompanionState>().is_none() {
+        app.manage(AttachCompanionState::default());
+    }
+    register_approval_event_presenter(app);
+    start_approval_presenter(app);
+    start_desktop_client(app);
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn runtime_clients_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    let status = app.state::<AttachCompanionState>().listener_status();
+    status.connected && status.chat_events_connected
+}
+
+#[cfg(target_os = "linux")]
 pub(super) fn should_retry_attach_accept(error: AttachAcceptError) -> bool {
     matches!(
         error,

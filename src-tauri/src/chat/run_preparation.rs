@@ -228,8 +228,9 @@ pub(super) fn map_fetch_grant_error(error: FetchGrantError) -> RunStartError {
     }
 }
 
-pub(super) fn fetch_grant(access_token: &str) -> Result<ChatGrant, FetchGrantError> {
-    core_fetch_grant(&api_base_url(), access_token)
+pub(super) fn fetch_grant(_access_token: &str) -> Result<ChatGrant, FetchGrantError> {
+    // Cloud runs use run.submit on the runtime, including grant recovery.
+    Err(FetchGrantError::Unavailable)
 }
 
 pub(super) fn validate_grant(grant: &ChatGrant) -> Result<(), String> {

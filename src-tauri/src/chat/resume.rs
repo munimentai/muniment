@@ -12,8 +12,8 @@ pub(super) fn protect_prompt(
     prompt: &str,
     subject: Option<&str>,
 ) -> Result<(), String> {
-    muniment_core::chat_prompt::store_prompt(run_id, prompt, subject)
-        .map_err(|_| "Conversation history is unavailable.".to_string())
+    let _ = (run_id, prompt, subject);
+    Err(auth::background_service_error())
 }
 
 pub(crate) fn state_session_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
