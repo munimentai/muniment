@@ -10,11 +10,79 @@ const TOKENS = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->|r(#+)"[\s\S]*?"\1|"(
 const LOG_CALL = /\b(?:console\.(?:debug|info|log|warn|error)|(?:e?println|debug|info|warn|error|trace)!)\s*\(/g
 const blank = (text) => text.replace(/[^\n]/g, ' ')
 
-function withoutLogsAndComments(source) {
-  const tokens = [...source.matchAll(TOKENS)]
+// Keep rendered text out of the script tokenizer. URLs and slashes are text there.
+function copyTokens(source, file) {
+  if (!/\.(?:svelte|js|mjs|jsx|tsx)$/.test(file) && file !== '<fixture>') return [...source.matchAll(TOKENS)]
+  const scriptToken = new RegExp(TOKENS.source, 'y')
+  const tag = /<\/?(?:([a-zA-Z][\w:.-]*)(?:\s+(?:[^<>"']|"[^"]*"|'[^']*')*)?\s*\/?)?>/y
+  const contexts = []
+  const tokens = []
+  let mode = file.endsWith('.svelte') ? 'text' : 'code'
+  let index = 0
+  while (index < source.length) {
+    if (source.startsWith('<!--', index)) {
+      const end = source.indexOf('-->', index + 4)
+      const value = source.slice(index, end < 0 ? source.length : end + 3)
+      tokens.push(Object.assign([value], { index }))
+      index += value.length
+      continue
+    }
+    tag.lastIndex = index
+    const element = tag.exec(source)
+    if (element) {
+      for (const token of element[0].matchAll(TOKENS)) {
+        token.index += index
+        tokens.push(token)
+      }
+      if (element[0].startsWith('</')) {
+        if (contexts.at(-1)?.kind === 'element') mode = contexts.pop().mode
+      } else if (!element[0].endsWith('/>') && !/^(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/.test(element[1])) {
+        const raw = /^(?:script|style)$/.test(element[1])
+        contexts.push({ kind: 'element', mode, rawEnd: raw ? source.indexOf(`</${element[1]}`, index + element[0].length) : -1 })
+        mode = raw ? 'code' : 'text'
+      }
+      index += element[0].length
+      continue
+    }
+    if (mode === 'text') {
+      if (source[index] === '{') {
+        contexts.push({ kind: 'expression', depth: 1 })
+        mode = 'code'
+        index += 1
+      } else {
+        const start = index++
+        while (index < source.length && !/[<{]/.test(source[index])) index += 1
+        tokens.push(Object.assign([source.slice(start, index)], { index: start, rendered: true }))
+      }
+      continue
+    }
+    scriptToken.lastIndex = index
+    const token = scriptToken.exec(source)
+    if (token) {
+      // A raw element ends at its closing tag, even inside a script comment.
+      const rawEnd = contexts.at(-1)?.rawEnd
+      if (rawEnd > index && rawEnd < index + token[0].length) token[0] = source.slice(index, rawEnd)
+      tokens.push(token)
+      index += token[0].length
+      continue
+    }
+    const expression = contexts.at(-1)
+    if (expression?.kind === 'expression') {
+      if (source[index] === '{') expression.depth += 1
+      if (source[index] === '}' && --expression.depth === 0) {
+        contexts.pop()
+        mode = 'text'
+      }
+    }
+    index += 1
+  }
+  return tokens
+}
+
+function withoutLogsAndComments(source, tokens) {
   let masked = source
   for (const token of tokens) {
-    if (/^(?:\/\/|\/\*|<!--)/.test(token[0])) {
+    if (!token.rendered && /^(?:\/\/|\/\*|<!--)/.test(token[0])) {
       masked = masked.slice(0, token.index) + blank(token[0]) + masked.slice(token.index + token[0].length)
     }
   }
@@ -63,12 +131,14 @@ export function forbiddenHarnessCopy(source, file = '<fixture>') {
   const normalizedFile = `/${file.replaceAll('\\', '/')}`
   // The scan registry names installed assistants as data, not shell prose.
   if (normalizedFile.endsWith('/core/src/harness_scan.rs')) return []
-  const copy = withoutLogsAndComments(source)
-  const strings = [...copy.matchAll(TOKENS)].filter((token) => !/^(?:\/\/|\/\*|<!--)/.test(token[0]))
+  const tokens = copyTokens(source, file)
+  const copy = withoutLogsAndComments(source, tokens)
+  const strings = tokens.filter((token) => token.rendered || !/^(?:\/\/|\/\*|<!--)/.test(token[0]))
   const diagnostics = [...DIAGNOSTICS].find(([suffix]) => normalizedFile.endsWith(suffix))?.[1]
   return [...copy.matchAll(HARNESS)].filter((match) => {
     const token = strings.find((token) => match.index >= token.index && match.index < token.index + token[0].length)
     if (!token) return file === '<fixture>' || file.endsWith('.svelte')
+    if (token.rendered) return true
     const value = token[0].slice(1, -1)
     if (/\bevent=[\w.-]+/.test(value)) return false
     if (diagnostics?.has(value)) return false

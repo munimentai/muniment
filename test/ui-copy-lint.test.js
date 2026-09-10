@@ -23,6 +23,19 @@ describe('UI copy lint', () => {
 
   it.each([
     ['src/App.svelte', '<p>Pi answers here.</p>'],
+    ['src/App.svelte', '<p>See https://example.com for Pi settings.</p>'],
+    ['src/App.svelte', '<script>// Ready.</script><p>Pi answers here.</p>'],
+    ['src/App.svelte', '<p>{ready ? { label: "Ready." }.label : "Wait."} See https://example.com for Pi settings.</p>'],
+    ['src/App.svelte', '<p>// Pi answers here.</p>'],
+    ['src/App.svelte', '<p>/* Pi answers here. */</p>'],
+    ['src/App.svelte', '<p>console.log(Pi answers here.)</p>'],
+    ['src/App.svelte', '<p>See https://example.com</p><p>Pi answers here.</p>'],
+    ['src/App.jsx', '<p>Pi answers here.</p>'],
+    ['src/App.js', 'const App = () => <p>Pi answers here.</p>'],
+    ['src/App.tsx', 'export const App = () => <p>See https://example.com for Pi settings.</p>'],
+    ['src/App.jsx', 'const App = () => <><p>Ready.</p><p>Pi answers here.</p></>'],
+    ['src/App.jsx', 'const App = () => <div>{ready && <p>Pi answers here.</p>}</div>'],
+    ['src/App.jsx', 'const App = () => <p>{/* Ready. */}Pi answers here.</p>'],
     ['src/App.svelte', '<p>Pi-powered replies.</p>'],
     ['src/status.js', 'const copy = "Ask Pi."'],
     ['src/status.js', 'const copy = "...Pi answers."'],
@@ -53,6 +66,28 @@ describe('UI copy lint', () => {
     expect(forbiddenHarnessCopy(source, 'src/status.js')).toEqual([])
   })
 
+  it.each([
+    ['<fixture>', '// Pi starts here.\nconst copy = "Ready."'],
+    ['src/App.svelte', '<script>// Pi starts here.\nconsole.info("Pi started.")</script><p>Ready.</p>'],
+    ['src/App.svelte', '<!-- See https://example.com for Pi settings. --><p>Ready.</p>'],
+    ['src/App.jsx', '// Pi starts here.\nconst App = () => <p>Ready.</p>'],
+    ['src/App.tsx', 'const App = () => <p>{/* Pi starts here. */}Ready.</p>'],
+    ['src/App.jsx', 'console.info("Pi started."); const App = () => <p>Ready.</p>'],
+    ['src/App.jsx', 'const App = () => <p>Ready.</p>; console.info("Pi started.");'],
+    ['src/App.jsx', 'const pi = 3.14; const App = () => <p>{pi}</p>;'],
+    ['src/status.mjs', 'const pi = 3.14; for (let i = 0; i < 2; i++) { console.log(pi); } const read = () => pi;'],
+    ['src/App.jsx', 'const App = () => <p>{count < 2 ? "Ready." : "Wait."}</p>; // Pi starts here.'],
+  ])('keeps script comments and logs exempt in %s', (file, source) => {
+    expect(forbiddenHarnessCopy(source, file)).toEqual([])
+  })
+
+  it('reports the line after a rendered URL', () => {
+    const file = 'src/App.svelte'
+    expect(forbiddenHarnessCopy('<p>See https://example.com\nfor Pi settings.</p>', file)).toEqual([
+      { file, line: 2, word: 'Pi' },
+    ])
+  })
+
   it('does not let a log hide nearby UI copy', () => {
     const source = 'console.log("event=pi_start Pi started."); const copy = "Pi failed."'
     expect(forbiddenHarnessCopy(source, 'src/status.js')).toEqual([
@@ -74,21 +109,25 @@ describe('UI copy lint', () => {
     expect(forbiddenHarnessCopy('const COPY: &str = "Pi";', 'src-tauri/src/status.rs')).toHaveLength(1)
   })
 
-  it('checks every CLI root and returns failure for Rust UI copy', () => {
+  it.each([
+    ['status.rs', 'eprintln!("event=pi_start Pi started.");', 'return Err("Pi failed.".into());'],
+    ['App.svelte', '<script>console.info("Pi started.")</script>', '<p>See https://example.com for Pi settings.</p>'],
+    ['App.jsx', 'console.info("Pi started.");', 'const App = () => <p>Pi answers here.</p>'],
+  ])('checks every CLI root and returns failure for %s UI copy', (name, log, copy) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-copy-lint-'))
     const frontend = path.join(root, 'src')
     const backend = path.join(root, 'src-tauri')
     fs.mkdirSync(frontend)
     fs.mkdirSync(backend)
-    const fixture = path.join(backend, 'status.rs')
+    const fixture = path.join(name.endsWith('.rs') ? backend : frontend, name)
     const run = () => spawnSync(process.execPath, ['test/ui-copy-lint.mjs', frontend, backend], { encoding: 'utf8' })
     try {
-      fs.writeFileSync(fixture, 'eprintln!("event=pi_start Pi started.");')
+      fs.writeFileSync(fixture, log)
       expect(run().status).toBe(0)
-      fs.appendFileSync(fixture, '\nreturn Err("Pi failed.".into());')
+      fs.appendFileSync(fixture, `\n${copy}`)
       const failure = run()
       expect(failure.status).toBe(1)
-      expect(failure.stderr).toContain('status.rs:2: forbidden UI copy: Pi')
+      expect(failure.stderr).toContain(`${name}:2: forbidden UI copy: Pi`)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
