@@ -320,21 +320,24 @@ function Finalize-Run {
       } elseif ($productCode) { Invoke-BoundedProcess "msiexec.exe" "/x $productCode /qn /norestart" 180 (Join-Path $raw "uninstaller.log") }
     }
   }
+  $uninstalledRegistration = @{ scope = $null }
   Invoke-Cleanup "registration-gone" {
     if ($productCode) {
       $snapshot = Save-RegistrationSnapshot "uninstalled"
+      $uninstalledRegistration.scope = $snapshot.scope
       Write-PerUserMsiRegistration $snapshot.scope "uninstalled"
       Assert-PerUserMsiRegistration $snapshot.scope $installLocalAppData -Absent
     } elseif (@(Get-ProductRegistration).Count -ne 0) { throw "product registration remains" }
+  }
+  # Write directly to the host outside the cleanup wrapper's stream redirection.
+  if ($uninstalledRegistration.scope) {
+    Write-PerUserMsiRegistration $uninstalledRegistration.scope "uninstalled"
   }
   Invoke-Cleanup "installed-files-gone" { if ($installDirectory -and (Test-Path -LiteralPath $installDirectory)) { throw "installed files remain" } }
   Invoke-Cleanup "remove-auth-handler" { Remove-AuthHandler }
   Invoke-Cleanup "remove-state" { if ($stateRoot) { Remove-Item $stateRoot -Recurse -Force -ErrorAction SilentlyContinue } }
   Invoke-Cleanup "processes-gone" {
     if (@(Get-HarnessProcesses).Count -ne 0) { throw "test process remains" }
-  }
-  if ($cleanupLog -and (Test-Path -LiteralPath $cleanupLog)) {
-    Get-Content -LiteralPath $cleanupLog | Where-Object { $_ -like '*per-user MSI uninstalled*' } | Write-Host
   }
   Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
   if ($raw -and (Test-Path -LiteralPath $raw)) {
