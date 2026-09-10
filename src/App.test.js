@@ -937,7 +937,7 @@ describe('workspace composer entry', () => {
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
-  it('enters local mode and saves a Pi provider key', async () => {
+  it('enters local mode and saves a provider key', async () => {
     let providerStatusChecks = 0
     invoke.mockImplementation(async (command) => {
       if (command === 'local_mode_status') return false
@@ -963,8 +963,13 @@ describe('workspace composer entry', () => {
 
     const composer = await screen.findByPlaceholderText('Ask anything')
     expect(composer).toBeInTheDocument()
-    expect(composer).toHaveAccessibleDescription('Pi answers with the provider settings you saved. Local replies carry no cloud receipt.')
-    expect(screen.getByText("Pi uses a provider from its credential store.", { exact: false })).toBeInTheDocument()
+    expect(composer).toHaveAccessibleDescription('Local replies have no cloud receipt. Ask anything.')
+    expect(screen.getByText('Your model answers here. Ask anything.')).toBeInTheDocument()
+    for (const selector of ['.empty', '#composer-hint']) {
+      const copy = document.querySelector(selector).textContent.trim()
+      expect(copy).not.toMatch(/[\r\n]/)
+      expect(copy.split(/\s+/).length).toBeLessThan(12)
+    }
     expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
     expect(screen.getByText('Google', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
     expect(screen.getByText('OpenAI', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
@@ -982,15 +987,35 @@ describe('workspace composer entry', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
 
     expect(invoke).toHaveBeenCalledWith('local_mode_store_provider_key', { provider: 'anthropic', key: 'secret-key' })
-    expect(await screen.findByText('Pi saved the Anthropic key.')).toBeInTheDocument()
+    expect(await screen.findByText('Muniment saved the Anthropic key. Send a message.')).toBeInTheDocument()
     expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Saved')
 
     await fireEvent.click(within(provider).getByRole('radio', { name: 'Ollama (local)' }))
     await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save Ollama server' }))
     expect(invoke).toHaveBeenCalledWith('local_mode_store_local_provider', { baseUrl: 'http://localhost:11434/v1' })
-    expect(await screen.findByText('Pi saved the Ollama server.')).toBeInTheDocument()
+    expect(await screen.findByText('Muniment saved the Ollama server. Send a message.')).toBeInTheDocument()
     expect(providerStatusChecks).toBe(3)
+  })
+
+  it.each([
+    ['local_mode_store_provider_key', 'Muniment could not save the provider key. Try again.'],
+    ['local_mode_provider_status', 'Muniment cannot read provider settings. Restart the app to retry.'],
+  ])('shows a next step when %s fails', async (failedCommand, copy) => {
+    localModeStatus = true
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === failedCommand) return Promise.reject(new Error('Storage failed.'))
+      return defaultInvoke(command, ...args)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    if (failedCommand === 'local_mode_store_provider_key') {
+      await fireEvent.input(await screen.findByLabelText('Provider API key'), { target: { value: 'test-key' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
+    }
+    expect(await screen.findByText(copy)).toBeInTheDocument()
+    expect(copy.split(/\s+/).length).toBeLessThan(12)
   })
 
   it('shows the provider fields after each provider change', async () => {
@@ -1034,6 +1059,9 @@ describe('workspace composer entry', () => {
 
     if (fails) save.reject(new Error('Save failed.'))
     else save.resolve()
+    expect(await screen.findByText(fails
+      ? 'Ollama setup failed. Check the URL, then retry.'
+      : 'Muniment saved the Ollama server. Send a message.')).toBeInTheDocument()
     await waitFor(() => {
       for (const radio of screen.getAllByRole('radio')) expect(radio).toBeEnabled()
     })
@@ -4253,7 +4281,7 @@ describe('thread announcements', () => {
     const composer = await screen.findByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    const progress = 'Pi installation is in progress. The reply will start when Pi is ready.'
+    const progress = 'Reply setup has started. Please wait.'
     chatListener({ payload: { runId: 'run-9', phase: 'acquiring-pi', text: '', toolActivity: [] } })
     await waitFor(() => expect(document.querySelector('.response')).toHaveTextContent(progress))
     expect(screen.getByTestId('run-announcement')).toHaveTextContent(progress)
