@@ -36,6 +36,9 @@ $ready = $false
 $installAttempted = $false
 $installDirectory = $null
 $productCode = $null
+$installSid = $null
+$installLocalAppData = $env:LOCALAPPDATA
+. (Join-Path $PSScriptRoot "../../windows-msi-registration.ps1")
 $handlerKey = "HKCU:\Software\Classes\muniment-e2e-https"
 $httpsKey = "HKCU:\Software\Classes\https"
 $testRegistration = $null
@@ -175,19 +178,17 @@ function Save-RegistrationSnapshot([string]$Phase) {
     hklm = @{ count = $machineRegistrations.Count; entries = $machineRegistrations }
     userUninstallEntries = $userEntries
     machineUninstallEntries = $machineEntries
+    scope = $(if ($productCode) { Get-PerUserMsiRegistration $productCode $installSid } else { $null })
   }
   ConvertTo-Json -InputObject $snapshot -Depth 5 | Set-Content -LiteralPath (Join-Path $raw "registration-$Phase.json") -Encoding UTF8
   return $snapshot
 }
 
-function Assert-ProductRegistration([object[]]$Registrations, [object[]]$MachineRegistrations) {
-  $entries = [ordered]@{
-    hkcu = @($Registrations | Select-Object DisplayName, PSChildName, PSPath)
-    hklm = @($MachineRegistrations | Select-Object DisplayName, PSChildName, PSPath)
-  } | ConvertTo-Json -Depth 4 -Compress
-  $detail = "hkcu=$($Registrations.Count) hklm=$($MachineRegistrations.Count) entries=$entries"
-  Write-Output "per-user MSI registration: $detail"
-  if ($Registrations.Count -ne 1 -or $MachineRegistrations.Count -ne 0) {
+function Assert-ProductRegistration($Registration) {
+  try {
+    Assert-PerUserMsiRegistration $Registration $installLocalAppData
+  } catch {
+    $registrationFailure = $_
     # Publish redacted evidence before the assertion throws.
     try {
       Invoke-NativeCommand "node" "`"$redactor`" `"$raw`" `"$safe`"" $cleanupLog "registration artifact redaction failed" | Out-Null
@@ -195,11 +196,13 @@ function Assert-ProductRegistration([object[]]$Registrations, [object[]]$Machine
     } catch {
       Write-Output "Registration artifact publication failed."
     }
-    throw "per-user MSI registration requires hkcu=1 hklm=0: $detail"
+    throw $registrationFailure
   }
 }
 
 function Install-Product {
+  $script:productCode = Get-MsiProductCode $msi
+  $script:installSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
   Save-RegistrationSnapshot "before" | Out-Null
   $msiLog = Join-Path $runRoot "msi-verbose.log"
   $script:installAttempted = $true
@@ -211,11 +214,16 @@ function Install-Product {
       $msiText = Get-Content -LiteralPath $msiLog -Raw
       $msiText | Set-Content -LiteralPath (Join-Path $raw "msi-verbose.log") -Encoding UTF8
       $msiText | Add-Content -LiteralPath $installerLog -Encoding UTF8
+      $elevationLines = @($msiText -split '\r?\n' | Where-Object { $_ -match '\bMsiRunningElevated\b' })
+      if ($elevationLines.Count -eq 0) { Write-Host "The per-user MSI log has no MsiRunningElevated lines." }
+      $elevationLines | ForEach-Object { Write-Host $_ }
     }
     $snapshot = Save-RegistrationSnapshot "after"
-    $script:registrations = @($snapshot.hkcu.entries)
+    Write-PerUserMsiRegistration $snapshot.scope "installed"
   }
-  Assert-ProductRegistration $registrations @($snapshot.hklm.entries)
+  Assert-ProductRegistration $snapshot.scope
+  $script:installDirectory = $snapshot.scope.InstallLocation
+  $script:installDisplayIcon = $snapshot.scope.DisplayIcon
 }
 
 function Get-HarnessProcesses {
@@ -305,22 +313,32 @@ function Finalize-Run {
   Invoke-Cleanup "stop-app" { Stop-HarnessProcesses }
   if ($installAttempted) {
     Invoke-Cleanup "uninstall" {
-      $registration = @(Get-ProductRegistration)
-      if ($registration.Count -gt 1) { throw "product is registered more than once" }
-      $code = if ($registration.Count -eq 1) { $registration[0].PSChildName } else { $productCode }
       if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {
         if ($env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE) { Remove-Item -LiteralPath $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE -Force }
         if ($env:MUNIMENT_E2E_FINALIZER_TEST_REMAIN_REGISTRATION -ne "1" -and $testRegistration) { Remove-Item $testRegistration -Force }
         if ($env:MUNIMENT_E2E_FINALIZER_TEST_REMAIN_FILES -ne "1" -and $installDirectory) { Remove-Item $installDirectory -Recurse -Force }
-      } elseif ($code) { Invoke-BoundedProcess "msiexec.exe" "/x $code /qn /norestart" 180 (Join-Path $raw "uninstaller.log") }
+      } elseif ($productCode) { Invoke-BoundedProcess "msiexec.exe" "/x $productCode /qn /norestart" 180 (Join-Path $raw "uninstaller.log") }
     }
   }
-  Invoke-Cleanup "registration-gone" { if (@(Get-ProductRegistration).Count -ne 0) { throw "product registration remains" } }
+  Invoke-Cleanup "registration-gone" {
+    if ($productCode) {
+      $snapshot = Save-RegistrationSnapshot "uninstalled"
+      Write-PerUserMsiRegistration $snapshot.scope "uninstalled"
+      Assert-PerUserMsiRegistration $snapshot.scope $installLocalAppData -Absent
+    } elseif (@(Get-ProductRegistration).Count -ne 0) { throw "product registration remains" }
+  }
   Invoke-Cleanup "installed-files-gone" { if ($installDirectory -and (Test-Path -LiteralPath $installDirectory)) { throw "installed files remain" } }
   Invoke-Cleanup "remove-auth-handler" { Remove-AuthHandler }
   Invoke-Cleanup "remove-state" { if ($stateRoot) { Remove-Item $stateRoot -Recurse -Force -ErrorAction SilentlyContinue } }
   Invoke-Cleanup "processes-gone" {
     if (@(Get-HarnessProcesses).Count -ne 0) { throw "test process remains" }
+  }
+  if ($cleanupLog -and (Test-Path -LiteralPath $cleanupLog)) {
+    Get-Content -LiteralPath $cleanupLog | Where-Object { $_ -like '*per-user MSI uninstalled*' } | Write-Host
+  }
+  Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+  if ($raw -and (Test-Path -LiteralPath $raw)) {
+    Copy-Item -LiteralPath $transcriptPath -Destination (Join-Path $raw "runner-transcript.log") -Force -ErrorAction SilentlyContinue
   }
   if ($cleanupLog -and $raw) { Copy-Item $cleanupLog (Join-Path $raw "cleanup.log") -Force -ErrorAction SilentlyContinue }
   Invoke-Cleanup "index-failure-artifacts" {
@@ -417,8 +435,28 @@ try {
     return
   }
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1" -and $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE) {
+    $installLocalAppData = Split-Path -Parent $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE
+    function Get-MsiProductCode { return '{12345678-1234-ABCD-EF12-34567890ABCD}' }
+    function Get-PerUserMsiRegistration {
+      $fixture = $env:MUNIMENT_E2E_REGISTRATION_TEST_FIXTURE
+      $scope = Get-Content -LiteralPath "$fixture.scope.json" -Raw | ConvertFrom-Json
+      $keys = [ordered]@{}
+      foreach ($property in $scope.keys.PSObject.Properties) {
+        $keys[$property.Name] = @{ path = $property.Value.path; present = $property.Value.present }
+      }
+      $uninstall = [ordered]@{}
+      foreach ($property in $scope.uninstall.PSObject.Properties) { $uninstall[$property.Name] = @($property.Value) }
+      if (-not (Test-Path -LiteralPath $fixture)) {
+        foreach ($key in $keys.Values) { $key.present = $false }
+        foreach ($hive in @($uninstall.Keys)) { $uninstall[$hive] = @() }
+        $scope.InstallLocation = ''
+      }
+      return @{ ProductCode = $scope.ProductCode; Sid = $scope.Sid; keys = $keys; uninstall = $uninstall; InstallLocation = $scope.InstallLocation; DisplayIcon = '' }
+    }
     function Invoke-BoundedProcess {
-      Set-Content -LiteralPath (Join-Path $runRoot "msi-verbose.log") -Value "MSI fixture: caf$([char]0xE9) $env:MUNIMENT_E2E_PASSWORD" -Encoding Unicode
+      $scope = Get-PerUserMsiRegistration
+      New-Item -ItemType Directory -Force $scope.InstallLocation | Out-Null
+      Set-Content -LiteralPath (Join-Path $runRoot "msi-verbose.log") -Value "MSI fixture: caf$([char]0xE9) $env:MUNIMENT_E2E_PASSWORD`nProperty(S): MsiRunningElevated = 1" -Encoding Unicode
     }
     Install-Product
     return
@@ -478,10 +516,7 @@ try {
   $env:npm_config_cache = Join-Path $runRoot "npm-cache"
   New-Item -ItemType Directory -Force $env:APPDATA, $env:LOCALAPPDATA | Out-Null
   Install-Product
-  $registration = Get-ItemProperty $registrations[0].PSPath
-  $productCode = $registrations[0].PSChildName
-  $installDirectory = $registration.InstallLocation
-  $appBinary = if ($registration.DisplayIcon) { ($registration.DisplayIcon -replace '^"|"?(?:,\d+)?$', '') } else { $null }
+  $appBinary = if ($installDisplayIcon) { ($installDisplayIcon -replace '^"|"?(?:,\d+)?$', '') } else { $null }
   if (-not $appBinary -or -not (Test-Path -LiteralPath $appBinary -PathType Leaf)) {
     if (-not $installDirectory) { throw "installer metadata does not identify an install directory" }
     $matches = @(Get-ChildItem -LiteralPath $installDirectory -Filter "muniment.exe" -File -Recurse)
@@ -608,10 +643,6 @@ namespace MunimentE2e {
   if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }
   $status = 1
 } finally {
-  Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
-  if ($raw -and (Test-Path -LiteralPath $raw)) {
-    Copy-Item -LiteralPath $transcriptPath -Destination (Join-Path $raw "runner-transcript.log") -Force -ErrorAction SilentlyContinue
-  }
   $diagnosticRoot = Join-Path $env:TEMP ([guid]::NewGuid().ToString("N"))
   $diagnosticRaw = Join-Path $diagnosticRoot "raw"
   try {
