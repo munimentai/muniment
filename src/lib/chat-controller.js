@@ -60,6 +60,10 @@ export function createChatController({
   // event while one runs, because no published run describes it yet.
   let historyLoads = 0
   let refreshingOpenThread = false
+  let recoveryPending = false
+  let recovering = false
+  let recoveryRetry
+  let deliveryFailureReason = ''
   let threadRefreshSequence = 0
   let threadPageCount = 1
   let nextThreadCursor = null
@@ -106,14 +110,14 @@ export function createChatController({
     onFreshThread(next)
   }
 
-  async function refreshThreads() {
+  async function refreshThreads(reportFailure = false) {
     const sequence = ++threadRefreshSequence
     try {
       const [firstPage, currentThreadId] = await Promise.all([
         invoke('chat_thread_summaries', { limit: 20 }),
         invoke('chat_current_thread'),
       ])
-      if (destroyed || sequence !== threadRefreshSequence) return
+      if (destroyed || sequence !== threadRefreshSequence) return false
       const refreshedThreadIds = new Set(firstPage.summaries.map((summary) => summary.threadId))
       const retainedSummaries = readThreadSummaries().filter((summary) => !refreshedThreadIds.has(summary.threadId))
       const summaries = [...firstPage.summaries, ...retainedSummaries]
@@ -122,7 +126,9 @@ export function createChatController({
       if (currentThreadId && summaries.some((summary) => summary.threadId === currentThreadId)) {
         publishFreshThread(false)
       }
-    } catch (_) {
+      return true
+    } catch (error) {
+      if (reportFailure) throw error
       // A settlement refresh must not disturb the visible conversation state.
     }
   }
@@ -187,6 +193,13 @@ export function createChatController({
   }
 
   function handleEvent({ payload }) {
+    if (destroyed) return
+    if (payload.phase === 'delivery-failed') {
+      deliveryFailureReason = payload.failureReason || 'Reply delivery failed.'
+      onHistoryError(deliveryFailureReason, { label: 'Restore reply', run: recoverChatEvents })
+      void recoverChatEvents()
+      return
+    }
     const signaled = signalThread(payload.threadId)
     // A thread load replaces the whole transcript, so no published run describes
     // this event yet. openThread and refreshOpenThread drain the buffer onto the
@@ -387,6 +400,7 @@ export function createChatController({
       releaseBuffer()
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
+      if (recoveryPending) void recoverChatEvents()
     }
   }
 
@@ -411,7 +425,7 @@ export function createChatController({
   // so this re-read repairs it in place. It reads the same pages openThread
   // reads, and it selects no thread, so a run in flight keeps running.
   // A successful re-read clears history-read alerts but keeps unrelated action errors.
-  async function refreshOpenThread() {
+  async function refreshOpenThread(reportFailure = false) {
     const threadId = readThreadId()
     if (!threadId || destroyed || switchingThread || refreshingOpenThread) return
     // A submission still waiting for its run id owns the transcript tail, and no
@@ -442,6 +456,7 @@ export function createChatController({
       // older transcript. That call owns the view now, and publishing the pages
       // would drop the message and the run it just added.
       if (messages() !== publishedAtEntry) {
+        if (recovering) recoveryPending = true
         drainVisibleRun()
         return
       }
@@ -467,20 +482,53 @@ export function createChatController({
       if (tracked) onAnnounce(tracked)
       if (historyReadFailed) onHistoryError('')
       if (settled) void refreshThreads()
-    } catch (_) {
+    } catch (error) {
       // A background re-read must not disturb the visible conversation state.
       // This call repairs a hole a dropped subscriber left, so a failed read
       // must not open a wider one.
       drainVisibleRun()
+      if (reportFailure) throw error
     } finally {
       historyLoads -= 1
       releaseBuffer()
       refreshingOpenThread = false
+      if (recoveryPending && !recovering) void recoverChatEvents()
     }
     // A signal can land on a re-read that a reconnect started. Collapse it
     // into one follow-up once that re-read ends.
     if (signaledRunRefreshFollowUp && !signaledRunRefreshInFlight && !destroyed) {
       void refreshSignaledOpenThread()
+    }
+    return true
+  }
+
+  async function recoverChatEvents() {
+    if (destroyed) return
+    recoveryPending = true
+    if (recovering || active()?.id === 'pending' || switchingThread || refreshingOpenThread) return
+    clearTimeout(recoveryRetry)
+    recovering = true
+    try {
+      do {
+        recoveryPending = false
+        // The first lost frame can name a new thread. Resolve it before reading the journal.
+        if (!await refreshThreads(true) || active()?.id === 'pending' || switchingThread || refreshingOpenThread) {
+          recoveryPending = true
+          break
+        }
+        if (readThreadId() && !await refreshOpenThread(true)) {
+          recoveryPending = true
+          break
+        }
+      } while (recoveryPending && !destroyed && active()?.id !== 'pending' && !switchingThread)
+      if (!recoveryPending) deliveryFailureReason = ''
+    } catch (error) {
+      recoveryPending = true
+      if (!destroyed) onHistoryError(deliveryFailureReason || historyReadError(error), { label: 'Restore reply', run: recoverChatEvents }, !deliveryFailureReason)
+    } finally {
+      recovering = false
+      // Request connectivity can recover without another chat subscription event.
+      if (recoveryPending && !destroyed) recoveryRetry = setTimeout(recoverChatEvents, 1000)
     }
   }
 
@@ -510,6 +558,7 @@ export function createChatController({
     } finally {
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
+      if (recoveryPending) void recoverChatEvents()
     }
   }
 
@@ -573,6 +622,7 @@ export function createChatController({
     } finally {
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
+      if (recoveryPending) void recoverChatEvents()
     }
   }
 
@@ -629,6 +679,7 @@ export function createChatController({
       return false
     } finally {
       releaseBuffer()
+      if (recoveryPending) void recoverChatEvents()
     }
   }
 
@@ -690,11 +741,12 @@ export function createChatController({
 
   function cleanup() {
     destroyed = true
+    clearTimeout(recoveryRetry)
     threadRefreshSequence += 1
     unlisten?.()
     unlisten = undefined
     buffered.clear()
   }
 
-  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, recoverChatEvents, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

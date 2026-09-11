@@ -227,6 +227,7 @@ beforeEach(() => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'onboarding_scan') return
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+    if (command === 'onboarding_model_settings_error') return
     if (command === 'chat_thread_open') return []
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -724,6 +725,46 @@ describe('workspace composer entry', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
 
+  it.each(['chat', 'request'])('restores a local reply when the %s socket reconnects first', async (firstSocket) => {
+    localModeStatus = true
+    let requestConnected = true
+    let restored = false
+    invoke.mockImplementation(async (command) => {
+      if (command === 'attach_listener_status') return chatEventsStatus(true)
+      if (command === 'chat_current_thread') {
+        if (!requestConnected) throw new Error('The request socket closed.')
+        return 'thread-1'
+      }
+      if (command === 'chat_thread_open') {
+        if (!requestConnected) throw new Error('The request socket closed.')
+        return [{ runId: 'run-1', prompt: 'Hello', text: restored ? 'The journal kept the reply.' : '', phase: restored ? 'complete' : 'streaming', receipt: {} }]
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await findWorkspaceComposer()
+    await waitFor(() => expect(document.querySelector('.response-prose.streaming')).toBeInTheDocument())
+    requestConnected = false
+    desktopClientListener({ payload: { ...chatEventsStatus(false), connected: false } })
+    restored = true
+    invoke.mockClear()
+    if (firstSocket === 'chat') {
+      desktopClientListener({ payload: { ...chatEventsStatus(true), connected: false } })
+      await screen.findByText('Muniment could not restore conversation history. The request socket closed.')
+      requestConnected = true
+      desktopClientListener({ payload: chatEventsStatus(true) })
+    } else {
+      requestConnected = true
+      desktopClientListener({ payload: chatEventsStatus(false) })
+      await screen.findByText('The journal kept the reply.')
+      desktopClientListener({ payload: chatEventsStatus(true) })
+    }
+    expect(await screen.findByText('The journal kept the reply.')).toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.response-prose.streaming')).not.toBeInTheDocument())
+    expect(invoke).not.toHaveBeenCalledWith('auth_status')
+    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
+  })
+
   it('re-reads the open thread when the status poll reports the recovery', async () => {
     let finishRegistration
     desktopClientListen = vi.fn(() => new Promise((resolve) => { finishRegistration = resolve }))
@@ -1208,6 +1249,29 @@ describe('workspace composer entry', () => {
     })
     await fireEvent.click(screen.getByRole('radio', { name: 'Anthropic' }))
     expect(screen.getByLabelText('Provider API key')).toBeVisible()
+  })
+
+  it('shows a delivery deadline cause and restores the local reply from the journal', async () => {
+    localModeStatus = true
+    let restored = false
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_thread_open') return [{
+        runId: 'run-local', phase: restored ? 'complete' : 'streaming',
+        text: restored ? 'The journal kept the reply.' : 'A', prompt: 'A question', receipt: {}, toolActivity: [],
+      }]
+      return defaultInvoke(command, ...args)
+    })
+    render(App)
+    await screen.findByText('A question', { selector: '.user-turn p' })
+    restored = true
+    const cause = 'Reply delivery failed. The desktop missed the five-second chat.event frame deadline with 17 bytes pending.'
+    chatListener({ payload: { runId: 'run-local', phase: 'delivery-failed', failureReason: cause } })
+    expect(await screen.findByText(cause)).toBeVisible()
+    expect(await screen.findByText('The journal kept the reply.')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Restore reply' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
   })
 
   it('disables the provider radios during an active reply', async () => {
@@ -2450,6 +2514,7 @@ describe('Home onboarding', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('Muniment could not enter local mode. Open model settings again.')
+    expect(invoke).toHaveBeenCalledWith('onboarding_model_settings_error', { cause: 'localMode' })
     expect(alert.closest('#onboarding-model-panel')).not.toBeNull()
     expect(alert).toHaveClass('error')
     expect(screen.getByRole('button', { name: 'Open model settings' })).toBeEnabled()
@@ -2479,6 +2544,7 @@ describe('Home onboarding', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(2)
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not read session status. Open model settings again.')
+    expect(invoke).toHaveBeenCalledWith('onboarding_model_settings_error', { cause: 'sessionStatus' })
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(3)
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
     expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
@@ -2529,6 +2595,7 @@ describe('Home onboarding', () => {
 
     startup.reject(new Error('marker unavailable'))
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not finish startup. Open model settings again.')
+    expect(invoke).toHaveBeenCalledWith('onboarding_model_settings_error', { cause: 'startup' })
     expect(openSettings).toBeEnabled()
     expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
@@ -2589,6 +2656,7 @@ describe('Home onboarding', () => {
     expect(invoke).toHaveBeenCalledWith('local_mode_enter')
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('The runtime is not connected yet. Open model settings again.')
+    expect(invoke).toHaveBeenCalledWith('onboarding_model_settings_error', { cause: 'runtime' })
     expect(alert.closest('#onboarding-model-panel')).not.toBeNull()
     const openSettings = screen.getByRole('button', { name: 'Open model settings' })
     expect(openSettings).toBeEnabled()

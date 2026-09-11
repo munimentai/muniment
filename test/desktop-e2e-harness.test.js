@@ -8,7 +8,7 @@ import './e2e/support/windows-msi-registration-contract.js'
 
 const root = process.cwd()
 const temporary = []
-const temp = () => { const value = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-e2e-test-')); temporary.push(value); return value }
+const temp = () => { const value = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-e2e-test-'))); temporary.push(value); return value }
 afterEach(() => { for (const value of temporary.splice(0)) fs.rmSync(value, { recursive: true, force: true }) })
 const runNode = (script, args, options = {}) => spawnSync(process.execPath, [path.join(root, script), ...args], { encoding: 'utf8', ...options })
 
@@ -147,6 +147,9 @@ describe('WDIO main window selection', () => {
         }
         throw new Error(options.timeoutMsg)
       },
+      tauri: { switchWindow: vi.fn(async (label) => {
+        current = Object.keys(labels).find((handle) => labels[handle] === label)
+      }) },
       getWindowHandles: async () => batches[Math.min(attempt, batches.length - 1)],
       switchToWindow: async (handle) => {
         calls.push(handle)
@@ -175,6 +178,7 @@ describe('WDIO main window selection', () => {
     expect(fixture.label()).toBe('main')
     await fixture.driver.switchToWindow(handles.find((handle) => labels[handle] === 'launcher'))
     await config.beforeTest()
+    expect(fixture.driver.tauri.switchWindow).toHaveBeenCalledWith('main')
     expect(fixture.label()).toBe('main')
   })
 
@@ -204,6 +208,22 @@ describe('WDIO main window selection', () => {
     fixture.driver.saveScreenshot = async () => { expect(fixture.label()).toBe('main') }
     await captureFailureArtifacts({ passed: false })
     expect(fs.readFileSync(path.join(process.env.MUNIMENT_E2E_RAW_DIR, 'page-source-onboarding.html'), 'utf8')).toBe('<main>shell</main>')
+  })
+
+  it('The harness captures a timeout when Mocha bypasses afterTest.', async () => {
+    const { config } = await import('./e2e/wdio.conf.js')
+    const fixture = driverFixture([['main']], { main: 'main' })
+    vi.stubGlobal('browser', fixture.driver)
+    await config.before({}, ['test/e2e/specs/onboarding.spec.js'])
+    fixture.driver.getPageSource = vi.fn(async () => '<main><section class="onboarding">The runtime is not connected yet. Open model settings again.</section></main>')
+    fixture.driver.saveScreenshot = vi.fn(async () => {})
+    await config.after(1)
+    expect(fs.readFileSync(path.join(process.env.MUNIMENT_E2E_RAW_DIR, 'page-source-onboarding.html'), 'utf8'))
+      .toContain('The runtime is not connected yet.')
+    expect(fixture.driver.saveScreenshot).toHaveBeenCalled()
+    fixture.driver.getPageSource.mockClear()
+    await config.after(0)
+    expect(fixture.driver.getPageSource).not.toHaveBeenCalled()
   })
 
   it('does not save launcher artifacts when main selection fails', async () => {
@@ -3624,6 +3644,26 @@ ${lookup}
           expect(listed).toBeLessThan(failure)
         }
       }
+    }
+  })
+})
+
+describe('temporary fixture paths', () => {
+  it('Resolves the temporary directory alias before it returns a fixture path.', () => {
+    // Native paths match child-process output when Windows TEMP uses an 8.3 alias.
+    const directory = temp()
+    const target = path.join(directory, 'long directory name [fixture]')
+    const alias = path.join(directory, 'alias')
+    fs.mkdirSync(target)
+    fs.symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir')
+    const tmpdir = vi.spyOn(os, 'tmpdir').mockReturnValue(alias)
+    try {
+      const fixture = temp()
+      expect(path.dirname(fixture)).toBe(target)
+      expect(fixture).toBe(fs.realpathSync.native(fixture))
+      expect(fs.statSync(fixture).isDirectory()).toBe(true)
+    } finally {
+      tmpdir.mockRestore()
     }
   })
 })

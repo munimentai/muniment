@@ -25,6 +25,7 @@
   import { createChatTranscriptController } from './lib/chat-transcript-controller.js'
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
+  import { firstRunError } from './lib/onboarding-diagnostics.js'
   import { relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_STORAGE_KEY, isNewThreadShortcut, isSidebarShortcut, newThreadShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
@@ -261,10 +262,10 @@
     // it re-reads nothing.
     const chatEventsRecovered = desktopClientStatus?.chat_events_connected === false
       && status?.chat_events_connected === true
+    const requestsRecovered = desktopClientStatus?.connected === false && status?.connected === true
     desktopClientStatus = status
-    if (chatEventsRecovered) {
-      void startupReady.then(() => chatController.refreshOpenThread())
-      void startupReady.then(() => chatController.refreshThreads())
+    if (chatEventsRecovered || (requestsRecovered && workspaceMode())) {
+      void startupReady.then(() => chatController.recoverChatEvents())
     }
   }
 
@@ -1013,15 +1014,15 @@
   async function openFirstRunModelSettings() {
     if (retryStartup) startWorkspace()
     retryStartup = await startupReady === false
-    if (retryStartup) throw new Error('Muniment could not finish startup. Open model settings again.')
+    if (retryStartup) throw firstRunError(tauri, 'startup')
     if (auth.name === 'error' && auth.retry === 'status' && await run('status') === false) {
-      throw new Error('Muniment could not read session status. Open model settings again.')
+      throw firstRunError(tauri, 'sessionStatus')
     }
     if (auth.name === 'signed-out' && await enterLocalMode() === false) {
-      throw new Error('Muniment could not enter local mode. Open model settings again.')
+      throw firstRunError(tauri, 'localMode')
     }
     if (!workspaceMode() || desktopClientStatus?.connected !== true) {
-      throw new Error('The runtime is not connected yet. Open model settings again.')
+      throw firstRunError(tauri, 'runtime')
     }
     onboarding = { name: 'complete', homePath: onboarding.homePath }
   }
