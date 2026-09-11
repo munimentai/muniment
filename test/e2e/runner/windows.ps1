@@ -3,6 +3,10 @@ param()
 try {
   $artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { Join-Path $env:TEMP "dci-artifacts" }
   New-Item -ItemType Directory -Force $artifacts -ErrorAction Stop | Out-Null
+  # New-Item -Force can accept a file without creating a directory.
+  if (-not (Test-Path -LiteralPath $artifacts -PathType Container)) {
+    throw "The artifact path is not a directory: $artifacts"
+  }
   $diagnosticFile = Join-Path $artifacts "runner-failure.txt"
   $transcriptPath = Join-Path $env:TEMP "dci-windows-transcript.log"
   if ($env:MUNIMENT_E2E_BOOTSTRAP_TEST_FAIL -eq "start-transcript") { throw "injected Start-Transcript failure" }

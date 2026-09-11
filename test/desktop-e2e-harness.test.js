@@ -1631,18 +1631,48 @@ exit 0
     },
   )
 
+  const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
+  const hasPowerShell = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+
+  it.skipIf(!hasPowerShell).each(['missing', 'directory', 'file'])('The bootstrap checks the %s artifact path before dependency installation.', (state) => {
+    const directory = temp()
+    const artifacts = path.join(directory, 'artifacts [fixture]')
+    if (state === 'file') fs.writeFileSync(artifacts, 'blocked')
+    if (state === 'directory') fs.mkdirSync(artifacts)
+    const script = path.join(directory, 'bootstrap.ps1')
+    const bootstrap = runner.slice(0, runner.indexOf('$diagnostic = $null'))
+    fs.writeFileSync(script, `${bootstrap}\nStop-Transcript -ErrorAction SilentlyContinue | Out-Null\nWrite-Output 'Bootstrap reached dependency installation.'\n`)
+    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
+      encoding: 'utf8', timeout: 15_000,
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts },
+    })
+    expect(result.status, result.stdout + result.stderr).toBe(state === 'file' ? 1 : 0)
+    expect(result.stdout.includes('Bootstrap reached dependency installation.')).toBe(state !== 'file')
+    if (state === 'file') {
+      expect(result.stdout).toContain(`message: The artifact path is not a directory: ${artifacts}`)
+      expect(fs.readFileSync(artifacts, 'utf8')).toBe('blocked')
+    } else {
+      expect(fs.statSync(artifacts).isDirectory()).toBe(true)
+    }
+  })
+
   it.skipIf(process.platform !== 'win32')('writes stdout when artifact directory creation fails', () => {
     const directory = temp()
     const blockedPath = path.join(directory, 'not-a-directory')
+    const cli = path.join(root, 'node_modules/@tauri-apps/cli/tauri.js')
+    const installedCli = fs.readFileSync(cli)
     fs.writeFileSync(blockedPath, 'blocked')
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
-      encoding: 'utf8',
+      encoding: 'utf8', timeout: 15_000,
       env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: blockedPath },
     })
     expect(result.status).not.toBe(0)
-    expect(result.stdout).toContain('message:')
+    expect(result.stdout).toContain(`message: The artifact path is not a directory: ${blockedPath}`)
     expect(result.stdout).toContain('category:')
     expect(result.stdout).toMatch(/line: [1-9]\d*/)
+    expect(result.stdout + result.stderr).not.toContain('npm dependency installation')
+    expect(fs.readFileSync(cli)).toEqual(installedCli)
+    expect(fs.readFileSync(blockedPath, 'utf8')).toBe('blocked')
   })
 
   it.skipIf(process.platform !== 'win32')('writes a diagnostic artifact and stdout when transcript startup fails', () => {
