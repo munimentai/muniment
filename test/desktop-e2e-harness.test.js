@@ -3223,3 +3223,95 @@ describe('installed model settings controls', () => {
     expect(onboardingSpec).toContain('await panel.getText()')
   })
 })
+
+describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+  const start = runner.lastIndexOf('\n  Install-Product') + '\n  Install-Product'.length
+  const lookup = runner.slice(start, runner.indexOf('\n  Invoke-NativeCommand "npm.cmd" "run tauri', start))
+  const native = runner.slice(runner.indexOf('function Resolve-NativeCommand'), runner.indexOf('function Get-UninstallEntries'))
+  const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
+  const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+
+  it('Uses the shipped desktop name for both guards.', () => {
+    const cargo = fs.readFileSync(path.join(root, 'src-tauri/Cargo.toml'), 'utf8')
+    const config = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri/tauri.conf.json'), 'utf8'))
+    expect(cargo).toMatch(/^\[package\]\s+name = "muniment-desktop"/)
+    expect(config.mainBinaryName).toBeUndefined()
+    expect(lookup).toContain('$appBinary = Join-Path $installDirectory "muniment-desktop.exe"')
+    expect(lookup).toContain('Test-Path -LiteralPath $appBinary -PathType Leaf')
+    expect(lookup).not.toContain('$installDisplayIcon')
+    expect(lookup).toContain('webdriver-release-guard.mjs absent `"$appBinary`"')
+    const build = runner.indexOf('"run tauri -- build --no-bundle --features e2e-webdriver')
+    const binary = runner.indexOf('"../../../src-tauri/target/release/muniment-desktop.exe"')
+    expect(build).toBeGreaterThan(start)
+    expect(binary).toBeGreaterThan(build)
+    expect(runner.indexOf('webdriver-release-guard.mjs present `"$appBinary`"')).toBeGreaterThan(binary)
+    expect(runner).not.toContain('muniment.exe')
+  })
+
+  it.skipIf(!hasPowerShell).each([
+    ['desktop', ['muniment-desktop.exe', 'muniment-runtime.exe', 'product.ico'], 0],
+    ['wrong name', ['muniment.exe', 'muniment-runtime.exe', 'product.ico'], 1],
+    ['nested desktop', ['nested/muniment-desktop.exe', 'muniment-runtime.exe'], 1],
+    ['directory named executable', ['muniment-desktop.exe/child.txt'], 1],
+    ['empty directory', [], 1],
+    ['missing directory', [], 1],
+    ['missing location', [], 1],
+  ])('Checks the %s fixture and records the lookup evidence.', (fixture, files, status) => {
+    const directory = temp()
+    const installed = path.join(directory, 'installed app [fixture]')
+    if (fixture !== 'missing directory') fs.mkdirSync(installed)
+    for (const file of files) {
+      const destination = path.join(installed, file)
+      fs.mkdirSync(path.dirname(destination), { recursive: true })
+      fs.writeFileSync(destination, 'release fixture')
+    }
+    const icon = path.join(directory, 'muniment-desktop.exe')
+    fs.writeFileSync(icon, 'TAURI_WEBDRIVER_PORT')
+    const transcript = path.join(directory, 'transcript.log')
+    const script = path.join(directory, 'lookup.ps1')
+    fs.writeFileSync(script, `param([string]$installDirectory, [string]$installDisplayIcon, [string]$transcript, [string]$installerLog, [string]$fixture)
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+if ($fixture -eq 'missing location') { $installDirectory = $null }
+${native}
+Start-Transcript -LiteralPath $transcript -Force | Out-Null
+try {
+${lookup}
+  Write-Output "Release WebDriver guard passed: $appBinary"
+} catch {
+  Write-Output "Lookup failed: $($_.Exception.Message)"
+  exit 1
+} finally {
+  Stop-Transcript | Out-Null
+}
+`)
+    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+      installed, icon, transcript, path.join(directory, 'installer.log'), fixture], {
+      cwd: root, encoding: 'utf8', timeout: 20_000,
+    })
+    expect(result.status, result.stdout + result.stderr).toBe(status)
+    const evidence = fs.readFileSync(transcript, 'utf8')
+    if (status === 0) {
+      expect(evidence).toContain(`The installed desktop executable is ${path.join(installed, 'muniment-desktop.exe')}`)
+      expect(evidence).toContain(`Release WebDriver guard passed: ${path.join(installed, 'muniment-desktop.exe')}`)
+    } else {
+      expect(evidence).not.toContain('Release WebDriver guard passed:')
+      const failure = evidence.indexOf('Lookup failed:')
+      expect(failure).toBeGreaterThan(-1)
+      if (fixture === 'missing location') {
+        expect(evidence).toContain('installer metadata does not identify an install directory')
+      } else {
+        expect(evidence).toContain(`The installed desktop executable is missing: ${path.join(installed, 'muniment-desktop.exe')}`)
+        const listing = evidence.indexOf(`InstallLocation contains these files: ${installed}`)
+        expect(listing).toBeGreaterThan(-1)
+        expect(listing).toBeLessThan(failure)
+        for (const file of files) {
+          const listed = evidence.indexOf(path.join(installed, file))
+          expect(listed).toBeGreaterThan(listing)
+          expect(listed).toBeLessThan(failure)
+        }
+      }
+    }
+  })
+})
