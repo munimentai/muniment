@@ -59,6 +59,10 @@ impl Drop for TemporaryProfile {
     }
 }
 
+pub fn local_grant() -> ChatGrant {
+    ChatGrant::local()
+}
+
 pub fn fixture_grant() -> ChatGrant {
     ChatGrant {
         workspace: "workspace-a".into(),

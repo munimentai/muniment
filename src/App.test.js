@@ -4694,6 +4694,35 @@ describe('thread announcements', () => {
     expect(retry).toBeDisabled()
   })
 
+  it.each(['live', 'restored'])('shows the %s prompt storage notice in one mono line without blocking the reply', async (source) => {
+    localModeStatus = true
+    const promptStorageNotice = 'Prompt text stays in runtime memory for this run. Keyring error -25307: A default keychain could not be found.'
+    const entry = { runId: 'memory-run', phase: 'streaming', text: 'First reply', promptStorageNotice }
+    if (source === 'restored') {
+      signedIn([{ ...entry, prompt: null }])
+    } else {
+      signedIn([], { runId: entry.runId, attachments: [] })
+      const composer = await screen.findByPlaceholderText('Ask anything')
+      await fireEvent.input(composer, { target: { value: 'A question' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      chatListener({ payload: entry })
+    }
+    const summary = await screen.findByText('Prompt text stays in runtime memory for this run.')
+    expect(summary.tagName).toBe('SUMMARY')
+    expect(summary).toHaveAttribute('title', promptStorageNotice)
+    expect(summary.closest('details')).toHaveClass('prompt-storage-notice')
+    expect(appRules.get('.prompt-storage-notice')).toContain('var(--font-mono)')
+    expect(appRules.get('.prompt-storage-notice summary')).toContain('white-space: nowrap')
+    await fireEvent.click(summary)
+    expect(screen.getByText(promptStorageNotice)).toBeVisible()
+    expect(await screen.findByText('First reply')).toBeInTheDocument()
+    expect(screen.queryByText('Conversation history is unavailable.')).not.toBeInTheDocument()
+    chatListener({ payload: { ...entry, phase: 'complete', text: 'Complete reply' } })
+    expect(await screen.findByText('Complete reply')).toBeInTheDocument()
+    expect(screen.getAllByText(promptStorageNotice)).toHaveLength(1)
+    expect(screen.getByPlaceholderText('Ask anything')).toBeEnabled()
+  })
+
   it('keeps retry disabled when the failed run has no saved prompt', async () => {
     signedIn([{ runId: 'missing-prompt', phase: 'failed', text: '', failureReason: 'The provider refused access.' }])
     const error = await screen.findByText('The provider refused access.')

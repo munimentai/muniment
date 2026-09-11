@@ -23,6 +23,7 @@ fn event() -> ChatEvent {
         thread_id: None,
         phase: "running".into(),
         text: "hello".into(),
+        prompt_storage_notice: None,
         failure_reason: None,
         receipt: None,
         tool_activity: Vec::new(),
