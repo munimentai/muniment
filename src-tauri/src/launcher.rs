@@ -3,6 +3,55 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 pub const SHORTCUT: &str = "Control+Alt+Space";
 
+#[cfg(target_os = "macos")]
+mod macos;
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static PANEL: std::cell::RefCell<Option<objc2::rc::Retained<macos::LauncherPanel>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(target_os = "macos")]
+pub fn setup(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("launcher")
+        .ok_or("The launcher is unavailable.")?;
+    let mtm = objc2::MainThreadMarker::new().ok_or("The launcher needs the main thread.")?;
+    let host = window.ns_window().map_err(|error| error.to_string())?;
+    // Tauri owns this NSWindow. Setup and all panel calls run on the AppKit thread.
+    let host = unsafe { &*host.cast::<objc2_app_kit::NSWindow>() };
+    PANEL.with(|slot| *slot.borrow_mut() = Some(macos::LauncherPanel::attach(host, mtm)));
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn panel_visibility(window: tauri::WebviewWindow, visible: Option<bool>) -> Result<bool, String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let host_window = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let result = PANEL.with(|slot| {
+                let slot = slot.borrow();
+                let panel = slot.as_ref().ok_or("The launcher is unavailable.")?;
+                match visible {
+                    Some(true) => {
+                        let host = host_window.ns_window().map_err(|error| error.to_string())?;
+                        // The hidden Tauri host supplies the monitor-adjusted AppKit frame.
+                        panel.show(unsafe { &*host.cast::<objc2_app_kit::NSWindow>() });
+                    }
+                    Some(false) => panel.hide(),
+                    None => {}
+                }
+                Ok(panel.isVisible())
+            });
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+    receiver.recv().map_err(|error| error.to_string())?
+}
+
 fn position(x: i32, y: i32, width: u32, height: u32, scale: f64) -> PhysicalPosition<i32> {
     PhysicalPosition::new(
         x + ((f64::from(width) - 600.0 * scale) / 2.0).max(0.0).round() as i32,
@@ -34,8 +83,13 @@ pub fn launcher_open(app: tauri::AppHandle) -> Result<(), String> {
             ))
             .map_err(|error| error.to_string())?;
     }
-    window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    panel_visibility(window.clone(), Some(true))?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+    }
     window
         .emit("launcher-opened", ())
         .map_err(|error| error.to_string())
@@ -43,10 +97,24 @@ pub fn launcher_open(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn launcher_close(app: tauri::AppHandle) -> Result<(), String> {
-    app.get_webview_window("launcher")
-        .ok_or("The launcher is unavailable.")?
-        .hide()
-        .map_err(|error| error.to_string())
+    let window = app
+        .get_webview_window("launcher")
+        .ok_or("The launcher is unavailable.")?;
+    #[cfg(target_os = "macos")]
+    return panel_visibility(window, Some(false)).map(|_| ());
+    #[cfg(not(target_os = "macos"))]
+    window.hide().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn launcher_is_visible(app: tauri::AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("launcher")
+        .ok_or("The launcher is unavailable.")?;
+    #[cfg(target_os = "macos")]
+    return panel_visibility(window, None);
+    #[cfg(not(target_os = "macos"))]
+    window.is_visible().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -64,7 +132,7 @@ pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     match (window.label(), event) {
         ("launcher", tauri::WindowEvent::CloseRequested { api, .. }) => {
             api.prevent_close();
-            if let Err(error) = window.hide() {
+            if let Err(error) = launcher_close(window.app_handle().clone()) {
                 eprintln!("The launcher could not close. Press Escape again: {error}");
             }
         }

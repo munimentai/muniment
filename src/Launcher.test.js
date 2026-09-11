@@ -7,6 +7,8 @@ let invoke
 let emitTo
 let stops
 beforeEach(() => {
+  localStorage.clear()
+  delete document.documentElement.dataset.theme
   handlers = {}
   stops = []
   invoke = vi.fn().mockResolvedValue(undefined)
@@ -24,7 +26,12 @@ beforeEach(() => {
     },
   }
 })
-afterEach(() => { cleanup(); delete window.__TAURI__ })
+afterEach(() => {
+  cleanup()
+  localStorage.clear()
+  delete document.documentElement.dataset.theme
+  delete window.__TAURI__
+})
 
 async function open() {
   render(Launcher)
@@ -46,6 +53,41 @@ function reply(error = '') {
 }
 
 describe('launcher', () => {
+  it('syncs Light, Dark, and System from another window while hidden and on reopen', async () => {
+    const input = await open()
+    for (const theme of ['light', 'dark', 'system', 'dark', 'light']) {
+      await fireEvent.keyDown(input, { key: 'Escape' })
+      localStorage.setItem('muniment.theme', theme)
+      await fireEvent(window, new StorageEvent('storage', {
+        key: 'muniment.theme', newValue: theme, storageArea: localStorage,
+      }))
+      expect(document.documentElement.dataset.theme).toBe(theme === 'system' ? undefined : theme)
+      // Reopening repairs a missed storage event.
+      document.documentElement.dataset.theme = 'stale'
+      handlers['launcher-opened']()
+      expect(document.documentElement.dataset.theme).toBe(theme === 'system' ? undefined : theme)
+    }
+    localStorage.clear()
+    await fireEvent(window, new StorageEvent('storage', { key: null, storageArea: localStorage }))
+    expect(document.documentElement.dataset.theme).toBeUndefined()
+  })
+
+  it('uses System for malformed or unavailable storage and ignores unrelated changes', async () => {
+    localStorage.setItem('muniment.theme', 'dark')
+    await open()
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    localStorage.setItem('muniment.theme', 'invalid')
+    await fireEvent(window, new StorageEvent('storage', { key: 'other', storageArea: localStorage }))
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    handlers['launcher-opened']()
+    expect(document.documentElement.dataset.theme).toBeUndefined()
+    const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
+    document.documentElement.dataset.theme = 'dark'
+    handlers['launcher-opened']()
+    expect(document.documentElement.dataset.theme).toBeUndefined()
+    read.mockRestore()
+  })
+
   it('opens, sends once, presents the main window, and closes with Escape', async () => {
     const input = await open()
     await typeAndSend(input)

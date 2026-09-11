@@ -39,6 +39,7 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 muniment-runtime = { path = "runtime" }
 objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSGraphics", "NSPanel", "NSResponder", "NSRunningApplication", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSError", "NSString"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["SMAppService", "SMErrors", "objc2", "objc2-foundation", "std"] }
 
@@ -52,6 +53,11 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 tar = "0.4"
 tauri = { version = "2", features = ["test"] }
+
+[[test]]
+name = "launcher-panel"
+path = "tests/launcher_panel.rs"
+harness = false
 
 [[example]]
 name = "sidecar-test-stub"

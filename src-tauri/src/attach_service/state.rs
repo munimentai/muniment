@@ -24,6 +24,19 @@ pub struct AuthorizedCompanion {
     pub(crate) approved_at: Option<String>,
 }
 
+impl AttachCompanionState {
+    pub(crate) fn runtime_connected(&self) -> bool {
+        let status = self.listener_status();
+        status.connected && status.chat_events_connected
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn runtime_disconnected(&self) -> bool {
+        let status = self.listener_status();
+        !status.connected && !status.chat_events_connected
+    }
+}
+
 pub struct AttachCompanionState {
     #[cfg(target_os = "linux")]
     pub(super) listener: Mutex<Option<Arc<AttachListenerState>>>,

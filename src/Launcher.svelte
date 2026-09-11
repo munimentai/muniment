@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte'
+  import { THEME_STORAGE_KEY, parseTheme } from './lib/theme-state.js'
 
   const api = window.__TAURI__
   let input
@@ -7,6 +8,19 @@
   let pending = $state(null)
   let ready = $state(false)
   let error = $state('')
+
+  function syncAppearance() {
+    let theme = 'system'
+    try { theme = parseTheme(localStorage.getItem(THEME_STORAGE_KEY)) } catch (_) {}
+    if (theme === 'system') delete document.documentElement.dataset.theme
+    else document.documentElement.dataset.theme = theme
+  }
+
+  function storageChanged(event) {
+    if (event.storageArea === localStorage && (event.key === THEME_STORAGE_KEY || event.key === null)) {
+      syncAppearance()
+    }
+  }
 
   function showError(message) {
     error = message
@@ -50,7 +64,7 @@
     const stops = []
     async function start() {
       for (const [name, handler] of [
-        ['launcher-opened', () => input?.focus()],
+        ['launcher-opened', () => { syncAppearance(); input?.focus() }],
         ['launcher-result', async ({ payload }) => {
           if (!pending || payload?.id !== pending) return
           pending = null
@@ -71,6 +85,7 @@
         stops.push(stop)
       }
       ready = true
+      syncAppearance()
       input.focus()
     }
     void start().catch(() => showError('The launcher could not start. Restart the app.'))
@@ -78,7 +93,7 @@
   })
 </script>
 
-<svelte:window onkeydown={keydown} />
+<svelte:window onkeydown={keydown} onstorage={storageChanged} />
 
 <form class="launcher" aria-label="New thread" onsubmit={send}>
   <input

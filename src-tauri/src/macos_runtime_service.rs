@@ -44,14 +44,6 @@ pub(crate) enum RuntimeServiceActivation {
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub(crate) fn runtime_service_activation(
-    activation: tauri::State<'_, RuntimeServiceActivation>,
-) -> RuntimeServiceActivation {
-    *activation
-}
-
-#[cfg(target_os = "macos")]
-#[tauri::command]
 pub(crate) fn open_login_items() {
     use objc2_service_management::SMAppService;
 
@@ -237,7 +229,8 @@ fn write_start_diagnostic(log_directory: &Path, outcome: RuntimeStartOutcome) ->
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn activate_bundled_runtime_service() -> RuntimeServiceActivation {
+pub(crate) fn start() -> crate::runtime_owner::RuntimeEvent {
+    use crate::runtime_owner::RuntimeEvent;
     let log_directory = muniment_core::user_diagnostics::effective_user_home()
         .ok()
         .map(|home| home.join("Library/Logs/Muniment"));
@@ -246,24 +239,57 @@ pub(crate) fn activate_bundled_runtime_service() -> RuntimeServiceActivation {
         log_directory.as_deref(),
     )
     .expect("macOS startup activates the runtime service");
-    if let Some(log_directory) = log_directory {
-        if let Ok(profile_directory) = muniment_runtime::profile_directory() {
-            let start_adapter = MacosRuntimeStartAdapter::new(profile_directory);
-            let outcome = request_enabled_runtime_start(activation, &start_adapter);
-            let _ = write_start_diagnostic(&log_directory, outcome);
-        }
+    match activation {
+        RuntimeServiceActivation::RequiresApproval => return RuntimeEvent::RequiresApproval,
+        RuntimeServiceActivation::NotFound => return RuntimeEvent::NotFound,
+        RuntimeServiceActivation::Failed => return RuntimeEvent::RegistrationFailed,
+        RuntimeServiceActivation::Enabled => {}
     }
-    activation
+    // Kickstart is idempotent without -k. A stale socket must not block a retry.
+    let outcome = match muniment_runtime::profile_directory() {
+        Ok(directory) => {
+            let mut adapter = MacosRuntimeStartAdapter::new(directory);
+            adapter.force_request = true;
+            request_enabled_runtime_start(activation, &adapter)
+        }
+        Err(_) => RuntimeStartOutcome::RequestFailed,
+    };
+    if let Some(directory) = log_directory {
+        let _ = write_start_diagnostic(&directory, outcome);
+    }
+    if outcome == RuntimeStartOutcome::Requested {
+        RuntimeEvent::Starting
+    } else {
+        RuntimeEvent::StartFailed
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn requires_approval() -> Option<bool> {
+    match MacosRuntimeServiceAdapter::new().status() {
+        Ok(ServiceStatus::RequiresApproval) => Some(true),
+        Ok(ServiceStatus::Enabled) => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn stop() -> Result<(), ()> {
+    let adapter = MacosRuntimeServiceAdapter::new();
+    // SAFETY: The adapter retains the bundled service for the duration of this call.
+    unsafe { adapter.service.unregisterAndReturnError() }.map_err(|_| ())
 }
 
 struct MacosRuntimeStartAdapter {
     endpoint: PathBuf,
+    force_request: bool,
 }
 
 impl MacosRuntimeStartAdapter {
     fn new(profile_directory: PathBuf) -> Self {
         Self {
             endpoint: profile_directory.join("muniment/attach-v1.sock"),
+            force_request: false,
         }
     }
 }
@@ -271,6 +297,9 @@ impl MacosRuntimeStartAdapter {
 #[cfg(target_os = "macos")]
 impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
     fn endpoint_exists(&self) -> Result<bool, ()> {
+        if self.force_request {
+            return Ok(false);
+        }
         match std::fs::symlink_metadata(&self.endpoint) {
             Ok(_) => Ok(true),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -505,6 +534,7 @@ mod tests {
     fn start_adapter_checks_the_canonical_profile_endpoint() {
         let profile_directory = PathBuf::from("/profiles/current");
         let adapter = MacosRuntimeStartAdapter::new(profile_directory);
+        assert!(!adapter.force_request);
 
         assert_eq!(
             adapter.endpoint,
@@ -569,7 +599,8 @@ mod tests {
     #[test]
     fn main_registers_runtime_service_commands() {
         let main = include_str!("main.rs");
-        assert!(main.contains("macos_runtime_service::runtime_service_activation"));
+        assert!(main.contains("runtime_owner::runtime_state"));
+        assert!(main.contains("runtime_owner::runtime_start"));
         assert!(main.contains("macos_runtime_service::open_login_items"));
     }
 
