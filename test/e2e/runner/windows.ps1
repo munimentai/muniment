@@ -3,6 +3,10 @@ param()
 try {
   $artifacts = if ($env:DCI_ARTIFACTS_DIR) { $env:DCI_ARTIFACTS_DIR } else { Join-Path $env:TEMP "dci-artifacts" }
   New-Item -ItemType Directory -Force $artifacts -ErrorAction Stop | Out-Null
+  # New-Item -Force can accept a file without creating a directory.
+  if (-not (Test-Path -LiteralPath $artifacts -PathType Container)) {
+    throw "The artifact path is not a directory: $artifacts"
+  }
   $diagnosticFile = Join-Path $artifacts "runner-failure.txt"
   $transcriptPath = Join-Path $env:TEMP "dci-windows-transcript.log"
   if ($env:MUNIMENT_E2E_BOOTSTRAP_TEST_FAIL -eq "start-transcript") { throw "injected Start-Transcript failure" }
@@ -99,6 +103,8 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
     $startInfo.FileName = $resolvedFile
     $startInfo.Arguments = $Arguments
   }
+  # PowerShell location and the process current directory can differ.
+  $startInfo.WorkingDirectory = (Get-Location).ProviderPath
   $startInfo.UseShellExecute = $false
   $startInfo.CreateNoWindow = $true
   $startInfo.RedirectStandardOutput = $true
@@ -120,21 +126,31 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
   $process.WaitForExit()
   $stdout = $stdoutTask.Result
   $stderr = $stderrTask.Result
-  if ($stdout) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
-  if ($stderr) { Add-Content -LiteralPath $(if ($ErrorLog) { $ErrorLog } else { $Log }) -Value $stderr -NoNewline }
+  if ($stdout -and $Log) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
+  $stderrLog = if ($ErrorLog) { $ErrorLog } else { $Log }
+  if ($stderr -and $stderrLog) { Add-Content -LiteralPath $stderrLog -Value $stderr -NoNewline }
   if ($process.ExitCode -ne 0) {
     if (-not $SummarizeFailure) { throw "diagnostic summary unavailable" }
     # Share redaction and diagnostic selection with the POSIX runner.
     $summaryHelper = Join-Path $PSScriptRoot "../support/failure-summary.mjs"
     $summaryInput = @{ stdout = $stdout; stderr = $stderr; label = $FailureMessage; exitCode = $process.ExitCode } | ConvertTo-Json -Compress
     try {
-      $detail = Invoke-NativeCommand "node" "`"$summaryHelper`"" $Log "diagnostic summary failed" $summaryInput $null $false
+      # Keep the summary's progress excerpts out of the command log.
+      $detail = Invoke-NativeCommand "node" "`"$summaryHelper`"" $null "diagnostic summary failed" $summaryInput $null $false
     } catch {
       throw "native command failed (exit code $($process.ExitCode)), diagnostic summary unavailable"
     }
     throw $detail
   }
   return $stdout
+}
+
+function Write-ToolchainState([string]$Phase) {
+  Write-Output "Tauri toolchain $Phase process_cwd=$([Environment]::CurrentDirectory) command_cwd=$((Get-Location).ProviderPath)"
+  Write-Output "Tauri toolchain $Phase npm=$(Resolve-NativeCommand 'npm.cmd' 'toolchain probe failed')"
+  # --call uses Node from PATH without asking npm to resolve the node package.
+  # Relative paths avoid nested cmd.exe quotes when the repository path contains spaces.
+  Invoke-NativeCommand "npm.cmd" "exec --offline --call `"node test/e2e/support/windows-toolchain.mjs . $Phase`"" $installerLog "Tauri toolchain probe failed"
 }
 
 function Get-UninstallEntries([ValidateSet("HKCU", "HKLM")][string]$Hive = "HKCU") {
@@ -339,6 +355,15 @@ function Finalize-Run {
   Invoke-Cleanup "processes-gone" {
     if (@(Get-HarnessProcesses).Count -ne 0) { throw "test process remains" }
   }
+  # Keep the tail even if artifact publication fails after Stop-Transcript.
+  if ($installerLog -and (Test-Path -LiteralPath $installerLog)) {
+    try {
+      $tailHelper = Join-Path $PSScriptRoot "../support/installer-log-tail.mjs"
+      Invoke-NativeCommand "node" "`"$tailHelper`" `"$installerLog`"" $cleanupLog "installer log tail failed" | ForEach-Object { Write-Host $_ }
+    } catch {
+      Write-Output "The installer.log tail is unavailable."
+    }
+  }
   Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
   if ($raw -and (Test-Path -LiteralPath $raw)) {
     Copy-Item -LiteralPath $transcriptPath -Destination (Join-Path $raw "runner-transcript.log") -Force -ErrorAction SilentlyContinue
@@ -478,12 +503,16 @@ try {
     return
   }
 
+  $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../.."))
+  Set-Location -LiteralPath $repoRoot
   $imageFixture = Join-Path $stateRoot "image-token.png"
   $imageBase64 = (Get-Content -LiteralPath "test/e2e/fixtures/image-token.png.base64" -Raw) -replace '\s', ''
   [IO.File]::WriteAllBytes($imageFixture, [Convert]::FromBase64String($imageBase64))
 
   Invoke-NativeCommand "npm.cmd" "ci --no-audit --no-fund" $installerLog "npm dependency installation failed"
+  Write-ToolchainState "after-npm-ci"
   Invoke-NativeCommand "npx.cmd" "vitest run --root . test/desktop-e2e-harness.test.js" $installerLog "Windows contract tests failed for test/desktop-e2e-harness.test.js"
+  Write-ToolchainState "after-contract-tests"
 
   $sha = $env:MUNIMENT_E2E_SOURCE_SHA
   if ($sha -notmatch '^[0-9a-f]{40}$') { throw "invalid source SHA" }
@@ -533,7 +562,11 @@ try {
   Write-Output "The installed desktop executable is $appBinary"
 
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs absent `"$appBinary`"" $installerLog "release WebDriver guard failed"
-  Invoke-NativeCommand "npm.cmd" "run tauri -- build --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json" $installerLog "E2E application build failed"
+  Write-ToolchainState "before-e2e-build"
+  # Use the installed CLI entry without npm's bare-command PATH lookup.
+  $tauriCli = Join-Path $repoRoot "node_modules/@tauri-apps/cli/tauri.js"
+  if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) { throw "The local Tauri CLI entry is missing: $tauriCli" }
+  Invoke-NativeCommand "node" "`"$tauriCli`" build --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json" $installerLog "E2E application build failed"
   $appBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment-desktop.exe"))
   if (-not (Test-Path -LiteralPath $appBinary -PathType Leaf)) { throw "E2E application binary is unavailable" }
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs present `"$appBinary`"" $installerLog "E2E WebDriver guard failed"
@@ -647,7 +680,8 @@ namespace MunimentE2e {
 } catch {
   Save-RunnerFailure $_
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL) { $script:redacted = $false }
-  if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }
+  # A multiline summary must not displace the command's stderr from the log tail.
+  if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message -replace '\r?\n', ' ')" -ErrorAction SilentlyContinue }
   $status = 1
 } finally {
   $diagnosticRoot = Join-Path $env:TEMP ([guid]::NewGuid().ToString("N"))

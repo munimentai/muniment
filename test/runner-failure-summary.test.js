@@ -87,6 +87,22 @@ for (const helper of ['POSIX runner', 'Windows summary', 'Windows runner']) {
       },
     )
 
+    it.each([
+      "'tauri' is not recognized as an internal or external command,",
+      'error[E0432]: unresolved import',
+      'npm ERR! code EACCES',
+      'npm error code EACCES',
+    ])('Puts the stderr diagnostic first: %s.', (error) => {
+      const banner = '> muniment-desktop@0.0.1 tauri'
+      const files = publish(helper, `${banner}\n> tauri build\n${'p'.repeat(1800)}`,
+        `${'warning\n'.repeat(200)}\n${error}\n${'stack frame\n'.repeat(200)}`, process.env)
+      const cause = files['runner-failure.txt']
+      expect(cause).toContain(`(exit code 7): ${error}`)
+      expect(cause.indexOf(error)).toBeLessThan(cause.indexOf(banner))
+      expect(cause.length).toBeLessThanOrEqual(1000)
+      expect(files['junit-infrastructure.xml']).toContain(error.replaceAll("'", '&apos;'))
+    })
+
     it.each(['macos', 'windows'])('keeps the complete missing %s asset error through the JUnit cap', (platform) => {
       const sha = 'a'.repeat(40)
       const assetNames = [
