@@ -127,6 +127,8 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     )
     .unwrap();
 
+    let chat_events = service.subscribe_chat_events().unwrap();
+    assert!(state.signed_workspace_approval().approval().is_none());
     let submitted = service
         .submit_run(
             "",
@@ -157,6 +159,20 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
         std::fs::read_to_string(prompt_capture).unwrap().trim(),
         "local prompt"
     );
+
+    let delivered = std::iter::from_fn(|| chat_events.try_recv().ok()).collect::<Vec<_>>();
+    assert!(delivered
+        .iter()
+        .any(|event| event.phase == "streaming" && event.text == " resumed"));
+    let completed = delivered.last().unwrap();
+    assert_eq!(completed.phase, "complete");
+    assert_eq!(completed.text, " resumed");
+    assert!(completed.receipt.is_some());
+    assert!(delivered
+        .iter()
+        .all(|event| event.run_id == submitted.run_id
+            && event.thread_id.as_deref() == Some(submitted.thread_id.as_str())));
+    assert!(state.signed_workspace_approval().approval().is_none());
 
     let storage = open_profile_storage(&profile.profile).unwrap();
     let events = storage
@@ -203,6 +219,38 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     let elapsed = receipt["time"].as_str().unwrap();
     assert!(elapsed.ends_with('s'));
     assert!(elapsed.trim_end_matches('s').parse::<f64>().is_ok());
+
+    let cause = "Reply delivery failed. The desktop missed the five-second chat.event frame deadline with 17 bytes pending.";
+    service.record_chat_delivery_failure(&submitted.run_id, cause);
+    let reconnected = service.subscribe_chat_events().unwrap();
+    let failure = reconnected.try_recv().unwrap();
+    assert_eq!(failure.run_id, submitted.run_id);
+    assert_eq!(
+        failure.thread_id.as_deref(),
+        Some(submitted.thread_id.as_str())
+    );
+    assert_eq!(failure.phase, "delivery-failed");
+    assert_eq!(failure.failure_reason.as_deref(), Some(cause));
+    assert!(reconnected.try_recv().is_err());
+    assert!(service.subscribe_chat_events().unwrap().try_recv().is_err());
+    let restored = storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(&submitted.run_id)
+        .unwrap();
+    assert_eq!(restored, events);
+
+    service.record_chat_delivery_failure("missing-run", cause);
+    assert!(service.subscribe_chat_events().unwrap().try_recv().is_err());
+    service.record_chat_delivery_failure(&submitted.run_id, cause);
+    std::fs::remove_file(
+        profile
+            .config
+            .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+    )
+    .unwrap();
+    assert!(service.subscribe_chat_events().unwrap().try_recv().is_err());
 }
 
 #[test]

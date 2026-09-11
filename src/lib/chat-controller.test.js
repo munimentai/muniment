@@ -88,6 +88,70 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
   }
 }
 
+describe('chat delivery recovery', () => {
+  it('shows the frame cause and restores the first run after its submit acknowledgment', async () => {
+    const submit = deferred()
+    const history = deferred()
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_submit') return submit.promise
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_thread_open') return history.promise
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke)
+    context.onThreadSelected.mockImplementation(context.setThreadId)
+    await context.start()
+    const sending = context.controller.send()
+    const cause = 'Reply delivery failed. The desktop missed the five-second chat.event frame deadline with 17 bytes pending.'
+    context.event({ runId: 'run-1', phase: 'delivery-failed', failureReason: cause })
+    expect(context.onHistoryError).toHaveBeenLastCalledWith(cause, expect.objectContaining({ label: 'Restore reply' }))
+    expect(context.active().id).toBe('pending')
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+
+    submit.resolve({ runId: 'run-1' })
+    await sending
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 }))
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual([
+      'chat_submit', 'chat_thread_summaries', 'chat_current_thread', 'chat_thread_open',
+    ])
+    history.resolve({ entries: [{ runId: 'run-1', prompt: 'Hello', text: 'The journal kept this reply.', phase: 'complete', receipt: {} }], nextCursor: null })
+    await vi.waitFor(() => expect(context.messages()[1].run.text).toBe('The journal kept this reply.'))
+    expect(context.messages()[1].run.phase).toBe('complete')
+    expect(context.active()).toBe(null)
+    expect(context.onHistoryError).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries a recovery that arrives during a journal read', async () => {
+    const first = deferred()
+    let reads = 0
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_open') {
+        reads += 1
+        return reads === 1 ? first.promise : { entries: [{ runId: 'run-1', phase: 'complete', text: 'Restored' }], nextCursor: null }
+      }
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-1'
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const refreshing = context.controller.refreshOpenThread()
+    await context.controller.recoverChatEvents()
+    first.resolve({ entries: [], nextCursor: null })
+    await refreshing
+    await vi.waitFor(() => expect(reads).toBe(2))
+    await vi.waitFor(() => expect(context.messages()[0].run.text).toBe('Restored'))
+  })
+
+  it('ignores a delivery failure after cleanup', async () => {
+    const context = setup()
+    await context.start()
+    context.controller.cleanup()
+    context.event({ runId: 'run-1', phase: 'delivery-failed', failureReason: 'Reply delivery failed.' })
+    expect(context.onHistoryError).not.toHaveBeenCalled()
+  })
+})
+
 describe('launcher submission', () => {
   it('starts a fresh thread without consuming the main draft or attachments', async () => {
     const invoke = vi.fn(async (command) => command === 'chat_submit' ? { runId: 'launcher-run' } : undefined)

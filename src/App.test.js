@@ -1210,6 +1210,29 @@ describe('workspace composer entry', () => {
     expect(screen.getByLabelText('Provider API key')).toBeVisible()
   })
 
+  it('shows a delivery deadline cause and restores the local reply from the journal', async () => {
+    localModeStatus = true
+    let restored = false
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_thread_open') return [{
+        runId: 'run-local', phase: restored ? 'complete' : 'streaming',
+        text: restored ? 'The journal kept the reply.' : 'A', prompt: 'A question', receipt: {}, toolActivity: [],
+      }]
+      return defaultInvoke(command, ...args)
+    })
+    render(App)
+    await screen.findByText('A question', { selector: '.user-turn p' })
+    restored = true
+    const cause = 'Reply delivery failed. The desktop missed the five-second chat.event frame deadline with 17 bytes pending.'
+    chatListener({ payload: { runId: 'run-local', phase: 'delivery-failed', failureReason: cause } })
+    expect(await screen.findByText(cause)).toBeVisible()
+    expect(await screen.findByText('The journal kept the reply.')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Restore reply' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+  })
+
   it('disables the provider radios during an active reply', async () => {
     localModeStatus = true
     const defaultInvoke = invoke.getMockImplementation()

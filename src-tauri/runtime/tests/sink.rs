@@ -269,6 +269,64 @@ fn withholds_a_mismatched_broadcast_and_keeps_the_subscription() {
     assert_eq!(subscriber.recv().unwrap().text, "hello");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn local_broadcast_needs_the_marker_not_signed_workspace_approval() {
+    let profile = TemporaryProfile::new("sink-local", false);
+    fs::create_dir_all(&profile.config).unwrap();
+    let marker = profile
+        .config
+        .join(muniment_core::local_mode::LOCAL_MODE_MARKER);
+    let approval = SignedWorkspaceApproval::default();
+    let broadcast = RuntimeChatEventBroadcast::new(approval.clone())
+        .with_config_directory(profile.config.clone());
+    let subscriber = broadcast.subscribe();
+    let local = RuntimeChatEventSink::new(
+        &profile.profile,
+        broadcast.clone(),
+        memory_runtime(&profile),
+        "thread-local".into(),
+        "local".into(),
+    );
+    let cloud = RuntimeChatEventSink::new(
+        &profile.profile,
+        broadcast,
+        memory_runtime(&profile),
+        "thread-cloud".into(),
+        "workspace-a".into(),
+    );
+
+    local.deliver(event()).unwrap();
+    assert!(matches!(subscriber.try_recv(), Err(TryRecvError::Empty)));
+    fs::write(&marker, b"").unwrap();
+    local.deliver(event()).unwrap();
+    let delivered = subscriber.try_recv().unwrap();
+    assert_eq!(delivered.text, "hello");
+    assert_eq!(delivered.thread_id.as_deref(), Some("thread-local"));
+    assert!(approval.approval().is_none());
+
+    // Local mode must not expose events from an older signed workspace.
+    approval.record("workspace-a".into());
+    cloud.deliver(event()).unwrap();
+    assert!(matches!(subscriber.try_recv(), Err(TryRecvError::Empty)));
+    fs::remove_file(&marker).unwrap();
+    local.deliver(event()).unwrap();
+    assert!(matches!(subscriber.try_recv(), Err(TryRecvError::Empty)));
+    cloud.deliver(event()).unwrap();
+    assert_eq!(
+        subscriber.try_recv().unwrap().thread_id.as_deref(),
+        Some("thread-cloud")
+    );
+
+    // A directory at the marker path does not activate local mode.
+    fs::create_dir(&marker).unwrap();
+    local.deliver(event()).unwrap();
+    assert!(matches!(subscriber.try_recv(), Err(TryRecvError::Empty)));
+    approval.clear();
+    cloud.deliver(event()).unwrap();
+    assert!(matches!(subscriber.try_recv(), Err(TryRecvError::Empty)));
+}
+
 #[test]
 fn withholds_an_unrecorded_broadcast_and_reads_the_workspace_at_delivery() {
     let profile = TemporaryProfile::new("sink-broadcast-unrecorded", false);

@@ -20,6 +20,8 @@ pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 pub struct RuntimeChatEventBroadcast {
     shared: Arc<RuntimeChatEventBroadcastShared>,
     approval: SignedWorkspaceApproval,
+    #[cfg(target_os = "linux")]
+    config_directory: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -27,6 +29,8 @@ struct RuntimeChatEventBroadcastShared {
     next_id: AtomicU64,
     full_queue_drops: AtomicU64,
     subscribers: Mutex<Vec<RuntimeChatEventSubscriber>>,
+    #[cfg(target_os = "linux")]
+    delivery_failure: Mutex<Option<(String, ChatEvent)>>,
 }
 
 struct RuntimeChatEventSubscriber {
@@ -39,11 +43,53 @@ impl RuntimeChatEventBroadcast {
         Self {
             shared: Arc::new(RuntimeChatEventBroadcastShared::default()),
             approval,
+            #[cfg(target_os = "linux")]
+            config_directory: None,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn with_config_directory(mut self, config_directory: PathBuf) -> Self {
+        self.config_directory = Some(config_directory);
+        self
+    }
+
+    fn allows_workspace(&self, workspace: &str) -> bool {
+        #[cfg(target_os = "linux")]
+        if let Some(directory) = &self.config_directory {
+            if muniment_core::local_mode::is_local_mode(directory) {
+                return workspace == "local";
+            }
+        }
+        self.approval
+            .approval()
+            .is_some_and(|approval| approval.workspace == workspace)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn record_delivery_failure(&self, workspace: String, event: ChatEvent) {
+        // One run can execute at a time. Keep its delivery failure until the next subscription.
+        *self
+            .shared
+            .delivery_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((workspace, event));
     }
 
     pub fn subscribe(&self) -> ChatEventSubscription {
         let (sender, receiver) = mpsc::sync_channel(CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY);
+        #[cfg(target_os = "linux")]
+        if let Some((workspace, failure)) = self
+            .shared
+            .delivery_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            if self.allows_workspace(&workspace) {
+                let _ = sender.try_send(failure);
+            }
+        }
         let id = self.shared.next_id.fetch_add(1, Ordering::Relaxed);
         self.shared
             .subscribers
@@ -70,11 +116,7 @@ impl RuntimeChatEventBroadcast {
     }
 
     fn deliver(&self, workspace: &str, event: ChatEvent) {
-        if !self
-            .approval
-            .approval()
-            .is_some_and(|approval| approval.workspace == workspace)
-        {
+        if !self.allows_workspace(workspace) {
             return;
         }
         let mut full_queue_drops = Vec::new();

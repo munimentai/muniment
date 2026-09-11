@@ -146,6 +146,8 @@ impl RuntimeAttachBoundaries {
         sign_in_running: Arc<AtomicBool>,
         chat_events: RuntimeChatEventBroadcast,
     ) -> Self {
+        #[cfg(target_os = "linux")]
+        let chat_events = chat_events.with_config_directory(config_directory.clone());
         Self {
             storage,
             active,
@@ -977,6 +979,46 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .journal
             .subscribe_commits(run_id)
             .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn record_chat_delivery_failure(&self, run_id: &str, cause: &str) {
+        let workspace = if self.local_mode() {
+            "local".to_owned()
+        } else if let Some(approval) = self.approval.approval() {
+            approval.workspace
+        } else {
+            return;
+        };
+        let Ok(storage) = self.storage.lock() else {
+            return;
+        };
+        if !matches!(
+            storage.journal.run_belongs_to_workspace(run_id, &workspace),
+            Ok(true)
+        ) {
+            return;
+        }
+        let Ok(Some(thread_id)) = storage.journal.run_thread_id(run_id) else {
+            return;
+        };
+        drop(storage);
+        self.chat_events.record_delivery_failure(
+            workspace,
+            muniment_core::run_events::ChatEvent {
+                run_id: run_id.to_owned(),
+                thread_id: Some(thread_id),
+                phase: "delivery-failed".into(),
+                text: String::new(),
+                failure_reason: Some(cause.to_owned()),
+                receipt: None,
+                tool_activity: Vec::new(),
+                attachments: Vec::new(),
+                recalls: Vec::new(),
+                applied_diffs: Vec::new(),
+                pending_permission: None,
+            },
+        );
     }
 
     fn subscribe_chat_events(

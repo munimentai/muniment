@@ -60,6 +60,8 @@ export function createChatController({
   // event while one runs, because no published run describes it yet.
   let historyLoads = 0
   let refreshingOpenThread = false
+  let recoveryPending = false
+  let recovering = false
   let threadRefreshSequence = 0
   let threadPageCount = 1
   let nextThreadCursor = null
@@ -187,6 +189,12 @@ export function createChatController({
   }
 
   function handleEvent({ payload }) {
+    if (destroyed) return
+    if (payload.phase === 'delivery-failed') {
+      onHistoryError(payload.failureReason || 'Reply delivery failed.', { label: 'Restore reply', run: recoverChatEvents })
+      void recoverChatEvents()
+      return
+    }
     const signaled = signalThread(payload.threadId)
     // A thread load replaces the whole transcript, so no published run describes
     // this event yet. openThread and refreshOpenThread drain the buffer onto the
@@ -387,6 +395,7 @@ export function createChatController({
       releaseBuffer()
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
+      if (recoveryPending) void recoverChatEvents()
     }
   }
 
@@ -442,6 +451,7 @@ export function createChatController({
       // older transcript. That call owns the view now, and publishing the pages
       // would drop the message and the run it just added.
       if (messages() !== publishedAtEntry) {
+        if (recovering) recoveryPending = true
         drainVisibleRun()
         return
       }
@@ -476,11 +486,33 @@ export function createChatController({
       historyLoads -= 1
       releaseBuffer()
       refreshingOpenThread = false
+      if (recoveryPending && !recovering) void recoverChatEvents()
     }
     // A signal can land on a re-read that a reconnect started. Collapse it
     // into one follow-up once that re-read ends.
     if (signaledRunRefreshFollowUp && !signaledRunRefreshInFlight && !destroyed) {
       void refreshSignaledOpenThread()
+    }
+  }
+
+  async function recoverChatEvents() {
+    if (destroyed) return
+    recoveryPending = true
+    if (recovering || active()?.id === 'pending' || switchingThread || refreshingOpenThread) return
+    recovering = true
+    try {
+      do {
+        recoveryPending = false
+        // The first lost frame can name a new thread. Resolve it before reading the journal.
+        await refreshThreads()
+        if (active()?.id === 'pending' || switchingThread || refreshingOpenThread) {
+          recoveryPending = true
+          break
+        }
+        await refreshOpenThread()
+      } while (recoveryPending && !destroyed && active()?.id !== 'pending' && !switchingThread)
+    } finally {
+      recovering = false
     }
   }
 
@@ -510,6 +542,7 @@ export function createChatController({
     } finally {
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
+      if (recoveryPending) void recoverChatEvents()
     }
   }
 
@@ -573,6 +606,7 @@ export function createChatController({
     } finally {
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
+      if (recoveryPending) void recoverChatEvents()
     }
   }
 
@@ -629,6 +663,7 @@ export function createChatController({
       return false
     } finally {
       releaseBuffer()
+      if (recoveryPending) void recoverChatEvents()
     }
   }
 
@@ -696,5 +731,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, recoverChatEvents, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

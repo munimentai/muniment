@@ -263,8 +263,7 @@
       && status?.chat_events_connected === true
     desktopClientStatus = status
     if (chatEventsRecovered) {
-      void startupReady.then(() => chatController.refreshOpenThread())
-      void startupReady.then(() => chatController.refreshThreads())
+      void startupReady.then(() => chatController.recoverChatEvents())
     }
   }
 
