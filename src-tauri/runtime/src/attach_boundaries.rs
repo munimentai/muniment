@@ -340,9 +340,14 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         thread_id: Option<&str>,
     ) -> Result<(u64, ChatProjector), RunStartError> {
         let files = open_selected_files(files)?;
+        let mut notice = None;
         let protect = || {
-            muniment_core::chat_prompt::store_prompt(run_id, prompt, tokens.subject.as_deref())
-                .map_err(|_| "Conversation history is unavailable.".to_string())
+            notice = service::prompt_storage::store_prompt_or_notice(
+                run_id,
+                prompt,
+                tokens.subject.as_deref(),
+            );
+            Ok(())
         };
         let result = match thread_id {
             Some(thread_id) => prepare_new_run_in_thread_after_validation(
@@ -373,7 +378,14 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                 protect,
             ),
         };
-        result.map_err(|error| {
+        service::prompt_storage::record_prompt_storage_notice(
+            &self.storage,
+            run_id,
+            tokens.subject.as_deref(),
+            result,
+            notice,
+        )
+        .map_err(|error| {
             if error == "thread_not_found" {
                 RunStartError::ThreadNotFound
             } else {

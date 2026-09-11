@@ -33,7 +33,17 @@ An empty journal shows the composer without a history alert.
 If a history read fails, the alert includes the reader's cause. **Restore history** repeats the failed action.
 A successful history read clears the alert.
 
-Local mode writes run input, model output, tool activity, and completion records to the local run journal. A completed local run records its elapsed time and no cloud receipt. These records use the same event shapes as cloud-backed runs.
+The runtime saves prompt history in the OS keyring.
+If the keyring refuses a write, Send still starts the run with the prompt in runtime memory.
+The shell shows a mono line with the storage location.
+Open the line to read the keyring error and its platform code.
+The runtime log and the journal record the same notice without the prompt text.
+
+After the shell restores the thread, it shows the reply and notice without prompt history.
+The runtime does not add a plaintext prompt store.
+The model provider and its session files still follow their own storage rules.
+
+Local mode writes run start, model output, tool activity, and completion records to the local run journal. A completed local run records its elapsed time and no cloud receipt. These records use the same event shapes as cloud-backed runs.
 
 After Pi becomes ready, a prompt has 30 seconds to produce its first reply event. An acknowledgment alone does not satisfy this bound. If the bound expires, the shell shows the cause and records a failed reply in the local run journal.
 

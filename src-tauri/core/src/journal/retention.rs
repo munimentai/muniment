@@ -21,6 +21,7 @@ pub struct RetentionOutcome {
 pub struct DeletedRun {
     pub run_id: String,
     pub subject: Option<String>,
+    pub prompt_stored: bool,
 }
 
 #[derive(Debug)]
@@ -129,6 +130,9 @@ pub fn apply_retention_with(
         let deleted_run = DeletedRun {
             run_id: newest.run_id.clone(),
             subject,
+            prompt_stored: !events
+                .iter()
+                .any(|event| event.event_type == "chat.prompt.storage_notice"),
         };
         before_delete(&deleted_run)?;
         journal.delete_run(&newest.run_id)?;

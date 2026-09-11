@@ -141,6 +141,9 @@ pub fn apply_retention(
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
     let ChatStorage { journal, cas } = &mut *storage;
     apply_retention_now_with(journal, Some(cas), max_age_seconds, |deleted_run| {
+        if !deleted_run.prompt_stored {
+            return Ok(());
+        }
         muniment_core::chat_prompt::delete_prompt(
             &deleted_run.run_id,
             deleted_run.subject.as_deref(),

@@ -129,7 +129,13 @@ pub fn accept_prompt(
         },
     )?;
     let setup = (|| {
-        let mut prepared = match thread_id.as_deref() {
+        let mut notice = None;
+        let protect = || {
+            notice =
+                super::prompt_storage::store_prompt_or_notice(&run_id, &prompt, subject.as_deref());
+            Ok(())
+        };
+        let prepared = match thread_id.as_deref() {
             Some(thread_id) => prepare_new_run_in_thread_after_validation(
                 &storage,
                 &run_id,
@@ -140,10 +146,7 @@ pub fn accept_prompt(
                 thread_id,
                 "muniment-runtime",
                 env!("CARGO_PKG_VERSION"),
-                || {
-                    muniment_core::chat_prompt::store_prompt(&run_id, &prompt, subject.as_deref())
-                        .map_err(|_| "Conversation history is unavailable.".to_string())
-                },
+                protect,
             ),
             None => prepare_new_run_with_session_thread(
                 &storage,
@@ -158,12 +161,16 @@ pub fn accept_prompt(
                 Some(runtime_provenance()),
                 "muniment-runtime",
                 env!("CARGO_PKG_VERSION"),
-                || {
-                    muniment_core::chat_prompt::store_prompt(&run_id, &prompt, subject.as_deref())
-                        .map_err(|_| "Conversation history is unavailable.".to_string())
-                },
+                protect,
             ),
-        }?;
+        };
+        let mut prepared = super::prompt_storage::record_prompt_storage_notice(
+            &storage,
+            &run_id,
+            subject.as_deref(),
+            prepared,
+            notice,
+        )?;
         let thread_id = {
             let mut storage = match storage.lock() {
                 Ok(storage) => storage,
