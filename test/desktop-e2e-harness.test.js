@@ -2423,7 +2423,7 @@ describe('installed desktop client identity', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
 
   it('copies the WebDriver build to the installed desktop path before each phase', () => {
-    expect(runner).toContain('installed_desktop=/usr/bin/muniment')
+    expect(runner).toMatch(/^installed_desktop=\/usr\/bin\/muniment-desktop$/m)
     expect(runner).toContain('[[ -f $installed_desktop ]]')
     expect(runner).toContain('sudo install -m 0755 "$e2e_app_binary" "$installed_desktop"')
     expect(runner).toContain("runner_failure 'installed desktop path could not use the E2E build'")

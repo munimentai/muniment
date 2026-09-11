@@ -312,7 +312,8 @@ runtime_version=$(/usr/lib/muniment/muniment-runtime --version) || { runner_fail
 # The installed runtime admits a desktop client only from the installed path.
 # Copy the WebDriver build there so its rpath also resolves the installed ASR
 # libraries without a loader environment override.
-installed_desktop=/usr/bin/muniment
+# Install the payload, not its alias. GNU install replaces a destination symlink.
+installed_desktop=/usr/bin/muniment-desktop
 [[ -f $installed_desktop ]] || { runner_failure 'installed desktop path is unavailable'; exit; }
 sudo install -m 0755 "$e2e_app_binary" "$installed_desktop" || { runner_failure 'installed desktop path could not use the E2E build'; exit; }
 cmp -s "$e2e_app_binary" "$installed_desktop" || { runner_failure 'installed desktop path does not contain the E2E build'; exit; }
