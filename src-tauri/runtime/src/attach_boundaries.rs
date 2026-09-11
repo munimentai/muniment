@@ -1099,6 +1099,77 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn presenter_disconnect_releases_the_runtime_claim() {
+        use muniment_core::attach::{serve_approval_presenter, ApprovalPresenterConnection};
+        use std::os::unix::net::UnixStream;
+
+        let coordinator = ApprovalCoordinator::default();
+        for _ in 0..2 {
+            let (runtime, desktop) = UnixStream::pair().unwrap();
+            let session = serve_approval_presenter(
+                coordinator.clone(),
+                ApprovalPresenterConnection::new(runtime, "presenter"),
+            )
+            .unwrap();
+            assert!(coordinator.claim_presenter(|_| true).is_none());
+            let (sender, closed) = std::sync::mpsc::channel();
+            let waiter = std::thread::spawn(move || {
+                session.wait_until_closed();
+                drop(session);
+                sender.send(()).unwrap();
+            });
+            drop(desktop);
+            closed.recv_timeout(Duration::from_secs(2)).unwrap();
+            waiter.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn run_rejection_keeps_the_runtime_reason_on_the_wire() {
+        use muniment_core::attach::{
+            decode_frame, encode_frame, Envelope, ErrorDetails, ErrorEnvelope, Failure, Id,
+            Protocol,
+        };
+
+        for reason in [
+            "Enter a message before sending.",
+            "A reply is already in progress.",
+            "Conversation history is unavailable.",
+            "A reason with \"quotes\" and a newline.\nNext line.",
+        ] {
+            let error = run_service_error(reason.into()).desktop_protocol_error();
+            let frame = encode_frame(&ErrorEnvelope {
+                protocol: Protocol,
+                request_id: Some(Id::new("018f0000-0000-7000-8000-000000000201").unwrap()),
+                ok: Failure,
+                error: error.clone(),
+            })
+            .unwrap();
+            let (Envelope::Error(envelope), _) = decode_frame::<Envelope>(&frame).unwrap().unwrap()
+            else {
+                panic!("expected a run rejection");
+            };
+            assert_eq!(envelope.error, error);
+            assert_eq!(
+                envelope.error.details(),
+                Some(&ErrorDetails::RequestReason {
+                    reason: reason.into()
+                })
+            );
+            assert_eq!(
+                envelope.error.to_string(),
+                format!("code=\"invalid_request\" reason={reason:?}")
+            );
+            assert!(!envelope.error.to_string().contains('\n'));
+        }
+        assert_eq!(
+            run_service_error("thread_not_found".into()).protocol_error(),
+            ProtocolError::thread_not_found()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn recorded_workspace_approval_reaches_the_claimed_presenter() {
         let approval = SignedWorkspaceApproval::default();
         approval.record("workspace-a".into());
