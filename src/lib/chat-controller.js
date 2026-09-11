@@ -484,14 +484,15 @@ export function createChatController({
     }
   }
 
-  async function newThread() {
-    if (active() || switchingThread || switchBlocked) return
+  async function newThread(prompt) {
+    const fromLauncher = typeof prompt === 'string'
+    if (destroyed || active() || switchingThread || switchBlocked || (fromLauncher && blocked())) return false
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
     try {
       await invoke('chat_new_thread')
-      if (destroyed) return
+      if (destroyed) return false
       onHistoryStart()
       onAnnounce(null)
       onThreadSelected(null)
@@ -501,8 +502,11 @@ export function createChatController({
       onFollow()
       onFocus()
       onHistoryError('')
+      if (fromLauncher) return await submitPrompt(prompt, [], true)
+      return true
     } catch (_) {
-      if (!destroyed) onHistoryError('A new thread could not be started.', { label: 'Start new thread', run: newThread })
+      if (!destroyed) onHistoryError('A new thread could not be started.', { label: 'Start new thread', run: () => newThread() })
+      return false
     } finally {
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
@@ -572,9 +576,19 @@ export function createChatController({
     }
   }
 
+  async function sendNewThread(text) {
+    const prompt = typeof text === 'string' ? text.trim() : ''
+    if (!prompt) return false
+    return newThread(prompt)
+  }
+
   async function send() {
     const prompt = readDraft().trim()
     if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
+    return submitPrompt(prompt, readFiles().map(({ path }) => ({ path })))
+  }
+
+  async function submitPrompt(prompt, files, preserveDraft = false) {
     onSend()
     onSubmitError('')
     const submissionId = ++submissionSequence
@@ -588,11 +602,13 @@ export function createChatController({
     try {
       const run = await invoke('chat_submit', {
         prompt,
-        files: readFiles().map(({ path }) => ({ path })),
+        files,
       })
       if (destroyed || submissionId !== submissionSequence) return
-      onDraft('')
-      onFiles([])
+      if (!preserveDraft) {
+        onDraft('')
+        onFiles([])
+      }
       publishMessages(messages().map((message) => message.submissionId === submissionId ? { ...message, attachments: run.attachments ?? [] } : message))
       const identified = { ...pending, id: run.runId }
       const projected = applyBufferedChatEvents(identified, buffered.get(run.runId) ?? [])
@@ -602,6 +618,7 @@ export function createChatController({
       const settled = settledPhases.has(projected.phase)
       onActive(settled ? null : projected)
       if (settled) await refreshThreads()
+      return true
     } catch (error) {
       if (destroyed) return
       const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed', failureReason: typeof error === 'string' ? error : 'The message could not be sent.' }
@@ -609,6 +626,7 @@ export function createChatController({
       if (submissionId !== submissionSequence) return
       onAnnounce(failed)
       onActive(null)
+      return false
     } finally {
       releaseBuffer()
     }
@@ -678,5 +696,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, newThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

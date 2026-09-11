@@ -10,6 +10,17 @@ The desktop opens at 1100 by 720 logical points unless a saved size exists.
 It clamps saved sizes to at least 960 by 640 logical points before it shows the window.
 Display scaling converts the saved physical pixels to logical points.
 
+## Launcher
+
+On macOS, press **Control Option Space** to open the launcher.
+On Windows and Linux, press **Control Alt Space**.
+The launcher opens above other apps in the upper third of the screen, including macOS fullscreen Spaces.
+It follows the **Appearance** choice: **Light**, **Dark**, or **System**.
+
+Type the first message of a new thread.
+Press **Enter** to send it and bring the main window forward.
+Press **Escape** to close the launcher without sending.
+
 ## Provider access
 
 Open the sidebar's **Local mode** section from the thread surface. Select **Anthropic**, **Google**, or **OpenAI**. Enter the key in **Provider API key**, then select **Save key**. The desktop writes the key to Pi's `~/.pi/agent/auth.json` store with Pi's file lock.

@@ -4,22 +4,27 @@ use muniment_core::attach::linux::AttachFilesystem;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
 
+static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
 struct RuntimeDirectory(PathBuf);
 
 impl RuntimeDirectory {
     fn new() -> Self {
+        Self::new_at(SystemTime::now())
+    }
+
+    fn new_at(timestamp: SystemTime) -> Self {
         let path = std::env::temp_dir().join(format!(
-            "muniment-runtime-test-{}-{}",
+            "muniment-runtime-test-{}-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            timestamp.duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+            NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -56,6 +61,34 @@ fn wait_for_exit(mut child: Child, timeout: Duration) -> Output {
         std::thread::sleep(Duration::from_millis(20));
     }
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn directories_are_unique_when_clock_values_repeat() {
+    let timestamp = SystemTime::now();
+    let directories = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..16)
+            .map(|_| scope.spawn(|| RuntimeDirectory::new_at(timestamp)))
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let paths: std::collections::HashSet<_> = directories
+        .iter()
+        .map(|directory| directory.0.clone())
+        .collect();
+    assert_eq!(paths.len(), directories.len());
+    for path in &paths {
+        assert!(path.is_dir());
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    drop(directories);
+    assert!(paths.iter().all(|path| !path.exists()));
 }
 
 #[test]

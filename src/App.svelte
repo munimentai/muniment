@@ -17,6 +17,7 @@
   import { ringPath, solidMilledRingPath } from './lib/mark.js'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage, toolName, toolStatus } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
+  import { listenForLauncher } from './lib/launcher-bridge.js'
   import { composerHeight } from './lib/composer-size.js'
   import { createDictationController } from './lib/dictation-controller.js'
   import { ariaKeyShortcut, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
@@ -799,6 +800,7 @@
     let pairingUnlisten
     let registrationRetryUnlisten
     let desktopClientUnlisten
+    let launcherUnlisten
     const readDesktopClientStatus = () => {
       const version = desktopClientStatusVersion
       return tauri?.invoke('attach_listener_status').then((status) => {
@@ -873,6 +875,17 @@
       startWorkspace()
       void backgroundServiceNotice.start()
       chatController.start()
+      void listenForLauncher({
+        listen: (...args) => window.__TAURI__.event.listen(...args),
+        emitTo: (...args) => window.__TAURI__.event.emitTo(...args),
+        ready: async () => { await startupReady; return !destroyed && workspaceMode() },
+        send: (text) => chatController.sendNewThread(text),
+      }).then((stop) => {
+        if (destroyed) { stop(); return }
+        launcherUnlisten = stop
+        // Register only after the main window can receive a launcher message.
+        return tauri.invoke('launcher_register')
+      }).catch((error) => console.error('The launcher could not start. Restart the app.', error))
       entitlementToast.start()
       voiceShortcutManager.start()
     }
@@ -944,6 +957,7 @@
       pairingUnlisten?.()
       registrationRetryUnlisten?.()
       desktopClientUnlisten?.()
+      launcherUnlisten?.()
       voiceGesture.cleanup()
       transcriptController.cleanup()
       stopDragDrop?.()

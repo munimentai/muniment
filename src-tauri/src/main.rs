@@ -6,6 +6,7 @@ mod chat;
 mod chat_threads;
 mod dictation;
 mod home;
+mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_runtime_service;
 mod local_mode;
@@ -73,6 +74,7 @@ fn main() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .skip_initial_state("main")
+                .with_denylist(&["launcher"])
                 .build(),
         )
         .manage(auth::AuthState::new(runtime_activity.clone()))
@@ -88,6 +90,8 @@ fn main() {
         })
         .setup(move |app| {
             window_state::restore_main_window(app)?;
+            #[cfg(target_os = "macos")]
+            launcher::setup(app.handle())?;
             let app_data = app.path().app_data_dir()?;
             let app_config = app.path().app_config_dir()?;
             let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
@@ -111,6 +115,7 @@ fn main() {
             app.manage(dictation::DictationState::new(parakeet_root));
             Ok(())
         })
+        .on_window_event(launcher::window_event)
         .invoke_handler(tauri::generate_handler![
             auth::auth_sign_in,
             auth::auth_status,
@@ -143,6 +148,11 @@ fn main() {
             attach_service::attach_listener_status,
             attach_service::attach_revoke_companion,
             restart_muniment,
+            launcher::launcher_register,
+            launcher::launcher_open,
+            launcher::launcher_close,
+            launcher::launcher_is_visible,
+            launcher::launcher_present_main,
             home::home_status,
             home::home_confirm,
             home::home_confirm_import,
