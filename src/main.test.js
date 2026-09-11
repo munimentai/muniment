@@ -3,8 +3,10 @@ import { mount } from 'svelte'
 
 vi.mock('svelte', () => ({ mount: vi.fn() }))
 vi.mock('./App.svelte', () => ({ default: {} }))
+vi.mock('./Launcher.svelte', () => ({ default: {} }))
 
 afterEach(() => {
+  history.replaceState({}, '', '/')
   localStorage.clear()
   delete document.documentElement.dataset.theme
   document.body.innerHTML = ''
@@ -32,6 +34,15 @@ it.each([
 
   await import('./main.js')
   expect(mount).toHaveBeenCalledOnce()
+})
+
+it('mounts only the launcher in the launcher window', async () => {
+  vi.resetModules()
+  history.replaceState({}, '', '/index.html?launcher')
+  document.body.innerHTML = '<div id="app"></div>'
+  const { default: Launcher } = await import('./Launcher.svelte')
+  await import('./main.js')
+  expect(mount).toHaveBeenCalledExactlyOnceWith(Launcher, { target: document.getElementById('app') })
 })
 
 it('uses the system theme at launch when storage is unavailable', async () => {

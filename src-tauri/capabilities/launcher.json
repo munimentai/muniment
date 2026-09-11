@@ -1,0 +1,7 @@
+{
+  "$schema": "https://schema.tauri.app/capability/2",
+  "identifier": "launcher",
+  "description": "The launcher exchanges thread requests with the main window.",
+  "windows": ["launcher"],
+  "permissions": ["core:event:default"]
+}

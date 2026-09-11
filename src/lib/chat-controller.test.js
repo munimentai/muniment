@@ -81,10 +81,61 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
     summaries: () => threadSummaries,
     setActive: (next) => { active = next },
     setDraft: (next) => { draft = next },
+    setFiles: (next) => { files = next },
+    files: () => files,
     setMessages: (next) => { messages = next },
     setThreadId: (next) => { openThreadId = next },
   }
 }
+
+describe('launcher submission', () => {
+  it('starts a fresh thread without consuming the main draft or attachments', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_submit' ? { runId: 'launcher-run' } : undefined)
+    const ui = setup(invoke)
+    ui.setMessages([{ role: 'user', text: 'An older thread' }])
+    ui.setDraft('An unfinished main draft')
+    ui.setFiles([{ path: '/tmp/main-draft.txt' }])
+    await expect(ui.controller.sendNewThread('  A launcher message  ')).resolves.toBe(true)
+    expect(invoke.mock.calls).toEqual([
+      ['chat_new_thread'], ['chat_submit', { prompt: 'A launcher message', files: [] }],
+    ])
+    expect(ui.messages()[0]).toMatchObject({ role: 'user', text: 'A launcher message' })
+    expect(ui.messages()).toHaveLength(2)
+    expect(ui.draft()).toBe('An unfinished main draft')
+    expect(ui.files()).toEqual([{ path: '/tmp/main-draft.txt' }])
+  })
+
+  it('rejects blank, invalid, active, and concurrent submissions', async () => {
+    const create = deferred()
+    const invoke = vi.fn((command) => command === 'chat_new_thread' ? create.promise : Promise.resolve({ runId: 'run' }))
+    const ui = setup(invoke)
+    for (const text of ['', '  ', null, 12]) {
+      await expect(ui.controller.sendNewThread(text)).resolves.toBe(false)
+    }
+    ui.setActive({ id: 'active' })
+    await expect(ui.controller.sendNewThread('Do not interrupt')).resolves.toBe(false)
+    ui.setActive(null)
+    const first = ui.controller.sendNewThread('First')
+    await expect(ui.controller.sendNewThread('Second')).resolves.toBe(false)
+    await ui.controller.send()
+    expect(invoke).toHaveBeenCalledTimes(1)
+    create.resolve()
+    await expect(first).resolves.toBe(true)
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not submit when thread creation fails and keeps the draft after rejection', async () => {
+    const invoke = vi.fn().mockRejectedValueOnce(new Error('offline'))
+    const ui = setup(invoke)
+    await expect(ui.controller.sendNewThread('Keep this')).resolves.toBe(false)
+    expect(invoke).toHaveBeenCalledTimes(1)
+    invoke.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('no model'))
+    await expect(ui.controller.sendNewThread('Retry this')).resolves.toBe(false)
+    expect(ui.active()).toBeNull()
+    expect(ui.draft()).toBe('Hello')
+    expect(ui.messages()[1].run.phase).toBe('failed')
+  })
+})
 
 describe('chat controller', () => {
   it('returns refreshThreads', () => {

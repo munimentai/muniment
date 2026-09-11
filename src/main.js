@@ -3,6 +3,7 @@ import './styles/tokens.css'
 import './styles/base.css'
 import './styles/code-diff.css'
 import App from './App.svelte'
+import Launcher from './Launcher.svelte'
 import { THEME_STORAGE_KEY, parseTheme } from './lib/theme-state.js'
 
 let theme
@@ -13,4 +14,6 @@ try {
 }
 if (theme === 'system') delete document.documentElement.dataset.theme
 else document.documentElement.dataset.theme = theme
-mount(App, { target: document.getElementById('app') })
+mount(new URLSearchParams(location.search).has('launcher') ? Launcher : App, {
+  target: document.getElementById('app'),
+})

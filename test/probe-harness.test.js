@@ -95,6 +95,12 @@ describe('probe harness', () => {
     await expect(table.invoke('local_mode_store_provider_key', { provider: 'google', key: 'test' })).resolves.toBeNull()
   })
 
+  it('registers the launcher shortcut without an unknown command', async () => {
+    const table = buildProbeCommandTable('restored')
+    await expect(table.invoke('launcher_register')).resolves.toBeNull()
+    expect(table.unknownCommands).toEqual([])
+  })
+
   it('rejects an unknown core command with its name', async () => {
     const table = buildProbeCommandTable('restored')
     await expect(table.invoke('missing_probe_command')).rejects.toThrow('Unknown probe command: missing_probe_command')
