@@ -390,11 +390,16 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
     fn run_thread_id(&self, run_id: &str) -> Result<String, RunStartError> {
         self.storage
             .lock()
-            .map_err(|_| persistence_error())?
+            .map_err(|error| persistence_error("lock", error.to_string()))?
             .journal
             .run_thread_id(run_id)
-            .map_err(|_| persistence_error())?
-            .ok_or_else(persistence_error)
+            .map_err(|error| persistence_error("journal", error))?
+            .ok_or_else(|| {
+                persistence_error(
+                    "journal",
+                    format!("The journal has no thread for run {run_id}."),
+                )
+            })
     }
 
     fn open_memory_session(
@@ -411,7 +416,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                     minimum_cacheable_prefix_characters: minimum,
                 },
             )
-            .map_err(|_| persistence_error())
+            .map_err(|error| persistence_error("memory session", error))
     }
 
     fn close_memory_session(&self, run_id: &str) {
@@ -423,7 +428,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
             &mut self
                 .storage
                 .lock()
-                .map_err(|_| persistence_error())?
+                .map_err(|error| persistence_error("lock", error.to_string()))?
                 .journal,
             &launch.run_id,
             launch.prepared.0,
@@ -431,7 +436,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
             "muniment-runtime",
             env!("CARGO_PKG_VERSION"),
         )
-        .map_err(|_| persistence_error())
+        .map_err(|error| persistence_error("journal", error))
     }
 
     fn cancel_run(&self, workspace: &str, run_id: &str) -> Result<(), RunStartError> {
@@ -501,17 +506,23 @@ fn open_selected_files(files: Vec<SelectedFile>) -> Result<Vec<OpenSelectedFile>
     files
         .into_iter()
         .map(|selected| {
-            let file = std::fs::File::open(&selected.path).map_err(|_| persistence_error())?;
-            let metadata = file.metadata().map_err(|_| persistence_error())?;
+            let file = std::fs::File::open(&selected.path)
+                .map_err(|error| persistence_error("attachment", error))?;
+            let metadata = file
+                .metadata()
+                .map_err(|error| persistence_error("attachment", error))?;
             if !metadata.is_file() {
-                return Err(persistence_error());
+                return Err(persistence_error(
+                    "attachment",
+                    "The selected path is not a file.",
+                ));
             }
             let display_name = selected
                 .path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .filter(|name| !name.is_empty())
-                .ok_or_else(persistence_error)?
+                .ok_or_else(|| persistence_error("attachment", "The file name is invalid."))?
                 .to_owned();
             Ok(OpenSelectedFile {
                 file,
@@ -522,8 +533,8 @@ fn open_selected_files(files: Vec<SelectedFile>) -> Result<Vec<OpenSelectedFile>
         .collect()
 }
 
-fn persistence_error() -> RunStartError {
-    RunStartError::Persistence("Conversation history is unavailable.".into())
+fn persistence_error(context: &str, error: impl std::fmt::Debug) -> RunStartError {
+    RunStartError::Persistence(format!("Conversation history {context} failed: {error:?}"))
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -612,10 +623,10 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         let belongs_to_workspace = self
             .storage
             .lock()
-            .map_err(|_| persistence_error())?
+            .map_err(|error| persistence_error("lock", error.to_string()))?
             .journal
             .run_belongs_to_workspace(run_id, workspace)
-            .map_err(|_| persistence_error())?;
+            .map_err(|error| persistence_error("journal", error))?;
         if !belongs_to_workspace {
             return Err(RunStartError::InvalidRequest(
                 "The run was not found or is inaccessible.".into(),
@@ -638,19 +649,27 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             self.pi_artifact,
         )
         .map_err(run_service_error)?;
-        let mut storage = self.storage.lock().map_err(|_| persistence_error())?;
+        let mut storage = self
+            .storage
+            .lock()
+            .map_err(|error| persistence_error("lock", error.to_string()))?;
         let thread_id = storage
             .journal
             .run_thread_id(run_id)
-            .map_err(|_| persistence_error())?
+            .map_err(|error| persistence_error("journal", error))?
             .ok_or(RunStartError::ThreadNotFound)?;
         let committed_seq = storage
             .journal
             .events(run_id)
-            .map_err(|_| persistence_error())?
+            .map_err(|error| persistence_error("journal", error))?
             .last()
             .map(|event| event.run_seq)
-            .ok_or_else(persistence_error)?;
+            .ok_or_else(|| {
+                persistence_error(
+                    "journal",
+                    format!("The journal has no events for run {run_id}."),
+                )
+            })?;
         Ok(AttachResumeAccepted {
             run_id: run_id.to_owned(),
             thread_id,
@@ -776,7 +795,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             usize::from(request.limit),
             request.cursor,
         )
-        .map_err(|_| ProtocolError::persistence_failed())
+        .map_err(ProtocolError::persistence_failed_with_reason)
     }
 
     fn select_thread(&self, thread_id: &str) -> Result<bool, ProtocolError> {
@@ -785,12 +804,12 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .map_err(|error| error.protocol_error())?
             .subject;
         service::select_thread(Arc::clone(&self.storage), subject, thread_id.to_owned())
-            .map_err(|_| ProtocolError::persistence_failed())
+            .map_err(ProtocolError::persistence_failed_with_reason)
     }
 
     fn recheck_retention(&self) -> Result<(), ProtocolError> {
         crate::attach_state::apply_recorded_retention(&self.config_directory, &self.storage)
-            .map_err(|_| ProtocolError::persistence_failed())
+            .map_err(ProtocolError::persistence_failed_with_reason)
     }
 
     fn thread_history(
@@ -809,7 +828,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             usize::from(request.limit),
             request.cursor,
         )
-        .map_err(|_| ProtocolError::persistence_failed())
+        .map_err(ProtocolError::persistence_failed_with_reason)
     }
 
     fn create_thread(
@@ -1117,6 +1136,23 @@ mod tests {
             closed.recv_timeout(Duration::from_secs(2)).unwrap();
             waiter.join().unwrap();
         }
+    }
+
+    #[test]
+    fn persistence_rejection_keeps_the_cause_for_the_desktop_owner() {
+        let cause = std::io::Error::other("the journal is locked");
+        let error = persistence_error("journal", cause);
+        let reason = "Conversation history journal failed: Custom { kind: Other, error: \"the journal is locked\" }";
+        let desktop = error.desktop_protocol_error();
+        assert_eq!(
+            desktop,
+            ProtocolError::persistence_failed_with_reason(reason)
+        );
+        assert_eq!(
+            desktop.to_string(),
+            format!("code=\"persistence_failed\" reason={reason:?}")
+        );
+        assert_eq!(error.protocol_error(), ProtocolError::persistence_failed());
     }
 
     #[test]

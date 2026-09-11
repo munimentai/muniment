@@ -13,6 +13,7 @@ fn memory_session_failure_ends_the_prepared_run() {
     let temporary_profile = TemporaryProfile::new("preparation-failure", false);
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
+    std::fs::write(config.join("home.json"), "invalid json").unwrap();
     let storage = open_profile_storage(&profile).unwrap();
     let active = Arc::new(Mutex::new(None));
     let runtime_activity = RuntimeActivityRegistry::new();
@@ -38,11 +39,16 @@ fn memory_session_failure_ends_the_prepared_run() {
         None,
     );
     let error = match result {
-        Ok(_) => panic!("the memory session opened without a confirmed Home"),
+        Ok(_) => panic!("the memory session opened with an invalid Home record"),
         Err(error) => error,
     };
 
-    assert_eq!(error, "Conversation history is unavailable.");
+    assert!(error.starts_with("Conversation history memory session failed: Io("));
+    assert!(error.contains("The saved Home location is invalid."));
+    assert_eq!(
+        std::fs::read_to_string(config.join("home.json")).unwrap(),
+        "invalid json"
+    );
     assert!(active.lock().unwrap().is_none());
     let events = storage.lock().unwrap().journal.events(run_id).unwrap();
     let failed = events.last().unwrap();

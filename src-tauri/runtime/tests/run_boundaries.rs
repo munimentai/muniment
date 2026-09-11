@@ -27,6 +27,28 @@ use common::{credentials, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
+struct TestEnvironment {
+    name: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl TestEnvironment {
+    fn set(name: &'static str, value: &std::path::Path) -> Self {
+        let previous = std::env::var_os(name);
+        std::env::set_var(name, value);
+        Self { name, previous }
+    }
+}
+
+impl Drop for TestEnvironment {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var(self.name, value),
+            None => std::env::remove_var(self.name),
+        }
+    }
+}
+
 #[test]
 fn local_mode_prepares_a_journaled_run_without_native_auth_or_a_cloud_grant() {
     let _environment = ENVIRONMENT.lock().unwrap();
@@ -101,9 +123,18 @@ fn local_mode_prepares_a_journaled_run_without_native_auth_or_a_cloud_grant() {
 
 #[test]
 fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
+    local_mode_run(true);
+}
+
+#[test]
+fn local_mode_submit_without_a_configured_home_creates_the_default_home_and_replies() {
+    local_mode_run(false);
+}
+
+fn local_mode_run(configured: bool) {
     let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
-    let profile = TemporaryProfile::new("local-pi-run", true);
+    let profile = TemporaryProfile::new("local-pi-run", configured);
     std::fs::write(
         profile
             .config
@@ -112,6 +143,18 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     )
     .unwrap();
     let descriptor = stage_pi_stub(&profile.profile);
+    let documents = profile.root.join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let _home = TestEnvironment::set("HOME", &profile.root);
+    let _xdg_config = TestEnvironment::set("XDG_CONFIG_HOME", &profile.config);
+    let expected_home = if configured {
+        profile.root.join("home")
+    } else {
+        assert!(!profile.config.join("home.json").exists());
+        assert!(!documents.join("Muniment").exists());
+        muniment_core::home::choose_default_home(Some(documents), Some(profile.root.clone()))
+            .unwrap()
+    };
     std::env::remove_var("MUNIMENT_PI_ROOT");
     let prompt_capture = profile.root.join("prompt.txt");
     std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_capture);
@@ -153,6 +196,14 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     std::env::remove_var("PI_RESUME_STUB_PROMPTS");
     std::env::remove_var("PI_RESUME_STUB_TOOL_EVENTS");
     assert!(!boundaries.active_run_exists());
+    assert!(!submitted.run_id.is_empty());
+    assert_eq!(
+        muniment_core::home::configured_home(&profile.config).unwrap(),
+        Some(expected_home.clone())
+    );
+    for folder in ["memory", "agents", "projects", "sessions"] {
+        assert!(expected_home.join(folder).join("README.md").is_file());
+    }
     assert_eq!(
         std::fs::read_to_string(prompt_capture).unwrap().trim(),
         "local prompt"
