@@ -113,7 +113,7 @@ jobs:
                 ;;
             esac
             case "$path" in
-              src-tauri/tauri*.conf.json|src-tauri/windows/*|src-tauri/packaging/*|src-tauri/capabilities/*|.github/build-*.mjs|.github/build-*.sh|.github/upload-nightly-assets.mjs|.github/workflows/ci.yml|test/e2e/*)
+              src-tauri/tauri*.conf.json|src-tauri/windows/*|src-tauri/packaging/*|src-tauri/capabilities/*|.github/build-*.mjs|.github/build-*.sh|.github/lib/*|.github/upload-nightly-assets.mjs|.github/workflows/ci.yml|test/e2e/*|test/windows-installers.ps1)
                 # The installer, packaging, workflow and e2e paths are the ones
                 # the nightly cannot prove one merge later without a red run,
                 # so only these run the three-platform build on the PR.
