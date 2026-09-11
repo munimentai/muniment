@@ -227,6 +227,7 @@ beforeEach(() => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'onboarding_scan') return
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+    if (command === 'onboarding_model_settings_error') return
     if (command === 'chat_thread_open') return []
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -2450,6 +2451,7 @@ describe('Home onboarding', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('Muniment could not enter local mode. Open model settings again.')
+    expect(invoke).toHaveBeenCalledWith('onboarding_model_settings_error', { cause: 'localMode' })
     expect(alert.closest('#onboarding-model-panel')).not.toBeNull()
     expect(alert).toHaveClass('error')
     expect(screen.getByRole('button', { name: 'Open model settings' })).toBeEnabled()
@@ -2479,6 +2481,7 @@ describe('Home onboarding', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(2)
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not read session status. Open model settings again.')
+    expect(invoke).toHaveBeenCalledWith('onboarding_model_settings_error', { cause: 'sessionStatus' })
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_status')).toHaveLength(3)
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
     expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
@@ -2529,6 +2532,7 @@ describe('Home onboarding', () => {
 
     startup.reject(new Error('marker unavailable'))
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not finish startup. Open model settings again.')
+    expect(invoke).toHaveBeenCalledWith('onboarding_model_settings_error', { cause: 'startup' })
     expect(openSettings).toBeEnabled()
     expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
@@ -2589,6 +2593,7 @@ describe('Home onboarding', () => {
     expect(invoke).toHaveBeenCalledWith('local_mode_enter')
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('The runtime is not connected yet. Open model settings again.')
+    expect(invoke).toHaveBeenCalledWith('onboarding_model_settings_error', { cause: 'runtime' })
     expect(alert.closest('#onboarding-model-panel')).not.toBeNull()
     const openSettings = screen.getByRole('button', { name: 'Open model settings' })
     expect(openSettings).toBeEnabled()

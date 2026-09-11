@@ -18,6 +18,7 @@ mod macos_runtime_notice_probe;
 mod macos_runtime_service;
 mod memory;
 mod model_install;
+mod onboarding_diagnostics;
 mod onboarding_import;
 mod onboarding_scan;
 mod runtime_owner;
@@ -117,6 +118,7 @@ fn main() {
         })
         .on_window_event(launcher::window_event)
         .invoke_handler(tauri::generate_handler![
+            onboarding_diagnostics::onboarding_model_settings_error,
             auth::auth_sign_in,
             auth::auth_status,
             auth::auth_entitlement_snapshot,

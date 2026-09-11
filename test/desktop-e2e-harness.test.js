@@ -147,6 +147,9 @@ describe('WDIO main window selection', () => {
         }
         throw new Error(options.timeoutMsg)
       },
+      tauri: { switchWindow: vi.fn(async (label) => {
+        current = Object.keys(labels).find((handle) => labels[handle] === label)
+      }) },
       getWindowHandles: async () => batches[Math.min(attempt, batches.length - 1)],
       switchToWindow: async (handle) => {
         calls.push(handle)
@@ -175,6 +178,7 @@ describe('WDIO main window selection', () => {
     expect(fixture.label()).toBe('main')
     await fixture.driver.switchToWindow(handles.find((handle) => labels[handle] === 'launcher'))
     await config.beforeTest()
+    expect(fixture.driver.tauri.switchWindow).toHaveBeenCalledWith('main')
     expect(fixture.label()).toBe('main')
   })
 
@@ -204,6 +208,22 @@ describe('WDIO main window selection', () => {
     fixture.driver.saveScreenshot = async () => { expect(fixture.label()).toBe('main') }
     await captureFailureArtifacts({ passed: false })
     expect(fs.readFileSync(path.join(process.env.MUNIMENT_E2E_RAW_DIR, 'page-source-onboarding.html'), 'utf8')).toBe('<main>shell</main>')
+  })
+
+  it('The harness captures a timeout when Mocha bypasses afterTest.', async () => {
+    const { config } = await import('./e2e/wdio.conf.js')
+    const fixture = driverFixture([['main']], { main: 'main' })
+    vi.stubGlobal('browser', fixture.driver)
+    await config.before({}, ['test/e2e/specs/onboarding.spec.js'])
+    fixture.driver.getPageSource = vi.fn(async () => '<main><section class="onboarding">The runtime is not connected yet. Open model settings again.</section></main>')
+    fixture.driver.saveScreenshot = vi.fn(async () => {})
+    await config.after(1)
+    expect(fs.readFileSync(path.join(process.env.MUNIMENT_E2E_RAW_DIR, 'page-source-onboarding.html'), 'utf8'))
+      .toContain('The runtime is not connected yet.')
+    expect(fixture.driver.saveScreenshot).toHaveBeenCalled()
+    fixture.driver.getPageSource.mockClear()
+    await config.after(0)
+    expect(fixture.driver.getPageSource).not.toHaveBeenCalled()
   })
 
   it('does not save launcher artifacts when main selection fails', async () => {
