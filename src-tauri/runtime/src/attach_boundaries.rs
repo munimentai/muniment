@@ -53,8 +53,8 @@ use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_events::SharedStorage;
 use muniment_core::run_preparation::{
-    append_prepared_run_persistence_failure, prepare_new_run_in_thread_after_validation,
-    prepare_new_run_with_session_thread, OpenSelectedFile, SessionThreadStart,
+    append_prepared_run_persistence_failure, prepare_opened_run_with_prompt_storage,
+    OpenSelectedFile, SessionThreadStart,
 };
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::run_start::{
@@ -341,50 +341,33 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
     ) -> Result<(u64, ChatProjector), RunStartError> {
         let files = open_selected_files(files)?;
         let mut notice = None;
-        let protect = || {
-            notice = service::prompt_storage::store_prompt_or_notice(
-                run_id,
-                prompt,
-                tokens.subject.as_deref(),
-            );
-            Ok(())
-        };
-        let result = match thread_id {
-            Some(thread_id) => prepare_new_run_in_thread_after_validation(
-                &self.storage,
-                run_id,
-                &grant.workspace,
-                tokens.subject.as_deref(),
-                files,
-                provenance,
-                thread_id,
-                "muniment-runtime",
-                env!("CARGO_PKG_VERSION"),
-                protect,
-            ),
-            None => prepare_new_run_with_session_thread(
-                &self.storage,
-                SessionThreadStart {
-                    tracker: &self.session_thread,
-                    continue_existing: true,
-                },
-                run_id,
-                &grant.workspace,
-                tokens.subject.as_deref(),
-                files,
-                provenance,
-                "muniment-runtime",
-                env!("CARGO_PKG_VERSION"),
-                protect,
-            ),
-        };
-        service::prompt_storage::record_prompt_storage_notice(
+        prepare_opened_run_with_prompt_storage(
             &self.storage,
+            SessionThreadStart {
+                tracker: &self.session_thread,
+                continue_existing: thread_id.is_none(),
+            },
             run_id,
+            &grant.workspace,
             tokens.subject.as_deref(),
-            result,
-            notice,
+            files,
+            provenance,
+            thread_id,
+            "muniment-runtime",
+            env!("CARGO_PKG_VERSION"),
+            || {
+                notice = service::prompt_storage::store_prompt_or_notice(
+                    run_id,
+                    prompt,
+                    tokens.subject.as_deref(),
+                );
+                Ok(notice.clone())
+            },
         )
+        .map_err(|error| match notice {
+            Some(notice) => format!("{notice} {error}"),
+            None => error,
+        })
         .map_err(|error| {
             if error == "thread_not_found" {
                 RunStartError::ThreadNotFound

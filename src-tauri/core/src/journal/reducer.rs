@@ -516,6 +516,9 @@ pub fn project_chat_fragment(events: &[EventEnvelope]) -> Result<ChatProjection,
     let mut chat = ChatProjection::default();
     for event in events {
         match event.event_type.as_str() {
+            "run.started" => {
+                chat.prompt_storage_notice = optional_field(event, "prompt_storage_notice")?;
+            }
             "chat.prompt.storage_notice" => {
                 chat.prompt_storage_notice = Some(field(event, "notice")?);
             }
@@ -574,6 +577,9 @@ impl ChatProjector {
     pub fn apply(&mut self, event: &EventEnvelope) -> Result<(), ReduceError> {
         self.reducer.apply(event)?;
         match event.event_type.as_str() {
+            "run.started" => {
+                self.chat.prompt_storage_notice = optional_field(event, "prompt_storage_notice")?;
+            }
             "chat.prompt.storage_notice" => {
                 self.chat.prompt_storage_notice = Some(field(event, "notice")?);
             }

@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::chat_grant::ChatGrant;
 use muniment_core::journal::reducer::project_chat_fragment;
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{
@@ -12,7 +11,7 @@ use muniment_runtime::{
 };
 
 mod common;
-use common::{stage_pi_stub, TemporaryProfile};
+use common::{local_grant, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 static WRITES: AtomicUsize = AtomicUsize::new(0);
@@ -118,7 +117,7 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
             String::new(),
             None,
             Vec::new(),
-            ChatGrant::local(),
+            local_grant(),
             Arc::clone(&active),
             RuntimeChatEventTarget::Subscriber(Some(sender)),
             Some(descriptor),
@@ -128,11 +127,11 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
             assert_eq!(&accepted.thread_id, thread_id);
         }
         thread_id = Some(accepted.thread_id);
-        assert_eq!(accepted.committed_seq, 2);
+        assert_eq!(accepted.committed_seq, 1);
         assert_eq!(active.lock().unwrap().as_ref().unwrap().id, run_id);
         let journal_events = storage.lock().unwrap().journal.events(&run_id).unwrap();
         assert_eq!(journal_events[0].event_type, "run.started");
-        assert_eq!(journal_events[1].event_type, "chat.prompt.storage_notice");
+        assert_eq!(journal_events.len(), 1);
         let notice = project_chat_fragment(&journal_events)
             .unwrap()
             .prompt_storage_notice
@@ -216,7 +215,7 @@ fn attach_submit_sends_without_a_default_keychain() {
         .submit_run("local", "Send this prompt".into(), Vec::new(), None)
         .unwrap();
     assert!(!accepted.run_id.is_empty());
-    assert_eq!(accepted.committed_seq, 2);
+    assert_eq!(accepted.committed_seq, 1);
     let mut saw_reply = false;
     loop {
         let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -281,7 +280,7 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
             display_name: "attachment.txt".into(),
             byte_length: 100,
         }],
-        ChatGrant::local(),
+        local_grant(),
         Arc::clone(&active),
         RuntimeChatEventTarget::Subscriber(None),
         None,
@@ -294,6 +293,44 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
     let events = storage.lock().unwrap().journal.events(run_id).unwrap();
     assert_eq!(events.first().unwrap().event_type, "run.started");
     assert_eq!(events.last().unwrap().event_type, "run.failed");
+    let notice = project_chat_fragment(&events)
+        .unwrap()
+        .prompt_storage_notice
+        .unwrap();
+    assert!(notice.contains("-25308"));
+    assert!(notice.contains("User interaction is not allowed."));
+    assert!(!serde_json::to_string(&events)
+        .unwrap()
+        .contains("private prompt"));
+    let thread_id = storage
+        .lock()
+        .unwrap()
+        .journal
+        .run_thread_id(run_id)
+        .unwrap()
+        .unwrap();
+    drop(storage);
+    let reopened = open_profile_storage(&temporary.profile).unwrap();
+    let page = thread_page(
+        &temporary.profile,
+        Arc::clone(&reopened),
+        None,
+        thread_id,
+        10,
+        None,
+    )
+    .unwrap();
+    assert_eq!(page.entries.len(), 1);
+    assert!(page.entries[0].prompt.is_none());
+    assert_eq!(page.entries[0].phase, "failed");
+    assert_eq!(
+        page.entries[0].prompt_storage_notice.as_deref(),
+        Some(notice.as_str())
+    );
+    let retention = apply_retention(reopened, 0).unwrap();
+    assert_eq!(retention.deleted_runs.len(), 1);
+    assert_eq!(retention.deleted_runs[0].run_id, run_id);
+    assert!(!retention.deleted_runs[0].prompt_stored);
     assert!(active.lock().unwrap().is_none());
     assert!(!activity.snapshot().active_run);
 }
@@ -326,7 +363,7 @@ fn an_invalid_thread_does_not_touch_the_prompt_store() {
         String::new(),
         None,
         Vec::new(),
-        ChatGrant::local(),
+        local_grant(),
         Arc::clone(&active),
         RuntimeChatEventTarget::Subscriber(None),
         None,

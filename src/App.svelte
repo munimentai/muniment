@@ -1664,7 +1664,7 @@
   .user-message > p { margin: 0; white-space: pre-wrap; }
   .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .prompt-storage-notice { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .prompt-storage-notice summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prompt-storage-notice summary { min-height: 24px; line-height: 24px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .prompt-storage-notice summary:hover { color: var(--ink); }
   .prompt-storage-notice p { margin: 6px 0 0; overflow-wrap: anywhere; }
   .message-attachments { display: grid; justify-items: end; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
