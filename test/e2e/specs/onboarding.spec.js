@@ -2,6 +2,7 @@ import path from 'node:path'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
 import { chooseFolder } from '../support/folder-dialog.mjs'
 import { homePathMatches } from '../support/home-path.mjs'
+import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 
 const FOLDER_DIALOG_WAIT_SECONDS = 30
 const FOLDER_DIALOG_TITLE = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
@@ -78,6 +79,7 @@ describe('installed nightly model-ready onboarding', () => {
     await composer.waitForDisplayed({ timeout: 120000 })
     expect(await composer.isDisplayed()).toBe(true)
     expect(await (await $('button=Send')).isEnabled()).toBe(true)
+    expect(await (await $('[data-testid="onboarding-model"]')).isDisplayed()).toBe(true)
     expect(await (await $('[data-testid="onboarding-model"]')).getText()).toBe('Connect a model')
     expect(await (await $('[data-testid="onboarding-scan"]')).isDisplayed()).toBe(true)
     expect(await (await $('.chips')).$$('button')).toHaveLength(3)
@@ -103,12 +105,8 @@ describe('installed nightly model-ready onboarding', () => {
       expect(exists).toBe(false)
     }
     await composer.setValue('Help me organize my notes.')
-    await (await $('button=Send')).click()
-    const modelSettings = await $('button=Open model settings')
-    await modelSettings.waitForDisplayed()
-    expect(await (await $('p=No free hosted model exists at the no-account tier.')).isDisplayed()).toBe(true)
-    await modelSettings.click()
-    const localMode = await $('#local-account-title')
+    await openFirstRunModelSettings()
+    const localMode = await $('[data-testid="local-mode"]')
     // The installed runtime answers the session, so this screen waits on the
     // desktop client connection. Report that connection when the wait runs out.
     try {
@@ -127,6 +125,7 @@ describe('installed nightly model-ready onboarding', () => {
     expect(await (await $('button=Save key')).isDisplayed()).toBe(true)
     expect(await (await $('[aria-label="First-run settings"]')).isExisting()).toBe(false)
 
+    await expandSidebar()
     const row = await $('header.titlebar')
     expect((await row.getSize()).height).toBe(36)
     for (const name of ['Collapse sidebar', 'New thread', 'Rename thread', 'Open artifact rail']) {

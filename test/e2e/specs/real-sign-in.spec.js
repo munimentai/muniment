@@ -3,6 +3,7 @@ import { access, appendFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { remote } from 'webdriverio'
 import { withAuthDiagnostics } from '../support/auth-diagnostics.mjs'
+import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 
 const rawDir = process.env.MUNIMENT_E2E_RAW_DIR
 
@@ -114,7 +115,7 @@ describe('installed nightly', () => {
   it('signs in through the production UI', withAuthDiagnostics(async function () {
     const location = await $('[data-testid="onboarding-home-path"]')
     const signedOut = await $('button=Sign in')
-    const localMode = await $('#local-account-title')
+    const localMode = await $('[data-testid="local-mode"]')
     const cloudSignIn = await $('button=Sign in for cloud features')
     await browser.waitUntil(async () => (
       await location.isDisplayed() || await signedOut.isDisplayed() || await localMode.isDisplayed()
@@ -128,10 +129,7 @@ describe('installed nightly', () => {
       const composer = await $('textarea[placeholder="Ask anything"]')
       expect(await composer.isDisplayed()).toBe(true)
       await composer.setValue('Help me organize my notes.')
-      await (await $('button=Send')).click()
-      const modelSettings = await $('button=Open model settings')
-      await modelSettings.waitForDisplayed()
-      await modelSettings.click()
+      await openFirstRunModelSettings()
     }
 
     // The desktop client can restore Local mode after onboarding.
@@ -145,7 +143,9 @@ describe('installed nightly', () => {
     } catch (waitError) {
       throw new Error(`${waitError.message} ${await shellState()}`)
     }
-    const signIn = await localMode.isDisplayed() ? cloudSignIn : signedOut
+    const inLocalMode = await localMode.isDisplayed()
+    if (inLocalMode) await expandSidebar()
+    const signIn = inLocalMode ? cloudSignIn : signedOut
     await signIn.waitForDisplayed()
 
     if (home) {

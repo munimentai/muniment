@@ -2408,8 +2408,15 @@ describe('Home onboarding', () => {
     recovered.resolve({ signed_in: signedIn, subject: signedIn ? 'token-subject' : null })
     await waitFor(() => expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument())
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
-    if (signedIn) expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
-    else expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    if (signedIn) {
+      expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
+      expect(screen.queryByTestId('local-mode')).not.toBeInTheDocument()
+    } else {
+      expect(await screen.findByText('Local mode')).toBeInTheDocument()
+      expect(screen.getByTestId('local-mode')).toBeVisible()
+      await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+      expect(screen.getByTestId('local-mode')).toBeVisible()
+    }
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
     expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
   })
