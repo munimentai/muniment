@@ -101,5 +101,44 @@ describe('installed local-mode chat', () => {
     })
     console.log(`The first local-mode reply took ${((Date.now() - launchStarted) / 1000).toFixed(1)} seconds.`)
     await checkCandidatePackages()
+
+    await browser.waitUntil(async () => !(await (await $('button=Stop')).isExisting()), { timeout: 180000 })
+    const registered = await browser.execute(async () => window.__TAURI__.core.invoke(
+      'plugin:global-shortcut|is_registered', { shortcut: 'Control+Alt+Space' },
+    ))
+    expect(registered).toBe(true)
+    console.log('The launcher registered Control+Alt+Space.')
+    const previousThread = await browser.execute(async () => window.__TAURI__.core.invoke('chat_current_thread'))
+    const mainHandle = await browser.getWindowHandle()
+    await browser.execute(async () => window.__TAURI__.core.invoke('launcher_open'))
+    let launcherHandle
+    for (const handle of await browser.getWindowHandles()) {
+      await browser.switchToWindow(handle)
+      if (await browser.execute(() => new URLSearchParams(location.search).has('launcher'))) {
+        launcherHandle = handle
+        break
+      }
+    }
+    expect(launcherHandle).toBeTruthy()
+    const launcher = await $('input[aria-label="First message"]')
+    await launcher.waitForDisplayed()
+    expect(await launcher.isFocused()).toBe(true)
+    expect(await browser.execute(async () => window.__TAURI__.core.invoke('launcher_is_visible'))).toBe(true)
+    await browser.keys('Escape')
+    await browser.switchToWindow(mainHandle)
+    expect(await browser.execute(async () => window.__TAURI__.core.invoke('launcher_is_visible'))).toBe(false)
+    await browser.execute(async () => window.__TAURI__.core.invoke('launcher_open'))
+    await browser.switchToWindow(launcherHandle)
+    const launcherPrompt = `Launcher local E2E chat ${Date.now()}`
+    await launcher.setValue(launcherPrompt)
+    await browser.keys('Enter')
+    await browser.switchToWindow(mainHandle)
+    await browser.waitUntil(async () => (await (await $('.thread')).getText()).includes(launcherPrompt))
+    await browser.waitUntil(async () => !(await browser.execute(async () => window.__TAURI__.core.invoke('launcher_is_visible'))))
+    expect(await composer.getValue()).toBe('')
+    const currentThread = await browser.execute(async () => window.__TAURI__.core.invoke('chat_current_thread'))
+    expect(currentThread).toBeTruthy()
+    expect(currentThread).not.toBe(previousThread)
+    expect(await (await $('.thread')).getText()).not.toContain(prompt)
   }).timeout(300000)
 })

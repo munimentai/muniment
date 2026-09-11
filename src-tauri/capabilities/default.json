@@ -11,6 +11,7 @@
     "core:window:allow-request-user-attention",
     "dialog:allow-open",
     "global-shortcut:allow-register",
+    "global-shortcut:allow-is-registered",
     "global-shortcut:allow-unregister",
     {
       "identifier": "opener:allow-open-url",
