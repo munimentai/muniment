@@ -1429,8 +1429,7 @@
               <h2 id="artifact-rail-title">Artifacts</h2>
             </header>
             <div class="artifact-empty">
-              <strong>No artifacts yet</strong>
-              <p>Artifacts created in this thread will appear here.</p>
+              <p>No artifacts yet</p>
             </div>
           </aside>
         {/if}
@@ -1648,8 +1647,7 @@
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }
   .artifact-empty { display: grid; place-items: center; align-content: center; min-height: 45%; text-align: center; }
-  .artifact-empty strong { font-weight: 600; }
-  .artifact-empty p { max-width: 250px; margin: 7px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
+  .artifact-empty p { margin: 0; color: var(--muted); }
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
   .thread-shell { position: relative; min-height: 0; }
   .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
