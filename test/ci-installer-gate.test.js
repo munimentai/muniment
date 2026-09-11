@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 
 const root = process.cwd()
@@ -18,10 +19,33 @@ const installerPaths = [
   'src-tauri/capabilities/*',
   '.github/build-*.mjs',
   '.github/build-*.sh',
+  '.github/lib/*',
   '.github/upload-nightly-assets.mjs',
   '.github/workflows/ci.yml',
   'test/e2e/*',
+  'test/windows-installers.ps1',
 ]
+
+function classify(paths) {
+  const script = changes.split('        run: |\n')[1].replace(/^ {10}/gm, '')
+  const output = execFileSync('bash', ['-eu', '-c', `
+    git() { printf '%s' "$CHANGED_PATHS"; }
+    GITHUB_OUTPUT=$(mktemp)
+    trap 'rm -f "$GITHUB_OUTPUT"' EXIT
+    ${script}
+    cat "$GITHUB_OUTPUT"
+  `], {
+    encoding: 'utf8',
+    timeout: 10000,
+    env: {
+      ...process.env,
+      BASE_SHA: 'base',
+      HEAD_SHA: 'head',
+      CHANGED_PATHS: paths.length ? `${paths.join('\n')}\n` : '',
+    },
+  })
+  return Object.fromEntries(output.trim().split('\n').map((line) => line.split('=')))
+}
 
 describe('PR gate shape', () => {
   it('classifies the diff in its own job and exposes the installer flag', () => {
@@ -35,6 +59,43 @@ describe('PR gate shape', () => {
     while (lines[patternLine].trim().startsWith('#')) patternLine -= 1
     const patterns = lines[patternLine].trim().replace(/\)$/, '').split('|')
     for (const p of installerPaths) expect(patterns).toContain(p)
+  })
+
+  it.each([
+    '.github/build-linux.sh',
+    '.github/build-windows-installers.mjs',
+    '.github/build-macos-runtime.mjs',
+    '.github/lib/windows-signing.mjs',
+    '.github/lib/macos-signing.mjs',
+    '.github/lib/nested/helper.mjs',
+    'test/windows-installers.ps1',
+  ])('enables the installer matrix for a change to %s alone', (file) => {
+    expect(classify([file])).toMatchObject({ installer: 'true', desktop: 'true', docs_only: 'false' })
+  })
+
+  it.each([
+    'AGENTS.md',
+    'README.md',
+    'SPEC.md',
+    'ROADMAP.md',
+    'DESIGN.md',
+    'docs/decisions/0030-public-core-boundary.md',
+  ])('skips the installer matrix for a change to %s alone', (file) => {
+    expect(classify([file])).toMatchObject({ installer: 'false', desktop: 'false', docs_only: 'true' })
+  })
+
+  it('keeps the installer flag when other paths change in either order', () => {
+    for (const paths of [
+      ['test/windows-installers.ps1', 'README.md', 'src/App.svelte'],
+      ['src/App.svelte', 'README.md', 'test/windows-installers.ps1'],
+    ]) {
+      expect(classify(paths)).toMatchObject({ installer: 'true', desktop: 'true', docs_only: 'false' })
+    }
+  })
+
+  it('skips the installer matrix for an empty diff or an unrelated code change', () => {
+    expect(classify([])).toMatchObject({ installer: 'false', desktop: 'false', docs_only: 'true' })
+    expect(classify(['src/App.svelte'])).toMatchObject({ installer: 'false', desktop: 'true', docs_only: 'false' })
   })
 
   it('runs smoke and the preflights off the changes job, not off each other', () => {
