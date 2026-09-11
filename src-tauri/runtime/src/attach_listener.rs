@@ -114,10 +114,18 @@ where
                 Ok(accepted) => accepted,
                 Err(AttachAcceptError::Closed) => break Ok(()),
                 Err(AttachAcceptError::Accept) => {
+                    muniment_core::runtime_eprintln!(
+                        "muniment-runtime: attach accept failed route=unknown reason=Accept"
+                    );
                     std::thread::sleep(Duration::from_millis(50));
                     continue;
                 }
-                Err(AttachAcceptError::PeerCredentials | AttachAcceptError::WrongUid(_)) => {
+                Err(
+                    error @ (AttachAcceptError::PeerCredentials | AttachAcceptError::WrongUid(_)),
+                ) => {
+                    muniment_core::runtime_eprintln!(
+                        "muniment-runtime: attach session refused route=unknown reason={error:?}"
+                    );
                     continue;
                 }
             };
@@ -140,33 +148,56 @@ where
                         )
                     },
                 );
+                if route == AttachConnectionRoute::Companion {
+                    if let Some(expected) = &expected_desktop_executable {
+                        let authority = u32::try_from(credentials.pid)
+                            .map_err(|_| muniment_core::attach::PeerAuthorityError::PeerUnavailable)
+                            .and_then(|pid| {
+                                muniment_core::attach::verify_approval_presenter_peer(pid, expected)
+                            });
+                        if let Err(error) = authority {
+                            muniment_core::runtime_eprintln!("muniment-runtime: desktop routes refused route={route:?} peer_pid={} expected_executable={expected:?} reason={error:?}", credentials.pid);
+                        }
+                    }
+                }
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: attach session routed route={route:?} peer_pid={}",
+                    credentials.pid
+                );
                 match route {
                     AttachConnectionRoute::ApprovalPresenter => {
                         let expected_desktop_executable = expected_desktop_executable
                             .as_ref()
                             .expect("the approval presenter route has an expected executable");
-                        let Ok((stream, capability)) = admit_approval_presenter(
+                        let (stream, capability) = match admit_approval_presenter(
                             stream,
                             credentials,
                             expected_desktop_executable,
                             &ProcReader,
                             env!("CARGO_PKG_VERSION"),
                             PRESENTER_ADMISSION_TIMEOUT,
-                        ) else {
-                            return;
+                        ) {
+                            Ok(admitted) => admitted,
+                            Err(error) => {
+                                muniment_core::runtime_eprintln!("muniment-runtime: attach session refused route={route:?} reason={error:?}");
+                                return;
+                            }
                         };
                         let connection = ApprovalPresenterConnection::new(stream, capability);
                         let Some(session) = serve_approval_presenter(approvals, connection) else {
+                            muniment_core::runtime_eprintln!("muniment-runtime: attach session closed route={route:?} reason=presenter unavailable");
                             return;
                         };
+                        muniment_core::runtime_eprintln!("muniment-runtime: attach session accepted route={route:?} reason=peer authorized");
                         session.wait_until_closed();
+                        muniment_core::runtime_eprintln!("muniment-runtime: attach session closed route={route:?} reason=presenter connection ended");
                         return;
                     }
                     AttachConnectionRoute::DesktopClient => {
                         let expected_desktop_executable = expected_desktop_executable
                             .as_ref()
                             .expect("the desktop client route has an expected executable");
-                        let Ok((stream, session)) = admit_desktop_client(
+                        let (stream, session) = match admit_desktop_client(
                             stream,
                             credentials,
                             expected_desktop_executable,
@@ -174,18 +205,26 @@ where
                             env!("CARGO_PKG_VERSION"),
                             approval.approval(),
                             PRESENTER_ADMISSION_TIMEOUT,
-                        ) else {
-                            return;
+                        ) {
+                            Ok(admitted) => admitted,
+                            Err(error) => {
+                                muniment_core::runtime_eprintln!("muniment-runtime: attach session refused route={route:?} reason={error:?}");
+                                return;
+                            }
                         };
+                        muniment_core::runtime_eprintln!("muniment-runtime: attach session accepted route={route:?} reason=peer authorized");
                         let Ok(mut service) = service_factory() else {
+                            muniment_core::runtime_eprintln!("muniment-runtime: attach session closed route={route:?} reason=service creation failed");
                             return;
                         };
-                        let _ = serve_desktop_client_session(stream, &session, &mut service);
+                        let result = serve_desktop_client_session(stream, &session, &mut service);
+                        muniment_core::runtime_eprintln!("muniment-runtime: attach session closed route={route:?} reason={result:?}");
                         return;
                     }
                     AttachConnectionRoute::Companion => {}
                 }
                 let Ok(mut service) = service_factory() else {
+                    muniment_core::runtime_eprintln!("muniment-runtime: attach session closed route={route:?} reason=service creation failed");
                     return;
                 };
                 let waiter = approval_waiter_with_claims(
@@ -203,7 +242,7 @@ where
                         ))
                     },
                 );
-                let _ = run_authenticated_session_with_service_approvals_and_registry(
+                let result = run_authenticated_session_with_service_approvals_and_registry(
                     stream,
                     credentials,
                     env!("CARGO_PKG_VERSION"),
@@ -211,6 +250,9 @@ where
                     waiter,
                     &live_connections,
                     handoff_nonce.as_deref(),
+                );
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: attach session closed route={route:?} reason={result:?}"
                 );
             });
         };
