@@ -47,7 +47,7 @@ fn main() {
                 (Some(endpoint), None) => {
                     macos_run_start_probe::run(std::path::Path::new(&endpoint))
                 }
-                _ => Err("The run-start probe requires one attach socket path."),
+                _ => Err("The run-start probe requires one attach socket path.".into()),
             };
             match result {
                 Ok(run_id) => println!("{run_id}"),

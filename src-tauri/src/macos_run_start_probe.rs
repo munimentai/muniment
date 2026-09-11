@@ -3,20 +3,26 @@ use std::time::Duration;
 
 use muniment_core::attach::connect_desktop_client_at;
 
-pub(crate) fn run(endpoint: &Path) -> Result<String, &'static str> {
+pub(crate) fn run(endpoint: &Path) -> Result<String, String> {
     submit_after_idle(endpoint, Duration::from_secs(60))
 }
 
-fn submit_after_idle(endpoint: &Path, idle: Duration) -> Result<String, &'static str> {
+fn submit_after_idle(endpoint: &Path, idle: Duration) -> Result<String, String> {
     // The installed desktop executable must connect so the runtime can verify its peer identity.
     let mut client =
         connect_desktop_client_at(endpoint, env!("CARGO_PKG_VERSION"), Duration::from_secs(5))
-            .map_err(|_| "The run-start probe could not connect.")?;
+            .map_err(|error| format!("The run-start probe could not connect: {error}."))?;
     // Keep this connection open without retries or keepalive requests.
     std::thread::sleep(idle);
     let accepted = client
         .run_submit("Start the installed local run-start probe.", &[], None)
-        .map_err(|_| "The run-start probe could not submit a run.")?;
+        .map_err(|error| {
+            let detail = client
+                .last_request_error()
+                .map(|error| format!(" {error}"))
+                .unwrap_or_default();
+            format!("The run-start probe could not submit a run: {error}.{detail}")
+        })?;
     // The journal proves admission. The probe does not need a model reply.
     let _ = client.run_cancel(&accepted.run_id);
     Ok(accepted.run_id)
@@ -40,7 +46,10 @@ mod tests {
             std::env::temp_dir().join(format!("muniment-absent-{}", uuid::Uuid::now_v7()));
         assert_eq!(
             run(&endpoint),
-            Err("The run-start probe could not connect.")
+            Err(format!(
+                "The run-start probe could not connect: {}.",
+                muniment_core::attach::ClientError::DesktopUnavailable
+            ))
         );
     }
 
@@ -61,7 +70,49 @@ mod tests {
         let result = submit_after_idle(&endpoint, Duration::from_millis(50));
         server.join().unwrap();
         std::fs::remove_file(endpoint).unwrap();
-        assert_eq!(result, Err("The run-start probe could not submit a run."));
+        assert_eq!(
+            result,
+            Err(format!(
+                "The run-start probe could not submit a run: {}.",
+                muniment_core::attach::ClientError::ConnectionClosed
+            ))
+        );
+    }
+
+    #[test]
+    fn probe_reports_the_runtime_code_and_message_for_a_rejected_submit() {
+        let endpoint = Path::new("/tmp").join(format!("muniment-probe-{}", uuid::Uuid::now_v7()));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            admit_desktop_client_over_stream(
+                &mut stream,
+                "1.2.3",
+                None,
+                Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap();
+            let mut prefix = [0; 4];
+            stream.read_exact(&mut prefix).unwrap();
+            let mut body = vec![0; u32::from_be_bytes(prefix) as usize];
+            stream.read_exact(&mut body).unwrap();
+            let request: Request = serde_json::from_slice(&body).unwrap();
+            assert_eq!(request.operation, Operation::RunSubmit);
+            stream.write_all(&encode_frame(&json!({
+                "protocol": "muniment.attach/1", "request_id": request.request_id,
+                "ok": false, "error": muniment_core::attach::ProtocolError::runtime_draining(),
+            })).unwrap()).unwrap();
+        });
+        let result = submit_after_idle(&endpoint, Duration::from_millis(20));
+        server.join().unwrap();
+        std::fs::remove_file(endpoint).unwrap();
+        assert_eq!(result, Err(concat!(
+            "The run-start probe could not submit a run: the desktop rejected the thread request. ",
+            "code=\"runtime_draining\" reason=\"The runtime is draining and cannot accept new work.\""
+        ).into()));
     }
 
     #[test]
