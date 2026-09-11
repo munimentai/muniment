@@ -39,13 +39,37 @@ fn runtime(directory: &PathBuf, exit: &str) -> Output {
 fn maps_macos_activation_outcomes_to_process_statuses() {
     let directory = directory();
 
-    assert!(runtime(&directory, "orderly").status.success());
+    let orderly = runtime(&directory, "orderly");
+    assert!(orderly.status.success());
+    assert_exit_line(
+        &orderly,
+        "muniment-runtime: exit status=0 cause=manager stop",
+    );
     for _ in 0..4 {
-        assert_eq!(runtime(&directory, "failed").status.code(), Some(1));
+        let failed = runtime(&directory, "failed");
+        assert_eq!(failed.status.code(), Some(1));
+        assert_exit_line(
+            &failed,
+            "muniment-runtime: exit status=1 cause=activation failed",
+        );
     }
-    assert!(runtime(&directory, "failed").status.success());
+    let stopped = runtime(&directory, "failed");
+    assert!(stopped.status.success());
+    assert_exit_line(
+        &stopped,
+        "muniment-runtime: exit status=0 cause=restart loop stopped after activation failure",
+    );
 
     fs::remove_dir_all(directory).unwrap();
+}
+
+fn assert_exit_line(output: &Output, expected: &str) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.starts_with("muniment-runtime: exit "))
+        .collect();
+    assert_eq!(lines, [expected]);
 }
 
 #[test]

@@ -164,6 +164,9 @@ impl WindowsAttachFactory for SystemMacosAttachFactory {
     fn bind(&self) -> Result<Self::Acceptor, WindowsAttachBindFailure> {
         MacosAttachAcceptor::bind(&self.profile_directory, &self.config_directory).map_err(
             |error| {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: attach bind failed reason={error:?}"
+                );
                 let event = error.diagnostic_event();
                 if let Ok(directory) = crate::effective_user_macos_log_directory() {
                     let _ = crate::write_macos_diagnostic(directory, event);
@@ -240,8 +243,14 @@ impl MacosAttachServeBoundary for SystemMacosAttachBoundary {
             Ok(MacosAttachWaitOutcome::Connected(stream)) => {
                 let expected_desktop_executable = self.expected_desktop_executable.clone();
                 std::thread::spawn(move || {
-                    let Ok(mut service) = service_factory() else {
-                        return;
+                    let mut service = match service_factory() {
+                        Ok(service) => service,
+                        Err(error) => {
+                            muniment_core::runtime_eprintln!(
+                                "muniment-runtime: desktop session closed reason=service creation failed {error}"
+                            );
+                            return;
+                        }
                     };
                     let approval = service.boundaries.signed_workspace_approval();
                     let coordinator = service.boundaries.approval_coordinator();
@@ -263,7 +272,7 @@ impl MacosAttachServeBoundary for SystemMacosAttachBoundary {
                             ))
                         },
                     );
-                    let _ = serve_macos_attach_session_with_state(
+                    let result = serve_macos_attach_session_with_state(
                         stream,
                         &expected_desktop_executable,
                         env!("CARGO_PKG_VERSION"),
@@ -274,11 +283,27 @@ impl MacosAttachServeBoundary for SystemMacosAttachBoundary {
                         waiter,
                         &live_connections,
                     );
+                    // The desktop request loop logs its own close reason.
+                    if let Err(error) = result {
+                        if !matches!(
+                            error,
+                            muniment_core::attach::MacosAttachSessionError::DesktopClientSession(_)
+                        ) {
+                            muniment_core::runtime_eprintln!(
+                                "muniment-runtime: attach session closed reason={error:?}"
+                            );
+                        }
+                    }
                 });
                 WindowsAttachAcceptOutcome::Served
             }
             Ok(MacosAttachWaitOutcome::Stopped) => WindowsAttachAcceptOutcome::Stopped,
-            Err(_) => WindowsAttachAcceptOutcome::Failed,
+            Err(error) => {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: attach accept failed reason={error:?}"
+                );
+                WindowsAttachAcceptOutcome::Failed
+            }
         }
     }
 }
