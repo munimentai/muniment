@@ -105,11 +105,10 @@ describe('installed nightly model-ready onboarding', () => {
       expect(exists).toBe(false)
     }
     await composer.setValue('Help me organize my notes.')
-    await openFirstRunModelSettings()
-    const localMode = await $('[data-testid="local-mode"]')
-    // The installed runtime answers the session, so this screen waits on the
-    // desktop client connection. Report that connection when the wait runs out.
+    // Include the first Send and the panel checks in the failure report.
     try {
+      await openFirstRunModelSettings()
+      const localMode = await $('[data-testid="local-mode"]')
       await localMode.waitForDisplayed({
         timeoutMsg: 'model settings did not appear after the first Send',
       })

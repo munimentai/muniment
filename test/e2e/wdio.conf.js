@@ -5,6 +5,7 @@ const appBinary = process.env.MUNIMENT_E2E_APP_BINARY
 const artifactDir = process.env.MUNIMENT_E2E_RAW_DIR
 const reportName = process.env.MUNIMENT_E2E_CLEANUP_ONLY === '1' ? 'cleanup' : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1' ? 'onboarding' : null
 let specName = 'unknown'
+let sourceCaptured = false
 
 if (!appBinary || !path.isAbsolute(appBinary)) throw new Error('MUNIMENT_E2E_APP_BINARY must be an absolute path')
 if (!artifactDir || !path.isAbsolute(artifactDir)) throw new Error('MUNIMENT_E2E_RAW_DIR must be an absolute path')
@@ -58,6 +59,7 @@ export async function captureFailureArtifacts(result, capture = {
   try {
     const source = redactPageSource(await capture.getPageSource())
     await capture.writeFile(path.join(artifactDir, `page-source-${specName}.html`), source)
+    sourceCaptured = true
   } catch (error) {
     logFailure('Failed to capture the page source.', error)
   }
@@ -79,9 +81,14 @@ export const config = {
   bail: 0,
   before: async (_capabilities, specs) => {
     specName = path.basename(specs[0], '.spec.js').replace(/[^A-Za-z0-9._-]/g, '_')
+    sourceCaptured = false
     await selectMainWindow()
   },
-  beforeTest: async () => { await selectMainWindow() },
+  beforeTest: async () => {
+    // Pin the service target too. Raw WebDriver switches leave its focus probes active.
+    await browser.tauri.switchWindow('main')
+    await selectMainWindow()
+  },
   maxInstances: 1,
   capabilities: [{ browserName: 'tauri' }],
   logLevel: 'info',
@@ -105,6 +112,10 @@ export const config = {
     captureFrontendLogs: true,
     captureBackendLogs: true,
   }]],
+  // Mocha timeouts can bypass afterTest. Capture before the service closes the session.
+  after: async (result) => {
+    if (!sourceCaptured) await captureFailureArtifacts({ passed: result === 0 })
+  },
   afterTest: async (_test, _context, result) => {
     try {
       await captureFailureArtifacts(result)
