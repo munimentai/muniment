@@ -21,6 +21,11 @@ Type the first message of a new thread.
 Press **Enter** to send it and bring the main window forward.
 Press **Escape** to close the launcher without sending.
 
+If the launcher cannot start, its alert names the cause and asks you to restart the app.
+The desktop writes the cause to stderr, which the Linux evidence envelope captures in `driver-app.log`.
+The installed specs select the `main` window by its Tauri label before they read the shell.
+Failure captures use that window too.
+
 ## Provider access
 
 Open the sidebar's **Local mode** section from the thread surface. Select **Anthropic**, **Google**, or **OpenAI**. Enter the key in **Provider API key**, then select **Save key**. The desktop writes the key to Pi's `~/.pi/agent/auth.json` store with Pi's file lock.

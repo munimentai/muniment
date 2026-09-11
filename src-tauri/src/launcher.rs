@@ -71,6 +71,11 @@ pub(crate) fn position(
 }
 
 #[tauri::command]
+pub fn launcher_start_failed(cause: String) {
+    eprintln!("The launcher could not start: {cause:?}. Restart the app.");
+}
+
+#[tauri::command]
 pub fn launcher_open(app: tauri::AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("launcher")
