@@ -1,9 +1,10 @@
-use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 use muniment_core::attach::RuntimeActivityRegistry;
+use muniment_core::chat_prompt::use_refused_keyring_for_tests;
 use muniment_core::journal::reducer::project_chat_fragment;
+use muniment_core::journal::EventPayload;
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{
     accept_prompt, apply_retention, drive_prompt, open_profile_storage, thread_page,
@@ -14,67 +15,6 @@ mod common;
 use common::{local_grant, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
-static WRITES: AtomicUsize = AtomicUsize::new(0);
-
-#[derive(Clone, Debug)]
-struct RefusedKeyring {
-    code: i32,
-    message: &'static str,
-    refuse_entry: bool,
-}
-
-impl std::fmt::Display for RefusedKeyring {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for RefusedKeyring {}
-
-impl RefusedKeyring {
-    fn error(&self) -> keyring::Error {
-        keyring::Error::PlatformFailure(Box::new(self.clone()))
-    }
-}
-
-impl keyring::credential::CredentialBuilderApi for RefusedKeyring {
-    fn build(
-        &self,
-        _target: Option<&str>,
-        _service: &str,
-        _user: &str,
-    ) -> keyring::Result<Box<keyring::Credential>> {
-        if self.refuse_entry {
-            WRITES.fetch_add(1, Ordering::SeqCst);
-            return Err(self.error());
-        }
-        Ok(Box::new(self.clone()))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-impl keyring::credential::CredentialApi for RefusedKeyring {
-    fn set_secret(&self, _secret: &[u8]) -> keyring::Result<()> {
-        WRITES.fetch_add(1, Ordering::SeqCst);
-        Err(self.error())
-    }
-
-    fn get_secret(&self) -> keyring::Result<Vec<u8>> {
-        panic!("The runtime must not read a prompt that the keyring refused.");
-    }
-
-    fn delete_credential(&self) -> keyring::Result<()> {
-        panic!("Retention must not delete a prompt that the keyring refused.");
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
 #[test]
 fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
     let _environment = ENVIRONMENT.lock().unwrap();
@@ -88,18 +28,14 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
     let mut thread_id = None;
     let captured = temporary.root.join("captured-prompts");
     std::env::set_var("PI_RESUME_STUB_PROMPTS", &captured);
-    WRITES.store(0, Ordering::SeqCst);
+    let writes = Arc::new(AtomicUsize::new(0));
 
     for (index, code, message, refuse_entry) in [
         (1, -25307, "A default keychain could not be found.", false),
         (2, -25308, "User interaction is not allowed.", false),
         (3, -25307, "A default keychain could not be found.", true),
     ] {
-        keyring::set_default_credential_builder(Box::new(RefusedKeyring {
-            code,
-            message,
-            refuse_entry,
-        }));
+        use_refused_keyring_for_tests(code, message, refuse_entry, Arc::clone(&writes));
         let run_id = format!("018f0000-0000-7000-8000-{index:012}");
         let prompt = format!("private prompt {index}");
         let (sender, events) = mpsc::channel();
@@ -140,9 +76,12 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
         assert!(notice.contains(&code.to_string()));
         assert!(notice.contains(message));
         assert!(!notice.contains("Conversation history is unavailable."));
-        assert!(!serde_json::to_string(&journal_events)
-            .unwrap()
-            .contains(&prompt));
+        for event in &journal_events {
+            let EventPayload::Inline { payload_json } = &event.payload else {
+                panic!("Run creation must use an inline payload.");
+            };
+            assert!(!payload_json.to_string().contains(&prompt));
+        }
 
         // The notice must not turn an accepted run into a failed reply.
         drive_prompt(launch);
@@ -158,7 +97,7 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
             .unwrap()
             .contains(&prompt));
     }
-    assert_eq!(WRITES.load(Ordering::SeqCst), 3);
+    assert_eq!(writes.load(Ordering::SeqCst), 3);
     drop(storage);
     let reopened = open_profile_storage(&temporary.profile).unwrap();
     let page = thread_page(
@@ -192,11 +131,12 @@ fn attach_submit_sends_without_a_default_keychain() {
     use std::time::{Duration, Instant};
 
     let _environment = ENVIRONMENT.lock().unwrap();
-    keyring::set_default_credential_builder(Box::new(RefusedKeyring {
-        code: -25307,
-        message: "A default keychain could not be found.",
-        refuse_entry: false,
-    }));
+    use_refused_keyring_for_tests(
+        -25307,
+        "A default keychain could not be found.",
+        false,
+        Arc::new(AtomicUsize::new(0)),
+    );
     let temporary = TemporaryProfile::new("refused-prompt-submit", true);
     std::fs::write(
         temporary
@@ -250,11 +190,12 @@ fn attach_submit_sends_without_a_default_keychain() {
 #[test]
 fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
     let _environment = ENVIRONMENT.lock().unwrap();
-    keyring::set_default_credential_builder(Box::new(RefusedKeyring {
-        code: -25308,
-        message: "User interaction is not allowed.",
-        refuse_entry: false,
-    }));
+    use_refused_keyring_for_tests(
+        -25308,
+        "User interaction is not allowed.",
+        false,
+        Arc::new(AtomicUsize::new(0)),
+    );
     let temporary = TemporaryProfile::new("refused-prompt-attachment", true);
     let storage = open_profile_storage(&temporary.profile).unwrap();
     let active = Arc::new(Mutex::new(None));
@@ -299,9 +240,12 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
         .unwrap();
     assert!(notice.contains("-25308"));
     assert!(notice.contains("User interaction is not allowed."));
-    assert!(!serde_json::to_string(&events)
-        .unwrap()
-        .contains("private prompt"));
+    for event in &events {
+        let EventPayload::Inline { payload_json } = &event.payload else {
+            panic!("Run preparation must use an inline payload.");
+        };
+        assert!(!payload_json.to_string().contains("private prompt"));
+    }
     let thread_id = storage
         .lock()
         .unwrap()
@@ -338,12 +282,13 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
 #[test]
 fn an_invalid_thread_does_not_touch_the_prompt_store() {
     let _environment = ENVIRONMENT.lock().unwrap();
-    keyring::set_default_credential_builder(Box::new(RefusedKeyring {
-        code: -25307,
-        message: "A default keychain could not be found.",
-        refuse_entry: false,
-    }));
-    WRITES.store(0, Ordering::SeqCst);
+    let writes = Arc::new(AtomicUsize::new(0));
+    use_refused_keyring_for_tests(
+        -25307,
+        "A default keychain could not be found.",
+        false,
+        Arc::clone(&writes),
+    );
     let temporary = TemporaryProfile::new("refused-prompt-invalid-thread", true);
     let storage = open_profile_storage(&temporary.profile).unwrap();
     let active = Arc::new(Mutex::new(None));
@@ -369,7 +314,7 @@ fn an_invalid_thread_does_not_touch_the_prompt_store() {
         None,
     );
     assert_eq!(result.err().unwrap(), "thread_not_found");
-    assert_eq!(WRITES.load(Ordering::SeqCst), 0);
+    assert_eq!(writes.load(Ordering::SeqCst), 0);
     assert!(storage
         .lock()
         .unwrap()
