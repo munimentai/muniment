@@ -1,5 +1,6 @@
 //! Dormant runtime service composition.
 
+pub(crate) mod prompt_storage;
 mod run;
 mod session;
 mod threads;

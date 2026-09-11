@@ -1203,6 +1203,12 @@
             {@const groupedTools = activity.filter((tool) => groupedIds.includes(tool.effectId))}
             {@const singleTools = activity.filter((tool) => !groupedIds.includes(tool.effectId))}
             <div class="response">
+              {#if message.run.promptStorageNotice}
+                <details class="prompt-storage-notice">
+                  <summary title={message.run.promptStorageNotice}>Prompt text stays in runtime memory for this run.</summary>
+                  <p>{message.run.promptStorageNotice}</p>
+                </details>
+              {/if}
               {#if message.run.phase === 'acquiring-pi'}
                 <p class="thinking">{runAnnouncement(message.run)}</p>
               {:else if message.run.phase === 'thinking'}
@@ -1657,6 +1663,10 @@
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
   .user-message > p { margin: 0; white-space: pre-wrap; }
   .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .prompt-storage-notice { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .prompt-storage-notice summary { min-height: 24px; line-height: 24px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prompt-storage-notice summary:hover { color: var(--ink); }
+  .prompt-storage-notice p { margin: 6px 0 0; overflow-wrap: anywhere; }
   .message-attachments { display: grid; justify-items: end; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
   .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: var(--text-12); }

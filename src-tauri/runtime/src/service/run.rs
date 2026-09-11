@@ -21,8 +21,8 @@ use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_events::SharedStorage;
 use muniment_core::run_preparation::{
-    prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
-    record_persistence_failure, OpenSelectedFile, SessionThreadStart,
+    prepare_opened_run_with_prompt_storage, record_persistence_failure, OpenSelectedFile,
+    SessionThreadStart,
 };
 use muniment_core::run_start::{accepted_time_now, ActiveRun};
 use muniment_core::session_thread::SessionThread;
@@ -129,41 +129,34 @@ pub fn accept_prompt(
         },
     )?;
     let setup = (|| {
-        let mut prepared = match thread_id.as_deref() {
-            Some(thread_id) => prepare_new_run_in_thread_after_validation(
-                &storage,
-                &run_id,
-                &grant.workspace,
-                subject.as_deref(),
-                files,
-                Some(runtime_provenance()),
-                thread_id,
-                "muniment-runtime",
-                env!("CARGO_PKG_VERSION"),
-                || {
-                    muniment_core::chat_prompt::store_prompt(&run_id, &prompt, subject.as_deref())
-                        .map_err(|_| "Conversation history is unavailable.".to_string())
-                },
-            ),
-            None => prepare_new_run_with_session_thread(
-                &storage,
-                SessionThreadStart {
-                    tracker: session_thread,
-                    continue_existing,
-                },
-                &run_id,
-                &grant.workspace,
-                subject.as_deref(),
-                files,
-                Some(runtime_provenance()),
-                "muniment-runtime",
-                env!("CARGO_PKG_VERSION"),
-                || {
-                    muniment_core::chat_prompt::store_prompt(&run_id, &prompt, subject.as_deref())
-                        .map_err(|_| "Conversation history is unavailable.".to_string())
-                },
-            ),
-        }?;
+        let mut notice = None;
+        let mut prepared = prepare_opened_run_with_prompt_storage(
+            &storage,
+            SessionThreadStart {
+                tracker: session_thread,
+                continue_existing: thread_id.is_none() && continue_existing,
+            },
+            &run_id,
+            &grant.workspace,
+            subject.as_deref(),
+            files,
+            Some(runtime_provenance()),
+            thread_id.as_deref(),
+            "muniment-runtime",
+            env!("CARGO_PKG_VERSION"),
+            || {
+                notice = super::prompt_storage::store_prompt_or_notice(
+                    &run_id,
+                    &prompt,
+                    subject.as_deref(),
+                );
+                Ok(notice.clone())
+            },
+        )
+        .map_err(|error| match notice {
+            Some(notice) => format!("{notice} {error}"),
+            None => error,
+        })?;
         let thread_id = {
             let mut storage = match storage.lock() {
                 Ok(storage) => storage,

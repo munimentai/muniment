@@ -5,6 +5,18 @@ export const historyFixtures = {
   scan: [],
   access: [],
   empty: [],
+  'prompt-storage': [
+    {
+      runId: 'probe-prompt-storage',
+      prompt: null,
+      phase: 'complete',
+      text: 'The local notes list the lease renewal date and notice period.',
+      promptStorageNotice: 'Prompt text stays in runtime memory for this run. The keyring refused prompt history: Store(PlatformFailure(Error { code: -25307, message: "A default keychain could not be found." })).',
+      receipt: { time: '0.8s' },
+      toolActivity: [],
+      resumable: false,
+    },
+  ],
   'local-mode': [
     {
       runId: 'probe-local-complete',
@@ -257,7 +269,7 @@ export function buildProbeCommandTable(fixtureName) {
       }
       return null
     }
-    if (command === 'local_mode_status') return fixtureName === 'local-mode'
+    if (command === 'local_mode_status') return ['local-mode', 'prompt-storage'].includes(fixtureName)
     if (command === 'local_mode_enter') return null
     if (command === 'local_mode_leave') return null
     if (command === 'local_mode_provider_status') return [
@@ -462,7 +474,7 @@ function fixtureRendered() {
       && workspace.querySelector('.assistant-markdown a')?.textContent.startsWith('Ready')
   }
   const renderedText = workspace.textContent.replaceAll(/\s/g, '')
-  return history.every((run) => renderedText.includes(run.prompt.replaceAll(/\s/g, ''))
+  return history.every((run) => renderedText.includes((run.prompt ?? '').replaceAll(/\s/g, ''))
     && renderedText.includes(run.text.replaceAll(/\s/g, '')))
 }
 
