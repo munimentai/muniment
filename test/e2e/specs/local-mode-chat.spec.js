@@ -122,6 +122,8 @@ describe('installed local-mode chat', () => {
     expect(launcherHandle).toBeTruthy()
     const launcher = await $('input[aria-label="First message"]')
     await launcher.waitForDisplayed()
+    expect(await launcher.getAttribute('aria-invalid')).toBe('false')
+    expect(await (await $('[role="alert"]')).getText()).toBe('')
     expect(await launcher.isFocused()).toBe(true)
     expect(await browser.execute(async () => window.__TAURI__.core.invoke('launcher_is_visible'))).toBe(true)
     await browser.keys('Escape')
