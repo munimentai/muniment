@@ -1066,7 +1066,7 @@
   {/if}
 
   {#if tauri}
-    <Onboarding {tauri} bind:onboarding bind:draft onready={openFirstRunModelSettings} runtimeUnavailable={backgroundServiceNoticeVisible} />
+    <Onboarding {tauri} bind:onboarding bind:draft onready={openFirstRunModelSettings} />
     {#if backgroundServiceNoticeVisible}
       <section class="auth-state" aria-live="polite" data-testid="runtime-notice">
         <p class="record error-record">{runtimeNotice.text}</p>

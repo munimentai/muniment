@@ -33,6 +33,7 @@ pub(crate) struct Snapshot {
     last_event: RuntimeEvent,
     visible: bool,
     busy: bool,
+    cause: Option<String>,
 }
 
 #[derive(Default)]
@@ -54,6 +55,36 @@ impl Lifecycle {
     fn change(&mut self, event: RuntimeEvent, visible: bool) {
         self.snapshot.last_event = event;
         self.snapshot.visible = visible;
+        self.snapshot.cause = None;
+    }
+
+    #[cfg(target_os = "linux")]
+    fn start_failed(&mut self, error: &str, desktop: bool, chat_events: bool) {
+        self.started(RuntimeEvent::StartFailed);
+        self.snapshot.cause = Some(format!(
+            "{error} Desktop client connected: {desktop}. Chat events connected: {chat_events}."
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn activation_finished(&mut self, result: Result<(), String>, clients: (bool, bool)) {
+        match result {
+            Ok(()) => self.started(RuntimeEvent::Connected),
+            Err(error) => self.start_failed(&error, clients.0, clients.1),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn observe_clients(&mut self, desktop: bool, chat_events: bool, now: Instant) {
+        let starting = self.snapshot.last_event == RuntimeEvent::Starting;
+        self.observe(desktop && chat_events, !desktop && !chat_events, now);
+        if starting && self.snapshot.last_event == RuntimeEvent::StartFailed {
+            self.start_failed(
+                "The runtime clients did not connect within 10 seconds.",
+                desktop,
+                chat_events,
+            );
+        }
     }
 
     fn observe(&mut self, connected: bool, disconnected: bool, now: Instant) {
@@ -80,8 +111,8 @@ impl Lifecycle {
             {
                 self.snapshot.last_event = RuntimeEvent::StartFailed;
             }
-            self.snapshot.visible =
-                self.snapshot.visible || first || now.duration_since(since) >= DWELL;
+            self.snapshot.visible = self.snapshot.last_event != RuntimeEvent::Starting
+                && (self.snapshot.visible || first || now.duration_since(since) >= DWELL);
         }
         self.read_status = true;
     }
@@ -99,11 +130,7 @@ impl Lifecycle {
         self.awaiting_disconnect = event == RuntimeEvent::Stopped;
         self.snapshot.busy = self.awaiting_disconnect;
         self.outage = None;
-        let visible = match event {
-            RuntimeEvent::Connected => false,
-            RuntimeEvent::Starting => self.snapshot.visible,
-            _ => true,
-        };
+        let visible = !matches!(event, RuntimeEvent::Connected | RuntimeEvent::Starting);
         self.change(event, visible);
     }
 }
@@ -118,6 +145,12 @@ impl RuntimeOwner {
         let before = state.snapshot.clone();
         update(&mut state);
         if state.snapshot != before {
+            #[cfg(target_os = "linux")]
+            if state.snapshot.cause != before.cause || (before.busy && !state.snapshot.busy) {
+                if let Some(cause) = &state.snapshot.cause {
+                    eprintln!("The runtime start failed. {cause}");
+                }
+            }
             state.snapshot.revision += 1;
             let snapshot = state.snapshot.clone();
             drop(state);
@@ -177,10 +210,14 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         Err(_) => RuntimeEvent::StartFailed,
     };
     #[cfg(target_os = "linux")]
-    let event = match crate::linux_runtime_service::start_runtime(app) {
-        Ok(()) => RuntimeEvent::Connected,
-        Err(_) => RuntimeEvent::StartFailed,
-    };
+    {
+        let result = crate::linux_runtime_service::start_runtime(app);
+        let clients = app
+            .state::<crate::attach_service::AttachCompanionState>()
+            .runtime_client_connections();
+        owner.update(app, |state| state.activation_finished(result, clients));
+    }
+    #[cfg(not(target_os = "linux"))]
     owner.update(app, |state| state.started(event));
 }
 
@@ -238,16 +275,17 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 if matches!(process.try_wait(), Ok(Some(_))) {
                     *child = None;
                     owner.update(&app, |state| {
-                        state.snapshot.last_event = RuntimeEvent::Exited;
+                        state.change(RuntimeEvent::Exited, state.snapshot.visible);
                         state.observe(false, false, Instant::now());
                     });
                 }
             }
         }
         let companion = app.state::<crate::attach_service::AttachCompanionState>();
+        #[cfg(not(target_os = "linux"))]
         let connected = companion.runtime_connected();
         #[cfg(target_os = "linux")]
-        let disconnected = companion.runtime_disconnected();
+        let (desktop, chat_events) = companion.runtime_client_connections();
         #[cfg(not(target_os = "linux"))]
         let disconnected = !connected;
         #[cfg(target_os = "macos")]
@@ -267,6 +305,9 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             {
                 state.change(RuntimeEvent::Approved, true);
             }
+            #[cfg(target_os = "linux")]
+            state.observe_clients(desktop, chat_events, Instant::now());
+            #[cfg(not(target_os = "linux"))]
             state.observe(connected, disconnected, Instant::now());
         });
         std::thread::sleep(Duration::from_millis(100));
@@ -302,6 +343,111 @@ mod tests {
         assert!(state.snapshot.visible);
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ten_second_timeout_records_each_missing_client_and_clears_on_recovery() {
+        let now = Instant::now();
+        for (desktop, chat_events) in [(false, false), (true, false), (false, true)] {
+            let app = tauri::test::mock_app();
+            app.manage(RuntimeOwner::default());
+            let owner = app.state::<RuntimeOwner>();
+            for elapsed in [Duration::ZERO, DWELL, Duration::from_millis(9999)] {
+                owner.update(app.handle(), |state| {
+                    state.observe_clients(desktop, chat_events, now + elapsed);
+                });
+                let snapshot = runtime_state(app.state());
+                assert_eq!(snapshot.last_event, RuntimeEvent::Starting);
+                assert!(!snapshot.visible);
+                assert_eq!(snapshot.cause, None);
+            }
+            owner.update(app.handle(), |state| {
+                state.observe_clients(desktop, chat_events, now + Duration::from_secs(10));
+            });
+            let snapshot = runtime_state(app.state());
+            assert_eq!(snapshot.last_event, RuntimeEvent::StartFailed);
+            assert!(snapshot.visible);
+            assert_eq!(snapshot.cause, Some(format!(
+                "The runtime clients did not connect within 10 seconds. Desktop client connected: {desktop}. Chat events connected: {chat_events}."
+            )));
+            let serialized = serde_json::to_value(&snapshot).unwrap();
+            assert_eq!(serialized["cause"], snapshot.cause.as_deref().unwrap());
+            owner.update(app.handle(), |state| {
+                state.observe_clients(desktop, chat_events, now + Duration::from_secs(11));
+            });
+            assert_eq!(runtime_state(app.state()), snapshot);
+            owner.update(app.handle(), |state| {
+                state.observe_clients(true, true, now + Duration::from_secs(12));
+            });
+            let recovered = runtime_state(app.state());
+            assert_eq!(recovered.last_event, RuntimeEvent::Connected);
+            assert!(!recovered.visible);
+            assert_eq!(recovered.cause, None);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn activation_failure_publishes_the_error_and_both_client_states() {
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        owner.update(app.handle(), |state| assert!(state.start()));
+        owner.update(app.handle(), |state| {
+            state.activation_finished(
+                Err(
+                    "The runtime start timed out while waiting for the running runtime clients."
+                        .into(),
+                ),
+                (true, false),
+            );
+        });
+        let snapshot = runtime_state(app.state());
+        assert_eq!(snapshot.last_event, RuntimeEvent::StartFailed);
+        assert!(snapshot.visible);
+        assert!(!snapshot.busy);
+        assert_eq!(snapshot.cause.as_deref(), Some(
+            "The runtime start timed out while waiting for the running runtime clients. Desktop client connected: true. Chat events connected: false."
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn activation_error_survives_busy_observations_and_retry() {
+        let now = Instant::now();
+        let mut state = Lifecycle::default();
+        assert!(state.start());
+        state.observe_clients(false, true, now + Duration::from_secs(10));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Starting);
+        assert!(!state.snapshot.visible);
+        state.activation_finished(Err("The startup lock denied access.".into()), (false, true));
+        let failure = state.snapshot.clone();
+        assert_eq!(failure.cause.as_deref(), Some(
+            "The startup lock denied access. Desktop client connected: false. Chat events connected: true."
+        ));
+        assert!(failure.visible);
+        assert!(!failure.busy);
+        assert!(state.start());
+        assert!(!state.start());
+        state.observe_clients(true, true, now + Duration::from_secs(11));
+        assert_eq!(state.snapshot.cause, failure.cause);
+        state.activation_finished(Ok(()), (true, true));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        assert_eq!(state.snapshot.cause, None);
+        assert!(!state.snapshot.visible);
+    }
+
+    #[test]
+    fn a_starting_owner_connects_at_the_timeout_boundary_without_a_notice() {
+        let now = Instant::now();
+        let mut state = Lifecycle::default();
+        state.observe(false, true, now);
+        assert!(!state.snapshot.visible);
+        state.observe(true, false, now + Duration::from_secs(10));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        assert!(!state.snapshot.visible);
+        assert_eq!(state.snapshot.cause, None);
+    }
+
     #[test]
     fn repeated_outages_do_not_extend_the_dwell() {
         let now = Instant::now();
@@ -330,6 +476,7 @@ mod tests {
         state.observe(false, true, now);
         state.observe(false, true, now + Duration::from_millis(9999));
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Starting);
+        assert!(!state.snapshot.visible);
         state.observe(false, true, now + Duration::from_secs(10));
         assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
         assert!(state.start());
@@ -426,6 +573,7 @@ mod tests {
     fn first_outage_shows_at_once_and_short_drop_keeps_workspace() {
         let now = Instant::now();
         let mut state = Lifecycle::default();
+        state.change(RuntimeEvent::Disconnected, false);
         state.observe(false, true, now);
         assert!(state.snapshot.visible);
         state.observe(false, true, now + Duration::from_millis(100));

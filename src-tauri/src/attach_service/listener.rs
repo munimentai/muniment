@@ -12,8 +12,10 @@ pub(crate) fn start_runtime_clients<R: tauri::Runtime>(app: &tauri::AppHandle<R>
 
 #[cfg(target_os = "linux")]
 pub(crate) fn runtime_clients_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
-    let status = app.state::<AttachCompanionState>().listener_status();
-    status.connected && status.chat_events_connected
+    let (desktop, chat_events) = app
+        .state::<AttachCompanionState>()
+        .runtime_client_connections();
+    desktop && chat_events
 }
 
 #[cfg(target_os = "linux")]
