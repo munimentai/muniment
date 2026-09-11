@@ -4,7 +4,7 @@
   import { onboardingCancelSettingsState, onboardingStatusState } from './onboarding-state.js'
   import { scanRows, scanSummary } from './onboarding-scan.js'
 
-  let { tauri, onboarding = $bindable(), draft = $bindable(''), onready, runtimeUnavailable = false } = $props()
+  let { tauri, onboarding = $bindable(), draft = $bindable(''), onready } = $props()
   let panel = $state(null)
   let report = $state(null)
   let scanError = $state('')
@@ -113,7 +113,7 @@
   })
 </script>
 
-{#if onboarding.name !== 'complete' && !runtimeUnavailable}
+{#if onboarding.name !== 'complete'}
   <section class="onboarding" aria-label={settings ? 'Home settings' : 'First run'}>
     {#if settings}
       <h1>Home settings</h1>

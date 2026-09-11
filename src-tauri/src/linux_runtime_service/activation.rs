@@ -15,43 +15,47 @@ pub(crate) fn activate_runtime(
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| "The runtime start timeout is invalid.".to_owned())?;
+    let startup_timeout = "The runtime start timed out while waiting for the startup lock.";
     let _startup_lock = loop {
         if connected() {
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err("Muniment could not connect to its runtime.".into());
+            return Err(startup_timeout.into());
         }
         match filesystem.acquire_startup_lock() {
             Ok(lock) => break lock,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => return Err("Muniment could not lock runtime startup.".into()),
+            Err(error) => return Err(format!("Muniment could not lock runtime startup: {error}")),
         }
-        wait_for_retry(deadline)?;
+        wait_for_retry(deadline, startup_timeout)?;
     };
     if connected() {
         return Ok(());
     }
-    match filesystem.acquire_instance_lock() {
+    let connection_timeout = match filesystem.acquire_instance_lock() {
         Ok(lock) => {
             // Only the runtime owns the endpoint. Release the probe lock before the child starts.
             drop(lock);
             start()?;
+            "The runtime start timed out while waiting for the new runtime clients."
         }
         // A service or another desktop already started the runtime. Wait for its client handshake.
-        Err(InstanceLockError::AlreadyHeld) => {}
+        Err(InstanceLockError::AlreadyHeld) => {
+            "The runtime start timed out while waiting for the running runtime clients."
+        }
         Err(error) => return Err(error.to_string()),
-    }
+    };
     while !connected() {
-        wait_for_retry(deadline)?;
+        wait_for_retry(deadline, connection_timeout)?;
     }
     Ok(())
 }
 
-fn wait_for_retry(deadline: Instant) -> Result<(), String> {
+fn wait_for_retry(deadline: Instant, error: &str) -> Result<(), String> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        return Err("Muniment could not connect to its runtime.".into());
+        return Err(error.into());
     }
     std::thread::sleep(RETRY_INTERVAL.min(remaining));
     Ok(())

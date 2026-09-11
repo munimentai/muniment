@@ -25,15 +25,23 @@ pub struct AuthorizedCompanion {
 }
 
 impl AttachCompanionState {
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn runtime_connected(&self) -> bool {
         let status = self.listener_status();
         status.connected && status.chat_events_connected
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn runtime_disconnected(&self) -> bool {
-        let status = self.listener_status();
-        !status.connected && !status.chat_events_connected
+    pub(crate) fn runtime_client_connections(&self) -> (bool, bool) {
+        let desktop = self
+            .connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let chat_events = self
+            .chat_events_connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (*desktop, *chat_events)
     }
 }
 
