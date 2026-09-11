@@ -88,7 +88,20 @@
       syncAppearance()
       input.focus()
     }
-    void start().catch(() => showError('The launcher could not start. Restart the app.'))
+    void start().catch(async (failure) => {
+      if (destroyed) return
+      ready = false
+      void Promise.allSettled(stops.splice(0).map((stop) => Promise.resolve().then(stop)))
+      const cause = failure instanceof Error ? failure.message : String(failure)
+      const message = `The launcher could not start: ${cause}. Restart the app.`
+      showError(message)
+      console.error(message)
+      try {
+        await api.core.invoke('launcher_start_failed', { cause })
+      } catch (error) {
+        console.error('The launcher could not log its start failure.', error)
+      }
+    })
     return () => { destroyed = true; stops.forEach((stop) => stop()) }
   })
 </script>

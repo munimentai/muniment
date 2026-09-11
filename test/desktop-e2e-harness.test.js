@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -124,7 +124,113 @@ describe('installed production chat contract', () => {
   })
 })
 
+describe('WDIO main window selection', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.stubEnv('MUNIMENT_E2E_APP_BINARY', path.join(root, 'muniment-test-binary'))
+    vi.stubEnv('MUNIMENT_E2E_RAW_DIR', temp())
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  function driverFixture(batches, labels) {
+    let current
+    let attempt = 0
+    const calls = []
+    const driver = {
+      waitUntil: async (predicate, options) => {
+        expect(options.timeout).toBe(30000)
+        for (attempt = 0; attempt < 3; attempt++) {
+          if (await predicate()) return
+        }
+        throw new Error(options.timeoutMsg)
+      },
+      getWindowHandles: async () => batches[Math.min(attempt, batches.length - 1)],
+      switchToWindow: async (handle) => {
+        calls.push(handle)
+        if (labels[handle] instanceof Error) throw labels[handle]
+        current = handle
+      },
+      execute: async (script) => {
+        vi.stubGlobal('window', { __TAURI__: { window: { getCurrentWindow: () => ({ label: labels[current] }) } } })
+        return script()
+      },
+    }
+    return { driver, calls, label: () => labels[current] }
+  }
+
+  it.each([
+    [['launcher', 'main'], { launcher: 'launcher', main: 'main' }],
+    [['main', 'launcher'], { launcher: 'launcher', main: 'main' }],
+    [['opaque-a', 'opaque-b'], { 'opaque-a': 'launcher', 'opaque-b': 'main' }],
+    [['opaque-b', 'opaque-a'], { 'opaque-a': 'launcher', 'opaque-b': 'main' }],
+    [['main', 'shell'], { main: 'launcher', shell: 'main' }],
+  ])('selects the Tauri main label before specs and tests with handles %j', async (handles, labels) => {
+    const { config } = await import('./e2e/wdio.conf.js')
+    const fixture = driverFixture([handles], labels)
+    vi.stubGlobal('browser', fixture.driver)
+    await config.before({}, ['test/e2e/specs/onboarding.spec.js'])
+    expect(fixture.label()).toBe('main')
+    await fixture.driver.switchToWindow(handles.find((handle) => labels[handle] === 'launcher'))
+    await config.beforeTest()
+    expect(fixture.label()).toBe('main')
+  })
+
+  it('waits for the main window and tolerates a stale handle', async () => {
+    const { selectMainWindow } = await import('./e2e/wdio.conf.js')
+    const fixture = driverFixture([[], ['stale', 'launcher'], ['stale', 'shell']], {
+      stale: new Error('window closed'), launcher: 'launcher', shell: 'main',
+    })
+    await selectMainWindow(fixture.driver)
+    expect(fixture.calls).toEqual(['stale', 'launcher', 'stale', 'shell'])
+    expect(fixture.label()).toBe('main')
+  })
+
+  it.each([[[]], [['launcher']], [['stale']]])('names the handles when main stays absent from %j', async (handles) => {
+    const { selectMainWindow } = await import('./e2e/wdio.conf.js')
+    const { driver } = driverFixture([handles], { launcher: 'launcher', stale: new Error('window closed') })
+    await expect(selectMainWindow(driver)).rejects.toThrow(`The driver could not select the main window. Handles: ${JSON.stringify(handles)}`)
+  })
+
+  it('captures only main after a failure leaves the launcher current', async () => {
+    const { config, captureFailureArtifacts } = await import('./e2e/wdio.conf.js')
+    const fixture = driverFixture([['launcher', 'main']], { launcher: 'launcher', main: 'main' })
+    vi.stubGlobal('browser', fixture.driver)
+    await config.before({}, ['test/e2e/specs/onboarding.spec.js'])
+    await fixture.driver.switchToWindow('launcher')
+    fixture.driver.getPageSource = async () => `<${fixture.label()}>shell</${fixture.label()}>`
+    fixture.driver.saveScreenshot = async () => { expect(fixture.label()).toBe('main') }
+    await captureFailureArtifacts({ passed: false })
+    expect(fs.readFileSync(path.join(process.env.MUNIMENT_E2E_RAW_DIR, 'page-source-onboarding.html'), 'utf8')).toBe('<main>shell</main>')
+  })
+
+  it('does not save launcher artifacts when main selection fails', async () => {
+    const { captureFailureArtifacts } = await import('./e2e/wdio.conf.js')
+    const capture = {
+      selectMainWindow: vi.fn().mockRejectedValue(new Error('main missing')),
+      getPageSource: vi.fn(), saveScreenshot: vi.fn(), writeFile: vi.fn(), log: vi.fn(),
+    }
+    await captureFailureArtifacts({ passed: false }, capture)
+    expect(capture.log).toHaveBeenCalledWith('Failed to select the main window for failure capture.', expect.any(Error))
+    expect(capture.getPageSource).not.toHaveBeenCalled()
+    expect(capture.saveScreenshot).not.toHaveBeenCalled()
+  })
+})
+
 describe('WDIO Tauri driver contract', () => {
+  it('keeps production capabilities for both windows in the e2e build', () => {
+    const e2e = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri/tauri.e2e.conf.json'), 'utf8'))
+    const capabilities = e2e.app.security.capabilities
+    expect(capabilities).toContain('default')
+    expect(capabilities).toContain('launcher')
+    const launcher = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri/capabilities/launcher.json'), 'utf8'))
+    expect(launcher.windows).toEqual(['launcher'])
+    expect(launcher.permissions).toContain('core:event:default')
+    expect(capabilities.find((entry) => entry.identifier === 'e2e-webdriver').windows).toEqual(['main', 'launcher'])
+  })
+
   it.each([
     ['linux.sh', /-name 'page-source-\*\.html'[\s\S]+-name 'screenshot-\*\.png'/],
     ['macos.sh', /-name 'page-source-\*\.html'[\s\S]+-name 'screenshot-\*\.png'/],
@@ -167,19 +273,21 @@ describe('WDIO Tauri driver contract', () => {
       const { captureFailureArtifacts } = await import('./e2e/wdio.conf.js?capture-contract')
       const calls = []
       await expect(captureFailureArtifacts({ passed: false }, {
+        selectMainWindow: async () => { calls.push('main') },
         getPageSource: async () => { calls.push('source'); throw new Error('source failed') },
         saveScreenshot: async () => { calls.push('screenshot'); throw new Error('screenshot failed') },
         writeFile: async () => { calls.push('write') },
         log: () => { throw new Error('log failed') },
       })).resolves.toBeUndefined()
-      expect(calls).toEqual(['source', 'screenshot'])
+      expect(calls).toEqual(['main', 'source', 'screenshot'])
       await captureFailureArtifacts({ passed: true }, {
+        selectMainWindow: async () => { calls.push('passing main') },
         getPageSource: async () => { calls.push('passing source') },
         saveScreenshot: async () => { calls.push('passing screenshot') },
         writeFile: async () => { calls.push('passing write') },
         log: () => {},
       })
-      expect(calls).toEqual(['source', 'screenshot'])
+      expect(calls).toEqual(['main', 'source', 'screenshot'])
     } finally {
       if (previousBinary === undefined) delete process.env.MUNIMENT_E2E_APP_BINARY
       else process.env.MUNIMENT_E2E_APP_BINARY = previousBinary
@@ -196,10 +304,14 @@ import fs from 'node:fs/promises'
 import { config } from ${JSON.stringify(pathToFileURL(path.join(root, 'test/e2e/wdio.conf.js')).href)}
 const spec = process.argv[2]
 globalThis.browser = {
+  waitUntil: async (predicate) => { if (!await predicate()) throw new Error('main missing') },
+  getWindowHandles: async () => ['launcher', 'main'],
+  switchToWindow: async (handle) => { globalThis.window = { __TAURI__: { window: { getCurrentWindow: () => ({ label: handle }) } } } },
+  execute: async (script) => script(),
   getPageSource: async () => '<main>' + spec + ' failed after Send</main>',
   saveScreenshot: async (destination) => fs.copyFile(process.argv[3], destination),
 }
-config.before({}, [spec])
+await config.before({}, [spec])
 await config.afterTest({}, {}, { passed: false })
 `)
     const screenshot = path.join(directory, 'fixture.png')

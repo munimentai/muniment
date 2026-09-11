@@ -14,7 +14,30 @@ export function redactPageSource(source, values = [process.env.MUNIMENT_E2E_USER
     .reduce((redacted, value) => redacted.split(value).join('[REDACTED]'), source)
 }
 
+export async function selectMainWindow(driver = browser) {
+  let handles = []
+  let lastError = ''
+  try {
+    await driver.waitUntil(async () => {
+      handles = await driver.getWindowHandles()
+      for (const handle of handles) {
+        try {
+          await driver.switchToWindow(handle)
+          const label = await driver.execute(() => window.__TAURI__.window.getCurrentWindow().label)
+          if (label === 'main') return true
+        } catch (error) {
+          lastError = String(error)
+        }
+      }
+      return false
+    }, { timeout: 30000, timeoutMsg: 'The driver could not select the main window.' })
+  } catch (error) {
+    throw new Error(`${error.message} Handles: ${JSON.stringify(handles)}. ${lastError}`)
+  }
+}
+
 export async function captureFailureArtifacts(result, capture = {
+  selectMainWindow: () => selectMainWindow(),
   getPageSource: () => browser.getPageSource(),
   saveScreenshot: (destination) => browser.saveScreenshot(destination),
   writeFile: (destination, contents) => fs.writeFile(destination, contents, { mode: 0o600 }),
@@ -25,6 +48,12 @@ export async function captureFailureArtifacts(result, capture = {
     try {
       capture.log(message, error)
     } catch {}
+  }
+  try {
+    await capture.selectMainWindow()
+  } catch (error) {
+    logFailure('Failed to select the main window for failure capture.', error)
+    return
   }
   try {
     const source = redactPageSource(await capture.getPageSource())
@@ -48,9 +77,11 @@ export const config = {
       ? ['./specs/onboarding.spec.js']
       : ['./specs/local-mode-chat.spec.js', './specs/real-sign-in.spec.js'],
   bail: 0,
-  before: (_capabilities, specs) => {
+  before: async (_capabilities, specs) => {
     specName = path.basename(specs[0], '.spec.js').replace(/[^A-Za-z0-9._-]/g, '_')
+    await selectMainWindow()
   },
+  beforeTest: async () => { await selectMainWindow() },
   maxInstances: 1,
   capabilities: [{ browserName: 'tauri' }],
   logLevel: 'info',

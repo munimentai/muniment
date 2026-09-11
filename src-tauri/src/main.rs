@@ -149,6 +149,7 @@ fn main() {
             attach_service::attach_revoke_companion,
             restart_muniment,
             launcher::launcher_register,
+            launcher::launcher_start_failed,
             launcher::launcher_open,
             launcher::launcher_close,
             launcher::launcher_is_visible,
