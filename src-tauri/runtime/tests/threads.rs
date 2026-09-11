@@ -190,6 +190,50 @@ fn thread_operations_report_the_poisoned_storage_lock() {
 }
 
 #[test]
+fn history_and_ownership_keep_the_underlying_journal_error() {
+    let profile = TemporaryProfile::new("thread-journal-error", false);
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    let run_id = "01900000-0000-7000-8000-000000000008";
+    let thread_id = prepare_run(&storage, run_id, "owner");
+    rusqlite::Connection::open(profile.profile.join("runs.sqlite3"))
+        .unwrap()
+        .execute_batch("DROP TABLE events;")
+        .unwrap();
+    let ownership = select_thread(
+        Arc::clone(&storage),
+        Some("owner".into()),
+        thread_id.clone(),
+    )
+    .unwrap_err();
+    let history = thread_page(
+        &profile.profile,
+        Arc::clone(&storage),
+        Some("owner".into()),
+        thread_id,
+        10,
+        None,
+    )
+    .err()
+    .unwrap();
+    for error in [ownership, history] {
+        assert!(error.contains("FirstEnvelopeUnavailable"), "{error}");
+        assert!(error.contains("no such table: events"), "{error}");
+    }
+    let error = muniment_core::thread_history::project_history_entry(
+        &mut storage.lock().unwrap().journal,
+        None,
+        run_id.into(),
+        Some("owner"),
+        &profile.profile,
+    )
+    .err()
+    .unwrap();
+    let error = format!("{error:?}");
+    assert!(error.contains("RunEventsUnavailable"), "{error}");
+    assert!(error.contains("no such table: events"), "{error}");
+}
+
+#[test]
 fn rejects_a_thread_owned_by_another_subject() {
     let temporary_profile = TemporaryProfile::new("thread-owner", false);
     let profile = temporary_profile.profile.clone();

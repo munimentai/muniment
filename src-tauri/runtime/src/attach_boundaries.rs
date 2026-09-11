@@ -840,12 +840,11 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
     ) -> Result<String, ProtocolError> {
         provenance.source = "muniment-runtime".into();
         provenance.source_version = env!("CARGO_PKG_VERSION").into();
-        let mut storage = self
-            .storage
-            .lock()
-            .map_err(|_| ProtocolError::persistence_failed())?;
+        let mut storage = self.storage.lock().map_err(|error| {
+            persistence_error("lock", error.to_string()).desktop_protocol_error()
+        })?;
         create_thread_now(&mut storage.journal, workspace, provenance)
-            .map_err(|_| ProtocolError::persistence_failed())
+            .map_err(|error| persistence_error("journal", error).desktop_protocol_error())
     }
 
     fn rename_thread(
@@ -860,10 +859,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .subject;
         provenance.source = "muniment-runtime".into();
         provenance.source_version = env!("CARGO_PKG_VERSION").into();
-        let mut storage = self
-            .storage
-            .lock()
-            .map_err(|_| ProtocolError::persistence_failed())?;
+        let mut storage = self.storage.lock().map_err(|error| {
+            persistence_error("lock", error.to_string()).desktop_protocol_error()
+        })?;
         append_thread_rename_now(
             &mut storage.journal,
             subject.as_deref(),
@@ -885,10 +883,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .subject;
         provenance.source = "muniment-runtime".into();
         provenance.source_version = env!("CARGO_PKG_VERSION").into();
-        let mut storage = self
-            .storage
-            .lock()
-            .map_err(|_| ProtocolError::persistence_failed())?;
+        let mut storage = self.storage.lock().map_err(|error| {
+            persistence_error("lock", error.to_string()).desktop_protocol_error()
+        })?;
         append_thread_delete_now(
             &mut storage.journal,
             subject.as_deref(),
@@ -1133,7 +1130,7 @@ fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
     match error {
         ThreadMutationError::NotOwned => ProtocolError::thread_not_found(),
         ThreadMutationError::Ownership(_) | ThreadMutationError::Journal(_) => {
-            ProtocolError::persistence_failed()
+            persistence_error("journal", error).desktop_protocol_error()
         }
     }
 }

@@ -143,7 +143,7 @@ pub fn apply_retention(
             &deleted_run.run_id,
             deleted_run.subject.as_deref(),
         )
-        .map_err(|_| RetentionError::BeforeDelete)
+        .map_err(|error| RetentionError::BeforeDeleteWithReason(format!("{error:?}")))
     })
     .map_err(journal_error)
 }

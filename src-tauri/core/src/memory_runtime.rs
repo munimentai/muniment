@@ -36,22 +36,8 @@ impl ApplicationMemoryRuntime {
             };
             MemoryIndexError::Io(std::io::Error::other(message))
         };
-        let home = match muniment_core::home::configured_home(&self.config).map_err(home_error)? {
-            Some(home) => home,
-            None => {
-                let home = muniment_core::home::choose_default_home(
-                    dirs::document_dir(),
-                    dirs::home_dir(),
-                )
-                .map_err(|error| {
-                    MemoryIndexError::Io(std::io::Error::other(format!(
-                        "The default Home is unavailable: {error}"
-                    )))
-                })?;
-                muniment_core::home::confirm_home(&self.config, &home).map_err(home_error)?;
-                home
-            }
-        };
+        let home =
+            muniment_core::home::initialize_default_home(&self.config).map_err(home_error)?;
         let database = self.database_root.join("memory-index.sqlite3");
         self.open_session_for_home(session, thread, capability, &home, database);
         if let Err(error) = self.write_agent_extension(session) {
