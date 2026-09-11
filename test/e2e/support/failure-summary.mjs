@@ -13,14 +13,14 @@ function bounded(text, budget) {
   return characters.slice(0, head).join('') + ' ... ' + characters.slice(-(budget - head - 5)).join('')
 }
 
-const streams = [input.stdout, input.stderr].map((text) => {
+const streams = [input.stderr, input.stdout].map((text) => {
   // Redact complete streams before a cutoff can split a secret or token.
-  const safe = redactText(text).trim()
-  // Node prints source excerpts before the error and stack frames after it.
-  const diagnostics = safe.split(/\r?\n/).filter((line) => /^\s*(?:[\w.]*Error(?:\s*\[[^\]]+\])?|error|fatal)\s*:/i.test(line))
-  return diagnostics.length ? diagnostics.join('\n') : safe
-}).filter(Boolean)
+  const safe = redactText(text).replace(/\x1b\[[0-9;]*m/g, '').trim()
+  // Keep shell, Rust, npm, and Node errors ahead of progress and source excerpts.
+  const diagnostics = safe.split(/\r?\n/).filter((line) => /\bnot recognized\b|^\s*(?:npm\s+(?:ERR!|error)(?=\s|$)|error\[E\d+\]|(?:[\w.]*Error(?:\s*\[[^\]]+\])?|error|fatal)\s*:)/i.test(line))
+  return { text: diagnostics.length ? diagnostics.join('\n') : safe, diagnostic: diagnostics.length > 0 }
+}).filter(({ text }) => text).sort((a, b) => Number(b.diagnostic) - Number(a.diagnostic))
 const budget = streams.length > 1 ? 400 : 850
-const detail = streams.map((text) => bounded(text, budget)).join('\n')
+const detail = streams.map(({ text }) => bounded(text, budget)).join('\n')
 const label = Array.from(redactText(input.label)).slice(0, 100).join('')
 process.stdout.write(`${label} (exit code ${input.exitCode})${detail ? `: ${detail}` : ''}`)
