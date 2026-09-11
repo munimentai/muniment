@@ -8,7 +8,7 @@ import './e2e/support/windows-msi-registration-contract.js'
 
 const root = process.cwd()
 const temporary = []
-const temp = () => { const value = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-e2e-test-')); temporary.push(value); return value }
+const temp = () => { const value = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-e2e-test-'))); temporary.push(value); return value }
 afterEach(() => { for (const value of temporary.splice(0)) fs.rmSync(value, { recursive: true, force: true }) })
 const runNode = (script, args, options = {}) => spawnSync(process.execPath, [path.join(root, script), ...args], { encoding: 'utf8', ...options })
 
@@ -3644,6 +3644,26 @@ ${lookup}
           expect(listed).toBeLessThan(failure)
         }
       }
+    }
+  })
+})
+
+describe('temporary fixture paths', () => {
+  it('Resolves the temporary directory alias before it returns a fixture path.', () => {
+    // Native paths match child-process output when Windows TEMP uses an 8.3 alias.
+    const directory = temp()
+    const target = path.join(directory, 'long directory name [fixture]')
+    const alias = path.join(directory, 'alias')
+    fs.mkdirSync(target)
+    fs.symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir')
+    const tmpdir = vi.spyOn(os, 'tmpdir').mockReturnValue(alias)
+    try {
+      const fixture = temp()
+      expect(path.dirname(fixture)).toBe(target)
+      expect(fixture).toBe(fs.realpathSync.native(fixture))
+      expect(fs.statSync(fixture).isDirectory()).toBe(true)
+    } finally {
+      tmpdir.mockRestore()
     }
   })
 })
