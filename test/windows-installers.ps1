@@ -58,6 +58,15 @@ function Write-MsiScopeLog($LogPath) {
   }
 }
 
+function Get-UserRegistrations($Hive) {
+  foreach ($suffix in @("Software\Microsoft\Windows\CurrentVersion\Uninstall", "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")) {
+    $root = "$Hive\$suffix"
+    if (Test-Path -LiteralPath $root) {
+      Get-ChildItem -LiteralPath $root | Where-Object { (Get-ItemProperty -LiteralPath $_.PSPath).DisplayName -eq "muniment" }
+    }
+  }
+}
+
 function Invoke-Msi($Action, $Package, $Description, $LogPath) {
   $resolvedPackage = (Resolve-Path -LiteralPath $Package).Path
   $arguments = "$Action `"$resolvedPackage`" /qn /norestart"
@@ -123,8 +132,17 @@ try {
     Invoke-Msi "/i" $regularMsi[0].FullName "Silent regular MSI install" $userMsiLog
   } finally {
     Write-MsiScopeLog $userMsiLog
-    $userRegistration = Get-PerUserMsiRegistration $userProductCode $sessionSid
-    Write-PerUserMsiRegistration $userRegistration "installed"
+    $hkcu = @(Get-UserRegistrations "HKCU:")
+    $hku = @(Get-UserRegistrations "Registry::HKEY_USERS\$sessionSid")
+    $hklm = @(Get-MunimentRegistrations)
+    Write-Host "per-user MSI registration: session SID=$sessionSid HKU\$sessionSid=$($hku.Count) hkcu=$($hkcu.Count) hklm=$($hklm.Count)"
+    $userRegistrations = @(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid)
+    Write-Host "The regular MSI has $($userRegistrations.Count) Windows Installer registrations."
+    foreach ($registration in $userRegistrations) {
+      Write-Host "The MSI registration has ProductCode=$($registration.ProductCode) context=$($registration.Context) SID=$($registration.UserSid) State=$($registration.State)."
+    }
+    $registryRegistration = Get-PerUserMsiRegistration $userProductCode $sessionSid
+    Write-PerUserMsiRegistration $registryRegistration "installed"
   }
 } finally {
   Remove-Item -LiteralPath $userMsiLog -Force
@@ -133,12 +151,11 @@ $userKey = "HKCU:\Software\Muniment\muniment"
 try {
   # Windows Installer can store a per-user product's uninstall entry under HKLM.
   # Check its registered context, not the uninstall entry's hive: https://github.com/wixtoolset/issues/issues/9323
-  $userRegistrations = @(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid)
-  $userRegistrations | ForEach-Object {
-    Write-Host "MSI registration: ProductCode=$($_.ProductCode) Context=$($_.Context) UserSid=$($_.UserSid) State=$($_.State)"
-  }
   Assert-MsiProductContext $userRegistrations $sessionSid
-  Assert-PerUserMsiRegistration $userRegistration $env:LOCALAPPDATA
+  Assert-PerUserMsiRegistration $registryRegistration $env:LOCALAPPDATA
+  if (($hkcu.Count + $hklm.Count) -ne 1) {
+    throw "The regular MSI must have exactly one uninstall registration."
+  }
   if ((Get-ItemPropertyValue $userKey InstallDir).TrimEnd('\') -ne (Split-Path $userRuntime)) {
     throw "The per-user MSI must register its LocalAppData install path under HKCU."
   }
@@ -148,9 +165,9 @@ try {
   try {
     Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
   } finally {
-    $userRegistration = Get-PerUserMsiRegistration $userProductCode $sessionSid
-    Write-PerUserMsiRegistration $userRegistration "uninstalled"
-    Assert-PerUserMsiRegistration $userRegistration $env:LOCALAPPDATA -Absent
+    $registryRegistration = Get-PerUserMsiRegistration $userProductCode $sessionSid
+    Write-PerUserMsiRegistration $registryRegistration "uninstalled"
+    Assert-PerUserMsiRegistration $registryRegistration $env:LOCALAPPDATA -Absent
     if (@(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid).Count -ne 0) {
       throw "The MSI product registration remains after the per-user uninstall."
     }
@@ -159,7 +176,7 @@ try {
   }
 }
 
-# NSIS /S is case-sensitive. Its silent uninstall retains the shared HKCU key.
+# NSIS /S is case-sensitive. Its silent uninstall retains the default install path under the shared HKCU key.
 # Run NSIS after both MSI lifecycles so the retained key cannot affect MSI assertions.
 $nsisProcess = Start-Process $nsis.FullName -ArgumentList "/S" -Wait -PassThru
 if ($nsisProcess.ExitCode -ne 0) { throw "Silent NSIS install failed: $($nsisProcess.ExitCode)" }

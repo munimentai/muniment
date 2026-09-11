@@ -31,6 +31,11 @@ describe('onboarding layout', () => {
     expect(rules.get('.chips')).toMatch(/flex-wrap:\s*wrap/)
   })
 
+  it('uses the mono record register for model settings errors', () => {
+    expect(rules.get('.path, li, .error')).toMatch(/font:\s*var\(--text-12\) var\(--font-mono\)/)
+    expect(source).toContain('{#if modelError}<p class="error" role="alert">{modelError}</p>{/if}')
+  })
+
   it('does not nest list scrollers inside the panel', () => {
     expect(rules.get('ul')).not.toMatch(/max-height\s*:/)
     expect(rules.get('ul')).not.toMatch(/overflow-y\s*:/)

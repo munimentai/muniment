@@ -38,7 +38,7 @@ describe('installed onboarding spec contract', () => {
 
   it('reports the desktop client when the model settings wait runs out', () => {
     expect(onboardingSpec).toContain("timeoutMsg: 'model settings did not appear after the first Send'")
-    expect(onboardingSpec).toContain('throw new Error(`${waitError.message} ${await shellState()}`)')
+    expect(onboardingSpec).toContain('throw new Error(`${waitError.message} Model settings: ${failure} ${await shellState()}`)')
     expect(onboardingSpec).toContain('return `desktop client status: ${connection}. shell: ${rendered}`')
     expect(onboardingSpec.indexOf('async function shellState()')).toBeLessThan(onboardingSpec.indexOf("describe('installed nightly model-ready onboarding'"))
   })
@@ -2763,11 +2763,86 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
   const helpers = registration + '\n' + script.slice(script.indexOf('function Write-MsiScopeLog'), script.indexOf('\n$machineKey ='))
   const invoke = (body, args = []) => {
     const file = path.join(temp(), 'diagnostics.ps1')
-    fs.writeFileSync(file, `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${helpers}\n${body}\n`)
+    // Replace COM identity and release calls. The fixture runs the registration helper and its property getters.
+    const fixtureHelpers = helpers.replaceAll(
+      '[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(', '[void](Release-FixtureComObject ',
+    ).replaceAll('[Runtime.InteropServices.Marshal]::IsComObject(', '(Test-FixtureComObject ')
+    fs.writeFileSync(file, `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${fixtureHelpers}\n${body}\n`)
     return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
       encoding: 'utf8', timeout: 15_000,
     })
   }
+
+  const comFixture = `
+$script:fixtureInstalled = $true
+$script:fixtureContext = 2
+$script:fixtureSid = 'S-1-5-21-123'
+$script:fixtureCount = 1
+$script:fixtureState = 5
+$script:fixtureProductLeftover = $false
+$script:fixtureRecord = $true
+$script:released = @()
+$script:getters = @()
+$script:queries = @()
+$script:closed = 0
+function Test-FixtureComObject($Object) { return $null -ne $Object.Tag }
+function Release-FixtureComObject($Object) { $script:released += $Object.Tag; return 0 }
+$script:comReflector = [PSCustomObject]@{}
+$script:comReflector | Add-Member ScriptMethod InvokeMember {
+  param($Name, $Flags, $Binder, $Target, $Arguments)
+  if ([Reflection.BindingFlags]$Flags -ne [Reflection.BindingFlags]::GetProperty -or $null -ne $Binder -or
+      $Target.Tag -ne 'product') { throw 'Invalid COM getter arguments.' }
+  if ($Name -eq 'InstallProperty') {
+    if ($Arguments.Count -ne 1 -or $Arguments[0] -ne 'State') { throw 'Invalid MSI state arguments.' }
+  } elseif ($null -ne $Arguments) { throw 'Invalid COM property arguments.' }
+  $script:getters += $Name
+  switch ($Name) {
+    'ProductCode' { return '{12345678-1234-ABCD-EF12-34567890ABCD}' }
+    'Context' { return $script:fixtureContext }
+    'UserSid' { return $script:fixtureSid }
+    'InstallProperty' { return $script:fixtureState }
+    default { throw "Unexpected COM property: $Name" }
+  }
+}
+# The product exposes properties through IDispatch, not PowerShell property lookup.
+$script:comProduct = [PSCustomObject]@{ Tag = 'product' }
+$script:comProduct | Add-Member ScriptMethod GetType { return $script:comReflector } -Force
+$script:comRecord = [PSCustomObject]@{ Tag = 'record' }
+$script:comRecord | Add-Member ScriptMethod StringData {
+  param($Index)
+  if ($Index -ne 1) { throw 'Invalid MSI record field.' }
+  return '{12345678-1234-ABCD-EF12-34567890ABCD}'
+}
+$script:comView = [PSCustomObject]@{ Tag = 'view' }
+$script:comView | Add-Member ScriptMethod Execute { return '' }
+$script:comView | Add-Member ScriptMethod Close { $script:closed++; return '' }
+$script:comView | Add-Member ScriptMethod Fetch { if ($script:fixtureRecord) { return $script:comRecord } }
+$script:comDatabase = [PSCustomObject]@{ Tag = 'database' }
+$script:comDatabase | Add-Member ScriptMethod OpenView {
+  param($Query)
+  $script:queries += $Query
+  return $script:comView
+}
+$script:comInstaller = [PSCustomObject]@{ Tag = 'installer' }
+$script:comInstaller | Add-Member ScriptMethod OpenDatabase {
+  param($Package, $Mode)
+  if ($Package -ne $argsPath -or $Mode -ne 0) { throw 'Invalid MSI database arguments.' }
+  return $script:comDatabase
+}
+$script:comInstaller | Add-Member ScriptMethod ProductsEx {
+  param($Code, $Sid, $Context)
+  if ($Code -ne '{12345678-1234-ABCD-EF12-34567890ABCD}' -or $Sid -ne 'S-1-5-21-123' -or $Context -ne 7) {
+    throw 'Invalid MSI registration scope.'
+  }
+  if (-not $script:fixtureInstalled) { Write-Host 'MSI product cleanup check.' }
+  if ($script:fixtureInstalled -or $script:fixtureProductLeftover) { @($script:comProduct) * $script:fixtureCount }
+}
+function New-Object($ComObject) {
+  if ($ComObject -ne 'WindowsInstaller.Installer') { throw 'Unexpected COM object.' }
+  return $script:comInstaller
+}
+$argsPath = $args[0]
+`
 
   it('Reads every built MSI before any install starts.', () => {
     expect(script).toContain('New-Object -ComObject WindowsInstaller.Installer')
@@ -2791,7 +2866,7 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
       'Invoke-Msi "/i" $regularMsi[0].FullName',
       'Assert-MsiProductContext $userRegistrations $sessionSid',
       'Invoke-Msi "/x" $regularMsi[0].FullName',
-      'Assert-PerUserMsiRegistration $userRegistration $env:LOCALAPPDATA -Absent',
+      'Assert-PerUserMsiRegistration $registryRegistration $env:LOCALAPPDATA -Absent',
       'throw "The MSI product registration remains after the per-user uninstall."',
       'if (Test-Path $userRuntime) { throw "The runtime remains after the per-user MSI uninstall." }',
       'if (Test-Path $userKey) { throw "The application registration remains after the per-user MSI uninstall." }',
@@ -2810,6 +2885,8 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
   it('Prints scope evidence before install errors and registration assertions exit.', () => {
     expect(script).toMatch(/Invoke-Msi "\/i" \$regularMsi\[0\]\.FullName "Silent regular MSI install" \$userMsiLog\s*\} finally \{\s*Write-MsiScopeLog \$userMsiLog/)
     expect(script).toContain('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
+    expect(script).toContain('Get-UserRegistrations "Registry::HKEY_USERS\\$sessionSid"')
+    expect(script).toContain('HKU\\$sessionSid=$($hku.Count) hkcu=$($hkcu.Count) hklm=$($hklm.Count)')
     expect(registration).toContain('"Registry::HKEY_USERS\\$Sid"')
     expect(registration).toContain('hkcu=$(@($uninstall[\'HKCU:\']).Count) HKU\\$sid=$(@($uninstall["Registry::HKEY_USERS\\$sid"]).Count) hklm=$(@($uninstall[\'HKLM:\']).Count)')
     expect(script.indexOf('Write-MsiScopeLog $userMsiLog')).toBeLessThan(script.indexOf('Assert-MsiProductContext $userRegistrations $sessionSid'))
@@ -2820,15 +2897,26 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
     expect(script).toContain('The per-user MSI must register its LocalAppData install path under HKCU.')
     expect(script).toContain('The per-user MSI wrote application registration under HKLM.')
     expect(script).toContain('Get-PerUserMsiRegistration $userProductCode $sessionSid')
-    expect(script).toContain('Write-PerUserMsiRegistration $userRegistration "installed"')
-    expect(script.indexOf('Write-MsiScopeLog $userMsiLog')).toBeLessThan(script.indexOf('Assert-PerUserMsiRegistration $userRegistration'))
-    expect(script).toContain('Assert-PerUserMsiRegistration $userRegistration $env:LOCALAPPDATA -Absent')
+    expect(script).toContain('Write-PerUserMsiRegistration $registryRegistration "installed"')
+    expect(script.indexOf('Write-MsiScopeLog $userMsiLog')).toBeLessThan(script.indexOf('Assert-PerUserMsiRegistration $registryRegistration'))
+    expect(script).toContain('Assert-PerUserMsiRegistration $registryRegistration $env:LOCALAPPDATA -Absent')
     expect(script).not.toContain('requires hkcu=1 hklm=0')
     expect(script).toContain('if (Test-Path "HKCU:\\Software\\Muniment\\muniment")')
     expect(script).toContain('throw "Per-machine MSI wrote application registration under HKCU"')
     for (const workflow of ['ci.yml', 'nightly.yml']) {
       expect(fs.readFileSync(path.join(root, '.github/workflows', workflow), 'utf8')).toContain('-File test/windows-installers.ps1')
     }
+  })
+
+  it('Checks machine scope and regular MSI cleanup before NSIS starts.', () => {
+    const machineCleanup = script.indexOf('Remove-Item $upgradeBaseMsi -Force')
+    const regularInstall = script.indexOf('$userProductCode =')
+    const regularCleanup = script.indexOf('if (Test-Path $userKey) { throw "The application registration remains after the per-user MSI uninstall." }')
+    const nsisInstall = script.indexOf('$nsisProcess = Start-Process')
+    expect(machineCleanup).toBeGreaterThan(0)
+    expect(regularInstall).toBeGreaterThan(machineCleanup)
+    expect(regularCleanup).toBeGreaterThan(regularInstall)
+    expect(nsisInstall).toBeGreaterThan(regularCleanup)
   })
 
   it.skipIf(!hasPowerShell)('Prints scope changes and the installing user from a Unicode log.', () => {
@@ -2871,30 +2959,41 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
     [2, 0, 2, 0, 2, 2], [1, 1, 1, 0, 2, 2], [1, 0, 0, 1603, 2, 1],
     [0, 1, 0, 0, 4, 1], [1, 0, 1, 0, 4, 1],
     [0, 0, 0, 0, 2, 1], [2, 0, 2, 0, 2, 1], [1, 1, 1, 0, 2, 1],
-    ...['userProduct', 'userData', 'managed', 'machineProduct', 'leftover'].map((invalid) => [0, 1, 0, 0, 2, 1, invalid]),
+    ...['userProduct', 'userData', 'managed', 'machineProduct', 'leftover', 'application-leftover', 'product-leftover'].map((invalid) => [0, 1, 0, 0, 2, 1, invalid]),
   ])('Prints counts for HKCU=%s HKLM=%s HKU=%s, install code %s, context %s, and registrations %s.', (hkcu, hklm, hku, code, context, count, invalid = '') => {
     const msi = path.join(temp(), 'fixture.msi')
     fs.writeFileSync(msi, '')
-    // Replace the Windows identity boundary while the fixture runs the install sequence.
-    const sequence = script.slice(script.indexOf('$userProductCode ='), script.indexOf('\n# NSIS /S')).replace(
+    const runtime = path.join(path.dirname(msi), 'muniment', 'muniment-runtime.exe')
+    fs.mkdirSync(path.dirname(runtime))
+    fs.writeFileSync(runtime, '')
+    // Replace the Windows identity boundary while the fixture runs both per-user installer cycles.
+    const sequence = script.slice(script.indexOf('\n', script.indexOf('Remove-Item $upgradeBaseMsi -Force'))).replace(
       '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', '"S-1-5-21-123"',
     )
     const result = invoke(`
+${comFixture}
 $regularMsi = @([PSCustomObject]@{ FullName = $args[0] })
-$userRuntime = $args[0]
-$machineKey = "$($args[0]).machine"
-$script:uninstalled = $false
+$script:fixtureContext = ${context}
+$script:fixtureCount = ${count}
+$nsis = @([PSCustomObject]@{ FullName = 'fixture-setup.exe' })
+$userRuntime = $args[1]
+$env:LOCALAPPDATA = Split-Path (Split-Path $userRuntime)
+$script:applicationValues = @{}
+$machineKey = "HKLM:\\Software\\Muniment\\muniment"
 function Test-Path($Path, $LiteralPath) {
-  if ($Path -eq "HKCU:\\Software\\Muniment\\muniment") { return -not $script:uninstalled }
-  if ($LiteralPath) { $Path = $LiteralPath }
-  Microsoft.PowerShell.Management\\Test-Path -LiteralPath $Path
-}
-function Get-ItemPropertyValue($Path, $Name) { (Split-Path $userRuntime) + '\\' }
-function Get-MsiRegistrations($Package, $UserSid) {
-  if (-not $script:uninstalled) {
-    @([PSCustomObject]@{ ProductCode = "fixture"; Context = ${context}; UserSid = $UserSid; State = 5 }) * ${count}
+  if ($Path -eq $machineKey) { return $false }
+  if ($Path -eq "HKCU:\\Software\\Muniment\\muniment") {
+    if (-not $script:fixtureInstalled) { Write-Host 'MSI application cleanup check.' }
+    return $script:applicationValues.Count -ne 0
   }
+  if ($LiteralPath) { return Microsoft.PowerShell.Management\\Test-Path -LiteralPath $LiteralPath }
+  return Microsoft.PowerShell.Management\\Test-Path $Path
 }
+function Get-ItemPropertyValue($Path, $Name) { return $script:applicationValues[$Name] }
+function Get-UserRegistrations($Hive) {
+  if ($Hive -eq "HKCU:") { @("fixture") * ${hkcu} } else { @("fixture") * ${hku} }
+}
+function Get-MunimentRegistrations { @('fixture') * ${hklm} }
 function Get-MsiProductCode { return '{12345678-1234-ABCD-EF12-34567890ABCD}' }
 $script:fixtureInstalled = $false
 function Test-MsiUserLocation($Location, $LocalAppData) { return $Location -eq 'fixture-location' }
@@ -2914,17 +3013,34 @@ function Get-PerUserMsiRegistration($ProductCode, $Sid) {
   }
 }
 function Start-Process($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru) {
+  if ($FilePath -ne 'msiexec.exe') {
+    if ($ArgumentList -cne '/S') { throw 'NSIS requires /S.' }
+    if ($FilePath -eq $nsis[0].FullName) {
+      Write-Host 'NSIS install.'
+      $script:applicationValues[''] = Split-Path $userRuntime
+      Set-Content -LiteralPath $userRuntime -Value ''
+      Set-Content -LiteralPath (Join-Path (Split-Path $userRuntime) 'uninstall.exe') -Value ''
+    } elseif ($FilePath -eq $nsisUninstaller) {
+      Remove-Item -LiteralPath $userRuntime, $nsisUninstaller
+      # Silent NSIS uninstall keeps the default install path under the shared application key.
+      Write-Host "NSIS retained values: $($script:applicationValues | ConvertTo-Json -Compress)"
+    } else { throw "Unexpected installer: $FilePath" }
+    return [PSCustomObject]@{ ExitCode = 0 }
+  }
   $script:fixtureInstalled = $ArgumentList -match '/i '
   if ($script:fixtureInstalled) {
+    $script:applicationValues['InstallDir'] = (Split-Path $userRuntime) + '\\'
+    Set-Content -LiteralPath $userRuntime -Value ''
     Set-Content -LiteralPath $userMsiLog -Value "Property(S): UserSID = S-1-5-21-456"
   } else {
-    $script:uninstalled = $true
+    if ('${invalid}' -ne 'application-leftover') { $script:applicationValues.Remove('InstallDir') }
+    $script:fixtureProductLeftover = '${invalid}' -eq 'product-leftover'
     Remove-Item -LiteralPath $userRuntime
   }
   return [PSCustomObject]@{ ExitCode = ${code} }
 }
-${sequence}`, [msi])
-    expect(result.status, result.stdout + result.stderr).toBe(context === 2 && count === 1 && code === 0 && !invalid ? 0 : 1)
+${sequence}`, [msi, runtime])
+    expect(result.status, result.stdout + result.stderr).toBe(context === 2 && count === 1 && hkcu + hklm === 1 && code === 0 && !invalid ? 0 : 1)
     expect(result.stdout).toContain('Property(S): UserSID = S-1-5-21-456')
     expect(result.stdout).toContain(`hkcu=${hkcu} HKU\\S-1-5-21-123=${hku} hklm=${hklm}`)
     if (code !== 0) expect(result.stderr).toContain(`Silent regular MSI install failed: ${code}`)
@@ -2933,15 +3049,143 @@ ${sequence}`, [msi])
       expect(result.stdout).toContain('per-user MSI uninstalled ProductCode=')
     }
     else if (invalid) {
-      expect(result.stderr).toContain('Per-user MSI registration failed')
+      const messages = {
+        'application-leftover': 'The application registration remains after the per-user MSI uninstall.',
+        'product-leftover': 'The MSI product registration remains after the per-user uninstall.',
+      }
+      expect(result.stderr).toContain(messages[invalid] ?? 'Per-user MSI registration failed')
       expect(result.stdout).toContain('per-user MSI uninstalled ProductCode=')
+      expect(result.stdout).not.toContain('NSIS install.')
     } else {
+      if (hkcu + hklm !== 1) expect(result.stderr).toContain('The regular MSI must have exactly one uninstall registration.')
+      expect(result.stdout).toContain('The regular MSI has 1 Windows Installer registrations.')
+      expect(result.stdout).toContain('The MSI registration has ProductCode={12345678-1234-ABCD-EF12-34567890ABCD} context=2 SID=S-1-5-21-123 State=5.')
       expect(result.stdout).toContain('per-user MSI uninstalled ProductCode=')
       expect(result.stdout).toContain('hkcu=0 HKU\\S-1-5-21-123=0 hklm=0')
       for (const key of ['userProduct', 'userData', 'managed', 'machineProduct']) {
         expect(result.stdout).toContain(`fixture-${key} present=0`)
       }
+      if (hkcu + hklm === 1) {
+        const cleanup = result.stdout.indexOf('MSI application cleanup check.')
+        const productCleanup = result.stdout.indexOf('MSI product cleanup check.')
+        expect(productCleanup).toBeGreaterThan(result.stdout.indexOf('per-user MSI uninstalled ProductCode='))
+        expect(cleanup).toBeGreaterThan(productCleanup)
+        expect(result.stdout.indexOf('NSIS install.')).toBeGreaterThan(cleanup)
+        const retained = result.stdout.match(/NSIS retained values: (.+)/)
+        expect(retained).not.toBeNull()
+        expect(JSON.parse(retained[1])).toEqual({ '': path.dirname(runtime) })
+      }
     }
+  })
+
+  it.skipIf(!hasPowerShell)('Returns only registration rows before and after uninstall.', () => {
+    const msi = path.join(temp(), 'fixture.msi')
+    fs.writeFileSync(msi, '')
+    const result = invoke(`
+${comFixture}
+$installed = @(Get-MsiRegistrations $args[0] 'S-1-5-21-123')
+$script:fixtureInstalled = $false
+$absent = @(Get-MsiRegistrations $args[0] 'S-1-5-21-123')
+[PSCustomObject]@{
+  Installed = $installed; Absent = $absent; Getters = $script:getters
+  Queries = $script:queries; Released = $script:released; Closed = $script:closed
+} | ConvertTo-Json -Depth 5 -Compress`, [msi])
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    const evidence = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1))
+    expect(evidence.Installed).toEqual([{
+      ProductCode: '{12345678-1234-ABCD-EF12-34567890ABCD}', Context: 2, UserSid: 'S-1-5-21-123', State: 5,
+    }])
+    expect(evidence.Absent).toEqual([])
+    expect(evidence.Getters).toEqual(['ProductCode', 'Context', 'UserSid', 'InstallProperty'])
+    expect(evidence.Queries).toEqual(Array(2).fill("SELECT `Value` FROM `Property` WHERE `Property` = 'ProductCode'"))
+    expect(evidence.Closed).toBe(2)
+    for (const object of ['record', 'view', 'database', 'installer']) {
+      expect(evidence.Released.filter((tag) => tag === object)).toHaveLength(2)
+    }
+  })
+
+  it.skipIf(!hasPowerShell)('Closes the view and releases COM objects when ProductCode is absent.', () => {
+    const msi = path.join(temp(), 'fixture.msi')
+    fs.writeFileSync(msi, '')
+    const result = invoke(`
+${comFixture}
+$script:fixtureRecord = $false
+try { Get-MsiRegistrations $args[0] 'S-1-5-21-123' } catch { Write-Host $_.Exception.Message }
+[PSCustomObject]@{ Closed = $script:closed; Released = $script:released } | ConvertTo-Json -Compress`, [msi])
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout).toContain('The MSI has no ProductCode.')
+    expect(JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1))).toEqual({
+      Closed: 1, Released: ['view', 'database', 'installer'],
+    })
+  })
+
+  it.skipIf(!hasPowerShell).each([
+    [1, 'S-1-5-21-123', 1, 1],
+    [2, 'S-1-5-21-123', 1, 0],
+    [4, '', 1, 1],
+    [0, 'S-1-5-21-123', 1, 1],
+    [7, 'S-1-5-21-123', 1, 1],
+    [2, '', 1, 1],
+    [2, 'S-1-5-21-456', 1, 1],
+    [2, 'S-1-5-21-123', 0, 1],
+    [2, 'S-1-5-21-123', 2, 1],
+  ])('Checks MSI context %s, SID %s, and registration count %s.', (context, sid, count, status) => {
+    const msi = path.join(temp(), 'fixture.msi')
+    fs.writeFileSync(msi, '')
+    const result = invoke(`
+${comFixture}
+$script:fixtureContext = ${context}
+$script:fixtureSid = '${sid}'
+$script:fixtureCount = ${count}
+$registrations = @(Get-MsiRegistrations $args[0] 'S-1-5-21-123')
+Assert-MsiProductContext $registrations 'S-1-5-21-123'`, [msi])
+    expect(result.status, result.stdout + result.stderr).toBe(status)
+    if (status !== 0) expect(result.stderr).toContain('The MSI must register one installed, unmanaged product')
+  })
+
+  it.skipIf(!hasPowerShell).each([
+    ['machine key', 'The per-user MSI wrote application registration under HKLM.'],
+    ['directory', 'The per-user MSI must register its LocalAppData install path under HKCU.'],
+    ['missing runtime', 'Regular MSI runtime not found'],
+    ['MSI registration', 'The MSI product registration remains after the per-user uninstall.'],
+    ['user key', 'The application registration remains after the per-user MSI uninstall.'],
+    ['runtime', 'The runtime remains after the per-user MSI uninstall.'],
+  ])('Rejects the %s failure after the scope check passes.', (failure, message) => {
+    const checks = script.slice(script.indexOf('$userKey = "HKCU:'))
+    const msi = path.join(temp(), 'fixture.msi')
+    fs.writeFileSync(msi, '')
+    const result = invoke(`
+${comFixture}
+$sessionSid = 'S-1-5-21-123'
+$userRegistrations = @(Get-MsiRegistrations $args[0] $sessionSid)
+$hkcu = @()
+$hklm = @('fixture')
+$regularMsi = @([PSCustomObject]@{ FullName = $args[0] })
+$machineKey = 'HKLM:\\Software\\Muniment\\muniment'
+$userRuntime = Join-Path ([IO.Path]::GetTempPath()) 'muniment-runtime.exe'
+$script:uninstalled = $false
+function Test-Path($Path) {
+  if ($Path -eq $machineKey) { return '${failure}' -eq 'machine key' }
+  if ($Path -eq $userRuntime) {
+    if ($script:uninstalled) { return '${failure}' -eq 'runtime' }
+    return '${failure}' -ne 'missing runtime'
+  }
+  return '${failure}' -eq 'user key'
+}
+function Get-ItemPropertyValue($Path, $Name) {
+  if ('${failure}' -eq 'directory') { return 'wrong' }
+  return Split-Path $userRuntime
+}
+function Invoke-Msi {
+  $script:uninstalled = $true
+  $script:fixtureInstalled = '${failure}' -eq 'MSI registration'
+}
+function Get-PerUserMsiRegistration { return @{} }
+function Write-PerUserMsiRegistration {}
+function Assert-PerUserMsiRegistration {}
+${checks}`, [msi])
+    expect(result.status, result.stdout + result.stderr).toBe(1)
+    expect(result.stderr).toContain(message)
   })
 
   it.skipIf(!hasPowerShell).each([0, 3010, 1603])('Keeps installer exit code %s and quotes the log path.', (code) => {
@@ -2959,5 +3203,23 @@ Invoke-Msi "/i" $args[0] "Fixture install" $args[1]`, [msi, log])
     expect(result.stdout).toContain(`msiexec.exe /i "${msi}" /qn /norestart /L*V "${log}" wait=True passThru=True`)
     expect(result.stdout).not.toMatch(/ALLUSERS=|MSIINSTALLPERUSER=/)
     if (code === 1603) expect(result.stderr).toContain('Fixture install failed: 1603')
+  })
+})
+
+describe('installed model settings controls', () => {
+  const onboardingSpec = fs.readFileSync(path.join(root, 'test/e2e/specs/onboarding.spec.js'), 'utf8')
+
+  it('opens model settings and checks the provider controls on the installed build', () => {
+    expect(onboardingSpec).toContain('await openFirstRunModelSettings()')
+    const firstRun = fs.readFileSync(path.join(root, 'test/e2e/support/first-run.mjs'), 'utf8')
+    expect(firstRun).toContain("panel.$('button=Open model settings')")
+    expect(firstRun).toContain('await settings.click()')
+    expect(onboardingSpec).toContain("expect(await (await $('#provider-key')).isDisplayed()).toBe(true)")
+    expect(onboardingSpec).toContain("expect(await (await $('button=Save key')).isDisplayed()).toBe(true)")
+  })
+
+  it('includes the model settings panel in the failure diagnostic', () => {
+    expect(onboardingSpec).toContain("const panel = await $('#onboarding-model-panel')")
+    expect(onboardingSpec).toContain('await panel.getText()')
   })
 })
