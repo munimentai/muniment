@@ -21,6 +21,8 @@ const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'pr
 let App
 let invoke
 let chatListener
+let launcherListener
+let launcherReply
 let dictationListener
 let entitlementListener
 let registrationRetryListener
@@ -155,6 +157,7 @@ beforeAll(async () => {
       if (command === 'chat_thread_open') {
         return Promise.resolve(invoke(command, ...args)).then((entries) => ({ entries, nextCursor: null }))
       }
+      if (command === 'launcher_register') return Promise.resolve()
       if (command === 'runtime_state') return Promise.resolve(runtimeState)
       if (command === 'home_status') return Promise.resolve(homeStatus)
       if (command === 'onboarding_scan') return invoke(command).then(() => scanReport)
@@ -164,6 +167,7 @@ beforeAll(async () => {
     event: { listen: vi.fn((event, listener) => {
       if (event === 'runtime-state-changed') runtimeListener = listener
       if (event === 'chat-event') chatListener = listener
+      if (event === 'launcher-submit') launcherListener = listener
       if (event === 'dictation-event') dictationListener = listener
       if (event === 'entitlement-changed') entitlementListener = listener
       if (event === 'auth-registration-retry') registrationRetryListener = listener
@@ -175,7 +179,7 @@ beforeAll(async () => {
       if (event === 'attach-pairing-requested') return Promise.resolve(pairingUnlisten)
       if (event === 'desktop-client-status-changed') return desktopClientListen(listener)
       return Promise.resolve(eventUnlisten)
-    }) },
+    }), emitTo: (...args) => launcherReply(...args) },
   }
   window.__TAURI_INTERNALS__ = {
     invoke: (command) => command === 'plugin:dialog|open' ? Promise.resolve(dialogResult) : Promise.reject(new Error(`unexpected internal command: ${command}`)),
@@ -194,6 +198,8 @@ beforeEach(() => {
   runtimeState = { revision: 0, lastEvent: 'connected', visible: false, busy: false }
   runtimeListener = undefined
   chatListener = undefined
+  launcherListener = undefined
+  launcherReply = vi.fn().mockResolvedValue(undefined)
   dictationListener = undefined
   entitlementListener = undefined
   registrationRetryListener = undefined
@@ -235,6 +241,26 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   vi.restoreAllMocks()
+})
+
+describe('launcher requests', () => {
+  it('starts a fresh thread and preserves the main composer draft', async () => {
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'chat_new_thread') return
+      if (command === 'chat_submit') return { runId: 'launcher-run' }
+      return fallback(command, payload)
+    })
+    render(App)
+    const composer = await findWorkspaceComposer()
+    await fireEvent.input(composer, { target: { value: 'Keep my main draft' } })
+    await launcherListener({ payload: { id: 'launcher-request', text: 'Start here' } })
+    await waitFor(() => expect(screen.getByText('Start here', { selector: '.user-message p' })).toBeInTheDocument())
+    expect(invoke).toHaveBeenCalledWith('chat_new_thread')
+    expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Start here', files: [] })
+    expect(composer.value).toBe('Keep my main draft')
+    expect(launcherReply).toHaveBeenCalledWith('launcher', 'launcher-result', { id: 'launcher-request', error: '' })
+  })
 })
 
 describe('onboarding window layout', () => {
@@ -1468,6 +1494,29 @@ describe('artifact rail', () => {
     await fireEvent.click(toggle)
     await fireEvent.click(toggle)
     expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuenow', '380')
+  })
+
+  it('reserves the paper frame when sizing and dragging the artifact rail', async () => {
+    render(App)
+    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    const workspace = toggle.closest('.workspace')
+    workspace.style.paddingRight = '8px'
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({ right: 1024 })
+
+    await fireEvent.click(toggle)
+    const separator = screen.getByRole('separator', { name: 'Artifacts' })
+    expect(separator).toHaveAttribute('aria-valuemax', '412')
+    await fireEvent.keyDown(separator, { key: 'End' })
+    expect(separator).toHaveAttribute('aria-valuenow', '412')
+
+    await fireEvent.pointerDown(separator, { button: 0, pointerId: 7, clientX: 604 })
+    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 616 })
+    expect(separator).toHaveAttribute('aria-valuenow', '400')
+    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 0 })
+    expect(separator).toHaveAttribute('aria-valuenow', '412')
+    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 1024 })
+    expect(separator).toHaveAttribute('aria-valuenow', '380')
+    await fireEvent.pointerUp(separator, { pointerId: 7 })
   })
 
   it('finishes pointer resizing on release and cancellation', async () => {
@@ -3682,7 +3731,7 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
-    expect(eventUnlisten).toHaveBeenCalledTimes(5)
+    expect(eventUnlisten).toHaveBeenCalledTimes(6)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
