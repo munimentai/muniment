@@ -58,6 +58,17 @@ describe('chat composer and projection', () => {
     })
   })
 
+  it('keeps the prompt storage notice across live events and restored history', () => {
+    const promptStorageNotice = 'Prompt text stays in runtime memory for this run. Keyring error -25307: A default keychain could not be found.'
+    const entry = { runId: 'r', phase: 'streaming', text: 'Reply', promptStorageNotice }
+    const initial = { id: 'r', phase: 'thinking', text: '' }
+    const live = applyChatEvent(initial, entry)
+    expect(live.promptStorageNotice).toBe(promptStorageNotice)
+    expect(applyChatEvent(live, { runId: 'r', phase: 'complete', text: 'Reply' }).promptStorageNotice).toBe(promptStorageNotice)
+    expect(historyMessages([{ ...entry, prompt: null }])[0].run.promptStorageNotice).toBe(promptStorageNotice)
+    expect(applyChatEvent(initial, { ...entry, runId: 'other' })).toBe(initial)
+  })
+
   it('moves thinking to streaming and removes signal on every terminal event', () => {
     let run = { id: 'r', phase: 'thinking', text: '' }
     run = applyChatEvent(run, { runId: 'r', type: 'text-delta', text: 'Hi' })
