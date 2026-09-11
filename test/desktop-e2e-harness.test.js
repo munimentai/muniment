@@ -2483,7 +2483,7 @@ describe('Windows nightly release lookup', () => {
 
   it('throws lookup failures with the exception text and logs runner failures', () => {
     expect(lookup).toMatch(/try \{\s*\$release = \(Invoke-WebRequest[\s\S]+?\} catch \{\s*throw "nightly release lookup failed: \$\(\$_\.Exception\.Message\)"\s*\}/)
-    expect(runner).toContain('if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }')
+    expect(runner).toContain(String.raw`if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message -replace '\r?\n', ' ')" -ErrorAction SilentlyContinue }`)
   })
 
   it('does not depend on the GitHub CLI', () => {
@@ -2577,6 +2577,7 @@ describe('Windows toolchain and failure evidence', { timeout: 30_000 }, () => {
     expect(runner).toContain('exec --offline --call')
     expect(runner).not.toContain('exec --offline -- node')
     expect(runner).not.toContain('"run tauri -- build')
+    expect(runner).toContain('$null "diagnostic summary failed" $summaryInput $null $false')
     const tail = runner.indexOf('../support/installer-log-tail.mjs')
     expect(tail).toBeGreaterThan(0)
     expect(tail).toBeLessThan(runner.indexOf('\n  Stop-Transcript '))
@@ -2713,6 +2714,11 @@ Invoke-NativeCommand 'node' "\`"$Probe\`"" $Log 'cwd probe failed'
         MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT: script, MUNIMENT_E2E_PASSWORD: 'fixture-secret' },
     })
     expect(result.status, result.stdout + result.stderr).toBe(1)
+    const log = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8').replaceAll('\r\n', '\n')
+    expect(log.match(/^progress$/gm)).toHaveLength(60)
+    expect(log).toContain('error[E0123]: [REDACTED] build failed')
+    expect(log.trimEnd().split('\n').slice(-40).join('\n')).toContain('error[E0123]: [REDACTED] build failed')
+    expect(log).not.toContain('fixture-secret')
     const transcript = fs.readFileSync(path.join(artifacts, 'runner-transcript.log'), 'utf8')
     const tail = transcript.slice(transcript.indexOf('dci: installer.log last 40 lines'))
     expect(tail).toContain('dci: installer.log last 40 lines')

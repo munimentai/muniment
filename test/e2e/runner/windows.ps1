@@ -122,15 +122,17 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
   $process.WaitForExit()
   $stdout = $stdoutTask.Result
   $stderr = $stderrTask.Result
-  if ($stdout) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
-  if ($stderr) { Add-Content -LiteralPath $(if ($ErrorLog) { $ErrorLog } else { $Log }) -Value $stderr -NoNewline }
+  if ($stdout -and $Log) { Add-Content -LiteralPath $Log -Value $stdout -NoNewline }
+  $stderrLog = if ($ErrorLog) { $ErrorLog } else { $Log }
+  if ($stderr -and $stderrLog) { Add-Content -LiteralPath $stderrLog -Value $stderr -NoNewline }
   if ($process.ExitCode -ne 0) {
     if (-not $SummarizeFailure) { throw "diagnostic summary unavailable" }
     # Share redaction and diagnostic selection with the POSIX runner.
     $summaryHelper = Join-Path $PSScriptRoot "../support/failure-summary.mjs"
     $summaryInput = @{ stdout = $stdout; stderr = $stderr; label = $FailureMessage; exitCode = $process.ExitCode } | ConvertTo-Json -Compress
     try {
-      $detail = Invoke-NativeCommand "node" "`"$summaryHelper`"" $Log "diagnostic summary failed" $summaryInput $null $false
+      # Keep the summary's progress excerpts out of the command log.
+      $detail = Invoke-NativeCommand "node" "`"$summaryHelper`"" $null "diagnostic summary failed" $summaryInput $null $false
     } catch {
       throw "native command failed (exit code $($process.ExitCode)), diagnostic summary unavailable"
     }
@@ -674,7 +676,8 @@ namespace MunimentE2e {
 } catch {
   Save-RunnerFailure $_
   if ($env:MUNIMENT_E2E_FINALIZER_TEST_SETUP_FAIL) { $script:redacted = $false }
-  if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message)" -ErrorAction SilentlyContinue }
+  # A multiline summary must not displace the command's stderr from the log tail.
+  if ($installerLog) { Add-Content $installerLog "runner failed: $($_.Exception.Message -replace '\r?\n', ' ')" -ErrorAction SilentlyContinue }
   $status = 1
 } finally {
   $diagnosticRoot = Join-Path $env:TEMP ([guid]::NewGuid().ToString("N"))
