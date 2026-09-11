@@ -50,6 +50,12 @@ Registration failures record the native error domain, code, and description in `
 The macOS evidence envelope includes `runtime.log` and `runtime-launchctl.log`.
 The runner captures these logs before cleanup stops the runtime.
 
+A rejected run request carries the runtime sentence in `error.details.reason` on the attach wire.
+The run-start probe and `runtime-service.log` print that sentence as `reason`.
+On macOS, `driver-app.log` records `desktop approval presenter connected=true` when the presenter connects.
+The runtime logs a presenter refusal once per holder, with `holder_claimed` and `holder_pending_requests`.
+The runtime releases the presenter claim when its connection closes.
+
 Read the macOS runtime log:
 
 ```sh

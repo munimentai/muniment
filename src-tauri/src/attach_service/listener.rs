@@ -68,6 +68,8 @@ pub(super) fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle
                 let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
                 #[cfg(target_os = "linux")]
                 let observer_app = presenter_app.clone();
+                #[cfg(target_os = "macos")]
+                eprintln!("desktop approval presenter connected=false");
                 serve_approval_presenter_at(
                     &endpoint,
                     env!("CARGO_PKG_VERSION"),
@@ -80,7 +82,7 @@ pub(super) fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle
                             .state::<AttachCompanionState>()
                             .record_presenting(presenting);
                         #[cfg(target_os = "macos")]
-                        let _ = presenting;
+                        eprintln!("desktop approval presenter connected={presenting}");
                     },
                     move |request| answer_presented_approval(&approvals, request),
                 );
@@ -237,13 +239,14 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                 #[cfg(test)]
                 TEST_PRESENTER_WORKERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
+                eprintln!("desktop approval presenter connected=false");
                 serve_approval_presenter_at(
                     &presenter_endpoint,
                     env!("CARGO_PKG_VERSION"),
                     Duration::from_secs(5),
                     Duration::from_millis(250),
                     stop,
-                    |_| {},
+                    |connected| eprintln!("desktop approval presenter connected={connected}"),
                     move |request| answer_presented_approval(&approvals, request),
                 );
             });
