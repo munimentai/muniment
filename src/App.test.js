@@ -1470,6 +1470,29 @@ describe('artifact rail', () => {
     expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuenow', '380')
   })
 
+  it('reserves the paper frame when sizing and dragging the artifact rail', async () => {
+    render(App)
+    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    const workspace = toggle.closest('.workspace')
+    workspace.style.paddingRight = '8px'
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({ right: 1024 })
+
+    await fireEvent.click(toggle)
+    const separator = screen.getByRole('separator', { name: 'Artifacts' })
+    expect(separator).toHaveAttribute('aria-valuemax', '412')
+    await fireEvent.keyDown(separator, { key: 'End' })
+    expect(separator).toHaveAttribute('aria-valuenow', '412')
+
+    await fireEvent.pointerDown(separator, { button: 0, pointerId: 7, clientX: 604 })
+    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 616 })
+    expect(separator).toHaveAttribute('aria-valuenow', '400')
+    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 0 })
+    expect(separator).toHaveAttribute('aria-valuenow', '412')
+    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 1024 })
+    expect(separator).toHaveAttribute('aria-valuenow', '380')
+    await fireEvent.pointerUp(separator, { pointerId: 7 })
+  })
+
   it('finishes pointer resizing on release and cancellation', async () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open artifact rail' }))

@@ -190,7 +190,7 @@
     readMaximum: () => artifactRailMaximum,
     readPointer: () => artifactRailPointer,
     readAvailableWidth: availableArtifactRailWidth,
-    readRightEdge: () => workspace?.getBoundingClientRect().right || window.innerWidth,
+    readRightEdge: () => (workspace?.getBoundingClientRect().right || window.innerWidth) - workspaceFrameWidth(),
     readViewportWidth: () => workspace?.clientWidth || window.innerWidth,
     onOpen: (next) => { artifactRailOpen = next },
     onWidth: (next) => { artifactRailWidth = next },
@@ -338,8 +338,13 @@
     deletingThreadId = null
   }
 
+  function workspaceFrameWidth() {
+    return workspace ? parseFloat(getComputedStyle(workspace).paddingRight) || 0 : 0
+  }
+
   function availableArtifactRailWidth() {
-    return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - (sidebarCollapsed ? sidebarRailWidth : sidebarWidth) - minimumThreadWidth))
+    // Reserve both outer edges and both panel gaps before sizing the rail.
+    return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - 4 * workspaceFrameWidth() - (sidebarCollapsed ? sidebarRailWidth : sidebarWidth) - minimumThreadWidth))
   }
 
   const dictationController = createDictationController({
@@ -1045,7 +1050,6 @@
       </section>
     {:else if workspaceMode() && desktopClientStatus}
       <section class="workspace" data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
-        {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <header class="titlebar" data-tauri-drag-region>
           <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
             <svg class="side-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
@@ -1138,6 +1142,8 @@
             </section>
           {/if}
         </aside>
+        <div class="thread-panel">
+        {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <div class="thread-shell">
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
@@ -1361,6 +1367,7 @@
           {:else if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
           {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </div>
+        </div>
         {#if entitlementToastVisible}
           <div class="entitlement-toast" role="status">Your access changed. Some models or connections may differ.</div>
         {/if}
@@ -1515,18 +1522,19 @@
     line-height: var(--leading-body);
   }
 
-  .workspace { position: fixed; inset: 0; display: grid; grid-template-rows: 36px 1fr auto; }
-  .workspace { grid-template-columns: 260px minmax(0, 1fr); grid-template-areas: "title title" "side thread" "side composer"; transition: grid-template-columns 180ms ease; }
+  .workspace { --frame-width: 8px; position: fixed; inset: 0; display: grid; grid-template-rows: 36px minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); gap: var(--frame-width); background: var(--paper); }
+  .workspace { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
   .workspace.artifact-resizing { transition: none; }
-  .workspace.artifact-open { grid-template-columns: 260px minmax(320px, 1fr) var(--artifact-rail-width); grid-template-areas: "title title title" "side thread rail" "side composer rail"; }
+  /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
+  .workspace.artifact-open { grid-template-columns: minmax(0, 260px) minmax(320px, 1fr) var(--artifact-rail-width); grid-template-areas: "title title title" "side thread rail"; }
   /* §2.1: the same 180ms grid transition carries the sidebar down to a 52px icon rail. */
-  .workspace.sidebar-collapsed { grid-template-columns: 52px minmax(0, 1fr); }
-  .workspace.sidebar-collapsed.artifact-open { grid-template-columns: 52px minmax(320px, 1fr) var(--artifact-rail-width); }
-  .workspace.sidebar-collapsed .drop-affordance { left: 52px; }
+  .workspace.sidebar-collapsed { grid-template-columns: minmax(0, 52px) minmax(0, 1fr); }
+  .workspace.sidebar-collapsed.artifact-open { grid-template-columns: minmax(0, 52px) minmax(320px, 1fr) var(--artifact-rail-width); }
+  .sidebar, .thread-panel, .artifact-rail { min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
-  .drop-affordance { position: fixed; z-index: 4; inset: 36px 0 0 260px; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); color: var(--ink); text-align: center; pointer-events: none; }
+  .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .titlebar { grid-area: title; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--surface); font-size: var(--text-13); user-select: none; }
+  .titlebar { grid-area: title; display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 calc(-1 * var(--frame-width)); padding: 0 12px; background: var(--paper); font-size: var(--text-13); user-select: none; }
   .workspace.macos .titlebar { padding-left: 84px; }
   .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 28px; padding: 2px 6px; }
   .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
@@ -1541,8 +1549,10 @@
   button.thread-title:disabled { opacity: 1; }
   kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .title-spacer { flex: 1; align-self: stretch; min-width: 24px; }
-  .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; background: var(--surface); border-right: 1px solid var(--border); }
+  .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; }
   .side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 16px; }
+  /* Clip labels during the panel slide without clipping the profile popover. */
+  .side-brand, .side-label, .older-threads, .side-action span { overflow: hidden; }
   .side-brand path { fill: none; stroke: var(--ink); stroke-linecap: round; }
   .side-toggle { line-height: 0; }
   .side-toggle:hover:not(:disabled), .side-toggle:focus-visible { border-color: transparent; background: var(--faint); }
@@ -1568,7 +1578,7 @@
   .thread-delete-confirm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
   .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
-  .side-action span { flex: 1; }
+  .side-action span { flex: 1; min-width: 0; }
   .local-account { display: grid; min-height: 0; overflow-y: auto; gap: 7px; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
   .local-account strong { margin-bottom: 3px; }
   .provider-statuses { display: grid; gap: 4px; margin: 0 0 3px; font: var(--text-12) var(--font-mono); }
@@ -1596,17 +1606,18 @@
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
   .quiet { background: transparent; border-color: transparent; }
-  .artifact-divider { grid-area: rail; z-index: 2; align-self: stretch; width: 9px; margin-left: -4px; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
-  .artifact-divider::after { content: ''; display: block; width: 1px; height: 100%; margin-left: 4px; background: var(--border); }
-  .artifact-divider:hover::after, .artifact-divider:focus-visible::after, .artifact-divider.dragging::after { width: 2px; margin-left: 3px; background: var(--muted); }
+  .artifact-divider { grid-area: rail; z-index: 2; align-self: stretch; width: var(--frame-width); margin-left: calc(-.5 * var(--frame-width)); padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
+  .artifact-divider::after { content: ''; display: block; width: 2px; height: 100%; margin: 0 auto; background: transparent; }
+  .artifact-divider:hover::after, .artifact-divider:focus-visible::after, .artifact-divider.dragging::after { background: var(--muted); }
   .artifact-divider:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
-  .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; background: var(--surface); }
+  .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }
   .artifact-empty { display: grid; place-items: center; align-content: center; min-height: 45%; text-align: center; }
   .artifact-empty strong { font-weight: 600; }
   .artifact-empty p { max-width: 250px; margin: 7px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 1.5; }
-  .thread-shell { grid-area: thread; position: relative; min-height: 0; }
+  .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+  .thread-shell { position: relative; min-height: 0; }
   .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
   .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
@@ -1687,7 +1698,7 @@
   .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
   .update-notice .support { font-size: var(--text-12); }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
-  .composer { grid-area: composer; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .composer { width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .composer:focus-within { border-color: var(--muted); }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; }
   .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
