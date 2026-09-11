@@ -2558,6 +2558,117 @@ try {
   })
 })
 
+describe('Windows toolchain and failure evidence', { timeout: 30_000 }, () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+
+  it('Uses the local CLI and records each toolchain boundary.', () => {
+    expect(runner).toContain('$startInfo.WorkingDirectory = (Get-Location).ProviderPath')
+    expect(runner).toContain('Set-Location -LiteralPath $repoRoot')
+    const ci = runner.indexOf('"ci --no-audit --no-fund"')
+    const first = runner.indexOf('Write-ToolchainState "after-npm-ci"')
+    const tests = runner.indexOf('"vitest run --root .')
+    const second = runner.indexOf('Write-ToolchainState "after-contract-tests"')
+    const install = runner.lastIndexOf('\n  Install-Product')
+    const last = runner.indexOf('Write-ToolchainState "before-e2e-build"')
+    const build = runner.indexOf('Invoke-NativeCommand "node" "`"$tauriCli`" build')
+    expect([ci, first, tests, second, install, last, build].every((value) => value >= 0)).toBe(true)
+    expect([ci, first, tests, second, install, last, build]).toEqual([ci, first, tests, second, install, last, build].sort((a, b) => a - b))
+    expect(runner).toContain('Test-Path -LiteralPath $tauriCli -PathType Leaf')
+    expect(runner).toContain('exec --offline -- node')
+    expect(runner).not.toContain('"run tauri -- build')
+    const tail = runner.indexOf('../support/installer-log-tail.mjs')
+    expect(tail).toBeGreaterThan(0)
+    expect(tail).toBeLessThan(runner.indexOf('\n  Stop-Transcript '))
+  })
+
+  it.each(['missing shim', 'missing CLI', 'missing PATH', 'missing PATHEXT', 'present'])('Names the %s toolchain state.', (state) => {
+    const directory = temp()
+    const bin = path.join(directory, 'node_modules', '.bin')
+    const cli = path.join(directory, 'node_modules', '@tauri-apps', 'cli', 'tauri.js')
+    fs.mkdirSync(bin, { recursive: true })
+    fs.mkdirSync(path.dirname(cli), { recursive: true })
+    if (state !== 'missing shim') fs.writeFileSync(path.join(bin, 'tauri.cmd'), '@echo fixture\r\n')
+    if (state !== 'missing CLI') fs.writeFileSync(cli, '')
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^path$/i.test(key)))
+    env.PATH = state === 'missing PATH' ? '' : bin
+    env.PATHEXT = state === 'missing PATHEXT' ? '.EXE' : '.EXE;.CMD'
+    const result = runNode('test/e2e/support/windows-toolchain.mjs', [directory, 'fixture'], { env })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout.includes('The local tauri.cmd shim is missing.')).toBe(state === 'missing shim')
+    expect(result.stdout.includes('The local Tauri CLI entry is missing.')).toBe(state === 'missing CLI')
+    expect(result.stdout.includes('PATH omits the local')).toBe(state === 'missing PATH')
+    expect(result.stdout.includes('PATHEXT omits .CMD')).toBe(state === 'missing PATHEXT')
+  })
+
+  it('Runs the local CLI without a command PATH or .CMD lookup.', () => {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^path$/i.test(key)))
+    const result = runNode('node_modules/@tauri-apps/cli/tauri.js', ['--version'], {
+      env: { ...env, PATH: '', PATHEXT: '.EXE' }, timeout: 15_000,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toMatch(/^tauri-cli \d+\./)
+  })
+
+  it.each([0, 1, 40, 41, 80])('Shows the last 40 installer lines from %s lines.', (count) => {
+    const log = path.join(temp(), 'installer.log')
+    const lines = Array.from({ length: count }, (_, index) => `installer line ${index}`)
+    fs.writeFileSync(log, lines.join('\r\n') + (count ? '\r\n' : ''))
+    const result = runNode('test/e2e/support/installer-log-tail.mjs', [log])
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toBe(`dci: installer.log last 40 lines\n${lines.slice(-40).join('\n')}\n`)
+  })
+
+  it('Redacts a secret across the installer line cutoff.', () => {
+    const log = path.join(temp(), 'installer.log')
+    const secret = 'first secret line\nsecond secret line'
+    fs.writeFileSync(log, secret + '\n' + 'safe line\n'.repeat(39))
+    const result = runNode('test/e2e/support/installer-log-tail.mjs', [log], {
+      env: { ...process.env, MUNIMENT_E2E_PASSWORD: secret },
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('[REDACTED]')
+    expect(result.stdout).not.toContain('secret line')
+  })
+
+  it.skipIf(process.platform !== 'win32')('Uses the PowerShell location when the process current directory differs.', () => {
+    const directory = temp()
+    const script = path.join(directory, 'cwd [fixture].ps1')
+    const probe = path.join(directory, 'cwd [fixture].mjs')
+    const helpers = runner.slice(runner.indexOf('function Resolve-NativeCommand'), runner.indexOf('function Write-ToolchainState'))
+    fs.writeFileSync(probe, 'console.log(process.cwd())')
+    fs.writeFileSync(script, `param([string]$Root, [string]$Probe, [string]$Log)
+$ErrorActionPreference = 'Stop'
+${helpers}
+Set-Location -LiteralPath $Root
+[Environment]::CurrentDirectory = $env:SystemRoot
+Invoke-NativeCommand 'node' "\`"$Probe\`"" $Log 'cwd probe failed'
+`)
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+      directory, probe, path.join(directory, 'cwd.log')], { encoding: 'utf8', timeout: 20_000 })
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe(directory)
+  })
+
+  it.skipIf(process.platform !== 'win32')('Publishes the installer tail in the failure transcript.', () => {
+    const directory = temp()
+    const script = path.join(directory, 'failure.mjs')
+    const artifacts = path.join(directory, 'artifacts')
+    fs.writeFileSync(script, `console.log('progress\\n'.repeat(60)); console.error('error[E0123]: fixture-secret build failed'); process.exitCode = 7`)
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'test/e2e/runner/windows.ps1')], {
+      encoding: 'utf8', timeout: 25_000,
+      env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts,
+        MUNIMENT_E2E_NATIVE_COMMAND_TEST_SCRIPT: script, MUNIMENT_E2E_PASSWORD: 'fixture-secret' },
+    })
+    expect(result.status, result.stdout + result.stderr).toBe(1)
+    const transcript = fs.readFileSync(path.join(artifacts, 'runner-transcript.log'), 'utf8')
+    const tail = transcript.slice(transcript.indexOf('dci: installer.log last 40 lines'))
+    expect(tail).toContain('dci: installer.log last 40 lines')
+    expect(tail).toContain('error[E0123]: [REDACTED] build failed')
+    expect(tail).not.toContain('fixture-secret')
+    expect(result.stdout).toContain('dci: installer.log last 40 lines')
+  })
+})
+
 describe('Windows native command contract', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
   it('routes native commands through the process helpers', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
@@ -3227,7 +3338,7 @@ describe('installed model settings controls', () => {
 describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
   const start = runner.lastIndexOf('\n  Install-Product') + '\n  Install-Product'.length
-  const lookup = runner.slice(start, runner.indexOf('\n  Invoke-NativeCommand "npm.cmd" "run tauri', start))
+  const lookup = runner.slice(start, runner.indexOf('\n  Write-ToolchainState "before-e2e-build"', start))
   const native = runner.slice(runner.indexOf('function Resolve-NativeCommand'), runner.indexOf('function Get-UninstallEntries'))
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
   const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
@@ -3241,7 +3352,7 @@ describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
     expect(lookup).toContain('Test-Path -LiteralPath $appBinary -PathType Leaf')
     expect(lookup).not.toContain('$installDisplayIcon')
     expect(lookup).toContain('webdriver-release-guard.mjs absent `"$appBinary`"')
-    const build = runner.indexOf('"run tauri -- build --no-bundle --features e2e-webdriver')
+    const build = runner.indexOf('"`"$tauriCli`" build --no-bundle --features e2e-webdriver')
     const binary = runner.indexOf('"../../../src-tauri/target/release/muniment-desktop.exe"')
     expect(build).toBeGreaterThan(start)
     expect(binary).toBeGreaterThan(build)
