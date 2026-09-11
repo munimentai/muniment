@@ -519,18 +519,22 @@ try {
   $env:npm_config_cache = Join-Path $runRoot "npm-cache"
   New-Item -ItemType Directory -Force $env:APPDATA, $env:LOCALAPPDATA | Out-Null
   Install-Product
-  $appBinary = if ($installDisplayIcon) { ($installDisplayIcon -replace '^"|"?(?:,\d+)?$', '') } else { $null }
-  if (-not $appBinary -or -not (Test-Path -LiteralPath $appBinary -PathType Leaf)) {
-    if (-not $installDirectory) { throw "installer metadata does not identify an install directory" }
-    $matches = @(Get-ChildItem -LiteralPath $installDirectory -Filter "muniment.exe" -File -Recurse)
-    if ($matches.Count -ne 1) { throw "installer metadata does not resolve one executable" }
-    $appBinary = $matches[0].FullName
+  if (-not $installDirectory) { throw "installer metadata does not identify an install directory" }
+  $appBinary = Join-Path $installDirectory "muniment-desktop.exe"
+  if (-not (Test-Path -LiteralPath $appBinary -PathType Leaf)) {
+    Write-Output "InstallLocation contains these files: $installDirectory"
+    if (Test-Path -LiteralPath $installDirectory -PathType Container) {
+      Get-ChildItem -LiteralPath $installDirectory -File -Recurse -Force | ForEach-Object { Write-Output $_.FullName }
+    } else {
+      Write-Output "The InstallLocation directory is missing: $installDirectory"
+    }
+    throw "The installed desktop executable is missing: $appBinary"
   }
-  if (-not $installDirectory) { $installDirectory = Split-Path $appBinary -Parent }
+  Write-Output "The installed desktop executable is $appBinary"
 
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs absent `"$appBinary`"" $installerLog "release WebDriver guard failed"
   Invoke-NativeCommand "npm.cmd" "run tauri -- build --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json" $installerLog "E2E application build failed"
-  $appBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment.exe"))
+  $appBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment-desktop.exe"))
   if (-not (Test-Path -LiteralPath $appBinary -PathType Leaf)) { throw "E2E application binary is unavailable" }
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs present `"$appBinary`"" $installerLog "E2E WebDriver guard failed"
 
