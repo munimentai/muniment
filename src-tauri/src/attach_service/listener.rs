@@ -269,25 +269,58 @@ pub(super) fn serve_chat_events_at(
     mut observe: impl FnMut(bool),
     mut deliver: impl FnMut(Value),
 ) {
+    #[cfg(target_os = "linux")]
+    let mut diagnostic = muniment_core::attach::LinuxConnectDiagnostic::default();
     loop {
-        let stream = interruptible_connect_with_state(endpoint, &stop.inner);
-        if let Some(stream) = stream {
-            if let Ok(mut client) =
-                handshake_desktop_client_stream(stream, client_version, io_timeout)
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(mut client) =
+                diagnostic.connect(endpoint, "chat-events", &stop.inner, |stream| {
+                    let mut client =
+                        handshake_desktop_client_stream(stream, client_version, io_timeout)?;
+                    client.subscribe_chat_events()?;
+                    Ok(client)
+                })
             {
-                if client.subscribe_chat_events().is_ok() {
-                    observe(true);
-                    while let Ok(event) = client.read_chat_event() {
-                        deliver(event);
+                observe(true);
+                loop {
+                    match client.read_chat_event() {
+                        Ok(event) => deliver(event),
+                        Err(error) => {
+                            eprintln!("muniment-desktop: session closed endpoint={endpoint:?} route=chat-events reason={error:?}");
+                            break;
+                        }
                     }
-                    observe(false);
                 }
+                observe(false);
             }
             stop.inner
                 .0
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .stream = None;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let stream = interruptible_connect_with_state(endpoint, &stop.inner);
+            if let Some(stream) = stream {
+                if let Ok(mut client) =
+                    handshake_desktop_client_stream(stream, client_version, io_timeout)
+                {
+                    if client.subscribe_chat_events().is_ok() {
+                        observe(true);
+                        while let Ok(event) = client.read_chat_event() {
+                            deliver(event);
+                        }
+                        observe(false);
+                    }
+                }
+                stop.inner
+                    .0
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .stream = None;
+            }
         }
 
         let (state, wake) = &*stop.inner;

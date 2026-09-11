@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use muniment_core::attach::interruptible_connect_with_state;
 #[cfg(all(target_os = "linux", test))]
 use muniment_core::attach::save_client_credentials as persist_client_credentials;
 #[cfg(target_os = "linux")]
@@ -13,8 +15,8 @@ use muniment_core::attach::{
 };
 #[cfg(unix)]
 use muniment_core::attach::{
-    handshake_desktop_client_stream, interruptible_connect_with_state, serve_approval_presenter_at,
-    serve_desktop_client_at, InterruptibleConnectState,
+    handshake_desktop_client_stream, serve_approval_presenter_at, serve_desktop_client_at,
+    InterruptibleConnectState,
 };
 #[cfg(target_os = "windows")]
 use muniment_core::attach::{

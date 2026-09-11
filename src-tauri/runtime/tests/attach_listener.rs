@@ -336,6 +336,120 @@ fn desktop_client_without_a_workspace_receives_an_empty_workspace_grant() {
 }
 
 #[test]
+fn installed_desktop_child() {
+    let Some(endpoint) = std::env::var_os("MUNIMENT_TEST_INSTALLED_ENDPOINT") else {
+        return;
+    };
+    let endpoint = std::path::Path::new(&endpoint);
+    let expected = std::env::var("MUNIMENT_TEST_EXPECT_CONNECTED").unwrap() == "true";
+    let client = connect_desktop_client_at(endpoint, "1.0.0", Duration::from_secs(2));
+    assert_eq!(client.is_ok(), expected, "desktop connection: {client:?}");
+    if expected {
+        assert!(client.unwrap().workspace_scopes().is_empty());
+        let mut events =
+            connect_desktop_client_at(endpoint, "1.0.0", Duration::from_secs(2)).unwrap();
+        events.subscribe_chat_events().unwrap();
+        let _presenter = muniment_attach::connect_approval_presenter_at(
+            endpoint,
+            "1.0.0",
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn installed_payload_connects_on_first_launch_but_replaced_alias_is_refused() {
+    use muniment_runtime::installed_desktop_executable_from;
+    use std::process::Command;
+
+    struct EventService;
+    impl ThreadListService for EventService {
+        fn subscribe_chat_events(
+            &mut self,
+        ) -> Result<muniment_core::run_events::ChatEventSubscription, ProtocolError> {
+            let (sender, receiver) = mpsc::channel();
+            Ok(muniment_core::run_events::ChatEventSubscription::new(
+                receiver,
+                move || drop(sender),
+            ))
+        }
+    }
+
+    let profile = TemporaryProfile::new("installed-payload", false);
+    fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let prefix = profile.root.join("usr");
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    let expected =
+        installed_desktop_executable_from(&prefix.join("lib/muniment/muniment-runtime")).unwrap();
+    let alias = prefix.join("bin/muniment");
+    fs::copy(std::env::current_exe().unwrap(), &expected).unwrap();
+    std::os::unix::fs::symlink("muniment-desktop", &alias).unwrap();
+    // GNU install replaces the alias instead of updating the trusted payload.
+    assert!(Command::new("install")
+        .args(["-m", "0755"])
+        .arg(std::env::current_exe().unwrap())
+        .arg(&alias)
+        .status()
+        .unwrap()
+        .success());
+    assert!(!alias.is_symlink());
+    let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
+    let endpoint = filesystem.endpoint_path().to_owned();
+    let instance = filesystem.acquire_instance_lock().unwrap();
+    let transport = muniment_core::attach::linux::AttachTransport::bind(&filesystem).unwrap();
+    let registry = CompanionRegistry::new(
+        Arc::new(Mutex::new(HashMap::new())),
+        profile.profile.join("companions.json"),
+        LiveConnectionRegistry::default(),
+    );
+    let (stop_tx, stop_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let listener = scope.spawn(|| {
+            muniment_runtime::run_bound_attach_listener(
+                instance,
+                transport,
+                AttachListenerInputs {
+                    companion_registry: &registry,
+                    approval: SignedWorkspaceApproval::default(),
+                    approvals: ApprovalCoordinator::default(),
+                    expected_desktop_executable: Some(expected.clone()),
+                },
+                None,
+                || Ok::<_, ()>(EventService),
+                stop_rx,
+            )
+            .unwrap();
+        });
+        let mut results = Vec::new();
+        for (executable, connected) in [
+            (&alias, false),
+            (&expected, true),
+            (&expected, true),
+            (&expected, true),
+        ] {
+            let output = Command::new(executable)
+                .args(["--exact", "installed_desktop_child", "--nocapture"])
+                .env("MUNIMENT_TEST_INSTALLED_ENDPOINT", &endpoint)
+                .env("MUNIMENT_TEST_EXPECT_CONNECTED", connected.to_string())
+                .output()
+                .unwrap();
+            results.push(output);
+        }
+        stop_tx.send(()).unwrap();
+        listener.join().unwrap();
+        for result in results {
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+    });
+}
+
+#[test]
 fn desktop_presenter_answers_an_approval_request() {
     let profile = TemporaryProfile::new("attach-listener-presenter", false);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();

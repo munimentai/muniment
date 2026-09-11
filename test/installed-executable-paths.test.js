@@ -70,14 +70,16 @@ describe('installed desktop executable paths', () => {
       .toBe(runnerRuntime)
   })
 
-  it('installs the product-name desktop path that the Linux runner remaps', () => {
+  it('installs the trusted payload without replacing the product-name alias', () => {
     const installedDesktop = runner.match(/installed_desktop=(\/\S+)/)?.[1]
+    const installedName = resolverFunction?.match(/\.join\("bin\/([^"/]+)"\)/)?.[1]
 
-    expect(installedDesktop, `${runnerPath} installed desktop value ${installedDesktop} disagrees with ${configPath} productName ${config.productName}`)
-      .toBe(`/usr/bin/${config.productName}`)
-    expect(postInstall, `${postInstallPath} does not install ${installedDesktop}`)
-      .toContain(`ln -sfn muniment-desktop ${installedDesktop}`)
+    expect(installedName).toBe('muniment-desktop')
+    expect(installedDesktop).toBe(`/usr/bin/${installedName}`)
+    expect(installedDesktop).not.toBe(`/usr/bin/${config.productName}`)
+    expect(postInstall).toContain(`ln -sfn ${installedName} /usr/bin/${config.productName}`)
     expect(runner).toContain('[[ -f $installed_desktop ]]')
+    expect(runner).toContain('app_binary=$installed_desktop')
   })
 })
 
