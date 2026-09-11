@@ -2,6 +2,7 @@ import path from 'node:path'
 import { access, readFile } from 'node:fs/promises'
 import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'
 import { piAgentDirectory } from '../support/pi-agent-directory.mjs'
+import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 
 async function checkCandidatePackages() {
   if (process.env.MUNIMENT_PI_CANDIDATE !== '1') return
@@ -36,10 +37,7 @@ async function completeOnboarding() {
   const composer = await $('textarea[placeholder="Ask anything"]')
   expect(await composer.isDisplayed()).toBe(true)
   await composer.setValue('Help me organize my notes.')
-  await (await $('button=Send')).click()
-  const modelSettings = await $('button=Open model settings')
-  await modelSettings.waitForDisplayed()
-  await modelSettings.click()
+  await openFirstRunModelSettings()
 }
 
 async function waitForDesktopClient() {
@@ -65,20 +63,23 @@ describe('installed local-mode chat', () => {
 
   it('starts a reply without cloud sign-in', async () => {
     await completeOnboarding()
-    const localMode = await $('#local-account-title')
+    const localMode = await $('[data-testid="local-mode"]')
     await localMode.waitForDisplayed({ timeout: 120000 })
+    await expandSidebar()
 
     const composer = await $('textarea[placeholder="Ask anything"]')
     await composer.waitForDisplayed({ timeout: 120000 })
     expect(await composer.getValue()).toBe('Help me organize my notes.')
-    const provider = await $('input[name="provider"][value="ollama"]')
+    const provider = await localMode.$('label[for="provider-ollama"]')
+    await provider.waitForDisplayed()
     await provider.click()
+    expect(await (await localMode.$('#provider-ollama')).isSelected()).toBe(true)
     const baseUrlInput = await $('#provider-base-url')
     await baseUrlInput.waitForDisplayed()
     expect(await baseUrlInput.isDisplayed()).toBe(true)
     await baseUrlInput.setValue(OLLAMA_BASE_URL)
     await (await $('button=Save Ollama server')).click()
-    await (await $('p=Pi saved the Ollama server.')).waitForDisplayed({ timeout: 30000 })
+    await (await $('p=Muniment saved the Ollama server. Send a message.')).waitForDisplayed({ timeout: 30000 })
     expect(await baseUrlInput.getValue()).toBe('')
 
     await waitForDesktopClient()

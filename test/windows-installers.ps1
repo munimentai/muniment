@@ -1,5 +1,6 @@
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "windows-msi-registration.ps1")
+& (Join-Path $PSScriptRoot "windows-msi-registration.tests.ps1")
 
 $bundleRoot = Join-Path $PSScriptRoot "..\src-tauri\target\release\bundle"
 $nsis = @(Get-ChildItem (Join-Path $bundleRoot "nsis") -Filter "*-setup.exe" -File)
@@ -113,18 +114,7 @@ if ((Get-MunimentRegistrations).Count -ne 0) {
 }
 Remove-Item $upgradeBaseMsi -Force
 
-# NSIS /S is case-sensitive. Run the per-user installer after the machine-scope
-# assertions so its expected HKCU registration cannot be attributed to the MSI.
-$nsisProcess = Start-Process $nsis.FullName -ArgumentList "/S" -Wait -PassThru
-if ($nsisProcess.ExitCode -ne 0) { throw "Silent NSIS install failed: $($nsisProcess.ExitCode)" }
 $userRuntime = Join-Path $env:LOCALAPPDATA "muniment\muniment-runtime.exe"
-if (-not (Test-Path $userRuntime)) { throw "NSIS runtime not found at $userRuntime" }
-$nsisUninstaller = Join-Path $env:LOCALAPPDATA "muniment\uninstall.exe"
-if (-not (Test-Path $nsisUninstaller)) { throw "NSIS uninstaller not found at $nsisUninstaller" }
-$nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassThru
-if ($nsisUninstall.ExitCode -ne 0) { throw "Silent NSIS uninstall failed: $($nsisUninstall.ExitCode)" }
-if (Test-Path $userRuntime) { throw "NSIS runtime remains after uninstall at $userRuntime" }
-
 $userProductCode = Get-MsiProductCode $regularMsi[0].FullName
 $sessionSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $userMsiLog = [IO.Path]::GetTempFileName()
@@ -139,8 +129,20 @@ try {
 } finally {
   Remove-Item -LiteralPath $userMsiLog -Force
 }
+$userKey = "HKCU:\Software\Muniment\muniment"
 try {
+  # Windows Installer can store a per-user product's uninstall entry under HKLM.
+  # Check its registered context, not the uninstall entry's hive: https://github.com/wixtoolset/issues/issues/9323
+  $userRegistrations = @(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid)
+  $userRegistrations | ForEach-Object {
+    Write-Host "MSI registration: ProductCode=$($_.ProductCode) Context=$($_.Context) UserSid=$($_.UserSid) State=$($_.State)"
+  }
+  Assert-MsiProductContext $userRegistrations $sessionSid
   Assert-PerUserMsiRegistration $userRegistration $env:LOCALAPPDATA
+  if ((Get-ItemPropertyValue $userKey InstallDir).TrimEnd('\') -ne (Split-Path $userRuntime)) {
+    throw "The per-user MSI must register its LocalAppData install path under HKCU."
+  }
+  if (Test-Path $machineKey) { throw "The per-user MSI wrote application registration under HKLM." }
   if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
 } finally {
   try {
@@ -149,7 +151,23 @@ try {
     $userRegistration = Get-PerUserMsiRegistration $userProductCode $sessionSid
     Write-PerUserMsiRegistration $userRegistration "uninstalled"
     Assert-PerUserMsiRegistration $userRegistration $env:LOCALAPPDATA -Absent
+    if (@(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid).Count -ne 0) {
+      throw "The MSI product registration remains after the per-user uninstall."
+    }
+    if (Test-Path $userRuntime) { throw "The runtime remains after the per-user MSI uninstall." }
+    if (Test-Path $userKey) { throw "The application registration remains after the per-user MSI uninstall." }
   }
 }
+
+# NSIS /S is case-sensitive. Its silent uninstall retains the shared HKCU key.
+# Run NSIS after both MSI lifecycles so the retained key cannot affect MSI assertions.
+$nsisProcess = Start-Process $nsis.FullName -ArgumentList "/S" -Wait -PassThru
+if ($nsisProcess.ExitCode -ne 0) { throw "Silent NSIS install failed: $($nsisProcess.ExitCode)" }
+if (-not (Test-Path $userRuntime)) { throw "NSIS runtime not found at $userRuntime" }
+$nsisUninstaller = Join-Path $env:LOCALAPPDATA "muniment\uninstall.exe"
+if (-not (Test-Path $nsisUninstaller)) { throw "NSIS uninstaller not found at $nsisUninstaller" }
+$nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassThru
+if ($nsisUninstall.ExitCode -ne 0) { throw "Silent NSIS uninstall failed: $($nsisUninstall.ExitCode)" }
+if (Test-Path $userRuntime) { throw "NSIS runtime remains after uninstall at $userRuntime" }
 
 Write-Host "Windows silent installer verification OK"
