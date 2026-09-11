@@ -139,6 +139,31 @@ async function checkWindowChrome(browser, baseUrl) {
   }
 }
 
+async function checkArtifactEmpty(page) {
+  const rail = page.getByRole('complementary', { name: 'Artifacts', exact: true })
+  if (await rail.count() === 0) return
+  const empty = rail.locator('.artifact-empty')
+  assert.equal(await empty.count(), 1)
+  assert.equal(await empty.innerText(), 'No artifacts yet')
+  assert.equal(await empty.locator(':scope > *').count(), 1)
+  const layout = await empty.locator('p').evaluate((line) => {
+    const range = document.createRange()
+    range.selectNodeContents(line)
+    const rects = [...range.getClientRects()]
+    const box = line.getBoundingClientRect()
+    return {
+      children: line.childElementCount,
+      lines: rects.length,
+      inside: rects.every((rect) => rect.left >= box.left && rect.right <= box.right),
+      font: getComputedStyle(line).fontFamily,
+    }
+  })
+  assert.equal(layout.children, 0)
+  assert.equal(layout.lines, 1)
+  assert.equal(layout.inside, true)
+  assert.match(layout.font, /Schibsted Grotesk/)
+}
+
 async function checkPaperFrame(browser, baseUrl) {
   for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) {
     for (const colorScheme of ['light', 'dark']) {
@@ -221,6 +246,7 @@ async function checkPaperFrame(browser, baseUrl) {
             return [...new Set(failures)]
           }, transition)
           assert.deepEqual(failures, [], `${platform} ${colorScheme} ${JSON.stringify(page.viewportSize())}`)
+          await checkArtifactEmpty(page)
         }
 
         for (const viewport of [{ width: 960, height: 640 }, { width: 1440, height: 900 }]) {

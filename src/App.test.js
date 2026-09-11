@@ -1452,8 +1452,10 @@ describe('artifact rail', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(toggle).toHaveAccessibleName('Close artifact rail')
     const rail = screen.getByRole('complementary', { name: 'Artifacts' })
-    expect(within(rail).getByText('No artifacts yet')).toBeInTheDocument()
-    expect(within(rail).getByText('Artifacts created in this thread will appear here.')).toBeInTheDocument()
+    const empty = rail.querySelector('.artifact-empty')
+    expect(empty).toHaveTextContent(/^No artifacts yet$/)
+    expect(empty.children).toHaveLength(1)
+    expect(within(empty).getByText('No artifacts yet').tagName).toBe('P')
 
     await fireEvent.click(toggle)
     expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
