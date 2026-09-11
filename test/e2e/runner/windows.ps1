@@ -142,8 +142,9 @@ function Invoke-NativeCommand([string]$File, [string]$Arguments, [string]$Log, [
 function Write-ToolchainState([string]$Phase) {
   Write-Output "Tauri toolchain $Phase process_cwd=$([Environment]::CurrentDirectory) command_cwd=$((Get-Location).ProviderPath)"
   Write-Output "Tauri toolchain $Phase npm=$(Resolve-NativeCommand 'npm.cmd' 'toolchain probe failed')"
-  $probe = Join-Path $PSScriptRoot "../support/windows-toolchain.mjs"
-  Invoke-NativeCommand "npm.cmd" "exec --offline -- node `"$probe`" `"$repoRoot`" $Phase" $installerLog "Tauri toolchain probe failed"
+  # --call uses Node from PATH without asking npm to resolve the node package.
+  # Relative paths avoid nested cmd.exe quotes when the repository path contains spaces.
+  Invoke-NativeCommand "npm.cmd" "exec --offline --call `"node test/e2e/support/windows-toolchain.mjs . $Phase`"" $installerLog "Tauri toolchain probe failed"
 }
 
 function Get-UninstallEntries([ValidateSet("HKCU", "HKLM")][string]$Hive = "HKCU") {

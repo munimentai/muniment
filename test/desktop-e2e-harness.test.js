@@ -2574,11 +2574,64 @@ describe('Windows toolchain and failure evidence', { timeout: 30_000 }, () => {
     expect([ci, first, tests, second, install, last, build].every((value) => value >= 0)).toBe(true)
     expect([ci, first, tests, second, install, last, build]).toEqual([ci, first, tests, second, install, last, build].sort((a, b) => a - b))
     expect(runner).toContain('Test-Path -LiteralPath $tauriCli -PathType Leaf')
-    expect(runner).toContain('exec --offline -- node')
+    expect(runner).toContain('exec --offline --call')
+    expect(runner).not.toContain('exec --offline -- node')
     expect(runner).not.toContain('"run tauri -- build')
     const tail = runner.indexOf('../support/installer-log-tail.mjs')
     expect(tail).toBeGreaterThan(0)
     expect(tail).toBeLessThan(runner.indexOf('\n  Stop-Transcript '))
+  })
+
+  it('Runs the npm probe with a fresh prefix and cache without package inference.', () => {
+    const directory = temp()
+    const repo = path.join(directory, 'repo [fixture] & spaces')
+    const support = path.join(repo, 'test/e2e/support')
+    const prefix = path.join(directory, 'fresh prefix')
+    const cache = path.join(directory, 'fresh cache')
+    const bin = path.join(repo, 'node_modules/.bin')
+    for (const folder of [support, prefix, cache, bin]) fs.mkdirSync(folder, { recursive: true })
+    fs.writeFileSync(path.join(repo, 'package.json'), '{"private":true}')
+    for (const name of ['windows-toolchain.mjs', 'redact-text.mjs', 'failure-summary.mjs']) {
+      fs.copyFileSync(path.join(root, 'test/e2e/support', name), path.join(support, name))
+    }
+    const env = Object.fromEntries(Object.entries(process.env)
+      .filter(([key]) => !/^npm_config_(prefix|cache)$/i.test(key)))
+    env.npm_config_prefix = prefix
+    env.npm_config_cache = cache
+    const options = { cwd: repo, env, encoding: 'utf8', timeout: 20_000 }
+    const node = spawnSync('node', ['--version'], options)
+    expect(node.status, node.stderr).toBe(0)
+    expect(fs.readdirSync(prefix)).toEqual([])
+    expect(fs.readdirSync(cache)).toEqual([])
+
+    let result
+    if (process.platform === 'win32') {
+      const script = path.join(repo, 'test/e2e/runner/probe.ps1')
+      fs.mkdirSync(path.dirname(script), { recursive: true })
+      const helpers = runner.slice(runner.indexOf('function Resolve-NativeCommand'), runner.indexOf('function Get-UninstallEntries'))
+      fs.writeFileSync(script, `param([string]$repoRoot, [string]$installerLog)
+$ErrorActionPreference = 'Stop'
+${helpers}
+Set-Location -LiteralPath $repoRoot
+[Environment]::CurrentDirectory = $env:SystemRoot
+Write-ToolchainState 'before-e2e-build'
+`)
+      result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+        repo, path.join(directory, 'installer.log')], options)
+    } else {
+      // Run the runner's shell command on Linux without PowerShell.
+      const call = runner.match(/exec --offline --call `"([^"\r\n]+)`"/)
+      expect(call).not.toBeNull()
+      result = spawnSync('npm', ['exec', '--offline', '--call', call[1].replace('$Phase', 'before-e2e-build')], options)
+    }
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout).toContain('Tauri toolchain before-e2e-build')
+    expect(result.stdout).toContain(`cwd=${repo}`)
+    expect(result.stdout).toContain('npm_path_has_local_bin=true')
+    expect(result.stdout).toContain('The local Tauri CLI entry is missing.')
+    expect(result.stdout).toContain('The local tauri.cmd shim is missing.')
+    expect(result.stdout + result.stderr).not.toContain('ENOTCACHED')
+    expect(fs.existsSync(path.join(cache, '_npx'))).toBe(false)
   })
 
   it.each(['missing shim', 'missing CLI', 'missing PATH', 'missing PATHEXT', 'present'])('Names the %s toolchain state.', (state) => {
