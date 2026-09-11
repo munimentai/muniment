@@ -41,7 +41,10 @@ fn main() {
         Err(error) => {
             eprintln!("muniment-runtime: {error}");
             #[cfg(target_os = "macos")]
-            record_macos_diagnostic(muniment_runtime::MacosDiagnosticEvent::ArgumentsInvalid);
+            {
+                record_macos_diagnostic(muniment_runtime::MacosDiagnosticEvent::ArgumentsInvalid);
+                eprintln!("muniment-runtime: exit status=1 cause=invalid arguments");
+            }
             #[cfg(target_os = "windows")]
             record_windows_diagnostic(muniment_runtime::WindowsDiagnosticEvent::ArgumentsInvalid);
             std::process::exit(1);
@@ -122,6 +125,16 @@ enum MacosActivationExit {
 }
 
 fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit) -> i32 {
+    let mut cause = "start record failed";
+    let status = run_recorded_macos_activation_with_cause(activate, &mut cause);
+    eprintln!("muniment-runtime: exit status={status} cause={cause}");
+    status
+}
+
+fn run_recorded_macos_activation_with_cause(
+    activate: impl FnOnce() -> MacosActivationExit,
+    cause: &mut &'static str,
+) -> i32 {
     use muniment_runtime::{
         profile_directory, record_macos_failed_exit, record_macos_orderly_exit, record_macos_start,
         MacosDiagnosticEvent, MacosStartDecision,
@@ -130,6 +143,7 @@ fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit)
     let state_directory = match profile_directory() {
         Ok(directory) => directory,
         Err(error) => {
+            *cause = "profile directory unavailable";
             eprintln!("muniment-runtime: {error}");
             record_macos_diagnostic(MacosDiagnosticEvent::StartRecordFailed);
             return FAILURE_EXIT_STATUS;
@@ -137,6 +151,7 @@ fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit)
     };
     let start = match record_macos_start(&state_directory) {
         Ok((MacosStartDecision::StopRestartLoop, _)) => {
+            *cause = "restart loop stopped";
             record_macos_diagnostic(MacosDiagnosticEvent::RestartLoopStopped);
             return SUCCESS_EXIT_STATUS;
         }
@@ -154,15 +169,22 @@ fn run_recorded_macos_activation(activate: impl FnOnce() -> MacosActivationExit)
                 record_macos_diagnostic(MacosDiagnosticEvent::StartRecordFailed);
                 return FAILURE_EXIT_STATUS;
             }
+            *cause = if status == 75 {
+                "upgrade refresh"
+            } else {
+                "manager stop"
+            };
             status
         }
         MacosActivationExit::Failed(status) => {
             match record_macos_failed_exit(state_directory, start) {
                 Ok(MacosStartDecision::StopRestartLoop) => {
+                    *cause = "restart loop stopped after activation failure";
                     record_macos_diagnostic(MacosDiagnosticEvent::RestartLoopStopped);
                     SUCCESS_EXIT_STATUS
                 }
                 Ok(MacosStartDecision::Run) => {
+                    *cause = "activation failed";
                     record_macos_diagnostic(MacosDiagnosticEvent::ActivationFailed);
                     status
                 }
