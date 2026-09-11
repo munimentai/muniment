@@ -471,7 +471,45 @@ describe('workspace composer entry', () => {
     expect(within(notice).getByText('The runtime exited.')).toHaveClass('record', 'error-record')
     expect(within(notice).getAllByRole('button')).toHaveLength(1)
     expect(within(notice).getByRole('button', { name: 'Start runtime' })).toBeDisabled()
-    expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+    if (configured) {
+      expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument()
+    } else {
+      const firstRun = await screen.findByRole('region', { name: 'First run' })
+      expect(within(firstRun).getByRole('textbox', { name: 'Message' })).toBeVisible()
+      expect(within(firstRun).getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+      expect(within(firstRun).getByTestId('onboarding-model')).toBeVisible()
+      expect(within(firstRun).getByTestId('onboarding-scan')).toBeVisible()
+      expect(within(firstRun).getByRole('button', { name: 'Send' })).toBeEnabled()
+      expect(firstRun.parentElement).toBe(notice.parentElement)
+    }
+  })
+
+  it('keeps the first-run draft and chips beside a start failure and after recovery', async () => {
+    homeStatus = { configured: false, homePath: '/Documents/Muniment' }
+    runtimeState = { revision: 1, lastEvent: 'starting', visible: false, busy: true }
+    render(App)
+    const firstRun = await screen.findByRole('region', { name: 'First run' })
+    const composer = within(firstRun).getByRole('textbox', { name: 'Message' })
+    await fireEvent.input(composer, { target: { value: 'Keep this first message' } })
+    expect(screen.queryByTestId('runtime-notice')).not.toBeInTheDocument()
+
+    runtimeListener({ payload: { revision: 2, lastEvent: 'startFailed', visible: true, busy: false,
+      cause: 'The runtime start timed out. Desktop client connected: true. Chat events connected: false.' } })
+    const notice = await screen.findByTestId('runtime-notice')
+    expect(within(notice).getByText('The runtime start failed.')).toBeVisible()
+    expect(firstRun).toBeVisible()
+    expect(composer).toHaveValue('Keep this first message')
+    for (const chip of ['onboarding-model', 'onboarding-home-path', 'onboarding-scan']) {
+      expect(within(firstRun).getByTestId(chip)).toBeVisible()
+    }
+    await fireEvent.click(within(firstRun).getByTestId('onboarding-home-path'))
+    expect(within(firstRun).getByRole('heading', { name: 'Home' })).toBeVisible()
+    expect(within(firstRun).getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled', 'true')
+
+    runtimeListener({ payload: { revision: 3, lastEvent: 'connected', visible: false, busy: false, cause: null } })
+    await waitFor(() => expect(screen.queryByTestId('runtime-notice')).not.toBeInTheDocument())
+    expect(composer).toHaveValue('Keep this first message')
+    expect(firstRun).toBeVisible()
   })
 
   it.each([

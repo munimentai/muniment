@@ -70,6 +70,8 @@ pub(super) fn observe_desktop_client_connection<R: tauri::Runtime>(
         .record_connected(connected);
     #[cfg(target_os = "macos")]
     eprintln!("desktop runtime client connected={connected}");
+    #[cfg(target_os = "linux")]
+    eprintln!("Desktop client connected: {connected}.");
     let status = app.state::<AttachCompanionState>().listener_status();
     let _ = app.emit("desktop-client-status-changed", status);
 }
@@ -81,6 +83,8 @@ pub(super) fn observe_chat_event_subscription<R: tauri::Runtime>(
 ) {
     app.state::<AttachCompanionState>()
         .record_chat_events_connected(connected);
+    #[cfg(target_os = "linux")]
+    eprintln!("Chat events connected: {connected}.");
     let status = app.state::<AttachCompanionState>().listener_status();
     let _ = app.emit("desktop-client-status-changed", status);
 }

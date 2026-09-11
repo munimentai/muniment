@@ -169,17 +169,41 @@ fn a_failed_start_releases_the_startup_lock_for_a_retry() {
 }
 
 #[test]
+fn activation_names_the_startup_lock_and_new_runtime_timeouts() {
+    let directory = Directory::new();
+    let filesystem = directory.filesystem();
+    let competing_filesystem = directory.filesystem();
+    let lock = competing_filesystem.acquire_startup_lock().unwrap();
+    assert_eq!(
+        activate_runtime(
+            &filesystem,
+            || panic!("A competing start owns the startup lock."),
+            || false,
+            Duration::from_millis(50),
+        ),
+        Err("The runtime start timed out while waiting for the startup lock.".into())
+    );
+    drop(lock);
+    assert_eq!(
+        activate_runtime(&filesystem, || Ok(()), || false, Duration::from_millis(50),),
+        Err("The runtime start timed out while waiting for the new runtime clients.".into())
+    );
+}
+
+#[test]
 fn a_disconnected_runtime_times_out_without_a_desktop_listener() {
     let directory = Directory::new();
     let filesystem = directory.filesystem();
     let _runtime_lock = filesystem.acquire_instance_lock().unwrap();
-    assert!(activate_runtime(
-        &filesystem,
-        || panic!("A failed handshake must not start another runtime."),
-        || false,
-        Duration::from_millis(50),
-    )
-    .is_err());
+    assert_eq!(
+        activate_runtime(
+            &filesystem,
+            || panic!("A failed handshake must not start another runtime."),
+            || false,
+            Duration::from_millis(50),
+        ),
+        Err("The runtime start timed out while waiting for the running runtime clients.".into())
+    );
     assert!(!filesystem.endpoint_path().exists());
     assert!(activate_runtime(
         &filesystem,
