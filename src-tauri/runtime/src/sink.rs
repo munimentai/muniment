@@ -20,6 +20,8 @@ pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 pub struct RuntimeChatEventBroadcast {
     shared: Arc<RuntimeChatEventBroadcastShared>,
     approval: SignedWorkspaceApproval,
+    #[cfg(target_os = "linux")]
+    config_directory: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -27,10 +29,13 @@ struct RuntimeChatEventBroadcastShared {
     next_id: AtomicU64,
     full_queue_drops: AtomicU64,
     subscribers: Mutex<Vec<RuntimeChatEventSubscriber>>,
+    #[cfg(target_os = "linux")]
+    delivery_failures: Mutex<std::collections::BTreeMap<(String, String), ChatEvent>>,
 }
 
 struct RuntimeChatEventSubscriber {
     id: u64,
+    capacity: usize,
     sender: SyncSender<ChatEvent>,
 }
 
@@ -39,17 +44,70 @@ impl RuntimeChatEventBroadcast {
         Self {
             shared: Arc::new(RuntimeChatEventBroadcastShared::default()),
             approval,
+            #[cfg(target_os = "linux")]
+            config_directory: None,
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn with_config_directory(mut self, config_directory: PathBuf) -> Self {
+        self.config_directory = Some(config_directory);
+        self
+    }
+
+    fn allows_workspace(&self, workspace: &str) -> bool {
+        #[cfg(target_os = "linux")]
+        if let Some(directory) = &self.config_directory {
+            if muniment_core::local_mode::is_local_mode(directory) {
+                return workspace == "local";
+            }
+        }
+        self.approval
+            .approval()
+            .is_some_and(|approval| approval.workspace == workspace)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn record_delivery_failure(&self, workspace: String, event: ChatEvent) {
+        // Subscription setup and socket writes do not acknowledge receipt by the shell.
+        // Keep each run's latest cause for every desktop in its workspace until runtime exit.
+        let mut failures = self
+            .shared
+            .delivery_failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        failures.insert((workspace.clone(), event.run_id.clone()), event.clone());
+        self.deliver(&workspace, event);
+    }
+
     pub fn subscribe(&self) -> ChatEventSubscription {
-        let (sender, receiver) = mpsc::sync_channel(CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY);
+        #[cfg(target_os = "linux")]
+        let failures = self
+            .shared
+            .delivery_failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(target_os = "linux")]
+        let capacity = CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY.max(failures.len());
+        #[cfg(not(target_os = "linux"))]
+        let capacity = CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY;
+        let (sender, receiver) = mpsc::sync_channel(capacity);
+        #[cfg(target_os = "linux")]
+        for ((workspace, _), failure) in failures.iter() {
+            if self.allows_workspace(workspace) {
+                let _ = sender.try_send(failure.clone());
+            }
+        }
         let id = self.shared.next_id.fetch_add(1, Ordering::Relaxed);
         self.shared
             .subscribers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(RuntimeChatEventSubscriber { id, sender });
+            .push(RuntimeChatEventSubscriber {
+                id,
+                capacity,
+                sender,
+            });
         let shared = Arc::downgrade(&self.shared);
         ChatEventSubscription::new(receiver, move || remove_subscriber(&shared, id))
     }
@@ -70,11 +128,7 @@ impl RuntimeChatEventBroadcast {
     }
 
     fn deliver(&self, workspace: &str, event: ChatEvent) {
-        if !self
-            .approval
-            .approval()
-            .is_some_and(|approval| approval.workspace == workspace)
-        {
+        if !self.allows_workspace(workspace) {
             return;
         }
         let mut full_queue_drops = Vec::new();
@@ -86,7 +140,7 @@ impl RuntimeChatEventBroadcast {
                 |subscriber| match subscriber.sender.try_send(event.clone()) {
                     Ok(()) => true,
                     Err(TrySendError::Full(_)) => {
-                        full_queue_drops.push(subscriber.id);
+                        full_queue_drops.push((subscriber.id, subscriber.capacity));
                         false
                     }
                     // A disconnected receiver is the ordinary close of a client connection.
@@ -97,10 +151,10 @@ impl RuntimeChatEventBroadcast {
             .full_queue_drops
             .fetch_add(full_queue_drops.len() as u64, Ordering::Relaxed);
         // Report each drop after the lock releases, so no run waits on stderr.
-        for id in full_queue_drops {
+        for (id, capacity) in full_queue_drops {
             eprintln!(
                 "muniment-runtime: dropped chat-event subscriber {id} because its \
-                 {CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY}-event queue is full"
+                 {capacity}-event queue is full"
             );
         }
     }
