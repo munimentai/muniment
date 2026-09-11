@@ -3,6 +3,7 @@
   import { open } from '@tauri-apps/plugin-dialog'
   import { onboardingCancelSettingsState, onboardingStatusState } from './onboarding-state.js'
   import { scanRows, scanSummary } from './onboarding-scan.js'
+  import { firstRunError } from './onboarding-diagnostics.js'
 
   let { tauri, onboarding = $bindable(), draft = $bindable(''), onready } = $props()
   let panel = $state(null)
@@ -60,7 +61,7 @@
     if (busy || picking || (!settings && !draft.trim())) return
     if (!onboarding.homePath) {
       panel = 'home'
-      onboarding = { ...onboarding, error: 'Home is unavailable. Retry or choose a folder.' }
+      onboarding = { ...onboarding, error: firstRunError(tauri, 'homeUnavailable').message }
       return
     }
     busy = true
@@ -76,7 +77,7 @@
       panel = 'home'
       onboarding = { ...onboarding, error: settings
         ? 'Muniment could not save Home. Check folder access and try Save Home again.'
-        : 'Muniment could not create Home. Check folder access and try Send again.' }
+        : firstRunError(tauri, 'homeConfirm').message }
     } finally {
       busy = false
     }
