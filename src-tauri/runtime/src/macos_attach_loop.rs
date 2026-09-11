@@ -283,11 +283,12 @@ impl MacosAttachServeBoundary for SystemMacosAttachBoundary {
                         waiter,
                         &live_connections,
                     );
-                    // The desktop request loop logs its own close reason.
+                    // The desktop request loop and presenter refusal path log their own close reasons.
                     if let Err(error) = result {
                         if !matches!(
                             error,
                             muniment_core::attach::MacosAttachSessionError::DesktopClientSession(_)
+                                | muniment_core::attach::MacosAttachSessionError::ApprovalPresenterUnavailable
                         ) {
                             muniment_core::runtime_eprintln!(
                                 "muniment-runtime: attach session closed reason={error:?}"

@@ -23,6 +23,7 @@ use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
 use muniment_core::retention_record::{write_retention_choice, RetentionChoice};
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
+use muniment_core::run_start::{ActiveRun, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime::{open_profile_storage, RuntimeAttachState};
 use muniment_runtime::{run_attach_listener, AttachListenerInputs};
@@ -216,6 +217,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
     let (stop_tx, stop_rx) = mpsc::channel();
 
     thread::scope(|scope| {
+        let active_boundaries = state.boundaries();
         let service_state = Arc::clone(&state);
         let profile_directory = profile.profile.clone();
         let config_directory = profile.config.clone();
@@ -248,6 +250,26 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
         };
 
         assert!(client.workspace_scopes().is_empty());
+        active_boundaries
+            .install_active_run(ActiveRun {
+                id: "busy-run".into(),
+                workspace: "local".into(),
+                cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                transport: Arc::new(Mutex::new(None)),
+                adapter: Arc::new(Mutex::new(None)),
+                permission_answers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                _activity: active_boundaries.mark_active_run(),
+            })
+            .unwrap();
+        assert_eq!(
+            client.run_submit("hello", &[], None).unwrap_err(),
+            ClientError::RequestRejected
+        );
+        assert_eq!(
+            client.last_request_error().unwrap().to_string(),
+            "code=\"invalid_request\" reason=\"A reply is already in progress.\""
+        );
+        active_boundaries.clear_active_run("busy-run");
         let accepted = client.run_submit("hello", &[], None).unwrap();
         assert!(!accepted.run_id.is_empty());
         assert_eq!(approval.approval().unwrap().workspace, "local");
