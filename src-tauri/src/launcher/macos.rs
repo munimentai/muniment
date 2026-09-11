@@ -1,9 +1,25 @@
 use objc2::{define_class, msg_send, rc::Retained, ClassType, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSBackingStoreType, NSFloatingWindowLevel, NSPanel, NSView, NSWindow,
+    NSBackingStoreType, NSEvent, NSFloatingWindowLevel, NSPanel, NSScreen, NSView, NSWindow,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
-use objc2_foundation::NSObjectProtocol;
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize};
+
+pub fn work_area(mtm: MainThreadMarker) -> Option<NSRect> {
+    let cursor = NSEvent::mouseLocation();
+    let screens = NSScreen::screens(mtm);
+    (0..screens.count())
+        .map(|index| screens.objectAtIndex(index))
+        .find(|screen| {
+            let frame = screen.frame();
+            cursor.x >= frame.origin.x
+                && cursor.x < frame.origin.x + frame.size.width
+                && cursor.y >= frame.origin.y
+                && cursor.y < frame.origin.y + frame.size.height
+        })
+        .or_else(|| screens.firstObject())
+        .map(|screen| screen.visibleFrame())
+}
 
 define_class!(
     #[unsafe(super(NSPanel))]
@@ -42,7 +58,12 @@ impl LauncherPanel {
         // Tauri retains the hidden host and webview. Only the launcher content moves into the panel.
         let content = host.contentView();
         let responder = host.firstResponder();
-        host.setContentView(None);
+        // Tao resolves native handles through the host content view, even while the panel owns the webview.
+        let placeholder = NSView::initWithFrame(
+            NSView::alloc(mtm),
+            NSRect::new(NSPoint::new(0.0, 0.0), host.frame().size),
+        );
+        host.setContentView(Some(&placeholder));
         panel.setContentView(content.as_deref());
         if let Some(responder) =
             responder.filter(|responder| responder.isKindOfClass(NSView::class()))
@@ -52,8 +73,17 @@ impl LauncherPanel {
         panel
     }
 
-    pub fn show(&self, host: &NSWindow) {
-        self.setFrame_display(host.frame(), true);
+    pub fn show(&self, area: NSRect) {
+        // AppKit uses logical points and a bottom-left origin on every screen, including mixed-scale screens.
+        let frame = NSRect::new(
+            NSPoint::new(
+                area.origin.x + ((area.size.width - 600.0) / 2.0).max(0.0),
+                area.origin.y + area.size.height - (area.size.height / 3.0 - 40.0).max(0.0) - 80.0,
+            ),
+            NSSize::new(600.0, 80.0),
+        );
+        // Move the panel synchronously. Tao queues host moves after the shortcut callback returns.
+        self.setFrame_display(frame, true);
         self.orderFrontRegardless();
         self.makeKeyWindow();
     }
