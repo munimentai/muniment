@@ -4,10 +4,11 @@
     "security": {
       "capabilities": [
         "default",
+        "launcher",
         {
           "identifier": "e2e-webdriver",
           "description": "Embedded WebDriver access for E2E builds.",
-          "windows": ["main"],
+          "windows": ["main", "launcher"],
           "permissions": ["wdio-webdriver:default"]
         }
       ]

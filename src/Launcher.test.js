@@ -53,6 +53,65 @@ function reply(error = '') {
 }
 
 describe('launcher', () => {
+  it('starts with one input and no alert on a fresh profile', async () => {
+    const input = await open()
+    expect(screen.getAllByRole('textbox')).toEqual([input])
+    expect(input.value).toBe('')
+    expect(input.getAttribute('aria-invalid')).toBe('false')
+    expect(screen.getByRole('alert').textContent).toBe('')
+    expect(input.checkValidity()).toBe(true)
+    expect(invoke).not.toHaveBeenCalledWith('launcher_start_failed', expect.anything())
+  })
+
+  it.each([new Error('event listener denied'), 'event listener denied'])(
+    'shows and logs the start failure cause %s', async (failure) => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      window.__TAURI__.event.listen.mockRejectedValueOnce(failure)
+      try {
+        render(Launcher)
+        await waitFor(() => expect(invoke).toHaveBeenCalledWith('launcher_start_failed', { cause: 'event listener denied' }))
+        const message = 'The launcher could not start: event listener denied. Restart the app.'
+        expect(screen.getByRole('alert').textContent).toBe(message)
+        expect(log).toHaveBeenCalledWith(message)
+        const input = screen.getByRole('textbox', { name: 'First message' })
+        expect(input.getAttribute('aria-invalid')).toBe('true')
+        await typeAndSend(input)
+        expect(emitTo).not.toHaveBeenCalled()
+      } finally {
+        log.mockRestore()
+      }
+    },
+  )
+
+  it('removes the first listener when the second listener fails and handles a log failure', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const stop = vi.fn().mockRejectedValue(new Error('unlisten unavailable'))
+    window.__TAURI__.event.listen.mockResolvedValueOnce(stop).mockRejectedValueOnce('second listener denied')
+    invoke.mockRejectedValueOnce(new Error('log unavailable'))
+    try {
+      render(Launcher)
+      await waitFor(() => expect(log).toHaveBeenCalledWith('The launcher could not log its start failure.', expect.any(Error)))
+      expect(stop).toHaveBeenCalledTimes(1)
+      expect(screen.getByRole('alert').textContent).toContain('second listener denied')
+      cleanup()
+      expect(stop).toHaveBeenCalledTimes(1)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('removes a listener that resolves after the launcher unmounts', async () => {
+    let resolve
+    const stop = vi.fn()
+    window.__TAURI__.event.listen.mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    render(Launcher)
+    cleanup()
+    resolve(stop)
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1))
+    expect(window.__TAURI__.event.listen).toHaveBeenCalledTimes(1)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it('syncs Light, Dark, and System from another window while hidden and on reopen', async () => {
     const input = await open()
     for (const theme of ['light', 'dark', 'system', 'dark', 'light']) {
