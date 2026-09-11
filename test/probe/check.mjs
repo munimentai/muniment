@@ -139,6 +139,129 @@ async function checkWindowChrome(browser, baseUrl) {
   }
 }
 
+async function checkPaperFrame(browser, baseUrl) {
+  for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) {
+    for (const colorScheme of ['light', 'dark']) {
+      const page = await browser.newPage({ colorScheme })
+      try {
+        await page.addInitScript((platform) => {
+          Object.defineProperty(navigator, 'platform', { get: () => platform })
+        }, platform)
+        await page.goto(`${baseUrl}/test/probe/history.html`)
+        await page.waitForSelector('[data-probe-ready]')
+        await page.evaluate(() => document.fonts.ready)
+
+        const checkFrame = async (transition = false) => {
+          const failures = await page.evaluate(async (transition) => {
+            const failures = []
+            const check = () => {
+              const workspace = document.querySelector('.workspace')
+              const style = getComputedStyle(workspace)
+              const frame = parseFloat(style.paddingRight)
+              const color = (token) => {
+                const sample = document.createElement('span')
+                sample.style.color = style.getPropertyValue(token)
+                workspace.append(sample)
+                const value = getComputedStyle(sample).color
+                sample.remove()
+                return value
+              }
+              const paper = color('--paper')
+              const surface = color('--surface')
+              const border = color('--border')
+              const panels = [...workspace.querySelectorAll('.sidebar, .thread-panel, .artifact-rail')]
+              const boxes = panels.map((panel) => panel.getBoundingClientRect())
+              const fail = (condition, message) => { if (!condition) failures.push(message) }
+              const near = (left, right) => Math.abs(left - right) < 1
+              fail(frame === 8, `Frame width: ${frame}`)
+              fail(style.backgroundColor === paper, 'The workspace lacks paper.')
+              fail(near(boxes[0].left, frame), 'The left frame changed.')
+              fail(near(boxes.at(-1).right, innerWidth - frame), 'The right frame changed.')
+              for (const [index, panel] of panels.entries()) {
+                const box = boxes[index]
+                const panelStyle = getComputedStyle(panel)
+                fail(near(box.top, 36 + frame), 'The top frame changed.')
+                fail(near(box.bottom, innerHeight - frame), 'The bottom frame changed.')
+                fail(panelStyle.backgroundColor === surface, `${panel.className} lacks surface.`)
+                for (const edge of ['Top', 'Right', 'Bottom', 'Left']) {
+                  fail(panelStyle[`border${edge}Width`] === '1px', `${panel.className} lacks a hairline.`)
+                  fail(panelStyle[`border${edge}Color`] === border, `${panel.className} has the wrong border color.`)
+                }
+                for (const corner of ['TopLeft', 'TopRight', 'BottomLeft', 'BottomRight']) {
+                  fail(panelStyle[`border${corner}Radius`] === style.getPropertyValue('--radius-panel').trim(), `${panel.className} has the wrong radius.`)
+                }
+                if (index) fail(near(box.left - boxes[index - 1].right, frame), 'The panel gap changed.')
+              }
+              fail(boxes[1].width >= 319.9, 'The thread fell below 320px.')
+              const composer = workspace.querySelector('.composer').getBoundingClientRect()
+              fail(composer.left > boxes[1].left && composer.right < boxes[1].right && composer.bottom < boxes[1].bottom, 'The composer escaped the thread panel.')
+              const backgroundAt = (x, y) => {
+                let element = document.elementFromPoint(x, y)
+                while (element) {
+                  const color = getComputedStyle(element).backgroundColor
+                  if (color !== 'rgba(0, 0, 0, 0)') return color
+                  element = element.parentElement
+                }
+                return null
+              }
+              for (const [x, y] of [[innerWidth / 2, 1], [1, innerHeight / 2], [innerWidth - 1, innerHeight / 2], [innerWidth / 2, innerHeight - 1]]) {
+                fail(backgroundAt(x, y) === paper, 'A window edge lacks paper.')
+              }
+              for (let index = 1; index < boxes.length; index++) {
+                for (let y = boxes[index].top + 1; y < boxes[index].bottom; y += 4) {
+                  fail(backgroundAt(boxes[index - 1].right + 1, y) === paper, 'A panel gap lacks paper.')
+                }
+              }
+            }
+            const start = performance.now()
+            do {
+              await new Promise(requestAnimationFrame)
+              check()
+            } while (transition && performance.now() - start < 240)
+            return [...new Set(failures)]
+          }, transition)
+          assert.deepEqual(failures, [], `${platform} ${colorScheme} ${JSON.stringify(page.viewportSize())}`)
+        }
+
+        for (const viewport of [{ width: 960, height: 640 }, { width: 1440, height: 900 }]) {
+          await page.setViewportSize(viewport)
+          await checkFrame()
+          await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
+          await checkFrame(true)
+          const divider = page.getByRole('separator', { name: 'Artifacts', exact: true })
+          await divider.press('End')
+          await checkFrame(true)
+          await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
+          await checkFrame(true)
+          await divider.press('End')
+          await checkFrame(true)
+          await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click()
+          await checkFrame(true)
+          const box = await divider.boundingBox()
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+          await page.mouse.down()
+          await page.mouse.move(viewport.width - 408, box.y + box.height / 2)
+          await page.mouse.up()
+          await checkFrame(true)
+          await page.getByRole('button', { name: 'Close artifact rail', exact: true }).click()
+          await checkFrame(true)
+          await page.emulateMedia({ reducedMotion: 'reduce' })
+          await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
+          await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
+          await checkFrame()
+          await divider.press('Escape')
+          await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click()
+          await checkFrame()
+          await page.emulateMedia({ reducedMotion: 'no-preference' })
+        }
+        console.log(`Paper frame checks passed for ${platform} in ${colorScheme}.`)
+      } finally {
+        await page.close()
+      }
+    }
+  }
+}
+
 async function checkComposerActions(browser, baseUrl) {
   for (const fixture of ['index.html', 'local-mode.html', 'in-flight.html']) {
     const page = await browser.newPage({ viewport: { width: 960, height: 640 } })
@@ -219,6 +342,7 @@ async function main() {
   try {
     browser = await chromium.launch({ headless: true })
     await checkWindowChrome(browser, baseUrl)
+    await checkPaperFrame(browser, baseUrl)
     await checkComposerActions(browser, baseUrl)
     for (const fixture of fixtures) {
       const errors = await checkFixture(browser, baseUrl, fixture)
