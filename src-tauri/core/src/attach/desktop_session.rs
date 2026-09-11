@@ -167,13 +167,28 @@ where
         };
         for event in live_events {
             let frame = encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?;
+            #[cfg(target_os = "linux")]
+            write_run_frame_before(
+                stream,
+                &frame,
+                Instant::now() + REQUEST_TIMEOUT,
+                service,
+                diagnostic,
+            )?;
+            #[cfg(not(target_os = "linux"))]
             write_before(stream, &frame, Instant::now() + REQUEST_TIMEOUT)?;
         }
         if service.has_chat_subscription(&state) {
             let (events, closed) = service.drain_chat_events(&mut state)?;
             for event in events {
                 #[cfg(target_os = "linux")]
-                write_chat_event_before(stream, &event, service, diagnostic)?;
+                write_run_frame_before(
+                    stream,
+                    &encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?,
+                    Instant::now() + REQUEST_TIMEOUT,
+                    service,
+                    diagnostic,
+                )?;
                 #[cfg(not(target_os = "linux"))]
                 {
                     let frame =
@@ -229,32 +244,43 @@ where
                     ok: Success,
                     body: dispatched.body,
                 };
-                write_before(
-                    stream,
-                    &encode_frame(&response).map_err(|_| AttachSessionError::MalformedFrame)?,
-                    deadline,
-                )?;
+                let frame =
+                    encode_frame(&response).map_err(|_| AttachSessionError::MalformedFrame)?;
+                #[cfg(target_os = "linux")]
+                write_run_frame_before(stream, &frame, deadline, service, diagnostic)?;
+                #[cfg(not(target_os = "linux"))]
+                write_before(stream, &frame, deadline)?;
                 for event in dispatched.events {
+                    let frame =
+                        encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?;
                     #[cfg(target_os = "linux")]
-                    let deadline = Instant::now() + REQUEST_TIMEOUT;
-                    write_before(
+                    write_run_frame_before(
                         stream,
-                        &encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?,
-                        deadline,
+                        &frame,
+                        Instant::now() + REQUEST_TIMEOUT,
+                        service,
+                        diagnostic,
                     )?;
+                    #[cfg(not(target_os = "linux"))]
+                    write_before(stream, &frame, deadline)?;
                 }
             }
             Err(failure) => {
                 diagnostic(request_rejection_line(Some(operation), &failure.error));
                 write_request_error(stream, Some(request_id), failure.error, deadline);
                 for event in failure.events {
+                    let frame =
+                        encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?;
                     #[cfg(target_os = "linux")]
-                    let deadline = Instant::now() + REQUEST_TIMEOUT;
-                    write_before(
+                    write_run_frame_before(
                         stream,
-                        &encode_frame(&event).map_err(|_| AttachSessionError::MalformedFrame)?,
-                        deadline,
+                        &frame,
+                        Instant::now() + REQUEST_TIMEOUT,
+                        service,
+                        diagnostic,
                     )?;
+                    #[cfg(not(target_os = "linux"))]
+                    write_before(stream, &frame, deadline)?;
                 }
             }
         }
@@ -348,24 +374,51 @@ fn write_request_error<S: DeadlineStream + ?Sized>(
 }
 
 #[cfg(target_os = "linux")]
-fn write_chat_event_before<S: DeadlineStream + ?Sized, H: DesktopSessionService>(
+fn write_run_frame_before<S: DeadlineStream + ?Sized, H: DesktopSessionService>(
     stream: &mut S,
-    event: &Event,
+    frame: &[u8],
+    deadline: Instant,
     service: &mut H,
     diagnostic: &mut impl FnMut(String),
 ) -> Result<(), AttachSessionError> {
-    let frame = encode_frame(event).map_err(|_| AttachSessionError::MalformedFrame)?;
-    write_frame_before(stream, &frame, Instant::now() + REQUEST_TIMEOUT, diagnostic)
-        .map_err(|failure| {
-            if failure.error == AttachSessionError::Timeout {
-                if let Some(run_id) = event.body.get("runId").and_then(serde_json::Value::as_str) {
-                    service.record_chat_delivery_failure(run_id, &format!(
-                        "Reply delivery failed. The desktop missed the five-second chat.event frame deadline with {} bytes pending.", failure.pending,
-                    ));
-                }
+    write_frame_before(stream, frame, deadline, diagnostic).map_err(|failure| {
+        if failure.error == AttachSessionError::Timeout {
+            let (kind, run_id) = frame_identity(frame);
+            if let Some(run_id) = run_id {
+                service.record_chat_delivery_failure(&run_id, &format!(
+                    "Reply delivery failed. The desktop missed the five-second {kind} frame deadline with {} bytes pending.", failure.pending,
+                ));
             }
-            failure.error
-        })
+        }
+        failure.error
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn frame_identity(frame: &[u8]) -> (String, Option<String>) {
+    let body_run_id = |body: &serde_json::Value, key| {
+        body.get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+            .map(str::to_owned)
+    };
+    match decode_frame::<Envelope>(frame) {
+        Ok(Some((Envelope::Event(event), _))) => (
+            serde_json::to_value(event.event)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "unknown".into()),
+            event
+                .run_id
+                .map(|id| id.as_str().to_owned())
+                .or_else(|| body_run_id(&event.body, "runId")),
+        ),
+        Ok(Some((Envelope::Response(response), _))) => {
+            ("response".into(), body_run_id(&response.body, "run_id"))
+        }
+        Ok(Some((Envelope::Error(_), _))) => ("error".into(), None),
+        _ => ("unknown".into(), None),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -417,24 +470,9 @@ fn write_frame_before<S: DeadlineStream + ?Sized>(
         Ok(())
     })();
     if let Err(error) = result {
-        let (kind, run_id) = match decode_frame::<Envelope>(frame) {
-            Ok(Some((Envelope::Event(event), _))) => (
-                serde_json::to_value(event.event).unwrap_or_default(),
-                event.run_id.map(|id| id.as_str().to_owned()).or_else(|| {
-                    event
-                        .body
-                        .get("runId")
-                        .and_then(serde_json::Value::as_str)
-                        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
-                        .map(str::to_owned)
-                }),
-            ),
-            Ok(Some((Envelope::Response(_), _))) => (serde_json::json!("response"), None),
-            Ok(Some((Envelope::Error(_), _))) => (serde_json::json!("error"), None),
-            _ => (serde_json::json!("unknown"), None),
-        };
+        let (kind, run_id) = frame_identity(frame);
         diagnostic(format!(
-            "muniment-runtime: desktop frame write failed kind={kind} run_id={} bytes_pending={} bytes_total={} reason={error:?}",
+            "muniment-runtime: desktop frame write failed kind={kind:?} run_id={} bytes_pending={} bytes_total={} reason={error:?}",
             run_id.as_deref().unwrap_or("none"), pending.len(), frame.len(),
         ));
     }
@@ -643,21 +681,133 @@ mod tests {
                 self.failure = Some((run_id.into(), cause.into()));
             }
         }
-        let (Envelope::Event(event), _) = decode_frame::<Envelope>(&frame).unwrap().unwrap() else {
-            panic!("expected a chat event")
-        };
         let mut service = RecordingService::default();
         stream.written = 0;
         stream.allowance = 2;
         assert_eq!(
-            write_chat_event_before(&mut stream, &event, &mut service, &mut |_| {}),
+            write_run_frame_before(
+                &mut stream,
+                &frame,
+                Instant::now() + REQUEST_TIMEOUT,
+                &mut service,
+                &mut |_| {}
+            ),
             Err(AttachSessionError::Timeout)
         );
-        let encoded_length = encode_frame(&event).unwrap().len();
+        let encoded_length = frame.len();
         assert_eq!(service.failure, Some((
             "018f0000-0000-7000-8000-000000000202".into(),
             format!("Reply delivery failed. The desktop missed the five-second chat.event frame deadline with {} bytes pending.", encoded_length - 2),
         )));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stalled_submission_response_and_run_stream_notify_the_run() {
+        const RUN_ID: &str = "018f0000-0000-7000-8000-000000000202";
+        struct StalledStream(std::io::Cursor<Vec<u8>>);
+        impl Read for StalledStream {
+            fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                self.0.read(bytes)
+            }
+        }
+        impl Write for StalledStream {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::WouldBlock.into())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        impl DeadlineStream for StalledStream {
+            fn wait_until_readable(&self, _: Instant) -> ReadableWait {
+                ReadableWait::Ready
+            }
+            fn set_read_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+                Ok(())
+            }
+            fn set_write_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        struct RunService {
+            event: Option<Event>,
+            failures: Vec<(String, String)>,
+        }
+        impl DesktopSessionService for RunService {
+            type State = ();
+            type Provenance = ();
+            fn new_session_state(&self) {}
+            fn poll_run_streams(&mut self, _: &mut ()) -> Result<Vec<Event>, ProtocolError> {
+                Ok(self.event.take().into_iter().collect())
+            }
+            fn has_chat_subscription(&self, _: &()) -> bool {
+                false
+            }
+            fn record_chat_delivery_failure(&mut self, run_id: &str, cause: &str) {
+                self.failures.push((run_id.into(), cause.into()));
+            }
+            fn drain_chat_events(
+                &mut self,
+                _: &mut (),
+            ) -> Result<(Vec<Event>, bool), AttachSessionError> {
+                unreachable!()
+            }
+            fn dispatch_request(
+                &mut self,
+                request: Request,
+                _: &str,
+                _: (),
+                _: &mut (),
+            ) -> Result<DesktopDispatchResult, DesktopDispatchFailure> {
+                assert_eq!(request.operation, Operation::RunSubmit);
+                Ok(DesktopDispatchResult {
+                    body: serde_json::json!({"run_id": RUN_ID}),
+                    events: vec![],
+                })
+            }
+        }
+        for kind in ["response", "run.event"] {
+            let event_frame = encode_frame(&serde_json::json!({
+                "protocol": "muniment.attach/1", "event": "run.event", "run_id": RUN_ID,
+                "subscription_id": "018f0000-0000-7000-8000-000000000201", "body": {},
+            }))
+            .unwrap();
+            let (Envelope::Event(event), _) =
+                decode_frame::<Envelope>(&event_frame).unwrap().unwrap()
+            else {
+                panic!("expected a run event")
+            };
+            let mut service = RunService {
+                event: (kind == "run.event").then_some(event),
+                failures: vec![],
+            };
+            let request = encode_frame(&serde_json::json!({
+                "protocol": "muniment.attach/1", "request_id": "018f0000-0000-7000-8000-000000000201",
+                "operation": "run.submit", "capability": "capability", "body": {},
+            })).unwrap();
+            let mut lines = vec![];
+            let result = serve_desktop_client_requests_with_diagnostics(
+                &mut StalledStream(std::io::Cursor::new(request)),
+                "capability",
+                "workspace",
+                (),
+                &mut service,
+                |line| lines.push(line),
+            );
+            assert_eq!(result, Err(AttachSessionError::Timeout));
+            assert_eq!(service.failures.len(), 1);
+            assert_eq!(service.failures[0].0, RUN_ID);
+            assert!(service.failures[0]
+                .1
+                .contains(&format!("five-second {kind} frame deadline")));
+            assert!(service.failures[0].1.contains("bytes pending"));
+            assert!(lines[0].contains(&format!("kind={kind:?} run_id={RUN_ID}")));
+            assert_eq!(
+                lines[1],
+                "muniment-runtime: desktop session closed reason=Timeout"
+            );
+        }
     }
 
     struct Service;

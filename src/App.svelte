@@ -261,8 +261,9 @@
     // it re-reads nothing.
     const chatEventsRecovered = desktopClientStatus?.chat_events_connected === false
       && status?.chat_events_connected === true
+    const requestsRecovered = desktopClientStatus?.connected === false && status?.connected === true
     desktopClientStatus = status
-    if (chatEventsRecovered) {
+    if (chatEventsRecovered || (requestsRecovered && workspaceMode())) {
       void startupReady.then(() => chatController.recoverChatEvents())
     }
   }

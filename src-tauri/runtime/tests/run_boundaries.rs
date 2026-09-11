@@ -221,8 +221,16 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     assert!(elapsed.trim_end_matches('s').parse::<f64>().is_ok());
 
     let cause = "Reply delivery failed. The desktop missed the five-second chat.event frame deadline with 17 bytes pending.";
+    let connected = service.subscribe_chat_events().unwrap();
     service.record_chat_delivery_failure(&submitted.run_id, cause);
+    assert_eq!(
+        connected.try_recv().unwrap().failure_reason.as_deref(),
+        Some(cause)
+    );
+    // A failed subscription response drops the receiver before the desktop reads its cause.
+    drop(service.subscribe_chat_events().unwrap());
     let reconnected = service.subscribe_chat_events().unwrap();
+    let concurrent = service.subscribe_chat_events().unwrap();
     let failure = reconnected.try_recv().unwrap();
     assert_eq!(failure.run_id, submitted.run_id);
     assert_eq!(
@@ -232,7 +240,15 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     assert_eq!(failure.phase, "delivery-failed");
     assert_eq!(failure.failure_reason.as_deref(), Some(cause));
     assert!(reconnected.try_recv().is_err());
-    assert!(service.subscribe_chat_events().unwrap().try_recv().is_err());
+    let assert_failure = |event: muniment_core::run_events::ChatEvent| {
+        assert_eq!(event.run_id, failure.run_id);
+        assert_eq!(event.thread_id, failure.thread_id);
+        assert_eq!(event.phase, failure.phase);
+        assert_eq!(event.failure_reason, failure.failure_reason);
+    };
+    assert_failure(concurrent.try_recv().unwrap());
+    drop(reconnected);
+    assert_failure(service.subscribe_chat_events().unwrap().try_recv().unwrap());
     let restored = storage
         .lock()
         .unwrap()
@@ -242,7 +258,7 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     assert_eq!(restored, events);
 
     service.record_chat_delivery_failure("missing-run", cause);
-    assert!(service.subscribe_chat_events().unwrap().try_recv().is_err());
+    assert_failure(service.subscribe_chat_events().unwrap().try_recv().unwrap());
     service.record_chat_delivery_failure(&submitted.run_id, cause);
     std::fs::remove_file(
         profile
@@ -251,6 +267,14 @@ fn local_mode_runs_pi_and_journals_the_signed_in_event_shapes() {
     )
     .unwrap();
     assert!(service.subscribe_chat_events().unwrap().try_recv().is_err());
+    std::fs::write(
+        profile
+            .config
+            .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+        "1",
+    )
+    .unwrap();
+    assert_failure(service.subscribe_chat_events().unwrap().try_recv().unwrap());
 }
 
 #[test]

@@ -724,6 +724,46 @@ describe('workspace composer entry', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
 
+  it.each(['chat', 'request'])('restores a local reply when the %s socket reconnects first', async (firstSocket) => {
+    localModeStatus = true
+    let requestConnected = true
+    let restored = false
+    invoke.mockImplementation(async (command) => {
+      if (command === 'attach_listener_status') return chatEventsStatus(true)
+      if (command === 'chat_current_thread') {
+        if (!requestConnected) throw new Error('The request socket closed.')
+        return 'thread-1'
+      }
+      if (command === 'chat_thread_open') {
+        if (!requestConnected) throw new Error('The request socket closed.')
+        return [{ runId: 'run-1', prompt: 'Hello', text: restored ? 'The journal kept the reply.' : '', phase: restored ? 'complete' : 'streaming', receipt: {} }]
+      }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await findWorkspaceComposer()
+    await waitFor(() => expect(document.querySelector('.response-prose.streaming')).toBeInTheDocument())
+    requestConnected = false
+    desktopClientListener({ payload: { ...chatEventsStatus(false), connected: false } })
+    restored = true
+    invoke.mockClear()
+    if (firstSocket === 'chat') {
+      desktopClientListener({ payload: { ...chatEventsStatus(true), connected: false } })
+      await screen.findByText('Muniment could not restore conversation history. The request socket closed.')
+      requestConnected = true
+      desktopClientListener({ payload: chatEventsStatus(true) })
+    } else {
+      requestConnected = true
+      desktopClientListener({ payload: chatEventsStatus(false) })
+      await screen.findByText('The journal kept the reply.')
+      desktopClientListener({ payload: chatEventsStatus(true) })
+    }
+    expect(await screen.findByText('The journal kept the reply.')).toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.response-prose.streaming')).not.toBeInTheDocument())
+    expect(invoke).not.toHaveBeenCalledWith('auth_status')
+    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
+  })
+
   it('re-reads the open thread when the status poll reports the recovery', async () => {
     let finishRegistration
     desktopClientListen = vi.fn(() => new Promise((resolve) => { finishRegistration = resolve }))

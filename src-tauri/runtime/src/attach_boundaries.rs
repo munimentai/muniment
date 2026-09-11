@@ -1005,6 +1005,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 thread_id: Some(thread_id),
                 phase: "delivery-failed".into(),
                 text: String::new(),
+                prompt_storage_notice: None,
                 failure_reason: Some(cause.to_owned()),
                 receipt: None,
                 tool_activity: Vec::new(),
