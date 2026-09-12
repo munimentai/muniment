@@ -497,7 +497,7 @@ describe('workspace composer entry', () => {
     runtimeListener({ payload: { revision: 2, lastEvent: 'startFailed', visible: true, busy: false,
       cause: 'The runtime start timed out. Desktop client connected: true. Chat events connected: false.' } })
     const notice = await screen.findByTestId('runtime-notice')
-    expect(within(notice).getByText('The runtime start failed.')).toBeVisible()
+    expect(within(notice).getByText('The runtime start failed. The runtime start timed out. Desktop client connected: true. Chat events connected: false.')).toBeVisible()
     expect(firstRun).toBeVisible()
     expect(composer).toHaveValue('Keep this first message')
     for (const chip of ['onboarding-model', 'onboarding-home-path', 'onboarding-scan']) {
@@ -546,6 +546,32 @@ describe('workspace composer entry', () => {
       await fireEvent.click(button)
       expect(invoke).toHaveBeenCalledWith('open_login_items')
     }
+  })
+
+  it.each([false, true])('shows the queued session and clears it after recovery with Home configured as %s', async (configured) => {
+    homeStatus = { configured, homePath: '/Documents/Muniment' }
+    const cause = 'Task Scheduler kept the runtime task in state Queued for session id 7.'
+    runtimeState = { revision: 1, lastEvent: 'startFailed', visible: true, busy: false, cause }
+    render(App)
+
+    const notice = await screen.findByTestId('runtime-notice')
+    expect(within(notice).getByText(`The runtime start failed. ${cause}`)).toBeVisible()
+    expect(within(notice).getByRole('button', { name: 'Start runtime' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Open Login Items' })).not.toBeInTheDocument()
+
+    runtimeListener({ payload: { ...runtimeState, revision: 2, busy: true } })
+    await waitFor(() => expect(within(notice).getByRole('button', { name: 'Start runtime' })).toBeDisabled())
+    expect(within(notice).getByText(`The runtime start failed. ${cause}`)).toBeVisible()
+
+    runtimeState = { revision: 3, lastEvent: 'connected', visible: false, busy: false, cause: null }
+    runtimeListener({ payload: runtimeState })
+    await waitFor(() => expect(screen.queryByTestId('runtime-notice')).not.toBeInTheDocument())
+    expect(await screen.findByRole('textbox', { name: 'Message' })).toBeVisible()
+
+    runtimeListener({ payload: { revision: 4, lastEvent: 'disconnected', visible: true, busy: false, cause: null } })
+    const disconnected = await screen.findByTestId('runtime-notice')
+    expect(within(disconnected).getByText('The runtime connection closed.')).toBeVisible()
+    expect(disconnected).not.toHaveTextContent(cause)
   })
 
   it('reads the owner state outside macOS without an approval control', async () => {

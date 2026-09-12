@@ -28,6 +28,30 @@ fn directory() -> PathBuf {
 }
 
 #[test]
+fn startup_causes_reach_the_owner_only_log() {
+    let root = directory();
+    let cause = "Task start failed: could not start the runtime task (RunTask HRESULT(0x80041326))";
+    write_windows_diagnostic(
+        &root,
+        WindowsDiagnosticEvent::RuntimeTaskStartFailed.with_cause(cause),
+    )
+    .unwrap();
+    let path = root.join("muniment/logs/runtime.log");
+    let text = fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        text,
+        format!(
+            "event=runtime_task_start_failed message=runtime task start failed cause={cause}\n"
+        )
+    );
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn a_failed_windows_activation_without_local_app_data_returns_failure() {
     let state = directory();
 
