@@ -20,12 +20,15 @@ first_failed_step=none
 current_step=prepare-state
 # Keep the login home before a spec changes HOME.
 diagnostic_reports="$HOME/Library/Logs/DiagnosticReports"
+runtime_log="$HOME/Library/Logs/Muniment/runtime.log"
 crash_start="$run_root/crash-start"
 
 # shellcheck source=../support/cleanup-ledger.sh
 source test/e2e/support/cleanup-ledger.sh
 # shellcheck source=../support/runner-failure.sh
 source test/e2e/support/runner-failure.sh
+# shellcheck source=../support/macos-runtime-probe.sh
+source test/e2e/support/macos-runtime-probe.sh
 
 harness_processes_gone() {
   ! pgrep -f '(^|/)muniment-desktop( |$)' >/dev/null &&
@@ -112,6 +115,7 @@ finalize() {
   exec 2>&3
   if (( runner_status != 0 )); then status=1; fi
   if (( status != 0 )) && [[ $first_failed_step == none ]]; then first_failed_step=$current_step; fi
+  cleanup_step collect-runtime-diagnostics collect_macos_runtime_diagnostics "gui/$(id -u)/ai.muniment.runtime" "$runtime_log" "$raw"
   cleanup_step stop-app stop_app
   if (( cleanup_status != 0 )); then status=1; fi
   if (( installed )); then cleanup_step remove-bundle rm -rf -- "$installed_bundle"; fi
@@ -185,6 +189,9 @@ done
 # The installed path resolves the ASR rpath and matches runtime client admission.
 run_step install-webdriver-app log_command "$raw/installer.log" install -m 0755 "$app_binary" "$installed_desktop" || exit
 run_step verify-webdriver-app cmp -s "$app_binary" "$installed_desktop" || exit
+# Sign only the WDIO bundle. Keep the nested Developer ID signatures and the pinned archive intact.
+run_step sign-webdriver-app log_command "$raw/installer.log" codesign --force --sign - "$installed_bundle" || exit
+run_step verify-webdriver-signature log_command "$raw/installer.log" codesign --verify --deep --strict "$installed_bundle" || exit
 unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
 
 export MUNIMENT_E2E_APP_BINARY="$PWD/test/e2e/support/macos-wdio-app.sh" MUNIMENT_E2E_RAW_DIR="$raw"

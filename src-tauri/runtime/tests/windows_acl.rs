@@ -65,6 +65,56 @@ fn creates_the_managed_tree_and_writes_fixed_records() {
 }
 
 #[test]
+fn writes_beneath_an_installer_directory_with_an_inherited_acl() {
+    let root = local_app_data();
+    let status = Command::new("icacls")
+        .arg(&root)
+        .args(["/grant", "*S-1-1-0:(OI)(CI)(R)"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let application = root.join("muniment");
+    fs::create_dir(&application).unwrap();
+    let before = Command::new("icacls").arg(&application).output().unwrap();
+    assert!(before.status.success());
+    assert!(String::from_utf8_lossy(&before.stdout).contains("(I)"));
+
+    let event = WindowsDiagnosticEvent::RuntimeTaskStartFailed;
+    let cause = "Runtime readiness failed: the attach endpoint did not appear within 5 seconds.";
+    write_windows_diagnostic(&root, event.with_cause(cause)).unwrap();
+    write_windows_diagnostic(&root, event.with_cause(cause)).unwrap();
+    assert_eq!(
+        fs::read_to_string(application.join("logs/runtime.log")).unwrap(),
+        format!(
+            "event=runtime_task_start_failed message=runtime task start failed cause={cause}\n"
+        )
+        .repeat(2)
+    );
+    let after = Command::new("icacls").arg(&application).output().unwrap();
+    assert!(after.status.success());
+    assert_eq!(before.stdout, after.stdout);
+    for path in [
+        application.join("logs"),
+        application.join("logs/runtime.log"),
+    ] {
+        let acl = Command::new("icacls").arg(path).output().unwrap();
+        assert!(acl.status.success());
+        assert!(!String::from_utf8_lossy(&acl.stdout).contains("(I)"));
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn refuses_an_existing_logs_directory_with_an_inherited_acl() {
+    let root = local_app_data();
+    let logs = root.join("muniment/logs");
+    fs::create_dir_all(&logs).unwrap();
+    assert!(write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).is_err());
+    assert!(!logs.join("runtime.log").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rejects_relative_roots_and_unsafe_native_access_lists() {
     assert!(
         write_windows_diagnostic("relative", WindowsDiagnosticEvent::ActivationFailed).is_err()
@@ -146,6 +196,25 @@ fn rejects_reparse_points_in_the_managed_path() {
             .is_err()
     );
     fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn rejects_an_application_directory_junction() {
+    let root = local_app_data();
+    let target = root.join("target");
+    fs::create_dir(&target).unwrap();
+    let link = root.join("muniment");
+    let status = Command::new("cmd")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&link)
+        .arg(&target)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    assert!(write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).is_err());
+    assert!(!target.join("logs").exists());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

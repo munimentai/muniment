@@ -719,6 +719,9 @@ describe.skipIf(process.platform === 'win32')('macOS WDIO startup diagnostics', 
     fs.mkdirSync(resources, { recursive: true })
     fs.mkdirSync(path.join(bundle, 'Contents/MacOS'), { recursive: true })
     fs.writeFileSync(path.join(bundle, 'Contents/MacOS/muniment-desktop'), '#!/bin/sh\nexit 99\n', { mode: 0o755 })
+    const helper = path.join(bundle, 'Contents/Library/LaunchServices/muniment-runtime')
+    fs.mkdirSync(path.dirname(helper), { recursive: true })
+    fs.writeFileSync(helper, 'Developer ID helper fixture', { mode: 0o755 })
     for (const library of ['libsherpa-onnx-c-api.dylib', 'libonnxruntime.1.24.4.dylib']) {
       if (mode !== `missing-${library}`) fs.writeFileSync(path.join(resources, library), 'installed library')
     }
@@ -766,6 +769,21 @@ install() {
   if [[ $FIXTURE_MODE == stale-copy ]]; then return 0; fi
   command install "$@"
 }
+codesign() {
+  printf 'codesign: %s\\n' "$*"
+  [[ \${@: -1} == "$installed_bundle" ]] || return 92
+  if [[ $1 == --force ]]; then
+    [[ $# == 4 && $2 == --sign && $3 == - ]] || return 93
+    [[ $FIXTURE_MODE != signing-failure ]] || return 7
+    cmp -s "$app_binary" "$installed_desktop" || return 94
+    printf '# Ad-hoc signature fixture.\\n' >>"$installed_desktop"
+  else
+    [[ $# == 4 && $1 == --verify && $2 == --deep && $3 == --strict ]] || return 95
+    [[ $FIXTURE_MODE != signature-verification-failure ]] || return 7
+    grep -q '^# Ad-hoc signature fixture.$' "$installed_desktop" || return 96
+    cmp -s "$FIXTURE_BUNDLE/Contents/Library/LaunchServices/muniment-runtime" "$installed_bundle/Contents/Library/LaunchServices/muniment-runtime" || return 97
+  fi
+}
 ${installSequence}
 export MUNIMENT_E2E_DRIVER_APP_LOG="$raw/driver-app-local-mode-chat.log"
 run_step spec-local-mode-chat "$MUNIMENT_E2E_APP_BINARY"
@@ -779,7 +797,7 @@ run_step spec-local-mode-chat "$MUNIMENT_E2E_APP_BINARY"
         DYLD_LIBRARY_PATH: '/invalid/override', DYLD_FALLBACK_LIBRARY_PATH: '/invalid/fallback',
       },
     })
-    return { result, artifacts, installedBundle, reason: fs.readFileSync(path.join(artifacts, 'exit-reason.txt'), 'utf8') }
+    return { result, artifacts, installedBundle, bundle, app, reason: fs.readFileSync(path.join(artifacts, 'exit-reason.txt'), 'utf8') }
   }
 
   it('Runs the source build beside the installed libraries without loader overrides.', () => {
@@ -795,6 +813,19 @@ run_step spec-local-mode-chat "$MUNIMENT_E2E_APP_BINARY"
     expect(runner).not.toMatch(/export DYLD_(?:LIBRARY_PATH|FALLBACK_LIBRARY_PATH)=/)
   })
 
+  it('Signs only the installed WebDriver bundle and verifies its nested signatures before launch.', () => {
+    const { result, artifacts, installedBundle, bundle, app } = runInstalledApp()
+    expect(result.status, result.stderr).toBe(0)
+    const log = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')
+    expect(log.split('\n').filter((line) => line.startsWith('codesign:'))).toEqual([
+      `codesign: --force --sign - ${installedBundle}`,
+      `codesign: --verify --deep --strict ${installedBundle}`,
+    ])
+    expect(fs.readFileSync(path.join(bundle, 'Contents/MacOS/muniment-desktop'), 'utf8')).toBe('#!/bin/sh\nexit 99\n')
+    expect(fs.readFileSync(path.join(bundle, 'Contents/Library/LaunchServices/muniment-runtime'), 'utf8')).toBe('Developer ID helper fixture')
+    expect(fs.readFileSync(app, 'utf8')).not.toContain('Ad-hoc signature fixture')
+  })
+
   it.each([
     ['invalid-source', 'validate-source'],
     ['release-failure', 'fetch-release'],
@@ -806,6 +837,8 @@ run_step spec-local-mode-chat "$MUNIMENT_E2E_APP_BINARY"
     ['missing-libonnxruntime.1.24.4.dylib', 'validate-libonnxruntime.1.24.4.dylib'],
     ['copy-failure', 'install-webdriver-app'],
     ['stale-copy', 'verify-webdriver-app'],
+    ['signing-failure', 'sign-webdriver-app'],
+    ['signature-verification-failure', 'verify-webdriver-signature'],
     ['existing-bundle', 'validate-bundle-absent'],
   ])('Names the failed install check for %s before the app starts.', (mode, step) => {
     const { result, artifacts, installedBundle, reason } = runInstalledApp(mode)
@@ -851,6 +884,14 @@ kill -ABRT "$$"
     const reports = path.join(home, 'Library/Logs/DiagnosticReports')
     const artifacts = path.join(directory, 'artifacts')
     fs.mkdirSync(reports, { recursive: true })
+    const runtimeLogs = path.join(home, 'Library/Logs/Muniment')
+    if (mode !== 'missing-runtime-log') {
+      fs.mkdirSync(runtimeLogs, { recursive: true })
+      fs.writeFileSync(path.join(runtimeLogs, 'runtime.log'), 'event=runtime_service_registration_failed domain="SMAppServiceErrorDomain" code=3 description="fixture-secret"\n')
+      fs.writeFileSync(path.join(runtimeLogs, 'runtime-service.log'), 'Runtime service fixture-secret.\n')
+    }
+    const launchctl = path.join(directory, 'launchctl')
+    fs.writeFileSync(launchctl, '#!/bin/sh\nprintf "target=%s\\nstate = running\\npid = 123\\n" "$2"\n', { mode: 0o700 })
     const stale = path.join(reports, 'muniment-desktop-stale.ips')
     fs.writeFileSync(stale, 'Stale report.\n')
     fs.utimesSync(stale, new Date(0), new Date(0))
@@ -890,6 +931,8 @@ ${sequence}
 if [[ -d $diagnostic_reports ]]; then
   printf 'Crash report with fixture-secret.\\n' >"$diagnostic_reports/muniment-desktop-current.ips"
 fi
+mkdir -p "$HOME/Library/Logs/Muniment"
+printf 'Wrong home.\\n' >"$HOME/Library/Logs/Muniment/runtime.log"
 mkdir -p "$HOME/Library/Logs/DiagnosticReports"
 printf 'Isolated home crash report.\\n' >"$HOME/Library/Logs/DiagnosticReports/muniment-desktop-isolated.ips"
 if [[ $FIXTURE_MODE == redaction-failure ]]; then printf bad >"$raw/screenshot-invalid.png"; fi
@@ -900,6 +943,7 @@ if [[ $FIXTURE_MODE == publication-failure ]]; then mv() { return 1; }; fi
       env: {
         ...process.env, HOME: home, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts,
         FIXTURE_MODE: mode, FIXTURE_APP: app, FIXTURE_LAUNCHER: launcher,
+        MUNIMENT_E2E_LAUNCHCTL: launchctl,
         MUNIMENT_E2E_PASSWORD: 'fixture-secret', MUNIMENT_E2E_FINALIZER_TEST_MODE: '0',
       },
     })
@@ -921,6 +965,23 @@ if [[ $FIXTURE_MODE == publication-failure ]]; then mv() { return 1; }; fi
       expect(fs.existsSync(path.join(artifacts, name))).toBe(false)
     }
     expect(fs.readdirSync(directory).filter((name) => name.startsWith('muniment-wdio-macos.'))).toEqual([])
+  })
+
+  it.each(['pass', 'abort', 'startup-failure', 'signal'])('Collects login home runtime diagnostics after %s.', (mode) => {
+    const { artifacts } = runEnvelope(mode)
+    expect(fs.readFileSync(path.join(artifacts, 'runtime.log'), 'utf8'))
+      .toBe('event=runtime_service_registration_failed domain="SMAppServiceErrorDomain" code=3 description="[REDACTED]"\n')
+    expect(fs.readFileSync(path.join(artifacts, 'runtime-service.log'), 'utf8')).toBe('Runtime service [REDACTED].\n')
+    expect(fs.readFileSync(path.join(artifacts, 'runtime-launchctl.log'), 'utf8'))
+      .toMatch(/target=gui\/\d+\/ai\.muniment\.runtime\nstate = running\npid = 123\n\nlaunchctl_exit_status=0\n/)
+    const ledger = fs.readFileSync(path.join(artifacts, 'cleanup-status.log'), 'utf8')
+    expect(ledger.indexOf('collect-runtime-diagnostics: ok')).toBeLessThan(ledger.indexOf('stop-app:'))
+  })
+
+  it('Names a missing login home runtime log instead of collecting the isolated home log.', () => {
+    const { artifacts, reason } = runEnvelope('missing-runtime-log')
+    expect(fs.readFileSync(path.join(artifacts, 'runtime.log'), 'utf8')).toBe('No runtime log exists for this user.\n')
+    expect(reason).toContain('cleanup_status=0\n')
   })
 
   it('Prepares Documents for each spec and publishes empty app logs when all specs pass.', () => {
