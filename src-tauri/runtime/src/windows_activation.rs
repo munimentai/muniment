@@ -1,3 +1,4 @@
+use muniment_core::attach::WindowsAttachAcceptError;
 use muniment_core::runtime_eprintln as eprintln;
 use std::io;
 use std::path::Path;
@@ -179,6 +180,7 @@ fn record_windows_start_millis(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowsDiagnosticEvent {
     ActivationFailed,
+    AttachAcceptFailed(WindowsAttachAcceptError),
     ArgumentsInvalid,
     InstanceLockWait,
     InstallLockUnavailable,
@@ -195,7 +197,11 @@ pub struct WindowsDiagnosticRecord {
 
 impl From<WindowsDiagnosticEvent> for WindowsDiagnosticRecord {
     fn from(event: WindowsDiagnosticEvent) -> Self {
-        Self { event, cause: None }
+        let cause = match event {
+            WindowsDiagnosticEvent::AttachAcceptFailed(error) => Some(error.to_string()),
+            _ => None,
+        };
+        Self { event, cause }
     }
 }
 
@@ -209,7 +215,7 @@ impl WindowsDiagnosticEvent {
 
     fn record(self) -> &'static [u8] {
         match self {
-            Self::ActivationFailed => {
+            Self::ActivationFailed | Self::AttachAcceptFailed(_) => {
                 b"event=activation_failed message=runtime activation failed\n"
             }
             Self::ArgumentsInvalid => {
