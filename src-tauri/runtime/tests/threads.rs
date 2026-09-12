@@ -195,10 +195,7 @@ fn history_and_ownership_keep_the_underlying_journal_error() {
     let storage = open_profile_storage(&profile.profile).unwrap();
     let run_id = "01900000-0000-7000-8000-000000000008";
     let thread_id = prepare_run(&storage, run_id, "owner");
-    rusqlite::Connection::open(profile.profile.join("runs.sqlite3"))
-        .unwrap()
-        .execute_batch("DROP TABLE events;")
-        .unwrap();
+    common::remove_journal_tables(&profile.profile, &["events"]);
     let ownership = select_thread(
         Arc::clone(&storage),
         Some("owner".into()),

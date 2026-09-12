@@ -2889,8 +2889,6 @@ version = "0.0.1"
 dependencies = [
  "muniment-attach",
  "muniment-core",
- "rusqlite",
- "serde_json",
 ]
 
 [[package]]

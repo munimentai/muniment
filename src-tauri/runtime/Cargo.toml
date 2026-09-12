@@ -6,7 +6,3 @@ edition = "2021"
 [dependencies]
 muniment-attach = { path = "../attach", features = ["client"] }
 muniment-core = { path = "../core", features = ["keyring", "tls"] }
-
-[dev-dependencies]
-rusqlite = { version = "0.32", features = ["bundled"] }
-serde_json = "1"
