@@ -497,7 +497,7 @@ describe('workspace composer entry', () => {
     runtimeListener({ payload: { revision: 2, lastEvent: 'startFailed', visible: true, busy: false,
       cause: 'The runtime start timed out. Desktop client connected: true. Chat events connected: false.' } })
     const notice = await screen.findByTestId('runtime-notice')
-    expect(within(notice).getByText('The runtime start failed.')).toBeVisible()
+    expect(within(notice).getByText('The runtime start failed. The runtime start timed out. Desktop client connected: true. Chat events connected: false.')).toBeVisible()
     expect(firstRun).toBeVisible()
     expect(composer).toHaveValue('Keep this first message')
     for (const chip of ['onboarding-model', 'onboarding-home-path', 'onboarding-scan']) {

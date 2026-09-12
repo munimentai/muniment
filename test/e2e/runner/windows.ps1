@@ -42,6 +42,8 @@ $installDirectory = $null
 $productCode = $null
 $installSid = $null
 $installLocalAppData = $env:LOCALAPPDATA
+# The known folder can differ from the environment under WebDriver.
+$runtimeLocalAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
 . (Join-Path $PSScriptRoot "../../windows-msi-registration.ps1")
 $handlerKey = "HKCU:\Software\Classes\muniment-e2e-https"
 $httpsKey = "HKCU:\Software\Classes\https"
@@ -316,6 +318,21 @@ function Remove-AuthHandler {
   }
 }
 
+function Write-RuntimeDiagnostics {
+  if ($status -eq 0 -and $cleanupStatus -eq 0) { return }
+  try {
+    $roots = @($runtimeLocalAppData, $installLocalAppData, $env:LOCALAPPDATA)
+    if ($stateRoot) {
+      $roots += @((Join-Path $stateRoot 'Local'), (Join-Path $stateRoot 'Degraded\Local'), (Join-Path $stateRoot 'Ready\Local'))
+    }
+    $helper = Join-Path $PSScriptRoot '../support/windows-runtime-log-tail.mjs'
+    $inputText = ConvertTo-Json -InputObject $roots -Compress
+    Invoke-NativeCommand 'node' "`"$helper`"" $null 'Runtime diagnostic collection failed' $inputText | ForEach-Object { Write-Host $_ }
+  } catch {
+    Write-Host 'Could not collect the runtime.log diagnostic records.'
+  }
+}
+
 function Finalize-Run {
   Invoke-Cleanup "stop-wdio" { Get-CimInstance Win32_Process | Where-Object CommandLine -Like '*wdio.conf.js*' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
   if ($ready) {
@@ -327,6 +344,8 @@ function Finalize-Run {
     }
   }
   Invoke-Cleanup "stop-app" { Stop-HarnessProcesses }
+  # Print diagnostics before uninstall or state removal can delete them.
+  Write-RuntimeDiagnostics
   if ($installAttempted) {
     Invoke-Cleanup "uninstall" {
       if ($env:MUNIMENT_E2E_FINALIZER_TEST_MODE -eq "1") {

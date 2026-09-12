@@ -14,9 +14,10 @@ const messages = {
 
 export function runtimeNotice(state) {
   if (!state || !Object.hasOwn(messages, state.lastEvent)) return null
+  const cause = state.lastEvent === 'startFailed' && typeof state.cause === 'string' ? state.cause.trim() : ''
   return {
     visible: state.lastEvent !== 'connected' && state.visible === true,
-    text: messages[state.lastEvent],
+    text: messages[state.lastEvent] + (cause ? ` ${cause}` : ''),
     control: state.lastEvent === 'requiresApproval' ? 'Open Login Items' : 'Start runtime',
     command: state.lastEvent === 'requiresApproval' ? 'open_login_items' : 'runtime_start',
     busy: state.busy === true,

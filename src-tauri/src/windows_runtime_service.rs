@@ -6,35 +6,51 @@ const ATTACH_ENDPOINT_READINESS_WAIT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "windows")]
 const ATTACH_ENDPOINT_CHECK_WAIT: Duration = Duration::from_secs(1);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RuntimeTaskStartOutcome {
     EndpointPresent,
     Ready,
-    EndpointCheckFailed,
-    ClearFailed,
-    StartFailed,
+    EndpointCheckFailed(String),
+    ClearFailed(String),
+    StartFailed(String),
     ReadinessTimedOut,
-    ReadinessFailed,
+    ReadinessFailed(String),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+impl RuntimeTaskStartOutcome {
+    fn cause(&self) -> Option<String> {
+        match self {
+            Self::EndpointPresent | Self::Ready => None,
+            Self::EndpointCheckFailed(error) => Some(format!("Endpoint lookup failed: {error}")),
+            Self::ClearFailed(error) => Some(format!("Crash window clear failed: {error}")),
+            Self::StartFailed(error) => Some(error.clone()),
+            Self::ReadinessTimedOut => Some(
+                "Runtime readiness failed: the attach endpoint did not appear within 5 seconds."
+                    .into(),
+            ),
+            Self::ReadinessFailed(error) => Some(format!("Runtime readiness failed: {error}")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RuntimeTaskStartError {
-    ClearFailed,
-    StartFailed,
+    ClearFailed(String),
+    StartFailed(String),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RuntimeReadinessError {
     TimedOut,
-    Failed,
+    Failed(String),
 }
 
 trait AttachEndpointAdapter {
-    fn endpoint_exists(&self) -> Result<bool, ()>;
+    fn endpoint_exists(&self) -> Result<bool, String>;
 }
 
 trait CrashWindowAdapter {
-    fn clear(&self) -> Result<(), ()>;
+    fn clear(&self) -> Result<(), String>;
 }
 
 trait RuntimeReadinessAdapter {
@@ -60,16 +76,22 @@ fn start_runtime_task(
             Ok(()) => match readiness_adapter.wait_until_ready(ATTACH_ENDPOINT_READINESS_WAIT) {
                 Ok(()) => RuntimeTaskStartOutcome::Ready,
                 Err(RuntimeReadinessError::TimedOut) => RuntimeTaskStartOutcome::ReadinessTimedOut,
-                Err(RuntimeReadinessError::Failed) => RuntimeTaskStartOutcome::ReadinessFailed,
+                Err(RuntimeReadinessError::Failed(error)) => {
+                    RuntimeTaskStartOutcome::ReadinessFailed(error)
+                }
             },
-            Err(RuntimeTaskStartError::ClearFailed) => RuntimeTaskStartOutcome::ClearFailed,
-            Err(RuntimeTaskStartError::StartFailed) => RuntimeTaskStartOutcome::StartFailed,
+            Err(RuntimeTaskStartError::ClearFailed(error)) => {
+                RuntimeTaskStartOutcome::ClearFailed(error)
+            }
+            Err(RuntimeTaskStartError::StartFailed(error)) => {
+                RuntimeTaskStartOutcome::StartFailed(error)
+            }
         },
-        Err(()) => RuntimeTaskStartOutcome::EndpointCheckFailed,
+        Err(error) => RuntimeTaskStartOutcome::EndpointCheckFailed(error),
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RuntimeTaskRegistrationOutcome {
     Registered,
     Updated,
@@ -78,7 +100,28 @@ enum RuntimeTaskRegistrationOutcome {
     LockUnavailable,
     LockTimedOut,
     Refused,
-    Failed,
+    Failed(String),
+}
+
+impl RuntimeTaskRegistrationOutcome {
+    fn cause(&self) -> Option<String> {
+        match self {
+            Self::Registered | Self::Updated | Self::Unchanged => None,
+            Self::NoInstalledPayload => {
+                Some("Payload lookup failed: no installed runtime payload exists.".into())
+            }
+            Self::LockUnavailable => {
+                Some("Task registration failed: the install lock is unavailable.".into())
+            }
+            Self::LockTimedOut => {
+                Some("Task registration failed: the install lock wait timed out.".into())
+            }
+            Self::Refused => {
+                Some("Task registration failed: refused to replace a foreign runtime task.".into())
+            }
+            Self::Failed(error) => Some(error.clone()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,11 +137,11 @@ enum RegistrationResult {
     Unchanged,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RegistrationError {
     NoInstalledPayload,
     Refused,
-    Failed,
+    Failed(String),
 }
 
 trait InstallLockGuard {}
@@ -123,7 +166,7 @@ enum DiagnosticEvent {
 }
 
 trait DiagnosticSink {
-    fn write(&self, event: DiagnosticEvent);
+    fn write(&self, event: DiagnosticEvent, cause: &str);
 }
 
 fn start_runtime_task_with_diagnostic(
@@ -139,15 +182,8 @@ fn start_runtime_task_with_diagnostic(
         task_adapter,
         readiness_adapter,
     );
-    if matches!(
-        outcome,
-        RuntimeTaskStartOutcome::EndpointCheckFailed
-            | RuntimeTaskStartOutcome::ClearFailed
-            | RuntimeTaskStartOutcome::StartFailed
-            | RuntimeTaskStartOutcome::ReadinessTimedOut
-            | RuntimeTaskStartOutcome::ReadinessFailed
-    ) {
-        diagnostic_sink.write(DiagnosticEvent::RuntimeTaskStartFailed);
+    if let Some(cause) = outcome.cause() {
+        diagnostic_sink.write(DiagnosticEvent::RuntimeTaskStartFailed, &cause);
     }
     outcome
 }
@@ -161,11 +197,21 @@ fn register_runtime_task(
     let _guard = match lock_adapter.acquire(state_directory, INSTALL_LOCK_WAIT) {
         Ok(guard) => guard,
         Err(LockError::Unavailable) => {
-            diagnostic_sink.write(DiagnosticEvent::InstallLockUnavailable);
+            diagnostic_sink.write(
+                DiagnosticEvent::InstallLockUnavailable,
+                &RuntimeTaskRegistrationOutcome::LockUnavailable
+                    .cause()
+                    .unwrap(),
+            );
             return RuntimeTaskRegistrationOutcome::LockUnavailable;
         }
         Err(LockError::TimedOut) => {
-            diagnostic_sink.write(DiagnosticEvent::InstallLockUnavailable);
+            diagnostic_sink.write(
+                DiagnosticEvent::InstallLockUnavailable,
+                &RuntimeTaskRegistrationOutcome::LockTimedOut
+                    .cause()
+                    .unwrap(),
+            );
             return RuntimeTaskRegistrationOutcome::LockTimedOut;
         }
     };
@@ -178,23 +224,16 @@ fn register_runtime_task(
             RuntimeTaskRegistrationOutcome::NoInstalledPayload
         }
         Err(RegistrationError::Refused) => RuntimeTaskRegistrationOutcome::Refused,
-        Err(RegistrationError::Failed) => RuntimeTaskRegistrationOutcome::Failed,
+        Err(RegistrationError::Failed(error)) => RuntimeTaskRegistrationOutcome::Failed(error),
     };
-    if matches!(
-        outcome,
-        RuntimeTaskRegistrationOutcome::NoInstalledPayload
-            | RuntimeTaskRegistrationOutcome::Refused
-            | RuntimeTaskRegistrationOutcome::Failed
-    ) {
-        diagnostic_sink.write(DiagnosticEvent::RuntimeTaskRegistrationFailed);
+    if let Some(cause) = outcome.cause() {
+        diagnostic_sink.write(DiagnosticEvent::RuntimeTaskRegistrationFailed, &cause);
     }
     outcome
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn start_runtime_task_at_startup(
-    state_directory: &Path,
-) -> crate::runtime_owner::RuntimeEvent {
+pub(crate) fn start_runtime_task_at_startup(state_directory: &Path) -> Result<(), String> {
     let outcome = start_runtime_task_with_diagnostic(
         &WindowsAttachEndpointAdapter,
         &WindowsCrashWindowAdapter { state_directory },
@@ -202,12 +241,7 @@ pub(crate) fn start_runtime_task_at_startup(
         &WindowsRuntimeReadinessAdapter,
         &WindowsDiagnosticSink,
     );
-    match outcome {
-        RuntimeTaskStartOutcome::EndpointPresent | RuntimeTaskStartOutcome::Ready => {
-            crate::runtime_owner::RuntimeEvent::Starting
-        }
-        _ => crate::runtime_owner::RuntimeEvent::StartFailed,
-    }
+    outcome.cause().map_or(Ok(()), Err)
 }
 
 #[cfg(target_os = "windows")]
@@ -241,13 +275,14 @@ pub(crate) fn stop_runtime() -> Result<(), ()> {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn register_runtime_task_at_startup(state_directory: &Path) {
-    let _ = register_runtime_task(
+pub(crate) fn register_runtime_task_at_startup(state_directory: &Path) -> Result<(), String> {
+    let outcome = register_runtime_task(
         state_directory,
         &WindowsInstallLockAdapter,
         &WindowsRuntimeTaskAdapter,
         &WindowsDiagnosticSink,
     );
+    outcome.cause().map_or(Ok(()), Err)
 }
 
 #[cfg(target_os = "windows")]
@@ -255,7 +290,7 @@ struct WindowsDiagnosticSink;
 
 #[cfg(target_os = "windows")]
 impl DiagnosticSink for WindowsDiagnosticSink {
-    fn write(&self, event: DiagnosticEvent) {
+    fn write(&self, event: DiagnosticEvent, cause: &str) {
         let event = match event {
             DiagnosticEvent::InstallLockUnavailable => {
                 muniment_runtime::WindowsDiagnosticEvent::InstallLockUnavailable
@@ -267,8 +302,16 @@ impl DiagnosticSink for WindowsDiagnosticSink {
                 muniment_runtime::WindowsDiagnosticEvent::RuntimeTaskStartFailed
             }
         };
-        if let Ok(local_app_data) = muniment_runtime::windows_local_app_data() {
-            let _ = muniment_runtime::write_windows_diagnostic(local_app_data, event);
+        match muniment_runtime::windows_local_app_data() {
+            Ok(local_app_data) => {
+                if let Err(error) = muniment_runtime::write_windows_diagnostic(
+                    local_app_data,
+                    event.with_cause(cause),
+                ) {
+                    eprintln!("Runtime diagnostic write failed: {error}");
+                }
+            }
+            Err(error) => eprintln!("Runtime diagnostic path lookup failed: {error}"),
         }
     }
 }
@@ -304,7 +347,7 @@ pub(crate) struct WindowsAttachEndpointAdapter;
 
 #[cfg(target_os = "windows")]
 impl AttachEndpointAdapter for WindowsAttachEndpointAdapter {
-    fn endpoint_exists(&self) -> Result<bool, ()> {
+    fn endpoint_exists(&self) -> Result<bool, String> {
         use muniment_core::attach::{connect_windows_attach_endpoint, WindowsAttachConnectError};
         use std::time::Instant;
 
@@ -314,7 +357,7 @@ impl AttachEndpointAdapter for WindowsAttachEndpointAdapter {
                 Ok(true)
             }
             Err(WindowsAttachConnectError::EndpointAbsent) => Ok(false),
-            Err(_) => Err(()),
+            Err(error) => Err(format!("{error:?}")),
         }
     }
 }
@@ -334,7 +377,7 @@ impl RuntimeReadinessAdapter for WindowsRuntimeReadinessAdapter {
                 Ok(())
             }
             Err(WindowsAttachConnectError::DeadlineExpired) => Err(RuntimeReadinessError::TimedOut),
-            Err(_) => Err(RuntimeReadinessError::Failed),
+            Err(error) => Err(RuntimeReadinessError::Failed(format!("{error:?}"))),
         }
     }
 }
@@ -346,9 +389,9 @@ pub(crate) struct WindowsCrashWindowAdapter<'a> {
 
 #[cfg(target_os = "windows")]
 impl CrashWindowAdapter for WindowsCrashWindowAdapter<'_> {
-    fn clear(&self) -> Result<(), ()> {
+    fn clear(&self) -> Result<(), String> {
         muniment_runtime::clear_windows_crash_window(self.state_directory, INSTALL_LOCK_WAIT)
-            .map_err(|_| ())
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -367,18 +410,28 @@ impl RuntimeTaskStartAdapter for WindowsRuntimeTaskStartAdapter {
             start_registered_task, StartRegisteredTaskError,
         };
 
-        let sid = current_process_user_sid().map_err(|_| RuntimeTaskStartError::StartFailed)?;
+        let sid = current_process_user_sid().map_err(|error| {
+            RuntimeTaskStartError::StartFailed(format!("SID lookup failed: {error:?}"))
+        })?;
         let payload = resolve_live_windows_payload()
-            .map_err(|_| RuntimeTaskStartError::StartFailed)?
-            .ok_or(RuntimeTaskStartError::StartFailed)?;
+            .map_err(|error| {
+                RuntimeTaskStartError::StartFailed(format!("Payload lookup failed: {error:?}"))
+            })?
+            .ok_or_else(|| {
+                RuntimeTaskStartError::StartFailed(
+                    "Payload lookup failed: no installed runtime payload exists.".into(),
+                )
+            })?;
         match start_registered_task(sid.as_str(), payload.payload_path, || {
             crash_window_adapter.clear()
         }) {
             Ok(_) => Ok(()),
-            Err(StartRegisteredTaskError::ClearCrashWindow(())) => {
-                Err(RuntimeTaskStartError::ClearFailed)
+            Err(StartRegisteredTaskError::ClearCrashWindow(error)) => {
+                Err(RuntimeTaskStartError::ClearFailed(error))
             }
-            Err(_) => Err(RuntimeTaskStartError::StartFailed),
+            Err(error) => Err(RuntimeTaskStartError::StartFailed(format!(
+                "Task start failed: {error} ({error:?})"
+            ))),
         }
     }
 }
@@ -406,7 +459,15 @@ impl RuntimeTaskAdapter for WindowsRuntimeTaskAdapter {
             Err(EnsureLiveTaskRegistrationError::EnsureRegistration(
                 EnsureTaskRegistrationError::Refused,
             )) => Err(RegistrationError::Refused),
-            Err(_) => Err(RegistrationError::Failed),
+            Err(EnsureLiveTaskRegistrationError::ReadProcessUserSid(error)) => Err(
+                RegistrationError::Failed(format!("SID lookup failed: {error:?}")),
+            ),
+            Err(EnsureLiveTaskRegistrationError::ResolvePayload(error)) => Err(
+                RegistrationError::Failed(format!("Payload lookup failed: {error:?}")),
+            ),
+            Err(error) => Err(RegistrationError::Failed(format!(
+                "Task registration failed: {error} ({error:?})"
+            ))),
         }
     }
 }
@@ -418,13 +479,13 @@ mod tests {
     use std::rc::Rc;
 
     struct FakeEndpointAdapter {
-        result: Result<bool, ()>,
+        result: Result<bool, String>,
         calls: Cell<usize>,
         order: Rc<RefCell<Vec<&'static str>>>,
     }
 
     impl FakeEndpointAdapter {
-        fn new(result: Result<bool, ()>, order: Rc<RefCell<Vec<&'static str>>>) -> Self {
+        fn new(result: Result<bool, String>, order: Rc<RefCell<Vec<&'static str>>>) -> Self {
             Self {
                 result,
                 calls: Cell::new(0),
@@ -434,10 +495,10 @@ mod tests {
     }
 
     impl AttachEndpointAdapter for FakeEndpointAdapter {
-        fn endpoint_exists(&self) -> Result<bool, ()> {
+        fn endpoint_exists(&self) -> Result<bool, String> {
             self.calls.set(self.calls.get() + 1);
             self.order.borrow_mut().push("endpoint");
-            self.result
+            self.result.clone()
         }
     }
 
@@ -467,18 +528,18 @@ mod tests {
             self.calls.set(self.calls.get() + 1);
             self.bounded_wait.set(Some(bounded_wait));
             self.order.borrow_mut().push("readiness");
-            self.result
+            self.result.clone()
         }
     }
 
     struct FakeCrashWindowAdapter {
-        result: Result<(), ()>,
+        result: Result<(), String>,
         calls: Cell<usize>,
         order: Rc<RefCell<Vec<&'static str>>>,
     }
 
     impl FakeCrashWindowAdapter {
-        fn new(result: Result<(), ()>, order: Rc<RefCell<Vec<&'static str>>>) -> Self {
+        fn new(result: Result<(), String>, order: Rc<RefCell<Vec<&'static str>>>) -> Self {
             Self {
                 result,
                 calls: Cell::new(0),
@@ -488,10 +549,10 @@ mod tests {
     }
 
     impl CrashWindowAdapter for FakeCrashWindowAdapter {
-        fn clear(&self) -> Result<(), ()> {
+        fn clear(&self) -> Result<(), String> {
             self.calls.set(self.calls.get() + 1);
             self.order.borrow_mut().push("clear");
-            self.result
+            self.result.clone()
         }
     }
 
@@ -524,10 +585,10 @@ mod tests {
             self.calls.set(self.calls.get() + 1);
             crash_window_adapter
                 .clear()
-                .map_err(|()| RuntimeTaskStartError::ClearFailed)?;
+                .map_err(RuntimeTaskStartError::ClearFailed)?;
             self.run_calls.set(self.run_calls.get() + 1);
             self.order.borrow_mut().push("start");
-            self.result
+            self.result.clone()
         }
     }
 
@@ -611,18 +672,20 @@ mod tests {
                 assert!(lock_held.get());
             }
             self.calls.set(self.calls.get() + 1);
-            self.result
+            self.result.clone()
         }
     }
 
     #[derive(Default)]
     struct FakeDiagnosticSink {
         events: RefCell<Vec<DiagnosticEvent>>,
+        causes: RefCell<Vec<String>>,
     }
 
     impl DiagnosticSink for FakeDiagnosticSink {
-        fn write(&self, event: DiagnosticEvent) {
+        fn write(&self, event: DiagnosticEvent, cause: &str) {
             self.events.borrow_mut().push(event);
+            self.causes.borrow_mut().push(cause.to_owned());
         }
     }
 
@@ -695,14 +758,14 @@ mod tests {
     #[test]
     fn endpoint_check_failure_skips_the_crash_window_and_task() {
         let order = Rc::new(RefCell::new(Vec::new()));
-        let endpoint = FakeEndpointAdapter::new(Err(()), Rc::clone(&order));
+        let endpoint = FakeEndpointAdapter::new(Err("denied".into()), Rc::clone(&order));
         let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
         let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
         let readiness = FakeRuntimeReadinessAdapter::new(Ok(()), Rc::clone(&order));
 
         assert_eq!(
             start_runtime_task(&endpoint, &crash_window, &task, &readiness),
-            RuntimeTaskStartOutcome::EndpointCheckFailed
+            RuntimeTaskStartOutcome::EndpointCheckFailed("denied".into())
         );
         assert_eq!(crash_window.calls.get(), 0);
         assert_eq!(task.calls.get(), 0);
@@ -714,13 +777,13 @@ mod tests {
     fn crash_window_failure_skips_the_task_start() {
         let order = Rc::new(RefCell::new(Vec::new()));
         let endpoint = FakeEndpointAdapter::new(Ok(false), Rc::clone(&order));
-        let crash_window = FakeCrashWindowAdapter::new(Err(()), Rc::clone(&order));
+        let crash_window = FakeCrashWindowAdapter::new(Err("denied".into()), Rc::clone(&order));
         let task = FakeRuntimeTaskStartAdapter::new(Ok(()), Rc::clone(&order));
         let readiness = FakeRuntimeReadinessAdapter::new(Ok(()), Rc::clone(&order));
 
         assert_eq!(
             start_runtime_task(&endpoint, &crash_window, &task, &readiness),
-            RuntimeTaskStartOutcome::ClearFailed
+            RuntimeTaskStartOutcome::ClearFailed("denied".into())
         );
         assert_eq!(crash_window.calls.get(), 1);
         assert_eq!(task.run_calls.get(), 0);
@@ -734,14 +797,18 @@ mod tests {
         let endpoint = FakeEndpointAdapter::new(Ok(false), Rc::clone(&order));
         let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
         let task = FakeRuntimeTaskStartAdapter::new(
-            Err(RuntimeTaskStartError::StartFailed),
+            Err(RuntimeTaskStartError::StartFailed(
+                "Task start failed: RunTask HRESULT(0x80041326)".into(),
+            )),
             Rc::clone(&order),
         );
         let readiness = FakeRuntimeReadinessAdapter::new(Ok(()), Rc::clone(&order));
 
         assert_eq!(
             start_runtime_task(&endpoint, &crash_window, &task, &readiness),
-            RuntimeTaskStartOutcome::StartFailed
+            RuntimeTaskStartOutcome::StartFailed(
+                "Task start failed: RunTask HRESULT(0x80041326)".into()
+            )
         );
         assert_eq!(crash_window.calls.get(), 1);
         assert_eq!(task.run_calls.get(), 1);
@@ -776,27 +843,29 @@ mod tests {
                 vec![],
             ),
             (
-                Err(()),
+                Err("denied".into()),
                 Ok(()),
                 Ok(()),
                 Ok(()),
-                RuntimeTaskStartOutcome::EndpointCheckFailed,
+                RuntimeTaskStartOutcome::EndpointCheckFailed("denied".into()),
                 vec![DiagnosticEvent::RuntimeTaskStartFailed],
             ),
             (
                 Ok(false),
-                Err(()),
+                Err("denied".into()),
                 Ok(()),
                 Ok(()),
-                RuntimeTaskStartOutcome::ClearFailed,
+                RuntimeTaskStartOutcome::ClearFailed("denied".into()),
                 vec![DiagnosticEvent::RuntimeTaskStartFailed],
             ),
             (
                 Ok(false),
                 Ok(()),
-                Err(RuntimeTaskStartError::StartFailed),
+                Err(RuntimeTaskStartError::StartFailed(
+                    "Task start failed: scheduler code".into(),
+                )),
                 Ok(()),
-                RuntimeTaskStartOutcome::StartFailed,
+                RuntimeTaskStartOutcome::StartFailed("Task start failed: scheduler code".into()),
                 vec![DiagnosticEvent::RuntimeTaskStartFailed],
             ),
             (
@@ -811,8 +880,8 @@ mod tests {
                 Ok(false),
                 Ok(()),
                 Ok(()),
-                Err(RuntimeReadinessError::Failed),
-                RuntimeTaskStartOutcome::ReadinessFailed,
+                Err(RuntimeReadinessError::Failed("denied".into())),
+                RuntimeTaskStartOutcome::ReadinessFailed("denied".into()),
                 vec![DiagnosticEvent::RuntimeTaskStartFailed],
             ),
         ] {
@@ -834,6 +903,10 @@ mod tests {
                 expected_outcome
             );
             assert_eq!(*diagnostics.events.borrow(), expected_events);
+            assert_eq!(
+                *diagnostics.causes.borrow(),
+                expected_outcome.cause().into_iter().collect::<Vec<_>>()
+            );
         }
     }
 
@@ -861,8 +934,12 @@ mod tests {
                 RuntimeTaskRegistrationOutcome::Refused,
             ),
             (
-                Err(RegistrationError::Failed),
-                RuntimeTaskRegistrationOutcome::Failed,
+                Err(RegistrationError::Failed(
+                    "Task registration failed: scheduler code".into(),
+                )),
+                RuntimeTaskRegistrationOutcome::Failed(
+                    "Task registration failed: scheduler code".into(),
+                ),
             ),
         ] {
             let lock = FakeLockAdapter::new(Ok(()));
@@ -880,12 +957,16 @@ mod tests {
             let expected_events = match expected {
                 RuntimeTaskRegistrationOutcome::NoInstalledPayload
                 | RuntimeTaskRegistrationOutcome::Refused
-                | RuntimeTaskRegistrationOutcome::Failed => {
+                | RuntimeTaskRegistrationOutcome::Failed(_) => {
                     vec![DiagnosticEvent::RuntimeTaskRegistrationFailed]
                 }
                 _ => Vec::new(),
             };
             assert_eq!(*diagnostics.events.borrow(), expected_events);
+            assert_eq!(
+                *diagnostics.causes.borrow(),
+                expected.cause().into_iter().collect::<Vec<_>>()
+            );
         }
     }
 
@@ -914,6 +995,10 @@ mod tests {
             assert_eq!(
                 *diagnostics.events.borrow(),
                 vec![DiagnosticEvent::InstallLockUnavailable]
+            );
+            assert_eq!(
+                *diagnostics.causes.borrow(),
+                expected.cause().into_iter().collect::<Vec<_>>()
             );
         }
     }

@@ -22,6 +22,24 @@ function setup(initial = snapshot(0, 'connected', false)) {
 
 describe('runtime notice', () => {
   it.each([
+    'SID lookup failed: could not open the current process token.',
+    'Payload lookup failed: no installed runtime payload exists.',
+    'Task registration failed: RegisterTaskDefinition HRESULT(0x80070005)',
+    'Task start failed: RunTask HRESULT(0x80041326)',
+  ])('Shows the startup cause: %s', (cause) => {
+    expect(runtimeNotice({ ...snapshot(1, 'startFailed'), cause }).text)
+      .toBe(`The runtime start failed. ${cause}`)
+  })
+
+  it.each([undefined, null, '', '  ', 0, false, {}, []])('Ignores an empty or invalid cause: %j', (cause) => {
+    expect(runtimeNotice({ ...snapshot(1, 'startFailed'), cause }).text).toBe('The runtime start failed.')
+  })
+
+  it('Does not show a stale cause after recovery.', () => {
+    expect(runtimeNotice({ ...snapshot(2, 'connected', false), cause: 'Task start failed: stale' }).text).toBe('')
+  })
+
+  it.each([
     ['starting', 'The runtime received a start request.'],
     ['disconnected', 'The runtime connection closed.'],
     ['exited', 'The runtime exited.'],

@@ -188,7 +188,25 @@ pub enum WindowsDiagnosticEvent {
     RestartLoopStopped,
 }
 
+pub struct WindowsDiagnosticRecord {
+    event: WindowsDiagnosticEvent,
+    cause: Option<String>,
+}
+
+impl From<WindowsDiagnosticEvent> for WindowsDiagnosticRecord {
+    fn from(event: WindowsDiagnosticEvent) -> Self {
+        Self { event, cause: None }
+    }
+}
+
 impl WindowsDiagnosticEvent {
+    pub fn with_cause(self, cause: &str) -> WindowsDiagnosticRecord {
+        WindowsDiagnosticRecord {
+            event: self,
+            cause: Some(cause.to_owned()),
+        }
+    }
+
     fn record(self) -> &'static [u8] {
         match self {
             Self::ActivationFailed => {
@@ -219,12 +237,43 @@ impl WindowsDiagnosticEvent {
     }
 }
 
-/// Appends one fixed record below the supplied local application data root.
-#[cfg(unix)]
+/// Appends one diagnostic record with an optional bounded startup cause.
+#[cfg(any(unix, target_os = "windows"))]
 pub fn write_windows_diagnostic(
     local_app_data: impl AsRef<Path>,
-    event: WindowsDiagnosticEvent,
+    record: impl Into<WindowsDiagnosticRecord>,
 ) -> io::Result<()> {
+    let record = record.into();
+    match record.cause {
+        Some(cause) => {
+            write_windows_record(local_app_data, &diagnostic_record(record.event, &cause))
+        }
+        None => write_windows_record(local_app_data, record.event.record()),
+    }
+}
+
+fn diagnostic_record(event: WindowsDiagnosticEvent, cause: &str) -> Vec<u8> {
+    let mut record = event.record().to_vec();
+    record.pop();
+    record.extend_from_slice(b" cause=");
+    let cause: String = cause
+        .chars()
+        .take(1024)
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    record.extend_from_slice(cause.as_bytes());
+    record.push(b'\n');
+    record
+}
+
+#[cfg(unix)]
+fn write_windows_record(local_app_data: impl AsRef<Path>, record: &[u8]) -> io::Result<()> {
     use std::fs;
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
@@ -250,23 +299,19 @@ pub fn write_windows_diagnostic(
         &directory,
         c"runtime.log",
         WINDOWS_RUNTIME_LOG_MAX_BYTES,
-        event.record(),
+        record,
     )
 }
 
-/// Appends one fixed record below the supplied local application data root.
 #[cfg(target_os = "windows")]
-pub fn write_windows_diagnostic(
-    local_app_data: impl AsRef<Path>,
-    event: WindowsDiagnosticEvent,
-) -> io::Result<()> {
+fn write_windows_record(local_app_data: impl AsRef<Path>, record: &[u8]) -> io::Result<()> {
     let directory = windows_log_directory_from_local_app_data(local_app_data.as_ref())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     muniment_core::windows_user_diagnostics::append_owner_only_record(
         local_app_data.as_ref(),
         &directory,
         WINDOWS_RUNTIME_LOG_MAX_BYTES,
-        event.record(),
+        record,
     )
 }
 
@@ -285,6 +330,29 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&path);
         path
+    }
+
+    #[test]
+    fn diagnostic_cause_keeps_the_step_and_code_on_one_bounded_line() {
+        let cause = format!(
+            "Task start failed: RunTask HRESULT(0x80041326)\r\nevent=forged\0{}",
+            "é".repeat(2000)
+        );
+        let record = diagnostic_record(WindowsDiagnosticEvent::RuntimeTaskStartFailed, &cause);
+        let text = String::from_utf8(record).unwrap();
+        assert!(
+            text.contains("cause=Task start failed: RunTask HRESULT(0x80041326)  event=forged ")
+        );
+        assert_eq!(text.lines().count(), 1);
+        assert_eq!(
+            text.split_once(" cause=")
+                .unwrap()
+                .1
+                .trim_end()
+                .chars()
+                .count(),
+            1024
+        );
     }
 
     #[test]
