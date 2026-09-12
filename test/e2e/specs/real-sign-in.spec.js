@@ -320,10 +320,20 @@ describe('installed nightly', () => {
       timeout: 60000,
       timeoutMsg: 'desktop client did not connect to the installed runtime',
     })
+    await authenticatedMarker.waitForEnabled({
+      timeout: 60000,
+      timeoutMsg: 'composer did not become ready after sign-in and thread restore',
+    })
     const prompt = `Muniment E2E chat ${Date.now()}`
     await authenticatedMarker.setValue(prompt)
     const send = await $('button=Send')
     await send.waitForDisplayed()
+    await browser.waitUntil(async () => (
+      await send.isEnabled() && await send.getAttribute('aria-disabled') !== 'true'
+    ), {
+      timeout: 60000,
+      timeoutMsg: 'Send did not become ready after sign-in and thread restore',
+    })
     await send.click()
 
     const userMessage = await $(`//div[contains(concat(' ', normalize-space(@class), ' '), ' user-turn ')]//p[normalize-space()="${prompt}"]`)
