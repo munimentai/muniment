@@ -17,6 +17,15 @@ The runtime logs the `session.sign_in` RPC start, outcome, and elapsed time.
 Each native cloud request logs its method, fixed path, HTTP status or transport error, and elapsed time.
 Sign-in failures name the registration, authorization, token exchange, or proof stage without exposing credentials.
 Authorization failures distinguish browser launch, callback timeout, state mismatch, and provider denial.
+
+HTTP failures also log a recognized `error.code` and a validated `cf-ray` identifier beside the status.
+Missing or unrecognized values appear as `unavailable`. The runtime never logs the response body.
+The sign-in RPC returns `authorization_failed` with the authorization cause and HTTP error code instead of a persistence error.
+
+The Windows runner records HTTPS clock samples in `clock.log` before the sign-in spec.
+It corrects clock skew and requires a fresh sample within ten seconds, including sample uncertainty.
+A failed clock check stops the sign-in spec and records the cause.
+
 The response frame gets a fresh five-second deadline after sign-in returns, including failures.
 A long browser wait does not consume that deadline.
 

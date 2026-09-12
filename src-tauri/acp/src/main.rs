@@ -1180,6 +1180,7 @@ fn pairing_failure(error: ClientError) -> &'static str {
     match error {
         ClientError::UnsupportedPlatform => "Muniment runtime attach is unsupported",
         ClientError::AuthorizationExpired => "Muniment runtime attach authorization expired",
+        ClientError::AuthorizationFailed => "Native authorization failed. Try sign-in again.",
         ClientError::ThreadNotFound => "Muniment runtime could not find the thread",
         ClientError::RequestRejected => "Muniment runtime rejected workspace registration",
         ClientError::DesktopFailed => "Muniment runtime failed workspace registration",
