@@ -75,6 +75,11 @@ fn main() {
                 std::process::exit(record_windows_failed_activation(&state_directory));
             }
         };
+        eprintln!(
+            "muniment-runtime: started version={} state_directory={}",
+            env!("CARGO_PKG_VERSION"),
+            state_directory.display(),
+        );
         let factory =
             SystemWindowsAttachFactory::new(&state_directory, std::time::Duration::from_secs(2));
         let diagnostics = MainWindowsDiagnosticSink {
