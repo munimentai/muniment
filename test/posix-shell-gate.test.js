@@ -38,6 +38,7 @@ const ALLOWED = {
   'test/desktop-e2e-harness.test.js:2590:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/desktop-e2e-harness.test.js:2616:19': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/desktop-e2e-harness.test.js:2643:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
+  'test/desktop-e2e-harness.test.js:4033:20': "describe.skipIf(process.platform === 'win32')('macOS WDIO runtime endpoint')",
   'test/nightly-workflow.test.js:13:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
   'test/nightly-workflow.test.js:48:20': "it.skipIf(process.platform === 'win32')('passes the remaining full build budget after Git and dependency setup')",
 }

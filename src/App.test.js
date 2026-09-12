@@ -2783,6 +2783,44 @@ describe('Home onboarding', () => {
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Muniment' })
   })
 
+  it.each([null, '', [], '/Other/Muniment'])('The Home picker records the resolved value (%s).', async (picked) => {
+    firstRun()
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-home-path'))
+    const section = screen.getByRole('region', { name: 'First run' })
+    expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'not-started' })
+    const dialog = deferred()
+    dialogResult = dialog.promise
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'pending' })
+    expect(screen.getByTestId('onboarding-picker')).toBeDisabled()
+    dialog.resolve(picked)
+    await waitFor(() => expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'resolved', value: picked }))
+    expect(screen.getByTestId('onboarding-picker')).toBeEnabled()
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent(typeof picked === 'string' && picked ? picked : '/Documents/Muniment')
+  })
+
+  it.each([new Error('The dialog command failed.'), 'The dialog command failed.'])('The Home picker records a rejection and resets on retry.', async (error) => {
+    firstRun()
+    render(App)
+    await fireEvent.click(await screen.findByTestId('onboarding-home-path'))
+    const section = screen.getByRole('region', { name: 'First run' })
+    const dialog = deferred()
+    dialogResult = dialog.promise
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    dialog.reject(error)
+    await waitFor(() => expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'rejected', error: 'The dialog command failed.' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Muniment could not open the folder picker.')
+    expect(screen.getByTestId('onboarding-picker')).toBeEnabled()
+    expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    const retry = deferred()
+    dialogResult = retry.promise
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
+    expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'pending' })
+    retry.resolve('/Other/Muniment')
+    await waitFor(() => expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'resolved', value: '/Other/Muniment' }))
+  })
+
   it('ignores a stale default after the user chooses Home', async () => {
     const status = deferred()
     homeStatus = status.promise
