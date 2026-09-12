@@ -115,8 +115,8 @@ fn run_starting_pi() {
     let reason = failure.failure_reason.unwrap();
     eprintln!("shell-failure: run_id={RUN_ID} reason={reason}");
     assert!(
-        reason == "Pi did not become ready within 30 seconds. Try again."
-            || reason == "Pi stopped before it became ready. Try again.",
+        reason == "Reply setup did not become ready within 30 seconds. Try again."
+            || reason == "Reply setup stopped before it became ready. Try again.",
         "{reason}"
     );
     done_rx

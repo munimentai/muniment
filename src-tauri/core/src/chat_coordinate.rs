@@ -510,10 +510,10 @@ pub fn coordinate(
         let reason = if grant.is_local() {
             "Reply setup timed out. Try again.".to_owned()
         } else if readiness_status != SidecarStatus::Starting {
-            "Pi stopped before it became ready. Try again.".to_owned()
+            "Reply setup stopped before it became ready. Try again.".to_owned()
         } else {
             format!(
-                "Pi did not become ready within {} seconds. Try again.",
+                "Reply setup did not become ready within {} seconds. Try again.",
                 startup_timeout.as_secs()
             )
         };
