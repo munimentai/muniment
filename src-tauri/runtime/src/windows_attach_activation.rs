@@ -188,6 +188,10 @@ pub fn run_windows_attach_activation_with_retention_schedule(
             diagnostics.record(WindowsDiagnosticEvent::ActivationFailed);
             WindowsActivationExit::Failed(1)
         }
+        WindowsAttachAcceptLoopExit::AcceptFailed(error) => {
+            diagnostics.record(WindowsDiagnosticEvent::AttachAcceptFailed(error));
+            WindowsActivationExit::Failed(1)
+        }
     }
 }
 

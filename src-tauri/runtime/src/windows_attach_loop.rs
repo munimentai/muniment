@@ -1,11 +1,15 @@
 //! Runtime-owned Windows attach accept loop.
 
+use muniment_core::attach::WindowsAttachAcceptError;
+use muniment_core::runtime_eprintln as eprintln;
 use std::time::Duration;
 #[cfg(target_os = "windows")]
 use std::time::Instant;
 
 #[cfg(test)]
 use muniment_core::attach::thread_service::ThreadListService;
+#[cfg(all(test, target_os = "windows"))]
+use muniment_core::attach::WindowsAttachServeOutcome;
 #[cfg(target_os = "windows")]
 use muniment_core::attach::{
     approval_waiter_with_claims, serve_windows_attach_session_with_state,
@@ -14,8 +18,6 @@ use muniment_core::attach::{
 };
 #[cfg(test)]
 use muniment_core::attach::{DesktopAttachService, ProtocolError};
-#[cfg(all(test, target_os = "windows"))]
-use muniment_core::attach::{WindowsAttachAcceptError, WindowsAttachServeOutcome};
 #[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(any(unix, target_os = "windows"))]
@@ -38,6 +40,7 @@ pub enum WindowsAttachAcceptOutcome {
     Served,
     Stopped,
     Failed,
+    AcceptFailed(WindowsAttachAcceptError),
 }
 
 /// A signal that stops a blocked Windows attach accept.
@@ -165,7 +168,7 @@ impl WindowsAttachAcceptBoundary for WindowsAttachAcceptor {
                 WindowsAttachAcceptOutcome::Served
             }
             Ok(CoreWindowsAttachAcceptOutcome::Stopped) => WindowsAttachAcceptOutcome::Stopped,
-            Err(_) => WindowsAttachAcceptOutcome::Failed,
+            Err(error) => WindowsAttachAcceptOutcome::AcceptFailed(error),
         }
     }
 }
@@ -177,7 +180,7 @@ fn windows_attach_accept_outcome(
     match result {
         Ok(WindowsAttachServeOutcome::Served) => WindowsAttachAcceptOutcome::Served,
         Ok(WindowsAttachServeOutcome::Stopped) => WindowsAttachAcceptOutcome::Stopped,
-        Err(_) => WindowsAttachAcceptOutcome::Failed,
+        Err(error) => WindowsAttachAcceptOutcome::AcceptFailed(error),
     }
 }
 
@@ -186,6 +189,7 @@ fn windows_attach_accept_outcome(
 pub enum WindowsAttachAcceptLoopExit {
     Stopped,
     Failed,
+    AcceptFailed(WindowsAttachAcceptError),
 }
 
 /// Serves Windows attach sessions until stopped or accepts keep failing.
@@ -196,10 +200,18 @@ pub fn run_windows_attach_accept_loop(
     loop {
         match acceptor.serve_next() {
             WindowsAttachAcceptOutcome::Stopped => return WindowsAttachAcceptLoopExit::Stopped,
-            WindowsAttachAcceptOutcome::Failed => {
+            failure @ (WindowsAttachAcceptOutcome::Failed
+            | WindowsAttachAcceptOutcome::AcceptFailed(_)) => {
+                let exit = match failure {
+                    WindowsAttachAcceptOutcome::AcceptFailed(error) => {
+                        eprintln!("muniment-runtime: attach accept failed: {error}");
+                        WindowsAttachAcceptLoopExit::AcceptFailed(error)
+                    }
+                    _ => WindowsAttachAcceptLoopExit::Failed,
+                };
                 consecutive_failed_accepts += 1;
                 if consecutive_failed_accepts == MAX_CONSECUTIVE_FAILED_ACCEPTS {
-                    return WindowsAttachAcceptLoopExit::Failed;
+                    return exit;
                 }
                 std::thread::sleep(FAILED_ACCEPT_RETRY_DELAY);
             }
@@ -274,14 +286,16 @@ mod tests {
             WindowsAttachAcceptError::DeadlineExpired,
             WindowsAttachAcceptError::CreateEvent(1),
             WindowsAttachAcceptError::CreateInstance(1),
-            WindowsAttachAcceptError::VerifyInstanceSecurity,
+            WindowsAttachAcceptError::VerifyInstanceSecurity(None),
+            WindowsAttachAcceptError::VerifyInstanceSecurity(Some(5)),
             WindowsAttachAcceptError::Connect(1),
+            WindowsAttachAcceptError::Disconnect(1),
             WindowsAttachAcceptError::Wait(1),
             WindowsAttachAcceptError::Cancel(1),
         ] {
             assert_eq!(
                 windows_attach_accept_outcome(Err(error)),
-                WindowsAttachAcceptOutcome::Failed
+                WindowsAttachAcceptOutcome::AcceptFailed(error)
             );
         }
     }
