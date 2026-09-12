@@ -112,7 +112,14 @@ pub fn home_status(app: AppHandle) -> Result<HomeStatus, String> {
 pub fn home_confirm(app: AppHandle, home_path: String) -> Result<HomeStatus, String> {
     let config = config_dir(&app)?;
     let home = PathBuf::from(home_path);
-    muniment_core::home::confirm_home(&config, &home).map_err(|error| error.to_string())?;
+    muniment_core::home::confirm_home(&config, &home).map_err(|error| {
+        eprintln!(
+            "home_confirm failed: config={} home={} error={error}",
+            config.display(),
+            home.display()
+        );
+        error.to_string()
+    })?;
     Ok(HomeStatus {
         configured: true,
         home_path: home.to_string_lossy().into_owned(),
