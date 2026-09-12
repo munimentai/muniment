@@ -374,8 +374,10 @@ fn a_failed_accept_reaches_the_record_and_stderr() {
         observed_acceptor.calls.get(),
         muniment_runtime::MAX_CONSECUTIVE_FAILED_ACCEPTS
     );
+    let log_directory =
+        muniment_runtime::windows_log_directory_from_local_app_data(&directory).unwrap();
     assert_eq!(
-        std::fs::read_to_string(directory.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
+        std::fs::read_to_string(log_directory.join("runtime.log")).unwrap(),
         "event=activation_failed message=runtime activation failed cause=CreateInstance win32=5 (0x00000005)\n"
     );
     std::fs::remove_dir_all(directory).unwrap();
