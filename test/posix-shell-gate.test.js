@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ALLOWED = {
-  'test/macos-local-mode-config.test.js:43:20': "it.skipIf(process.platform === 'win32').each shares each spec config and restores launchd config",
+  'test/macos-local-mode-config.test.js:18:29': "The fixture shell runs only through it.skipIf(process.platform === 'win32').",
   'test/linux-sign-in-state.test.js:19:20': "describe.skipIf(process.platform === 'win32')('Linux sign-in state cleanup')",
   'test/desktop-e2e-harness.test.js:354:20': "it.skipIf(process.platform === 'win32')('Keeps distinct captures after two failed spec runs.')",
   'test/desktop-e2e-harness.test.js:455:20': "describe.skipIf(process.platform === 'win32')('Linux spec process isolation')",
