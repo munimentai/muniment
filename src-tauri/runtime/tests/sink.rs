@@ -270,7 +270,6 @@ fn withholds_a_mismatched_broadcast_and_keeps_the_subscription() {
     assert_eq!(subscriber.recv().unwrap().text, "hello");
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn local_broadcast_needs_the_marker_not_signed_workspace_approval() {
     let profile = TemporaryProfile::new("sink-local", false);
@@ -305,6 +304,24 @@ fn local_broadcast_needs_the_marker_not_signed_workspace_approval() {
     assert_eq!(delivered.text, "hello");
     assert_eq!(delivered.thread_id.as_deref(), Some("thread-local"));
     assert!(approval.approval().is_none());
+
+    let started = std::time::Instant::now();
+    let mut acquiring = event();
+    acquiring.phase = "acquiring-pi".into();
+    acquiring.text.clear();
+    local.deliver(acquiring.clone()).unwrap();
+    assert_eq!(subscriber.try_recv().unwrap().phase, "acquiring-pi");
+    let reason = "Reply setup failed. Check your connection and storage, then retry.";
+    let mut failed = acquiring;
+    failed.phase = "failed".into();
+    failed.failure_reason = Some(reason.into());
+    local.deliver(failed).unwrap();
+    let delivered = subscriber.try_recv().unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    assert_eq!(delivered.phase, "failed");
+    assert_eq!(delivered.failure_reason.as_deref(), Some(reason));
+    assert!(delivered.text.is_empty());
+    assert_eq!(delivered.thread_id.as_deref(), Some("thread-local"));
 
     // Local mode must not expose events from an older signed workspace.
     approval.record("workspace-a".into());

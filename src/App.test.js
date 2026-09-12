@@ -4992,6 +4992,32 @@ describe('thread announcements', () => {
     expect(document.querySelector('.response')).not.toHaveTextContent(progress)
   })
 
+  it.each([false, true])('shows acquisition failure when the submit response is pending: %s', async (pending) => {
+    localModeStatus = true
+    const submission = deferred()
+    const result = { runId: 'run-acquisition', attachments: [] }
+    signedIn([], pending ? submission.promise : result)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const acquiring = { runId: result.runId, phase: 'acquiring-pi', text: '', toolActivity: [] }
+    chatListener({ payload: acquiring })
+    if (!pending) {
+      await waitFor(() => expect(document.querySelector('.response')).toHaveTextContent('Reply setup has started. Please wait.'))
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+    }
+    const reason = 'Reply setup failed. Check your connection and storage, then retry.'
+    chatListener({ payload: { ...acquiring, phase: 'failed', failureReason: reason } })
+    if (pending) submission.resolve(result)
+    const error = await within(document.querySelector('.thread')).findByText(reason)
+    expect(error).toHaveClass('run-error')
+    expect(screen.getByTestId('run-announcement')).toHaveTextContent(reason)
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Reply setup has started. Please wait.')).not.toBeInTheDocument()
+    expect(within(error).getByRole('button', { name: 'Try again' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument()
+  })
+
   it('announces a permission pause during a streamed run', async () => {
     signedIn([], { runId: 'run-9', attachments: [] })
     const composer = await screen.findByPlaceholderText('Ask anything')
