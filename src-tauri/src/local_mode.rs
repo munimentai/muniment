@@ -62,13 +62,24 @@ fn lock_pi_auth_file(auth_file: &Path) -> Result<PiAuthLock, String> {
     }
 }
 
-pub(crate) fn is_active<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<bool, String> {
-    Ok(app
-        .path()
+fn config_directory<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        // The launchd runtime and desktop must read the same local-mode marker.
+        muniment_core::local_mode::macos_config_directory()
+            .ok_or_else(|| "Muniment cannot find the local mode folder.".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    app.path()
         .app_config_dir()
-        .map_err(|_| "Local mode could not be checked.".to_string())?
-        .join(LOCAL_MODE_MARKER)
-        .is_file())
+        .map_err(|_| "Muniment cannot find the local mode folder.".to_string())
+}
+
+pub(crate) fn is_active<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<bool, String> {
+    Ok(muniment_core::local_mode::is_local_mode(&config_directory(
+        app,
+    )?))
 }
 
 fn set_local_mode(config_directory: &Path, enabled: bool) -> Result<(), String> {
@@ -321,20 +332,12 @@ pub(crate) fn local_mode_status(app: tauri::AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 pub(crate) fn local_mode_enter(app: tauri::AppHandle) -> Result<(), String> {
-    let directory = app
-        .path()
-        .app_config_dir()
-        .map_err(|_| "Local mode could not be changed.".to_string())?;
-    set_local_mode(&directory, true)
+    set_local_mode(&config_directory(&app)?, true)
 }
 
 #[tauri::command]
 pub(crate) fn local_mode_leave(app: tauri::AppHandle) -> Result<(), String> {
-    let directory = app
-        .path()
-        .app_config_dir()
-        .map_err(|_| "Local mode could not be changed.".to_string())?;
-    set_local_mode(&directory, false)
+    set_local_mode(&config_directory(&app)?, false)
 }
 
 #[tauri::command]
@@ -388,6 +391,16 @@ mod tests {
         let path = std::env::temp_dir().join(format!("muniment-local-mode-{}", Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         path
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn desktop_local_mode_directory_matches_the_runtime() {
+        let app = tauri::test::mock_app();
+        assert_eq!(
+            config_directory(app.handle()).unwrap(),
+            muniment_runtime::config_directory().unwrap()
+        );
     }
 
     #[test]

@@ -104,7 +104,12 @@ pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
     windows_state_directory()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    muniment_core::local_mode::macos_config_directory().ok_or(DirectoryUnavailableError)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
     let xdg_value = std::env::var_os("XDG_CONFIG_HOME");
     let home_value = std::env::var_os("HOME");
