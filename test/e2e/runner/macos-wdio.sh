@@ -11,6 +11,8 @@ state_root="$run_root/state"
 auth_url_file="$run_root/auth-url"
 redaction_report="$run_root/redaction-failure.txt"
 status=0
+installed=0
+installed_bundle=/Applications/muniment.app
 cleanup_status=0
 cleanup_log="$raw/cleanup.log"
 cleanup_status_entries=
@@ -112,6 +114,7 @@ finalize() {
   if (( status != 0 )) && [[ $first_failed_step == none ]]; then first_failed_step=$current_step; fi
   cleanup_step stop-app stop_app
   if (( cleanup_status != 0 )); then status=1; fi
+  if (( installed )); then cleanup_step remove-bundle rm -rf -- "$installed_bundle"; fi
   cleanup_step collect-crash-reports collect_crash_reports
   if node test/e2e/support/redact.mjs "$raw" "$safe" "$redaction_report"; then
     cleanup_step replace-artifacts rm -rf -- "$artifacts"
@@ -160,8 +163,32 @@ current_step=validate-app
 [[ -x $app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
 run_step webdriver-marker node test/e2e/support/webdriver-release-guard.mjs present "$app_binary" || exit
 
+# The installed smoke removes its bundle. Restore the pinned bundle for WDIO.
+sha=${MUNIMENT_E2E_SOURCE_SHA:-}
+current_step=validate-source
+[[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo 'The source SHA is invalid.' >&2; status=1; exit; }
+[[ -n ${GH_TOKEN:-} && -n ${GITHUB_REPOSITORY:-} ]] || { echo 'The release environment is unavailable.' >&2; status=1; exit; }
+release=$(run_step fetch-release gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { first_failed_step=fetch-release; status=1; exit; }
+asset_id=$(run_step identify-asset node test/e2e/support/asset-identity.mjs "$sha" macos <<<"$release") || { first_failed_step=identify-asset; status=1; exit; }
+run_step download-bundle gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$state_root/muniment.app.zip" || exit
+run_step expand-bundle log_command "$raw/installer.log" ditto -x -k "$state_root/muniment.app.zip" "$state_root/expanded" || exit
+run_step stop-before-install stop_app || exit
+run_step validate-bundle-absent test ! -e "$installed_bundle" || exit
+installed=1
+run_step install-bundle log_command "$raw/installer.log" ditto "$state_root/expanded/muniment.app" "$installed_bundle" || exit
+installed_desktop="$installed_bundle/Contents/MacOS/muniment-desktop"
+run_step validate-installed-app test -x "$installed_desktop" || exit
+run_step installed-webdriver-marker node test/e2e/support/webdriver-release-guard.mjs absent "$installed_desktop" || exit
+for library in libsherpa-onnx-c-api.dylib libonnxruntime.1.24.4.dylib; do
+  run_step "validate-$library" test -s "$installed_bundle/Contents/Resources/asr-runtime/$library" || exit
+done
+# The installed path resolves the ASR rpath and matches runtime client admission.
+run_step install-webdriver-app log_command "$raw/installer.log" install -m 0755 "$app_binary" "$installed_desktop" || exit
+run_step verify-webdriver-app cmp -s "$app_binary" "$installed_desktop" || exit
+unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
+
 export MUNIMENT_E2E_APP_BINARY="$PWD/test/e2e/support/macos-wdio-app.sh" MUNIMENT_E2E_RAW_DIR="$raw"
-export MUNIMENT_E2E_REAL_APP_BINARY="$app_binary"
+export MUNIMENT_E2E_REAL_APP_BINARY="$installed_desktop"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 run_step image-fixture openssl base64 -d -A -in test/e2e/fixtures/image-token.png.base64 -out "$state_root/image-token.png" || exit
 export MUNIMENT_E2E_IMAGE_PATH="$state_root/image-token.png"
