@@ -44,6 +44,7 @@ $installSid = $null
 $installLocalAppData = $env:LOCALAPPDATA
 # The known folder can differ from the environment under WebDriver.
 $runtimeLocalAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+$runtimeAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
 . (Join-Path $PSScriptRoot "../../windows-msi-registration.ps1")
 $handlerKey = "HKCU:\Software\Classes\muniment-e2e-https"
 $httpsKey = "HKCU:\Software\Classes\https"
@@ -318,6 +319,16 @@ function Remove-AuthHandler {
   }
 }
 
+function Save-LocalModePiLogs {
+  $helper = Join-Path $PSScriptRoot '../support/windows-local-mode-logs.mjs'
+  $inputText = ConvertTo-Json -Depth 3 -Compress -InputObject @{
+    localRoots = @($runtimeLocalAppData, $installLocalAppData, $env:LOCALAPPDATA)
+    profileRoots = @($runtimeAppData, $env:APPDATA)
+    destination = $raw
+  }
+  Invoke-NativeCommand 'node' "`"$helper`"" $null 'The runner could not collect the Pi local mode logs.' $inputText
+}
+
 function Write-RuntimeDiagnostics {
   if ($status -eq 0 -and $cleanupStatus -eq 0) { return }
   try {
@@ -327,7 +338,7 @@ function Write-RuntimeDiagnostics {
     }
     $helper = Join-Path $PSScriptRoot '../support/windows-runtime-log-tail.mjs'
     $inputText = ConvertTo-Json -InputObject $roots -Compress
-    Invoke-NativeCommand 'node' "`"$helper`"" $null 'Runtime diagnostic collection failed' $inputText | ForEach-Object { Write-Host $_ }
+    Invoke-NativeCommand 'node' "`"$helper`" `"$raw`"" $null 'Runtime diagnostic collection failed' $inputText | ForEach-Object { Write-Host $_ }
   } catch {
     Write-Host 'Could not collect the runtime.log diagnostic records.'
   }
@@ -618,6 +629,11 @@ try {
   $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'degraded-home'
   try {
     Invoke-E2e (Join-Path $raw "wdio.log") "Windows local-mode tests failed" 'test/e2e/specs/local-mode-chat.spec.js'
+  } catch {
+    Save-RunnerFailure $_
+  }
+  try {
+    Save-LocalModePiLogs
   } catch {
     Save-RunnerFailure $_
   }
