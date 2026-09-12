@@ -3929,6 +3929,99 @@ describe('Windows runtime diagnostic transcript', () => {
   })
 })
 
+describe('Windows onboarding profile isolation', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+  const functions = runner.slice(runner.indexOf('function Get-E2eProfileDirectory'), runner.indexOf('function Remove-AuthHandler'))
+  const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
+  const hasPowerShell = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+
+  it('Logs the app profile directory before the first render check.', () => {
+    const onboardingSpec = fs.readFileSync(path.join(root, 'test/e2e/specs/onboarding.spec.js'), 'utf8')
+    expect(onboardingSpec).toContain('window.__TAURI__.path.appConfigDir()')
+    expect(onboardingSpec).toContain('`profile_directory: ${JSON.stringify(profileDirectory)}\\n`')
+    expect(onboardingSpec.indexOf('`profile_directory:')).toBeLessThan(onboardingSpec.indexOf('await location.waitForDisplayed('))
+    expect(onboardingSpec).toContain("setTimeout(() => reject('The app profile directory query timed out.'), 5000)")
+  })
+
+  it('Resets the known-folder onboarding files for each phase without changing the installed product.', () => {
+    expect(functions).toContain('[Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)')
+    expect(functions).toContain("return Join-Path $roaming 'ai.muniment.desktop'")
+    expect(functions).not.toContain('$env:APPDATA')
+    expect(runner).toContain("'test/e2e/specs/local-mode-chat.spec.js' -ProfileState first-run")
+    expect(runner).toContain("'test/e2e/specs/real-sign-in.spec.js' -ProfileState signed-out")
+    expect(runner).toContain('"Windows onboarding tests failed" -ProfileState first-run')
+    expect(functions.indexOf('if ($script:cleanupLastStatus -ne 0)')).toBeLessThan(functions.indexOf('$profileDirectory = Get-E2eProfileDirectory'))
+    expect(functions).not.toContain('Remove-Item -LiteralPath $profileDirectory')
+  })
+
+  it.skipIf(!hasPowerShell).each([
+    ['missing', 'first-run', false, true],
+    ['configured', 'first-run', false, true],
+    ['configured', 'signed-out', false, true],
+    ['configured', 'preserve', false, true],
+    ['directory', 'first-run', false, false],
+    ['configured', 'first-run', true, false],
+    ['removal-failure', 'first-run', false, false],
+    ['configured', 'invalid', false, false],
+  ])('Handles %s state with %s and stop failure %s.', (state, profileState, stopFails, starts) => {
+    const directory = temp()
+    const profile = path.join(directory, 'known folder [fixture]', 'ai.muniment.desktop')
+    const redirected = path.join(directory, 'redirected', 'ai.muniment.desktop')
+    fs.mkdirSync(redirected, { recursive: true })
+    fs.writeFileSync(path.join(redirected, 'home.json'), 'redirected Home')
+    if (state !== 'missing') {
+      fs.mkdirSync(profile, { recursive: true })
+      fs.writeFileSync(path.join(profile, 'home.json'), 'configured Home')
+      fs.writeFileSync(path.join(profile, 'session.json'), 'session for revocation')
+      fs.writeFileSync(path.join(profile, 'runtime.db'), 'runtime data')
+      if (state === 'directory') fs.mkdirSync(path.join(profile, 'local-mode'))
+      else fs.writeFileSync(path.join(profile, 'local-mode'), '1')
+    }
+    const script = path.join(directory, 'profile.ps1')
+    fs.writeFileSync(script, `param($Directory, $Profile, $ProfileState, $StopFails, $State)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$raw = $Directory
+$cleanupLog = Join-Path $Directory 'cleanup.log'
+$cleanupStatusLedger = Join-Path $Directory 'cleanup-status.log'
+$cleanupStatus = 0
+${functions}
+function Get-E2eProfileDirectory { return $Profile }
+function Stop-HarnessProcesses {
+  if ($StopFails -eq 'true') { throw 'The fixture process did not stop.' }
+}
+if ($State -eq 'removal-failure') {
+  function Remove-Item { throw 'The fixture file is locked.' }
+}
+function Invoke-NativeCommand {
+  Set-Content -LiteralPath (Join-Path $Directory 'started') -Value '1'
+}
+try { Invoke-E2e (Join-Path $raw 'spec.log') 'The fixture spec failed.' -ProfileState $ProfileState }
+catch { Write-Output $_.Exception.Message; exit 1 }
+`)
+    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+      directory, profile, profileState, String(stopFails), state], {
+      encoding: 'utf8', timeout: 20_000,
+      env: { ...process.env, APPDATA: path.dirname(redirected), MUNIMENT_E2E_FINALIZER_TEST_MODE: '0', MUNIMENT_E2E_FINALIZER_TEST_FAIL: '' },
+    })
+    expect(result.status, result.stdout + result.stderr).toBe(starts ? 0 : 1)
+    expect(fs.existsSync(path.join(directory, 'started'))).toBe(starts)
+    expect(fs.readFileSync(path.join(redirected, 'home.json'), 'utf8')).toBe('redirected Home')
+    if (state === 'missing') {
+      expect(fs.existsSync(profile)).toBe(false)
+    } else {
+      expect(fs.existsSync(path.join(profile, 'home.json'))).toBe(!starts || profileState !== 'first-run')
+      expect(fs.existsSync(path.join(profile, 'local-mode'))).toBe(!starts || profileState === 'preserve')
+      expect(fs.readFileSync(path.join(profile, 'session.json'), 'utf8')).toBe('session for revocation')
+      expect(fs.readFileSync(path.join(profile, 'runtime.db'), 'utf8')).toBe('runtime data')
+    }
+    if (starts && profileState !== 'preserve') {
+      const log = fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8')
+      expect(log).toContain(`profile_directory=${profile} profile_state=${profileState}`)
+    }
+  }, 30_000)
+})
+
 describe.skipIf(process.platform === 'win32')('macOS WDIO runtime endpoint', () => {
   it.each(['', '/redirected/data', 'relative/data'])('Keeps the launchd endpoint across isolated spec homes with XDG_DATA_HOME=%s.', (inheritedDataHome) => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')

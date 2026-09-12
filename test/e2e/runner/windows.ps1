@@ -272,9 +272,37 @@ function Stop-HarnessProcesses {
   throw "Spec processes did not stop."
 }
 
-function Invoke-E2e([string]$Log, [string]$FailureMessage, [string]$Spec = '') {
+function Get-E2eProfileDirectory {
+  $roaming = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
+  if ([string]::IsNullOrWhiteSpace($roaming) -or -not [IO.Path]::IsPathRooted($roaming)) {
+    throw "The Windows application data known folder is unavailable."
+  }
+  return Join-Path $roaming 'ai.muniment.desktop'
+}
+
+function Invoke-E2e(
+  [string]$Log,
+  [string]$FailureMessage,
+  [string]$Spec = '',
+  [ValidateSet('preserve', 'first-run', 'signed-out')][string]$ProfileState = 'preserve'
+) {
   Invoke-Cleanup "stop-before-spec" { Stop-HarnessProcesses }
   if ($script:cleanupLastStatus -ne 0) { throw "Spec process cleanup failed. The runner did not start the next spec." }
+  if ($ProfileState -ne 'preserve') {
+    # The disposable Windows guest uses known folders, not APPDATA, for app and runtime state.
+    # Reset only onboarding files. Keep credentials so the finalizer can revoke the session.
+    $profileDirectory = Get-E2eProfileDirectory
+    $files = @('local-mode')
+    if ($ProfileState -eq 'first-run') { $files += 'home.json' }
+    foreach ($name in $files) {
+      $file = Join-Path $profileDirectory $name
+      if (Test-Path -LiteralPath $file) {
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "The onboarding state path is not a file: $file" }
+        Remove-Item -LiteralPath $file -Force
+      }
+    }
+    Add-Content $cleanupLog "profile_directory=$profileDirectory profile_state=$ProfileState"
+  }
   Add-Content $cleanupLog "start-spec: $([IO.Path]::GetFileName($Log))"
   $arguments = "run test:e2e"
   if ($Spec) { $arguments += " -- --spec $Spec" }
@@ -628,7 +656,7 @@ try {
   $env:LOCALAPPDATA = Join-Path $stateRoot "Degraded\Local"
   $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'degraded-home'
   try {
-    Invoke-E2e (Join-Path $raw "wdio.log") "Windows local-mode tests failed" 'test/e2e/specs/local-mode-chat.spec.js'
+    Invoke-E2e (Join-Path $raw "wdio.log") "Windows local-mode tests failed" 'test/e2e/specs/local-mode-chat.spec.js' -ProfileState first-run
   } catch {
     Save-RunnerFailure $_
   }
@@ -638,9 +666,7 @@ try {
     Save-RunnerFailure $_
   }
   try {
-    $localModeMarker = Join-Path $env:APPDATA 'ai.muniment.desktop\local-mode'
-    if (Test-Path -LiteralPath $localModeMarker) { Remove-Item -LiteralPath $localModeMarker -Force }
-    Invoke-E2e (Join-Path $raw "wdio-sign-in.log") "Windows sign-in tests failed" 'test/e2e/specs/real-sign-in.spec.js'
+    Invoke-E2e (Join-Path $raw "wdio-sign-in.log") "Windows sign-in tests failed" 'test/e2e/specs/real-sign-in.spec.js' -ProfileState signed-out
   } catch {
     Save-RunnerFailure $_
   }
@@ -709,7 +735,7 @@ namespace MunimentE2e {
   $env:MUNIMENT_E2E_HOME_PATH = Join-Path $stateRoot 'ready-home'
   $env:MUNIMENT_E2E_ONBOARDING_ONLY = "1"
   try {
-    Invoke-E2e (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed"
+    Invoke-E2e (Join-Path $raw "wdio-onboarding.log") "Windows onboarding tests failed" -ProfileState first-run
   } catch {
     Save-RunnerFailure $_
   }

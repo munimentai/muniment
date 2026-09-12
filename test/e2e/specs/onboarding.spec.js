@@ -37,6 +37,24 @@ describe('installed nightly model-ready onboarding', () => {
   it('chooses an isolated Home and scaffolds its README files', async () => {
     const home = process.env.MUNIMENT_E2E_HOME_PATH
     const location = await $('[data-testid="onboarding-home-path"]')
+    let profileDirectory = { error: 'The app profile directory is unavailable.' }
+    try {
+      profileDirectory = await browser.execute(async () => {
+        try {
+          const result = await Promise.race([
+            window.__TAURI__.path.appConfigDir(),
+            new Promise((_, reject) => setTimeout(() => reject('The app profile directory query timed out.'), 5000)),
+          ])
+          return { result }
+        } catch (error) {
+          return { error: String(error) }
+        }
+      })
+    } catch {}
+    await appendFile(
+      path.join(process.env.MUNIMENT_E2E_RAW_DIR, 'onboarding-first-render.log'),
+      `profile_directory: ${JSON.stringify(profileDirectory)}\n`,
+    )
     try {
       await location.waitForDisplayed({
         timeout: 120000,
