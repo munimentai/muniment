@@ -722,7 +722,13 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         match std::fs::remove_file(marker) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(ProtocolError::persistence_failed()),
+            Err(error) => {
+                return Err(ProtocolError::persistence_failed_with_reason(format!(
+                    "The runtime could not remove the local mode marker: kind={:?} os_code={:?}.",
+                    error.kind(),
+                    error.raw_os_error(),
+                )))
+            }
         }
         let _permit = SignInPermit::acquire(Arc::clone(&self.sign_in_running))
             .ok_or_else(ProtocolError::invalid_request)?;
