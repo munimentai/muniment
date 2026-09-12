@@ -296,9 +296,25 @@ pub(crate) fn register_runtime_task_at_startup(state_directory: &Path) -> Result
 #[cfg(target_os = "windows")]
 struct WindowsDiagnosticSink;
 
+#[cfg(any(target_os = "windows", test))]
+fn report_diagnostic_failure_once(
+    reported: &std::sync::Once,
+    path: &Path,
+    error: &dyn std::fmt::Display,
+    report: impl FnOnce(String),
+) {
+    reported.call_once(|| {
+        report(format!(
+            "Runtime diagnostic write failed at {}: {error}",
+            path.display()
+        ));
+    });
+}
+
 #[cfg(target_os = "windows")]
 impl DiagnosticSink for WindowsDiagnosticSink {
     fn write(&self, event: DiagnosticEvent, cause: &str) {
+        static REPORTED: std::sync::Once = std::sync::Once::new();
         let event = match event {
             DiagnosticEvent::InstallLockUnavailable => {
                 muniment_runtime::WindowsDiagnosticEvent::InstallLockUnavailable
@@ -313,13 +329,20 @@ impl DiagnosticSink for WindowsDiagnosticSink {
         match muniment_runtime::windows_local_app_data() {
             Ok(local_app_data) => {
                 if let Err(error) = muniment_runtime::write_windows_diagnostic(
-                    local_app_data,
+                    &local_app_data,
                     event.with_cause(cause),
                 ) {
-                    eprintln!("Runtime diagnostic write failed: {error}");
+                    report_diagnostic_failure_once(
+                        &REPORTED,
+                        &local_app_data.join("muniment/logs/runtime.log"),
+                        &error,
+                        |message| eprintln!("{message}"),
+                    );
                 }
             }
-            Err(error) => eprintln!("Runtime diagnostic path lookup failed: {error}"),
+            Err(error) => REPORTED.call_once(|| {
+                eprintln!("Runtime diagnostic path lookup failed: {error}");
+            }),
         }
     }
 }
@@ -488,6 +511,33 @@ mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+
+    #[test]
+    fn reports_the_refused_path_and_error_once_across_threads() {
+        let reported = std::sync::Once::new();
+        let messages = std::sync::Mutex::new(Vec::new());
+        let path = Path::new("C:/Users/person/AppData/Local/muniment/logs/runtime.log");
+        let error = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "diagnostic path owner or access is unsafe",
+        );
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    report_diagnostic_failure_once(&reported, path, &error, |message| {
+                        messages.lock().unwrap().push(message);
+                    });
+                });
+            }
+        });
+        assert_eq!(
+            *messages.lock().unwrap(),
+            [format!(
+                "Runtime diagnostic write failed at {}: {error}",
+                path.display()
+            )]
+        );
+    }
 
     struct FakeEndpointAdapter {
         result: Result<bool, String>,
