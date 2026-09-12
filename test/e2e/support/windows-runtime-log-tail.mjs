@@ -5,7 +5,7 @@ import { redactText } from './redact-text.mjs'
 // Read only the named diagnostic file. Never collect the user's runtime state.
 const roots = JSON.parse(fs.readFileSync(0, 'utf8'))
 for (const root of [...new Set(roots.filter(Boolean))]) {
-  const file = path.join(root, 'muniment', 'logs', 'runtime.log')
+  const file = path.join(root, 'ai.muniment.desktop', 'logs', 'runtime.log')
   process.stdout.write(`dci: Windows runtime.log ${redactText(file)}\n`)
   try {
     const descriptor = fs.openSync(file, 'r')

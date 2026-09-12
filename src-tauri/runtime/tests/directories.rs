@@ -209,12 +209,52 @@ fn maps_an_absolute_local_app_data_path_to_the_windows_log_directory() {
     assert_eq!(
         windows_log_directory_from_local_app_data(Path::new("/Users/person/AppData/Local"))
             .unwrap(),
-        Path::new("/Users/person/AppData/Local/muniment/logs")
+        Path::new("/Users/person/AppData/Local/ai.muniment.desktop/logs")
     );
     assert_eq!(
         windows_log_directory_from_local_app_data(Path::new("relative/AppData/Local")),
         Err(DirectoryUnavailableError)
     );
+}
+
+#[test]
+fn windows_diagnostics_do_not_prevent_per_user_install_directory_removal() {
+    use muniment_runtime::{write_windows_diagnostic, WindowsDiagnosticEvent};
+    use std::fs;
+
+    let template = include_str!("../../windows/per-user.wxs");
+    assert!(template
+        .contains(r#"<SetDirectory Id="INSTALLDIR" Value="[LocalAppDataFolder]{{product_name}}""#));
+    assert!(include_str!("../../tauri.conf.json").contains(r#""productName": "muniment""#));
+
+    let root = std::env::temp_dir().join(format!(
+        "muniment-log-location-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let install_directory = root.join("muniment");
+    fs::create_dir(&install_directory).unwrap();
+    let payload = install_directory.join("muniment-desktop.exe");
+    fs::write(&payload, b"payload").unwrap();
+
+    let log_directory = windows_log_directory_from_local_app_data(&root).unwrap();
+    assert!(!log_directory.starts_with(&install_directory));
+    write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).unwrap();
+    assert_eq!(
+        fs::read_to_string(log_directory.join("runtime.log")).unwrap(),
+        "event=activation_failed message=runtime activation failed\n"
+    );
+
+    // Model MSI payload removal followed by its empty-directory RemoveFolder action.
+    fs::remove_file(payload).unwrap();
+    fs::remove_dir(&install_directory).unwrap();
+    assert!(!install_directory.exists());
+    assert!(log_directory.join("runtime.log").is_file());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

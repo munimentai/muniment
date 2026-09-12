@@ -207,7 +207,7 @@ check. It does not prove binary integrity or defend against compromise under
 the same account. A claimed Hello kind carries no authority beyond route
 selection for a verified desktop-image peer. The runtime writes owner-only,
 redacted, bounded diagnostics to
-`%LocalAppData%\muniment\logs\runtime.log`. These records omit tokens,
+`%LocalAppData%\ai.muniment.desktop\logs\runtime.log`. These records omit tokens,
 credentials, prompts, model output, local paths, workspace values, connection
 nonces, and peer identifiers.
 

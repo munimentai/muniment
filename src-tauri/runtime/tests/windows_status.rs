@@ -36,7 +36,7 @@ fn startup_causes_reach_the_owner_only_log() {
         WindowsDiagnosticEvent::RuntimeTaskStartFailed.with_cause(cause),
     )
     .unwrap();
-    let path = root.join("muniment/logs/runtime.log");
+    let path = root.join("ai.muniment.desktop/logs/runtime.log");
     let text = fs::read_to_string(&path).unwrap();
     assert_eq!(
         text,
@@ -94,7 +94,7 @@ fn an_orderly_windows_activation_removes_its_start() {
         fs::read_to_string(state.join("windows-starts")).unwrap(),
         ""
     );
-    assert!(!root.join("muniment/logs/runtime.log").exists());
+    assert!(!root.join("ai.muniment.desktop/logs/runtime.log").exists());
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -112,7 +112,7 @@ fn a_failed_windows_activation_records_the_failure() {
         .unwrap()
         .starts_with("failure="));
     assert_eq!(
-        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
         "event=activation_failed message=runtime activation failed\n"
     );
 
@@ -138,7 +138,7 @@ fn the_fifth_failed_windows_activation_stops_the_restart_loop() {
         fs::read_to_string(state.join("windows-starts")).unwrap(),
         "needs_attention=true\n"
     );
-    let log = fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap();
+    let log = fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap();
     assert_eq!(log.matches("event=activation_failed").count(), 4);
     assert_eq!(log.matches("event=restart_loop_stopped").count(), 1);
 
@@ -163,7 +163,7 @@ fn a_stop_decision_skips_windows_activation() {
     );
     assert!(!activated.load(Ordering::Relaxed));
     assert_eq!(
-        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
         "event=restart_loop_stopped message=runtime restart limit reached\n"
     );
 
@@ -184,7 +184,7 @@ fn an_orderly_windows_exit_record_failure_returns_failure() {
         1
     );
     assert_eq!(
-        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
         "event=start_record_failed message=start record update failed\n"
     );
 
@@ -205,7 +205,7 @@ fn a_failed_windows_exit_record_failure_returns_failure() {
         1
     );
     assert_eq!(
-        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
         "event=start_record_failed message=start record update failed\n"
     );
 
@@ -228,7 +228,7 @@ fn a_windows_start_record_failure_returns_failure() {
     );
     assert!(!activated.load(Ordering::Relaxed));
     assert_eq!(
-        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
         "event=start_record_failed message=start record update failed\n"
     );
 
@@ -317,7 +317,7 @@ fn clear_reports_lock_and_record_failures_separately() {
 #[test]
 fn creates_owner_only_windows_logs_with_fixed_records() {
     let root = directory();
-    let logs = root.join("muniment/logs");
+    let logs = root.join("ai.muniment.desktop/logs");
 
     for event in [
         WindowsDiagnosticEvent::ActivationFailed,
@@ -360,7 +360,7 @@ fn creates_owner_only_windows_logs_with_fixed_records() {
 #[test]
 fn resets_the_windows_log_only_when_the_next_record_crosses_the_limit() {
     let root = directory();
-    let application = root.join("muniment");
+    let application = root.join("ai.muniment.desktop");
     fs::create_dir(&application).unwrap();
     fs::set_permissions(&application, fs::Permissions::from_mode(0o700)).unwrap();
     let logs = application.join("logs");
@@ -391,7 +391,7 @@ fn rejects_unsafe_windows_log_paths() {
     let target = root.join("target");
     fs::create_dir(&target).unwrap();
     fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
-    let application = root.join("muniment");
+    let application = root.join("ai.muniment.desktop");
     symlink(&target, &application).unwrap();
     assert!(write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).is_err());
 

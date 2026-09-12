@@ -1010,7 +1010,7 @@ pre-admission gate below. Task Scheduler does not restart those stops. Status
 Task Scheduler applies the same four-retry bound to status 75 and failed exits.
 
 The runtime writes redacted, bounded diagnostics to
-`%LocalAppData%\muniment\logs\runtime.log`. Task registration and launch
+`%LocalAppData%\ai.muniment.desktop\logs\runtime.log`. Task registration and launch
 failures also appear in the Task Scheduler operational log when enabled.
 Diagnostics omit tokens, credentials, prompts, model output, local paths,
 workspace values, connection nonces, and peer identifiers.
