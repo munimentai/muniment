@@ -146,7 +146,6 @@ impl RuntimeAttachBoundaries {
         sign_in_running: Arc<AtomicBool>,
         chat_events: RuntimeChatEventBroadcast,
     ) -> Self {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let chat_events = chat_events.with_config_directory(config_directory.clone());
         Self {
             storage,

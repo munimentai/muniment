@@ -20,7 +20,6 @@ pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 pub struct RuntimeChatEventBroadcast {
     shared: Arc<RuntimeChatEventBroadcastShared>,
     approval: SignedWorkspaceApproval,
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     config_directory: Option<PathBuf>,
 }
 
@@ -44,19 +43,16 @@ impl RuntimeChatEventBroadcast {
         Self {
             shared: Arc::new(RuntimeChatEventBroadcastShared::default()),
             approval,
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
             config_directory: None,
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn with_config_directory(mut self, config_directory: PathBuf) -> Self {
         self.config_directory = Some(config_directory);
         self
     }
 
     fn allows_workspace(&self, workspace: &str) -> bool {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(directory) = &self.config_directory {
             if muniment_core::local_mode::is_local_mode(directory) {
                 return workspace == "local";
