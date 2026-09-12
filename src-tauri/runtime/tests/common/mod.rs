@@ -11,7 +11,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use muniment_core::auth::{InstallationRecord, NativeCredentials, TokenSet};
+use muniment_core::attach::RuntimeActivityRegistry;
+use muniment_core::auth::{
+    AuthStatus, EntitlementSnapshotTracker, InstallationRecord, NativeCredentials, TokenSet,
+};
 use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_grant::ChatGrant;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
@@ -212,6 +215,22 @@ pub fn read_request(stream: &mut TcpStream) -> String {
         }
     }
     String::from_utf8(bytes).unwrap()
+}
+
+pub fn save_mock_session() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    save_credentials(&credentials());
+}
+
+pub fn sign_out_session(activity: &RuntimeActivityRegistry) -> AuthStatus {
+    muniment_runtime::sign_out(&EntitlementSnapshotTracker::new(), activity).unwrap()
+}
+
+pub fn has_credentials() -> bool {
+    KeyringNativeCredentialStore::new()
+        .load_credentials()
+        .unwrap()
+        .is_some()
 }
 
 pub fn save_credentials(credentials: &NativeCredentials) {

@@ -101,10 +101,10 @@ checkable in the diff:
   never a cloud virtual key.
 - The runtime logs its startup and the desktop logs the native-auth call, so a
   silent auth path names its cause from an envelope.
-- After Pi readiness each prompt has a 30-second bound to its first reply
-  event, and an acknowledgment does not satisfy it. A timeout records a failed
-  reply with its cause in the run journal and shell, and the runtime logs the
-  run start, Pi spawn, first reply, provider outcome and stderr tail by run id.
+- Signed-in runs give Pi 30 seconds to become ready. After readiness each prompt has
+  30 seconds to its first reply event. An acknowledgment does not count. A timeout records
+  a failed reply with its cause in the run journal and shell. The runtime logs the run start,
+  Pi spawn, first reply, provider outcome and stderr tail by run id.
 - Pi sidecar parity with the factory harness, below.
 
 ## First run
