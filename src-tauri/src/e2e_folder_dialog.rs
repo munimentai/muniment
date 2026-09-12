@@ -1,42 +1,46 @@
-// AppKit dispatch stays inside the E2E app. It needs no Apple Events or
-// Accessibility grant and never posts events to another process.
+// The E2E app uses its own NSOpenPanel API without Apple Events or Accessibility grants.
 use objc2::{rc::Retained, MainThreadMarker};
-use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSOpenPanel};
-use objc2_foundation::{NSPoint, NSString};
-use std::{
-    cell::RefCell,
-    path::Path,
-    time::{Duration, Instant},
-};
+use objc2_app_kit::{NSApplication, NSOpenPanel};
+use objc2_foundation::{NSString, NSURL};
+use std::{cell::RefCell, path::Path, time::Instant};
 
-struct Drive {
-    panel: Retained<NSOpenPanel>,
-    home: String,
-    step: u8,
-    next: Instant,
+mod drive;
+use drive::{Drive, FolderPanel};
+
+impl FolderPanel for Retained<NSOpenPanel> {
+    fn directory(&self) -> Option<String> {
+        self.directoryURL()?.path().map(|path| path.to_string())
+    }
+
+    fn set_directory(&self, home: &str) {
+        let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(home), true);
+        self.setDirectoryURL(Some(&url));
+    }
+
+    fn is_visible(&self) -> bool {
+        self.isVisible()
+    }
+
+    fn accept(&self) {
+        // A nil sender carries no object type requirements.
+        unsafe { self.ok(None) };
+    }
+
+    fn selected_paths(&self) -> Vec<String> {
+        let urls = self.URLs();
+        (0..urls.len())
+            .map(|index| {
+                urls.objectAtIndex(index)
+                    .path()
+                    .map(|path| path.to_string())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
 }
 
 thread_local! {
-    static DRIVE: RefCell<Option<Drive>> = const { RefCell::new(None) };
-}
-
-fn key(
-    app: &NSApplication,
-    text: &str,
-    code: u16,
-    flags: NSEventModifierFlags,
-) -> Result<(), String> {
-    let window = app
-        .keyWindow()
-        .ok_or("The Home picker has no key window.")?;
-    let text = NSString::from_str(text);
-    for kind in [NSEventType::KeyDown, NSEventType::KeyUp] {
-        let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
-            kind, NSPoint::new(0.0, 0.0), flags, 0.0, window.windowNumber(), None, &text, &text, false, code,
-        ).ok_or("The Home picker could not make a key event.")?;
-        app.sendEvent(&event);
-    }
-    Ok(())
+    static DRIVE: RefCell<Option<Drive<Retained<NSOpenPanel>>>> = const { RefCell::new(None) };
 }
 
 fn poll(home: String) -> Result<bool, String> {
@@ -62,72 +66,16 @@ fn poll(home: String) -> Result<bool, String> {
             {
                 return Err("The NSOpenPanel is not a single-folder picker.".into());
             }
-            *slot = Some(Drive {
-                panel,
-                home: home.clone(),
-                step: 0,
-                next: Instant::now(),
-            });
+            *slot = Some(Drive::new(panel, home.clone(), Instant::now()));
         }
-        let drive = slot
+        let closed = slot
             .as_mut()
-            .ok_or("The Home picker drive is unavailable.")?;
-        if drive.home != home {
-            return Err("The Home path changed during the picker drive.".into());
-        }
-        if Instant::now() < drive.next {
-            return Ok(false);
-        }
-        if drive.step == 4 {
-            if drive.panel.isVisible() {
-                return Ok(false);
-            }
-            let urls = drive.panel.URLs();
-            if urls.len() != 1
-                || urls
-                    .objectAtIndex(0)
-                    .path()
-                    .map(|path| path.to_string())
-                    .as_deref()
-                    != Some(home.as_str())
-            {
-                return Err("The NSOpenPanel did not select the isolated Home.".into());
-            }
+            .ok_or("The Home picker drive is unavailable.")?
+            .poll(&home, Instant::now())?;
+        if closed {
             *slot = None;
-            return Ok(true);
         }
-        if !drive.panel.isVisible() {
-            return Err("The NSOpenPanel closed before the picker drive finished.".into());
-        }
-        let window = app
-            .keyWindow()
-            .ok_or("The Home picker has no key window.")?;
-        // Accept only this panel or its sheet. Never type into the composer.
-        if window.windowNumber() != drive.panel.windowNumber()
-            && window
-                .sheetParent()
-                .is_none_or(|parent| parent.windowNumber() != drive.panel.windowNumber())
-        {
-            return Err("The NSOpenPanel lost keyboard focus.".into());
-        }
-        match drive.step {
-            0 => key(
-                &app,
-                "G",
-                5,
-                NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
-            )?,
-            1 => {
-                key(&app, "a", 0, NSEventModifierFlags::Command)?;
-                key(&app, &home, 0, NSEventModifierFlags::empty())?;
-            }
-            2 | 3 => key(&app, "\r", 36, NSEventModifierFlags::empty())?,
-            _ => return Err("The Home picker drive has an invalid step.".into()),
-        }
-        drive.step += 1;
-        // Give the native Go to Folder sheet time to show, navigate, and close.
-        drive.next = Instant::now() + Duration::from_millis(500);
-        Ok(false)
+        Ok(closed)
     })
 }
 

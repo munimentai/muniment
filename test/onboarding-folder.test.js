@@ -144,10 +144,14 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(macos).toContain('windows.objectAtIndex(index).downcast::<NSOpenPanel>().ok()')
     expect(macos).toContain('panel.isVisible()')
     expect(macos).toContain('panels.len() > 1')
-    expect(macos).toContain('The NSOpenPanel lost keyboard focus.')
-    expect(macos).toContain('The NSOpenPanel did not select the isolated Home.')
-    expect(macos).toContain('The Home path changed during the picker drive.')
-    expect(macos).toContain('drive.panel.URLs()')
+    const drive = await readFile(new URL('../src-tauri/src/e2e_folder_dialog/drive.rs', import.meta.url), 'utf8')
+    expect(drive).toContain('The NSOpenPanel did not select the isolated Home.')
+    expect(drive).toContain('The Home path changed during the picker drive.')
+    expect(drive).toContain('The NSOpenPanel did not move to the isolated Home.')
+    expect(drive).toContain('The NSOpenPanel did not close after ok.')
+    expect(drive).toContain('The panel directory is')
+    expect(drive).toContain('Duration::from_secs(5)')
+    expect(macos).toContain('self.URLs()')
     const windows = await readFile(new URL('./e2e/support/folder-dialog-windows.ps1', import.meta.url), 'utf8')
     expect(windows).toContain("Get-Process -Name 'muniment-desktop'")
     expect(windows).toContain('$_.Current.ProcessId -in $processIds')
@@ -173,7 +177,11 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(invoke).toHaveBeenCalledExactlyOnceWith('e2e_drive_folder_dialog')
 
     const native = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
-    expect(native).toContain('app.sendEvent(&event)')
+    expect(native).toContain('NSURL::fileURLWithPath_isDirectory(&NSString::from_str(home), true)')
+    expect(native).toContain('self.setDirectoryURL(Some(&url))')
+    expect(native).toContain('self.directoryURL()?.path()')
+    expect(native).toContain('self.ok(None)')
+    expect(native).not.toMatch(/sendEvent|NSEvent|keyWindow|setNameFieldStringValue|performClick/)
     expect(native).toContain('run_on_main_thread')
     expect(native).toContain('MUNIMENT_E2E_ONBOARDING_ONLY')
     expect(native).not.toMatch(/AXUIElement|AXIsProcessTrusted|CGEventPost|osascript|Command::new/)
@@ -261,6 +269,27 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(error.message).toContain('NSOpenPanel timed out')
     expect(error.message).toContain('"open":{"status":"pending"}')
     expect(error.message).toContain(state === 'blocked' ? 'The AppKit snapshot timed out.' : 'The AppKit thread is unavailable.')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('A stalled panel reports its step and directory before the outer timeout.', async () => {
+    vi.useFakeTimers()
+    const started = Date.now()
+    const cause = 'The NSOpenPanel did not move to the isolated Home. The drive stopped at step 1 (wait for directoryURL). The panel directory is "/start".'
+    const poll = vi.fn(() => Date.now() - started >= 5000 ? Promise.reject(cause) : Promise.resolve(false))
+    const diagnostics = {
+      native: { windows: [{ class: 'NSOpenPanel', title: 'Open', visible: true }], step: 1 },
+      open: { status: 'pending' },
+    }
+    const failure = driveMacosFolder(30, poll, () => diagnostics).catch((error) => error)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await failure).toMatchObject({
+      cause, message: `${cause} Home picker diagnostics: ${JSON.stringify(diagnostics)}`,
+    })
+    expect(Date.now() - started).toBe(5000)
+    const calls = poll.mock.calls.length
+    await vi.runAllTimersAsync()
+    expect(poll).toHaveBeenCalledTimes(calls)
     expect(vi.getTimerCount()).toBe(0)
   })
 

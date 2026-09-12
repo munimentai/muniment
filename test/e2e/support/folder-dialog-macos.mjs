@@ -1,4 +1,4 @@
-// The E2E app sends AppKit events to its own NSOpenPanel. No privacy grant
+// The E2E app uses its own NSOpenPanel API. No privacy grant
 // or external UI automation process participates in this drive.
 async function snapshot() {
   return browser.execute(async () => {
