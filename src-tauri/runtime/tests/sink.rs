@@ -270,7 +270,7 @@ fn withholds_a_mismatched_broadcast_and_keeps_the_subscription() {
     assert_eq!(subscriber.recv().unwrap().text, "hello");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn local_broadcast_needs_the_marker_not_signed_workspace_approval() {
     let profile = TemporaryProfile::new("sink-local", false);
