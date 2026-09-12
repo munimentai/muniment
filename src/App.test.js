@@ -1049,10 +1049,105 @@ describe('workspace composer entry', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_queue', expect.anything())
   })
 
+  it('refuses Send during the first thread restore and keeps the draft for a retry', async () => {
+    const restore = deferred()
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'chat_thread_open') return restore.promise
+      if (command === 'chat_submit') return { runId: 'run-after-restore', attachments: [] }
+      return fallback(command, payload)
+    })
+    render(App)
+    const composer = await findWorkspaceComposer()
+    const send = screen.getByRole('button', { name: 'Send' })
+    await waitFor(() => expect(composer).toBeDisabled())
+
+    // A stale input event can land as the thread restore starts.
+    await fireEvent.input(composer, { target: { value: 'Keep this prompt' } })
+    expect(send).toBeDisabled()
+    expect(send).toHaveAttribute('aria-disabled', 'true')
+    const status = screen.getByText('Send waits for the thread. Your draft stays here.')
+    expect(status).toHaveAttribute('role', 'status')
+    expect(composer).toHaveAccessibleDescription(status.textContent)
+    await fireEvent.click(send)
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(composer).toHaveValue('Keep this prompt')
+
+    restore.resolve([])
+    await waitFor(() => expect(send).toBeEnabled())
+    expect(composer).toBeEnabled()
+    expect(status).not.toBeInTheDocument()
+    expect(composer).toHaveValue('Keep this prompt')
+    await fireEvent.click(send)
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_submit')).toEqual([
+      ['chat_submit', { prompt: 'Keep this prompt', files: [] }],
+    ])
+    expect(await screen.findByText('Keep this prompt', { selector: '.user-turn p' })).toBeInTheDocument()
+    expect(composer).toHaveValue('')
+  })
+
+  it.each(['success', 'failure', 'rollback failure'])('refuses Send during a thread switch and releases it after %s', async (outcome) => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Current thread', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Other thread', updatedAt: '' },
+    ]
+    let open = deferred()
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'chat_select_thread') {
+        if (outcome === 'rollback failure' && payload.threadId === 'thread-1') return Promise.reject(new Error('Thread selection failed.'))
+        return undefined
+      }
+      if (command === 'chat_thread_open' && payload.threadId === 'thread-2') return open.promise
+      if (command === 'chat_submit') return { runId: 'run-after-switch', attachments: [] }
+      return fallback(command, payload)
+    })
+    render(App)
+    const composer = await findWorkspaceComposer()
+    await waitFor(() => expect(composer).toBeEnabled())
+    await fireEvent.input(composer, { target: { value: 'Keep this draft' } })
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toBeEnabled()
+    await fireEvent.click(screen.getByRole('button', { name: /^Other thread/ }))
+
+    expect(send).toBeDisabled()
+    expect(composer).toBeDisabled()
+    await fireEvent.click(send)
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(composer).toHaveValue('Keep this draft')
+
+    if (outcome === 'success') open.resolve([])
+    else open.reject(new Error('Thread read failed.'))
+    if (outcome !== 'success') {
+      const retry = await screen.findByRole('button', { name: 'Restore history' })
+      expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'thread-1' })
+      if (outcome === 'rollback failure') {
+        expect(send).toBeDisabled()
+        expect(composer).toBeDisabled()
+        expect(screen.getByText('Send waits for the thread. Your draft stays here.')).toBeVisible()
+        await fireEvent.click(send)
+        expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+        open = deferred()
+        await fireEvent.click(retry)
+        open.resolve([])
+      }
+    }
+    await waitFor(() => expect(send).toBeEnabled())
+    expect(composer).toHaveValue('Keep this draft')
+    await fireEvent.click(send)
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_submit')).toEqual([
+      ['chat_submit', { prompt: 'Keep this draft', files: [] }],
+    ])
+    expect(await screen.findByText('Keep this draft', { selector: '.user-turn p' })).toBeInTheDocument()
+  })
+
   it('names and describes the composer in its default state', async () => {
     render(App)
 
     const composer = await findWorkspaceComposer()
+    await waitFor(() => expect(composer).toBeEnabled())
     expect(composer).toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
     expect(composer).toHaveAttribute('placeholder', 'Ask anything')
   })
@@ -1071,6 +1166,7 @@ describe('workspace composer entry', () => {
   it('focuses the primary composer action once when the workspace appears', async () => {
     render(App)
     const composer = await findWorkspaceComposer()
+    await waitFor(() => expect(composer).toBeEnabled())
     const send = screen.getByRole('button', { name: 'Send' })
 
     expect(composer).toHaveFocus()
@@ -5549,6 +5645,7 @@ describe('active run composer queue', () => {
   it('keeps focus on the same Send button when a run starts', async () => {
     render(App)
     const composer = await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(composer).toBeEnabled())
     await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
     const send = screen.getByRole('button', { name: 'Send' })
     send.focus()

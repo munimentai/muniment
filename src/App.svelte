@@ -1351,7 +1351,9 @@
             </section>
           {/if}
           <div class="composer-row" bind:this={composerRow}>
-            {#if isDictationActive(dictation)}
+            {#if threadSwitching}
+              <span id="composer-hint" role="status">Send waits for the thread. Your draft stays here.</span>
+            {:else if isDictationActive(dictation)}
               <span id="composer-hint" class="capture-status" role="status">
                 <span class="capture-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
@@ -1368,7 +1370,7 @@
                 <button class="quiet follow-up" disabled={!draft.trim() || runtimeUpgradePending()} onclick={() => chatController.queue('followUp')}>Queue follow-up</button>
                 <button onclick={() => chatController.cancel()}>Stop</button>
               {/if}
-              <button class="primary" aria-disabled={sendDisabled() ? 'true' : undefined} onclick={send}>Send</button>
+              <button class="primary" disabled={threadSwitching} aria-disabled={sendDisabled() ? 'true' : undefined} onclick={send}>Send</button>
             </div>
           </div>
           {#if dictation.state === 'modelNotInstalled'}
