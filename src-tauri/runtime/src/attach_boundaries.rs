@@ -731,7 +731,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             &self.entitlement_tracker,
             &self.runtime_activity,
         )
-        .map_err(|_| ProtocolError::persistence_failed())
+        .map_err(|error| ProtocolError::persistence_failed_with_reason(error.to_string()))
     }
 
     fn sign_out(

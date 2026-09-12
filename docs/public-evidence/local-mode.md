@@ -57,6 +57,10 @@ The composer keeps its rest text instead of repeating the cause.
 
 The runtime log records run lifecycle outcomes and Pi's stderr tail for failed replies. The Linux evidence envelope keeps this log in `pi-local-mode-stderr.log` beside `muniment-runtime.log`.
 
+On Windows, the desktop starts the runtime task with `RunEx` and the calling process's session id.
+If the task stays `Queued` for five seconds, the runtime notice names the state and session id.
+The desktop writes the same cause to stderr.
+
 On macOS, the bundled runtime resolves the desktop executable at `Contents/MacOS/muniment-desktop` from `Contents/Library/LaunchServices/muniment-runtime`.
 Attach setup failures record `step=desktop_executable_check`, `step=socket_bind`, or `step=state_open` in `~/Library/Logs/Muniment/runtime.log` and the unified log.
 
