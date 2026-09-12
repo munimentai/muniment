@@ -179,7 +179,9 @@ fn main() {
             #[cfg(target_os = "macos")]
             macos_runtime_notice_probe::runtime_notice_observed,
             #[cfg(all(target_os = "macos", feature = "e2e-webdriver"))]
-            e2e_folder_dialog::e2e_drive_folder_dialog
+            e2e_folder_dialog::e2e_drive_folder_dialog,
+            #[cfg(all(target_os = "macos", feature = "e2e-webdriver"))]
+            e2e_folder_dialog::e2e_folder_dialog_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("error while running muniment");
