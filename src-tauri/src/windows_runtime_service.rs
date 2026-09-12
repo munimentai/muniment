@@ -334,7 +334,7 @@ impl DiagnosticSink for WindowsDiagnosticSink {
                 ) {
                     report_diagnostic_failure_once(
                         &REPORTED,
-                        &local_app_data.join("muniment/logs/runtime.log"),
+                        &local_app_data.join("ai.muniment.desktop/logs/runtime.log"),
                         &error,
                         |message| eprintln!("{message}"),
                     );
@@ -516,7 +516,7 @@ mod tests {
     fn reports_the_refused_path_and_error_once_across_threads() {
         let reported = std::sync::Once::new();
         let messages = std::sync::Mutex::new(Vec::new());
-        let path = Path::new("C:/Users/person/AppData/Local/muniment/logs/runtime.log");
+        let path = Path::new("C:/Users/person/AppData/Local/ai.muniment.desktop/logs/runtime.log");
         let error = std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "diagnostic path owner or access is unsafe",
