@@ -709,6 +709,114 @@ describe.skipIf(process.platform === 'win32')('macOS WDIO startup diagnostics', 
   const launcher = path.join(root, 'test/e2e/support/macos-wdio-app.sh')
   const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
 
+  const installSequence = runner.slice(runner.indexOf('# The installed smoke removes'), runner.indexOf('\nrun_step image-fixture'))
+
+  const runInstalledApp = (mode = 'pass') => {
+    const directory = temp()
+    const bundle = path.join(directory, 'release/muniment.app')
+    const installedBundle = path.join(directory, 'Applications/muniment.app')
+    const resources = path.join(bundle, 'Contents/Resources/asr-runtime')
+    fs.mkdirSync(resources, { recursive: true })
+    fs.mkdirSync(path.join(bundle, 'Contents/MacOS'), { recursive: true })
+    fs.writeFileSync(path.join(bundle, 'Contents/MacOS/muniment-desktop'), '#!/bin/sh\nexit 99\n', { mode: 0o755 })
+    for (const library of ['libsherpa-onnx-c-api.dylib', 'libonnxruntime.1.24.4.dylib']) {
+      if (mode !== `missing-${library}`) fs.writeFileSync(path.join(resources, library), 'installed library')
+    }
+    const app = path.join(directory, 'source app')
+    fs.writeFileSync(app, `#!/bin/bash
+# TAURI_WEBDRIVER_PORT
+[[ -z \${DYLD_LIBRARY_PATH+x} && -z \${DYLD_FALLBACK_LIBRARY_PATH+x} ]] || exit 90
+for library in libsherpa-onnx-c-api.dylib libonnxruntime.1.24.4.dylib; do
+  [[ -s "$(dirname "$0")/../Resources/asr-runtime/$library" ]] || exit 91
+done
+printf 'The installed WebDriver app reached the shell.\\n'
+`, { mode: 0o755 })
+    if (mode === 'existing-bundle') {
+      fs.mkdirSync(installedBundle, { recursive: true })
+      fs.writeFileSync(path.join(installedBundle, 'sentinel'), 'Keep this bundle.')
+    }
+    const artifacts = path.join(directory, 'artifacts')
+    const result = spawnSync('bash', ['-c', `${setup}
+installed_bundle="$FIXTURE_INSTALLED_BUNDLE"
+app_binary="$FIXTURE_APP"
+stop_app() { [[ $FIXTURE_MODE != stale-process ]]; }
+sleep() { :; }
+gh() {
+  if [[ $* == *releases/tags/nightly ]]; then
+    [[ $FIXTURE_MODE != release-failure ]] || return 7
+    if [[ $FIXTURE_MODE == missing-asset ]]; then printf '{"assets":[]}'; return; fi
+    printf '{"assets":[{"name":"nightly-%s-macos-muniment.app.zip","id":42}]}\\n' "$MUNIMENT_E2E_SOURCE_SHA"
+  else
+    [[ $FIXTURE_MODE != download-failure ]] || return 7
+    printf 'archive fixture'
+  fi
+}
+ditto() {
+  if [[ $1 == -x ]]; then
+    mkdir -p "$4"
+    cp -R "$FIXTURE_BUNDLE" "$4/muniment.app"
+  else
+    mkdir -p "$(dirname "$2")"
+    if [[ $FIXTURE_MODE == install-failure ]]; then mkdir -p "$2"; return 7; fi
+    cp -R "$1" "$2"
+  fi
+}
+install() {
+  [[ $FIXTURE_MODE != copy-failure ]] || return 7
+  if [[ $FIXTURE_MODE == stale-copy ]]; then return 0; fi
+  command install "$@"
+}
+${installSequence}
+export MUNIMENT_E2E_DRIVER_APP_LOG="$raw/driver-app-local-mode-chat.log"
+run_step spec-local-mode-chat "$MUNIMENT_E2E_APP_BINARY"
+`], {
+      encoding: 'utf8', timeout: 10_000,
+      env: {
+        ...process.env, HOME: directory, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts,
+        FIXTURE_MODE: mode, FIXTURE_APP: app, FIXTURE_BUNDLE: bundle, FIXTURE_INSTALLED_BUNDLE: installedBundle,
+        GH_TOKEN: 'fixture-token', GITHUB_REPOSITORY: 'fixture/desktop',
+        MUNIMENT_E2E_SOURCE_SHA: mode === 'invalid-source' ? '' : 'a'.repeat(40),
+        DYLD_LIBRARY_PATH: '/invalid/override', DYLD_FALLBACK_LIBRARY_PATH: '/invalid/fallback',
+      },
+    })
+    return { result, artifacts, installedBundle, reason: fs.readFileSync(path.join(artifacts, 'exit-reason.txt'), 'utf8') }
+  }
+
+  it('Runs the source build beside the installed libraries without loader overrides.', () => {
+    const { result, artifacts, installedBundle, reason } = runInstalledApp()
+    expect(result.status, result.stderr).toBe(0)
+    expect(reason).toContain('first_failed_step=none\n')
+    expect(fs.readFileSync(path.join(artifacts, 'driver-app-local-mode-chat.log'), 'utf8'))
+      .toBe('The installed WebDriver app reached the shell.\n')
+    expect(fs.existsSync(installedBundle)).toBe(false)
+    expect(runner).toContain('installed_bundle=/Applications/muniment.app')
+    expect(runner).toContain('installed_desktop="$installed_bundle/Contents/MacOS/muniment-desktop"')
+    expect(runner).toContain('export MUNIMENT_E2E_REAL_APP_BINARY="$installed_desktop"')
+    expect(runner).not.toMatch(/export DYLD_(?:LIBRARY_PATH|FALLBACK_LIBRARY_PATH)=/)
+  })
+
+  it.each([
+    ['invalid-source', 'validate-source'],
+    ['release-failure', 'fetch-release'],
+    ['missing-asset', 'identify-asset'],
+    ['download-failure', 'download-bundle'],
+    ['stale-process', 'stop-before-install'],
+    ['install-failure', 'install-bundle'],
+    ['missing-libsherpa-onnx-c-api.dylib', 'validate-libsherpa-onnx-c-api.dylib'],
+    ['missing-libonnxruntime.1.24.4.dylib', 'validate-libonnxruntime.1.24.4.dylib'],
+    ['copy-failure', 'install-webdriver-app'],
+    ['stale-copy', 'verify-webdriver-app'],
+    ['existing-bundle', 'validate-bundle-absent'],
+  ])('Names the failed install check for %s before the app starts.', (mode, step) => {
+    const { result, artifacts, installedBundle, reason } = runInstalledApp(mode)
+    expect(result.status, result.stderr).toBe(1)
+    expect(reason).toContain(`first_failed_step=${step}\n`)
+    expect(fs.existsSync(path.join(artifacts, 'driver-app-local-mode-chat.log'))).toBe(false)
+    if (mode === 'existing-bundle') {
+      expect(fs.readFileSync(path.join(installedBundle, 'sentinel'), 'utf8')).toBe('Keep this bundle.')
+    } else expect(fs.existsSync(installedBundle)).toBe(false)
+  })
+
   it('Captures an immediate abort and preserves the PID, signal, arguments, and environment.', () => {
     const directory = temp()
     const app = path.join(directory, 'app with spaces')
