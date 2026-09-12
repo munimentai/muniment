@@ -161,6 +161,7 @@ pub fn accept_prompt(
             let mut storage = match storage.lock() {
                 Ok(storage) => storage,
                 Err(poisoned) => {
+                    let reason = format!("Conversation history lock failed: {poisoned}");
                     let mut storage = poisoned.into_inner();
                     record_persistence_failure(
                         &mut storage.journal,
@@ -171,7 +172,7 @@ pub fn accept_prompt(
                         "muniment-runtime",
                         env!("CARGO_PKG_VERSION"),
                     );
-                    return Err("Conversation history is unavailable.".to_string());
+                    return Err(reason);
                 }
             };
             match storage.journal.run_thread_id(&run_id) {
@@ -188,22 +189,19 @@ pub fn accept_prompt(
                     );
                     return Err(match result {
                         Err(error) => error.to_string(),
-                        Ok(None) => "Conversation history is unavailable.".to_string(),
+                        Ok(None) => format!("The journal has no thread for run {run_id}."),
                         Ok(Some(_)) => unreachable!(),
                     });
                 }
             }
         };
-        if memory_runtime
-            .open_session(
-                &run_id,
-                &thread_id,
-                ModelMemoryCapability {
-                    minimum_cacheable_prefix_characters: grant.minimum_cacheable_prefix_characters,
-                },
-            )
-            .is_err()
-        {
+        if let Err(error) = memory_runtime.open_session(
+            &run_id,
+            &thread_id,
+            ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: grant.minimum_cacheable_prefix_characters,
+            },
+        ) {
             let mut storage = storage
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -216,7 +214,9 @@ pub fn accept_prompt(
                 "muniment-runtime",
                 env!("CARGO_PKG_VERSION"),
             );
-            return Err("Conversation history is unavailable.".to_string());
+            return Err(format!(
+                "Conversation history memory session failed: {error:?}"
+            ));
         }
         Ok::<_, String>((prepared, thread_id))
     })();

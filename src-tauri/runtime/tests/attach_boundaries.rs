@@ -790,7 +790,9 @@ fn runtime_boundaries_answer_all_attach_reads() {
             })
             .err()
             .unwrap(),
-        ProtocolError::persistence_failed()
+        ProtocolError::persistence_failed_with_reason(
+            "Conversation history journal operation failed: ThreadNotOwned"
+        )
     );
     other_history_server.join().unwrap();
 

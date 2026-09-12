@@ -149,6 +149,88 @@ fn lists_threads_and_opens_the_selected_thread() {
 }
 
 #[test]
+fn thread_operations_report_the_poisoned_storage_lock() {
+    let profile = TemporaryProfile::new("thread-lock", false);
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    let poisoned = Arc::clone(&storage);
+    assert!(std::thread::spawn(move || {
+        let _guard = poisoned.lock().unwrap();
+        panic!("poison the storage lock");
+    })
+    .join()
+    .is_err());
+    let expected = format!(
+        "Conversation history lock failed: {}",
+        storage.lock().err().unwrap()
+    );
+    let errors = [
+        thread_summaries(Arc::clone(&storage), None, 10, None)
+            .err()
+            .unwrap(),
+        select_thread(Arc::clone(&storage), None, "thread".into()).unwrap_err(),
+        muniment_runtime::create_thread(Arc::clone(&storage), "local".into(), "default".into())
+            .unwrap_err(),
+        rename_thread(Arc::clone(&storage), None, "thread".into(), "title".into()).unwrap_err(),
+        delete_thread(Arc::clone(&storage), None, "thread".into()).unwrap_err(),
+        muniment_runtime::apply_retention(Arc::clone(&storage), 0).unwrap_err(),
+        thread_page(
+            &profile.profile,
+            Arc::clone(&storage),
+            None,
+            "thread".into(),
+            10,
+            None,
+        )
+        .err()
+        .unwrap(),
+    ];
+    for error in errors {
+        assert_eq!(error, expected);
+    }
+}
+
+#[test]
+fn history_and_ownership_keep_the_underlying_journal_error() {
+    let profile = TemporaryProfile::new("thread-journal-error", false);
+    let storage = open_profile_storage(&profile.profile).unwrap();
+    let run_id = "01900000-0000-7000-8000-000000000008";
+    let thread_id = prepare_run(&storage, run_id, "owner");
+    common::remove_journal_tables(&profile.profile, &["events"]);
+    let ownership = select_thread(
+        Arc::clone(&storage),
+        Some("owner".into()),
+        thread_id.clone(),
+    )
+    .unwrap_err();
+    let history = thread_page(
+        &profile.profile,
+        Arc::clone(&storage),
+        Some("owner".into()),
+        thread_id,
+        10,
+        None,
+    )
+    .err()
+    .unwrap();
+    for error in [ownership, history] {
+        assert!(error.contains("FirstEnvelopeUnavailable"), "{error}");
+        assert!(error.contains("no such table: events"), "{error}");
+    }
+    let error = muniment_core::thread_history::project_history_entry(
+        &mut storage.lock().unwrap().journal,
+        None,
+        run_id.into(),
+        Some("owner"),
+        &profile.profile,
+    )
+    .err()
+    .unwrap();
+    let error = format!("{error:?}");
+    assert!(error.contains("RunEventsUnavailable"), "{error}");
+    assert!(error.contains("no such table: events"), "{error}");
+}
+
+#[test]
 fn rejects_a_thread_owned_by_another_subject() {
     let temporary_profile = TemporaryProfile::new("thread-owner", false);
     let profile = temporary_profile.profile.clone();
@@ -159,7 +241,10 @@ fn rejects_a_thread_owned_by_another_subject() {
         .err()
         .unwrap();
 
-    assert_eq!(error, "Conversation history is unavailable.");
+    assert_eq!(
+        error,
+        "Conversation history journal operation failed: ThreadNotOwned"
+    );
 }
 
 #[test]
@@ -260,7 +345,7 @@ fn rejects_mutations_by_another_subject_without_appending_events() {
             "New title".into(),
         )
         .unwrap_err(),
-        "Conversation history is unavailable."
+        "Conversation history journal operation failed: NotOwned"
     );
     assert_eq!(
         delete_thread(
@@ -269,7 +354,7 @@ fn rejects_mutations_by_another_subject_without_appending_events() {
             thread_id.clone(),
         )
         .unwrap_err(),
-        "Conversation history is unavailable."
+        "Conversation history journal operation failed: NotOwned"
     );
     assert_eq!(
         storage

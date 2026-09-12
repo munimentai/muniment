@@ -18,6 +18,14 @@ use muniment_core::thread_history::{chat_thread_open_page, ChatThreadOpenPage};
 use muniment_core::thread_ownership::subject_owns_first_run;
 use std::path::Path;
 
+fn lock_error(error: impl std::fmt::Display) -> String {
+    format!("Conversation history lock failed: {error}")
+}
+
+fn journal_error(error: impl std::fmt::Debug) -> String {
+    format!("Conversation history journal operation failed: {error:?}")
+}
+
 /// Lists the threads owned by one subject.
 pub fn thread_summaries(
     storage: SharedStorage,
@@ -25,16 +33,14 @@ pub fn thread_summaries(
     limit: usize,
     cursor: Option<String>,
 ) -> Result<ThreadSummaryPage, String> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut storage = storage.lock().map_err(lock_error)?;
     chat_thread_summaries_page(
         &mut storage.journal,
         subject.as_deref(),
         limit,
         cursor.as_deref(),
     )
-    .map_err(|_| "Conversation history is unavailable.".to_string())
+    .map_err(journal_error)
 }
 
 /// Reports whether one subject owns a thread.
@@ -43,11 +49,9 @@ pub fn select_thread(
     subject: Option<String>,
     thread_id: String,
 ) -> Result<bool, String> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut storage = storage.lock().map_err(lock_error)?;
     subject_owns_first_run(&mut storage.journal, &thread_id, subject.as_deref())
-        .map_err(|_| "Conversation history is unavailable.".to_string())
+        .map_err(journal_error)
 }
 
 /// Reads one page of a run stream.
@@ -86,11 +90,8 @@ pub fn create_thread(
     provenance
         .extra
         .insert("attach_profile".into(), attach_profile.into());
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
-    create_thread_now(&mut storage.journal, &workspace, provenance)
-        .map_err(|_| "Conversation history is unavailable.".to_string())
+    let mut storage = storage.lock().map_err(lock_error)?;
+    create_thread_now(&mut storage.journal, &workspace, provenance).map_err(journal_error)
 }
 
 /// Renames one thread owned by one subject.
@@ -100,9 +101,7 @@ pub fn rename_thread(
     thread_id: String,
     title: String,
 ) -> Result<(), String> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut storage = storage.lock().map_err(lock_error)?;
     append_thread_rename_now(
         &mut storage.journal,
         subject.as_deref(),
@@ -110,7 +109,7 @@ pub fn rename_thread(
         &title,
         &runtime_provenance(),
     )
-    .map_err(|_| "Conversation history is unavailable.".to_string())
+    .map_err(journal_error)
 }
 
 /// Deletes one thread owned by one subject.
@@ -119,16 +118,14 @@ pub fn delete_thread(
     subject: Option<String>,
     thread_id: String,
 ) -> Result<(), String> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut storage = storage.lock().map_err(lock_error)?;
     append_thread_delete_now(
         &mut storage.journal,
         subject.as_deref(),
         &thread_id,
         &runtime_provenance(),
     )
-    .map_err(|_| "Conversation history is unavailable.".to_string())
+    .map_err(journal_error)
 }
 
 /// Deletes terminal runs older than the maximum age.
@@ -136,9 +133,7 @@ pub fn apply_retention(
     storage: SharedStorage,
     max_age_seconds: i64,
 ) -> Result<RetentionOutcome, String> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut storage = storage.lock().map_err(lock_error)?;
     let ChatStorage { journal, cas } = &mut *storage;
     apply_retention_now_with(journal, Some(cas), max_age_seconds, |deleted_run| {
         if !deleted_run.prompt_stored {
@@ -148,9 +143,9 @@ pub fn apply_retention(
             &deleted_run.run_id,
             deleted_run.subject.as_deref(),
         )
-        .map_err(|_| RetentionError::BeforeDelete)
+        .map_err(|error| RetentionError::BeforeDeleteWithReason(format!("{error:?}")))
     })
-    .map_err(|_| "Conversation history is unavailable.".to_string())
+    .map_err(journal_error)
 }
 
 /// Opens one thread owned by one subject.
@@ -164,9 +159,7 @@ pub fn thread_page(
 ) -> Result<ChatThreadOpenPage, String> {
     let profile_directory = profile_directory.as_ref();
     let profile = ChatProfile::new(profile_directory);
-    let mut storage = storage
-        .lock()
-        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    let mut storage = storage.lock().map_err(lock_error)?;
     let ChatStorage { journal, cas } = &mut *storage;
     chat_thread_open_page(
         journal,
@@ -177,5 +170,5 @@ pub fn thread_page(
         limit,
         cursor.as_deref(),
     )
-    .map_err(|_| "Conversation history is unavailable.".to_string())
+    .map_err(journal_error)
 }

@@ -59,6 +59,39 @@ impl Drop for TemporaryProfile {
     }
 }
 
+pub fn remove_journal_tables(profile: &Path, tables: &[&str]) {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut workspace_hasher = DefaultHasher::new();
+    manifest_dir.hash(&mut workspace_hasher);
+    let build_root = std::env::temp_dir().join(format!(
+        "muniment-runtime-journal-test-fixture-{:x}",
+        workspace_hasher.finish()
+    ));
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "run",
+            "--quiet",
+            "--locked",
+            "--package",
+            "muniment-core",
+            "--example",
+            "remove-journal-tables",
+            "--target-dir",
+        ])
+        .arg(build_root)
+        .arg("--")
+        .arg(profile.join("runs.sqlite3"))
+        .args(tables)
+        .current_dir(manifest_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "journal fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 pub fn local_grant() -> ChatGrant {
     ChatGrant::local()
 }
