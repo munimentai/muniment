@@ -3910,3 +3910,36 @@ describe('Windows runtime diagnostic transcript', () => {
     expect(runner).not.toMatch(/Copy-Item[^\n]+runtime\.log/)
   })
 })
+
+describe.skipIf(process.platform === 'win32')('macOS WDIO runtime endpoint', () => {
+  it.each(['', '/redirected/data', 'relative/data'])('Keeps the launchd endpoint across isolated spec homes with XDG_DATA_HOME=%s.', (inheritedDataHome) => {
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
+    const sequence = runner.slice(runner.indexOf('# Each spec starts'))
+    const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
+    const directory = temp()
+    const home = path.join(directory, 'login home')
+    const stateRoot = path.join(directory, 'state')
+    const result = spawnSync('bash', ['-c', `
+set -uo pipefail
+state_root="$FIXTURE_STATE_ROOT"
+raw="$state_root/raw"
+run_e2e() {
+  printf '%s\\n' "$1" "$HOME" "$XDG_DATA_HOME/ai.muniment.desktop/muniment/attach-v1.sock" "$MUNIMENT_E2E_HOME_PATH"
+}
+${sequence}
+`], {
+      encoding: 'utf8', timeout: 10_000,
+      env: { ...process.env, HOME: home, XDG_DATA_HOME: inheritedDataHome, FIXTURE_STATE_ROOT: stateRoot },
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout.trim().split('\n')).toEqual(specs.flatMap((spec, index) => {
+      const phase = index < 2 ? 'degraded' : 'ready'
+      return [
+        spec,
+        path.join(stateRoot, phase),
+        path.join(home, '.local/share/ai.muniment.desktop/muniment/attach-v1.sock'),
+        path.join(stateRoot, `${phase}-home`),
+      ]
+    }))
+  })
+})
