@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
-import { chooseFolder } from '../support/folder-dialog.mjs'
+import { chooseFolder, folderDialogDescription } from '../support/onboarding-folder.mjs'
 import { homePathMatches } from '../support/home-path.mjs'
 import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 
@@ -96,7 +96,7 @@ describe('installed nightly model-ready onboarding', () => {
     // WebDriver's getElementText is unreliable for this element here.
     // textContent provides a stable read.
     await browser.waitUntil(async () => await homePathMatches(location, home), {
-      timeoutMsg: 'the Home picker DOM value did not match the isolated Home',
+      timeoutMsg: `The Home picker DOM value did not match the isolated Home. ${folderDialogDescription(FOLDER_DIALOG_TITLE)}`,
     })
     expect(await location.getProperty('textContent')).toBe(home)
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
