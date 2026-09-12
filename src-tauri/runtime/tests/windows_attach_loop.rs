@@ -102,6 +102,53 @@ fn consecutive_failed_outcomes_reach_the_failed_exit() {
 }
 
 #[test]
+fn the_failed_exit_keeps_the_last_accept_error() {
+    use muniment_core::attach::WindowsAttachAcceptError;
+
+    let last_error = WindowsAttachAcceptError::VerifyInstanceSecurity(Some(5));
+    let mut acceptor = FakeAcceptor {
+        outcomes: std::iter::repeat_n(
+            WindowsAttachAcceptOutcome::AcceptFailed(WindowsAttachAcceptError::Connect(232)),
+            MAX_CONSECUTIVE_FAILED_ACCEPTS - 1,
+        )
+        .chain([WindowsAttachAcceptOutcome::AcceptFailed(last_error)])
+        .collect(),
+        calls: Vec::new(),
+    };
+    assert_eq!(
+        run_windows_attach_accept_loop(&mut acceptor),
+        WindowsAttachAcceptLoopExit::AcceptFailed(last_error)
+    );
+    assert_eq!(acceptor.calls.len(), MAX_CONSECUTIVE_FAILED_ACCEPTS);
+}
+
+#[test]
+fn a_served_outcome_resets_typed_accept_failures() {
+    use muniment_core::attach::WindowsAttachAcceptError;
+
+    let failures = std::iter::repeat_n(
+        WindowsAttachAcceptOutcome::AcceptFailed(WindowsAttachAcceptError::CreateEvent(8)),
+        MAX_CONSECUTIVE_FAILED_ACCEPTS - 1,
+    );
+    let outcomes = failures
+        .clone()
+        .chain([WindowsAttachAcceptOutcome::Served])
+        .chain(failures)
+        .chain([WindowsAttachAcceptOutcome::Stopped])
+        .collect::<VecDeque<_>>();
+    let count = outcomes.len();
+    let mut acceptor = FakeAcceptor {
+        outcomes,
+        calls: Vec::new(),
+    };
+    assert_eq!(
+        run_windows_attach_accept_loop(&mut acceptor),
+        WindowsAttachAcceptLoopExit::Stopped
+    );
+    assert_eq!(acceptor.calls.len(), count);
+}
+
+#[test]
 fn served_outcomes_reset_the_failed_accept_count() {
     let failures = std::iter::repeat_n(
         WindowsAttachAcceptOutcome::Failed,
