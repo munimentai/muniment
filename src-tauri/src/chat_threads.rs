@@ -270,7 +270,9 @@ fn owned_threads_error_message(_error: OwnedThreadsError) -> String {
 #[cfg(any(unix, target_os = "windows"))]
 fn desktop_thread_history_error(error: ClientError) -> String {
     match error {
-        ClientError::DesktopBusy => auth::desktop_client_error(error),
+        ClientError::DesktopBusy | ClientError::AuthorizationExpired => {
+            auth::desktop_client_error(error)
+        }
         _ => "Conversation history is unavailable.".to_string(),
     }
 }
@@ -630,6 +632,19 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use uuid::Uuid;
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn history_names_an_authorization_refusal() {
+        assert_eq!(
+            desktop_thread_history_error(ClientError::AuthorizationExpired),
+            "The runtime refused the request as unauthorized. Enter local mode or sign in, then retry."
+        );
+        assert_eq!(
+            desktop_thread_history_error(ClientError::ConnectionClosed),
+            "Conversation history is unavailable."
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[derive(Clone)]

@@ -565,7 +565,7 @@ collect_local_mode_pi_log`, 'bash', directory, data], { encoding: 'utf8' })
 
 describe.skipIf(process.platform === 'win32')('macOS WDIO spec process isolation', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
-  const functions = runner.slice(runner.indexOf('harness_processes_gone()'), runner.indexOf('\nfinalize()'))
+  const functions = fs.readFileSync('test/e2e/support/macos-spec-config.sh', 'utf8') + '\n' + runner.slice(runner.indexOf('harness_processes_gone()'), runner.indexOf('\nfinalize()'))
   const sequence = runner.slice(runner.indexOf('# Each spec starts'))
   const processes = ['app', 'desktop', 'runtime', 'tauri-driver', 'safaridriver', 'wdio', 'worker', 'job']
   const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
@@ -608,7 +608,7 @@ pkill() {
     if [[ $key == wdio ]]; then rm -f "$process_root/worker"; fi
   fi
 }
-launchctl() {
+launchctl() { if [[ $1 == setenv ]]; then [[ $3 == "$HOME/Library/Application Support" ]]; return; fi
   if [[ $1 == print ]]; then
     if [[ -e "$process_root/job" ]]; then printf 'state = running\\npid = 123\\n'; else return 1; fi
   else
@@ -653,7 +653,7 @@ ${sequence}
     const result = spawnSync('bash', [script, directory], {
       encoding: 'utf8', timeout: 10_000,
       env: {
-        ...process.env, FAILED_SPEC: failedSpec, STOP_MODE: stopMode, STUCK_PROCESS: stuckProcess,
+        ...process.env, FAILED_SPEC: failedSpec, STOP_MODE: stopMode, STUCK_PROCESS: stuckProcess, MUNIMENT_E2E_LAUNCHCTL: 'launchctl',
         MUNIMENT_E2E_FINALIZER_TEST_MODE: '0', MUNIMENT_E2E_ONBOARDING_ONLY: '0', MUNIMENT_E2E_CLEANUP_ONLY: '0',
       },
     })
@@ -697,7 +697,7 @@ ${sequence}
   })
 
   it('Checks the same process set during final cleanup.', () => {
-    expect(runner).toContain('cleanup_step stop-app stop_app\n  if (( cleanup_status != 0 )); then status=1; fi')
+    expect(runner).toContain('cleanup_step stop-app stop_app\n  cleanup_step restore-config-environment restore_macos_spec_config\n  if (( cleanup_status != 0 )); then status=1; fi')
     expect(runner.indexOf('cleanup_step stop-app stop_app')).toBeLessThan(runner.indexOf('if node test/e2e/support/redact.mjs'))
   })
 })

@@ -2458,6 +2458,23 @@ describe('chat controller', () => {
     expect(context.onFreshThread).not.toHaveBeenCalled()
   })
 
+  it('shows an unauthorized history refusal with an explicit retry', async () => {
+    const refusal = 'The runtime refused the request as unauthorized. Enter local mode or sign in, then retry.'
+    const invoke = vi.fn().mockRejectedValueOnce(refusal).mockResolvedValueOnce({ summaries: [], nextCursor: null })
+    const context = setup(invoke)
+
+    await context.controller.loadHistory()
+
+    expect(context.onHistoryError).toHaveBeenLastCalledWith(
+      `Muniment could not restore conversation history. ${refusal}`,
+      expect.objectContaining({ label: 'Restore history' }),
+    )
+    expect(invoke).toHaveBeenCalledTimes(1)
+    await context.onHistoryError.mock.lastCall[1].run()
+    expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+    context.controller.cleanup()
+  })
+
   it('surfaces a failed submit only when it is the latest submission', async () => {
     const first = deferred()
     const second = deferred()

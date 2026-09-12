@@ -385,6 +385,10 @@ pub(crate) fn desktop_client_error(error: ClientError) -> String {
     match error {
         ClientError::DesktopBusy => "Muniment is busy with another request. Try again.".to_string(),
         ClientError::RuntimeUpgradePending => runtime_update_pending_error(),
+        ClientError::AuthorizationExpired => {
+            "The runtime refused the request as unauthorized. Enter local mode or sign in, then retry."
+                .to_string()
+        }
         _ => background_service_error(),
     }
 }
