@@ -66,7 +66,7 @@ pub(crate) async fn fresh_tokens_async<R: tauri::Runtime>(
     let status = state
         .marked_refresh(move || runtime_status(session))
         .await
-        .map_err(|_| background_service_error())??;
+        .map_err(|_| runtime_task_error())??;
     status_projection(status)
 }
 
@@ -205,8 +205,8 @@ fn decode_sign_in_status(response: serde_json::Value) -> Result<AuthStatus, Stri
     let status = response
         .get("status")
         .cloned()
-        .ok_or_else(background_service_error)?;
-    serde_json::from_value(status).map_err(|_| background_service_error())
+        .ok_or_else(runtime_response_error)?;
+    serde_json::from_value(status).map_err(|_| runtime_response_error())
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -279,7 +279,7 @@ fn status_projection(status: AuthStatus) -> Result<auth::TokenSet, String> {
 fn runtime_status(session: DesktopClientSession) -> Result<AuthStatus, String> {
     let client = connected_client(session)?;
     serde_json::from_value(client.session_status().map_err(desktop_client_error)?)
-        .map_err(|_| background_service_error())
+        .map_err(|_| runtime_response_error())
 }
 
 /// Asks the runtime for session status without a cloud request.
@@ -290,7 +290,7 @@ pub async fn auth_status(
 ) -> Result<AuthStatus, String> {
     status_for_session(attach_state.desktop_client_session(), |client| {
         serde_json::from_value(client.session_status().map_err(desktop_client_error)?)
-            .map_err(|_| background_service_error())
+            .map_err(|_| runtime_response_error())
     })
     .await
 }
@@ -332,15 +332,15 @@ async fn auth_entitlement_snapshot_with_state<R: tauri::Runtime>(
     let response = state
         .marked_refresh(move || client.entitlement_snapshot().map_err(desktop_client_error))
         .await
-        .map_err(|_| background_service_error())??;
+        .map_err(|_| runtime_task_error())??;
     let response: EntitlementSnapshotResponse =
-        serde_json::from_value(response).map_err(|_| background_service_error())?;
+        serde_json::from_value(response).map_err(|_| runtime_response_error())?;
     if let Some(snapshot_version) = response.changed_snapshot_version {
         app.emit(
             "entitlement-changed",
             EntitlementChanged { snapshot_version },
         )
-        .map_err(|_| background_service_error())?;
+        .map_err(|_| "Muniment could not show the access update. Try again.".to_string())?;
     }
     Ok(response.snapshot)
 }
@@ -366,7 +366,7 @@ async fn auth_devices_with_state<R: tauri::Runtime>(
     let response = state
         .marked_refresh(move || client.list_devices().map_err(desktop_client_error))
         .await
-        .map_err(|_| background_service_error())??;
+        .map_err(|_| runtime_task_error())??;
     decode_devices(response)
 }
 
@@ -389,14 +389,45 @@ pub(crate) fn desktop_client_error(error: ClientError) -> String {
             "The runtime refused the request as unauthorized. Enter local mode or sign in, then retry."
                 .to_string()
         }
-        _ => background_service_error(),
+        ClientError::DesktopUnavailable | ClientError::ConnectionClosed => background_service_error(),
+        ClientError::Timeout => "The background service did not answer in time. Try again.".into(),
+        ClientError::ThreadNotFound => "Muniment cannot find this thread. Open another thread.".into(),
+        ClientError::RequestRejected => "The background service refused the request. Try again.".into(),
+        ClientError::DesktopFailed => "The background service could not complete the request. Try again.".into(),
+        ClientError::CapabilityRevoked => "The background service revoked access. Restart Muniment.".into(),
+        ClientError::ProtocolIncompatible => "Muniment and its background service use different protocols. Restart Muniment.".into(),
+        ClientError::MalformedFrame | ClientError::PayloadTooLarge | ClientError::UnexpectedMessage => runtime_response_error(),
+        ClientError::UnsupportedPlatform | ClientError::RuntimeDirectoryMissing | ClientError::RuntimeDirectoryRelative
+        | ClientError::RandomnessUnavailable | ClientError::WriterFailed =>
+            "Muniment could not prepare the request. Restart Muniment.".into(),
     }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+pub(crate) fn desktop_request_error(
+    error: ClientError,
+    response: Option<&muniment_core::attach::ProtocolError>,
+) -> String {
+    if let Some(muniment_core::attach::ErrorDetails::RequestReason { reason }) =
+        response.and_then(|response| response.details())
+    {
+        return reason.clone();
+    }
+    desktop_client_error(error)
+}
+
+fn runtime_response_error() -> String {
+    "The background service returned an invalid response. Restart Muniment.".into()
+}
+
+fn runtime_task_error() -> String {
+    "Muniment could not complete the background service request. Try again.".into()
 }
 
 fn decode_devices(response: serde_json::Value) -> Result<Vec<auth::NativeDevice>, String> {
     serde_json::from_value::<auth::NativeDeviceList>(response)
         .map(|list| list.devices)
-        .map_err(|_| background_service_error())
+        .map_err(|_| runtime_response_error())
 }
 
 fn connected_client(session: DesktopClientSession) -> Result<DesktopClientHolder, String> {
@@ -467,6 +498,55 @@ async fn sign_out_marked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grant_refusal_keeps_the_cloud_code_and_message() {
+        let reason = "chat_not_entitled: No chat model is currently available for this account.";
+        let error = muniment_core::attach::ProtocolError::unauthorized_with_reason(reason);
+        assert_eq!(
+            desktop_request_error(ClientError::AuthorizationExpired, Some(&error)),
+            reason
+        );
+        assert_eq!(
+            desktop_request_error(ClientError::DesktopUnavailable, None),
+            background_service_error()
+        );
+    }
+
+    #[test]
+    fn only_transport_loss_reports_an_unreachable_service() {
+        for error in [
+            ClientError::UnsupportedPlatform,
+            ClientError::AuthorizationExpired,
+            ClientError::ThreadNotFound,
+            ClientError::RequestRejected,
+            ClientError::DesktopFailed,
+            ClientError::RuntimeDirectoryMissing,
+            ClientError::RuntimeDirectoryRelative,
+            ClientError::DesktopBusy,
+            ClientError::Timeout,
+            ClientError::MalformedFrame,
+            ClientError::PayloadTooLarge,
+            ClientError::UnexpectedMessage,
+            ClientError::CapabilityRevoked,
+            ClientError::ProtocolIncompatible,
+            ClientError::RuntimeUpgradePending,
+            ClientError::RandomnessUnavailable,
+            ClientError::WriterFailed,
+        ] {
+            assert_ne!(
+                desktop_client_error(error),
+                background_service_error(),
+                "{error:?}"
+            );
+        }
+        for error in [
+            ClientError::DesktopUnavailable,
+            ClientError::ConnectionClosed,
+        ] {
+            assert_eq!(desktop_client_error(error), background_service_error());
+        }
+    }
 
     #[test]
     fn concurrent_sign_in_is_rejected_and_guard_releases_on_drop() {
@@ -794,11 +874,11 @@ mod tests {
         ] {
             assert_eq!(
                 decode_sign_in_status(response.clone()).unwrap_err(),
-                background_service_error()
+                runtime_response_error()
             );
             assert_eq!(
                 decode_sign_out_status(response).unwrap_err(),
-                background_service_error()
+                runtime_response_error()
             );
         }
         assert!(status_projection(signed_out_status()).is_err());
@@ -840,7 +920,7 @@ mod tests {
     #[test]
     fn device_listing_redacts_client_errors() {
         let error = decode_devices(serde_json::json!({"devices": "backend-secret"})).unwrap_err();
-        assert_eq!(error, background_service_error());
+        assert_eq!(error, runtime_response_error());
         assert!(!error.contains("secret"));
     }
 

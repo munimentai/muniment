@@ -32,6 +32,12 @@ Before launch, the desktop renews a grant with at most 60 seconds of safe life.
 Safe life excludes 30 seconds for clock skew.
 The receipt request carries only `runId`.
 
+An account without an allowed model receives `chat_not_entitled` from the cloud.
+The failed reply shows that code and the cloud message without retrying the grant request.
+The runtime logs the refusal code with the run id.
+The desktop keeps its runtime connection after an authorization refusal.
+The signed-in test reports a visible refusal instead of waiting for a receipt.
+
 Run the core contract tests from the repository root:
 
 ```sh

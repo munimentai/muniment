@@ -67,6 +67,10 @@ impl DesktopClient {
         self.last_request_error.as_ref()
     }
 
+    pub(crate) fn take_request_error(&mut self) -> Option<crate::ProtocolError> {
+        self.last_request_error.take()
+    }
+
     pub fn request(
         &mut self,
         operation: Operation,
