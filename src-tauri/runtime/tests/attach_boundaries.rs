@@ -492,6 +492,26 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
 }
 
 #[test]
+fn sign_in_names_a_local_mode_marker_removal_failure() {
+    let profile = TemporaryProfile::new("sign-in-marker", false);
+    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let marker = profile
+        .config
+        .join(muniment_core::local_mode::LOCAL_MODE_MARKER);
+    fs::create_dir(&marker).unwrap();
+    let error = state
+        .boundaries()
+        .with_browser_opener(Arc::new(|_: &str| panic!("The browser must not open.")))
+        .sign_in(provenance())
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::PersistenceFailed);
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains("could not remove the local mode marker"));
+    assert!(diagnostic.contains("os_code=Some("));
+    assert!(!diagnostic.contains(profile.config.to_str().unwrap()));
+}
+
+#[test]
 fn runtime_boundaries_serve_sign_in_and_refuse_a_concurrent_attempt() {
     let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
