@@ -131,6 +131,52 @@ fn poll(home: String) -> Result<bool, String> {
     })
 }
 
+#[derive(serde::Serialize)]
+pub(crate) struct WindowSnapshot {
+    class: String,
+    title: String,
+    visible: bool,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct FolderDialogSnapshot {
+    windows: Vec<WindowSnapshot>,
+    step: Option<u8>,
+}
+
+#[tauri::command]
+pub(crate) async fn e2e_folder_dialog_snapshot(
+    app: tauri::AppHandle,
+) -> Result<FolderDialogSnapshot, String> {
+    if std::env::var("MUNIMENT_E2E_ONBOARDING_ONLY").as_deref() != Ok("1") {
+        return Err("The Home picker snapshot needs the E2E onboarding runner.".into());
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    app.run_on_main_thread(move || {
+        let result = (|| {
+            let mtm = MainThreadMarker::new().ok_or("The Home picker needs the AppKit thread.")?;
+            let app = NSApplication::sharedApplication(mtm);
+            let windows = app.windows();
+            Ok(FolderDialogSnapshot {
+                windows: (0..windows.len())
+                    .map(|index| {
+                        let window = windows.objectAtIndex(index);
+                        WindowSnapshot {
+                            class: window.class().name().to_string_lossy().into_owned(),
+                            title: window.title().to_string(),
+                            visible: window.isVisible(),
+                        }
+                    })
+                    .collect(),
+                step: DRIVE.with(|slot| slot.borrow().as_ref().map(|drive| drive.step)),
+            })
+        })();
+        let _ = sender.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+    receiver.recv().map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub(crate) async fn e2e_drive_folder_dialog(app: tauri::AppHandle) -> Result<bool, String> {
     if std::env::var("MUNIMENT_E2E_ONBOARDING_ONLY").as_deref() != Ok("1") {

@@ -180,6 +180,15 @@ describe('The onboarding folder picker selects a native driver.', () => {
     const main = await readFile(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8')
     expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*mod e2e_folder_dialog/)
     expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*e2e_folder_dialog::e2e_drive_folder_dialog/)
+    expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*e2e_folder_dialog::e2e_folder_dialog_snapshot/)
+    const snapshot = native.split('pub(crate) async fn e2e_folder_dialog_snapshot')[1].split('pub(crate) async fn e2e_drive_folder_dialog')[0]
+    expect(snapshot).toContain('MUNIMENT_E2E_ONBOARDING_ONLY')
+    expect(snapshot).toContain('run_on_main_thread')
+    expect(snapshot).toContain('windows: (0..windows.len())')
+    expect(snapshot).toContain('class: window.class().name().to_string_lossy().into_owned()')
+    expect(snapshot).toContain('title: window.title().to_string()')
+    expect(snapshot).toContain('visible: window.isVisible()')
+    expect(snapshot).not.toMatch(/\.filter|sendEvent|key\(/)
     const ci = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
     expect(ci).toContain('cargo check --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --features e2e-webdriver --target aarch64-apple-darwin')
   })
@@ -204,6 +213,78 @@ describe('The onboarding folder picker selects a native driver.', () => {
     await vi.runAllTimersAsync()
     expect(poll).toHaveBeenCalledTimes(calls)
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([
+    { status: 'not-started' },
+    { status: 'pending' },
+    { status: 'resolved', value: null },
+    { status: 'resolved', value: '/tmp/home' },
+    { status: 'rejected', error: 'The dialog command failed.' },
+  ])('An absent panel records every window and the open outcome ($status).', async (open) => {
+    const raw = await rawDirectory()
+    vi.useFakeTimers()
+    const native = {
+      windows: [
+        { class: 'TaoWindow', title: 'muniment', visible: true },
+        { class: 'NSPanel', title: '', visible: false },
+        { class: 'NSOpenPanel', title: 'Choose "Home"', visible: false },
+      ],
+      step: null,
+    }
+    const invoke = vi.fn((command) => Promise.resolve(command === 'e2e_drive_folder_dialog' ? false : native))
+    vi.stubGlobal('window', { __TAURI__: { core: { invoke } } })
+    vi.stubGlobal('document', { querySelector: () => ({ getAttribute: () => JSON.stringify(open) }) })
+    vi.stubGlobal('browser', { execute: (callback) => callback() })
+    const failure = chooseFolder('/tmp/home', 1, title, raw, vi.fn(), 'darwin').catch((error) => error)
+    await vi.advanceTimersByTimeAsync(1000)
+    const error = await failure
+    expect(error.message).toContain('NSOpenPanel timed out')
+    expect(error.message).toContain(JSON.stringify({ native, open }))
+    expect(await readFile(path.join(raw, 'folder-picker-failure.log'), 'utf8')).toContain(error.message)
+    expect(invoke).toHaveBeenLastCalledWith('e2e_folder_dialog_snapshot')
+    const calls = invoke.mock.calls.length
+    await vi.runAllTimersAsync()
+    expect(invoke).toHaveBeenCalledTimes(calls)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each(['rejected', 'blocked'])('The open outcome survives a %s native snapshot.', async (state) => {
+    vi.useFakeTimers()
+    vi.stubGlobal('window', { __TAURI__: { core: { invoke: () => state === 'blocked'
+      ? new Promise(() => {}) : Promise.reject('The AppKit thread is unavailable.') } } })
+    vi.stubGlobal('document', { querySelector: () => ({ getAttribute: () => '{"status":"pending"}' }) })
+    vi.stubGlobal('browser', { execute: (callback) => callback() })
+    const failure = driveMacosFolder(1, () => false).catch((error) => error)
+    await vi.advanceTimersByTimeAsync(3000)
+    const error = await failure
+    expect(error.message).toContain('NSOpenPanel timed out')
+    expect(error.message).toContain('"open":{"status":"pending"}')
+    expect(error.message).toContain(state === 'blocked' ? 'The AppKit snapshot timed out.' : 'The AppKit thread is unavailable.')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('The AppKit drive bounds a blocked diagnostic request.', async () => {
+    vi.useFakeTimers()
+    const failure = driveMacosFolder(1, () => false, () => new Promise(() => {})).catch((error) => error)
+    await vi.advanceTimersByTimeAsync(4000)
+    expect((await failure).message).toContain('NSOpenPanel timed out during the AppKit picker drive. Home picker diagnostics: The Home picker diagnostics timed out.')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('An empty window list stays explicit in the failure.', async () => {
+    const cause = new Error('The NSOpenPanel lost keyboard focus.')
+    const diagnostics = { native: { windows: [], step: 2 }, open: { status: 'unavailable' } }
+    await expect(driveMacosFolder(1, () => Promise.reject(cause), () => diagnostics)).rejects.toMatchObject({
+      cause, message: `${cause.message} Home picker diagnostics: ${JSON.stringify(diagnostics)}`,
+    })
+  })
+
+  it('The AppKit drive keeps a string IPC error when diagnostics fail.', async () => {
+    const cause = 'The Home picker needs the AppKit thread.'
+    await expect(driveMacosFolder(1, () => Promise.reject(cause), () => Promise.reject('The webview closed.'))).rejects.toMatchObject({
+      cause, message: `${cause} Home picker diagnostics: The webview closed.`,
+    })
   })
 
   it.each([undefined, null, 'true', 1])('The AppKit drive rejects an invalid result (%s).', async (result) => {

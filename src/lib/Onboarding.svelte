@@ -13,6 +13,7 @@
   let modelOpening = $state(false)
   let busy = $state(false)
   let picking = $state(false)
+  let pickerOutcome = $state({ status: 'not-started' })
   let homeRequest = 0
   let scanRequest = 0
   const settings = $derived(!!onboarding.savedHomePath)
@@ -42,15 +43,18 @@
   async function chooseHome() {
     if (busy || picking || modelOpening) return
     picking = true
+    pickerOutcome = { status: 'pending' }
     const request = homeRequest
     try {
       const picked = await open({ directory: true, multiple: false, defaultPath: onboarding.homePath || undefined })
+      pickerOutcome = { status: 'resolved', value: picked }
       if (request === homeRequest && typeof picked === 'string' && picked.trim()) {
         homeRequest += 1
         modelError = ''
         onboarding = { ...onboarding, name: settings ? 'settings' : 'choosing', homePath: picked, configured: false, error: undefined }
       }
-    } catch (_) {
+    } catch (error) {
+      pickerOutcome = { status: 'rejected', error: error instanceof Error ? error.message : String(error) }
       onboarding = { ...onboarding, error: 'Muniment could not open the folder picker. Try again.' }
     } finally {
       picking = false
@@ -115,7 +119,7 @@
 </script>
 
 {#if onboarding.name !== 'complete'}
-  <section class="onboarding" aria-label={settings ? 'Home settings' : 'First run'}>
+  <section class="onboarding" aria-label={settings ? 'Home settings' : 'First run'} data-home-picker={JSON.stringify(pickerOutcome)}>
     {#if settings}
       <h1>Home settings</h1>
       <p class="path" data-testid="onboarding-home-path">{onboarding.homePath}</p>
