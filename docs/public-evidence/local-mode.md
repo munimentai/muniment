@@ -58,6 +58,7 @@ The composer keeps its rest text instead of repeating the cause.
 The runtime log records run lifecycle outcomes and Pi's stderr tail for failed replies. The Linux evidence envelope keeps this log in `pi-local-mode-stderr.log` beside `muniment-runtime.log`.
 
 On Windows, the desktop starts the runtime task with `RunEx` and the calling process's session id.
+The release runtime does not open a console window.
 If the task stays `Queued` for five seconds, the runtime notice names the state and session id.
 The desktop writes the same cause to stderr.
 
