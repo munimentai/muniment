@@ -66,6 +66,17 @@ impl Lifecycle {
         ));
     }
 
+    #[cfg(any(test, target_os = "windows"))]
+    fn windows_start_finished(&mut self, result: Result<(), String>) {
+        match result {
+            Ok(()) => self.started(RuntimeEvent::Starting),
+            Err(cause) => {
+                self.started(RuntimeEvent::StartFailed);
+                self.snapshot.cause = Some(cause);
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     fn activation_finished(&mut self, result: Result<(), String>, clients: (bool, bool)) {
         match result {
@@ -145,7 +156,7 @@ impl RuntimeOwner {
         let before = state.snapshot.clone();
         update(&mut state);
         if state.snapshot != before {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             if state.snapshot.cause != before.cause || (before.busy && !state.snapshot.busy) {
                 if let Some(cause) = &state.snapshot.cause {
                     eprintln!("The runtime start failed. {cause}");
@@ -202,13 +213,17 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     #[cfg(target_os = "macos")]
     let event = crate::macos_runtime_service::start();
     #[cfg(target_os = "windows")]
-    let event = match app.path().app_data_dir() {
-        Ok(directory) => {
-            crate::windows_runtime_service::register_runtime_task_at_startup(&directory);
-            crate::windows_runtime_service::start_runtime_task_at_startup(&directory)
-        }
-        Err(_) => RuntimeEvent::StartFailed,
-    };
+    {
+        let result = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("Runtime state lookup failed: {error}"))
+            .and_then(|directory| {
+                crate::windows_runtime_service::register_runtime_task_at_startup(&directory)?;
+                crate::windows_runtime_service::start_runtime_task_at_startup(&directory)
+            });
+        owner.update(app, |state| state.windows_start_finished(result));
+    }
     #[cfg(target_os = "linux")]
     {
         let result = crate::linux_runtime_service::start_runtime(app);
@@ -217,7 +232,7 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             .runtime_client_connections();
         owner.update(app, |state| state.activation_finished(result, clients));
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     owner.update(app, |state| state.started(event));
 }
 
@@ -317,6 +332,28 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_start_preserves_the_cause_until_a_connection_or_successful_retry() {
+        let mut state = Lifecycle::default();
+        let cause = "Task registration failed: RegisterTaskDefinition HRESULT(0x80070005)";
+        assert!(state.start());
+        state.windows_start_finished(Err(cause.into()));
+        state.observe(false, true, Instant::now());
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+        assert_eq!(state.snapshot.cause.as_deref(), Some(cause));
+        assert!(state.snapshot.visible);
+        assert!(!state.snapshot.busy);
+        assert!(state.start());
+        assert_eq!(state.snapshot.cause.as_deref(), Some(cause));
+        state.windows_start_finished(Ok(()));
+        assert_eq!(state.snapshot.cause, None);
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Starting);
+        state.windows_start_finished(Err(cause.into()));
+        state.observe(true, false, Instant::now());
+        assert_eq!(state.snapshot.cause, None);
+        assert!(!state.snapshot.visible);
+    }
 
     #[test]
     fn exit_restart_and_shared_dwell() {
