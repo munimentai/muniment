@@ -3581,6 +3581,21 @@ describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
     expect(runner).not.toContain('muniment.exe')
   })
 
+  it('Keeps WebDriver at the installed path that the runtime admits.', () => {
+    const payload = fs.readFileSync(path.join(root, 'src-tauri/core/src/windows_payload.rs'), 'utf8')
+    expect(payload).toContain('const DESKTOP_FILE_NAME: &str = "muniment-desktop.exe";')
+    const build = runner.indexOf('  $webdriverBinary = ')
+    const launch = runner.indexOf('  $env:MUNIMENT_E2E_APP_BINARY = $appBinary', build)
+    expect(build).toBeGreaterThan(start)
+    expect(launch).toBeGreaterThan(build)
+    const staging = runner.slice(build, launch)
+    expect(staging).toContain('Test-Path -LiteralPath $webdriverBinary -PathType Leaf')
+    const copy = staging.indexOf('Copy-Item -LiteralPath $webdriverBinary -Destination $appBinary -Force -ErrorAction Stop')
+    expect(copy).toBeGreaterThan(0)
+    expect(staging.indexOf('webdriver-release-guard.mjs present `"$appBinary`"')).toBeGreaterThan(copy)
+    expect(staging).not.toMatch(/\$appBinary\s*=/)
+  })
+
   it.skipIf(!hasPowerShell).each([
     ['desktop', ['muniment-desktop.exe', 'muniment-runtime.exe', 'product.ico'], 0],
     ['wrong name', ['muniment.exe', 'muniment-runtime.exe', 'product.ico'], 1],
@@ -3665,5 +3680,64 @@ describe('temporary fixture paths', () => {
     } finally {
       tmpdir.mockRestore()
     }
+  })
+})
+
+describe('Windows runtime diagnostic transcript', () => {
+  const helper = path.join(root, 'test/e2e/support/windows-runtime-log-tail.mjs')
+  const run = (roots, env = {}) => spawnSync(process.execPath, [helper], {
+    input: JSON.stringify(roots), encoding: 'utf8', env: { ...process.env, ...env },
+  })
+  const plant = (directory, text) => {
+    const logs = path.join(directory, 'muniment', 'logs')
+    fs.mkdirSync(logs, { recursive: true })
+    fs.writeFileSync(path.join(logs, 'runtime.log'), text)
+  }
+
+  it('Reads the known folder and redirected profiles without duplicate roots.', () => {
+    const known = temp(); const redirected = temp(); const ready = temp()
+    plant(known, 'event=runtime_task_registration_failed cause=RegisterTaskDefinition HRESULT(0x80070005)\n')
+    plant(redirected, 'event=runtime_task_start_failed cause=RunTask HRESULT(0x80041326)\n')
+    const result = run([known, redirected, ready, known, null, ''])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('RegisterTaskDefinition HRESULT(0x80070005)')
+    expect(result.stdout).toContain('RunTask HRESULT(0x80041326)')
+    expect(result.stdout).toContain('No runtime.log exists at this path.')
+    expect(result.stdout.match(/dci: Windows runtime.log/g)).toHaveLength(3)
+  })
+
+  it('Redacts the full diagnostic before the tail cutoff.', () => {
+    const directory = temp()
+    const secret = 'first-secret-line\nsecond-secret-line'
+    plant(directory, `${secret}\n${'event=activation_failed\n'.repeat(59)}`)
+    const result = run([directory], { MUNIMENT_E2E_PASSWORD: secret })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('[REDACTED]')
+    expect(result.stdout).not.toContain('secret-line')
+  })
+
+  it('Names empty and oversized logs and still reads the next profile.', () => {
+    const empty = temp(); const oversized = temp(); const next = temp()
+    plant(empty, '')
+    plant(oversized, 'x'.repeat(1024 * 1024 + 1))
+    plant(next, 'event=runtime_task_start_failed cause=Task start failed\n')
+    const result = run([empty, oversized, next])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('The runtime.log is empty.')
+    expect(result.stdout).toContain('The runtime.log exceeds the 1 MiB diagnostic limit.')
+    expect(result.stdout).toContain('cause=Task start failed')
+  })
+
+  it('Prints diagnostics before uninstall and transcript closure without copying runtime state.', () => {
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+    const finalizer = runner.slice(runner.indexOf('function Finalize-Run'))
+    expect(runner).toContain('[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)')
+    expect(runner).toContain('$roots = @($runtimeLocalAppData, $installLocalAppData, $env:LOCALAPPDATA)')
+    expect(runner).toContain("Join-Path $stateRoot 'Degraded\\Local'")
+    expect(runner).toContain("Join-Path $stateRoot 'Ready\\Local'")
+    expect(finalizer.indexOf('Write-RuntimeDiagnostics')).toBeLessThan(finalizer.indexOf('Invoke-Cleanup "uninstall"'))
+    expect(finalizer.indexOf('Write-RuntimeDiagnostics')).toBeLessThan(finalizer.indexOf('Stop-Transcript'))
+    expect(runner).toContain("$inputText | ForEach-Object { Write-Host $_ }")
+    expect(runner).not.toMatch(/Copy-Item[^\n]+runtime\.log/)
   })
 })
