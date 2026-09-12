@@ -334,6 +334,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn windows_queued_cause_reaches_the_snapshot_and_clears_on_recovery() {
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        let cause = "Task Scheduler kept the runtime task in state Queued for session id 7.";
+        owner.update(app.handle(), |state| {
+            assert!(state.start());
+            state.windows_start_finished(Err(cause.to_owned()));
+        });
+        owner.update(app.handle(), |state| {
+            state.observe(false, true, Instant::now());
+        });
+        let snapshot = runtime_state(app.state());
+        assert_eq!(snapshot.last_event, RuntimeEvent::StartFailed);
+        assert_eq!(snapshot.cause.as_deref(), Some(cause));
+        assert!(snapshot.visible);
+        assert!(!snapshot.busy);
+        owner.update(app.handle(), |state| {
+            assert!(state.start());
+            assert!(!state.start());
+            state.windows_start_finished(Ok(()));
+        });
+        assert_eq!(runtime_state(app.state()).cause, None);
+        owner.update(app.handle(), |state| {
+            state.observe(true, false, Instant::now());
+        });
+        assert!(!runtime_state(app.state()).visible);
+    }
+
+    #[test]
     fn windows_start_preserves_the_cause_until_a_connection_or_successful_retry() {
         let mut state = Lifecycle::default();
         let cause = "Task registration failed: RegisterTaskDefinition HRESULT(0x80070005)";
