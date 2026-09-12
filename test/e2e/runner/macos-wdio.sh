@@ -29,6 +29,8 @@ source test/e2e/support/cleanup-ledger.sh
 source test/e2e/support/runner-failure.sh
 # shellcheck source=../support/macos-runtime-probe.sh
 source test/e2e/support/macos-runtime-probe.sh
+# shellcheck source=../support/macos-spec-config.sh
+source test/e2e/support/macos-spec-config.sh
 
 harness_processes_gone() {
   ! pgrep -f '(^|/)muniment-desktop( |$)' >/dev/null &&
@@ -105,6 +107,7 @@ run_e2e() {
     runner_failure 'Spec process cleanup failed. The runner did not start the next spec.'
     return 1
   fi
+  run_step "config-$spec" set_macos_spec_config || return 1
   printf 'start-spec: %s\n' "${wdio_log##*/}" >>"$cleanup_log"
   run_step "spec-$spec" log_command "$wdio_log" npm run test:e2e "$@"
 }
@@ -117,6 +120,7 @@ finalize() {
   if (( status != 0 )) && [[ $first_failed_step == none ]]; then first_failed_step=$current_step; fi
   cleanup_step collect-runtime-diagnostics collect_macos_runtime_diagnostics "gui/$(id -u)/ai.muniment.runtime" "$runtime_log" "$raw"
   cleanup_step stop-app stop_app
+  cleanup_step restore-config-environment restore_macos_spec_config
   if (( cleanup_status != 0 )); then status=1; fi
   if (( installed )); then cleanup_step remove-bundle rm -rf -- "$installed_bundle"; fi
   cleanup_step collect-crash-reports collect_crash_reports
@@ -200,6 +204,7 @@ export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/suppor
 run_step image-fixture openssl base64 -d -A -in test/e2e/fixtures/image-token.png.base64 -out "$state_root/image-token.png" || exit
 export MUNIMENT_E2E_IMAGE_PATH="$state_root/image-token.png"
 
+run_step save-config-environment save_macos_spec_config || exit
 # Each spec starts with no app, runtime, or driver from the last spec.
 # The launchd runtime uses the login home. Keep its endpoint when a spec redirects HOME.
 export XDG_DATA_HOME="$HOME/.local/share"
