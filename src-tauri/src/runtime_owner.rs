@@ -126,6 +126,12 @@ impl Lifecycle {
         true
     }
 
+    #[cfg(any(test, target_os = "windows"))]
+    fn windows_started(&mut self, event: RuntimeEvent, cause: Option<String>) {
+        self.started(event);
+        self.snapshot.cause = cause;
+    }
+
     fn started(&mut self, event: RuntimeEvent) {
         self.awaiting_disconnect = event == RuntimeEvent::Stopped;
         self.snapshot.busy = self.awaiting_disconnect;
@@ -145,7 +151,7 @@ impl RuntimeOwner {
         let before = state.snapshot.clone();
         update(&mut state);
         if state.snapshot != before {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             if state.snapshot.cause != before.cause || (before.busy && !state.snapshot.busy) {
                 if let Some(cause) = &state.snapshot.cause {
                     eprintln!("The runtime start failed. {cause}");
@@ -202,12 +208,12 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     #[cfg(target_os = "macos")]
     let event = crate::macos_runtime_service::start();
     #[cfg(target_os = "windows")]
-    let event = match app.path().app_data_dir() {
+    let (event, cause) = match app.path().app_data_dir() {
         Ok(directory) => {
             crate::windows_runtime_service::register_runtime_task_at_startup(&directory);
             crate::windows_runtime_service::start_runtime_task_at_startup(&directory)
         }
-        Err(_) => RuntimeEvent::StartFailed,
+        Err(_) => (RuntimeEvent::StartFailed, None),
     };
     #[cfg(target_os = "linux")]
     {
@@ -217,7 +223,9 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             .runtime_client_connections();
         owner.update(app, |state| state.activation_finished(result, clients));
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    owner.update(app, |state| state.windows_started(event, cause));
+    #[cfg(target_os = "macos")]
     owner.update(app, |state| state.started(event));
 }
 
@@ -317,6 +325,36 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_queued_cause_reaches_the_snapshot_and_clears_on_recovery() {
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        let cause = "Task Scheduler kept the runtime task in state Queued for session id 7.";
+        owner.update(app.handle(), |state| {
+            assert!(state.start());
+            state.windows_started(RuntimeEvent::StartFailed, Some(cause.to_owned()));
+        });
+        owner.update(app.handle(), |state| {
+            state.observe(false, true, Instant::now());
+        });
+        let snapshot = runtime_state(app.state());
+        assert_eq!(snapshot.last_event, RuntimeEvent::StartFailed);
+        assert_eq!(snapshot.cause.as_deref(), Some(cause));
+        assert!(snapshot.visible);
+        assert!(!snapshot.busy);
+        owner.update(app.handle(), |state| {
+            assert!(state.start());
+            assert!(!state.start());
+            state.windows_started(RuntimeEvent::Starting, None);
+        });
+        assert_eq!(runtime_state(app.state()).cause, None);
+        owner.update(app.handle(), |state| {
+            state.observe(true, false, Instant::now());
+        });
+        assert!(!runtime_state(app.state()).visible);
+    }
 
     #[test]
     fn exit_restart_and_shared_dwell() {

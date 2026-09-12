@@ -13,6 +13,7 @@ enum RuntimeTaskStartOutcome {
     EndpointCheckFailed,
     ClearFailed,
     StartFailed,
+    Queued { session_id: u32 },
     ReadinessTimedOut,
     ReadinessFailed,
 }
@@ -21,6 +22,7 @@ enum RuntimeTaskStartOutcome {
 enum RuntimeTaskStartError {
     ClearFailed,
     StartFailed,
+    Queued { session_id: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +66,9 @@ fn start_runtime_task(
             },
             Err(RuntimeTaskStartError::ClearFailed) => RuntimeTaskStartOutcome::ClearFailed,
             Err(RuntimeTaskStartError::StartFailed) => RuntimeTaskStartOutcome::StartFailed,
+            Err(RuntimeTaskStartError::Queued { session_id }) => {
+                RuntimeTaskStartOutcome::Queued { session_id }
+            }
         },
         Err(()) => RuntimeTaskStartOutcome::EndpointCheckFailed,
     }
@@ -144,6 +149,7 @@ fn start_runtime_task_with_diagnostic(
         RuntimeTaskStartOutcome::EndpointCheckFailed
             | RuntimeTaskStartOutcome::ClearFailed
             | RuntimeTaskStartOutcome::StartFailed
+            | RuntimeTaskStartOutcome::Queued { .. }
             | RuntimeTaskStartOutcome::ReadinessTimedOut
             | RuntimeTaskStartOutcome::ReadinessFailed
     ) {
@@ -191,10 +197,19 @@ fn register_runtime_task(
     outcome
 }
 
+fn start_failure_cause(outcome: RuntimeTaskStartOutcome) -> Option<String> {
+    match outcome {
+        RuntimeTaskStartOutcome::Queued { session_id } => Some(format!(
+            "Task Scheduler kept the runtime task in state Queued for session id {session_id}."
+        )),
+        _ => None,
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn start_runtime_task_at_startup(
     state_directory: &Path,
-) -> crate::runtime_owner::RuntimeEvent {
+) -> (crate::runtime_owner::RuntimeEvent, Option<String>) {
     let outcome = start_runtime_task_with_diagnostic(
         &WindowsAttachEndpointAdapter,
         &WindowsCrashWindowAdapter { state_directory },
@@ -202,12 +217,13 @@ pub(crate) fn start_runtime_task_at_startup(
         &WindowsRuntimeReadinessAdapter,
         &WindowsDiagnosticSink,
     );
-    match outcome {
+    let event = match outcome {
         RuntimeTaskStartOutcome::EndpointPresent | RuntimeTaskStartOutcome::Ready => {
             crate::runtime_owner::RuntimeEvent::Starting
         }
         _ => crate::runtime_owner::RuntimeEvent::StartFailed,
-    }
+    };
+    (event, start_failure_cause(outcome))
 }
 
 #[cfg(target_os = "windows")]
@@ -377,6 +393,9 @@ impl RuntimeTaskStartAdapter for WindowsRuntimeTaskStartAdapter {
             Ok(_) => Ok(()),
             Err(StartRegisteredTaskError::ClearCrashWindow(())) => {
                 Err(RuntimeTaskStartError::ClearFailed)
+            }
+            Err(StartRegisteredTaskError::Queued { session_id }) => {
+                Err(RuntimeTaskStartError::Queued { session_id })
             }
             Err(_) => Err(RuntimeTaskStartError::StartFailed),
         }
@@ -747,6 +766,45 @@ mod tests {
         assert_eq!(task.run_calls.get(), 1);
         assert_eq!(readiness.calls.get(), 0);
         assert_eq!(*order.borrow(), vec!["endpoint", "clear", "start"]);
+    }
+
+    #[test]
+    fn queued_start_keeps_the_session_cause_and_skips_readiness() {
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let endpoint = FakeEndpointAdapter::new(Ok(false), Rc::clone(&order));
+        let crash_window = FakeCrashWindowAdapter::new(Ok(()), Rc::clone(&order));
+        let task = FakeRuntimeTaskStartAdapter::new(
+            Err(RuntimeTaskStartError::Queued { session_id: 7 }),
+            Rc::clone(&order),
+        );
+        let readiness = FakeRuntimeReadinessAdapter::new(Ok(()), Rc::clone(&order));
+        let diagnostics = FakeDiagnosticSink::default();
+
+        let outcome = start_runtime_task_with_diagnostic(
+            &endpoint,
+            &crash_window,
+            &task,
+            &readiness,
+            &diagnostics,
+        );
+
+        assert_eq!(outcome, RuntimeTaskStartOutcome::Queued { session_id: 7 });
+        assert_eq!(
+            start_failure_cause(outcome).as_deref(),
+            Some("Task Scheduler kept the runtime task in state Queued for session id 7.")
+        );
+        assert_eq!(readiness.calls.get(), 0);
+        assert_eq!(*order.borrow(), vec!["endpoint", "clear", "start"]);
+        assert_eq!(
+            *diagnostics.events.borrow(),
+            vec![DiagnosticEvent::RuntimeTaskStartFailed]
+        );
+        for outcome in [
+            RuntimeTaskStartOutcome::Ready,
+            RuntimeTaskStartOutcome::StartFailed,
+        ] {
+            assert_eq!(start_failure_cause(outcome), None);
+        }
     }
 
     #[test]
