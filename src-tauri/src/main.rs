@@ -5,6 +5,8 @@ mod auth;
 mod chat;
 mod chat_threads;
 mod dictation;
+#[cfg(all(target_os = "macos", feature = "e2e-webdriver"))]
+mod e2e_folder_dialog;
 mod home;
 mod launcher;
 #[cfg(target_os = "linux")]
@@ -175,7 +177,9 @@ fn main() {
             #[cfg(target_os = "macos")]
             macos_runtime_service::open_login_items,
             #[cfg(target_os = "macos")]
-            macos_runtime_notice_probe::runtime_notice_observed
+            macos_runtime_notice_probe::runtime_notice_observed,
+            #[cfg(all(target_os = "macos", feature = "e2e-webdriver"))]
+            e2e_folder_dialog::e2e_drive_folder_dialog
         ])
         .run(tauri::generate_context!())
         .expect("error while running muniment");

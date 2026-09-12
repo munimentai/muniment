@@ -4,6 +4,7 @@ import { appendFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { chooseFolder as chooseLinuxFolder } from './folder-dialog.mjs'
+import { driveMacosFolder } from './folder-dialog-macos.mjs'
 
 const run = promisify(execFile)
 
@@ -17,7 +18,7 @@ export function folderDialogDescription(title, platform = process.platform) {
   return `platform: ${name}. searched window: ${window}`
 }
 
-export async function chooseFolder(home, waitSeconds, title, rawDir, execute = run, platform = process.platform) {
+export async function chooseFolder(home, waitSeconds, title, rawDir, execute = run, platform = process.platform, driveMacos = driveMacosFolder) {
   const description = folderDialogDescription(title, platform)
   try {
     if (!['linux', 'darwin', 'win32'].includes(platform)) throw new Error('The folder picker does not support this platform.')
@@ -31,9 +32,7 @@ export async function chooseFolder(home, waitSeconds, title, rawDir, execute = r
     if (platform === 'linux') {
       await chooseLinuxFolder(home, waitSeconds, title, rawDir, execute)
     } else if (platform === 'darwin') {
-      await execute('/usr/bin/osascript', [
-        fileURLToPath(new URL('./folder-dialog-macos.applescript', import.meta.url)), home, String(waitSeconds),
-      ], { timeout: (waitSeconds + 5) * 1000 })
+      await driveMacos(waitSeconds)
     } else {
       await execute(path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',

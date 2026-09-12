@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { chooseFolder, folderDialogDescription } from './e2e/support/onboarding-folder.mjs'
+import { driveMacosFolder } from './e2e/support/folder-dialog-macos.mjs'
 
 const title = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
 const temporary = []
@@ -14,33 +15,37 @@ async function rawDirectory() {
 }
 afterEach(async () => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
   await Promise.all(temporary.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
 const nativeCases = [
-  ['darwin', '/tmp/Home space "quote" café', '/usr/bin/osascript', 'folder-dialog-macos.applescript', 'NSOpenPanel'],
+  ['darwin', '/tmp/Home space "quote" café', '', '', 'NSOpenPanel'],
   ['win32', String.raw`C:\Users\Test\Home space & café`, 'powershell.exe', 'folder-dialog-windows.ps1', '#32770'],
 ]
 
 describe('The onboarding folder picker selects a native driver.', () => {
   it.each(nativeCases)('The picker uses only the native driver on %s.', async (platform, home, binary, script) => {
     const execute = vi.fn().mockResolvedValue({ stdout: '' })
-    await chooseFolder(home, 30, title, await rawDirectory(), execute, platform)
+    const driveMacos = vi.fn().mockResolvedValue(undefined)
+    await chooseFolder(home, 30, title, await rawDirectory(), execute, platform, driveMacos)
+    if (platform === 'darwin') {
+      expect(execute).not.toHaveBeenCalled()
+      expect(driveMacos).toHaveBeenCalledExactlyOnceWith(30)
+      return
+    }
+    expect(driveMacos).not.toHaveBeenCalled()
     expect(execute).toHaveBeenCalledTimes(1)
     const [command, args, options] = execute.mock.calls[0]
     expect(command.endsWith(binary)).toBe(true)
     expect(args.some((arg) => arg.endsWith(script))).toBe(true)
     expect(options.timeout).toBe(35000)
     expect([command, ...args].join(' ')).not.toMatch(/xdotool|\btimeout\b/)
-    if (platform === 'darwin') {
-      expect(args.slice(1)).toEqual([home, '30'])
-    } else {
-      expect(args).toHaveLength(6)
-      expect(args.slice(0, 5)).toEqual(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File'])
-      expect(options.env.MUNIMENT_FOLDER_PATH).toBe(home)
-      expect(options.env.MUNIMENT_FOLDER_WAIT_SECONDS).toBe('30')
-      expect(args).not.toContain(home)
-    }
+    expect(args).toHaveLength(6)
+    expect(args.slice(0, 5)).toEqual(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File'])
+    expect(options.env.MUNIMENT_FOLDER_PATH).toBe(home)
+    expect(options.env.MUNIMENT_FOLDER_WAIT_SECONDS).toBe('30')
+    expect(args).not.toContain(home)
   })
 
   it('The Linux picker drive stays unchanged.', async () => {
@@ -70,7 +75,7 @@ describe('The onboarding folder picker selects a native driver.', () => {
     })
     const execute = vi.fn().mockRejectedValue(cause)
     const description = folderDialogDescription(title, platform)
-    await expect(chooseFolder(home, 30, title, raw, execute, platform)).rejects.toMatchObject({
+    await expect(chooseFolder(home, 30, title, raw, execute, platform, execute)).rejects.toMatchObject({
       message: `Home picker failed. ${description}. ${cause.message}`, cause,
     })
     const artifact = await readFile(path.join(raw, 'folder-picker-failure.log'), 'utf8')
@@ -95,7 +100,7 @@ describe('The onboarding folder picker selects a native driver.', () => {
     const cause = new Error('The picker lost focus.')
     const execute = vi.fn().mockRejectedValue(cause)
     const raw = path.join(await rawDirectory(), 'absent')
-    await expect(chooseFolder('/tmp/home', 30, title, raw, execute, 'darwin')).rejects.toMatchObject({
+    await expect(chooseFolder('/tmp/home', 30, title, raw, execute, 'darwin', execute)).rejects.toMatchObject({
       message: `Home picker failed. ${folderDialogDescription(title, 'darwin')}. ${cause.message}`, cause,
     })
   })
@@ -107,9 +112,11 @@ describe('The onboarding folder picker selects a native driver.', () => {
   })
 
   it.each([1, 120])('The picker accepts the wait boundary (%s).', async (wait) => {
-    const execute = vi.fn().mockResolvedValue({ stdout: '' })
-    await chooseFolder('/tmp/home', wait, title, await rawDirectory(), execute, 'darwin')
-    expect(execute.mock.calls[0][2].timeout).toBe((wait + 5) * 1000)
+    const execute = vi.fn()
+    const driveMacos = vi.fn().mockResolvedValue(undefined)
+    await chooseFolder('/tmp/home', wait, title, await rawDirectory(), execute, 'darwin', driveMacos)
+    expect(driveMacos).toHaveBeenCalledExactlyOnceWith(wait)
+    expect(execute).not.toHaveBeenCalled()
   })
 
   it.each(['', 'relative', '/tmp/line\nbreak', '/tmp/null\0byte', undefined])('The picker rejects an invalid Home (%s) before a spawn.', async (home) => {
@@ -132,15 +139,15 @@ describe('The onboarding folder picker selects a native driver.', () => {
   })
 
   it('The native drivers scope their window searches and bound each wait.', async () => {
-    const macos = await readFile(new URL('./e2e/support/folder-dialog-macos.applescript', import.meta.url), 'utf8')
-    expect(macos).toContain('application processes whose bundle identifier is "ai.muniment.desktop"')
-    expect(macos).toContain('if (count appProcesses) is not 1 then error')
-    expect(macos).toContain('if (count matches) > 1 then error')
-    expect(macos).toContain('{appWindow} & (sheets of appWindow)')
-    expect(macos).toContain('if (current date) >= deadline then error')
-    expect(macos).toContain('set value of pathField to homePath')
-    expect(macos).toContain('if not (frontmost of appProcess) then error')
-    expect(macos).toContain('repeat while (my findPanel(appProcess)) is not missing value')
+    const macos = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
+    expect(macos).toContain('let windows = app.windows()')
+    expect(macos).toContain('windows.objectAtIndex(index).downcast::<NSOpenPanel>().ok()')
+    expect(macos).toContain('panel.isVisible()')
+    expect(macos).toContain('panels.len() > 1')
+    expect(macos).toContain('The NSOpenPanel lost keyboard focus.')
+    expect(macos).toContain('The NSOpenPanel did not select the isolated Home.')
+    expect(macos).toContain('The Home path changed during the picker drive.')
+    expect(macos).toContain('drive.panel.URLs()')
     const windows = await readFile(new URL('./e2e/support/folder-dialog-windows.ps1', import.meta.url), 'utf8')
     expect(windows).toContain("Get-Process -Name 'muniment-desktop'")
     expect(windows).toContain('$_.Current.ProcessId -in $processIds')
@@ -152,6 +159,61 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(windows).toContain('$value.SetValue($homePath)')
     expect(windows).toContain('$_.Current.NativeWindowHandle -eq $handle')
     expect(windows).not.toMatch(/SendKeys|SendWait|Invoke-Expression/)
+  })
+
+  it('The macOS picker uses the app IPC without Apple Events or Accessibility grants.', async () => {
+    const invoke = vi.fn().mockResolvedValue(true)
+    const execute = vi.fn()
+    vi.stubGlobal('window', { __TAURI__: { core: { invoke } } })
+    const browserExecute = vi.fn((callback) => callback())
+    vi.stubGlobal('browser', { execute: browserExecute })
+    await chooseFolder('/tmp/home', 30, title, await rawDirectory(), execute, 'darwin')
+    expect(execute).not.toHaveBeenCalled()
+    expect(browserExecute).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('e2e_drive_folder_dialog')
+
+    const native = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
+    expect(native).toContain('app.sendEvent(&event)')
+    expect(native).toContain('run_on_main_thread')
+    expect(native).toContain('MUNIMENT_E2E_ONBOARDING_ONLY')
+    expect(native).not.toMatch(/AXUIElement|AXIsProcessTrusted|CGEventPost|osascript|Command::new/)
+    const main = await readFile(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8')
+    expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*mod e2e_folder_dialog/)
+    expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*e2e_folder_dialog::e2e_drive_folder_dialog/)
+    const ci = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+    expect(ci).toContain('cargo check --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --features e2e-webdriver --target aarch64-apple-darwin')
+  })
+
+  it('The AppKit drive waits for the native panel to close.', async () => {
+    vi.useFakeTimers()
+    const poll = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true)
+    const result = driveMacosFolder(1, poll)
+    await vi.runAllTimersAsync()
+    await result
+    expect(poll).toHaveBeenCalledTimes(3)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each(['absent panel', 'blocked IPC'])('The AppKit drive bounds a wait for %s.', async (state) => {
+    vi.useFakeTimers()
+    const poll = vi.fn(() => state === 'blocked IPC' ? new Promise(() => {}) : Promise.resolve(false))
+    const result = expect(driveMacosFolder(1, poll)).rejects.toThrow('NSOpenPanel timed out')
+    await vi.advanceTimersByTimeAsync(1000)
+    await result
+    const calls = poll.mock.calls.length
+    await vi.runAllTimersAsync()
+    expect(poll).toHaveBeenCalledTimes(calls)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([undefined, null, 'true', 1])('The AppKit drive rejects an invalid result (%s).', async (result) => {
+    await expect(driveMacosFolder(1, vi.fn().mockResolvedValue(result))).rejects.toThrow('invalid state')
+  })
+
+  it('The AppKit drive reports native errors without a retry.', async () => {
+    const poll = vi.fn().mockRejectedValue(new Error('The NSOpenPanel lost keyboard focus.'))
+    await expect(driveMacosFolder(1, poll)).rejects.toThrow('lost keyboard focus')
+    expect(poll).toHaveBeenCalledTimes(1)
   })
 
   it('The picker rejects an unsupported platform before a spawn.', async () => {
