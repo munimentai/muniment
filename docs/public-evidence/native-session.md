@@ -11,6 +11,15 @@ Each grant shows its effect, action, resource, principal, and expiration.
 The panel preserves allow and deny records rather than computing effective access.
 Entitlement snapshots are display hints. The server enforces cloud use.
 
+## Sign-in diagnostics
+
+The runtime logs the `session.sign_in` RPC start, outcome, and elapsed time.
+Each native cloud request logs its method, fixed path, HTTP status or transport error, and elapsed time.
+Sign-in failures name the registration, authorization, token exchange, or proof stage without exposing credentials.
+Authorization failures distinguish browser launch, callback timeout, state mismatch, and provider denial.
+The response frame gets a fresh five-second deadline after sign-in returns, including failures.
+A long browser wait does not consume that deadline.
+
 ## Cloud chat grants
 
 The desktop posts `{"protocol":"muniment.desktop-access/1"}` to `/v1/chat/grants` with the native access token.
@@ -27,5 +36,8 @@ Run the core contract tests from the repository root:
 
 ```sh
 cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test native_session
+cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test native_sign_in
+cargo test --manifest-path src-tauri/core/Cargo.toml --locked sign_in_returns_a_result
+cargo test --manifest-path src-tauri/core/Cargo.toml --locked failure_diagnostics
 cargo test --manifest-path src-tauri/core/Cargo.toml --locked chat_grant
 ```
