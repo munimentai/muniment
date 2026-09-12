@@ -327,6 +327,61 @@ fn repeated_accept_failures_exit_failed_and_record_the_failure() {
 }
 
 #[test]
+fn a_failed_accept_reaches_the_record_and_stderr() {
+    const CHILD_ENV: &str = "MUNIMENT_TEST_ACCEPT_FAILURE_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "a_failed_accept_reaches_the_record_and_stderr",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(
+            stderr
+                .matches("attach accept failed: CreateInstance win32=5 (0x00000005)")
+                .count(),
+            muniment_runtime::MAX_CONSECUTIVE_FAILED_ACCEPTS
+        );
+        return;
+    }
+
+    struct FileDiagnostics(std::path::PathBuf);
+    impl WindowsDiagnosticSink for FileDiagnostics {
+        fn record(&self, event: WindowsDiagnosticEvent) {
+            muniment_runtime::write_windows_diagnostic(&self.0, event).unwrap();
+        }
+    }
+
+    let directory = temporary_state_directory("accept-error");
+    std::fs::create_dir_all(&directory).unwrap();
+    let error = muniment_core::attach::WindowsAttachAcceptError::CreateInstance(5);
+    let acceptor = fake_acceptor(WindowsAttachAcceptOutcome::AcceptFailed(error), false);
+    let observed_acceptor = acceptor.clone();
+    let factory = FakeFactory {
+        result: Ok(acceptor),
+    };
+    let (_stop_tx, stop_rx) = mpsc::channel();
+    assert_eq!(
+        run_windows_attach_activation(&factory, stop_rx, &FileDiagnostics(directory.clone())),
+        WindowsActivationExit::Failed(1)
+    );
+    assert_eq!(
+        observed_acceptor.calls.get(),
+        muniment_runtime::MAX_CONSECUTIVE_FAILED_ACCEPTS
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.join("muniment/logs/runtime.log")).unwrap(),
+        "event=activation_failed message=runtime activation failed cause=CreateInstance win32=5 (0x00000005)\n"
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn a_bound_acceptor_runs_retention_until_the_activation_ends() {
     let directory = temporary_state_directory("retention");
     std::fs::create_dir_all(&directory).unwrap();
