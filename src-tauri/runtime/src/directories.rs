@@ -124,7 +124,8 @@ pub fn windows_log_directory_from_local_app_data(
     if !local_app_data.is_absolute() {
         return Err(DirectoryUnavailableError);
     }
-    Ok(local_app_data.join("muniment/logs"))
+    // Keep diagnostics outside the per-user install directory.
+    Ok(local_app_data.join(APPLICATION_IDENTIFIER).join("logs"))
 }
 
 #[cfg(target_os = "windows")]
@@ -169,7 +170,7 @@ mod windows_tests {
         assert_eq!(windows_local_app_data(), Ok(local_app_data.clone()));
         assert_eq!(
             windows_log_directory(),
-            Ok(local_app_data.join("muniment/logs"))
+            Ok(local_app_data.join(APPLICATION_IDENTIFIER).join("logs"))
         );
     }
 }

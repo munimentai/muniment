@@ -33,6 +33,8 @@ fn local_app_data() -> PathBuf {
 #[test]
 fn creates_the_managed_tree_and_writes_fixed_records() {
     let root = local_app_data();
+    let install_directory = root.join("muniment");
+    fs::create_dir(&install_directory).unwrap();
 
     for event in [
         WindowsDiagnosticEvent::ActivationFailed,
@@ -48,7 +50,7 @@ fn creates_the_managed_tree_and_writes_fixed_records() {
     }
 
     assert_eq!(
-        fs::read_to_string(root.join("muniment/logs/runtime.log")).unwrap(),
+        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
         concat!(
             "event=activation_failed message=runtime activation failed\n",
             "event=arguments_invalid message=runtime arguments invalid\n",
@@ -61,11 +63,14 @@ fn creates_the_managed_tree_and_writes_fixed_records() {
         )
     );
     assert!(!root.join("runtime.log").exists());
+    fs::remove_dir(&install_directory).unwrap();
+    assert!(!install_directory.exists());
+    assert!(root.join("ai.muniment.desktop/logs/runtime.log").is_file());
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn writes_beneath_an_installer_directory_with_an_inherited_acl() {
+fn writes_beneath_an_application_directory_with_an_inherited_acl() {
     let root = local_app_data();
     let status = Command::new("icacls")
         .arg(&root)
@@ -73,7 +78,7 @@ fn writes_beneath_an_installer_directory_with_an_inherited_acl() {
         .status()
         .unwrap();
     assert!(status.success());
-    let application = root.join("muniment");
+    let application = root.join("ai.muniment.desktop");
     fs::create_dir(&application).unwrap();
     let before = Command::new("icacls").arg(&application).output().unwrap();
     assert!(before.status.success());
@@ -107,7 +112,7 @@ fn writes_beneath_an_installer_directory_with_an_inherited_acl() {
 #[test]
 fn refuses_an_existing_logs_directory_with_an_inherited_acl() {
     let root = local_app_data();
-    let logs = root.join("muniment/logs");
+    let logs = root.join("ai.muniment.desktop/logs");
     fs::create_dir_all(&logs).unwrap();
     assert!(write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).is_err());
     assert!(!logs.join("runtime.log").exists());
@@ -122,7 +127,7 @@ fn rejects_relative_roots_and_unsafe_native_access_lists() {
 
     let root = local_app_data();
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).unwrap();
-    let logs = root.join("muniment/logs");
+    let logs = root.join("ai.muniment.desktop/logs");
     let status = Command::new("icacls")
         .arg(&logs)
         .args(["/grant", "*S-1-1-0:(R)", "/inheritance:e"])
@@ -134,7 +139,7 @@ fn rejects_relative_roots_and_unsafe_native_access_lists() {
 
     let root = local_app_data();
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).unwrap();
-    let log = root.join("muniment/logs/runtime.log");
+    let log = root.join("ai.muniment.desktop/logs/runtime.log");
     let status = Command::new("icacls")
         .arg(&log)
         .args(["/grant", "*S-1-1-0:(R)"])
@@ -149,7 +154,7 @@ fn rejects_relative_roots_and_unsafe_native_access_lists() {
 fn rejects_hard_linked_log_files() {
     let root = local_app_data();
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).unwrap();
-    let log = root.join("muniment/logs/runtime.log");
+    let log = root.join("ai.muniment.desktop/logs/runtime.log");
     let outside_link = root.join("outside.log");
     fs::hard_link(&log, &outside_link).unwrap();
     let contents = fs::read(&log).unwrap();
@@ -164,10 +169,10 @@ fn rejects_hard_linked_log_files() {
 fn rejects_reparse_points_in_the_managed_path() {
     let root = local_app_data();
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).unwrap();
-    fs::remove_dir_all(root.join("muniment/logs")).unwrap();
+    fs::remove_dir_all(root.join("ai.muniment.desktop/logs")).unwrap();
     let target = root.join("target");
     fs::create_dir(&target).unwrap();
-    let link = root.join("muniment").join("logs");
+    let link = root.join("ai.muniment.desktop").join("logs");
     let status = Command::new("cmd")
         .args(["/d", "/c", "mklink", "/J"])
         .arg(&link)
@@ -203,7 +208,7 @@ fn rejects_an_application_directory_junction() {
     let root = local_app_data();
     let target = root.join("target");
     fs::create_dir(&target).unwrap();
-    let link = root.join("muniment");
+    let link = root.join("ai.muniment.desktop");
     let status = Command::new("cmd")
         .args(["/d", "/c", "mklink", "/J"])
         .arg(&link)
@@ -221,7 +226,7 @@ fn rejects_an_application_directory_junction() {
 fn resets_only_when_the_next_record_crosses_the_limit() {
     let root = local_app_data();
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::RestartLoopStopped).unwrap();
-    let log = root.join("muniment/logs/runtime.log");
+    let log = root.join("ai.muniment.desktop/logs/runtime.log");
     let record = b"event=restart_loop_stopped message=runtime restart limit reached\n";
     let file = fs::OpenOptions::new().write(true).open(&log).unwrap();
     file.set_len(WINDOWS_RUNTIME_LOG_MAX_BYTES - record.len() as u64)

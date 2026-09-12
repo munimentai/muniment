@@ -3858,7 +3858,7 @@ describe('Windows runtime diagnostic transcript', () => {
     input: JSON.stringify(roots), encoding: 'utf8', env: { ...process.env, ...env },
   })
   const plant = (directory, text) => {
-    const logs = path.join(directory, 'muniment', 'logs')
+    const logs = path.join(directory, 'ai.muniment.desktop', 'logs')
     fs.mkdirSync(logs, { recursive: true })
     fs.writeFileSync(path.join(logs, 'runtime.log'), text)
   }
@@ -3873,6 +3873,24 @@ describe('Windows runtime diagnostic transcript', () => {
     expect(result.stdout).toContain('RunTask HRESULT(0x80041326)')
     expect(result.stdout).toContain('No runtime.log exists at this path.')
     expect(result.stdout.match(/dci: Windows runtime.log/g)).toHaveLength(3)
+  })
+
+  it('Reads diagnostics outside the install directory without collecting runtime state.', () => {
+    const directory = temp()
+    const install = path.join(directory, 'muniment')
+    const state = path.join(directory, 'ai.muniment.desktop', 'state')
+    fs.mkdirSync(install)
+    fs.mkdirSync(state, { recursive: true })
+    fs.writeFileSync(path.join(state, 'journal'), 'private runtime state')
+    plant(directory, 'event=activation_failed message=runtime activation failed\n')
+    fs.rmdirSync(install)
+
+    const result = run([directory])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain(path.join(directory, 'ai.muniment.desktop', 'logs', 'runtime.log'))
+    expect(result.stdout).toContain('event=activation_failed message=runtime activation failed')
+    expect(result.stdout).not.toContain('private runtime state')
+    expect(fs.existsSync(install)).toBe(false)
   })
 
   it('Redacts the full diagnostic before the tail cutoff.', () => {

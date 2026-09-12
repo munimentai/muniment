@@ -15,7 +15,8 @@ Neither installer registers the task yet. Neither uninstaller removes it yet.
 
 A started runtime exits at once and publishes no attach endpoint. It does not
 open the instance lock, journal, CAS, Pi, or attach endpoint. The runtime writes
-bounded diagnostics to `%LocalAppData%\muniment\logs\runtime.log`.
+bounded diagnostics to `%LocalAppData%\ai.muniment.desktop\logs\runtime.log`.
+The log directory sits outside the install directory, so diagnostics do not block uninstall.
 
 ## Planned runtime task contract
 
