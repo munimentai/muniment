@@ -909,7 +909,7 @@ sleep() {
 }
 npm() {
   printf 'WDIO fixture output.\\n'
-  if [[ $FIXTURE_MODE == pass || $FIXTURE_MODE == final-cleanup-only ]]; then return 0; fi
+  if [[ $FIXTURE_MODE == pass || $FIXTURE_MODE == final-cleanup-only ]]; then test -d "$HOME/Documents"; return $?; fi
   "$MUNIMENT_E2E_APP_BINARY" "$current_step"
 }
 export MUNIMENT_E2E_APP_BINARY="$FIXTURE_LAUNCHER"
@@ -984,7 +984,7 @@ if [[ $FIXTURE_MODE == publication-failure ]]; then mv() { return 1; }; fi
     expect(reason).toContain('cleanup_status=0\n')
   })
 
-  it('Publishes empty app logs and a successful exit reason when all specs pass.', () => {
+  it('Prepares Documents for each spec and publishes empty app logs when all specs pass.', () => {
     const { result, artifacts, reason } = runEnvelope()
     expect(result.status, result.stderr).toBe(0)
     expect(reason).toBe('status=0\ncleanup_status=0\nredaction_status=0\nfirst_failed_step=none\n')
