@@ -201,6 +201,8 @@ run_step image-fixture openssl base64 -d -A -in test/e2e/fixtures/image-token.pn
 export MUNIMENT_E2E_IMAGE_PATH="$state_root/image-token.png"
 
 # Each spec starts with no app, runtime, or driver from the last spec.
+# The launchd runtime uses the login home. Keep its endpoint when a spec redirects HOME.
+export XDG_DATA_HOME="$HOME/.local/share"
 export HOME="$state_root/degraded" MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
 run_e2e local-mode-chat "$raw/wdio-local-mode-chat.log" -- --spec test/e2e/specs/local-mode-chat.spec.js || status=1
 run_e2e real-sign-in "$raw/wdio-sign-in.log" -- --spec test/e2e/specs/real-sign-in.spec.js || status=1

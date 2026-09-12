@@ -98,6 +98,29 @@ impl Lifecycle {
         }
     }
 
+    #[cfg(any(test, target_os = "macos"))]
+    fn observe_endpoint(
+        &mut self,
+        connected: bool,
+        now: Instant,
+        endpoint: Option<&std::path::Path>,
+    ) {
+        let starting = self.snapshot.last_event == RuntimeEvent::Starting;
+        self.observe(connected, !connected, now);
+        if starting && self.snapshot.last_event == RuntimeEvent::StartFailed {
+            let endpoint = match endpoint {
+                Some(path) => format!(
+                    "The desktop waited for runtime endpoint {}.",
+                    path.display()
+                ),
+                None => "The desktop could not resolve the runtime endpoint.".to_owned(),
+            };
+            self.snapshot.cause = Some(format!(
+                "The desktop client did not connect within 10 seconds. {endpoint}"
+            ));
+        }
+    }
+
     fn observe(&mut self, connected: bool, disconnected: bool, now: Instant) {
         if self.awaiting_disconnect {
             if connected || !disconnected {
@@ -156,7 +179,6 @@ impl RuntimeOwner {
         let before = state.snapshot.clone();
         update(&mut state);
         if state.snapshot != before {
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
             if state.snapshot.cause != before.cause || (before.busy && !state.snapshot.busy) {
                 if let Some(cause) = &state.snapshot.cause {
                     eprintln!("The runtime start failed. {cause}");
@@ -280,6 +302,10 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let start_app = app.clone();
     std::thread::spawn(move || start(&start_app));
     let app = app.clone();
+    #[cfg(target_os = "macos")]
+    let endpoint = muniment_runtime::profile_directory()
+        .ok()
+        .map(|profile| profile.join("muniment/attach-v1.sock"));
     std::thread::spawn(move || loop {
         let owner = app.state::<RuntimeOwner>();
         let revision = owner.state.lock().unwrap().snapshot.revision;
@@ -301,7 +327,7 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         let connected = companion.runtime_connected();
         #[cfg(target_os = "linux")]
         let (desktop, chat_events) = companion.runtime_client_connections();
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
         let disconnected = !connected;
         #[cfg(target_os = "macos")]
         let requires_approval = crate::macos_runtime_service::requires_approval();
@@ -322,7 +348,9 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             }
             #[cfg(target_os = "linux")]
             state.observe_clients(desktop, chat_events, Instant::now());
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            state.observe_endpoint(connected, Instant::now(), endpoint.as_deref());
+            #[cfg(target_os = "windows")]
             state.observe(connected, disconnected, Instant::now());
         });
         std::thread::sleep(Duration::from_millis(100));
@@ -332,6 +360,75 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_timeout_names_the_path_and_clears_on_recovery_or_retry() {
+        let now = Instant::now();
+        let endpoint = std::path::Path::new(
+            "/Users/test home/.local/share/ai.muniment.desktop/muniment/attach-v1.sock",
+        );
+        for endpoint in [Some(endpoint), None] {
+            let app = tauri::test::mock_app();
+            app.manage(RuntimeOwner::default());
+            let owner = app.state::<RuntimeOwner>();
+            for elapsed in [0, 9999, 10000, 11000] {
+                owner.update(app.handle(), |state| {
+                    state.observe_endpoint(false, now + Duration::from_millis(elapsed), endpoint);
+                });
+                let snapshot = runtime_state(app.state());
+                if elapsed < 10000 {
+                    assert_eq!(snapshot.last_event, RuntimeEvent::Starting);
+                    assert!(!snapshot.visible);
+                    assert_eq!(snapshot.cause, None);
+                } else {
+                    assert_eq!(snapshot.last_event, RuntimeEvent::StartFailed);
+                    assert!(snapshot.visible);
+                    let detail = match endpoint {
+                        Some(path) => format!(
+                            "The desktop waited for runtime endpoint {}.",
+                            path.display()
+                        ),
+                        None => "The desktop could not resolve the runtime endpoint.".to_owned(),
+                    };
+                    assert_eq!(
+                        snapshot.cause,
+                        Some(format!(
+                            "The desktop client did not connect within 10 seconds. {detail}"
+                        ))
+                    );
+                    assert_eq!(snapshot.revision, 1);
+                }
+            }
+            owner.update(app.handle(), |state| {
+                state.observe_endpoint(true, now + Duration::from_secs(12), endpoint);
+            });
+            assert_eq!(runtime_state(app.state()).cause, None);
+            assert!(!runtime_state(app.state()).visible);
+            owner.update(app.handle(), |state| {
+                assert!(state.start());
+                state.started(RuntimeEvent::Starting);
+                state.observe_endpoint(false, now, endpoint);
+                state.observe_endpoint(false, now + Duration::from_secs(10), endpoint);
+                assert!(state.snapshot.cause.is_some());
+                assert!(state.start());
+                state.observe_endpoint(false, now + Duration::from_secs(11), endpoint);
+                assert!(state.snapshot.cause.is_some());
+                state.started(RuntimeEvent::Starting);
+            });
+            assert_eq!(runtime_state(app.state()).cause, None);
+        }
+    }
+
+    #[test]
+    fn endpoint_connection_at_the_timeout_boundary_has_no_failure() {
+        let now = Instant::now();
+        let mut state = Lifecycle::default();
+        state.observe_endpoint(false, now, None);
+        state.observe_endpoint(true, now + Duration::from_secs(10), None);
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        assert_eq!(state.snapshot.cause, None);
+        assert!(!state.snapshot.visible);
+    }
 
     #[test]
     fn windows_queued_cause_reaches_the_snapshot_and_clears_on_recovery() {
