@@ -146,7 +146,7 @@ exec 3>&2
 trap finalize EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-mkdir -p "$raw" "$state_root/ready" "$state_root/degraded" || exit 1
+mkdir -p "$raw" "$state_root/ready/Documents" "$state_root/degraded/Documents" || exit 1
 exec 2>>"$raw/runner-stderr.log" || exit 1
 run_step prepare-crash-marker touch "$crash_start" || exit
 current_step=validate-environment
