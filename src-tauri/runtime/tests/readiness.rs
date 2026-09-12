@@ -3,18 +3,17 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::auth::{
-    EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
-};
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::SidecarStatus;
 use muniment_runtime::{
-    accept_prompt, drive_prompt, open_profile_storage, session_status, sign_out,
-    RuntimeChatEventTarget,
+    accept_prompt, drive_prompt, open_profile_storage, session_status, RuntimeChatEventTarget,
 };
 
 mod common;
-use common::{credentials, fixture_grant, spawn_server, stage_pi_stub, TemporaryProfile};
+use common::{
+    fixture_grant, has_credentials, save_mock_session, sign_out_session, spawn_server,
+    stage_pi_stub, TemporaryProfile,
+};
 
 const RUN_ID: &str = "01900000-0000-7000-8000-000000000031";
 
@@ -65,9 +64,7 @@ fn signed_in_starting_pi_rejects_and_releases_the_runtime() {
 }
 
 fn run_starting_pi() {
-    muniment_core::chat_prompt::use_mock_keyring_for_tests();
-    let store = KeyringNativeCredentialStore::new();
-    store.save_credentials(&credentials()).unwrap();
+    save_mock_session();
     let profile = TemporaryProfile::new("signed-in-readiness", true);
     let artifact = stage_pi_stub(&profile.root);
     let storage = open_profile_storage(&profile.profile).unwrap();
@@ -175,12 +172,8 @@ fn run_starting_pi() {
     assert!(active.lock().unwrap().is_none());
     let (base_url, server) = spawn_server(200, r#"{"ok":true}"#.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
-    assert!(
-        !sign_out(&EntitlementSnapshotTracker::new(), &activity)
-            .unwrap()
-            .signed_in
-    );
+    assert!(!sign_out_session(&activity).signed_in);
     server.join().unwrap();
     assert!(!session_status().unwrap().signed_in);
-    assert!(store.load_credentials().unwrap().is_none());
+    assert!(!has_credentials());
 }
