@@ -586,8 +586,10 @@ try {
   $tauriCli = Join-Path $repoRoot "node_modules/@tauri-apps/cli/tauri.js"
   if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) { throw "The local Tauri CLI entry is missing: $tauriCli" }
   Invoke-NativeCommand "node" "`"$tauriCli`" build --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json" $installerLog "E2E application build failed"
-  $appBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment-desktop.exe"))
-  if (-not (Test-Path -LiteralPath $appBinary -PathType Leaf)) { throw "E2E application binary is unavailable" }
+  $webdriverBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment-desktop.exe"))
+  if (-not (Test-Path -LiteralPath $webdriverBinary -PathType Leaf)) { throw "E2E application binary is unavailable" }
+  # The runtime admits only the installed desktop path, even with WebDriver.
+  Copy-Item -LiteralPath $webdriverBinary -Destination $appBinary -Force -ErrorAction Stop
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs present `"$appBinary`"" $installerLog "E2E WebDriver guard failed"
 
   New-Item -Path $handlerKey -Force | Out-Null

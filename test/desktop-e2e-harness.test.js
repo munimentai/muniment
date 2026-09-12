@@ -3581,6 +3581,21 @@ describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
     expect(runner).not.toContain('muniment.exe')
   })
 
+  it('Keeps WebDriver at the installed path that the runtime admits.', () => {
+    const payload = fs.readFileSync(path.join(root, 'src-tauri/core/src/windows_payload.rs'), 'utf8')
+    expect(payload).toContain('const DESKTOP_FILE_NAME: &str = "muniment-desktop.exe";')
+    const build = runner.indexOf('  $webdriverBinary = ')
+    const launch = runner.indexOf('  $env:MUNIMENT_E2E_APP_BINARY = $appBinary', build)
+    expect(build).toBeGreaterThan(start)
+    expect(launch).toBeGreaterThan(build)
+    const staging = runner.slice(build, launch)
+    expect(staging).toContain('Test-Path -LiteralPath $webdriverBinary -PathType Leaf')
+    const copy = staging.indexOf('Copy-Item -LiteralPath $webdriverBinary -Destination $appBinary -Force -ErrorAction Stop')
+    expect(copy).toBeGreaterThan(0)
+    expect(staging.indexOf('webdriver-release-guard.mjs present `"$appBinary`"')).toBeGreaterThan(copy)
+    expect(staging).not.toMatch(/\$appBinary\s*=/)
+  })
+
   it.skipIf(!hasPowerShell).each([
     ['desktop', ['muniment-desktop.exe', 'muniment-runtime.exe', 'product.ico'], 0],
     ['wrong name', ['muniment.exe', 'muniment-runtime.exe', 'product.ico'], 1],

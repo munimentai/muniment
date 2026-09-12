@@ -214,8 +214,9 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let event = crate::macos_runtime_service::start();
     #[cfg(target_os = "windows")]
     {
-        // Share the runtime's known-folder state path, including its crash window.
-        let result = muniment_runtime::profile_directory()
+        let result = app
+            .path()
+            .app_data_dir()
             .map_err(|error| format!("Runtime state lookup failed: {error}"))
             .and_then(|directory| {
                 crate::windows_runtime_service::register_runtime_task_at_startup(&directory)?;
