@@ -23,8 +23,8 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::TaskScheduler::{
     IExecAction, ITaskDefinition, ITaskFolder, ITaskService, TaskScheduler, TASK_ACTION_EXEC,
     TASK_CREATE_OR_UPDATE, TASK_ENUM_HIDDEN, TASK_LOGON_INTERACTIVE_TOKEN, TASK_LOGON_NONE,
-    TASK_LOGON_TYPE, TASK_RUN_USE_SESSION_ID, TASK_STATE, TASK_STATE_QUEUED, TASK_STATE_RUNNING,
-    TASK_UPDATE,
+    TASK_LOGON_TYPE, TASK_RUN_IGNORE_CONSTRAINTS, TASK_RUN_USE_SESSION_ID, TASK_STATE,
+    TASK_STATE_QUEUED, TASK_STATE_RUNNING, TASK_UPDATE,
 };
 use windows::Win32::System::Variant::VARIANT;
 
@@ -445,7 +445,10 @@ fn start_task_in_session<E>(
         .filter(|session| *session > 0)
         .ok_or(StartRegisteredTaskError::InvalidProcessSession(session_id))?;
     clear_crash_window().map_err(StartRegisteredTaskError::ClearCrashWindow)?;
-    match run(TASK_RUN_USE_SESSION_ID.0, session) {
+    // An app launch must not wait for idle or power constraints in the scheduler.
+    // Keep the caller's session explicit without changing the registered task.
+    let flags = TASK_RUN_USE_SESSION_ID.0 | TASK_RUN_IGNORE_CONSTRAINTS.0;
+    match run(flags, session) {
         Ok(TASK_STATE_QUEUED) => Err(StartRegisteredTaskError::Queued { session_id }),
         Ok(_) => Ok(StartRegisteredTaskResult::Started),
         Err(StartRegisteredTaskError::RunTask(SCHED_E_ALREADY_RUNNING)) => {
@@ -895,7 +898,11 @@ mod tests {
                     },
                     |flags, session| {
                         assert!(cleared.get());
-                        assert_eq!(flags, TASK_RUN_USE_SESSION_ID.0);
+                        assert_eq!(flags, 6);
+                        assert_eq!(
+                            flags,
+                            TASK_RUN_USE_SESSION_ID.0 | TASK_RUN_IGNORE_CONSTRAINTS.0
+                        );
                         assert_eq!(session, session_id as i32);
                         Ok(state)
                     },
