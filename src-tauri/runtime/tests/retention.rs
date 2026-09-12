@@ -159,7 +159,8 @@ fn deletes_an_expired_terminal_run_and_keeps_a_recent_run() {
     store_prompt(retry_run, "retry prompt", Some(subject)).unwrap();
     fail_next_mock_prompt_delete_for_tests();
 
-    assert!(apply_retention(Arc::clone(&storage), 30 * 24 * 60 * 60).is_err());
+    let error = apply_retention(Arc::clone(&storage), 30 * 24 * 60 * 60).unwrap_err();
+    assert!(error.contains("injected prompt delete failure"), "{error}");
     assert_eq!(
         load_prompt(retry_run, Some(subject)).unwrap().as_deref(),
         Some("retry prompt")
