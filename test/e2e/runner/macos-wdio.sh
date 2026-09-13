@@ -142,6 +142,12 @@ collect_local_mode_pi_route() {
   # Pi falls back to Ollama's default port when it reads no base URL.
   printf 'default_port_code=%s\n' \
     "$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:11434/v1/models 2>/dev/null)" >>"$destination"
+  # Pi runs under launchd, which carries its own environment and proxy settings.
+  {
+    printf 'system_proxy=%s\n' "$(scutil --proxy 2>/dev/null | tr -d '\n' | head -c 300)"
+    printf 'launchd_proxy_env=%s\n' \
+      "$(launchctl print "gui/$(id -u)" 2>/dev/null | grep -iE '(http|https|all|no)_proxy|BUN_CONFIG' | tr -d '\n' | head -c 300)"
+  } >>"$destination" || return 1
   printf 'The runner saved pi-local-mode-route.log.\n' >>"$cleanup_log"
 }
 
@@ -183,6 +189,7 @@ finalize() {
   cleanup_step stop-app stop_app
   cleanup_step restore-config-directory restore_macos_spec_config
   if (( cleanup_status != 0 )); then status=1; fi
+  cleanup_step clear-verbose-fetch launchctl unsetenv BUN_CONFIG_VERBOSE_FETCH
   if (( installed )); then cleanup_step remove-bundle rm -rf -- "$installed_bundle"; fi
   cleanup_step collect-crash-reports collect_crash_reports
   if node test/e2e/support/redact.mjs "$raw" "$safe" "$redaction_report"; then
@@ -266,6 +273,8 @@ run_step image-fixture openssl base64 -d -A -in test/e2e/fixtures/image-token.pn
 export MUNIMENT_E2E_IMAGE_PATH="$state_root/image-token.png"
 
 run_step save-config-directory save_macos_spec_config || exit
+# Bun prints every fetch it makes, so Pi's stderr names the address it dials.
+run_step pi-verbose-fetch launchctl setenv BUN_CONFIG_VERBOSE_FETCH curl || exit
 # Each spec starts with no app, runtime, or driver from the last spec.
 # The launchd runtime uses the login home. Keep its endpoint when a spec redirects HOME.
 export XDG_DATA_HOME="$HOME/.local/share"

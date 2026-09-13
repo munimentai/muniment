@@ -609,7 +609,10 @@ pkill() {
     if [[ $key == wdio ]]; then rm -f "$process_root/worker"; fi
   fi
 }
-launchctl() { if [[ $1 == setenv ]]; then [[ $3 == "$HOME/Library/Application Support" ]]; return; fi
+launchctl() { if [[ $1 == setenv ]]; then
+    if [[ $2 == BUN_CONFIG_VERBOSE_FETCH ]]; then printf 'verbose-fetch: %s\\n' "$3" >>"$cleanup_log"; return; fi
+    [[ $3 == "$HOME/Library/Application Support" ]]; return; fi
+  if [[ $1 == unsetenv ]]; then printf 'verbose-fetch: cleared\\n' >>"$cleanup_log"; return; fi
   if [[ $1 == print ]]; then
     if [[ -e "$process_root/job" ]]; then printf 'state = running\\npid = 123\\n'; else return 1; fi
   else
