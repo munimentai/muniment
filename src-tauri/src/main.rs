@@ -130,6 +130,8 @@ fn main() {
             local_mode::local_mode_enter,
             local_mode::local_mode_leave,
             local_mode::local_mode_provider_status,
+            local_mode::local_mode_model_source,
+            local_mode::local_mode_disconnect_provider,
             local_mode::local_mode_store_provider_key,
             local_mode::local_mode_store_local_provider,
             chat::chat_submit,

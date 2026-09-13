@@ -272,6 +272,7 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'local_mode_status') return ['local-mode', 'prompt-storage'].includes(fixtureName)
     if (command === 'local_mode_enter') return null
     if (command === 'local_mode_leave') return null
+    if (command === 'local_mode_model_source') return 'google'
     if (command === 'local_mode_provider_status') return [
       { provider: 'anthropic', configured: false },
       { provider: 'google', configured: true },

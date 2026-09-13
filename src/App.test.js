@@ -8,6 +8,7 @@ import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { historyMessages } from './lib/chat-state.js'
+import { tick } from 'svelte'
 
 const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.svelte'), 'utf8')
 const appStyles = appSource.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
@@ -228,6 +229,8 @@ beforeEach(() => {
     if (command === 'onboarding_scan') return
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
     if (command === 'onboarding_model_settings_error') return
+    if (command === 'local_mode_model_source') return 'google'
+    if (command === 'local_mode_provider_status') return [{ provider: 'google', configured: true }]
     if (command === 'chat_thread_open') return []
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -1243,22 +1246,24 @@ describe('workspace composer entry', () => {
 
   it('enters local mode and saves a provider key', async () => {
     let providerStatusChecks = 0
-    invoke.mockImplementation(async (command) => {
+    const saved = new Set()
+    invoke.mockImplementation(async (command, payload) => {
       if (command === 'local_mode_status') return false
       if (command === 'auth_status') return { signed_in: false, subject: null }
       if (command === 'local_mode_enter') return undefined
       if (command === 'chat_thread_open') return []
+      if (command === 'local_mode_model_source') return saved.has('ollama') ? 'ollama' : saved.has('anthropic') ? 'anthropic' : null
       if (command === 'local_mode_provider_status') {
         providerStatusChecks += 1
         return [
-          { provider: 'anthropic', configured: providerStatusChecks > 1 },
+          { provider: 'anthropic', configured: saved.has('anthropic') },
           { provider: 'google', configured: false },
           { provider: 'openai', configured: false },
-          { provider: 'ollama', configured: false },
+          { provider: 'ollama', configured: saved.has('ollama') },
         ]
       }
-      if (command === 'local_mode_store_provider_key') return undefined
-      if (command === 'local_mode_store_local_provider') return undefined
+      if (command === 'local_mode_store_provider_key') { saved.add(payload.provider); return }
+      if (command === 'local_mode_store_local_provider') { saved.add('ollama'); return }
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -1274,10 +1279,14 @@ describe('workspace composer entry', () => {
       expect(copy).not.toMatch(/[\r\n]/)
       expect(copy.split(/\s+/).length).toBeLessThan(12)
     }
-    expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
-    expect(screen.getByText('Google', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
-    expect(screen.getByText('OpenAI', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
-    expect(screen.getByText('Ollama', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
+    const chip = screen.getByRole('button', { name: 'Connect a model' })
+    expect(chip.closest('.composer-row')).not.toBeNull()
+    const sidebar = document.querySelector('#sidebar')
+    expect(sidebar.querySelector('input, fieldset, dl')).toBeNull()
+    expect(screen.queryByLabelText('Provider API key')).not.toBeInTheDocument()
+    await fireEvent.click(chip)
+    expect(screen.getByText('No providers connected.')).toBeVisible()
+    expect(sidebar.querySelector('input, fieldset, dl')).toBeNull()
     expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
 
     const provider = screen.getByRole('group', { name: 'Provider' })
@@ -1292,14 +1301,17 @@ describe('workspace composer entry', () => {
 
     expect(invoke).toHaveBeenCalledWith('local_mode_store_provider_key', { provider: 'anthropic', key: 'secret-key' })
     expect(await screen.findByText('Muniment saved the Anthropic key. Send a message.')).toBeInTheDocument()
-    expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Saved')
+    expect(screen.getByRole('button', { name: 'Anthropic key' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Disconnect Anthropic' }).closest('li')).toHaveTextContent('Key')
 
     await fireEvent.click(within(provider).getByRole('radio', { name: 'Ollama (local)' }))
     await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save Ollama server' }))
     expect(invoke).toHaveBeenCalledWith('local_mode_store_local_provider', { baseUrl: 'http://localhost:11434/v1' })
     expect(await screen.findByText('Muniment saved the Ollama server. Send a message.')).toBeInTheDocument()
-    expect(providerStatusChecks).toBe(3)
+    expect(providerStatusChecks).toBe(4)
+    expect(screen.getByRole('button', { name: 'Local · Ollama' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Disconnect Ollama' }).closest('li')).toHaveTextContent('Local')
   })
 
   it.each([
@@ -1314,6 +1326,8 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await screen.findByPlaceholderText('Ask anything')
+    await tick()
+    await fireEvent.click(await screen.findByRole('button', { name: /Google key|Connect a model/ }))
     if (failedCommand === 'local_mode_store_provider_key') {
       await fireEvent.input(await screen.findByLabelText('Provider API key'), { target: { value: 'test-key' } })
       await fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
@@ -1322,11 +1336,136 @@ describe('workspace composer entry', () => {
     expect(copy.split(/\s+/).length).toBeLessThan(12)
   })
 
+  it.each([
+    ['anthropic', 'Anthropic key'],
+    ['ollama', 'Local · Ollama'],
+    [null, 'Connect a model'],
+  ])('names the saved model source %s without sidebar inputs', async (source, label) => {
+    localModeStatus = true
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'local_mode_model_source') return Promise.resolve(source)
+      if (command === 'local_mode_provider_status') return Promise.resolve(source ? [{ provider: source, configured: true }] : [])
+      return original(command, ...args)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await tick()
+    const chip = await screen.findByRole('button', { name: label })
+    expect(document.querySelector('#sidebar').querySelector('input, fieldset, dl')).toBeNull()
+    await fireEvent.click(chip)
+    const panel = screen.getByRole('dialog', { name: 'Model source' })
+    expect(panel).toHaveFocus()
+    expect(within(panel).getAllByRole('radio')).toHaveLength(4)
+    expect(document.querySelector('#sidebar').querySelector('input, fieldset, dl')).toBeNull()
+    await fireEvent.input(screen.getByLabelText('Provider API key'), { target: { value: 'unsaved-secret' } })
+    await fireEvent.keyDown(screen.getByLabelText('Provider API key'), { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Model source' })).not.toBeInTheDocument()
+    expect(chip).toHaveFocus()
+    await fireEvent.click(chip)
+    expect(screen.getByLabelText('Provider API key')).toHaveValue('')
+  })
+
+  it.each(['click', 'Enter'])('opens the model panel on the first Send through %s without losing the draft', async (action) => {
+    localModeStatus = true
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'local_mode_model_source') return Promise.resolve(null)
+      if (command === 'local_mode_provider_status') return Promise.resolve([])
+      return original(command, ...args)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await tick()
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Keep this draft' } })
+    if (action === 'click') await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    else await fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(screen.getByRole('dialog', { name: 'Model source' })).toBeVisible()
+    expect(composer).toHaveValue('Keep this draft')
+    expect(invoke.mock.calls.some(([command]) => command === 'chat_submit')).toBe(false)
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('button', { name: 'Connect a model' })).toHaveFocus()
+  })
+
+  it.each([false, true])('refreshes the model source after a disconnect with failure %s', async (fails) => {
+    localModeStatus = true
+    let connected = true
+    const disconnect = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'local_mode_model_source') return Promise.resolve(connected ? 'google' : null)
+      if (command === 'local_mode_provider_status') return Promise.resolve([{ provider: 'google', configured: connected }])
+      if (command === 'local_mode_disconnect_provider') return disconnect.promise
+      return original(command, ...args)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Google key' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect Google' }))
+    expect(invoke).toHaveBeenCalledWith('local_mode_disconnect_provider', { provider: 'google' })
+    expect(screen.getByRole('button', { name: 'Disconnect Google' })).toBeDisabled()
+    for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
+    if (fails) disconnect.reject(new Error('Storage failed.'))
+    else { connected = false; disconnect.resolve() }
+    expect(await screen.findByText(fails ? 'Muniment could not disconnect the provider. Try again.' : 'Muniment disconnected Google.')).toBeVisible()
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Google' })).toBeEnabled())
+    expect(screen.getByRole('button', { name: fails ? 'Google key' : 'Connect a model' })).toBeVisible()
+    if (!fails) expect(screen.queryByRole('button', { name: 'Disconnect Google' })).not.toBeInTheDocument()
+  })
+
+  it('keeps a retry control when a disconnect removes the key before the route write fails', async () => {
+    localModeStatus = true
+    let connected = true
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'local_mode_model_source') return Promise.resolve(connected ? 'google' : null)
+      if (command === 'local_mode_provider_status') return Promise.resolve([{ provider: 'google', configured: connected }])
+      if (command === 'local_mode_disconnect_provider') {
+        if (connected) { connected = false; return Promise.reject(new Error('Route write failed.')) }
+        return Promise.resolve()
+      }
+      return original(command, ...args)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Google key' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect Google' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry disconnect' })).toBeEnabled())
+    expect(screen.queryByRole('button', { name: 'Disconnect Google' })).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry disconnect' }))
+    expect(await screen.findByText('Muniment disconnected Google.')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Retry disconnect' })).not.toBeInTheDocument()
+  })
+
+  it('ignores a stale panel refresh after a key save', async () => {
+    localModeStatus = true
+    const stale = deferred()
+    let reads = 0
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'local_mode_provider_status') return Promise.resolve([{ provider: 'google', configured: true }])
+      if (command === 'local_mode_model_source') {
+        reads += 1
+        return reads === 2 ? stale.promise : Promise.resolve('google')
+      }
+      if (command === 'local_mode_store_provider_key') return Promise.resolve()
+      return original(command, ...args)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Google key' }))
+    await fireEvent.input(screen.getByLabelText('Provider API key'), { target: { value: 'new-key' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
+    await screen.findByText('Muniment saved the Google key. Send a message.')
+    stale.resolve(null)
+    await tick()
+    expect(screen.getByRole('button', { name: 'Google key' })).toBeVisible()
+  })
+
   it('shows the provider fields after each provider change', async () => {
     localModeStatus = true
     render(App)
 
-    const ollama = await screen.findByRole('radio', { name: 'Ollama (local)' })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Google key' }))
+    const ollama = screen.getByRole('radio', { name: 'Ollama (local)' })
     await fireEvent.click(ollama)
     expect(ollama).toBeChecked()
     expect(screen.getByLabelText('Ollama server URL')).toBeVisible()
@@ -1354,12 +1493,18 @@ describe('workspace composer entry', () => {
       return defaultInvoke(command, ...args)
     })
     render(App)
-    const ollama = await screen.findByRole('radio', { name: 'Ollama (local)' })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Google key' }))
+    const ollama = screen.getByRole('radio', { name: 'Ollama (local)' })
     await fireEvent.click(ollama)
     await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save Ollama server' }))
     for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
     expect(ollama).toBeChecked()
+    await fireEvent.input(screen.getByPlaceholderText('Ask anything'), { target: { value: 'Wait for the save' } })
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'true')
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(invoke.mock.calls.some(([command]) => command === 'chat_submit')).toBe(false)
+    await fireEvent.click(screen.getByRole('button', { name: 'Google key' }))
 
     if (fails) save.reject(new Error('Save failed.'))
     else save.resolve()
@@ -1404,6 +1549,7 @@ describe('workspace composer entry', () => {
       return defaultInvoke(command, ...args)
     })
     render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Google key' }))
     await screen.findByRole('radio', { name: 'Google' })
     await waitFor(() => {
       for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
@@ -4740,6 +4886,8 @@ describe('thread announcements', () => {
 
   function signedIn(history, submit) {
     invoke.mockImplementation(async (command) => {
+      if (command === 'local_mode_provider_status') return [{ provider: 'google', configured: true }]
+      if (command === 'local_mode_model_source') return 'google'
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return history
       if (command === 'auth_entitlement_snapshot') return snapshot()

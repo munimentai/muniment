@@ -175,6 +175,99 @@ fn provider_status(auth_file: &Path, models_file: &Path) -> Result<Vec<ProviderS
         .collect())
 }
 
+fn model_source(auth_file: &Path, models_file: &Path) -> Result<Option<&'static str>, String> {
+    let statuses = provider_status(auth_file, models_file)?;
+    let settings = read_json_store(&pi_settings_file(models_file))?;
+    let configured = |provider: &str| {
+        statuses
+            .iter()
+            .any(|status| status.provider == provider && status.configured)
+    };
+    let saved_provider = settings
+        .as_ref()
+        .and_then(|root| root.get("defaultProvider"));
+    let saved_model = settings.as_ref().and_then(|root| root.get("defaultModel"));
+    if [saved_provider, saved_model]
+        .into_iter()
+        .flatten()
+        .any(|value| !value.is_string())
+    {
+        return Err(READ_SETTINGS_ERROR.into());
+    }
+    if let Some(provider) = saved_provider
+        .and_then(serde_json::Value::as_str)
+        .filter(|provider| !provider.is_empty())
+        .filter(|_| {
+            saved_model
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|model| !model.is_empty())
+        })
+    {
+        // A saved route must not silently name a different provider.
+        return Ok(PROVIDERS
+            .iter()
+            .copied()
+            .find(|name| *name == provider && configured(name)));
+    }
+    // Match the pinned runtime's default provider order for the supported keys.
+    Ok(["anthropic", "openai", "google", "ollama"]
+        .into_iter()
+        .find(|provider| configured(provider)))
+}
+
+fn disconnect_provider(auth_file: &Path, models_file: &Path, provider: &str) -> Result<(), String> {
+    if !PROVIDERS.contains(&provider) {
+        return Err("Choose a listed provider, then retry.".into());
+    }
+    let path = if provider == OLLAMA_PROVIDER {
+        models_file
+    } else {
+        auth_file
+    };
+    let parent = path
+        .parent()
+        .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
+    if !parent
+        .try_exists()
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?
+    {
+        return Ok(());
+    }
+    let _lock = lock_pi_auth_file(path)?;
+    let settings_file = pi_settings_file(models_file);
+    let settings_lock = muniment_core::pi_settings::lock_settings(&settings_file)
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let mut root = read_json_for_update(path)?;
+    let mut settings = read_json_for_update(&settings_file)?;
+    if provider == OLLAMA_PROVIDER {
+        if let Some(providers) = root.get_mut("providers") {
+            providers
+                .as_object_mut()
+                .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?
+                .remove(provider);
+        }
+    } else {
+        root.remove(provider);
+    }
+    let clear_route = settings
+        .get("defaultProvider")
+        .and_then(serde_json::Value::as_str)
+        == Some(provider);
+    if clear_route {
+        settings.remove("defaultProvider");
+        settings.remove("defaultModel");
+    }
+    // Remove the credential before clearing its route. A failed write stays visible.
+    settings_lock
+        .check()
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    write_json_for_update(path, &root)?;
+    if clear_route {
+        write_json_for_update(&settings_file, &settings)?;
+    }
+    Ok(())
+}
+
 fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(), String> {
     if !CLOUD_PROVIDERS.contains(&provider)
         || key.is_empty()
@@ -355,6 +448,35 @@ pub(crate) fn local_mode_provider_status(
 }
 
 #[tauri::command]
+pub(crate) fn local_mode_model_source(
+    app: tauri::AppHandle,
+) -> Result<Option<&'static str>, String> {
+    let home_directory = app
+        .path()
+        .home_dir()
+        .map_err(|_| READ_SETTINGS_ERROR.to_string())?;
+    let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
+    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref())?;
+    let models_file = pi_models_file(&home_directory, agent_directory.as_deref())?;
+    model_source(&auth_file, &models_file)
+}
+
+#[tauri::command]
+pub(crate) fn local_mode_disconnect_provider(
+    app: tauri::AppHandle,
+    provider: String,
+) -> Result<(), String> {
+    let home_directory = app
+        .path()
+        .home_dir()
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
+    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref())?;
+    let models_file = pi_models_file(&home_directory, agent_directory.as_deref())?;
+    disconnect_provider(&auth_file, &models_file, &provider)
+}
+
+#[tauri::command]
 pub(crate) fn local_mode_store_provider_key(
     app: tauri::AppHandle,
     provider: String,
@@ -518,6 +640,127 @@ mod tests {
             provider_status(&auth_file, &directory.join("models.json")).unwrap_err(),
             "Muniment cannot read provider settings. Check folder access, then retry."
         );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn model_source_uses_the_saved_route_before_the_default_key_order() {
+        let directory = temporary_directory();
+        let auth = directory.join("auth.json");
+        let models = directory.join("models.json");
+        assert_eq!(model_source(&auth, &models).unwrap(), None);
+        store_provider_key(&auth, "google", "google-key").unwrap();
+        assert_eq!(model_source(&auth, &models).unwrap(), Some("google"));
+        store_provider_key(&auth, "openai", "openai-key").unwrap();
+        assert_eq!(model_source(&auth, &models).unwrap(), Some("openai"));
+        store_provider_key(&auth, "anthropic", "anthropic-key").unwrap();
+        assert_eq!(model_source(&auth, &models).unwrap(), Some("anthropic"));
+        fs::write(
+            directory.join("settings.json"),
+            r#"{"defaultProvider":"google"}"#,
+        )
+        .unwrap();
+        assert_eq!(model_source(&auth, &models).unwrap(), Some("anthropic"));
+        fs::write(
+            directory.join("settings.json"),
+            r#"{"defaultProvider":42,"defaultModel":true}"#,
+        )
+        .unwrap();
+        assert!(model_source(&auth, &models).is_err());
+        fs::write(directory.join("settings.json"), "{}").unwrap();
+        store_local_provider(&models, "http://localhost:11434/v1").unwrap();
+        assert_eq!(model_source(&auth, &models).unwrap(), Some("ollama"));
+        fs::write(&models, "{}").unwrap();
+        assert_eq!(model_source(&auth, &models).unwrap(), None);
+        fs::write(directory.join("settings.json"), "invalid").unwrap();
+        assert!(model_source(&auth, &models).is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn disconnect_preserves_other_credentials_models_and_settings() {
+        let directory = temporary_directory();
+        let auth = directory.join("auth.json");
+        let models = directory.join("models.json");
+        let settings = directory.join("settings.json");
+        fs::write(&auth, r#"{"google":{"type":"api_key","key":"keep"},"anthropic":{"type":"api_key","key":"remove"},"other":{"type":"oauth","access":"keep"}}"#).unwrap();
+        fs::write(
+            &models,
+            r#"{"providers":{"custom":{"baseUrl":"http://localhost:9000/v1"}},"foreign":42}"#,
+        )
+        .unwrap();
+        fs::write(&settings, r#"{"theme":"dark"}"#).unwrap();
+        store_local_provider(&models, "http://localhost:11434/v1").unwrap();
+        disconnect_provider(&auth, &models, "anthropic").unwrap();
+        let credentials = read_json_for_update(&auth).unwrap();
+        assert!(!credentials.contains_key("anthropic"));
+        assert_eq!(credentials["google"]["key"], "keep");
+        assert_eq!(credentials["other"]["access"], "keep");
+        assert_eq!(model_source(&auth, &models).unwrap(), Some("ollama"));
+        disconnect_provider(&auth, &models, "ollama").unwrap();
+        disconnect_provider(&auth, &models, "ollama").unwrap();
+        let saved_models = read_json_for_update(&models).unwrap();
+        assert!(saved_models["providers"].get("ollama").is_none());
+        assert_eq!(
+            saved_models["providers"]["custom"]["baseUrl"],
+            "http://localhost:9000/v1"
+        );
+        assert_eq!(saved_models["foreign"], 42);
+        let saved_settings = read_json_for_update(&settings).unwrap();
+        assert!(!saved_settings.contains_key("defaultProvider"));
+        assert!(!saved_settings.contains_key("defaultModel"));
+        assert_eq!(saved_settings["theme"], "dark");
+        assert_eq!(model_source(&auth, &models).unwrap(), Some("google"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn disconnect_rejects_unknown_providers_and_malformed_stores_without_writes() {
+        let directory = temporary_directory();
+        let auth = directory.join("auth.json");
+        let models = directory.join("models.json");
+        for provider in ["", "unknown", "../auth.json", "Google"] {
+            assert!(disconnect_provider(&auth, &models, provider).is_err());
+        }
+        assert!(!auth.exists());
+        assert!(!models.exists());
+        fs::write(&auth, "invalid").unwrap();
+        assert!(disconnect_provider(&auth, &models, "google").is_err());
+        assert_eq!(fs::read_to_string(&auth).unwrap(), "invalid");
+        fs::write(&models, r#"{"providers":[]}"#).unwrap();
+        assert!(disconnect_provider(&auth, &models, "ollama").is_err());
+        assert_eq!(fs::read_to_string(&models).unwrap(), r#"{"providers":[]}"#);
+        store_provider_key(&directory.join("valid.json"), "google", "key").unwrap();
+        fs::write(directory.join("settings.json"), "invalid").unwrap();
+        assert!(disconnect_provider(&directory.join("valid.json"), &models, "google").is_err());
+        assert!(read_json_for_update(&directory.join("valid.json"))
+            .unwrap()
+            .contains_key("google"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn disconnect_waits_for_a_concurrent_credential_update() {
+        let directory = temporary_directory();
+        let auth = directory.join("auth.json");
+        let models = directory.join("models.json");
+        store_provider_key(&auth, "google", "remove").unwrap();
+        let lock = lock_pi_auth_file(&auth).unwrap();
+        let writer_auth = auth.clone();
+        let writer_models = models.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let result = disconnect_provider(&writer_auth, &writer_models, "google");
+            tx.send(()).unwrap();
+            result
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+        fs::write(&auth, r#"{"google":{"type":"api_key","key":"remove"},"openai":{"type":"api_key","key":"keep"}}"#).unwrap();
+        drop(lock);
+        writer.join().unwrap().unwrap();
+        let saved = read_json_for_update(&auth).unwrap();
+        assert!(!saved.contains_key("google"));
+        assert_eq!(saved["openai"]["key"], "keep");
         fs::remove_dir_all(directory).unwrap();
     }
 

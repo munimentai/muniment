@@ -11,6 +11,7 @@
   import CodeDiff from './lib/CodeDiff.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
+  import ModelPanel from './lib/ModelPanel.svelte'
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
@@ -80,6 +81,9 @@
   ])
   const providerNames = { anthropic: 'Anthropic', google: 'Google', openai: 'OpenAI', ollama: 'Ollama' }
   let providerStatusRequestVersion = 0
+  let modelPanel = $state()
+  let modelSource = $state(null)
+  let disconnectRetry = $state(null)
   let draft = $state('')
   let selectedFiles = $state([])
   let submitError = $state('')
@@ -708,15 +712,28 @@
   async function refreshProviderStatuses() {
     const version = ++providerStatusRequestVersion
     try {
-      const statuses = await tauri.invoke('local_mode_provider_status')
-      if (version === providerStatusRequestVersion) providerStatuses = statuses
+      const [statuses, source] = await Promise.all([
+        tauri.invoke('local_mode_provider_status'),
+        tauri.invoke('local_mode_model_source'),
+      ])
+      if (version === providerStatusRequestVersion) {
+        providerStatuses = statuses ?? []
+        modelSource = source ?? null
+      }
       return true
     } catch (_) {
       if (version === providerStatusRequestVersion) {
+        modelSource = null
         providerKeyStatus = 'Muniment cannot read provider settings. Restart the app to retry.'
       }
       return false
     }
+  }
+
+  async function refreshModelPanel() {
+    if (providerKeyPending) return
+    if (!disconnectRetry) providerKeyStatus = ''
+    await refreshProviderStatuses()
   }
 
   async function enterLocalMode() {
@@ -746,7 +763,7 @@
         await tauri.invoke('local_mode_leave')
         markerStartupLocalMode = false
       } catch (_) {
-        providerKeyStatus = 'Cloud sign-in could not start. Try again.'
+        localEntryError = 'Cloud sign-in could not start. Try again.'
         return
       }
     }
@@ -755,9 +772,11 @@
 
   async function saveProviderSettings() {
     const provider = selectedProvider
-    if (providerKeyPending || (provider === 'ollama' ? !providerBaseUrl.trim() : !providerKey.trim())) return
+    if (active || providerKeyPending || (provider === 'ollama' ? !providerBaseUrl.trim() : !providerKey.trim())) return
     providerKeyPending = true
+    providerStatusRequestVersion += 1
     providerKeyStatus = ''
+    disconnectRetry = null
     try {
       if (provider === 'ollama') {
         await tauri.invoke('local_mode_store_local_provider', { baseUrl: providerBaseUrl })
@@ -768,12 +787,30 @@
         providerKey = ''
         providerKeyStatus = `Muniment saved the ${providerNames[provider]} key. Send a message.`
       }
-      await refreshProviderStatuses()
     } catch (_) {
       providerKeyStatus = provider === 'ollama'
         ? 'Ollama setup failed. Check the URL, then retry.'
         : 'Muniment could not save the provider key. Try again.'
     } finally {
+      await refreshProviderStatuses()
+      providerKeyPending = false
+    }
+  }
+
+  async function disconnectProvider(provider) {
+    if (active || providerKeyPending) return
+    providerKeyPending = true
+    providerStatusRequestVersion += 1
+    providerKeyStatus = ''
+    disconnectRetry = null
+    try {
+      await tauri.invoke('local_mode_disconnect_provider', { provider })
+      providerKeyStatus = `Muniment disconnected ${providerNames[provider]}.`
+    } catch (_) {
+      providerKeyStatus = 'Muniment could not disconnect the provider. Try again.'
+      disconnectRetry = provider
+    } finally {
+      await refreshProviderStatuses()
       providerKeyPending = false
     }
   }
@@ -1025,13 +1062,15 @@
       throw firstRunError(tauri, 'runtime')
     }
     onboarding = { name: 'complete', homePath: onboarding.homePath }
+    await tick()
+    await modelPanel?.openPanel()
   }
 
   function keydown(event) {
     const action = composerAction(event, draft, active)
     if (action) {
       event.preventDefault()
-      action === 'submit' ? chatController.send() : chatController.queue('steer')
+      action === 'submit' ? send() : chatController.queue('steer')
     }
   }
 
@@ -1042,11 +1081,15 @@
   }
 
   function sendDisabled() {
-    return runtimeUpgradePending() || !draft.trim() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
+    return runtimeUpgradePending() || providerKeyPending || !draft.trim() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
   }
 
   function send() {
     if (sendDisabled()) return
+    if (!active && auth.name === 'local' && !modelSource) {
+      void modelPanel?.openPanel()
+      return
+    }
     active ? chatController.queue('steer') : chatController.send()
   }
 </script>
@@ -1149,30 +1192,7 @@
             <section class="local-account" aria-labelledby="local-account-title">
               <strong id="local-account-title">Local mode</strong>
               <Appearance />
-              <dl class="provider-statuses">
-                {#each providerStatuses as status (status.provider)}
-                  <div><dt>{providerNames[status.provider]}</dt><dd>{status.configured ? 'Saved' : 'Not set'}</dd></div>
-                {/each}
-              </dl>
-              <fieldset class="provider-choice" disabled={!!active || providerKeyPending}>
-                <legend>Provider</legend>
-                {#each Object.entries(providerNames) as [provider, name]}
-                  <label for="provider-{provider}">
-                    <input id="provider-{provider}" type="radio" name="provider" value={provider} bind:group={selectedProvider}>
-                    {name}{provider === 'ollama' ? ' (local)' : ''}
-                  </label>
-                {/each}
-              </fieldset>
-              {#if selectedProvider === 'ollama'}
-                <label for="provider-base-url">Ollama server URL</label>
-                <input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={providerBaseUrl} disabled={!!active || providerKeyPending}>
-                <button type="button" disabled={!!active || providerKeyPending || !providerBaseUrl.trim()} onclick={saveProviderSettings}>Save Ollama server</button>
-              {:else}
-                <label for="provider-key">Provider API key</label>
-                <input id="provider-key" type="password" autocomplete="off" bind:value={providerKey} disabled={!!active || providerKeyPending}>
-                <button type="button" disabled={!!active || providerKeyPending || !providerKey.trim()} onclick={saveProviderSettings}>Save key</button>
-              {/if}
-              {#if providerKeyStatus}<p class="support" role="status">{providerKeyStatus}</p>{/if}
+              {#if localEntryError}<p class="support" role="alert">{localEntryError}</p>{/if}
               <button type="button" class="quiet" disabled={!!active} onclick={signIn}>Sign in for cloud features</button>
             </section>
           {/if}
@@ -1351,6 +1371,9 @@
             </section>
           {/if}
           <div class="composer-row" bind:this={composerRow}>
+            {#if auth.name === 'local'}
+              <ModelPanel bind:this={modelPanel} statuses={providerStatuses} source={modelSource} names={providerNames} bind:selected={selectedProvider} bind:key={providerKey} bind:baseUrl={providerBaseUrl} status={providerKeyStatus} pending={providerKeyPending} active={!!active} onsave={saveProviderSettings} ondisconnect={disconnectProvider} onrefresh={refreshModelPanel} {disconnectRetry} />
+            {/if}
             {#if threadSwitching}
               <span id="composer-hint" role="status">Send waits for the thread. Your draft stays here.</span>
             {:else if isDictationActive(dictation)}
@@ -1623,18 +1646,6 @@
   .side-action span { flex: 1; min-width: 0; }
   .local-account { display: grid; min-height: 0; overflow-y: auto; gap: 7px; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
   .local-account strong { margin-bottom: 3px; }
-  .provider-statuses { display: grid; gap: 4px; margin: 0 0 3px; font: var(--text-12) var(--font-mono); }
-  .provider-statuses div { display: flex; justify-content: space-between; gap: 8px; }
-  .provider-statuses dd { margin: 0; color: var(--muted); }
-  .local-account label { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .local-account > input { min-width: 0; padding: 6px 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; }
-  .provider-choice { min-width: 0; margin: 0; padding: 0; border: 0; }
-  .provider-choice legend { margin-bottom: 4px; padding: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .provider-choice label { display: flex; align-items: center; gap: 8px; min-height: 32px; border-radius: var(--radius-control); color: var(--ink); font: inherit; cursor: pointer; }
-  .provider-choice:not(:disabled) label:hover { background: var(--faint); }
-  .provider-choice:disabled label { opacity: .55; cursor: default; }
-  .provider-choice input { flex: none; width: 24px; height: 24px; margin: 0; accent-color: var(--ink); cursor: inherit; }
-  .provider-choice input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   .local-account .support { margin: 0; font: var(--text-12) var(--font-mono); }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
   .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }

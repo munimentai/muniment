@@ -28,7 +28,25 @@ Failure captures use that window too.
 
 ## Provider access
 
-Open the sidebar's **Local mode** section from the thread surface. Select **Anthropic**, **Google**, or **OpenAI**. Enter the key in **Provider API key**, then select **Save key**. The desktop writes the key to Pi's `~/.pi/agent/auth.json` store with Pi's file lock.
+The model source chip sits under the input in the composer row.
+It names the saved source, such as **Anthropic key** or **Local · Ollama**.
+Without a source, it reads **Connect a model**, and Send opens its panel without losing the draft.
+
+1. Open the model source chip.
+2. Select **Anthropic**, **Google**, or **OpenAI**.
+3. Enter the key in **Provider API key**.
+4. Select **Save key**.
+
+For a local server, select **Ollama (local)** in the same panel.
+Enter its URL in **Ollama server URL**.
+Select **Save Ollama server**.
+The desktop writes keys to Pi's `auth.json` and the local server to `models.json` in Pi's agent folder.
+It honors Pi's file locks and keeps other providers.
+
+The panel lists connected providers with **Key** or **Local** source tags.
+Select **Disconnect** beside a provider to remove it.
+Press **Escape** to close the panel and return focus to the chip.
+The sidebar keeps **Appearance** and **Sign in for cloud features**, with no provider controls.
 
 Pi can also use provider credentials that the Pi CLI saved in the same store. Local mode removes inherited provider credential and endpoint variables from the Pi process environment.
 
