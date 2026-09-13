@@ -566,21 +566,21 @@ collect_local_mode_pi_log`, 'bash', directory, data], { encoding: 'utf8' })
 describe.skipIf(process.platform === 'win32')('macOS WDIO spec process isolation', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
   const functions = fs.readFileSync('test/e2e/support/macos-spec-config.sh', 'utf8') + '\n' + runner.slice(runner.indexOf('harness_processes_gone()'), runner.indexOf('\nfinalize()'))
-  const sequence = runner.slice(runner.indexOf('# Each spec starts'))
+  const sequence = runner.slice(runner.indexOf('run_step save-config-directory'))
   const processes = ['app', 'desktop', 'runtime', 'tauri-driver', 'safaridriver', 'wdio', 'worker', 'job']
   const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
   const runSequence = (failedSpec = '', stopMode = 'delayed', stuckProcess = '') => {
     const directory = temp()
     const script = path.join(directory, 'sequence.sh')
     fs.writeFileSync(script, `set -uo pipefail
-raw="$1"
+raw="$1" HOME="$1/login home"
 state_root="$raw/state"
 process_root="$raw/processes"
 cleanup_log="$raw/cleanup.log"
 cleanup_status=0
 status=0
 first_failed_step=none
-trap 'exit "$status"' EXIT
+trap 'restore_macos_spec_config; exit "$status"' EXIT
 mkdir -p "$process_root"
 source test/e2e/support/cleanup-ledger.sh
 source test/e2e/support/runner-failure.sh
@@ -697,7 +697,7 @@ ${sequence}
   })
 
   it('Checks the same process set during final cleanup.', () => {
-    expect(runner).toContain('cleanup_step stop-app stop_app\n  cleanup_step restore-config-environment restore_macos_spec_config\n  if (( cleanup_status != 0 )); then status=1; fi')
+    expect(runner).toContain('cleanup_step stop-app stop_app\n  cleanup_step restore-config-directory restore_macos_spec_config\n  if (( cleanup_status != 0 )); then status=1; fi')
     expect(runner.indexOf('cleanup_step stop-app stop_app')).toBeLessThan(runner.indexOf('if node test/e2e/support/redact.mjs'))
   })
 })
@@ -705,7 +705,7 @@ ${sequence}
 describe.skipIf(process.platform === 'win32')('macOS WDIO startup diagnostics', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
   const setup = runner.slice(0, runner.indexOf('\ncurrent_step=validate-environment'))
-  const sequence = runner.slice(runner.indexOf('# Each spec starts'))
+  const sequence = runner.slice(runner.indexOf('run_step save-config-directory'))
   const launcher = path.join(root, 'test/e2e/support/macos-wdio-app.sh')
   const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
 
