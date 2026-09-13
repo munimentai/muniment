@@ -4409,13 +4409,16 @@ describe('chat submission settlement', () => {
     expectNoProxyEqualityWarning(warn)
   })
 
-  it('replaces only the matching pending run after a failed submission', async () => {
+  it.each([
+    'The submission was rejected.',
+    'chat_not_entitled: No chat model is currently available for this account.',
+  ])('replaces only the matching pending run after a failed submission: %s', async (reason) => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [existingRun]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
-      if (command === 'chat_submit') throw 'The submission was rejected.'
+      if (command === 'chat_submit') throw reason
       throw new Error(`unexpected command: ${command}`)
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -4425,10 +4428,11 @@ describe('chat submission settlement', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     const thread = within(document.querySelector('.thread'))
-    const error = await thread.findByText('The submission was rejected.')
+    const error = await thread.findByText(reason)
     expect(error).toHaveClass('run-error')
     expect(within(error).getByRole('button', { name: 'Try again' })).toBeEnabled()
-    expect(screen.getByTestId('run-announcement')).toHaveTextContent('The submission was rejected.')
+    expect(screen.getByTestId('run-announcement')).toHaveTextContent(reason)
+    expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
     expect(document.querySelector('.cancel-error')).not.toBeInTheDocument()
     expect(composer).toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
     expect(thread.getByText('Existing answer')).toBeInTheDocument()

@@ -288,7 +288,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
 
     fn configure_run(
         &self,
-        _run_id: &str,
+        run_id: &str,
         _prompt: &str,
         tokens: &TokenSet,
         requested_workspace: Option<&str>,
@@ -299,6 +299,12 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         let grant =
             service::configure_run(&tokens.access_token, requested_workspace).map_err(|error| {
                 match error {
+                    ConfigureRunError::Grant(error @ FetchGrantError::NotEntitled { .. }) => {
+                        eprintln!(
+                        "muniment-runtime: grant refused run_id={run_id:?} code=chat_not_entitled"
+                    );
+                        RunStartError::Unauthorized(error.into_message())
+                    }
                     ConfigureRunError::Grant(FetchGrantError::Unauthorized) => {
                         RunStartError::Unauthorized("The capability is not authorized.".into())
                     }
@@ -1207,6 +1213,22 @@ mod tests {
             closed.recv_timeout(Duration::from_secs(2)).unwrap();
             waiter.join().unwrap();
         }
+    }
+
+    #[test]
+    fn grant_refusal_keeps_the_reason_for_the_desktop_and_redacts_companions() {
+        let reason = FetchGrantError::NotEntitled {
+            message: "No chat model is currently available for this account.".into(),
+        }
+        .into_message();
+        let error = RunStartError::Unauthorized(reason.clone());
+        let desktop = error.desktop_protocol_error();
+        assert_eq!(
+            desktop.code(),
+            muniment_core::attach::ErrorCode::Unauthorized
+        );
+        assert_eq!(desktop, ProtocolError::unauthorized_with_reason(reason));
+        assert_eq!(error.protocol_error(), ProtocolError::unauthorized());
     }
 
     #[test]
