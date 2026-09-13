@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
-import { chooseFolder, folderDialogDescription } from '../support/onboarding-folder.mjs'
+import { chooseFolder, folderDialogDescription, withWindowsPickerDiagnostics } from '../support/onboarding-folder.mjs'
 import { homePathMatches } from '../support/home-path.mjs'
 import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 
@@ -105,18 +105,21 @@ describe('installed nightly model-ready onboarding', () => {
     await mkdir(home, { recursive: true })
     await location.click()
     await (await $('[data-testid="onboarding-picker"]')).click()
-    await chooseFolder(
-      home,
-      FOLDER_DIALOG_WAIT_SECONDS,
-      FOLDER_DIALOG_TITLE,
-      process.env.MUNIMENT_E2E_RAW_DIR,
-    )
-    // WebDriver's getElementText is unreliable for this element here.
-    // textContent provides a stable read.
-    await browser.waitUntil(async () => await homePathMatches(location, home), {
-      timeoutMsg: `The Home picker DOM value did not match the isolated Home. ${folderDialogDescription(FOLDER_DIALOG_TITLE)}`,
-    })
-    expect(await location.getProperty('textContent')).toBe(home)
+    await withWindowsPickerDiagnostics(async () => {
+      await chooseFolder(
+        home,
+        FOLDER_DIALOG_WAIT_SECONDS,
+        FOLDER_DIALOG_TITLE,
+        process.env.MUNIMENT_E2E_RAW_DIR,
+      )
+      // WebDriver's getElementText is unreliable for this element here.
+      // textContent provides a stable read.
+      await browser.waitUntil(async () => await homePathMatches(location, home), {
+        timeoutMsg: `The Home picker DOM value did not match the isolated Home. ${folderDialogDescription(FOLDER_DIALOG_TITLE)}`,
+      })
+      expect(await location.getProperty('textContent')).toBe(home)
+    }, () => browser.execute(() => document.querySelector('[data-home-picker]')?.getAttribute('data-home-picker')),
+    process.env.MUNIMENT_E2E_RAW_DIR)
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
       let exists = true
       try { await access(path.join(home, directory)) } catch { exists = false }
