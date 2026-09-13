@@ -134,7 +134,7 @@ mod tests {
     fn config_failure_names_the_run_step_and_redacted_cause() {
         let error = crate::pi_launch::PiLaunchError::rejected(
             "package_install",
-            "Pi package install failed: exit status: 1\nstderr_tail=registry refused password=hidden-value",
+            "The agent runtime package install failed: exit status: 1\nstderr_tail=registry refused password=hidden-value",
         );
         let line = config_error_line("run-config", &error);
         assert!(line.contains(

@@ -108,7 +108,7 @@ pub trait PiLaunchBoundaries {
         if self.pi_artifact() != PI_SELECTED_ARTIFACT {
             return Err(PiLaunchError::rejected(
                 "artifact_selection",
-                "The Pi artifact does not match the selected artifact.",
+                "The agent runtime artifact does not match the selected artifact.",
             ));
         }
         crate::sidecar::pi_install::acquire_pi(root, cancelled).map_err(PiLaunchError::Acquisition)

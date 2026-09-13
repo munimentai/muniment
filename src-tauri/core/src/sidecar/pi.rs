@@ -26,15 +26,15 @@ impl PiSessionLocator {
 }
 
 fn canonical_session_root(session_root: &Path) -> Result<PathBuf, String> {
-    let root = session_root
-        .canonicalize()
-        .map_err(|error| format!("Pi session directory canonicalization failed: {error}"))?;
+    let root = session_root.canonicalize().map_err(|error| {
+        format!("The agent runtime session directory canonicalization failed: {error}")
+    })?;
     if !root
         .metadata()
-        .map_err(|error| format!("Pi session directory metadata failed: {error}"))?
+        .map_err(|error| format!("The agent runtime session directory metadata failed: {error}"))?
         .is_dir()
     {
-        return Err("The Pi session root is not a directory.".into());
+        return Err("The agent runtime session root is not a directory.".into());
     }
     Ok(root)
 }

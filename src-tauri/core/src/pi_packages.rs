@@ -221,7 +221,7 @@ fn run_install(command: &mut Command, timeout: Duration) -> io::Result<String> {
             Ok(Some(status)) if status.success() => break Ok(()),
             Ok(Some(status)) => {
                 break Err(io::Error::other(format!(
-                    "Pi package install failed: {status}"
+                    "The agent runtime package install failed: {status}"
                 )))
             }
             Err(error) => break Err(error),
@@ -248,7 +248,7 @@ fn run_install(command: &mut Command, timeout: Duration) -> io::Result<String> {
     let tail = stderr_tail_text(
         reader
             .join()
-            .map_err(|_| io::Error::other("Pi package stderr reader panicked."))?,
+            .map_err(|_| io::Error::other("The agent runtime package stderr reader panicked."))?,
     );
     result
         .map(|()| tail.clone())
