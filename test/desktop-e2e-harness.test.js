@@ -577,6 +577,7 @@ raw="$1" HOME="$1/login home"
 state_root="$raw/state"
 process_root="$raw/processes"
 cleanup_log="$raw/cleanup.log"
+runtime_log="$raw/runtime.log"
 cleanup_status=0
 status=0
 first_failed_step=none
@@ -643,6 +644,9 @@ npm() {
   fi
   printf 'session: %s\\n' "$spec" >>"$cleanup_log"
   touch "$raw/first-spec"
+  printf 'muniment-runtime: run_id=fixture-%s pi_stderr_tail=["provider failed"]\\n' "$spec" >>"$runtime_log"
+  mkdir -p "$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions"
+  printf '{"message":{"provider":"ollama","stopReason":"error","errorMessage":"%s provider failed"}}\\n' "$spec" >"$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions/session.jsonl"
   for key in ${processes.join(' ')}; do touch "$process_root/$key"; done
   [[ $spec != "$FAILED_SPEC" ]]
 }
@@ -657,8 +661,20 @@ ${sequence}
         MUNIMENT_E2E_FINALIZER_TEST_MODE: '0', MUNIMENT_E2E_ONBOARDING_ONLY: '0', MUNIMENT_E2E_CLEANUP_ONLY: '0',
       },
     })
-    return { result, log: fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8') }
+    return { result, directory, log: fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8') }
   }
+
+  it('Keeps the local mode Pi log before sign-in replaces the session log.', () => {
+    const { result, directory, log } = runSequence('local-mode-chat')
+    expect(result.status, result.stderr).toBe(1)
+    const piLog = fs.readFileSync(path.join(directory, 'pi-local-mode-chat.log'), 'utf8')
+    expect(piLog).toContain('local-mode-chat provider failed')
+    expect(piLog).not.toContain('real-sign-in provider failed')
+    expect(fs.readFileSync(path.join(directory, 'pi-local-mode-stderr.log'), 'utf8'))
+      .toContain('run_id=fixture-local-mode-chat pi_stderr_tail=["provider failed"]')
+    expect(log).toContain('The runner saved pi-local-mode-chat.log.')
+    expect(log.indexOf('The runner saved')).toBeLessThan(log.indexOf('session: real-sign-in'))
+  })
 
   it.each(['', ...specs])('Stops all processes before each spec after failure "%s".', (failedSpec) => {
     const { result, log } = runSequence(failedSpec)
