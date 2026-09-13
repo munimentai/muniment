@@ -218,7 +218,7 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(windows).not.toMatch(/SendKeys|SendWait|Invoke-Expression/)
   })
 
-  it('The macOS picker uses the app IPC without Apple Events or Accessibility grants.', async () => {
+  it('The macOS picker uses the app IPC and posts its keys from the app process.', async () => {
     const invoke = vi.fn().mockResolvedValue(true)
     const execute = vi.fn()
     vi.stubGlobal('window', { __TAURI__: { core: { invoke } } })
@@ -230,10 +230,11 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(invoke).toHaveBeenCalledExactlyOnceWith('e2e_drive_folder_dialog')
 
     const native = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
-    expect(native).toContain('app.sendEvent(&event)')
+    expect(native).toContain('event.post(CGEventTapLocation::HID)')
+    expect(native).toContain('AXIsProcessTrusted')
     expect(native).toContain('run_on_main_thread')
     expect(native).toContain('MUNIMENT_E2E_ONBOARDING_ONLY')
-    expect(native).not.toMatch(/AXUIElement|AXIsProcessTrusted|CGEventPost|osascript|Command::new/)
+    expect(native).not.toMatch(/AXUIElement|sendEvent|osascript|Command::new/)
     const main = await readFile(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8')
     expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*mod e2e_folder_dialog/)
     expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*e2e_folder_dialog::e2e_drive_folder_dialog/)
