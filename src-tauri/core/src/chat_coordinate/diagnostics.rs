@@ -147,6 +147,48 @@ mod tests {
     }
 
     #[test]
+    fn config_log_redacts_terminal_escapes_and_multiline_credentials() {
+        for input in [
+            "password\u{1b}[0m=short",
+            "{\"password\":\n\"opaque-credential\"}",
+            "{\"password\":\n\n\"opaque-credential\"}",
+            "{\"password\":\"\nopaque-credential\n\"}",
+            "{\"password\":\"short\",\"token\":\n\"opaque-credential\"}",
+            "{\"password\":\"token=short\nopaque-credential\n\"}",
+            "{\"password\":\"escaped\\\"\nopaque-credential\n\"}",
+            "password\u{1b}]0;title\u{7}=short",
+            "password\u{1b}]0;title\u{1b}\\=short",
+            "password\u{9b}0m=short",
+            "password\u{1b}[\n0m=short",
+        ] {
+            let cause = format!("registry refused\n{input}\nlast diagnostic");
+            for cause in [
+                cause.clone(),
+                crate::pi_packages::captured_stderr_for_test(cause.as_bytes()),
+            ] {
+                let error = crate::pi_launch::PiLaunchError::rejected("package_install", &cause);
+                // Check both the constructor and the formatter's defense against a raw cause.
+                let raw = crate::pi_launch::PiLaunchError::RejectedConfig {
+                    step: "package_install",
+                    cause,
+                };
+                for error in [error, raw] {
+                    let line = config_error_line("run-config", &error);
+                    assert!(line.contains("run_id=run-config"), "{line}");
+                    assert!(line.contains("step=package_install"), "{line}");
+                    assert!(line.contains("registry refused"), "{line}");
+                    assert!(line.contains("last diagnostic"), "{line}");
+                    assert!(line.contains("[redacted]"), "{line}");
+                    assert!(!line.contains("short"), "{line}");
+                    assert!(!line.contains("opaque-credential"), "{line}");
+                    assert!(!line.contains("title"), "{line}");
+                    assert_eq!(line.lines().count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn stderr_tail_is_bounded_and_stays_on_one_runtime_line() {
         let mut tail: Vec<_> = (0..25).map(|index| format!("detail {index}")).collect();
         tail.push("child\nline\r\n".repeat(1000));

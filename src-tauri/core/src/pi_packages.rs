@@ -5,7 +5,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fs2::FileExt;
@@ -53,16 +54,84 @@ fn install_command(executable: &Path, directory: &Path) -> Command {
     command
 }
 
-fn capture_stderr(mut reader: impl Read, tail: &Mutex<VecDeque<String>>) {
+struct PollingStderr(std::process::ChildStderr);
+
+impl PollingStderr {
+    fn new(stderr: std::process::ChildStderr) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            // The reader owns this pipe. Nonblocking reads let cancellation close it without a race.
+            let fd = stderr.as_raw_fd();
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags == -1
+                || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+            {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(Self(stderr))
+    }
+}
+
+impl Read for PollingStderr {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE;
+            use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+            let mut available = 0;
+            // This thread owns the only reader, so bytes from the peek remain available for the read.
+            if unsafe {
+                PeekNamedPipe(
+                    self.0.as_raw_handle(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                let error = io::Error::last_os_error();
+                return if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) {
+                    Ok(0)
+                } else {
+                    Err(error)
+                };
+            }
+            if available == 0 {
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            let length = buffer.len().min(available as usize);
+            return self.0.read(&mut buffer[..length]);
+        }
+        #[cfg(not(windows))]
+        self.0.read(buffer)
+    }
+}
+
+fn capture_stderr(mut reader: impl Read, cancelled: &AtomicBool) -> VecDeque<String> {
+    let mut tail = VecDeque::new();
+    let mut redactor = crate::pi_launch::DiagnosticRedactor::new();
     let mut buffer = [0; 4096];
     let mut line = Vec::new();
     let mut oversized = false;
-    let mut private_key = false;
     loop {
-        let count = match reader.read(&mut buffer) {
-            Ok(count) => count,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
+        let count = if cancelled.load(Ordering::Acquire) {
+            0
+        } else {
+            match reader.read(&mut buffer) {
+                Ok(count) => count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                // Flush the pending fragment on EOF, cancellation, or a read error.
+                Err(_) => 0,
+            }
         };
         for byte in buffer[..count]
             .iter()
@@ -71,19 +140,13 @@ fn capture_stderr(mut reader: impl Read, tail: &Mutex<VecDeque<String>>) {
         {
             if byte == b'\n' {
                 let text = String::from_utf8_lossy(&line);
-                if text.contains("-----BEGIN") && text.contains("PRIVATE KEY") {
-                    private_key = true;
-                }
-                let detail = if oversized || private_key {
+                let detail = redactor.line(&text);
+                let detail = if oversized {
                     "[redacted]".into()
                 } else {
-                    crate::pi_launch::diagnostic_text(&text)
+                    detail
                 };
-                if text.contains("-----END") && text.contains("PRIVATE KEY") {
-                    private_key = false;
-                }
                 if !detail.is_empty() {
-                    let mut tail = tail.lock().unwrap();
                     if tail.len() == 20 {
                         tail.pop_front();
                     }
@@ -102,6 +165,15 @@ fn capture_stderr(mut reader: impl Read, tail: &Mutex<VecDeque<String>>) {
             break;
         }
     }
+    tail
+}
+
+#[cfg(test)]
+pub(crate) fn captured_stderr_for_test(input: &[u8]) -> String {
+    capture_stderr(input, &AtomicBool::new(false))
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn install_failure(error: io::Error, tail: &str) -> io::Error {
@@ -110,14 +182,21 @@ fn install_failure(error: io::Error, tail: &str) -> io::Error {
 
 fn run_install(command: &mut Command, timeout: Duration) -> io::Result<String> {
     let mut child = command.spawn()?;
-    let tail = Arc::new(Mutex::new(VecDeque::new()));
-    let captured = tail.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let reader_cancelled = cancelled.clone();
     let stderr = child.stderr.take().expect("package install pipes stderr");
+    let stderr = match PollingStderr::new(stderr) {
+        Ok(stderr) => stderr,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
     let reader = match std::thread::Builder::new()
         .name("pi-package-stderr".into())
-        .spawn(move || {
-            capture_stderr(stderr, &captured);
-        }) {
+        .spawn(move || capture_stderr(stderr, &reader_cancelled))
+    {
         Ok(reader) => reader,
         Err(error) => {
             let _ = child.kill();
@@ -153,14 +232,12 @@ fn run_install(command: &mut Command, timeout: Duration) -> io::Result<String> {
     while !reader.is_finished() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
-    if reader.is_finished() {
-        let _ = reader.join();
-    }
-    let tail = tail
-        .lock()
-        .unwrap()
-        .iter()
-        .cloned()
+    cancelled.store(true, Ordering::Release);
+    // The reader flushes its pending fragment and closes the pipe before the join returns.
+    let tail = reader
+        .join()
+        .map_err(|_| io::Error::other("Pi package stderr reader panicked."))?
+        .into_iter()
         .collect::<Vec<_>>()
         .join(" | ");
     // Bound the tail after redaction.
@@ -243,10 +320,8 @@ mod tests {
 
     #[test]
     fn stderr_capture_bounds_output_and_redacts_before_retaining_the_tail() {
-        let tail = Mutex::new(VecDeque::new());
         let input = format!("{}\npassword=registry-secret\nhttps://user:pass@example.com/?token=hidden\n{}\nlast diagnostic", "detail\n".repeat(30), "x".repeat(70_000));
-        capture_stderr(input.as_bytes(), &tail);
-        let tail = tail.into_inner().unwrap();
+        let tail = capture_stderr(input.as_bytes(), &AtomicBool::new(false));
         assert_eq!(tail.len(), 20);
         assert_eq!(tail.back().unwrap(), "last diagnostic");
         let text = tail.into_iter().collect::<Vec<_>>().join(" ");
@@ -281,6 +356,73 @@ mod tests {
             assert!(detail.contains("stderr_tail=registry"), "{detail}");
             assert!(!detail.contains("hidden-value"));
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn inherited_stderr_keeps_unterminated_fragments_without_waiting_for_descendants() {
+        for (fragment, expected) in [
+            ("registry refused", "registry refused"),
+            (
+                "registry refused password\\033[0m=short",
+                "registry refused [redacted]",
+            ),
+            (
+                "registry refused {\"password\":\\n\"opaque-credential\"}",
+                "registry refused {\"[redacted]",
+            ),
+        ] {
+            let mut command = Command::new("sh");
+            command
+                .args([
+                    "-c",
+                    "printf '%b' \"$1\" >&2; sleep 2 & exit 7",
+                    "pi-stub",
+                    fragment,
+                ])
+                .stderr(Stdio::piped());
+            let started = Instant::now();
+            let detail = run_install(&mut command, Duration::from_secs(3))
+                .unwrap_err()
+                .to_string();
+            assert!(started.elapsed() < Duration::from_secs(1), "{detail}");
+            assert!(detail.contains("exit status: 7"), "{detail}");
+            assert!(detail.contains(expected), "{detail}");
+            assert!(!detail.contains("short"), "{detail}");
+            assert!(!detail.contains("opaque-credential"), "{detail}");
+        }
+    }
+
+    #[test]
+    fn cancellation_flushes_the_fragment_and_drops_the_reader() {
+        struct PendingReader<'a> {
+            cancelled: &'a AtomicBool,
+            dropped: &'a AtomicBool,
+        }
+        impl Read for PendingReader<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let text = b"registry refused";
+                buffer[..text.len()].copy_from_slice(text);
+                self.cancelled.store(true, Ordering::Release);
+                Ok(text.len())
+            }
+        }
+        impl Drop for PendingReader<'_> {
+            fn drop(&mut self) {
+                self.dropped.store(true, Ordering::Release);
+            }
+        }
+        let cancelled = AtomicBool::new(false);
+        let dropped = AtomicBool::new(false);
+        let tail = capture_stderr(
+            PendingReader {
+                cancelled: &cancelled,
+                dropped: &dropped,
+            },
+            &cancelled,
+        );
+        assert_eq!(tail.into_iter().collect::<Vec<_>>(), ["registry refused"]);
+        assert!(dropped.load(Ordering::Acquire));
     }
 
     #[test]

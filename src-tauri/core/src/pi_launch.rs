@@ -148,7 +148,11 @@ impl PiLaunchError {
 
 /// Redact before truncation so a boundary cannot expose part of a credential.
 pub(crate) fn diagnostic_text(text: &str) -> String {
-    let secrets = std::env::vars_os().filter_map(|(name, value)| {
+    redact_diagnostic(text, diagnostic_secrets())
+}
+
+fn diagnostic_secrets() -> impl Iterator<Item = String> {
+    std::env::vars_os().filter_map(|(name, value)| {
         let name = name.to_string_lossy().to_ascii_uppercase();
         let value = value.into_string().ok()?;
         (!value.is_empty()
@@ -156,60 +160,203 @@ pub(crate) fn diagnostic_text(text: &str) -> String {
                 .iter()
                 .any(|label| name.contains(label)))
         .then_some(value)
-    });
-    redact_diagnostic(text, secrets)
+    })
 }
 
 fn redact_diagnostic(text: &str, secrets: impl Iterator<Item = String>) -> String {
+    let mut redactor = DiagnosticRedactor::with_secrets(secrets);
     let mut text = text.to_owned();
-    let mut secrets: Vec<_> = secrets.collect();
-    secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
-    for secret in secrets {
-        text = text.replace(&secret, "[redacted]");
+    for secret in redactor
+        .secrets
+        .iter()
+        .filter(|secret| secret.contains('\n'))
+    {
+        text = text.replace(secret, "[redacted]");
     }
-    let mut private_key = false;
-    text = text
-        .lines()
-        .map(|line| {
-            if line.contains("-----BEGIN") && line.contains("PRIVATE KEY") {
-                private_key = true;
-            }
-            let mut redacted = if private_key {
-                "[redacted]".to_owned()
-            } else {
-                line.to_owned()
-            };
-            if line.contains("-----END") && line.contains("PRIVATE KEY") {
-                private_key = false;
-            }
-            // The reply scanner has a minimum token length. Logs also hide short credentials and authorization headers.
-            if let Some(start) = credential_field_start(&redacted) {
-                redacted.replace_range(start.., "[redacted]");
-            }
-            let scan = crate::assistant_text::scan(&redacted, true);
-            if let Some(start) = scan.withhold_from {
-                redacted.replace_range(start.., "[redacted]");
-            }
-            for matched in scan.matches.into_iter().rev() {
-                redacted.replace_range(matched.range, "[redacted]");
-            }
-            redacted
-        })
+    text.lines()
+        .map(|line| redactor.line(line))
         .collect::<Vec<_>>()
-        .join(" ");
-    // Registry URLs can carry credentials in userinfo, paths, or query parameters.
-    text = text
-        .split_whitespace()
-        .map(|word| if word.contains("://") { "[url]" } else { word })
-        .collect::<Vec<_>>()
-        .join(" ");
-    text.chars()
-        .filter(|character| !character.is_control())
+        .join(" ")
+        .chars()
         .take(8192)
         .collect()
 }
 
-fn credential_field_start(line: &str) -> Option<usize> {
+/// Keep terminal and credential state across stderr lines.
+pub(crate) struct DiagnosticRedactor {
+    secrets: Vec<String>,
+    terminal: TerminalState,
+    terminal_prefix: String,
+    private_key: bool,
+    value: CredentialValue,
+}
+
+#[derive(Default)]
+enum TerminalState {
+    #[default]
+    Text,
+    Escape,
+    Intermediate,
+    Csi,
+    String,
+    StringEscape,
+}
+
+#[derive(Default)]
+enum CredentialValue {
+    #[default]
+    None,
+    Pending,
+    Quoted(char),
+}
+
+impl DiagnosticRedactor {
+    pub(crate) fn new() -> Self {
+        Self::with_secrets(diagnostic_secrets())
+    }
+
+    fn with_secrets(secrets: impl Iterator<Item = String>) -> Self {
+        let mut secrets: Vec<_> = secrets.collect();
+        secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        Self {
+            secrets,
+            terminal: TerminalState::default(),
+            terminal_prefix: String::new(),
+            private_key: false,
+            value: CredentialValue::default(),
+        }
+    }
+
+    fn strip_terminal(&mut self, line: &str) -> String {
+        let mut text = std::mem::take(&mut self.terminal_prefix);
+        for character in line.chars() {
+            self.terminal = match self.terminal {
+                TerminalState::Text => match character {
+                    '\u{1b}' => TerminalState::Escape,
+                    '\u{9b}' => TerminalState::Csi,
+                    '\u{90}' | '\u{9d}' | '\u{9e}' | '\u{9f}' => TerminalState::String,
+                    _ => {
+                        if !character.is_control() || character == '\t' {
+                            text.push(character);
+                        }
+                        TerminalState::Text
+                    }
+                },
+                TerminalState::Escape => match character {
+                    '[' => TerminalState::Csi,
+                    ']' | 'P' | '^' | '_' | 'X' => TerminalState::String,
+                    '\u{20}'..='\u{2f}' => TerminalState::Intermediate,
+                    _ => TerminalState::Text,
+                },
+                TerminalState::Intermediate => match character {
+                    '\u{30}'..='\u{7e}' => TerminalState::Text,
+                    _ => TerminalState::Intermediate,
+                },
+                TerminalState::Csi => match character {
+                    '\u{40}'..='\u{7e}' => TerminalState::Text,
+                    _ => TerminalState::Csi,
+                },
+                TerminalState::String | TerminalState::StringEscape => match character {
+                    '\u{7}' | '\u{9c}' => TerminalState::Text,
+                    '\\' if matches!(self.terminal, TerminalState::StringEscape) => {
+                        TerminalState::Text
+                    }
+                    '\u{1b}' => TerminalState::StringEscape,
+                    _ => TerminalState::String,
+                },
+            };
+        }
+        if !matches!(self.terminal, TerminalState::Text) {
+            if text.len() > 65_536 {
+                // Hide the continuation if the terminal prefix exceeds the stderr line bound.
+                self.value = CredentialValue::Pending;
+            } else {
+                self.terminal_prefix = text;
+            }
+            return String::new();
+        }
+        text
+    }
+
+    fn consume_value(&mut self, value: &str) -> usize {
+        let length = value.len();
+        let mut value = value.trim_start();
+        if matches!(self.value, CredentialValue::Pending) {
+            if value.is_empty() {
+                return length;
+            }
+            let first = value.chars().next().unwrap();
+            if matches!(first, '\'' | '"' | '`') {
+                self.value = CredentialValue::Quoted(first);
+                value = &value[first.len_utf8()..];
+            } else {
+                self.value = CredentialValue::None;
+            }
+        }
+        if let CredentialValue::Quoted(quote) = self.value {
+            let mut escaped = false;
+            for (index, character) in value.char_indices() {
+                if character == quote && !escaped {
+                    self.value = CredentialValue::None;
+                    return length - value.len() + index + character.len_utf8();
+                }
+                escaped = character == '\\' && !escaped;
+            }
+        }
+        length
+    }
+
+    pub(crate) fn line(&mut self, line: &str) -> String {
+        let mut text = self.strip_terminal(line);
+        if text.contains("-----BEGIN") && text.contains("PRIVATE KEY") {
+            self.private_key = true;
+        }
+        let continuation = !matches!(self.value, CredentialValue::None);
+        let mut offset = if continuation {
+            self.consume_value(&text)
+        } else {
+            0
+        };
+        let mut first_field = None;
+        while matches!(self.value, CredentialValue::None) && offset < text.len() {
+            let Some((start, value)) = credential_field(&text[offset..]) else {
+                break;
+            };
+            first_field.get_or_insert(offset + start);
+            self.value = CredentialValue::Pending;
+            offset = text.len() - value.len() + self.consume_value(value);
+        }
+        let mut redacted = if self.private_key || continuation {
+            "[redacted]".to_owned()
+        } else if let Some(start) = first_field {
+            text[..start].to_owned() + "[redacted]"
+        } else {
+            text.clone()
+        };
+        if text.contains("-----END") && text.contains("PRIVATE KEY") {
+            self.private_key = false;
+        }
+        for secret in &self.secrets {
+            redacted = redacted.replace(secret, "[redacted]");
+        }
+        let scan = crate::assistant_text::scan(&redacted, true);
+        if let Some(start) = scan.withhold_from {
+            redacted.replace_range(start.., "[redacted]");
+        }
+        for matched in scan.matches.into_iter().rev() {
+            redacted.replace_range(matched.range, "[redacted]");
+        }
+        // Registry URLs can carry credentials in userinfo, paths, or query parameters.
+        text = redacted
+            .split_whitespace()
+            .map(|word| if word.contains("://") { "[url]" } else { word })
+            .collect::<Vec<_>>()
+            .join(" ");
+        text.chars().take(8192).collect()
+    }
+}
+
+fn credential_field(line: &str) -> Option<(usize, &str)> {
     let lower = line.to_ascii_lowercase();
     [
         "authorization",
@@ -232,14 +379,20 @@ fn credential_field_start(line: &str) -> Option<usize> {
             let boundary = start == 0 || !line.as_bytes()[start - 1].is_ascii_alphanumeric();
             let suffix = &line[start + label.len()..];
             let delimiter = suffix.trim_start_matches([' ', '\t', '\'', '"', '`']);
-            (boundary
-                && (delimiter.starts_with([':', '='])
-                    || (matches!(label, "bearer" | "basic")
-                        && suffix.starts_with(char::is_whitespace))))
-            .then_some(start)
+            if !boundary {
+                return None;
+            }
+            if delimiter.starts_with([':', '=']) {
+                Some((start, &delimiter[1..]))
+            } else if matches!(label, "bearer" | "basic") && suffix.starts_with(char::is_whitespace)
+            {
+                Some((start, suffix))
+            } else {
+                None
+            }
         })
     })
-    .min()
+    .min_by_key(|(start, _)| *start)
 }
 
 fn install_cloud_provider(path: &Path) -> Result<(), PiLaunchError> {
@@ -353,6 +506,13 @@ mod tests {
         assert!(!detail.contains('\n'));
         assert!(detail.len() < 8192);
         assert_eq!(redact_diagnostic("", std::iter::empty()), "");
+        assert_eq!(
+            redact_diagnostic(
+                "registry refused\nopaque-part-one\nopaque-part-two",
+                ["opaque-part-one\nopaque-part-two".to_owned()].into_iter(),
+            ),
+            "registry refused [redacted]"
+        );
         for text in [
             "registry refused Authorization: Bearer opaque-value",
             "registry refused password=short",
