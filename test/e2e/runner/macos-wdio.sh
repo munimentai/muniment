@@ -111,6 +111,40 @@ collect_local_mode_pi_log() {
   printf 'The runner saved pi-local-mode-chat.log.\n' >>"$cleanup_log"
 }
 
+# Pi reads its provider route from the login home's agent directory, which the
+# spec config links to the spec home. Record what it found and whether that
+# endpoint answers, so a connection failure names the address it used.
+collect_local_mode_pi_route() {
+  local login_agent="${macos_login_pi_agent:-$HOME/.pi/agent}"
+  local destination="$raw/pi-local-mode-route.log"
+  local models="$login_agent/models.json" settings="$login_agent/settings.json" base=
+  {
+    printf 'agent_directory=%s\n' "$login_agent"
+    printf 'agent_link=%s\n' "$(readlink "$login_agent" 2>/dev/null || printf 'not a link')"
+    printf 'models_file_exists=%s settings_file_exists=%s\n' \
+      "$([[ -f $models ]] && printf yes || printf no)" \
+      "$([[ -f $settings ]] && printf yes || printf no)"
+  } >"$destination" || return 1
+  if [[ -f $settings ]]; then
+    node -e 'const fs=require("fs");const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));console.log("default_provider="+(s.defaultProvider??"none")+" default_model="+(s.defaultModel??"none"))' \
+      "$settings" >>"$destination" 2>&1 || true
+  fi
+  if [[ -f $models ]]; then
+    base=$(node -e 'const fs=require("fs");const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const p=m.providers??{};for(const [id,v] of Object.entries(p)){console.error(`provider=${id} api=${v.api??"none"} base_url=${v.baseUrl??"none"} models=${(v.models??[]).map((x)=>x.id).join(",")}`)}process.stdout.write(p.ollama?.baseUrl??"")' \
+      "$models" 2>>"$destination") || true
+  fi
+  if [[ -n $base ]]; then
+    printf 'route_probe_code=%s url=%s\n' \
+      "$(curl -s -m 15 -o /dev/null -w '%{http_code}' "${base%/}/models" 2>/dev/null)" "$base" >>"$destination"
+  else
+    printf 'route_probe_code=none url=none\n' >>"$destination"
+  fi
+  # Pi falls back to Ollama's default port when it reads no base URL.
+  printf 'default_port_code=%s\n' \
+    "$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:11434/v1/models 2>/dev/null)" >>"$destination"
+  printf 'The runner saved pi-local-mode-route.log.\n' >>"$cleanup_log"
+}
+
 collect_crash_reports() {
   local directory report
   # macOS can finish a crash report after the app exits.
@@ -238,6 +272,7 @@ export XDG_DATA_HOME="$HOME/.local/share"
 export HOME="$state_root/degraded" MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
 run_e2e local-mode-chat "$raw/wdio-local-mode-chat.log" -- --spec test/e2e/specs/local-mode-chat.spec.js || status=1
 cleanup_step collect-local-mode-pi-log collect_local_mode_pi_log
+cleanup_step collect-local-mode-pi-route collect_local_mode_pi_route
 run_e2e real-sign-in "$raw/wdio-sign-in.log" -- --spec test/e2e/specs/real-sign-in.spec.js || status=1
 export HOME="$state_root/ready" MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
 export MUNIMENT_E2E_ONBOARDING_ONLY=1
