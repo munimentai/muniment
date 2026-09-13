@@ -70,10 +70,16 @@ describe('installed local-mode chat', () => {
     const composer = await $('textarea[placeholder="Ask anything"]')
     await composer.waitForDisplayed({ timeout: 120000 })
     expect(await composer.getValue()).toBe('Help me organize my notes.')
-    const provider = await localMode.$('label[for="provider-ollama"]')
+    // The first Send opens the model panel, and the chip reopens it.
+    const modelChip = await localMode.$('.model-chip')
+    await modelChip.waitForDisplayed()
+    if (await modelChip.getAttribute('aria-expanded') !== 'true') await modelChip.click()
+    const modelPanel = await localMode.$('.model-panel')
+    await modelPanel.waitForDisplayed()
+    const provider = await modelPanel.$('label[for="provider-ollama"]')
     await provider.waitForDisplayed()
     await provider.click()
-    expect(await (await localMode.$('#provider-ollama')).isSelected()).toBe(true)
+    expect(await (await modelPanel.$('#provider-ollama')).isSelected()).toBe(true)
     const baseUrlInput = await $('#provider-base-url')
     await baseUrlInput.waitForDisplayed()
     expect(await baseUrlInput.isDisplayed()).toBe(true)
@@ -81,6 +87,8 @@ describe('installed local-mode chat', () => {
     await (await $('button=Save Ollama server')).click()
     await (await $('p=Muniment saved the Ollama server. Send a message.')).waitForDisplayed({ timeout: 30000 })
     expect(await baseUrlInput.getValue()).toBe('')
+    await (await modelPanel.$('button=Close')).click()
+    await modelPanel.waitForDisplayed({ reverse: true, timeout: 10000 })
 
     await waitForDesktopClient()
     const prompt = `Muniment local E2E chat ${Date.now()}`

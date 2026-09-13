@@ -1241,6 +1241,18 @@ describe('workspace composer entry', () => {
     expect(document.documentElement).not.toHaveAttribute('data-theme')
   })
 
+  // The first-run screen carries its own Connect a model button, so the chip is
+  // found by its class inside the workspace composer.
+  const openModelPanel = async () => {
+    const chip = await waitFor(() => {
+      const button = document.querySelector('.model-chip')
+      expect(button).not.toBeNull()
+      return button
+    })
+    await fireEvent.click(chip)
+    await screen.findByRole('dialog', { name: 'Model' })
+  }
+
   it('enters local mode and saves a provider key', async () => {
     let providerStatusChecks = 0
     invoke.mockImplementation(async (command) => {
@@ -1274,11 +1286,13 @@ describe('workspace composer entry', () => {
       expect(copy).not.toMatch(/[\r\n]/)
       expect(copy.split(/\s+/).length).toBeLessThan(12)
     }
-    expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
-    expect(screen.getByText('Google', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
-    expect(screen.getByText('OpenAI', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
-    expect(screen.getByText('Ollama', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Not set')
     expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
+    expect(screen.queryByRole('group', { name: 'Provider' })).not.toBeInTheDocument()
+
+    await openModelPanel()
+    for (const name of ['Anthropic', 'Google', 'OpenAI', 'Ollama (local)']) {
+      expect(screen.getByRole('radio', { name }).closest('.provider-row')).toHaveTextContent('Not set')
+    }
 
     const provider = screen.getByRole('group', { name: 'Provider' })
     expect(provider.tagName).toBe('FIELDSET')
@@ -1292,7 +1306,7 @@ describe('workspace composer entry', () => {
 
     expect(invoke).toHaveBeenCalledWith('local_mode_store_provider_key', { provider: 'anthropic', key: 'secret-key' })
     expect(await screen.findByText('Muniment saved the Anthropic key. Send a message.')).toBeInTheDocument()
-    expect(screen.getByText('Anthropic', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Saved')
+    expect(screen.getByRole('radio', { name: 'Anthropic' }).closest('.provider-row')).toHaveTextContent('Saved')
 
     await fireEvent.click(within(provider).getByRole('radio', { name: 'Ollama (local)' }))
     await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
@@ -1314,6 +1328,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await screen.findByPlaceholderText('Ask anything')
+    await openModelPanel()
     if (failedCommand === 'local_mode_store_provider_key') {
       await fireEvent.input(await screen.findByLabelText('Provider API key'), { target: { value: 'test-key' } })
       await fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
@@ -1322,11 +1337,47 @@ describe('workspace composer entry', () => {
     expect(copy.split(/\s+/).length).toBeLessThan(12)
   })
 
+  it('names the model source on the composer chip and closes the panel with Escape', async () => {
+    localModeStatus = true
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'local_mode_provider_status') {
+        return [
+          { provider: 'anthropic', configured: false },
+          { provider: 'google', configured: false },
+          { provider: 'openai', configured: false },
+          { provider: 'ollama', configured: true },
+        ]
+      }
+      return defaultInvoke(command, ...args)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+
+    const chip = await waitFor(() => {
+      const button = document.querySelector('.model-chip')
+      expect(button).not.toBeNull()
+      return button
+    })
+    await waitFor(() => expect(chip).toHaveTextContent('Local · Ollama'))
+    expect(chip).toHaveAttribute('aria-expanded', 'false')
+
+    await fireEvent.click(chip)
+    const panel = await screen.findByRole('dialog', { name: 'Model' })
+    expect(chip).toHaveAttribute('aria-expanded', 'true')
+    expect(within(panel).getByRole('radio', { name: 'Ollama (local)' }).closest('.provider-row')).toHaveTextContent('Saved')
+
+    await fireEvent.keyDown(panel, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model' })).not.toBeInTheDocument())
+    expect(document.activeElement).toBe(chip)
+  })
+
   it('shows the provider fields after each provider change', async () => {
     localModeStatus = true
     render(App)
 
-    const ollama = await screen.findByRole('radio', { name: 'Ollama (local)' })
+    await openModelPanel()
+    const ollama = screen.getByRole('radio', { name: 'Ollama (local)' })
     await fireEvent.click(ollama)
     expect(ollama).toBeChecked()
     expect(screen.getByLabelText('Ollama server URL')).toBeVisible()
@@ -1354,7 +1405,8 @@ describe('workspace composer entry', () => {
       return defaultInvoke(command, ...args)
     })
     render(App)
-    const ollama = await screen.findByRole('radio', { name: 'Ollama (local)' })
+    await openModelPanel()
+    const ollama = screen.getByRole('radio', { name: 'Ollama (local)' })
     await fireEvent.click(ollama)
     await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save Ollama server' }))
@@ -1404,7 +1456,8 @@ describe('workspace composer entry', () => {
       return defaultInvoke(command, ...args)
     })
     render(App)
-    await screen.findByRole('radio', { name: 'Google' })
+    await openModelPanel()
+    screen.getByRole('radio', { name: 'Google' })
     await waitFor(() => {
       for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
     })
