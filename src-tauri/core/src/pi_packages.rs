@@ -117,7 +117,7 @@ fn capture_stderr(mut reader: impl Read, cancelled: &AtomicBool) -> VecDeque<Str
     let mut redactor = crate::pi_launch::DiagnosticRedactor::new();
     let mut buffer = [0; 4096];
     let mut line = Vec::new();
-    let mut oversized = false;
+    let mut suppressed = false;
     loop {
         let count = if cancelled.load(Ordering::Acquire) {
             0
@@ -138,14 +138,12 @@ fn capture_stderr(mut reader: impl Read, cancelled: &AtomicBool) -> VecDeque<Str
             .copied()
             .chain((count == 0).then_some(b'\n'))
         {
+            if suppressed {
+                continue;
+            }
             if byte == b'\n' {
                 let text = String::from_utf8_lossy(&line);
                 let detail = redactor.line(&text);
-                let detail = if oversized {
-                    "[redacted]".into()
-                } else {
-                    detail
-                };
                 if !detail.is_empty() {
                     if tail.len() == 20 {
                         tail.pop_front();
@@ -153,12 +151,16 @@ fn capture_stderr(mut reader: impl Read, cancelled: &AtomicBool) -> VecDeque<Str
                     tail.push_back(detail);
                 }
                 line.clear();
-                oversized = false;
             } else if line.len() < 65_536 {
                 line.push(byte);
             } else {
-                // Drop the whole line rather than expose a clipped credential.
-                oversized = true;
+                // Discarded bytes can start a multiline credential. Suppress all later output but keep draining the pipe.
+                suppressed = true;
+                line.clear();
+                if tail.len() == 20 {
+                    tail.pop_front();
+                }
+                tail.push_back("[redacted]".into());
             }
         }
         if count == 0 {
@@ -170,10 +172,19 @@ fn capture_stderr(mut reader: impl Read, cancelled: &AtomicBool) -> VecDeque<Str
 
 #[cfg(test)]
 pub(crate) fn captured_stderr_for_test(input: &[u8]) -> String {
-    capture_stderr(input, &AtomicBool::new(false))
-        .into_iter()
+    stderr_tail_text(capture_stderr(input, &AtomicBool::new(false)))
+}
+
+fn stderr_tail_text(tail: VecDeque<String>) -> String {
+    let tail = tail.into_iter().collect::<Vec<_>>().join(" | ");
+    // Bound the tail after redaction.
+    tail.chars()
+        .rev()
+        .take(4096)
         .collect::<Vec<_>>()
-        .join(" | ")
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 fn install_failure(error: io::Error, tail: &str) -> io::Error {
@@ -234,21 +245,11 @@ fn run_install(command: &mut Command, timeout: Duration) -> io::Result<String> {
     }
     cancelled.store(true, Ordering::Release);
     // The reader flushes its pending fragment and closes the pipe before the join returns.
-    let tail = reader
-        .join()
-        .map_err(|_| io::Error::other("Pi package stderr reader panicked."))?
-        .into_iter()
-        .collect::<Vec<_>>()
-        .join(" | ");
-    // Bound the tail after redaction.
-    let tail: String = tail
-        .chars()
-        .rev()
-        .take(4096)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
+    let tail = stderr_tail_text(
+        reader
+            .join()
+            .map_err(|_| io::Error::other("Pi package stderr reader panicked."))?,
+    );
     result
         .map(|()| tail.clone())
         .map_err(|error| install_failure(error, &tail))
@@ -323,12 +324,28 @@ mod tests {
         let input = format!("{}\npassword=registry-secret\nhttps://user:pass@example.com/?token=hidden\n{}\nlast diagnostic", "detail\n".repeat(30), "x".repeat(70_000));
         let tail = capture_stderr(input.as_bytes(), &AtomicBool::new(false));
         assert_eq!(tail.len(), 20);
-        assert_eq!(tail.back().unwrap(), "last diagnostic");
+        assert_eq!(tail.back().unwrap(), "[redacted]");
         let text = tail.into_iter().collect::<Vec<_>>().join(" ");
+        assert!(!text.contains("last diagnostic"));
         assert!(!text.contains("registry-secret"));
         assert!(!text.contains("hidden"));
         assert!(!text.contains(&"x".repeat(100)));
         assert!(text.contains("[redacted]"));
+    }
+
+    #[test]
+    fn stderr_capture_preserves_diagnostics_at_the_line_limit() {
+        for length in [65_535, 65_536] {
+            let diagnostic: String = "x ".chars().cycle().take(length).collect();
+            let input = format!("{diagnostic}\nlast diagnostic");
+            let tail = capture_stderr(input.as_bytes(), &AtomicBool::new(false));
+            assert_eq!(tail.len(), 2);
+            assert_eq!(tail[0], "x ".repeat(4096));
+            assert_eq!(tail[1], "last diagnostic");
+        }
+        let input = format!("{}\nlast diagnostic", "x".repeat(65_537));
+        let tail = capture_stderr(input.as_bytes(), &AtomicBool::new(false));
+        assert_eq!(tail.into_iter().collect::<Vec<_>>(), ["[redacted]"]);
     }
 
     #[test]

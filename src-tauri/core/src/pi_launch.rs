@@ -216,7 +216,44 @@ impl DiagnosticRedactor {
     }
 
     fn with_secrets(secrets: impl Iterator<Item = String>) -> Self {
-        let mut secrets: Vec<_> = secrets.collect();
+        // Redact each component before stderr joins or bounds the lines, even when the tail contains only one component.
+        let mut secrets: Vec<_> = secrets
+            .flat_map(|value| {
+                let mut parts = Vec::new();
+                let json = serde_json::from_str::<serde_json::Value>(&value);
+                let components = match &json {
+                    // Credential JSON contains framing, not just secret text. Redact its string values instead of braces.
+                    Ok(json @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) => {
+                        let mut pending = vec![json];
+                        let mut strings = Vec::new();
+                        while let Some(item) = pending.pop() {
+                            match item {
+                                serde_json::Value::Object(fields) => {
+                                    pending.extend(fields.values())
+                                }
+                                serde_json::Value::Array(items) => pending.extend(items),
+                                serde_json::Value::String(text) => strings.push(text.as_str()),
+                                _ => {}
+                            }
+                        }
+                        strings
+                    }
+                    _ => vec![value.as_str()],
+                };
+                for component in components {
+                    parts.extend(
+                        component
+                            .lines()
+                            .filter(|part| !part.is_empty())
+                            .map(str::to_owned),
+                    );
+                }
+                if !value.is_empty() && !parts.contains(&value) {
+                    parts.push(value);
+                }
+                parts
+            })
+            .collect();
         secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
         Self {
             secrets,
@@ -488,6 +525,24 @@ pub fn pi_launch_config_for_executable(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multiline_secret_components_preserve_json_framing_and_redact_short_values() {
+        let secrets = [
+            "{\n\"nested\": [{\"password\": \"opaque-one\\nopaque-two\"}]\n}".to_owned(),
+            "!\n?\n".to_owned(),
+            String::new(),
+        ];
+        let mut redactor = DiagnosticRedactor::with_secrets(secrets.into_iter());
+        assert_eq!(
+            redactor.line("{ registry refused }"),
+            "{ registry refused }"
+        );
+        for secret in ["opaque-one", "opaque-two", "!", "?"] {
+            assert_eq!(redactor.line(secret), "[redacted]");
+        }
+        assert_eq!(redactor.line(""), "");
+    }
 
     #[test]
     fn diagnostic_redaction_precedes_bounds_and_escapes_credentials() {
