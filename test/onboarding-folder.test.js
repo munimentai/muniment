@@ -212,10 +212,63 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(windows).toContain('if ($matches.Count -gt 1) { throw')
     expect(windows).toContain('if ([DateTime]::UtcNow -ge $deadline) { throw')
     expect(windows).toContain("AutomationIdProperty, '1152'")
-    expect(windows).toContain('[System.Windows.Automation.ControlType]::Edit')
-    expect(windows).toContain('$value.SetValue($homePath)')
+    expect(windows).toContain("ClassNameProperty, 'Edit'")
+    expect(windows).toContain('[MunimentFolderPicker.Desktop]::SetFolder([IntPtr]$handle, [IntPtr]$edit.Current.NativeWindowHandle, $homePath)')
+    expect(windows).toContain('String.Equals(text.ToString(), path, StringComparison.Ordinal)')
+    expect(windows).toContain('[MunimentFolderPicker.Desktop]::ConfirmFolder([IntPtr]$handle, [IntPtr]$confirm.Current.NativeWindowHandle)')
     expect(windows).toContain('$_.Handle -eq $handle -and $_.Visible')
     expect(windows).not.toMatch(/SendKeys|SendWait|Invoke-Expression/)
+  })
+
+  it('The Windows selectors match the Folder field and confirm button without control patterns.', async () => {
+    const script = await readFile(new URL('./e2e/support/folder-dialog-windows.ps1', import.meta.url), 'utf8')
+    // Evaluate the script's PropertyConditions against the recorded UI Automation shapes.
+    function selector(name) {
+      const block = script.match(new RegExp(`\\$${name} = \\[System\\.Windows\\.Automation\\.AndCondition\\]::new\\(([\\s\\S]*?)\\n  \\)`))?.[1]
+      expect(block).toBeDefined()
+      const conditions = [...block.matchAll(/\[System\.Windows\.Automation\.PropertyCondition\]::new\(\[System\.Windows\.Automation\.AutomationElement\]::(\w+)Property, (?:'([^']*)'|\[System\.Windows\.Automation\.ControlType\]::(\w+))\)/g)]
+      expect(conditions).toHaveLength(2)
+      expect(block.replace(/\[System\.Windows\.Automation\.PropertyCondition\]::new\([^\n]+\)/g, '').replace(/[\s,]/g, '')).toBe('')
+      return (element) => conditions.every(([, property, text, type]) => element[property] === (text ?? type))
+    }
+    const field = selector('editCondition')
+    const confirm = selector('confirmCondition')
+    const elements = [
+      { AutomationId: '1090', ControlType: 'Pane', ClassName: 'Static', Patterns: [] },
+      { AutomationId: '1152', ControlType: 'Pane', ClassName: 'Edit', Patterns: [] },
+      { AutomationId: '1', ControlType: 'Pane', ClassName: 'Button', Patterns: [] },
+      { AutomationId: '2', ControlType: 'Pane', ClassName: 'Button', Patterns: [] },
+      { AutomationId: 'SearchEditBox', ControlType: 'Edit', ClassName: 'SearchEditBox', Patterns: ['ValuePattern', 'TextPattern'] },
+    ]
+    expect(elements.filter(field)).toEqual([elements[1]])
+    expect(elements.filter(confirm)).toEqual([elements[2]])
+    expect(field({ ...elements[1], ControlType: 'Edit', Patterns: ['ValuePattern'] })).toBe(true)
+    expect(confirm({ ...elements[2], ControlType: 'Button', Patterns: ['InvokePattern'] })).toBe(true)
+    for (const match of [field, confirm]) {
+      expect(match({})).toBe(false)
+      expect(match({ ...elements[1], ClassName: 'SearchEditBox' })).toBe(false)
+      expect(match({ ...elements[2], ClassName: 'Static' })).toBe(false)
+      expect(match({ ...elements[1], AutomationId: '2' })).toBe(false)
+    }
+  })
+
+  it('The Windows control drive bounds native calls and reports the UI Automation shape on failure.', async () => {
+    const script = await readFile(new URL('./e2e/support/folder-dialog-windows.ps1', import.meta.url), 'utf8')
+    expect(script).toContain('$controlDeadline = [DateTime]::UtcNow.AddSeconds(5)')
+    expect(script).toContain('$deadline.AddSeconds(-2)')
+    expect(script).toContain('$controls.Count -gt 1')
+    expect(script).toContain('control id: $id. type: $($_.Current.ControlType.ProgrammaticName). class: $($_.Current.ClassName). patterns: $patterns')
+    expect(script).toContain('control id: $id. type: absent. class: absent. patterns: absent')
+    expect(script).toContain('control id: $id. type: unavailable. class: unavailable. patterns: unavailable')
+    expect(script).toContain('GetSupportedPatterns()')
+    expect(script).toContain('throw "$($failure.Exception.Message) $controlReport"')
+    expect(script).toContain('!IsChild(dialog, control) || GetDlgCtrlID(control) != id')
+    expect(script).toContain('!IsWindowEnabled(control) || !IsWindowVisible(control)')
+    expect(script).toContain('SendText(control, 0x000C, UIntPtr.Zero, path, 0x23, 1000, out result)')
+    expect(script).toContain('ReadText(control, 0x000D, new UIntPtr((uint)text.Capacity), text, 0x23, 1000, out result)')
+    expect(script).toContain('new StringBuilder(path.Length + 2)')
+    expect(script).toContain('PostMessage(GetParent(control), 0x0111, new IntPtr(1), control)')
+    expect(script).not.toMatch(/GetCurrentPattern|\.Invoke\(\)/)
   })
 
   it('The macOS picker uses the app IPC and posts its keys from the app process.', async () => {

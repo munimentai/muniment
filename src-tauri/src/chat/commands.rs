@@ -9,7 +9,7 @@ pub(super) trait RunCommandClient {
         text: &str,
         files: &[String],
         thread_id: Option<&str>,
-    ) -> Result<RunSubmitAccepted, ClientError>;
+    ) -> Result<RunSubmitAccepted, String>;
     fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError>;
     fn run_steer(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError>;
     fn run_follow_up(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError>;
@@ -29,13 +29,14 @@ impl RunCommandClient for DesktopClientHolder {
         text: &str,
         files: &[String],
         thread_id: Option<&str>,
-    ) -> Result<RunSubmitAccepted, ClientError> {
-        self.run_submit_if_compatible(
+    ) -> Result<RunSubmitAccepted, String> {
+        self.run_submit_with_reason(
             text,
             files,
             thread_id,
             crate::attach_service::runtime_version_compatible,
         )
+        .map_err(|(error, response)| auth::desktop_request_error(error, response.as_ref()))
     }
 
     fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError> {
@@ -122,9 +123,7 @@ where
                         .ok_or_else(attachment_error)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let accepted = client
-                .run_submit(prompt, &file_paths, thread_id.as_deref())
-                .map_err(auth::desktop_client_error)?;
+            let accepted = client.run_submit(prompt, &file_paths, thread_id.as_deref())?;
             state
                 .session_thread
                 .select(accepted.thread_id.clone(), subject);

@@ -27,6 +27,51 @@ namespace MunimentFolderPicker {
     [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromWindow(IntPtr handle, uint flags);
 
+    [DllImport("user32.dll")]
+    private static extern bool IsChild(IntPtr parent, IntPtr child);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowEnabled(IntPtr handle);
+    [DllImport("user32.dll")]
+    private static extern int GetDlgCtrlID(IntPtr handle);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetParent(IntPtr handle);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
+    private static extern IntPtr SendText(IntPtr handle, uint message, UIntPtr parameter, string text,
+      uint flags, uint timeout, out UIntPtr result);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
+    private static extern IntPtr ReadText(IntPtr handle, uint message, UIntPtr capacity, StringBuilder text,
+      uint flags, uint timeout, out UIntPtr result);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool PostMessage(IntPtr handle, uint message, IntPtr parameter, IntPtr control);
+
+    private static void CheckControl(IntPtr dialog, IntPtr control, int id, string expectedClass) {
+      var name = new StringBuilder(256);
+      GetClassName(control, name, name.Capacity);
+      if (!IsChild(dialog, control) || GetDlgCtrlID(control) != id ||
+          !String.Equals(name.ToString(), expectedClass, StringComparison.Ordinal) ||
+          !IsWindowEnabled(control) || !IsWindowVisible(control))
+        throw new InvalidOperationException("The native control does not match the ready dialog control.");
+    }
+    public static void SetFolder(IntPtr dialog, IntPtr control, string path) {
+      CheckControl(dialog, control, 1152, "Edit");
+      UIntPtr result;
+      // WM_SETTEXT and WM_GETTEXT preserve the literal Unicode path and bound each cross-process call.
+      if (SendText(control, 0x000C, UIntPtr.Zero, path, 0x23, 1000, out result) == IntPtr.Zero ||
+          result == UIntPtr.Zero)
+        throw new InvalidOperationException("The Folder field rejected WM_SETTEXT or did not respond within one second.");
+      var text = new StringBuilder(path.Length + 2);
+      if (ReadText(control, 0x000D, new UIntPtr((uint)text.Capacity), text, 0x23, 1000, out result) == IntPtr.Zero)
+        throw new InvalidOperationException("The Folder field did not answer WM_GETTEXT within one second.");
+      if (!String.Equals(text.ToString(), path, StringComparison.Ordinal))
+        throw new InvalidOperationException("The Folder field did not keep the Home path.");
+    }
+    public static void ConfirmFolder(IntPtr dialog, IntPtr control) {
+      CheckControl(dialog, control, 1, "Button");
+      // Post WM_COMMAND with BN_CLICKED so the dialog can close without blocking this process.
+      if (!PostMessage(GetParent(control), 0x0111, new IntPtr(1), control))
+        throw new InvalidOperationException("The Select Folder button rejected WM_COMMAND.");
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct Rectangle { public int Left, Top, Right, Bottom; }
     public class Window {
@@ -98,6 +143,38 @@ function Wait-PickerStep([string]$step) {
   Start-Sleep -Milliseconds 100
 }
 
+function Describe-PickerControl($dialog, [string]$id) {
+  try {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+    $controls = $dialog.FindAll($descendants, $condition)
+    if ($controls.Count -eq 0) { return "control id: $id. type: absent. class: absent. patterns: absent" }
+    return (($controls | ForEach-Object {
+      $patterns = @($_.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName }) -join ', '
+      if (-not $patterns) { $patterns = 'none' }
+      "control id: $id. type: $($_.Current.ControlType.ProgrammaticName). class: $($_.Current.ClassName). patterns: $patterns. enabled: $($_.Current.IsEnabled). offscreen: $($_.Current.IsOffscreen)"
+    }) -join ' | ')
+  } catch {
+    return "control id: $id. type: unavailable. class: unavailable. patterns: unavailable. UI Automation error: $($_.Exception.Message)"
+  }
+}
+
+function Find-PickerControl($dialog, $condition, [string]$id) {
+  # Reserve time for the control error and the existing window report.
+  $controlDeadline = [DateTime]::UtcNow.AddSeconds(5)
+  do {
+    $controls = $dialog.FindAll($descendants, $condition)
+    if ($controls.Count -gt 1) { throw "The dialog has more than one matching control. $(Describe-PickerControl $dialog $id)" }
+    if ($controls.Count -eq 1 -and $controls[0].Current.IsEnabled -and -not $controls[0].Current.IsOffscreen) {
+      return $controls[0]
+    }
+    if ([DateTime]::UtcNow -ge $controlDeadline -or [DateTime]::UtcNow -ge $deadline.AddSeconds(-2)) {
+      throw "The dialog control is not ready. $(Describe-PickerControl $dialog $id)"
+    }
+    Start-Sleep -Milliseconds 100
+  } while ($true)
+}
+
 function Find-FolderDialog {
   $processIds = @(Get-Process -Name 'muniment-desktop' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
   $matches = @([MunimentFolderPicker.Desktop]::Windows() | Where-Object {
@@ -109,6 +186,7 @@ function Find-FolderDialog {
   }
 }
 
+$controlReport = $null
 try {
   $dialog = Find-FolderDialog
   while ($null -eq $dialog) {
@@ -119,26 +197,20 @@ try {
   $handle = $dialog.Current.NativeWindowHandle
   $editCondition = [System.Windows.Automation.AndCondition]::new(
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1152'),
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty, 'Edit')
   )
   $confirmCondition = [System.Windows.Automation.AndCondition]::new(
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1'),
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty, 'Button')
   )
-  $edit = $dialog.FindFirst($descendants, $editCondition)
-  while ($null -eq $edit -or -not $edit.Current.IsEnabled -or $edit.Current.IsOffscreen) {
-    Wait-PickerStep 'the Folder field search'
-    $edit = $dialog.FindFirst($descendants, $editCondition)
-  }
-  $value = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-  $value.SetValue($homePath)
-  if ($value.Current.Value -cne $homePath) { throw 'The Folder field did not keep the Home path.' }
-  $confirm = $dialog.FindFirst($descendants, $confirmCondition)
-  while ($null -eq $confirm -or -not $confirm.Current.IsEnabled -or $confirm.Current.IsOffscreen) {
-    Wait-PickerStep 'the Select Folder button search'
-    $confirm = $dialog.FindFirst($descendants, $confirmCondition)
-  }
-  $confirm.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  $controlReport = Describe-PickerControl $dialog '1152'
+  $edit = Find-PickerControl $dialog $editCondition '1152'
+  $controlReport = Describe-PickerControl $dialog '1152'
+  [MunimentFolderPicker.Desktop]::SetFolder([IntPtr]$handle, [IntPtr]$edit.Current.NativeWindowHandle, $homePath)
+  $controlReport = Describe-PickerControl $dialog '1'
+  $confirm = Find-PickerControl $dialog $confirmCondition '1'
+  $controlReport = Describe-PickerControl $dialog '1'
+  [MunimentFolderPicker.Desktop]::ConfirmFolder([IntPtr]$handle, [IntPtr]$confirm.Current.NativeWindowHandle)
   while ($null -ne ([MunimentFolderPicker.Desktop]::Windows() | Where-Object {
     $_.Handle -eq $handle -and $_.Visible
   })) {
@@ -151,5 +223,6 @@ try {
   } catch {
     Write-Output "window report error: $($_.Exception.Message)"
   }
+  if ($controlReport) { throw "$($failure.Exception.Message) $controlReport" }
   throw $failure
 }

@@ -102,7 +102,7 @@ describe('installed production chat contract', () => {
     expect(spec).toContain('}, rawDir)).timeout(900000)')
     expect(spec).toContain('await browser.waitUntil(async () => {')
     expect(spec).toContain('timeout: 180000')
-    expect(spec).toContain('chat response did not complete with a receipt for prompt:')
+    expect(spec).toContain('The chat response returned neither a receipt nor a refusal for prompt:')
     expect(spec).not.toMatch(/browser\.pause\s*\(/)
     expect(spec).toContain("response.$('button.provenance')")
     expect(spec).toContain("response.$('.route-value')")
