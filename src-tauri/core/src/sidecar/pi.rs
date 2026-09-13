@@ -28,13 +28,13 @@ impl PiSessionLocator {
 fn canonical_session_root(session_root: &Path) -> Result<PathBuf, String> {
     let root = session_root
         .canonicalize()
-        .map_err(|_| "Pi session directory is unavailable".to_string())?;
+        .map_err(|error| format!("Pi session directory canonicalization failed: {error}"))?;
     if !root
         .metadata()
-        .map(|metadata| metadata.is_dir())
-        .unwrap_or(false)
+        .map_err(|error| format!("Pi session directory metadata failed: {error}"))?
+        .is_dir()
     {
-        return Err("Pi session directory is unavailable".into());
+        return Err("The Pi session root is not a directory.".into());
     }
     Ok(root)
 }

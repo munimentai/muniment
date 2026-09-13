@@ -106,7 +106,10 @@ pub trait PiLaunchBoundaries {
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> Result<PathBuf, PiLaunchError> {
         if self.pi_artifact() != PI_SELECTED_ARTIFACT {
-            return Err(PiLaunchError::RejectedConfig);
+            return Err(PiLaunchError::rejected(
+                "artifact_selection",
+                "The Pi artifact does not match the selected artifact.",
+            ));
         }
         crate::sidecar::pi_install::acquire_pi(root, cancelled).map_err(PiLaunchError::Acquisition)
     }
@@ -119,7 +122,6 @@ pub trait PiLaunchBoundaries {
         executable: &Path,
     ) -> Result<(), PiLaunchError> {
         crate::pi_settings::prepare_pi_settings(artifact, executable)
-            .map_err(|_| PiLaunchError::RejectedConfig)
     }
     fn pi_artifact(&self) -> PiArtifactDescriptor {
         PI_SELECTED_ARTIFACT
@@ -131,8 +133,113 @@ pub enum PiLaunchError {
     MissingRoot,
     UnresolvableExecutable,
     UnavailableSessionRoot,
-    RejectedConfig,
+    RejectedConfig { step: &'static str, cause: String },
     Acquisition(crate::sidecar::pi_install::CoordinatedPiInstallError),
+}
+
+impl PiLaunchError {
+    pub fn rejected(step: &'static str, error: impl std::fmt::Display) -> Self {
+        Self::RejectedConfig {
+            step,
+            cause: diagnostic_text(&error.to_string()),
+        }
+    }
+}
+
+/// Redact before truncation so a boundary cannot expose part of a credential.
+pub(crate) fn diagnostic_text(text: &str) -> String {
+    let secrets = std::env::vars_os().filter_map(|(name, value)| {
+        let name = name.to_string_lossy().to_ascii_uppercase();
+        let value = value.into_string().ok()?;
+        (!value.is_empty()
+            && ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "AUTH"]
+                .iter()
+                .any(|label| name.contains(label)))
+        .then_some(value)
+    });
+    redact_diagnostic(text, secrets)
+}
+
+fn redact_diagnostic(text: &str, secrets: impl Iterator<Item = String>) -> String {
+    let mut text = text.to_owned();
+    let mut secrets: Vec<_> = secrets.collect();
+    secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    for secret in secrets {
+        text = text.replace(&secret, "[redacted]");
+    }
+    let mut private_key = false;
+    text = text
+        .lines()
+        .map(|line| {
+            if line.contains("-----BEGIN") && line.contains("PRIVATE KEY") {
+                private_key = true;
+            }
+            let mut redacted = if private_key {
+                "[redacted]".to_owned()
+            } else {
+                line.to_owned()
+            };
+            if line.contains("-----END") && line.contains("PRIVATE KEY") {
+                private_key = false;
+            }
+            // The reply scanner has a minimum token length. Logs also hide short credentials and authorization headers.
+            if let Some(start) = credential_field_start(&redacted) {
+                redacted.replace_range(start.., "[redacted]");
+            }
+            let scan = crate::assistant_text::scan(&redacted, true);
+            if let Some(start) = scan.withhold_from {
+                redacted.replace_range(start.., "[redacted]");
+            }
+            for matched in scan.matches.into_iter().rev() {
+                redacted.replace_range(matched.range, "[redacted]");
+            }
+            redacted
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Registry URLs can carry credentials in userinfo, paths, or query parameters.
+    text = text
+        .split_whitespace()
+        .map(|word| if word.contains("://") { "[url]" } else { word })
+        .collect::<Vec<_>>()
+        .join(" ");
+    text.chars()
+        .filter(|character| !character.is_control())
+        .take(8192)
+        .collect()
+}
+
+fn credential_field_start(line: &str) -> Option<usize> {
+    let lower = line.to_ascii_lowercase();
+    [
+        "authorization",
+        "bearer",
+        "basic",
+        "authtoken",
+        "api_key",
+        "apikey",
+        "api-token",
+        "token",
+        "secret",
+        "passwd",
+        "password",
+        "auth",
+        "key",
+    ]
+    .into_iter()
+    .flat_map(|label| {
+        lower.match_indices(label).filter_map(move |(start, _)| {
+            let boundary = start == 0 || !line.as_bytes()[start - 1].is_ascii_alphanumeric();
+            let suffix = &line[start + label.len()..];
+            let delimiter = suffix.trim_start_matches([' ', '\t', '\'', '"', '`']);
+            (boundary
+                && (delimiter.starts_with([':', '='])
+                    || (matches!(label, "bearer" | "basic")
+                        && suffix.starts_with(char::is_whitespace))))
+            .then_some(start)
+        })
+    })
+    .min()
 }
 
 fn install_cloud_provider(path: &Path) -> Result<(), PiLaunchError> {
@@ -149,7 +256,7 @@ fn install_cloud_provider(path: &Path) -> Result<(), PiLaunchError> {
         std::fs::rename(&temporary, path)
     })();
     let _ = std::fs::remove_file(&temporary);
-    result.map_err(|_| PiLaunchError::RejectedConfig)
+    result.map_err(|error: std::io::Error| PiLaunchError::rejected("cloud_extension_write", error))
 }
 
 pub fn pi_launch_config(
@@ -172,7 +279,7 @@ pub fn pi_launch_config_for_executable(
 ) -> Result<SidecarConfig, PiLaunchError> {
     let session_root = boundaries.pi_session_root()?;
     let mut config = pi_sidecar_config(executable.to_string_lossy(), &session_root, reopen)
-        .map_err(|_| PiLaunchError::RejectedConfig)?;
+        .map_err(|error| PiLaunchError::rejected("session_root_check", error))?;
     boundaries.prepare_pi_settings(boundaries.pi_artifact(), &executable)?;
     config.env_remove.push("BUN_BE_BUN".into());
     if boundaries.pi_artifact().version == crate::sidecar::pi_install::PI_CANDIDATE_ARTIFACT.version
@@ -223,4 +330,42 @@ pub fn pi_launch_config_for_executable(
         ]);
     }
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_redaction_precedes_bounds_and_escapes_credentials() {
+        let text = format!("permission denied\nBearer opaque-credential https://user:password@registry.example/package?secret=value\napi_key={}\nlast error", "a".repeat(9000));
+        let detail = redact_diagnostic(&text, ["opaque-credential".to_owned()].into_iter());
+        assert!(detail.contains("permission denied"));
+        assert!(detail.contains("last error"));
+        for secret in [
+            "opaque-credential",
+            "password@",
+            "secret=value",
+            &"a".repeat(100),
+        ] {
+            assert!(!detail.contains(secret), "{detail}");
+        }
+        assert!(!detail.contains('\n'));
+        assert!(detail.len() < 8192);
+        assert_eq!(redact_diagnostic("", std::iter::empty()), "");
+        for text in [
+            "registry refused Authorization: Bearer opaque-value",
+            "registry refused password=short",
+            "registry refused NPM_TOKEN=short",
+            "registry refused Basic YTpi",
+            "registry refused {\"_auth\":\"short\"}",
+            "registry refused api_key=sh\u{1b}[31mort",
+        ] {
+            let detail = redact_diagnostic(text, std::iter::empty());
+            assert!(detail.contains("registry refused"));
+            for secret in ["opaque-value", "short", "YTpi", "31mort"] {
+                assert!(!detail.contains(secret), "{detail}");
+            }
+        }
+    }
 }

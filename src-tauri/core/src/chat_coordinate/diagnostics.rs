@@ -99,6 +99,16 @@ impl Drop for RunDiagnostics {
     }
 }
 
+pub(super) fn config_error_line(run_id: &str, error: &crate::pi_launch::PiLaunchError) -> String {
+    match error {
+        crate::pi_launch::PiLaunchError::RejectedConfig { step, cause } => format!(
+            "muniment-runtime: run_id={run_id} pi_spawn config_error=RejectedConfig step={step} error={}",
+            serde_json::to_string(&crate::pi_launch::diagnostic_text(cause)).unwrap()
+        ),
+        _ => format!("muniment-runtime: run_id={run_id} pi_spawn config_error={error:?}"),
+    }
+}
+
 fn stderr_line(run_id: &str, tail: Vec<String>) -> String {
     // Keep diagnostics bounded even when Pi emits a long stderr line.
     let tail: Vec<String> = tail
@@ -119,6 +129,22 @@ fn stderr_line(run_id: &str, tail: Vec<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_failure_names_the_run_step_and_redacted_cause() {
+        let error = crate::pi_launch::PiLaunchError::rejected(
+            "package_install",
+            "Pi package install failed: exit status: 1\nstderr_tail=registry refused password=hidden-value",
+        );
+        let line = config_error_line("run-config", &error);
+        assert!(line.contains(
+            "run_id=run-config pi_spawn config_error=RejectedConfig step=package_install"
+        ));
+        assert!(line.contains("exit status: 1"));
+        assert!(line.contains("stderr_tail=registry refused"));
+        assert!(!line.contains("hidden-value"));
+        assert_eq!(line.lines().count(), 1);
+    }
 
     #[test]
     fn stderr_tail_is_bounded_and_stays_on_one_runtime_line() {
