@@ -86,6 +86,31 @@ log_command() {
   "$@" >>"$log" 2>&1
 }
 
+collect_local_mode_pi_log() {
+  # The launchd runtime keeps the login home, so its state outlives a HOME redirect.
+  local session_root="${XDG_DATA_HOME:-$HOME/.local/share}/ai.muniment.desktop/pi-sessions"
+  local log="${runtime_log:-}"
+  local destination="$raw/pi-local-mode-chat.log" session count=0
+  # Keep the local run diagnostics before another spec starts Pi.
+  if [[ -n $log && -f $log ]]; then
+    cp -- "$log" "$raw/pi-local-mode-stderr.log" || return 1
+  else
+    printf 'No runtime log exists for the local mode run.\n' >"$raw/pi-local-mode-stderr.log" || return 1
+  fi
+  : >"$destination" || return 1
+  for session in "$session_root"/*.jsonl; do
+    [[ -f $session && ! -L $session ]] || continue
+    printf 'Pi wrote session log %s.\n' "${session##*/}" >>"$destination" || return 1
+    cat -- "$session" >>"$destination" || return 1
+    printf '\n' >>"$destination" || return 1
+    count=$((count + 1))
+  done
+  if (( count == 0 )); then
+    printf 'No Pi session log exists for the local mode run.\n' >>"$destination" || return 1
+  fi
+  printf 'The runner saved pi-local-mode-chat.log.\n' >>"$cleanup_log"
+}
+
 collect_crash_reports() {
   local directory report
   # macOS can finish a crash report after the app exits.
@@ -212,6 +237,7 @@ run_step save-config-directory save_macos_spec_config || exit
 export XDG_DATA_HOME="$HOME/.local/share"
 export HOME="$state_root/degraded" MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
 run_e2e local-mode-chat "$raw/wdio-local-mode-chat.log" -- --spec test/e2e/specs/local-mode-chat.spec.js || status=1
+cleanup_step collect-local-mode-pi-log collect_local_mode_pi_log
 run_e2e real-sign-in "$raw/wdio-sign-in.log" -- --spec test/e2e/specs/real-sign-in.spec.js || status=1
 export HOME="$state_root/ready" MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
 export MUNIMENT_E2E_ONBOARDING_ONLY=1
