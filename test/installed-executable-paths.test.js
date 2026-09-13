@@ -84,6 +84,11 @@ describe('installed desktop executable paths', () => {
 })
 
 describe('Windows runtime bundle paths', () => {
+  it('The release runtime uses the Windows subsystem without a console window.', () => {
+    const main = readFileSync('src-tauri/runtime/src/main.rs', 'utf8')
+    expect(main).toMatch(/^#!\[cfg_attr\(not\(debug_assertions\), windows_subsystem = "windows"\)\]/)
+  })
+
   const runtimeResource = {
     'target/release/muniment-runtime.exe': 'muniment-runtime.exe',
   }
