@@ -368,13 +368,31 @@ if ($message -notlike '*navigated instead of closing*Displayed address: Address:
 foreach ($field in @($homePath, '')) {
   [MunimentFolderPicker.Desktop]::Field = $field
   $message = Get-PickerCloseFailure $dialog 10 $edit $homePath
-  if ($message -notlike '*timed out during the window close*') { throw "The report invented navigation: $message" }
+  if ($message -notlike '*navigated instead of closing*Displayed address: Address: C:\Home space & café*') {
+    throw "The report missed address-only navigation: $message"
+  }
 }
 [MunimentFolderPicker.Desktop]::ReadFails = $true
 $message = Get-PickerCloseFailure $dialog 10 $edit $homePath
-if ($message -notlike '*Displayed address: Address: C:\Home space & café*Folder field: unavailable*') {
-  throw "The field failure hid the address: $message"
+if ($message -notlike '*navigated instead of closing*Displayed address: Address: C:\Home space & café*Folder field: unavailable*') {
+  throw "The field failure hid the navigation: $message"
 }
+$dialog | Add-Member -Force ScriptMethod FindAll { param($scope, $condition)
+  @([PSCustomObject]@{ Current = [PSCustomObject]@{ Name = $script:address } })
+}
+foreach ($address in @('Address: Documents', 'Address: C:\Home space & café\child', '')) {
+  foreach ($field in @($homePath, '')) {
+    [MunimentFolderPicker.Desktop]::Field = $field
+    foreach ($readFails in @($false, $true)) {
+      [MunimentFolderPicker.Desktop]::ReadFails = $readFails
+      $message = Get-PickerCloseFailure $dialog 10 $edit $homePath
+      if ($message -notlike '*timed out during the window close*') { throw "The report invented navigation: $message" }
+    }
+  }
+}
+$address = 'Address: c:\home space & CAFÉ'
+$message = Get-PickerCloseFailure $dialog 10 $edit $homePath
+if ($message -notlike '*navigated instead of closing*') { throw "The report missed the address with different case: $message" }
 [MunimentFolderPicker.Desktop]::ReadFails = $false
 [MunimentFolderPicker.Desktop]::Field = 'Home space & café'
 $dialog | Add-Member -Force ScriptMethod FindAll { throw 'The address is unavailable.' }

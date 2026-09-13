@@ -193,12 +193,13 @@ function Get-PickerCloseFailure($dialog, $handle, $edit, [string]$path) {
       [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'ToolbarWindow32')
     $addresses = @($dialog.FindAll($descendants, $condition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ -like 'Address:*' })
     if ($addresses.Count -gt 0) { $address = $addresses -join ' | ' }
+    $navigated = @($addresses | Where-Object { $_ -ieq "Address: $path" }).Count -gt 0
   } catch {
     $address = "unavailable ($($_.Exception.Message))"
   }
   try {
     $field = [MunimentFolderPicker.Desktop]::FolderText([IntPtr]$handle, [IntPtr]$edit.Current.NativeWindowHandle)
-    $navigated = $field.Length -gt 0 -and $field -cne $path
+    $navigated = $navigated -or ($field.Length -gt 0 -and $field -cne $path)
   } catch {
     $field = "unavailable ($($_.Exception.Message))"
   }
