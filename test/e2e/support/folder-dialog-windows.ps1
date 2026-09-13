@@ -33,16 +33,15 @@ namespace MunimentFolderPicker {
     private static extern bool IsWindowEnabled(IntPtr handle);
     [DllImport("user32.dll")]
     private static extern int GetDlgCtrlID(IntPtr handle);
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetParent(IntPtr handle);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
     private static extern IntPtr SendText(IntPtr handle, uint message, UIntPtr parameter, string text,
       uint flags, uint timeout, out UIntPtr result);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
     private static extern IntPtr ReadText(IntPtr handle, uint message, UIntPtr capacity, StringBuilder text,
       uint flags, uint timeout, out UIntPtr result);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool PostMessage(IntPtr handle, uint message, IntPtr parameter, IntPtr control);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
+    private static extern IntPtr SendClick(IntPtr handle, uint message, UIntPtr parameter, IntPtr data,
+      uint flags, uint timeout, out UIntPtr result);
 
     private static void CheckControl(IntPtr dialog, IntPtr control, int id, string expectedClass) {
       var name = new StringBuilder(256);
@@ -67,9 +66,19 @@ namespace MunimentFolderPicker {
     }
     public static void ConfirmFolder(IntPtr dialog, IntPtr control) {
       CheckControl(dialog, control, 1, "Button");
-      // Post WM_COMMAND with BN_CLICKED so the dialog can close without blocking this process.
-      if (!PostMessage(GetParent(control), 0x0111, new IntPtr(1), control))
-        throw new InvalidOperationException("The Select Folder button rejected WM_COMMAND.");
+      // BM_CLICK follows the button's focus behavior instead of only notifying the dialog.
+      // Omit SMTO_ERRORONEXIT because a successful click can destroy the button.
+      UIntPtr result;
+      if (SendClick(control, 0x00F5, UIntPtr.Zero, IntPtr.Zero, 0x03, 1000, out result) == IntPtr.Zero)
+        throw new InvalidOperationException("The Select Folder button did not answer BM_CLICK within one second.");
+    }
+    public static string FolderText(IntPtr dialog, IntPtr control) {
+      CheckControl(dialog, control, 1152, "Edit");
+      var text = new StringBuilder(32768);
+      UIntPtr result;
+      if (ReadText(control, 0x000D, new UIntPtr((uint)text.Capacity), text, 0x23, 1000, out result) == IntPtr.Zero)
+        throw new InvalidOperationException("The Folder field did not answer WM_GETTEXT within one second.");
+      return text.ToString();
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -175,6 +184,31 @@ function Find-PickerControl($dialog, $condition, [string]$id) {
   } while ($true)
 }
 
+function Get-PickerCloseFailure($dialog, $handle, $edit, [string]$path) {
+  $address = 'unavailable'
+  $field = 'unavailable'
+  $navigated = $false
+  try {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'ToolbarWindow32')
+    $addresses = @($dialog.FindAll($descendants, $condition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ -like 'Address:*' })
+    if ($addresses.Count -gt 0) { $address = $addresses -join ' | ' }
+    $navigated = @($addresses | Where-Object { $_ -ieq "Address: $path" }).Count -gt 0
+  } catch {
+    $address = "unavailable ($($_.Exception.Message))"
+  }
+  try {
+    $field = [MunimentFolderPicker.Desktop]::FolderText([IntPtr]$handle, [IntPtr]$edit.Current.NativeWindowHandle)
+    $navigated = $navigated -or ($field.Length -gt 0 -and $field -cne $path)
+  } catch {
+    $field = "unavailable ($($_.Exception.Message))"
+  }
+  if ($navigated) {
+    return "The shell folder dialog navigated instead of closing. Displayed address: $address. Folder field: $field."
+  }
+  return "The shell folder dialog timed out during the window close. Displayed address: $address. Folder field: $field."
+}
+
 function Find-FolderDialog {
   $processIds = @(Get-Process -Name 'muniment-desktop' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
   $matches = @([MunimentFolderPicker.Desktop]::Windows() | Where-Object {
@@ -214,7 +248,10 @@ try {
   while ($null -ne ([MunimentFolderPicker.Desktop]::Windows() | Where-Object {
     $_.Handle -eq $handle -and $_.Visible
   })) {
-    Wait-PickerStep 'the window close'
+    if ([DateTime]::UtcNow -ge $deadline) {
+      throw (Get-PickerCloseFailure $dialog $handle $edit $homePath)
+    }
+    Start-Sleep -Milliseconds 100
   }
 } catch {
   $failure = $_
