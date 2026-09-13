@@ -86,6 +86,14 @@ log_command() {
   "$@" >>"$log" 2>&1
 }
 
+set_verbose_fetch() {
+  launchctl setenv BUN_CONFIG_VERBOSE_FETCH curl 2>/dev/null || true
+}
+
+clear_verbose_fetch() {
+  launchctl unsetenv BUN_CONFIG_VERBOSE_FETCH 2>/dev/null || true
+}
+
 collect_local_mode_pi_log() {
   # The launchd runtime keeps the login home, so its state outlives a HOME redirect.
   local session_root="${XDG_DATA_HOME:-$HOME/.local/share}/ai.muniment.desktop/pi-sessions"
@@ -189,7 +197,7 @@ finalize() {
   cleanup_step stop-app stop_app
   cleanup_step restore-config-directory restore_macos_spec_config
   if (( cleanup_status != 0 )); then status=1; fi
-  cleanup_step clear-verbose-fetch launchctl unsetenv BUN_CONFIG_VERBOSE_FETCH
+  cleanup_step clear-verbose-fetch clear_verbose_fetch
   if (( installed )); then cleanup_step remove-bundle rm -rf -- "$installed_bundle"; fi
   cleanup_step collect-crash-reports collect_crash_reports
   if node test/e2e/support/redact.mjs "$raw" "$safe" "$redaction_report"; then
@@ -274,7 +282,7 @@ export MUNIMENT_E2E_IMAGE_PATH="$state_root/image-token.png"
 
 run_step save-config-directory save_macos_spec_config || exit
 # Bun prints every fetch it makes, so Pi's stderr names the address it dials.
-run_step pi-verbose-fetch launchctl setenv BUN_CONFIG_VERBOSE_FETCH curl || exit
+run_step pi-verbose-fetch set_verbose_fetch || exit
 # Each spec starts with no app, runtime, or driver from the last spec.
 # The launchd runtime uses the login home. Keep its endpoint when a spec redirects HOME.
 export XDG_DATA_HOME="$HOME/.local/share"
