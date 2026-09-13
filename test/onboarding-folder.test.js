@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { chooseFolder, folderDialogDescription } from './e2e/support/onboarding-folder.mjs'
+import { chooseFolder, folderDialogDescription, withWindowsPickerDiagnostics } from './e2e/support/onboarding-folder.mjs'
 import { driveMacosFolder } from './e2e/support/folder-dialog-macos.mjs'
 
 const title = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
@@ -24,6 +24,61 @@ const nativeCases = [
   ['win32', String.raw`C:\Users\Test\Home space & café`, 'powershell.exe', 'folder-dialog-windows.ps1', '#32770'],
 ]
 
+describe('The Windows picker outcome report preserves the failing check.', () => {
+  it.each([
+    { status: 'pending' },
+    { status: 'resolved', value: null },
+    { status: 'resolved', value: String.raw`C:\Home` },
+    { status: 'rejected', error: 'The dialog call failed.' },
+  ])('The report records the open() outcome $status.', async (outcome) => {
+    const raw = await rawDirectory()
+    const cause = new Error('The shell folder dialog timed out during the window search.')
+    await expect(withWindowsPickerDiagnostics(() => Promise.reject(cause), () => JSON.stringify(outcome), raw, 'win32'))
+      .rejects.toMatchObject({ message: `${cause.message} Home picker open() outcome: ${JSON.stringify(outcome)}`, cause })
+    expect(await readFile(path.join(raw, 'folder-picker-failure.log'), 'utf8')).toContain(JSON.stringify(outcome))
+  })
+
+  it('The report names a Home path mismatch after the native drive returns.', async () => {
+    const cause = new Error('The Home picker DOM value did not match the isolated Home.')
+    const raw = await rawDirectory()
+    await expect(withWindowsPickerDiagnostics(() => Promise.reject(cause), () => ({ status: 'resolved', value: 'C:\\wrong' }), raw, 'win32'))
+      .rejects.toMatchObject({ cause, message: expect.stringContaining(cause.message) })
+  })
+
+  it('The report preserves a failure when the outcome query and artifact write fail.', async () => {
+    const cause = new Error('The window search timed out.')
+    const raw = path.join(await rawDirectory(), 'absent')
+    await expect(withWindowsPickerDiagnostics(() => Promise.reject(cause), () => { throw new Error('The WebView disconnected.') }, raw, 'win32'))
+      .rejects.toMatchObject({ cause, message: expect.stringContaining('The WebView disconnected.') })
+  })
+
+  it.each([null, undefined, '', 'The dialog call failed.'])('The report preserves a non-Error rejection (%s).', async (cause) => {
+    const raw = await rawDirectory()
+    await expect(withWindowsPickerDiagnostics(() => Promise.reject(cause), () => Promise.reject(null), raw, 'win32'))
+      .rejects.toMatchObject({ cause, message: `${String(cause)} Home picker open() outcome: The picker outcome query failed: null` })
+  })
+
+  it('The report names an absent outcome.', async () => {
+    const raw = await rawDirectory()
+    await withWindowsPickerDiagnostics(() => undefined, () => null, raw, 'win32')
+    expect(await readFile(path.join(raw, 'folder-picker-outcome.log'), 'utf8')).toContain('The picker outcome is absent.')
+  })
+
+  it('The report records success without changing the result.', async () => {
+    const raw = await rawDirectory()
+    const outcome = { status: 'resolved', value: 'C:\\Home' }
+    expect(await withWindowsPickerDiagnostics(() => 42, () => outcome, raw, 'win32')).toBe(42)
+    expect(await readFile(path.join(raw, 'folder-picker-outcome.log'), 'utf8')).toContain(JSON.stringify(outcome))
+  })
+
+  it.each(['linux', 'darwin'])('The report leaves the %s drive unchanged.', async (platform) => {
+    const cause = new Error('The native drive failed.')
+    const readOutcome = vi.fn()
+    await expect(withWindowsPickerDiagnostics(() => Promise.reject(cause), readOutcome, await rawDirectory(), platform)).rejects.toBe(cause)
+    expect(readOutcome).not.toHaveBeenCalled()
+  })
+})
+
 describe('The onboarding folder picker selects a native driver.', () => {
   it.each(nativeCases)('The picker uses only the native driver on %s.', async (platform, home, binary, script) => {
     const execute = vi.fn().mockResolvedValue({ stdout: '' })
@@ -39,7 +94,7 @@ describe('The onboarding folder picker selects a native driver.', () => {
     const [command, args, options] = execute.mock.calls[0]
     expect(command.endsWith(binary)).toBe(true)
     expect(args.some((arg) => arg.endsWith(script))).toBe(true)
-    expect(options.timeout).toBe(35000)
+    expect(options.timeout).toBe(45000)
     expect([command, ...args].join(' ')).not.toMatch(/xdotool|\btimeout\b/)
     expect(args).toHaveLength(6)
     expect(args.slice(0, 5)).toEqual(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File'])
@@ -150,14 +205,16 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(macos).toContain('drive.panel.URLs()')
     const windows = await readFile(new URL('./e2e/support/folder-dialog-windows.ps1', import.meta.url), 'utf8')
     expect(windows).toContain("Get-Process -Name 'muniment-desktop'")
-    expect(windows).toContain('$_.Current.ProcessId -in $processIds')
-    expect(windows).toContain("$_.Current.ClassName -eq '#32770' -and -not $_.Current.IsOffscreen")
+    expect(windows).toContain("$_.ProcessId -in $processIds -and $_.Class -eq '#32770'")
+    const search = windows.slice(windows.indexOf('function Find-FolderDialog'), windows.indexOf('\ntry {'))
+    expect(search).not.toMatch(/IsOffscreen|\.Visible/)
+    expect(search).toContain('[MunimentFolderPicker.Desktop]::Windows()')
     expect(windows).toContain('if ($matches.Count -gt 1) { throw')
     expect(windows).toContain('if ([DateTime]::UtcNow -ge $deadline) { throw')
     expect(windows).toContain("AutomationIdProperty, '1152'")
     expect(windows).toContain('[System.Windows.Automation.ControlType]::Edit')
     expect(windows).toContain('$value.SetValue($homePath)')
-    expect(windows).toContain('$_.Current.NativeWindowHandle -eq $handle')
+    expect(windows).toContain('$_.Handle -eq $handle -and $_.Visible')
     expect(windows).not.toMatch(/SendKeys|SendWait|Invoke-Expression/)
   })
 
@@ -307,6 +364,8 @@ describe('The onboarding folder picker selects a native driver.', () => {
     const spec = await readFile(new URL('./e2e/specs/onboarding.spec.js', import.meta.url), 'utf8')
     expect(spec).toContain("from '../support/onboarding-folder.mjs'")
     expect(spec).toContain('await chooseFolder(')
+    expect(spec).toContain('await withWindowsPickerDiagnostics(async () => {')
+    expect(spec).toContain("document.querySelector('[data-home-picker]')?.getAttribute('data-home-picker')")
     expect(spec).toContain('await homePathMatches(location, home)')
     expect(spec).toContain("expect(await location.getProperty('textContent')).toBe(home)")
     expect(spec).toContain('${folderDialogDescription(FOLDER_DIALOG_TITLE)}')

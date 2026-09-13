@@ -145,8 +145,23 @@ pub async fn auth_sign_in(
 ) -> Result<AuthStatus, String> {
     let started = native_auth_command_start();
     let result = sign_in_for_session(&state, attach_state.desktop_client_session(), |client| {
-        let response = native_auth_runtime_result(|| client.sign_in(), |line| eprintln!("{line}"))
-            .map_err(desktop_client_error)?;
+        let mut authorization_failure = None;
+        let response = native_auth_runtime_result(
+            || {
+                client
+                    .sign_in_with_diagnostics()
+                    .map_err(|(error, failure)| {
+                        authorization_failure = failure;
+                        error
+                    })
+            },
+            |line| eprintln!("{line}"),
+        )
+        .map_err(|error| {
+            authorization_failure
+                .map(|failure| failure.to_string())
+                .unwrap_or_else(|| desktop_client_error(error))
+        })?;
         decode_sign_in_status(response)
     })
     .await;

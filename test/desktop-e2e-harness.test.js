@@ -566,21 +566,21 @@ collect_local_mode_pi_log`, 'bash', directory, data], { encoding: 'utf8' })
 describe.skipIf(process.platform === 'win32')('macOS WDIO spec process isolation', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
   const functions = fs.readFileSync('test/e2e/support/macos-spec-config.sh', 'utf8') + '\n' + runner.slice(runner.indexOf('harness_processes_gone()'), runner.indexOf('\nfinalize()'))
-  const sequence = runner.slice(runner.indexOf('# Each spec starts'))
+  const sequence = runner.slice(runner.indexOf('run_step save-config-directory'))
   const processes = ['app', 'desktop', 'runtime', 'tauri-driver', 'safaridriver', 'wdio', 'worker', 'job']
   const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
   const runSequence = (failedSpec = '', stopMode = 'delayed', stuckProcess = '') => {
     const directory = temp()
     const script = path.join(directory, 'sequence.sh')
     fs.writeFileSync(script, `set -uo pipefail
-raw="$1"
+raw="$1" HOME="$1/login home"
 state_root="$raw/state"
 process_root="$raw/processes"
 cleanup_log="$raw/cleanup.log"
 cleanup_status=0
 status=0
 first_failed_step=none
-trap 'exit "$status"' EXIT
+trap 'restore_macos_spec_config; exit "$status"' EXIT
 mkdir -p "$process_root"
 source test/e2e/support/cleanup-ledger.sh
 source test/e2e/support/runner-failure.sh
@@ -697,7 +697,7 @@ ${sequence}
   })
 
   it('Checks the same process set during final cleanup.', () => {
-    expect(runner).toContain('cleanup_step stop-app stop_app\n  cleanup_step restore-config-environment restore_macos_spec_config\n  if (( cleanup_status != 0 )); then status=1; fi')
+    expect(runner).toContain('cleanup_step stop-app stop_app\n  cleanup_step restore-config-directory restore_macos_spec_config\n  if (( cleanup_status != 0 )); then status=1; fi')
     expect(runner.indexOf('cleanup_step stop-app stop_app')).toBeLessThan(runner.indexOf('if node test/e2e/support/redact.mjs'))
   })
 })
@@ -705,7 +705,7 @@ ${sequence}
 describe.skipIf(process.platform === 'win32')('macOS WDIO startup diagnostics', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
   const setup = runner.slice(0, runner.indexOf('\ncurrent_step=validate-environment'))
-  const sequence = runner.slice(runner.indexOf('# Each spec starts'))
+  const sequence = runner.slice(runner.indexOf('run_step save-config-directory'))
   const launcher = path.join(root, 'test/e2e/support/macos-wdio-app.sh')
   const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
 
@@ -4022,6 +4022,69 @@ catch { Write-Output $_.Exception.Message; exit 1 }
   }, 30_000)
 })
 
+describe('Windows sign-in clock', () => {
+  const helper = path.join(root, 'test/e2e/support/windows-clock.ps1')
+  const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
+  const hasPowerShell = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+
+  it('checks the clock after process cleanup and before the sign-in spec', () => {
+    const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+    const invoke = runner.slice(runner.indexOf('function Invoke-E2e('), runner.indexOf('function Invoke-Cleanup('))
+    expect(invoke).toContain("if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js')")
+    expect(invoke.indexOf('Stop-HarnessProcesses')).toBeLessThan(invoke.indexOf('Sync-SignInClock'))
+    expect(invoke.indexOf('Sync-SignInClock')).toBeLessThan(invoke.indexOf('Invoke-NativeCommand'))
+    const clock = fs.readFileSync(helper, 'utf8')
+    expect(clock).toContain("$source = 'https://api.muniment.ai/'")
+    expect(clock).toContain('$request.AllowAutoRedirect = $false')
+    expect(clock).toContain('$request.Timeout = 10000')
+    expect(clock).toContain('TryParseExact')
+    expect(clock).not.toMatch(/ServerCertificateValidationCallback|SkipCertificateCheck/)
+  })
+
+  it.skipIf(!hasPowerShell).each([
+    ['ahead', -10800, 0, false, true, 0],
+    ['behind', 10800, 0, false, true, 0],
+    ['boundary', 9, 9, false, false, 0],
+    ['outside', 9.1, 0, false, true, 0],
+    ['uncorrected', 10800, 10800, false, true, 1],
+    ['denied', 10800, 0, true, true, 1],
+    ['unavailable', 0, 0, false, false, 1],
+  ])('verifies the %s clock without changing the host clock', (name, before, after, denied, setsClock, status) => {
+    const directory = temp()
+    const script = path.join(directory, 'clock-test.ps1')
+    fs.writeFileSync(script, `param([string]$Helper, [string]$Directory)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+. $Helper
+$script:calls = 0
+function Get-TrustedClockSample {
+  if ('${name}' -eq 'unavailable') { throw 'The trusted clock source did not answer over HTTPS.' }
+  $offset = if ($script:calls -eq 0) { ${before} } else { ${after} }
+  $script:calls += 1
+  return [pscustomobject]@{ Source = 'https://api.muniment.ai/'; LocalUtc = [DateTime]::UtcNow; TrustedUtc = [DateTime]::UtcNow.AddSeconds($offset); OffsetSeconds = $offset; UncertaintySeconds = 1 }
+}
+function Set-Date {
+  param($Date, $ErrorAction)
+  Set-Content (Join-Path $Directory 'set-date') 'called'
+  if ($${denied}) { throw 'Access denied.' }
+}
+try { Sync-SignInClock (Join-Path $Directory 'clock.log'); exit 0 }
+catch { Write-Output $_.Exception.Message; exit 1 }
+`)
+    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, helper, directory], { encoding: 'utf8', timeout: 20_000 })
+    expect(result.status, result.stdout + result.stderr).toBe(status)
+    expect(fs.existsSync(path.join(directory, 'set-date'))).toBe(setsClock)
+    const log = fs.readFileSync(path.join(directory, 'clock.log'), 'utf8')
+    if (status === 0) {
+      expect(log).toContain('phase=before')
+      expect(log).toContain('phase=verified')
+      expect(log).toContain('trusted_utc=')
+    } else {
+      expect(log).toContain('clock failure=')
+    }
+  }, 30_000)
+})
+
 describe.skipIf(process.platform === 'win32')('macOS WDIO runtime endpoint', () => {
   it.each(['', '/redirected/data', 'relative/data'])('Keeps the launchd endpoint across isolated spec homes with XDG_DATA_HOME=%s.', (inheritedDataHome) => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
@@ -4053,4 +4116,39 @@ ${sequence}
       ]
     }))
   })
+})
+
+describe('Windows folder dialog diagnostics', () => {
+  it.skipIf(process.platform !== 'win32')('The timeout reports hidden and offscreen app and WebView2 windows.', () => {
+    const directory = temp()
+    const result = spawnSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+      path.join(root, 'test/e2e/fixtures/folder-dialog-windows.ps1'), directory,
+      path.join(root, 'test/e2e/support/folder-dialog-windows.ps1'),
+    ], { encoding: 'utf8', timeout: 60_000 })
+    const output = result.stdout + result.stderr
+    expect(result.status, output).toBe(0)
+    expect(output).toContain('driver exit: 1')
+    expect(output).toContain('The shell folder dialog timed out during the window search.')
+    expect(output).not.toMatch(/window report error:|process tree error:/)
+    const windows = output.split(/\r?\n/).filter((line) => line.startsWith('window: '))
+      .map((line) => JSON.parse(line.slice('window: '.length)))
+    for (const prefix of ['app', 'webview']) {
+      const processId = Number(fs.readFileSync(path.join(directory, `${prefix}.ready`), 'utf8'))
+      for (const state of ['visible', 'hidden', 'offscreen']) {
+        const window = windows.find((entry) => entry.Title === `${prefix} ${state}` && entry.ProcessId === processId)
+        expect(window, output).toBeDefined()
+        expect(window.Class).toMatch(/^WindowsForms/)
+        expect(window.Visible).toBe(state !== 'hidden')
+        expect(window.RectangleAvailable).toBe(true)
+        expect(window.Rectangle.Right).toBeGreaterThan(window.Rectangle.Left)
+        expect(window.Rectangle.Bottom).toBeGreaterThan(window.Rectangle.Top)
+        expect(typeof window.Offscreen).toBe('boolean')
+        if (state === 'offscreen') {
+          expect(window.Offscreen).toBe(true)
+          expect(window.Rectangle.Left).toBe(-32000)
+        }
+      }
+    }
+  }, 70_000)
 })

@@ -63,6 +63,7 @@ A failed package install includes the exit status or timeout and a bounded, reda
 The Windows evidence envelope relays `runtime.log` in `runner-transcript.log`.
 
 On Windows, the desktop starts the runtime task with `RunEx` and the calling process's session id.
+The release runtime does not open a console window.
 If the task stays `Queued` for five seconds, the runtime notice names the state and session id.
 The desktop writes the same cause to stderr.
 

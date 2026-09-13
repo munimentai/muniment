@@ -736,7 +736,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             &self.entitlement_tracker,
             &self.runtime_activity,
         )
-        .map_err(|error| ProtocolError::persistence_failed_with_reason(error.to_string()))
+        .map_err(sign_in_protocol_error)
     }
 
     fn sign_out(
@@ -1141,6 +1141,16 @@ fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
 }
 
 #[cfg(any(unix, target_os = "windows"))]
+fn sign_in_protocol_error(error: muniment_core::auth::NativeSignInError) -> ProtocolError {
+    match error {
+        muniment_core::auth::NativeSignInError::Authorization(_) => {
+            ProtocolError::authorization_failed(error.to_string())
+        }
+        _ => ProtocolError::persistence_failed_with_reason(error.to_string()),
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
 fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
     match error {
         NativeDeviceListError::CredentialsMissing
@@ -1155,6 +1165,22 @@ fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sign_in_authorization_failure_keeps_its_code_in_the_rpc() {
+        let error = sign_in_protocol_error(muniment_core::auth::NativeSignInError::Authorization(
+            "HttpStatus status=400 error_code=invalid_device_proof cf_ray=0123456789abcdef-IAD"
+                .into(),
+        ));
+        assert_eq!(
+            error.code(),
+            muniment_core::attach::ErrorCode::AuthorizationFailed
+        );
+        assert_eq!(error.details(), Some(&muniment_core::attach::ErrorDetails::RequestReason {
+            reason: "native authorization failed: HttpStatus status=400 error_code=invalid_device_proof cf_ray=0123456789abcdef-IAD".into(),
+        }));
+        assert!(!error.retryable());
+    }
 
     #[cfg(unix)]
     #[test]

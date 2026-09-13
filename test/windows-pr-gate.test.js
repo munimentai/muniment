@@ -8,7 +8,7 @@ const desktopCompile = workflow.slice(workflow.indexOf('  desktop-compile:'), wo
 const guardedPattern = /it\.skipIf\(process\.platform !== 'win32'\)/
 
 describe('Windows-only PR test gate', () => {
-  it('Keeps all 27 Windows-only declarations in the gated test file.', () => {
+  it('Keeps all 28 Windows-only declarations in the gated test file.', () => {
     const guardedFiles = fs.readdirSync(path.join(root, 'test'), { recursive: true })
       .filter((name) => /\.test\.js$/.test(name))
       .map((name) => path.join('test', name))
@@ -16,7 +16,7 @@ describe('Windows-only PR test gate', () => {
       .map((name) => name.replaceAll(path.sep, '/'))
 
     expect(guardedFiles).toEqual(['test/desktop-e2e-harness.test.js'])
-    expect(fs.readFileSync(path.join(root, guardedFiles[0]), 'utf8').match(new RegExp(guardedPattern, 'g'))).toHaveLength(27)
+    expect(fs.readFileSync(path.join(root, guardedFiles[0]), 'utf8').match(new RegExp(guardedPattern, 'g'))).toHaveLength(28)
   })
 
   it('runs the guarded test file in the Windows PR compile lane', () => {
