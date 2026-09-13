@@ -45,7 +45,7 @@ fn bun_install_directory(directory: &Path) -> std::path::PathBuf {
             Prefix::VerbatimUNC(server, share) => {
                 let mut plain = OsString::from(r"\\");
                 plain.push(server);
-                plain.push(r"\");
+                plain.push("\\");
                 plain.push(share);
                 plain
             }
