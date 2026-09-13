@@ -1,13 +1,27 @@
-// AppKit dispatch stays inside the E2E app. It needs no Apple Events or
-// Accessibility grant and never posts events to another process.
+// The E2E app posts its key events from its own process to the HID event tap.
+// It needs no Apple Events, no second process and no UI automation from outside.
+// The CI harness session already trusts the app process for accessibility, and
+// the drive checks that trust before its first key so a template change reads
+// as a cause and not a timeout.
+use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use objc2::{rc::Retained, MainThreadMarker};
-use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSOpenPanel};
-use objc2_foundation::{NSPoint, NSString};
+use objc2_app_kit::{NSApplication, NSOpenPanel};
 use std::{
     cell::RefCell,
     path::Path,
     time::{Duration, Instant},
 };
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+}
+
+fn process_trusted() -> bool {
+    // SAFETY: AXIsProcessTrusted takes no arguments and reads process state alone.
+    unsafe { AXIsProcessTrusted() }
+}
 
 struct Drive {
     panel: Retained<NSOpenPanel>,
@@ -20,23 +34,31 @@ thread_local! {
     static DRIVE: RefCell<Option<Drive>> = const { RefCell::new(None) };
 }
 
-fn key(
-    app: &NSApplication,
-    text: &str,
-    code: u16,
-    flags: NSEventModifierFlags,
-) -> Result<(), String> {
-    let window = app
-        .keyWindow()
-        .ok_or("The Home picker has no key window.")?;
-    let text = NSString::from_str(text);
-    for kind in [NSEventType::KeyDown, NSEventType::KeyUp] {
-        let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
-            kind, NSPoint::new(0.0, 0.0), flags, 0.0, window.windowNumber(), None, &text, &text, false, code,
-        ).ok_or("The Home picker could not make a key event.")?;
-        app.sendEvent(&event);
+fn key(text: &str, code: u16, flags: CGEventFlags) -> Result<(), String> {
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| "The Home picker could not make an event source.")?;
+    for down in [true, false] {
+        let event = CGEvent::new_keyboard_event(source.clone(), code, down)
+            .map_err(|_| "The Home picker could not make a key event.")?;
+        event.set_flags(flags);
+        if !text.is_empty() {
+            event.set_string(text);
+        }
+        event.post(CGEventTapLocation::HID);
     }
     Ok(())
+}
+
+fn type_text(text: &str) -> Result<(), String> {
+    let mut buffer = [0u8; 4];
+    for character in text.chars() {
+        key(character.encode_utf8(&mut buffer), 0, CGEventFlags::empty())?;
+    }
+    Ok(())
+}
+
+fn panel_directory(panel: &NSOpenPanel) -> Option<String> {
+    panel.directoryURL()?.path().map(|path| path.to_string())
 }
 
 fn poll(home: String) -> Result<bool, String> {
@@ -62,6 +84,12 @@ fn poll(home: String) -> Result<bool, String> {
             {
                 return Err("The NSOpenPanel is not a single-folder picker.".into());
             }
+            if !process_trusted() {
+                return Err(
+                    "The Home picker needs Accessibility trust for the app process, and AXIsProcessTrusted reads false.".into(),
+                );
+            }
+            app.activate();
             *slot = Some(Drive {
                 panel,
                 home: home.clone(),
@@ -83,15 +111,17 @@ fn poll(home: String) -> Result<bool, String> {
                 return Ok(false);
             }
             let urls = drive.panel.URLs();
-            if urls.len() != 1
-                || urls
-                    .objectAtIndex(0)
-                    .path()
-                    .map(|path| path.to_string())
-                    .as_deref()
-                    != Some(home.as_str())
+            let selected = (urls.len() == 1)
+                .then(|| urls.objectAtIndex(0).path().map(|path| path.to_string()))
+                .flatten();
+            // The panel answers a resolved path, so compare canonical forms.
+            let canonical = |path: &str| std::fs::canonicalize(path).ok();
+            if selected.as_deref().and_then(canonical) != canonical(&home)
+                || canonical(&home).is_none()
             {
-                return Err("The NSOpenPanel did not select the isolated Home.".into());
+                return Err(format!(
+                    "The NSOpenPanel did not select the isolated Home. The panel selected {selected:?} and the drive expected {home}."
+                ));
             }
             *slot = None;
             return Ok(true);
@@ -108,25 +138,24 @@ fn poll(home: String) -> Result<bool, String> {
                 .sheetParent()
                 .is_none_or(|parent| parent.windowNumber() != drive.panel.windowNumber())
         {
-            return Err("The NSOpenPanel lost keyboard focus.".into());
+            return Err(format!(
+                "The NSOpenPanel lost keyboard focus. The drive stopped at step {} with the panel directory {:?}.",
+                drive.step,
+                panel_directory(&drive.panel)
+            ));
         }
         match drive.step {
-            0 => key(
-                &app,
-                "G",
-                5,
-                NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
-            )?,
+            0 => key("", 5, CGEventFlags::CGEventFlagCommand | CGEventFlags::CGEventFlagShift)?,
             1 => {
-                key(&app, "a", 0, NSEventModifierFlags::Command)?;
-                key(&app, &home, 0, NSEventModifierFlags::empty())?;
+                key("", 0, CGEventFlags::CGEventFlagCommand)?;
+                type_text(&home)?;
             }
-            2 | 3 => key(&app, "\r", 36, NSEventModifierFlags::empty())?,
+            2 | 3 => key("", 36, CGEventFlags::empty())?,
             _ => return Err("The Home picker drive has an invalid step.".into()),
         }
         drive.step += 1;
         // Give the native Go to Folder sheet time to show, navigate, and close.
-        drive.next = Instant::now() + Duration::from_millis(500);
+        drive.next = Instant::now() + Duration::from_millis(700);
         Ok(false)
     })
 }
@@ -142,6 +171,8 @@ pub(crate) struct WindowSnapshot {
 pub(crate) struct FolderDialogSnapshot {
     windows: Vec<WindowSnapshot>,
     step: Option<u8>,
+    directory: Option<String>,
+    trusted: bool,
 }
 
 #[tauri::command]
@@ -169,6 +200,12 @@ pub(crate) async fn e2e_folder_dialog_snapshot(
                     })
                     .collect(),
                 step: DRIVE.with(|slot| slot.borrow().as_ref().map(|drive| drive.step)),
+                directory: DRIVE.with(|slot| {
+                    slot.borrow()
+                        .as_ref()
+                        .and_then(|drive| panel_directory(&drive.panel))
+                }),
+                trusted: process_trusted(),
             })
         })();
         let _ = sender.send(result);

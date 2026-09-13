@@ -12,6 +12,24 @@ const RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD: &[u8] =
 const RUNTIME_SERVICE_START_FAILED_RECORD: &[u8] =
     b"event=runtime_service_start_failed message=runtime service start failed\n";
 
+/// What the start path did after a kickstart of an enabled service failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartRecovery {
+    None,
+    Reregistered,
+    Failed,
+}
+
+impl fmt::Display for StartRecovery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::None => "none",
+            Self::Reregistered => "reregistered",
+            Self::Failed => "failed",
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeStartOutcome {
     SkippedActivation,
@@ -79,6 +97,9 @@ enum RegistrationError {
 trait RuntimeServiceAdapter {
     fn status(&self) -> Result<ServiceStatus, ()>;
     fn register(&self) -> Result<(), RegistrationError>;
+    fn unregister(&self) -> Result<(), ()> {
+        Err(())
+    }
     fn registration_diagnostic_written(&self) -> bool {
         false
     }
@@ -87,6 +108,33 @@ trait RuntimeServiceAdapter {
 trait RuntimeStartAdapter {
     fn endpoint_exists(&self) -> Result<bool, ()>;
     fn request_start(&self) -> Result<(), ()>;
+    /// The text of the last failed start request, for the diagnostic record.
+    fn request_failure(&self) -> Option<String> {
+        None
+    }
+}
+
+// SMAppService can report Enabled while launchd holds no job, for example
+// after the bundle changed under the same path. A failed kickstart then means
+// the registration must be made again before a second start request.
+fn start_enabled_runtime_with_recovery(
+    service: &impl RuntimeServiceAdapter,
+    start: &impl RuntimeStartAdapter,
+) -> (RuntimeStartOutcome, StartRecovery) {
+    let outcome = request_enabled_runtime_start(RuntimeServiceActivation::Enabled, start);
+    if outcome != RuntimeStartOutcome::RequestFailed {
+        return (outcome, StartRecovery::None);
+    }
+    if service.unregister().is_err()
+        || service.register().is_err()
+        || service.status() != Ok(ServiceStatus::Enabled)
+    {
+        return (outcome, StartRecovery::Failed);
+    }
+    (
+        request_enabled_runtime_start(RuntimeServiceActivation::Enabled, start),
+        StartRecovery::Reregistered,
+    )
 }
 
 fn request_enabled_runtime_start(
@@ -228,6 +276,33 @@ fn write_start_diagnostic(log_directory: &Path, outcome: RuntimeStartOutcome) ->
     )
 }
 
+fn write_start_detail(
+    log_directory: &Path,
+    outcome: RuntimeStartOutcome,
+    recovery: StartRecovery,
+    failure: Option<&str>,
+) -> io::Result<()> {
+    if recovery == StartRecovery::None
+        && !matches!(
+            outcome,
+            RuntimeStartOutcome::EndpointCheckFailed | RuntimeStartOutcome::RequestFailed
+        )
+    {
+        return Ok(());
+    }
+    let bounded: String = failure.unwrap_or("").chars().take(4096).collect();
+    let record = format!(
+        "event=runtime_service_start_detail outcome={outcome} recovery={recovery} request_error={}\n",
+        serde_json::to_string(&bounded)?
+    );
+    muniment_core::user_diagnostics::append_owner_only_record(
+        log_directory,
+        c"runtime.log",
+        MACOS_RUNTIME_LOG_MAX_BYTES,
+        record.as_bytes(),
+    )
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn start() -> crate::runtime_owner::RuntimeEvent {
     use crate::runtime_owner::RuntimeEvent;
@@ -246,16 +321,23 @@ pub(crate) fn start() -> crate::runtime_owner::RuntimeEvent {
         RuntimeServiceActivation::Enabled => {}
     }
     // Kickstart is idempotent without -k. A stale socket must not block a retry.
-    let outcome = match muniment_runtime::profile_directory() {
+    let (outcome, recovery, failure) = match muniment_runtime::profile_directory() {
         Ok(directory) => {
             let mut adapter = MacosRuntimeStartAdapter::new(directory);
             adapter.force_request = true;
-            request_enabled_runtime_start(activation, &adapter)
+            let (outcome, recovery) =
+                start_enabled_runtime_with_recovery(&MacosRuntimeServiceAdapter::new(), &adapter);
+            (outcome, recovery, adapter.request_failure())
         }
-        Err(_) => RuntimeStartOutcome::RequestFailed,
+        Err(_) => (
+            RuntimeStartOutcome::RequestFailed,
+            StartRecovery::None,
+            Some("The runtime profile directory is unavailable.".to_owned()),
+        ),
     };
     if let Some(directory) = log_directory {
         let _ = write_start_diagnostic(&directory, outcome);
+        let _ = write_start_detail(&directory, outcome, recovery, failure.as_deref());
     }
     if outcome == RuntimeStartOutcome::Requested {
         RuntimeEvent::Starting
@@ -283,6 +365,7 @@ pub(crate) fn stop() -> Result<(), ()> {
 struct MacosRuntimeStartAdapter {
     endpoint: PathBuf,
     force_request: bool,
+    failure: std::cell::RefCell<Option<String>>,
 }
 
 impl MacosRuntimeStartAdapter {
@@ -290,6 +373,7 @@ impl MacosRuntimeStartAdapter {
         Self {
             endpoint: profile_directory.join("muniment/attach-v1.sock"),
             force_request: false,
+            failure: std::cell::RefCell::new(None),
         }
     }
 }
@@ -313,16 +397,29 @@ impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
         // SAFETY: geteuid reads the effective user ID without dereferencing memory.
         let effective_uid = unsafe { libc::geteuid() };
         let target = format!("gui/{effective_uid}/ai.muniment.runtime");
-        Command::new("/bin/launchctl")
+        let output = Command::new("/bin/launchctl")
             .args(["kickstart", target.as_str()])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|_| ())?
-            .success()
-            .then_some(())
-            .ok_or(())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| {
+                *self.failure.borrow_mut() = Some(format!("launchctl did not run: {error}"));
+            })?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        *self.failure.borrow_mut() = Some(format!(
+            "launchctl kickstart {target} exit={:?} stderr={}",
+            output.status.code(),
+            stderr.trim()
+        ));
+        Err(())
+    }
+
+    fn request_failure(&self) -> Option<String> {
+        self.failure.borrow().clone()
     }
 }
 
@@ -387,6 +484,11 @@ impl RuntimeServiceAdapter for MacosRuntimeServiceAdapter {
         })
     }
 
+    fn unregister(&self) -> Result<(), ()> {
+        // SAFETY: The service comes from agentServiceWithPlistName and remains retained.
+        unsafe { self.service.unregisterAndReturnError() }.map_err(|_| ())
+    }
+
     fn registration_diagnostic_written(&self) -> bool {
         self.registration_diagnostic_written.get()
     }
@@ -407,22 +509,31 @@ mod tests {
         registration: Result<(), RegistrationError>,
         status_calls: Cell<usize>,
         registration_calls: Cell<usize>,
+        unregister_calls: Cell<usize>,
         diagnostic_directory: Option<PathBuf>,
         diagnostic_written: Cell<bool>,
     }
 
     struct FakeStartAdapter {
         endpoint: Result<bool, ()>,
-        request: Result<(), ()>,
+        requests: RefCell<VecDeque<Result<(), ()>>>,
         endpoint_calls: Cell<usize>,
         request_calls: Cell<usize>,
     }
 
     impl FakeStartAdapter {
         fn new(endpoint: Result<bool, ()>, request: Result<(), ()>) -> Self {
+            Self::with_requests(endpoint, [request])
+        }
+
+        /// Each start request answers the next result; the last one repeats.
+        fn with_requests(
+            endpoint: Result<bool, ()>,
+            requests: impl IntoIterator<Item = Result<(), ()>>,
+        ) -> Self {
             Self {
                 endpoint,
-                request,
+                requests: RefCell::new(requests.into_iter().collect()),
                 endpoint_calls: Cell::new(0),
                 request_calls: Cell::new(0),
             }
@@ -437,7 +548,16 @@ mod tests {
 
         fn request_start(&self) -> Result<(), ()> {
             self.request_calls.set(self.request_calls.get() + 1);
-            self.request
+            let mut requests = self.requests.borrow_mut();
+            if requests.len() > 1 {
+                requests.pop_front().unwrap()
+            } else {
+                *requests.front().unwrap()
+            }
+        }
+
+        fn request_failure(&self) -> Option<String> {
+            Some("launchctl kickstart gui/501/ai.muniment.runtime exit=Some(113) stderr=Could not find service".into())
         }
     }
 
@@ -451,6 +571,7 @@ mod tests {
                 registration,
                 status_calls: Cell::new(0),
                 registration_calls: Cell::new(0),
+                unregister_calls: Cell::new(0),
                 diagnostic_directory: None,
                 diagnostic_written: Cell::new(false),
             }
@@ -481,6 +602,11 @@ mod tests {
                 }
             }
             self.registration
+        }
+
+        fn unregister(&self) -> Result<(), ()> {
+            self.unregister_calls.set(self.unregister_calls.get() + 1);
+            Ok(())
         }
 
         fn registration_diagnostic_written(&self) -> bool {
@@ -579,6 +705,85 @@ mod tests {
         assert_eq!(outcome, RuntimeStartOutcome::RequestFailed);
         assert_eq!(outcome.to_string(), "requestFailed");
         assert_eq!(request_failure.request_calls.get(), 1);
+    }
+
+    #[test]
+    fn reregisters_an_enabled_service_whose_kickstart_fails_and_starts_once_more() {
+        let service = FakeAdapter::new([Ok(ServiceStatus::Enabled)], Ok(()));
+        let start = FakeStartAdapter::with_requests(Ok(false), [Err(()), Ok(())]);
+        assert_eq!(
+            start_enabled_runtime_with_recovery(&service, &start),
+            (RuntimeStartOutcome::Requested, StartRecovery::Reregistered)
+        );
+        assert_eq!(service.unregister_calls.get(), 1);
+        assert_eq!(service.registration_calls.get(), 1);
+        assert_eq!(service.status_calls.get(), 1);
+        assert_eq!(start.request_calls.get(), 2);
+    }
+
+    #[test]
+    fn keeps_the_request_failure_when_the_registration_does_not_recover() {
+        for (statuses, registration) in [
+            (
+                vec![Ok(ServiceStatus::Enabled)],
+                Err(RegistrationError::Failed),
+            ),
+            (vec![Ok(ServiceStatus::NotRegistered)], Ok(())),
+            (vec![Err(())], Ok(())),
+        ] {
+            let service = FakeAdapter::new(statuses, registration);
+            let start = FakeStartAdapter::with_requests(Ok(false), [Err(()), Ok(())]);
+            assert_eq!(
+                start_enabled_runtime_with_recovery(&service, &start),
+                (RuntimeStartOutcome::RequestFailed, StartRecovery::Failed)
+            );
+            assert_eq!(service.unregister_calls.get(), 1);
+            assert_eq!(start.request_calls.get(), 1);
+        }
+        let service = FakeAdapter::new([Ok(ServiceStatus::Enabled)], Ok(()));
+        let start = FakeStartAdapter::new(Ok(false), Ok(()));
+        assert_eq!(
+            start_enabled_runtime_with_recovery(&service, &start),
+            (RuntimeStartOutcome::Requested, StartRecovery::None)
+        );
+        assert_eq!(service.unregister_calls.get(), 0);
+    }
+
+    #[test]
+    fn start_detail_names_the_outcome_recovery_and_launchctl_text() {
+        let root = directory();
+        let logs = root.join("Library/Logs/Muniment");
+        fs::create_dir_all(root.join("Library/Logs")).unwrap();
+        fs::set_permissions(root.join("Library/Logs"), fs::Permissions::from_mode(0o700)).unwrap();
+        write_start_detail(
+            &logs,
+            RuntimeStartOutcome::Requested,
+            StartRecovery::None,
+            None,
+        )
+        .unwrap();
+        assert!(!logs.exists());
+        let start = FakeStartAdapter::new(Ok(false), Err(()));
+        write_start_detail(
+            &logs,
+            RuntimeStartOutcome::RequestFailed,
+            StartRecovery::Failed,
+            start.request_failure().as_deref(),
+        )
+        .unwrap();
+        write_start_detail(
+            &logs,
+            RuntimeStartOutcome::Requested,
+            StartRecovery::Reregistered,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            "event=runtime_service_start_detail outcome=requestFailed recovery=failed request_error=\"launchctl kickstart gui/501/ai.muniment.runtime exit=Some(113) stderr=Could not find service\"\n\
+             event=runtime_service_start_detail outcome=requested recovery=reregistered request_error=\"\"\n"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
