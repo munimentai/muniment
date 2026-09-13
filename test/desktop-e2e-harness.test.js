@@ -711,6 +711,34 @@ describe.skipIf(process.platform === 'win32')('macOS WDIO startup diagnostics', 
 
   const installSequence = runner.slice(runner.indexOf('# The installed smoke removes'), runner.indexOf('\nrun_step image-fixture'))
 
+  it.each(['physical', 'alias'])('Exports physical Home paths when TMPDIR uses a %s path.', (mode) => {
+    const directory = temp()
+    const physical = path.join(directory, 'physical tmp')
+    const alias = path.join(directory, 'tmp alias')
+    fs.mkdirSync(physical)
+    fs.symlinkSync(physical, alias)
+    const result = spawnSync('bash', ['-c', `${runner.slice(0, runner.indexOf('\nraw='))}
+state_root="$run_root/state"
+raw="$run_root/raw"
+run_step() { shift; "$@"; }
+save_macos_spec_config() { :; }
+run_e2e() { printf '%s\\t%s\\t%s\\n' "$1" "$HOME" "$MUNIMENT_E2E_HOME_PATH"; }
+printf '%s\\n' "$run_root"
+${sequence}
+`], {
+      encoding: 'utf8', timeout: 10_000,
+      env: { ...process.env, TMPDIR: mode === 'alias' ? alias : physical },
+    })
+    expect(result.status, result.stderr).toBe(0)
+    const [runRoot, ...exports] = result.stdout.trim().split('\n')
+    expect(runRoot).toBe(fs.realpathSync.native(runRoot))
+    expect(path.dirname(runRoot)).toBe(physical)
+    expect(exports).toEqual(specs.map((spec, index) => {
+      const state = index < 2 ? 'degraded' : 'ready'
+      return `${spec}\t${runRoot}/state/${state}\t${runRoot}/state/${state}-home`
+    }))
+  })
+
   const runInstalledApp = (mode = 'pass') => {
     const directory = temp()
     const bundle = path.join(directory, 'release/muniment.app')
@@ -784,6 +812,10 @@ codesign() {
     cmp -s "$FIXTURE_BUNDLE/Contents/Library/LaunchServices/muniment-runtime" "$installed_bundle/Contents/Library/LaunchServices/muniment-runtime" || return 97
   fi
 }
+cargo() {
+  printf 'cargo: <%s>\\n' "$@"
+  [[ $FIXTURE_MODE != folder-dialog-failure ]] || return 7
+}
 ${installSequence}
 export MUNIMENT_E2E_DRIVER_APP_LOG="$raw/driver-app-local-mode-chat.log"
 run_step spec-local-mode-chat "$MUNIMENT_E2E_APP_BINARY"
@@ -813,6 +845,17 @@ run_step spec-local-mode-chat "$MUNIMENT_E2E_APP_BINARY"
     expect(runner).not.toMatch(/export DYLD_(?:LIBRARY_PATH|FALLBACK_LIBRARY_PATH)=/)
   })
 
+  it('Runs the macOS folder dialog tests before the app starts.', () => {
+    const { result, artifacts } = runInstalledApp()
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(artifacts, 'folder-dialog-macos.log'), 'utf8').trim().split('\n'))
+      .toEqual([
+        'test', '--manifest-path', 'src-tauri/Cargo.toml', '--package', 'muniment-desktop',
+        '--locked', '--release', '--features', 'e2e-webdriver',
+        '--test', 'folder_dialog_drive', '--test', 'folder-dialog-macos',
+      ].map((argument) => `cargo: <${argument}>`))
+  })
+
   it('Signs only the installed WebDriver bundle and verifies its nested signatures before launch.', () => {
     const { result, artifacts, installedBundle, bundle, app } = runInstalledApp()
     expect(result.status, result.stderr).toBe(0)
@@ -839,6 +882,7 @@ run_step spec-local-mode-chat "$MUNIMENT_E2E_APP_BINARY"
     ['stale-copy', 'verify-webdriver-app'],
     ['signing-failure', 'sign-webdriver-app'],
     ['signature-verification-failure', 'verify-webdriver-signature'],
+    ['folder-dialog-failure', 'folder-dialog-macos'],
     ['existing-bundle', 'validate-bundle-absent'],
   ])('Names the failed install check for %s before the app starts.', (mode, step) => {
     const { result, artifacts, installedBundle, reason } = runInstalledApp(mode)
