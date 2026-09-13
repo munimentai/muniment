@@ -340,13 +340,22 @@ describe('installed nightly', () => {
     await userMessage.waitForDisplayed()
     const response = await userMessage.$('./ancestor::div[contains(concat(" ", normalize-space(@class), " "), " user-turn ")]/following-sibling::div[contains(concat(" ", normalize-space(@class), " "), " response ")][1]')
     let receipt
+    let refusal
     await browser.waitUntil(async () => {
+      const failure = await response.$('.run-error')
+      if (await failure.isDisplayed()) {
+        refusal = await failure.getText()
+        return true
+      }
       receipt = await response.$('button.provenance')
       return await receipt.isDisplayed()
     }, {
       timeout: 180000,
-      timeoutMsg: `chat response did not complete with a receipt for prompt: ${prompt}`,
+      timeoutMsg: `The chat response returned neither a receipt nor a refusal for prompt: ${prompt}`,
     })
+    if (refusal !== undefined) {
+      throw new Error(`The chat response failed: ${refusal}`)
+    }
 
     const assistantResponse = await response.$('./p[1]')
     const assistantText = (await assistantResponse.getText()).trim()

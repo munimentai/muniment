@@ -41,9 +41,11 @@ impl RunCommandClient for FakeRunClient {
         text: &str,
         files: &[String],
         thread_id: Option<&str>,
-    ) -> Result<RunSubmitAccepted, ClientError> {
+    ) -> Result<RunSubmitAccepted, String> {
         if self.1 {
-            return Err(ClientError::RuntimeUpgradePending);
+            return Err(auth::desktop_client_error(
+                ClientError::RuntimeUpgradePending,
+            ));
         }
         self.0.lock().unwrap().push(RunClientCall::Submit(
             text.to_owned(),

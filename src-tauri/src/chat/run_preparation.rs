@@ -207,15 +207,14 @@ pub(crate) fn desktop_provenance(subject: Option<&str>) -> Provenance {
 }
 
 pub(super) fn fetch_grant_error_message(error: FetchGrantError) -> String {
-    match error {
-        FetchGrantError::Unauthorized => "The capability is not authorized.".into(),
-        FetchGrantError::Unavailable => "Chat configuration is temporarily unavailable.".into(),
-        FetchGrantError::InvalidResponse => "The chat configuration response was invalid.".into(),
-    }
+    error.into_message()
 }
 
 pub(super) fn map_fetch_grant_error(error: FetchGrantError) -> RunStartError {
     match error {
+        error @ FetchGrantError::NotEntitled { .. } => {
+            RunStartError::Unauthorized(error.into_message())
+        }
         FetchGrantError::Unauthorized => {
             RunStartError::Unauthorized("The capability is not authorized.".into())
         }
