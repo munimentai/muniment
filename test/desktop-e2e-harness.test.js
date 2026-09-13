@@ -4054,3 +4054,38 @@ ${sequence}
     }))
   })
 })
+
+describe('Windows folder dialog diagnostics', () => {
+  it.skipIf(process.platform !== 'win32')('The timeout reports hidden and offscreen app and WebView2 windows.', () => {
+    const directory = temp()
+    const result = spawnSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+      path.join(root, 'test/e2e/fixtures/folder-dialog-windows.ps1'), directory,
+      path.join(root, 'test/e2e/support/folder-dialog-windows.ps1'),
+    ], { encoding: 'utf8', timeout: 60_000 })
+    const output = result.stdout + result.stderr
+    expect(result.status, output).toBe(0)
+    expect(output).toContain('driver exit: 1')
+    expect(output).toContain('The shell folder dialog timed out during the window search.')
+    expect(output).not.toMatch(/window report error:|process tree error:/)
+    const windows = output.split(/\r?\n/).filter((line) => line.startsWith('window: '))
+      .map((line) => JSON.parse(line.slice('window: '.length)))
+    for (const prefix of ['app', 'webview']) {
+      const processId = Number(fs.readFileSync(path.join(directory, `${prefix}.ready`), 'utf8'))
+      for (const state of ['visible', 'hidden', 'offscreen']) {
+        const window = windows.find((entry) => entry.Title === `${prefix} ${state}` && entry.ProcessId === processId)
+        expect(window, output).toBeDefined()
+        expect(window.Class).toMatch(/^WindowsForms/)
+        expect(window.Visible).toBe(state !== 'hidden')
+        expect(window.RectangleAvailable).toBe(true)
+        expect(window.Rectangle.Right).toBeGreaterThan(window.Rectangle.Left)
+        expect(window.Rectangle.Bottom).toBeGreaterThan(window.Rectangle.Top)
+        expect(typeof window.Offscreen).toBe('boolean')
+        if (state === 'offscreen') {
+          expect(window.Offscreen).toBe(true)
+          expect(window.Rectangle.Left).toBe(-32000)
+        }
+      }
+    }
+  }, 70_000)
+})

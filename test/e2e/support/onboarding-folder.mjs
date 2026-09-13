@@ -18,6 +18,32 @@ export function folderDialogDescription(title, platform = process.platform) {
   return `platform: ${name}. searched window: ${window}`
 }
 
+export async function withWindowsPickerDiagnostics(action, readOutcome, rawDir, platform = process.platform) {
+  if (platform !== 'win32') return action()
+  let result
+  let failure
+  let failed = false
+  try {
+    result = await action()
+  } catch (error) {
+    failure = error
+    failed = true
+  }
+  const failureMessage = failure instanceof Error ? failure.message : String(failure)
+  let outcome
+  try {
+    outcome = await readOutcome() ?? 'The picker outcome is absent.'
+  } catch (error) {
+    outcome = `The picker outcome query failed: ${error instanceof Error ? error.message : String(error)}`
+  }
+  const message = `Home picker open() outcome: ${typeof outcome === 'string' ? outcome : JSON.stringify(outcome)}`
+  try {
+    await appendFile(path.join(rawDir, failed ? 'folder-picker-failure.log' : 'folder-picker-outcome.log'), `${failed ? `${failureMessage}\n` : ''}${message}\n`)
+  } catch {}
+  if (failed) throw new Error(`${failureMessage} ${message}`, { cause: failure })
+  return result
+}
+
 export async function chooseFolder(home, waitSeconds, title, rawDir, execute = run, platform = process.platform, driveMacos = driveMacosFolder) {
   const description = folderDialogDescription(title, platform)
   try {
@@ -38,7 +64,9 @@ export async function chooseFolder(home, waitSeconds, title, rawDir, execute = r
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
         fileURLToPath(new URL('./folder-dialog-windows.ps1', import.meta.url)),
       ], {
-        timeout: (waitSeconds + 5) * 1000,
+        // Reserve time for PowerShell startup and the native window report.
+        timeout: (waitSeconds + 15) * 1000,
+        maxBuffer: 8 * 1024 * 1024,
         env: { ...process.env, MUNIMENT_FOLDER_PATH: home, MUNIMENT_FOLDER_WAIT_SECONDS: String(waitSeconds) },
       })
     }

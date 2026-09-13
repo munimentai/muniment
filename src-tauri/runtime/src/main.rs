@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 #[cfg(target_os = "linux")]
 use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, TerminationSignalWait};
 use muniment_core::runtime_eprintln as eprintln;
