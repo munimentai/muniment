@@ -296,9 +296,12 @@ fn macos_activation() -> MacosActivationExit {
         }
     };
     eprintln!(
-        "muniment-runtime: started version={} state_directory={} endpoint={}",
+        "muniment-runtime: started version={} state_directory={} config_directory={} endpoint={}",
         env!("CARGO_PKG_VERSION"),
         profile_directory.display(),
+        std::fs::canonicalize(&config_directory)
+            .unwrap_or_else(|_| config_directory.clone())
+            .display(),
         muniment_runtime::macos_attach_socket_path(&profile_directory).display()
     );
     let factory = SystemMacosAttachFactory::new(profile_directory, config_directory);
