@@ -46,6 +46,7 @@ $installLocalAppData = $env:LOCALAPPDATA
 $runtimeLocalAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
 $runtimeAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
 . (Join-Path $PSScriptRoot "../../windows-msi-registration.ps1")
+. (Join-Path $PSScriptRoot "../support/windows-clock.ps1")
 $handlerKey = "HKCU:\Software\Classes\muniment-e2e-https"
 $httpsKey = "HKCU:\Software\Classes\https"
 $testRegistration = $null
@@ -306,6 +307,9 @@ function Invoke-E2e(
   Add-Content $cleanupLog "start-spec: $([IO.Path]::GetFileName($Log))"
   $arguments = "run test:e2e"
   if ($Spec) { $arguments += " -- --spec $Spec" }
+  if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js') {
+    Sync-SignInClock (Join-Path $raw 'clock.log')
+  }
   Invoke-NativeCommand "npm.cmd" $arguments $Log $FailureMessage $null (Join-Path $raw "driver-app.log")
 }
 

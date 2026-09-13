@@ -19,7 +19,7 @@ impl Drop for Runtime {
 
 #[test]
 fn hand_launched_runtime_writes_started_with_stderr_discarded_within_one_second() {
-    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::fs::{symlink, DirBuilderExt};
 
     let directory = std::env::temp_dir().join(format!(
         "muniment-service-log-{}-{}",
@@ -34,10 +34,18 @@ fn hand_launched_runtime_writes_started_with_stderr_discarded_within_one_second(
         .create(&directory)
         .unwrap();
     let profile = directory.join(muniment_runtime::APPLICATION_IDENTIFIER);
+    let spec_config_root = directory.join("spec home/Library/Application Support");
+    let spec_config = spec_config_root.join(muniment_runtime::APPLICATION_IDENTIFIER);
+    fs::create_dir_all(&spec_config).unwrap();
+    let login_home = directory.join("login home");
+    let login_config = login_home.join("Library/Application Support/ai.muniment.desktop");
+    fs::create_dir_all(login_config.parent().unwrap()).unwrap();
+    symlink(&spec_config, &login_config).unwrap();
     let expected = format!(
-        "muniment-runtime: started version={} state_directory={} endpoint={}\n",
+        "muniment-runtime: started version={} state_directory={} config_directory={} endpoint={}\n",
         env!("CARGO_PKG_VERSION"),
         profile.display(),
+        fs::canonicalize(&spec_config).unwrap().display(),
         muniment_runtime::macos_attach_socket_path(&profile).display()
     );
     let log = muniment_runtime::effective_user_macos_log_directory()
@@ -45,9 +53,10 @@ fn hand_launched_runtime_writes_started_with_stderr_discarded_within_one_second(
         .join("runtime-service.log");
     let started = Instant::now();
     let child = Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
+        // Model launchd with the login home and no config variable from the runner.
+        .env_clear()
+        .env("HOME", &login_home)
         .env("XDG_DATA_HOME", &directory)
-        .env("XDG_CONFIG_HOME", &directory)
-        .env_remove("MUNIMENT_RUNTIME_TEST_MACOS_ACTIVATION_EXIT")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

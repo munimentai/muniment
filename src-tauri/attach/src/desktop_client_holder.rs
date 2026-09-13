@@ -73,7 +73,22 @@ impl DesktopClientHolder {
     }
 
     pub fn sign_in(&self) -> Result<Value, ClientError> {
-        self.with_client(DesktopClient::sign_in)
+        self.sign_in_with_diagnostics().map_err(|(error, _)| error)
+    }
+
+    pub fn sign_in_with_diagnostics(
+        &self,
+    ) -> Result<Value, (ClientError, Option<crate::ProtocolError>)> {
+        let mut failure = None;
+        let result = self.with_client(|client| {
+            let result = client.sign_in();
+            if result == Err(ClientError::AuthorizationFailed) {
+                // Copy the matching response before another request can replace it.
+                failure = client.last_request_error().cloned();
+            }
+            result
+        });
+        result.map_err(|error| (error, failure))
     }
 
     pub fn thread_summaries(&self, limit: u8, cursor: Option<&str>) -> Result<Value, ClientError> {
@@ -217,7 +232,9 @@ impl DesktopClientHolder {
         // report the refusal without a reconnect that repeats the same request.
         if !matches!(
             &result,
-            Err(ClientError::RuntimeUpgradePending | ClientError::AuthorizationExpired)
+            Err(ClientError::RuntimeUpgradePending
+                | ClientError::AuthorizationExpired
+                | ClientError::AuthorizationFailed)
         ) && result.is_err()
         {
             *client = None;
@@ -370,6 +387,121 @@ mod tests {
         assert_eq!(
             holder.run_submit_with_reason(" ", &[], None, |_| true),
             Err((ClientError::UnexpectedMessage, None))
+        );
+    }
+
+    #[test]
+    fn delayed_submit_refusal_keeps_reason_connection_and_other_request_deadlines() {
+        use std::io::{Read, Write};
+        use std::sync::mpsc;
+
+        let holder = DesktopClientHolder::new();
+        let (stream, mut server) = UnixStream::pair().unwrap();
+        server.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+        *holder.inner.0.lock().unwrap() = Some(desktop_client_for_test(
+            Box::new(stream),
+            "1.0.0".into(),
+            IO_TIMEOUT,
+        ));
+        *holder.runtime_version.lock().unwrap() = Some("1.0.0".into());
+        let reason = crate::ProtocolError::unauthorized_with_reason(
+            "chat_not_entitled: No chat model is currently available for this account.",
+        );
+        let expected = reason.clone();
+        let (release, released) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            for operation in [Operation::RunSubmit, Operation::SessionStatus] {
+                let mut prefix = [0; 4];
+                server.read_exact(&mut prefix).unwrap();
+                let mut body = vec![0; u32::from_be_bytes(prefix) as usize];
+                server.read_exact(&mut body).unwrap();
+                let request: crate::Request = serde_json::from_slice(&body).unwrap();
+                assert_eq!(request.operation, operation);
+                if operation == Operation::RunSubmit {
+                    std::thread::sleep(Duration::from_secs(6));
+                    let response = serde_json::json!({
+                        "protocol": "muniment.attach/1", "request_id": request.request_id,
+                        "ok": false, "error": reason,
+                    });
+                    server
+                        .write_all(&crate::encode_frame(&response).unwrap())
+                        .unwrap();
+                } else {
+                    // Keep the socket open without a response to test the next request's deadline.
+                    let _ = released.recv_timeout(Duration::from_secs(35));
+                }
+            }
+        });
+
+        let started = Instant::now();
+        assert_eq!(
+            holder.run_submit_with_reason("prompt", &[], None, |_| true),
+            Err((ClientError::AuthorizationExpired, Some(expected)))
+        );
+        assert!(started.elapsed() >= Duration::from_secs(6));
+        assert!(started.elapsed() < Duration::from_secs(30));
+        assert!(holder.inner.0.lock().unwrap().is_some());
+        assert_eq!(holder.runtime_version().as_deref(), Some("1.0.0"));
+
+        let started = Instant::now();
+        assert_eq!(holder.session_status(), Err(ClientError::Timeout));
+        let elapsed = started.elapsed();
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert!(elapsed >= IO_TIMEOUT);
+        assert!(elapsed < IO_TIMEOUT + Duration::from_secs(2));
+        assert!(holder.inner.0.lock().unwrap().is_none());
+        assert_eq!(holder.runtime_version(), None);
+    }
+
+    #[test]
+    fn sign_in_diagnostics_stay_with_the_failed_request() {
+        use std::io::{Read, Write};
+        let holder = DesktopClientHolder::new();
+        let (stream, mut server) = UnixStream::pair().unwrap();
+        server.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+        *holder.inner.0.lock().unwrap() = Some(desktop_client_for_test(
+            Box::new(stream),
+            "1.0.0".into(),
+            IO_TIMEOUT,
+        ));
+        let failure = crate::ProtocolError::authorization_failed("native authorization failed: HttpStatus status=400 error_code=invalid_client cf_ray=unavailable");
+        let expected = failure.clone();
+        let worker = std::thread::spawn(move || {
+            for refused in [true, false] {
+                let mut prefix = [0; 4];
+                server.read_exact(&mut prefix).unwrap();
+                let mut body = vec![0; u32::from_be_bytes(prefix) as usize];
+                server.read_exact(&mut body).unwrap();
+                let request: crate::Request = serde_json::from_slice(&body).unwrap();
+                let response = if refused {
+                    serde_json::json!({ "protocol": "muniment.attach/1", "request_id": request.request_id, "ok": false, "error": failure })
+                } else {
+                    serde_json::json!({ "protocol": "muniment.attach/1", "request_id": request.request_id, "ok": true, "body": {"status": {"signed_in": true}} })
+                };
+                server
+                    .write_all(&crate::encode_frame(&response).unwrap())
+                    .unwrap();
+            }
+        });
+        let failed = holder.sign_in_with_diagnostics();
+        assert_eq!(
+            failed,
+            Err((ClientError::AuthorizationFailed, Some(expected.clone())))
+        );
+        assert!(holder.sign_in_with_diagnostics().is_ok());
+        assert_eq!(
+            failed,
+            Err((ClientError::AuthorizationFailed, Some(expected)))
+        );
+        worker.join().unwrap();
+        assert_eq!(
+            holder.sign_in_with_diagnostics(),
+            Err((ClientError::ConnectionClosed, None))
+        );
+        assert_eq!(
+            holder.sign_in_with_diagnostics(),
+            Err((ClientError::DesktopUnavailable, None))
         );
     }
 
