@@ -196,6 +196,8 @@ run_step verify-webdriver-app cmp -s "$app_binary" "$installed_desktop" || exit
 # Sign only the WDIO bundle. Keep the nested Developer ID signatures and the pinned archive intact.
 run_step sign-webdriver-app log_command "$raw/installer.log" codesign --force --sign - "$installed_bundle" || exit
 run_step verify-webdriver-signature log_command "$raw/installer.log" codesign --verify --deep --strict "$installed_bundle" || exit
+# Cargo tests can rebuild the app without the E2E capability config. Keep the installed WebDriver build intact.
+run_step folder-dialog-macos log_command "$raw/folder-dialog-macos.log" cargo test --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --release --features e2e-webdriver --test folder_dialog_drive --test folder-dialog-macos || exit
 unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
 
 export MUNIMENT_E2E_APP_BINARY="$PWD/test/e2e/support/macos-wdio-app.sh" MUNIMENT_E2E_RAW_DIR="$raw"

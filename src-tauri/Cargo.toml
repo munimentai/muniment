@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = []
-e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver", "objc2-app-kit/NSOpenPanel", "objc2-app-kit/NSSavePanel", "objc2-app-kit/NSGraphicsContext"]
+e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver", "dep:core-graphics", "objc2-app-kit/NSOpenPanel", "objc2-app-kit/NSSavePanel", "objc2-app-kit/NSGraphicsContext"]
 
 [workspace]
 members = [".", "core", "attach", "code-diff", "cli", "acp", "runtime"]
@@ -37,6 +37,7 @@ muniment-runtime = { path = "runtime" }
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { version = "0.25.0", optional = true }
 muniment-runtime = { path = "runtime" }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphics", "NSPanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }
@@ -58,6 +59,17 @@ tauri = { version = "2", features = ["test"] }
 name = "launcher-panel"
 path = "tests/launcher_panel.rs"
 harness = false
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+block2 = "0.6.2"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["block2"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSDate", "NSRunLoop", "NSURL"] }
+
+[[test]]
+name = "folder-dialog-macos"
+path = "tests/folder_dialog_macos.rs"
+harness = false
+required-features = ["e2e-webdriver"]
 
 [[example]]
 name = "sidecar-test-stub"

@@ -1,5 +1,5 @@
-// The E2E app sends AppKit events to its own NSOpenPanel. No privacy grant
-// or external UI automation process participates in this drive.
+// The E2E app posts CGEvent keys after it checks the existing process trust.
+// The drive never requests a privacy grant or starts an external UI automation process.
 async function snapshot() {
   return browser.execute(async () => {
     let timer
