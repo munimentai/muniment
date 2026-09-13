@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import { chooseFolder, folderDialogDescription, withWindowsPickerDiagnostics } from './e2e/support/onboarding-folder.mjs'
@@ -267,9 +268,128 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(script).toContain('SendText(control, 0x000C, UIntPtr.Zero, path, 0x23, 1000, out result)')
     expect(script).toContain('ReadText(control, 0x000D, new UIntPtr((uint)text.Capacity), text, 0x23, 1000, out result)')
     expect(script).toContain('new StringBuilder(path.Length + 2)')
-    expect(script).toContain('PostMessage(GetParent(control), 0x0111, new IntPtr(1), control)')
+    expect(script).toContain('SendClick(control, 0x00F5, UIntPtr.Zero, IntPtr.Zero, 0x03, 1000, out result) == IntPtr.Zero')
+    expect(script).not.toMatch(/PostMessage|0x0111/)
+    expect(script).toContain('throw (Get-PickerCloseFailure $dialog $handle $edit $homePath)')
+    expect(script).toContain("ClassNameProperty, 'ToolbarWindow32'")
+    expect(script).toContain("$_ -like 'Address:*'")
     expect(script).not.toMatch(/GetCurrentPattern|\.Invoke\(\)/)
   })
+
+  // Windows tests run this fixture. PowerShell Core can also run the mocked calls on Linux.
+  it.runIf(process.platform === 'win32' || process.env.MUNIMENT_TEST_POWERSHELL)(
+    'The Windows confirm closes a dialog that navigates on WM_COMMAND and reports a stalled click.', async () => {
+      const script = await readFile(new URL('./e2e/support/folder-dialog-windows.ps1', import.meta.url), 'utf8')
+      const confirm = script.match(/    public static void ConfirmFolder\(IntPtr dialog, IntPtr control\) \{[\s\S]*?\n    \}/)?.[0]
+      const failure = script.match(/function Get-PickerCloseFailure\([\s\S]*?\n\}/)?.[0]
+      expect(confirm).toBeDefined()
+      expect(failure).toBeDefined()
+      const fixture = path.join(await rawDirectory(), 'confirm.ps1')
+      await writeFile(fixture, '\uFEFF' + String.raw`$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+namespace System.Windows.Automation {
+  public class AutomationElement { public static string ClassNameProperty = "ClassName"; }
+  public class PropertyCondition { public PropertyCondition(object property, object value) {} }
+}
+namespace MunimentFolderPicker {
+  public static class Desktop {
+    public static bool Visible = true, Responds = true, Ready = true, Validated = false, Stall = false, ReadFails = false;
+    public static int Commands = 0, Clicks = 0;
+    public static string Field = @"C:\Home space & café";
+    private static void CheckControl(IntPtr dialog, IntPtr control, int id, string name) {
+      if (!Ready || dialog.ToInt64() != 10 || control.ToInt64() != 11 || id != 1 || name != "Button")
+        throw new InvalidOperationException("The control is not ready.");
+      Validated = true;
+    }
+    private static IntPtr GetParent(IntPtr control) { return new IntPtr(10); }
+    private static bool PostMessage(IntPtr dialog, uint message, IntPtr parameter, IntPtr control) {
+      Commands++;
+      Field = "Home space & café";
+      if (Commands == 2) Visible = false;
+      return true;
+    }
+    private static IntPtr SendClick(IntPtr control, uint message, UIntPtr parameter, IntPtr data,
+        uint flags, uint timeout, out UIntPtr result) {
+      result = UIntPtr.Zero;
+      if (!Validated || control.ToInt64() != 11 || message != 0x00F5 || parameter != UIntPtr.Zero ||
+          data != IntPtr.Zero || flags != 0x03 || timeout != 1000)
+        throw new InvalidOperationException("The click arguments do not match BM_CLICK.");
+      Clicks++;
+      if (!Responds) return IntPtr.Zero;
+      if (Stall) Field = "Home space & café";
+      else Visible = false;
+      return new IntPtr(1);
+    }
+    public static string FolderText(IntPtr dialog, IntPtr control) {
+      if (ReadFails) throw new InvalidOperationException("The field is unavailable.");
+      return Field;
+    }
+${confirm}
+  }
+}
+'@
+${failure}
+$homePath = 'C:\Home space & café'
+[MunimentFolderPicker.Desktop]::ConfirmFolder([IntPtr]10, [IntPtr]11)
+if ([MunimentFolderPicker.Desktop]::Visible) { throw 'The confirm navigated without closing.' }
+if ([MunimentFolderPicker.Desktop]::Field -cne $homePath) { throw 'The confirm changed the Home path.' }
+if ([MunimentFolderPicker.Desktop]::Clicks -ne 1) { throw 'The confirm did not send one click.' }
+if ([MunimentFolderPicker.Desktop]::Commands -ne 0) { throw 'The confirm posted a command.' }
+[MunimentFolderPicker.Desktop]::Responds = $false
+try {
+  [MunimentFolderPicker.Desktop]::ConfirmFolder([IntPtr]10, [IntPtr]11)
+  throw 'The confirm accepted a blocked button.'
+} catch {
+  if ($_.Exception.Message -notlike '*did not answer BM_CLICK within one second*') { throw }
+}
+[MunimentFolderPicker.Desktop]::Ready = $false
+try {
+  [MunimentFolderPicker.Desktop]::ConfirmFolder([IntPtr]10, [IntPtr]11)
+  throw 'The confirm accepted a stale control.'
+} catch {
+  if ($_.Exception.Message -notlike '*control is not ready*') { throw }
+}
+if ([MunimentFolderPicker.Desktop]::Clicks -ne 2) { throw 'The confirm clicked a stale control.' }
+[MunimentFolderPicker.Desktop]::Ready = $true
+[MunimentFolderPicker.Desktop]::Responds = $true
+[MunimentFolderPicker.Desktop]::Visible = $true
+[MunimentFolderPicker.Desktop]::Stall = $true
+[MunimentFolderPicker.Desktop]::ConfirmFolder([IntPtr]10, [IntPtr]11)
+$dialog = New-Object PSObject
+$dialog | Add-Member ScriptMethod FindAll { param($scope, $condition)
+  @([PSCustomObject]@{ Current = [PSCustomObject]@{ Name = 'Address: C:\Home space & café' } })
+}
+$edit = [PSCustomObject]@{ Current = [PSCustomObject]@{ NativeWindowHandle = 12 } }
+$message = Get-PickerCloseFailure $dialog 10 $edit $homePath
+if ($message -notlike '*navigated instead of closing*Displayed address: Address: C:\Home space & café*Folder field: Home space & café*') {
+  throw "The navigation report lost the displayed address: $message"
+}
+foreach ($field in @($homePath, '')) {
+  [MunimentFolderPicker.Desktop]::Field = $field
+  $message = Get-PickerCloseFailure $dialog 10 $edit $homePath
+  if ($message -notlike '*timed out during the window close*') { throw "The report invented navigation: $message" }
+}
+[MunimentFolderPicker.Desktop]::ReadFails = $true
+$message = Get-PickerCloseFailure $dialog 10 $edit $homePath
+if ($message -notlike '*Displayed address: Address: C:\Home space & café*Folder field: unavailable*') {
+  throw "The field failure hid the address: $message"
+}
+[MunimentFolderPicker.Desktop]::ReadFails = $false
+[MunimentFolderPicker.Desktop]::Field = 'Home space & café'
+$dialog | Add-Member -Force ScriptMethod FindAll { throw 'The address is unavailable.' }
+$message = Get-PickerCloseFailure $dialog 10 $edit $homePath
+if ($message -notlike '*navigated instead of closing*Displayed address: unavailable*Folder field: Home space & café*') {
+  throw "The address failure hid the navigation: $message"
+}
+Write-Output 'The confirm and navigation checks passed.'
+`)
+      const result = spawnSync(process.env.MUNIMENT_TEST_POWERSHELL || 'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', fixture],
+        { encoding: 'utf8', timeout: 30_000 })
+      expect(result.status, result.stderr || result.error?.message).toBe(0)
+      expect(result.stdout).toContain('The confirm and navigation checks passed.')
+    }, 35_000)
 
   it('The macOS picker uses the app IPC without Apple Events or Accessibility grants.', async () => {
     const invoke = vi.fn().mockResolvedValue(true)
