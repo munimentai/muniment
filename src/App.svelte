@@ -1127,21 +1127,25 @@
     {:else if workspaceMode() && desktopClientStatus}
       <section class="workspace" data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
-          <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
-            <svg class="side-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
-          </button>
-          <button type="button" class="quiet new-thread" aria-label="New thread" title={`New thread (${shortcutDisplayLabel(newThreadKeyShortcut)})`} aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
-            <svg class="side-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-            <span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
-          </button>
-          {#if editingThreadTitle}
-            <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
-          {:else}
-            <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>
-          {/if}
-          <span class="title-spacer" data-tauri-drag-region></span>
-          <button type="button" class="quiet artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
-          <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
+          <div class="titlebar-sidebar" data-tauri-drag-region>
+            <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
+              <svg class="side-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
+            </button>
+            <button type="button" class="quiet new-thread" aria-label="New thread" title={`New thread (${shortcutDisplayLabel(newThreadKeyShortcut)})`} aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
+              <svg class="side-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              <span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
+            </button>
+          </div>
+          <div class="titlebar-thread" data-tauri-drag-region>
+            {#if editingThreadTitle}
+              <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
+            {:else}
+              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>
+            {/if}
+            <span class="title-spacer" data-tauri-drag-region></span>
+            <button type="button" class="quiet artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
+            <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
+          </div>
         </header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
@@ -1629,7 +1633,27 @@
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 calc(-1 * var(--frame-width)); padding: 0 12px; background: var(--paper); font-size: var(--text-13); user-select: none; }
-  .workspace.macos .titlebar { padding-left: 84px; }
+  /* The title row shares the animated sidebar width so controls never cross during the panel slide. */
+  @property --sidebar-column { syntax: '<length>'; inherits: true; initial-value: 260px; }
+  .workspace.macos { --titlebar-inset: 84px; --sidebar-column: 260px; --titlebar-controls-end: 276px; grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); transition: --sidebar-column 180ms ease; }
+  .workspace.macos.artifact-open { --titlebar-controls-end: 160px; grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--artifact-rail-width); }
+  .workspace.macos.sidebar-collapsed { --sidebar-column: 52px; }
+  .workspace.macos.artifact-resizing { transition: none; }
+  .titlebar-sidebar, .titlebar-thread { display: contents; }
+  .workspace.macos .titlebar { display: grid; grid-template-columns: subgrid; padding-left: var(--titlebar-inset); padding-right: var(--frame-width); }
+  .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; min-width: 0; container-type: inline-size; }
+  /* The composer has a 760px cap, 24px gutters and a 1px panel border. */
+  .workspace.macos .titlebar-thread { grid-column: 2; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - 2 * var(--frame-width) - var(--sidebar-column))); padding-right: max(25px, calc((100% - 760px) / 2)); }
+  .workspace.macos:not(.sidebar-collapsed) .side-brand { margin-left: calc(var(--titlebar-inset) - var(--frame-width) - 11px); padding-left: 0; }
+  /* The collapsed sidebar keeps the controls clear of the native traffic lights. */
+  .workspace.macos.sidebar-collapsed .titlebar-sidebar { width: 184px; }
+  .workspace.macos.sidebar-collapsed.artifact-open .titlebar-sidebar { width: 68px; }
+  .workspace.macos .update-slot { order: 1; }
+  .workspace.macos .artifacts-toggle { order: 2; }
+  .workspace.macos .thread-title { padding-left: 0; }
+  @container (max-width: 170px) {
+    .new-thread span, .new-thread kbd { display: none; }
+  }
   .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 28px; padding: 2px 6px; }
   .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .titlebar button:hover:not(:disabled) { background: var(--faint); border-color: transparent; }

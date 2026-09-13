@@ -39,8 +39,8 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 muniment-runtime = { path = "runtime" }
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphics", "NSPanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSError", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSGraphics", "NSPanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSError", "NSNotification", "NSString"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["SMAppService", "SMErrors", "objc2", "objc2-foundation", "std"] }
 
 [dev-dependencies]
