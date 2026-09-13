@@ -5,6 +5,8 @@ umask 077
 
 artifacts=${DCI_ARTIFACTS_DIR:-/tmp/dci-artifacts}
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/muniment-wdio-macos.XXXXXX") || exit 1
+# NSOpenPanel answers resolved paths. Keep every derived path canonical so the spec compares equals.
+run_root=$(cd "$run_root" && pwd -P) || exit 1
 raw="$run_root/raw"
 safe="$run_root/safe"
 state_root="$run_root/state"

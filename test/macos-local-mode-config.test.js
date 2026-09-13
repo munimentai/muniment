@@ -172,6 +172,34 @@ restore_macos_spec_config
     },
   )
 
+  it.skipIf(process.platform === 'win32')('links the login home Pi agent directory to the spec home and restores it', () => {
+    const { directory, loginHome, shell } = fixture()
+    const loginAgent = path.join(loginHome, '.pi/agent')
+    fs.mkdirSync(loginAgent, { recursive: true })
+    fs.writeFileSync(path.join(loginAgent, 'models.json'), 'login models')
+    const result = shell(`
+save_macos_spec_config
+for spec in degraded ready; do
+  export HOME="$ROOT/$spec home"
+  set_macos_spec_config
+  printf '%s' "$spec" >"$HOME/.pi/agent/models.json"
+  [[ -L "$LOGIN_HOME/.pi/agent" ]]
+  [[ $(readlink "$LOGIN_HOME/.pi/agent") == "$HOME/.pi/agent" ]]
+  [[ $(cat "$LOGIN_HOME/.pi/agent/models.json") == "$spec" ]]
+done
+HOME=$LOGIN_HOME
+if set_macos_spec_config; then exit 2; fi
+restore_macos_spec_config
+`)
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.lstatSync(loginAgent).isSymbolicLink()).toBe(false)
+    expect(fs.readFileSync(path.join(loginAgent, 'models.json'), 'utf8')).toBe('login models')
+    for (const spec of ['degraded', 'ready']) {
+      expect(fs.readFileSync(path.join(directory, `${spec} home/.pi/agent/models.json`), 'utf8')).toBe(spec)
+    }
+    expect(fs.readdirSync(path.join(loginHome, 'Library/Application Support'))).toEqual([])
+  })
+
   it('keeps the installed probe marker in the runtime config directory', () => {
     const runner = fs.readFileSync('test/e2e/runner/macos.sh', 'utf8')
     expect(runner).toContain('runtime_config_root=${XDG_CONFIG_HOME:-}')
