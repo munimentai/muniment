@@ -220,6 +220,23 @@ async function checkPaperFrame(browser, baseUrl) {
               fail(boxes[1].width >= 319.9, 'The thread fell below 320px.')
               const composer = workspace.querySelector('.composer').getBoundingClientRect()
               fail(composer.left > boxes[1].left && composer.right < boxes[1].right && composer.bottom < boxes[1].bottom, 'The composer escaped the thread panel.')
+              if (workspace.classList.contains('macos')) {
+                const rect = (selector) => workspace.querySelector(selector).getBoundingClientRect()
+                const artifacts = rect('.artifacts-toggle')
+                const update = rect('.update-slot')
+                fail(near(artifacts.right, composer.right), 'Artifacts does not align with the composer.')
+                fail(update.right <= artifacts.left, 'The update slot extends past Artifacts.')
+                if (!workspace.classList.contains('sidebar-collapsed')) {
+                  fail(near(rect('.side-toggle').left, rect('.side-brand').left), 'The sidebar toggle does not align with the brand.')
+                }
+                const titleLeft = Math.max(boxes[1].left, parseFloat(style.getPropertyValue('--titlebar-controls-end')))
+                fail(near(rect('.thread-title').left, titleLeft), 'The thread title does not follow the thread panel and native clearance.')
+                for (const control of workspace.querySelectorAll('.titlebar button, .titlebar input')) {
+                  const box = control.getBoundingClientRect()
+                  const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+                  fail(box.width >= 24 && box.height >= 24 && control.contains(target), 'A title row control lacks a hit area.')
+                }
+              }
               const backgroundAt = (x, y) => {
                 let element = document.elementFromPoint(x, y)
                 while (element) {
@@ -246,10 +263,20 @@ async function checkPaperFrame(browser, baseUrl) {
             return [...new Set(failures)]
           }, transition)
           assert.deepEqual(failures, [], `${platform} ${colorScheme} ${JSON.stringify(page.viewportSize())}`)
+          if (platform.startsWith('Mac')) {
+            const aligned = await page.evaluate(() => {
+              const workspace = document.querySelector('.workspace')
+              if (workspace.classList.contains('sidebar-collapsed')) return true
+              const title = workspace.querySelector('.thread-title').getBoundingClientRect()
+              const panel = workspace.querySelector('.thread-panel').getBoundingClientRect()
+              return Math.abs(title.left - panel.left) < 1
+            })
+            assert.ok(aligned, 'The expanded thread title does not align with the thread panel.')
+          }
           await checkArtifactEmpty(page)
         }
 
-        for (const viewport of [{ width: 960, height: 640 }, { width: 1440, height: 900 }]) {
+        for (const viewport of [{ width: 960, height: 640 }, { width: 1144, height: 640 }, { width: 1440, height: 900 }]) {
           await page.setViewportSize(viewport)
           await checkFrame()
           await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
