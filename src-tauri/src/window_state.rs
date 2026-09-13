@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use tauri::{utils::config::WindowConfig, Manager, PhysicalSize, Runtime};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 #[derive(Deserialize)]
 struct SavedSize {
     width: u32,
@@ -72,7 +75,12 @@ pub fn restore_main_window<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()>
     window.restore_state(StateFlags::POSITION | StateFlags::DECORATIONS)?;
     window.set_size(initial_size(config, &saved, window.scale_factor()?))?;
     window.restore_state(StateFlags::MAXIMIZED | StateFlags::FULLSCREEN)?;
+    #[cfg(target_os = "macos")]
+    macos::install(&window, config)?;
     window.show()?;
+    // Apply the configured inset after show. Native frame observers keep later layouts aligned.
+    #[cfg(target_os = "macos")]
+    macos::apply();
     window.set_focus()?;
     Ok(())
 }

@@ -2217,12 +2217,28 @@ describe('window chrome', () => {
     }
   })
 
+  it('centers the configured traffic lights in the macOS title row', () => {
+    const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
+    const main = config.app.windows.find((window) => window.label === 'main')
+    const rowHeight = Number(appStyles.match(/grid-template-rows:\s*(\d+)px minmax\(0, 1fr\)/)[1])
+    const inset = Number(appRules.get('.workspace.macos').match(/--titlebar-inset:\s*(\d+)px/)[1])
+    const controlHeight = Number(appRules.get('.titlebar button, .titlebar input').match(/(?:^|;)\s*height:\s*(\d+)px/)[1])
+    expect(rowHeight).toBe(36)
+    expect(controlHeight).toBe(28)
+    expect(inset).toBe(84)
+    expect(appRules.get('.workspace.macos .titlebar')).toMatch(/padding-left:\s*var\(--titlebar-inset\)/)
+    expect(main.visible).toBe(false)
+    expect(main.trafficLightPosition).toEqual({ x: 14, y: (rowHeight - 16) / 2 })
+    expect(main.trafficLightPosition.y + 16 / 2).toBe((rowHeight - controlHeight) / 2 + controlHeight / 2)
+    expect(inset).toBeGreaterThanOrEqual(main.trafficLightPosition.x + 3 * 16 + 2 * 7 + 8)
+  })
+
   it('keeps native decorations and grants row drag permission', () => {
     const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
     const capabilities = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'))
     expect(config.app.windows[0]).toMatchObject({
       title: 'muniment', titleBarStyle: 'Overlay', hiddenTitle: true,
-      trafficLightPosition: { x: 14, y: 14 },
+      trafficLightPosition: { x: 14, y: 10 },
     })
     expect(config.app.windows[0].decorations).not.toBe(false)
     expect(capabilities.permissions).toContain('core:window:allow-start-dragging')
