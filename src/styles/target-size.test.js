@@ -6,7 +6,7 @@ const app = fs.readFileSync(path.join(process.cwd(), 'src/App.svelte'), 'utf8')
 const accessPanel = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
 const style = [app, accessPanel].map((source) => source.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? '').join('\n')
 const selectors = [
-  '.thread-delete',
+  '.thread-menu button',
   '.thread-delete-confirm button',
   '.run-error button',
   '.provenance',
@@ -34,8 +34,8 @@ describe('signed-in shell target sizes', () => {
   })
 
   it('rejects a compact shell control below the target-size floor', () => {
-    const drift = style.replace(/(\.thread-delete\s*\{[^{}]*min-height:\s*)24px/, (_, prefix) => `${prefix}23px`)
-    expect(undersized(drift)).toContain('.thread-delete')
+    const drift = style.replace(/(\.thread-menu button\s*\{[^{}]*min-height:\s*)24px/, (_, prefix) => `${prefix}23px`)
+    expect(undersized(drift)).toContain('.thread-menu button')
   })
 
   it('rejects a compact shell control without a minimum width', () => {

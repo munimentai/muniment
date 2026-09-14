@@ -41,6 +41,7 @@ const unpermitted = (source, allowed) => signalSelectors(source).filter((selecto
 const FOCUS_EXCEPTIONS = {
   'src/App.svelte': {
     '.artifact-divider:focus-visible': '§6: the 9px divider uses an inset ring so it does not bleed into the thread and rail',
+    '.sidebar-divider:focus-visible': '§6: the 9px divider uses an inset ring so it does not bleed into the sidebar and thread',
   },
 }
 

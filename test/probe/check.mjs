@@ -104,9 +104,9 @@ async function checkWindowChrome(browser, baseUrl) {
             }),
           }
         })
-        assert.equal(row.height, 36)
+        assert.equal(row.height, platform.startsWith('Mac') ? 32 : 28)
         assert.equal(row.top, 0)
-        if (platform.startsWith('Mac')) assert.equal(row.clearance, 84)
+        if (platform.startsWith('Mac')) assert.equal(row.clearance, 78)
         else assert.equal(row.padding, '12px')
         assert.equal(row.controls.length, 4)
         for (const control of row.controls) {
@@ -208,7 +208,7 @@ async function checkPaperFrame(browser, baseUrl) {
               for (const [index, panel] of panels.entries()) {
                 const box = boxes[index]
                 const panelStyle = getComputedStyle(panel)
-                fail(near(box.top, 36 + frame), 'The top frame changed.')
+                fail(near(box.top, workspace.querySelector('.titlebar').getBoundingClientRect().height + frame), 'The top frame changed.')
                 fail(near(box.bottom, innerHeight - frame), 'The bottom frame changed.')
                 fail(panelStyle.backgroundColor === surface, `${panel.className} lacks surface.`)
                 for (const edge of ['Top', 'Right', 'Bottom', 'Left']) {
@@ -229,8 +229,10 @@ async function checkPaperFrame(browser, baseUrl) {
                 const update = rect('.update-slot')
                 fail(near(artifacts.right, innerWidth - 12), 'Artifacts does not sit flush right in the title row.')
                 fail(update.right <= artifacts.left, 'The update slot extends past Artifacts.')
-                const titleLeft = Math.max(boxes[1].left, parseFloat(style.getPropertyValue('--titlebar-controls-end')))
+                const controlsEnd = parseFloat(style.getPropertyValue('--titlebar-controls-end'))
+                const titleLeft = Math.max(boxes[1].left, controlsEnd)
                 fail(near(rect('.thread-title').left, titleLeft), 'The thread title does not follow the thread panel and native clearance.')
+                fail(rect('.new-thread').right + frame <= controlsEnd, `New thread ends at ${rect('.new-thread').right}px and runs into the thread title.`)
                 for (const control of workspace.querySelectorAll('.titlebar button, .titlebar input')) {
                   const box = control.getBoundingClientRect()
                   const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
@@ -267,11 +269,13 @@ async function checkPaperFrame(browser, baseUrl) {
             const aligned = await page.evaluate(() => {
               const workspace = document.querySelector('.workspace')
               if (workspace.classList.contains('sidebar-collapsed')) return true
+              // The title follows the thread panel once the sidebar is wider than the row's own controls.
               const title = workspace.querySelector('.thread-title').getBoundingClientRect()
               const panel = workspace.querySelector('.thread-panel').getBoundingClientRect()
-              return Math.abs(title.left - panel.left) < 1
+              const controlsEnd = parseFloat(getComputedStyle(workspace).getPropertyValue('--titlebar-controls-end'))
+              return Math.abs(title.left - Math.max(panel.left, controlsEnd)) < 1
             })
-            assert.ok(aligned, 'The expanded thread title does not align with the thread panel.')
+            assert.ok(aligned, 'The expanded thread title does not align with the thread panel or the row controls.')
           }
           await checkArtifactEmpty(page)
         }

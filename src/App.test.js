@@ -16,6 +16,11 @@ const appRules = new Map([...appStyles
   .matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
 const accessPanelSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
+// The delete action lives in the row's right-click menu and opens the inline confirmation.
+const openDeleteMenu = async (title) => {
+  await fireEvent.contextMenu(document.querySelector(`.thread-record [title="${title}"]`))
+  await fireEvent.click(screen.getByRole('menuitem', { name: `Delete ${title}` }))
+}
 const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/code-diff/1/modified.json'), 'utf8'))
 
 let App
@@ -1865,7 +1870,8 @@ describe('artifact rail', () => {
     expect(separator).toHaveAttribute('tabindex', '0')
     expect(separator).toHaveAttribute('aria-orientation', 'vertical')
     expect(separator).toHaveAttribute('aria-valuemin', '380')
-    expect(separator).toHaveAttribute('aria-valuemax', '444')
+    // 1024 wide, the 195px sidebar and the 320px thread minimum leave 509px.
+    expect(separator).toHaveAttribute('aria-valuemax', '509')
     expect(separator).toHaveAttribute('aria-valuenow', '380')
 
     await fireEvent.keyDown(separator, { key: 'ArrowLeft' })
@@ -1892,18 +1898,56 @@ describe('artifact rail', () => {
 
     await fireEvent.click(toggle)
     const separator = screen.getByRole('separator', { name: 'Artifacts' })
-    expect(separator).toHaveAttribute('aria-valuemax', '412')
+    expect(separator).toHaveAttribute('aria-valuemax', '477')
     await fireEvent.keyDown(separator, { key: 'End' })
-    expect(separator).toHaveAttribute('aria-valuenow', '412')
+    expect(separator).toHaveAttribute('aria-valuenow', '477')
 
     await fireEvent.pointerDown(separator, { button: 0, pointerId: 7, clientX: 604 })
     await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 616 })
     expect(separator).toHaveAttribute('aria-valuenow', '400')
     await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 0 })
-    expect(separator).toHaveAttribute('aria-valuenow', '412')
+    expect(separator).toHaveAttribute('aria-valuenow', '477')
     await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 1024 })
     expect(separator).toHaveAttribute('aria-valuenow', '380')
     await fireEvent.pointerUp(separator, { pointerId: 7 })
+  })
+
+  it('resizes the sidebar from its divider with the pointer and the keyboard, and keeps the width', async () => {
+    render(App)
+    await screen.findByRole('button', { name: 'Collapse sidebar' })
+    const separator = screen.getByRole('separator', { name: 'Threads' })
+    const workspace = separator.closest('.workspace')
+    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({ left: 0, right: 1024 })
+    expect(separator).toHaveAttribute('tabindex', '0')
+    expect(separator).toHaveAttribute('aria-orientation', 'vertical')
+    expect(separator).toHaveAttribute('aria-controls', 'sidebar')
+    expect(separator).toHaveAttribute('aria-valuemin', '160')
+    expect(separator).toHaveAttribute('aria-valuenow', '195')
+    expect(workspace.style.getPropertyValue('--sidebar-column')).toBe('195px')
+
+    await fireEvent.keyDown(separator, { key: 'ArrowRight' })
+    expect(separator).toHaveAttribute('aria-valuenow', '215')
+    expect(workspace.style.getPropertyValue('--sidebar-column')).toBe('215px')
+    await fireEvent.keyDown(separator, { key: 'Home' })
+    expect(separator).toHaveAttribute('aria-valuenow', '160')
+
+    await fireEvent.pointerDown(separator, { button: 0, pointerId: 5, clientX: 160 })
+    expect(workspace.classList.contains('sidebar-resizing')).toBe(true)
+    await fireEvent.pointerMove(separator, { pointerId: 5, clientX: 240 })
+    expect(separator).toHaveAttribute('aria-valuenow', '240')
+    await fireEvent.pointerUp(separator, { pointerId: 5 })
+    expect(workspace.classList.contains('sidebar-resizing')).toBe(false)
+    await fireEvent.pointerMove(separator, { pointerId: 5, clientX: 300 })
+    expect(separator).toHaveAttribute('aria-valuenow', '240')
+    expect(localStorage.getItem('muniment.sidebar-width')).toBe('240')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    expect(screen.queryByRole('separator', { name: 'Threads' })).not.toBeInTheDocument()
+    expect(workspace.style.getPropertyValue('--sidebar-column')).toBe('52px')
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
+    expect(screen.getByRole('separator', { name: 'Threads' })).toHaveAttribute('aria-valuenow', '240')
+    expect(appRules.get('.artifact-divider, .sidebar-divider')).toMatch(/cursor:\s*col-resize/)
+    expect(appStyles).not.toMatch(/divider[^{]*::after/)
   })
 
   it('finishes pointer resizing on release and cancellation', async () => {
@@ -2104,25 +2148,56 @@ describe('thread name', () => {
     expect(screen.queryByRole('button', { name: 'Older threads' })).not.toBeInTheDocument()
   })
 
-  it('reveals a quiet delete action and cancels its inline confirmation', async () => {
-    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+  it('opens a menu on right-click with the delete action and cancels its inline confirmation', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' },
+    ]
     render(App)
-    const remove = await screen.findByRole('button', { name: 'Delete Lease renewal' })
+    const row = await screen.findByRole('button', { name: 'Vendor audit' })
 
-    expect(remove.tabIndex).toBe(0)
-    expect(appRules.get('.thread-delete')).toMatch(/opacity:\s*0/)
-    expect(appRules.get('.thread-record:hover .thread-delete, .thread-record:focus-within .thread-delete')).toMatch(/opacity:\s*1/)
-    await fireEvent.click(remove)
-    expect(screen.getByLabelText('Delete Lease renewal?')).toHaveTextContent('Delete “Lease renewal”?')
+    // No hover control: the row's actions live in a menu on right-click.
+    expect(screen.queryByRole('button', { name: 'Delete Vendor audit' })).not.toBeInTheDocument()
+    expect(appStyles).not.toMatch(/\.thread-delete(?![-\w])/)
+    await fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
+    const menu = screen.getByRole('menu', { name: 'Vendor audit actions' })
+    expect(menu).toHaveStyle({ left: '120px', top: '80px' })
+    const remove = within(menu).getByRole('menuitem', { name: 'Delete Vendor audit' })
+    expect(remove).toHaveFocus()
+
+    await fireEvent.keyDown(menu, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    await waitFor(() => expect(row).toHaveFocus())
+
+    // The keyboard's context menu key opens it under the row.
+    await fireEvent.contextMenu(row)
+    expect(screen.getByRole('menu', { name: 'Vendor audit actions' })).toHaveStyle({ left: '0px', top: '0px' })
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Vendor audit' }))
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Delete Vendor audit?')).toHaveTextContent('Delete “Vendor audit”?')
 
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(screen.queryByLabelText('Delete Lease renewal?')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Delete Lease renewal' })).toHaveFocus()
+    expect(screen.queryByLabelText('Delete Vendor audit?')).not.toBeInTheDocument()
+    await waitFor(() => expect(row).toHaveFocus())
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Delete Lease renewal' }))
+    await openDeleteMenu('Vendor audit')
     await fireEvent.keyDown(screen.getByRole('button', { name: 'Delete' }), { key: 'Escape' })
-    expect(screen.queryByLabelText('Delete Lease renewal?')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Delete Lease renewal' })).toHaveFocus()
+    expect(screen.queryByLabelText('Delete Vendor audit?')).not.toBeInTheDocument()
+    await waitFor(() => expect(row).toHaveFocus())
+
+    // The current thread's row opens the same menu.
+    await openDeleteMenu('Lease renewal')
+    expect(screen.getByLabelText('Delete Lease renewal?')).toBeInTheDocument()
+  })
+
+  it('closes the thread menu on a pointer press outside it', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    render(App)
+    await screen.findByText('Lease renewal', { selector: '.thread-row-title' })
+    await fireEvent.contextMenu(document.querySelector('.thread-record .thread-row'), { clientX: 120, clientY: 80 })
+    expect(screen.getByRole('menu', { name: 'Lease renewal actions' })).toBeInTheDocument()
+    await fireEvent.pointerDown(screen.getByPlaceholderText('Ask anything'), { button: 0 })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 
   it('deletes the open thread and focuses the fresh composer', async () => {
@@ -2138,7 +2213,7 @@ describe('thread name', () => {
     render(App)
     await screen.findByText('Answer')
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Delete Lease renewal' }))
+    await openDeleteMenu('Lease renewal')
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
     await waitFor(() => expect(screen.queryByText('Answer')).not.toBeInTheDocument())
@@ -2161,12 +2236,13 @@ describe('thread name', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Delete Lease renewal' }))
+    await screen.findByText('Lease renewal', { selector: '.thread-row-title' })
+    await openDeleteMenu('Lease renewal')
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The thread could not be deleted.')
     const repeatDelete = screen.getByRole('button', { name: 'Delete thread' })
-    expect(screen.getByRole('button', { name: 'Delete Lease renewal' })).toBeInTheDocument()
+    expect(screen.getByText('Lease renewal', { selector: '.thread-row-title' })).toBeInTheDocument()
     expect(screen.queryByLabelText('Delete Lease renewal?')).not.toBeInTheDocument()
 
     await fireEvent.click(repeatDelete)
@@ -2340,8 +2416,11 @@ describe('thread name', () => {
     expect(appRules.get('.thread-title')).toMatch(/text-overflow:\s*ellipsis/)
     expect(appRules.get('.thread-title')).toMatch(/white-space:\s*nowrap/)
     expect(appRules.get('.thread-row-title')).toMatch(/overflow:\s*hidden/)
-    expect(appRules.get('.thread-row-title')).toMatch(/text-overflow:\s*ellipsis/)
     expect(appRules.get('.thread-row-title')).toMatch(/white-space:\s*nowrap/)
+    // The row title fades at its end and the time keeps its width, so the time always shows.
+    expect(appRules.get('.thread-row-title')).toMatch(/flex:\s*1 1 auto/)
+    expect(appRules.get('.thread-row-title')).toMatch(/mask-image:\s*linear-gradient\(to right, currentColor calc\(100% - 28px\), transparent\)/)
+    expect(appRules.get('.thread-row time')).toMatch(/flex:\s*none/)
   })
 
   it('reserves the current-thread dot width in every row', () => {
@@ -2381,20 +2460,23 @@ describe('window chrome', () => {
   it('lets macOS place the traffic lights and sizes the title row to their band', () => {
     const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
     const main = config.app.windows.find((window) => window.label === 'main')
-    const rowHeight = Number(appStyles.match(/grid-template-rows:\s*(\d+)px minmax\(0, 1fr\)/)[1])
+    expect(appStyles).toMatch(/grid-template-rows:\s*var\(--titlebar-height\) minmax\(0, 1fr\)/)
+    const rowHeight = Number(appRules.get('.workspace.macos').match(/--titlebar-height:\s*(\d+)px/)[1])
     const inset = Number(appRules.get('.workspace.macos').match(/--titlebar-inset:\s*(\d+)px/)[1])
     const controlHeight = Number(appRules.get('.titlebar button, .titlebar input').match(/(?:^|;)\s*height:\s*(\d+)px/)[1])
-    // The native title bar band is 28pt, and macOS centers its 12pt lights in it.
+    // Measured on macOS 26: the native title bar band is 32pt and the 14pt lights center 16pt below the top edge.
+    // A 24px control centered in a 32px row shares that center.
     expect(main.trafficLightPosition).toBeUndefined()
-    expect(rowHeight).toBe(28)
+    expect(rowHeight).toBe(32)
     expect(controlHeight).toBe(24)
+    expect(rowHeight / 2).toBe(16)
     // The clearance is the sidebar part's padding: the title row itself is a subgrid with no padding.
     expect(appRules.get('.workspace.macos .titlebar')).toMatch(/grid-template-columns:\s*subgrid;\s*margin:\s*0;\s*padding:\s*0/)
     expect(appRules.get('.workspace.macos .titlebar-sidebar')).toMatch(/padding-left:\s*calc\(var\(--titlebar-inset\) - var\(--frame-width\)\)/)
     expect(main.visible).toBe(false)
-    // Three 12pt lights from x=7 with 8pt gaps end at 59pt, and the row starts one gap later.
-    expect(inset).toBeGreaterThanOrEqual(7 + 3 * 12 + 2 * 8 + 8)
-    expect(inset).toBe(72)
+    // Three 14pt lights from x=9 with 9pt gaps end at 69pt, and the row starts one gap later.
+    expect(inset).toBeGreaterThanOrEqual(9 + 3 * 14 + 2 * 9 + 9)
+    expect(inset).toBe(78)
   })
 
   it('keeps native decorations and grants row drag permission', () => {
@@ -2521,7 +2603,7 @@ describe('sidebar collapse', () => {
   it('widens the artifact rail bounds while the sidebar is a rail', async () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open artifact rail' }))
-    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuemax', '444')
+    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuemax', '509')
 
     await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     const separator = screen.getByRole('separator', { name: 'Artifacts' })
@@ -2530,7 +2612,7 @@ describe('sidebar collapse', () => {
     await fireEvent.keyDown(separator, { key: 'End' })
     expect(separator).toHaveAttribute('aria-valuenow', '560')
     await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
-    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuenow', '444')
+    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuenow', '509')
   })
 })
 
