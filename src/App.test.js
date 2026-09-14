@@ -1206,6 +1206,7 @@ describe('workspace composer entry', () => {
     localModeStatus = true
     localStorage.setItem('muniment.theme', 'light')
     render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
     const appearance = within(await screen.findByRole('group', { name: 'Appearance' }))
     expect(appearance.getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     expect(appearance.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
@@ -1217,12 +1218,12 @@ describe('workspace composer entry', () => {
 
     cleanup()
     render(App)
+    // The sidebar carries no appearance control, so the workspace stays clear of it.
+    const reopened = await screen.findByRole('button', { name: 'Settings' })
+    expect(screen.queryByRole('group', { name: 'Appearance' })).not.toBeInTheDocument()
+    await fireEvent.click(reopened)
     const restored = within(await screen.findByRole('group', { name: 'Appearance' }))
     expect(restored.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
-    await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
-    expect(screen.queryByRole('group', { name: 'Appearance' })).not.toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
-    expect(within(screen.getByRole('group', { name: 'Appearance' })).getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
     delete document.documentElement.dataset.theme
   })
@@ -1232,6 +1233,7 @@ describe('workspace composer entry', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Storage unavailable') })
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage unavailable') })
     render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
     const appearance = within(await screen.findByRole('group', { name: 'Appearance' }))
     expect(appearance.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true')
     await fireEvent.click(appearance.getByRole('button', { name: 'Dark' }))
@@ -1279,13 +1281,13 @@ describe('workspace composer entry', () => {
 
     const composer = await screen.findByPlaceholderText('Ask anything')
     expect(composer).toBeInTheDocument()
-    expect(composer).toHaveAccessibleDescription('Local replies have no cloud receipt. Ask anything.')
+    // The chip names the model, so local mode carries no sentence beside it.
+    expect(composer).not.toHaveAccessibleDescription()
+    expect(document.querySelector('#composer-hint')).toBeNull()
     expect(screen.getByText('Your model answers here. Ask anything.')).toBeInTheDocument()
-    for (const selector of ['.empty', '#composer-hint']) {
-      const copy = document.querySelector(selector).textContent.trim()
-      expect(copy).not.toMatch(/[\r\n]/)
-      expect(copy.split(/\s+/).length).toBeLessThan(12)
-    }
+    const empty = document.querySelector('.empty').textContent.trim()
+    expect(empty).not.toMatch(/[\r\n]/)
+    expect(empty.split(/\s+/).length).toBeLessThan(12)
     expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
     expect(screen.queryByRole('group', { name: 'Provider' })).not.toBeInTheDocument()
 
@@ -1657,7 +1659,8 @@ describe('workspace composer entry', () => {
     const composer = await findWorkspaceComposer()
     expect(composer).toHaveFocus()
 
-    await fireEvent.click(screen.getByText('Home settings'))
+    await fireEvent.click(screen.getByText('Settings'))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
@@ -1679,7 +1682,8 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
-    await fireEvent.click(screen.getByText('Home settings'))
+    await fireEvent.click(screen.getByText('Settings'))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
     const composer = await screen.findByRole('textbox', { name: 'Message' })
@@ -1983,7 +1987,7 @@ describe('thread name', () => {
 
     const control = await screen.findByRole('button', { name: 'Older threads' })
     const list = screen.getByRole('list', { name: 'Threads' })
-    const homeSettings = screen.getByRole('button', { name: 'Home settings' })
+    const homeSettings = screen.getByRole('button', { name: 'Settings' })
 
     expect(within(list).getAllByRole('listitem')).toHaveLength(1)
     expect(within(list).queryByRole('button', { name: 'Older threads' })).not.toBeInTheDocument()
@@ -2320,7 +2324,7 @@ describe('sidebar collapse', () => {
     expect(currentThread.tabIndex).toBe(-1)
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
     expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action')).toHaveLength(2)
-    expect(screen.getByRole('button', { name: 'Home settings' })).toHaveTextContent('Home settings')
+    expect(screen.getByRole('button', { name: 'Settings' })).toHaveTextContent('Settings')
     expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(1)
     expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(0)
 
@@ -2335,7 +2339,7 @@ describe('sidebar collapse', () => {
     expect(expand).toHaveAttribute('title', expect.stringContaining('Expand sidebar'))
     expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'New thread (⌘N)' : 'New thread (Ctrl N)')
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Home settings' })).toHaveAttribute('title', 'Home settings')
+    expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute('title', 'Settings')
     expect(screen.queryByText('Threads')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Alice/i })).not.toBeInTheDocument()
 
@@ -2670,7 +2674,8 @@ describe('Home onboarding', () => {
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('My early draft')
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
-    await fireEvent.click(screen.getByText('Home settings'))
+    await fireEvent.click(screen.getByText('Settings'))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })
 
@@ -3067,20 +3072,23 @@ describe('Home onboarding', () => {
 
   it('saves a changed Home from the existing settings control', async () => {
     render(App)
-    await fireEvent.click(await screen.findByText('Home settings'))
+    await fireEvent.click(await screen.findByText('Settings'))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     dialogResult = '/Other/Home'
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     await fireEvent.click(screen.getByRole('button', { name: 'Save Home' }))
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Home' })
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    await fireEvent.click(screen.getByText('Home settings'))
+    await fireEvent.click(screen.getByText('Settings'))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Other/Home')
   })
 
   it('keeps a configured Home and cancels settings back to the workspace', async () => {
     homeStatus = { configured: true, homePath: '/Saved/Home' }
     render(App)
-    await fireEvent.click(await screen.findByText('Home settings'))
+    await fireEvent.click(await screen.findByText('Settings'))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
     expect(screen.queryByText('Local AI')).not.toBeInTheDocument()
     expect(screen.queryByText('Starting setup')).not.toBeInTheDocument()
@@ -3089,7 +3097,8 @@ describe('Home onboarding', () => {
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-    await fireEvent.click(screen.getByText('Home settings'))
+    await fireEvent.click(screen.getByText('Settings'))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })
 })
@@ -5016,7 +5025,7 @@ describe('thread announcements', () => {
     localModeStatus = local
     signedIn([], { runId: 'run-failed', attachments: [] })
     const composer = await screen.findByPlaceholderText('Ask anything')
-    const hint = local ? 'Local replies have no cloud receipt. Ask anything.' : 'Routing is automatic. Every reply carries its receipt.'
+    const hint = local ? '' : 'Routing is automatic. Every reply carries its receipt.'
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     chatListener({ payload: {
@@ -5029,7 +5038,8 @@ describe('thread announcements', () => {
     expect(within(error).getByRole('button', { name: 'Try again' })).toBeEnabled()
     expect(screen.getByTestId('run-announcement').textContent).toBe(cause)
     expect(document.querySelector('.cancel-error')).not.toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Ask anything')).toHaveAccessibleDescription(hint)
+    if (hint) expect(screen.getByPlaceholderText('Ask anything')).toHaveAccessibleDescription(hint)
+    else expect(screen.getByPlaceholderText('Ask anything')).not.toHaveAccessibleDescription()
     expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
   })
 
@@ -5044,9 +5054,9 @@ describe('thread announcements', () => {
     const error = await within(document.querySelector('.thread')).findByText('Muniment cannot reach its background service.')
     expect(within(error).getByRole('button', { name: 'Try again' })).toBeEnabled()
     expect(document.querySelector('.cancel-error')).not.toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Ask anything')).toHaveAccessibleDescription(local
-      ? 'Local replies have no cloud receipt. Ask anything.'
-      : 'Routing is automatic. Every reply carries its receipt.')
+    if (local) expect(screen.getByPlaceholderText('Ask anything')).not.toHaveAccessibleDescription()
+    else expect(screen.getByPlaceholderText('Ask anything'))
+      .toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
   })
 
   it('shows Pi acquisition before the first reply event', async () => {

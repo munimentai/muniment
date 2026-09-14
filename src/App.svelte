@@ -89,11 +89,47 @@
 
   // The chip names the source that answers, so a saved provider wins over the
   // radio the panel happens to show.
+  const composerHint = $derived(
+    active?.phase === 'resuming' ? 'Reopening the existing secure session…'
+      : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up'
+        : auth.name === 'local' ? ''
+          : 'Routing is automatic. Every reply carries its receipt.')
+
   const modelSourceLabel = $derived.by(() => {
     if (configuredProviders.length === 0) return 'Connect a model'
     const source = configuredProviders.includes(selectedProvider) ? selectedProvider : configuredProviders[0]
     return source === 'ollama' ? 'Local · Ollama' : `${providerNames[source]} key`
   })
+
+  let settingsOpen = $state(false)
+  let settingsButton = $state()
+  let settingsPopover = $state()
+
+  function closeSettings() {
+    settingsOpen = false
+    void tick().then(() => settingsButton?.focus())
+  }
+
+  function toggleSettings() {
+    if (settingsOpen) closeSettings()
+    else settingsOpen = true
+  }
+
+  function settingsKeydown(event) {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    closeSettings()
+  }
+
+  function focusSettingsOnMount(element) {
+    element.focus()
+  }
+
+  function openHomeSettings() {
+    settingsOpen = false
+    onboarding = onboardingSettingsState(onboarding)
+  }
 
   function openModelPanel() {
     modelPanelOpen = true
@@ -1143,9 +1179,9 @@
               <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>
             {/if}
             <span class="title-spacer" data-tauri-drag-region></span>
-            <button type="button" class="quiet artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
-            <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
           </div>
+          <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
+          <button type="button" class="quiet artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
         </header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
@@ -1187,13 +1223,25 @@
               <button type="button" class="older-threads" disabled={loadingOlderThreads} onclick={loadOlderThreads}>Older threads</button>
             {/if}
           {/if}
-          <button class="side-action home-settings" aria-label={sidebarCollapsed ? 'Home settings' : null} title={sidebarCollapsed ? 'Home settings' : null} onclick={() => { onboarding = onboardingSettingsState(onboarding) }}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 10.5 12 4.75l7.5 5.75V19a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19z" /><path d="M9.75 20.5v-5.75h4.5v5.75" /></svg>{#if !sidebarCollapsed}<span>Home settings</span>{/if}</button>
+          <div class="settings-block">
+            <button class="side-action settings-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-label={sidebarCollapsed ? 'Settings' : null} title={sidebarCollapsed ? 'Settings' : null} bind:this={settingsButton} onclick={toggleSettings}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.25" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>{#if !sidebarCollapsed}<span>Settings</span>{/if}</button>
+            {#if settingsOpen}
+              <div class="settings-popover" role="dialog" aria-label="Settings" tabindex="-1" bind:this={settingsPopover} onkeydown={settingsKeydown} use:focusSettingsOnMount>
+                <header><h2>Settings</h2><button type="button" class="quiet close-settings" aria-label="Close settings" onclick={closeSettings}>×</button></header>
+                <Appearance />
+                <section class="settings-home" aria-labelledby="settings-home-title">
+                  <h3 id="settings-home-title" class="settings-label">Home</h3>
+                  <p class="settings-path">{onboarding.homePath}</p>
+                  <button type="button" onclick={openHomeSettings}>Change folder…</button>
+                </section>
+              </div>
+            {/if}
+          </div>
           {#if !sidebarCollapsed && auth.name === 'signed-in'}
             <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
           {:else if !sidebarCollapsed && auth.name === 'local'}
             <section class="local-account" aria-labelledby="local-account-title">
               <strong id="local-account-title">Local mode</strong>
-              <Appearance />
               <button type="button" class="quiet" disabled={!!active} onclick={signIn}>Sign in for cloud features</button>
             </section>
           {/if}
@@ -1390,7 +1438,7 @@
           {/if}
           <div class="composer-input">
             <label class="visually-hidden" for="composer-message">Message</label>
-            <textarea id="composer-message" aria-describedby="composer-hint" bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
+            <textarea id="composer-message" aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
           </div>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
@@ -1414,7 +1462,7 @@
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
               </span>
             {:else}
-              <span id="composer-hint">{active?.phase === 'resuming' ? 'Reopening the existing secure session…' : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up' : auth.name === 'local' ? 'Local replies have no cloud receipt. Ask anything.' : 'Routing is automatic. Every reply carries its receipt.'}</span>
+              {#if composerHint}<span id="composer-hint">{composerHint}</span>{/if}
             {/if}
             </div>
             <div class="composer-actions">
@@ -1639,16 +1687,20 @@
   .workspace.macos.artifact-open { --titlebar-controls-end: 160px; grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--artifact-rail-width); }
   .workspace.macos.sidebar-collapsed { --sidebar-column: 52px; }
   .workspace.macos.artifact-resizing { transition: none; }
-  .titlebar-sidebar, .titlebar-thread { display: contents; }
-  .workspace.macos .titlebar { display: grid; grid-template-columns: subgrid; padding-left: var(--titlebar-inset); padding-right: var(--frame-width); }
-  .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; min-width: 0; container-type: inline-size; }
+  .workspace:not(.macos) .titlebar-sidebar, .workspace:not(.macos) .titlebar-thread { display: contents; }
+  /* A flex row, not a subgrid: padding on a subgrid shifts its tracks past the
+     frame in WebKit, which pushed the artifact control off the window. */
+  .workspace.macos .titlebar { display: flex; align-items: center; gap: 8px; padding-left: var(--titlebar-inset); padding-right: 8px; }
+  /* The frame edge is the anchor: WebKit and Blink place a subgrid item's
+     padding differently, so the artifact control leaves the column grid. */
+  .workspace.macos .update-slot { margin-left: auto; }
+  .workspace.macos .titlebar-sidebar { position: relative; z-index: 1; flex: 0 0 auto; width: calc(var(--sidebar-column) + 2 * var(--frame-width) - var(--titlebar-inset)); display: flex; align-items: center; gap: 8px; min-width: 0; container-type: inline-size; }
   /* The composer has a 760px cap, 24px gutters and a 1px panel border. */
-  .workspace.macos .titlebar-thread { grid-column: 2; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - 2 * var(--frame-width) - var(--sidebar-column))); padding-right: max(25px, calc((100% - 760px) / 2)); }
+  .workspace.macos .titlebar-thread { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
   .workspace.macos:not(.sidebar-collapsed) .side-brand { margin-left: calc(var(--titlebar-inset) - var(--frame-width) - 11px); padding-left: 0; }
   /* The collapsed sidebar keeps the controls clear of the native traffic lights. */
   .workspace.macos.sidebar-collapsed .titlebar-sidebar { width: 184px; }
   .workspace.macos.sidebar-collapsed.artifact-open .titlebar-sidebar { width: 68px; }
-  .workspace.macos .update-slot { order: 1; }
   .workspace.macos .artifacts-toggle { order: 2; }
   .workspace.macos .thread-title { padding-left: 0; }
   @container (max-width: 170px) {
@@ -1697,6 +1749,16 @@
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
   .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
   .side-action span { flex: 1; min-width: 0; }
+  .settings-block { position: relative; }
+  .settings-popover { position: absolute; z-index: 6; left: 0; bottom: calc(100% + 8px); width: min(300px, 90vw); display: grid; gap: 12px; padding: 14px 16px 16px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); }
+  .settings-popover:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .settings-popover header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .settings-popover h2 { margin: 0; font-size: var(--text-15); }
+  .close-settings { min-width: 24px; min-height: 24px; padding: 0 6px; }
+  .settings-home { display: grid; gap: 6px; }
+  .settings-label { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
+  .settings-path { margin: 0; overflow-wrap: anywhere; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .settings-home button { justify-self: start; min-height: 28px; padding: 4px 10px; }
   .local-account { display: grid; min-height: 0; overflow-y: auto; gap: 7px; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
   .local-account strong { margin-bottom: 3px; }
   .model-panel label { color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -1722,8 +1784,8 @@
   .workspace.sidebar-collapsed .side-brand { padding: 0 0 14px; }
   .workspace.sidebar-collapsed .side-action { justify-content: center; gap: 0; padding: 9px 0; }
   /* The pinned control is its own group once the threads list is gone. */
-  .workspace.sidebar-collapsed .home-settings { position: relative; margin-top: auto; }
-  .workspace.sidebar-collapsed .home-settings::before { content: ''; position: absolute; inset: -9px -6px auto; height: 1px; background: var(--border); }
+  .workspace.sidebar-collapsed .settings-action { position: relative; margin-top: auto; }
+  .workspace.sidebar-collapsed .settings-action::before { content: ''; position: absolute; inset: -9px -6px auto; height: 1px; background: var(--border); }
   .side-label { margin: 20px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
