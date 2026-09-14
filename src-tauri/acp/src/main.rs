@@ -351,7 +351,8 @@ fn load_session_response(id: Value, result: Result<(), ClientError>) -> Value {
     }
 }
 
-#[cfg(test)]
+// The load tests read /proc and the Linux runtime directory.
+#[cfg(all(test, target_os = "linux"))]
 mod load_tests {
     use super::*;
 
