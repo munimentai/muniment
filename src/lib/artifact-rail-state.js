@@ -29,7 +29,8 @@ export function artifactRailShortcut(platform = navigator.platform) {
 }
 
 export function shortcutDisplayLabel(shortcut) {
-  if (shortcut.startsWith('Meta+')) return `⌘${shortcut.slice('Meta+'.length)}`
+  // One space between the modifier and the key on every platform, so the chip reads as two parts.
+  if (shortcut.startsWith('Meta+')) return `⌘ ${shortcut.slice('Meta+'.length)}`
   if (shortcut.startsWith('Control+')) return `Ctrl ${shortcut.slice('Control+'.length)}`
   return shortcut
 }

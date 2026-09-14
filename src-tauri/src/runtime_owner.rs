@@ -23,6 +23,8 @@ pub(crate) enum RuntimeEvent {
     #[cfg(target_os = "macos")]
     RegistrationFailed,
     #[cfg(target_os = "macos")]
+    ServiceInactive,
+    #[cfg(target_os = "macos")]
     ChildStarted,
     Stopped,
     StopFailed,
@@ -265,8 +267,12 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         return;
     }
     #[cfg(target_os = "macos")]
+    // A service that never registers, or registers and never runs, yields to
+    // the bundled runtime as the desktop's child.
     let event = match crate::macos_runtime_service::start() {
-        RuntimeEvent::RegistrationFailed => crate::macos_runtime_service::start_child(&owner),
+        RuntimeEvent::RegistrationFailed | RuntimeEvent::ServiceInactive => {
+            crate::macos_runtime_service::start_child(&owner)
+        }
         event => event,
     };
     #[cfg(target_os = "windows")]
