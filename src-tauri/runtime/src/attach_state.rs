@@ -135,10 +135,13 @@ impl RuntimeAttachState {
         self.approval.clone()
     }
 
+    // Only the Linux activation reads these two.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn runtime_activity(&self) -> RuntimeActivityRegistry {
         self.runtime_activity.clone()
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn drain_state(&self) -> DrainState {
         self.drain_state.clone()
     }
