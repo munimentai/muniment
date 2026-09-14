@@ -16,7 +16,7 @@
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createArtifactRailController, defaultArtifactRailWidth, isArtifactRailShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
-  import { ringPath, solidMilledRingPath } from './lib/mark.js'
+  import { solidMilledRingPath } from './lib/mark.js'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage, toolName, toolStatus } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
   import { listenForLauncher } from './lib/launcher-bridge.js'
@@ -38,8 +38,8 @@
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
   import { createWindowTitle } from './lib/window-title.js'
 
-  const markD = ringPath()
-  const thinkingMarkD = solidMilledRingPath()
+  const sealD = solidMilledRingPath()
+  const thinkingMarkD = sealD
   const version = __APP_VERSION__
 
   function boundedAttachClaim(value) {
@@ -270,6 +270,17 @@
     onParallelTools: (next) => { parallelTools = next },
   })
   const { scrollToLatest, followNewContent, handleScroll: handleThreadScroll, copyResponse, toggleReceipt } = transcriptController
+
+  // The thread's scroll bar thumb shows while the thread scrolls and for a
+  // second after, then hides until the pointer rests on the thread.
+  let threadScrolling = $state(false)
+  let threadScrollTimer
+  function onThreadScroll() {
+    handleThreadScroll()
+    threadScrolling = true
+    clearTimeout(threadScrollTimer)
+    threadScrollTimer = setTimeout(() => { threadScrolling = false }, 1000)
+  }
 
   const artifactRailController = createArtifactRailController({
     readOpen: () => artifactRailOpen,
@@ -833,6 +844,15 @@
     }
   }
 
+  // A saved session launches signed in. Any other shell past onboarding enters
+  // local mode on its own, including the shell a sign-out leaves behind. The
+  // first run keeps its own entry, and a failed entry keeps the sign-in screen.
+  $effect(() => {
+    if (onboarding.name === 'complete' && auth.name === 'signed-out' && !localEntryPending && !localEntryError) {
+      void enterLocalMode()
+    }
+  })
+
   async function enterLocalMode() {
     if (auth.name !== 'signed-out' || localEntryPending) return
     localEntryPending = true
@@ -1171,7 +1191,7 @@
   {#if !workspaceMode() || onboarding.name !== 'complete'}
     <div class="lockup">
       <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true">
-        <path d={markD} stroke-width="5.6" />
+        <path d={sealD} fill-rule="evenodd" />
       </svg>
       {#if onboarding.name === 'complete' && (auth.name === 'signed-out' || auth.name === 'signing-in')}
         <h1 class="name">muniment</h1>
@@ -1274,7 +1294,7 @@
                 {#if auth.name === 'local'}
                   <section class="settings-account" aria-labelledby="settings-account-title">
                     <h3 id="settings-account-title" class="settings-label">Account</h3>
-                    <button type="button" disabled={!!active} onclick={signIn}>Sign in for cloud features</button>
+                    <button type="button" disabled={!!active || localEntryPending} onclick={signIn}>Sign in for cloud features</button>
                   </section>
                 {/if}
               </section>
@@ -1285,7 +1305,7 @@
         <div class="thread-panel">
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <div class="thread-shell">
-        <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
+        <div class="thread" class:scrolling={threadScrolling} role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={onThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
           {#if messages.length === 0}<p class="empty">{auth.name === 'local' ? 'Your model answers here. Ask anything.' : "Ask anything. Your org's routing decides which model answers."}</p>{/if}
           {#each messages as message}
@@ -1628,7 +1648,7 @@
     padding: 24px;
   }
 
-  /* Lockup (§1.8): static ink mark at rest beside the wordmark,
+  /* Lockup (§1.8): the seal, static ink at rest beside the wordmark,
      Schibsted 600, lowercase, −1% tracking. */
   .lockup {
     display: flex;
@@ -1637,9 +1657,7 @@
   }
 
   .lockup path {
-    fill: none;
-    stroke: var(--ink);
-    stroke-linecap: round;
+    fill: var(--ink);
   }
 
   .name {
@@ -1833,6 +1851,7 @@
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
   .thread-shell { position: relative; min-height: 0; }
   .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
+  .thread.scrolling::-webkit-scrollbar-thumb { background: var(--border); }
   .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-turn { margin: 0 0 28px auto; }

@@ -96,9 +96,9 @@ checkable in the diff:
 - `muniment-runtime` carries the ASR rpath on macOS. It lives one directory
   deeper than the app binary, so its path is `../../Resources`. The Linux e2e
   runner exports no `LD_LIBRARY_PATH`, so the probe proves the real install.
-- The signed-out shell offers a control that enters the thread surface with no
-  cloud session. The Pi sidecar authenticates with Pi's own credential store,
-  never a cloud virtual key.
+- A saved cloud session launches signed in. Any other launch enters the thread
+  surface in local mode, with sign-in in the Settings menu. The Pi sidecar
+  authenticates with Pi's own credential store, never a cloud virtual key.
 - The runtime logs its startup and the desktop logs the native-auth call, so a
   silent auth path names its cause from an envelope.
 - Signed-in runs give Pi 30 seconds to become ready. After readiness each prompt has

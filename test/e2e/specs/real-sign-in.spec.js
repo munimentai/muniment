@@ -108,7 +108,8 @@ describe('installed nightly', () => {
     if (await profile.isExisting()) {
       await profile.click()
       await (await $('button=Sign out')).click()
-      await (await $('button=Sign in')).waitForDisplayed({ timeout: 30000 })
+      // A sign-out lands in local mode.
+      await (await $('[data-testid="local-mode"]')).waitForDisplayed({ timeout: 30000 })
     }
   })
 

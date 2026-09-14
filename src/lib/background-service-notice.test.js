@@ -48,6 +48,7 @@ describe('runtime notice', () => {
     ['approved', 'The runtime registration has approval.'],
     ['notFound', 'The runtime registration found no service.'],
     ['registrationFailed', 'The runtime registration failed.'],
+    ['childStarted', 'The runtime registration failed, so the desktop runs the runtime itself.'],
     ['stopped', 'The runtime stopped.'],
     ['stopFailed', 'The runtime stop failed.'],
   ])('names the last event %s in one sentence', (event, text) => {

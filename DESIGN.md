@@ -70,7 +70,10 @@ verdigris and animated: an irregular breath that flexes scale, stroke and
 milling depth together, a spin that eases toward a new random target and often
 stops, and a rare trace that runs the outline once. All visible instances
 animate in sync as one organism. At 20px and below it renders as a solid
-two-edge reduction. [docs/design-reference/ring/muniment-ring-pulse-spin.html](docs/design-reference/ring/muniment-ring-pulse-spin.html)
+two-edge reduction. That reduction is the seal: the application icon is the
+seal in verdigris on the dark brand card, and the lockup on the launch
+screen renders the seal in ink at 34px so the mark there matches the icon.
+[docs/design-reference/ring/muniment-ring-pulse-spin.html](docs/design-reference/ring/muniment-ring-pulse-spin.html)
 is the reference geometry and animation engine.
 
 ## Grammar
@@ -89,7 +92,7 @@ New thread, the thread title, and Artifacts flush right with the update
 control beside it. Windows keeps its native caption controls and Linux keeps
 its decorations. The sidebar holds the threads and one Settings control at its
 foot that expands a menu inside the sidebar: appearance, Home and the account.
-The mark appears on the signed-out screen and in the thinking state, never in
+The mark appears on the launch screen and in the thinking state, never in
 the sidebar. Icons are Lucide, vendored as inline SVG at a 1.6px stroke. Sidebar, thread and rail sit
 on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
 the frame shows at every edge and between panels. The update control is a 20px
