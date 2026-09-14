@@ -44,9 +44,7 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
     }
 
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
-        self.app
-            .path()
-            .app_data_dir()
+        muniment_runtime::profile_directory()
             .map(|path| ChatProfile::new(path).pi_session_root())
             .map_err(|_| PiLaunchError::UnavailableSessionRoot)
     }
@@ -516,8 +514,8 @@ impl ChatState {
         if self.storage.get().is_some() {
             return Ok(());
         }
-        let directory = app.path().app_data_dir()?;
-        let config_directory = app.path().app_config_dir()?;
+        let directory = muniment_runtime::profile_directory()?;
+        let config_directory = directory.clone();
         let profile = ChatProfile::new(directory);
         let (mut journal, cas) = profile.open_storage()?;
         reconcile_interrupted_runs(&mut journal, &desktop_provenance(None));

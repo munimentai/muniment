@@ -1,10 +1,9 @@
-use std::ffi::OsStr;
 use std::path::Path;
 
 use muniment_runtime::{
-    installed_desktop_executable, installed_desktop_executable_from, macos_log_directory_from_home,
-    resolve_directory, windows_log_directory_from_local_app_data,
-    windows_state_directory_from_app_data, DirectoryUnavailableError, APPLICATION_IDENTIFIER,
+    config_directory, installed_desktop_executable, installed_desktop_executable_from,
+    macos_log_directory_from_home, profile_directory, windows_log_directory_from_local_app_data,
+    DirectoryUnavailableError, APPLICATION_IDENTIFIER,
 };
 
 #[test]
@@ -117,56 +116,14 @@ fn resolves_the_running_executable_with_the_installed_layout_rule() {
 }
 
 #[test]
-fn uses_an_absolute_xdg_directory() {
-    let directory = resolve_directory(
-        Some(OsStr::new("/xdg/data")),
-        Some(OsStr::new("/home/person")),
-        ".local/share",
-    )
-    .unwrap();
-
-    assert_eq!(directory, Path::new("/xdg/data/ai.muniment.desktop"));
-}
-
-#[test]
-fn skips_a_relative_xdg_directory_and_uses_home() {
-    let directory = resolve_directory(
-        Some(OsStr::new("relative/data")),
-        Some(OsStr::new("/home/person")),
-        ".local/share",
-    )
-    .unwrap();
-
-    assert_eq!(
-        directory,
-        Path::new("/home/person/.local/share/ai.muniment.desktop")
-    );
-}
-
-#[test]
-fn maps_the_config_fallback() {
-    let directory = resolve_directory(None, Some(OsStr::new("/home/person")), ".config").unwrap();
-
-    assert_eq!(
-        directory,
-        Path::new("/home/person/.config/ai.muniment.desktop")
-    );
-}
-
-#[test]
-fn rejects_missing_and_relative_sources() {
-    assert_eq!(
-        resolve_directory(None, None, ".config"),
-        Err(DirectoryUnavailableError)
-    );
-    assert_eq!(
-        resolve_directory(
-            Some(OsStr::new("relative/config")),
-            Some(OsStr::new("relative/home")),
-            ".config",
-        ),
-        Err(DirectoryUnavailableError)
-    );
+fn state_and_config_share_one_root_named_by_the_override_or_the_home() {
+    let state = profile_directory().unwrap();
+    assert_eq!(config_directory().unwrap(), state);
+    assert!(state.is_absolute());
+    match std::env::var_os(muniment_core::state_root::STATE_DIRECTORY_OVERRIDE) {
+        Some(value) if Path::new(&value).is_absolute() => assert_eq!(state, Path::new(&value)),
+        _ => assert!(state.ends_with(muniment_core::state_root::STATE_DIRECTORY_NAME)),
+    }
 }
 
 #[test]
@@ -177,31 +134,6 @@ fn tauri_identifier_matches_the_runtime_identifier() {
     let identifier = format!("\"identifier\": \"{APPLICATION_IDENTIFIER}\"");
 
     assert!(config.contains(&identifier));
-}
-
-#[test]
-fn maps_an_absolute_app_data_root_to_the_windows_state_directory() {
-    assert_eq!(
-        windows_state_directory_from_app_data(Path::new("/Users/person/AppData/Roaming")).unwrap(),
-        Path::new("/Users/person/AppData/Roaming/ai.muniment.desktop")
-    );
-}
-
-#[test]
-fn rejects_a_relative_windows_app_data_root() {
-    assert_eq!(
-        windows_state_directory_from_app_data(Path::new("AppData/Roaming")),
-        Err(DirectoryUnavailableError)
-    );
-}
-
-#[test]
-fn preserves_a_parent_segment_in_the_windows_app_data_root() {
-    assert_eq!(
-        windows_state_directory_from_app_data(Path::new("/Users/person/AppData/Local/../Roaming"))
-            .unwrap(),
-        Path::new("/Users/person/AppData/Local/../Roaming/ai.muniment.desktop")
-    );
 }
 
 #[test]

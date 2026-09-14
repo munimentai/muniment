@@ -220,19 +220,18 @@ fn drives_pi_launch_config_over_the_profile_directory() {
     );
     assert_eq!(
         sink.pi_session_root().unwrap(),
-        profile.profile.join("pi-sessions")
+        profile.profile.join("sessions")
     );
-    assert_eq!(sink.pi_install_root().unwrap(), profile.profile.join("pi"));
+    assert_eq!(
+        sink.pi_install_root().unwrap(),
+        profile.profile.join("harness")
+    );
     assert_eq!(sink.memory_agent_extension_path(), Some(extension.clone()));
     let config = pi_launch_config_for_executable(&sink, "pi".into(), &grant(), None).unwrap();
     assert!(config.args.windows(2).any(|args| {
         args == [
             "--session-dir",
-            profile
-                .profile
-                .join("pi-sessions")
-                .to_string_lossy()
-                .as_ref(),
+            profile.profile.join("sessions").to_string_lossy().as_ref(),
         ]
     }));
     assert!(config

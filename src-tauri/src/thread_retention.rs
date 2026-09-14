@@ -12,9 +12,8 @@ use crate::attach_service::{AttachCompanionState, DesktopClientSession};
 use crate::auth;
 use crate::chat::{ChatState, RetentionTrigger};
 
-fn config_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    app.path()
-        .app_config_dir()
+fn config_dir(_app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    muniment_runtime::profile_directory()
         .map_err(|_| "Muniment configuration storage is unavailable.".to_string())
 }
 

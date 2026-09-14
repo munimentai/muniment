@@ -82,9 +82,8 @@ fn map_home_error(error: HomeError) -> HomeImportError {
     }
 }
 
-fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_config_dir()
+fn config_dir(_app: &AppHandle) -> Result<PathBuf, String> {
+    muniment_runtime::profile_directory()
         .map_err(|_| "Muniment configuration storage is unavailable.".to_string())
 }
 

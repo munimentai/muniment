@@ -49,14 +49,14 @@ defines `NativeInstallLock` over `install.lock`.
 ### Store location and owner
 
 The core service owns one classifier store for each logged-in OS user. It uses
-`app_data_dir()/models/classifier/`, beside the current app-data model root.
-The resolved roots are:
+`models/classifier/` under the app's state root, beside the other model roots.
+The state root is `~/.muniment` on every platform, or the directory
+`MUNIMENT_STATE_DIR` names, so the resolved store is:
 
 | Platform | Shared classifier store |
 | --- | --- |
-| macOS | `~/Library/Application Support/ai.muniment.desktop/models/classifier/` |
-| Windows | `%APPDATA%\ai.muniment.desktop\models\classifier\` |
-| Linux | `$XDG_DATA_HOME/ai.muniment.desktop/models/classifier/`, or `~/.local/share/ai.muniment.desktop/models/classifier/` when unset |
+| macOS, Linux | `~/.muniment/models/classifier/` |
+| Windows | `%USERPROFILE%\.muniment\models\classifier\` |
 
 No surface owns a private copy. This choice gives all three desktop surfaces
 one per-user path and one custody boundary.

@@ -65,7 +65,7 @@ index_failure_artifacts() {
 }
 
 collect_local_mode_pi_log() {
-  local session_root="$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions"
+  local session_root="$MUNIMENT_STATE_DIR/sessions"
   local destination="$raw/pi-local-mode-chat.log" session count=0
   # Keep the local run diagnostics before another spec starts Pi.
   if [[ -f "$raw/muniment-runtime.log" ]]; then
@@ -324,16 +324,18 @@ export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"
 ready=1
 # Run the installed chat specs first. Each later phase still runs after a failure.
 export XDG_DATA_HOME="$state_root/ready/data" XDG_CONFIG_HOME="$state_root/ready/config" XDG_CACHE_HOME="$state_root/ready/cache"
+export MUNIMENT_STATE_DIR="$state_root/ready/state"
 export MUNIMENT_E2E_HOME_PATH="$state_root/ready-home"
 run_e2e "$raw/wdio.log" 0 test/e2e/specs/local-mode-chat.spec.js || status=1
 collect_local_mode_pi_log || runner_failure 'The runner could not collect the Pi local mode log.'
-# Remove $state_root/ready/config/ai.muniment.desktop/local-mode before sign-in.
-if rm -f -- "$XDG_CONFIG_HOME/ai.muniment.desktop/local-mode"; then
+# Remove $state_root/ready/state/local-mode before sign-in.
+if rm -f -- "$MUNIMENT_STATE_DIR/local-mode"; then
   run_e2e "$raw/wdio-sign-in.log" 0 test/e2e/specs/real-sign-in.spec.js || status=1
 else
   runner_failure 'Local mode marker cleanup failed before sign-in.'
 fi
 export XDG_DATA_HOME="$state_root/degraded/data" XDG_CONFIG_HOME="$state_root/degraded/config" XDG_CACHE_HOME="$state_root/degraded/cache"
+export MUNIMENT_STATE_DIR="$state_root/degraded/state"
 export MUNIMENT_E2E_ONBOARDING_ONLY=1 MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
 run_e2e "$raw/wdio-onboarding.log" || status=1
 unset MUNIMENT_E2E_ONBOARDING_ONLY

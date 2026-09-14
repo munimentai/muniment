@@ -367,8 +367,7 @@ pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             .record_listener_pending();
     }
     let Some(state) = initialize_attach_listener(&app, || {
-        app.path()
-            .app_data_dir()
+        muniment_runtime::profile_directory()
             .ok()
             .map(|path| path.join(COMPANION_CREDENTIAL_FILE_NAME))
     }) else {

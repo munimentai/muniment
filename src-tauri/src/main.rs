@@ -92,14 +92,15 @@ fn main() {
             let _ = (webview, payload);
         })
         .setup(move |app| {
+            // Every file the app keeps lives under one root, and an earlier
+            // install's files move there before anything opens them.
+            let state = muniment_runtime::adopt_state_directory()?;
             window_state::restore_main_window(app)?;
             #[cfg(target_os = "macos")]
             launcher::setup(app.handle())?;
-            let app_data = app.path().app_data_dir()?;
-            let app_config = app.path().app_config_dir()?;
             let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
-                app_config,
-                app_data.join("memory"),
+                state.clone(),
+                state.join("memory"),
             ));
             app.manage(Arc::clone(&memory_runtime));
             #[cfg(unix)]
@@ -111,7 +112,7 @@ fn main() {
                 app.manage(chat::ChatState::new(runtime_activity.clone()));
             }
             runtime_owner::setup(app.handle());
-            let parakeet_root = app.path().app_data_dir()?.join("models").join("parakeet");
+            let parakeet_root = state.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
             )?);

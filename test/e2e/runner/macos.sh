@@ -10,10 +10,9 @@ safe="$run_root/safe"
 archive="$run_root/muniment-nightly.app.zip"
 expanded="$run_root/expanded"
 state_root="$run_root/state"
-runtime_state=${MUNIMENT_E2E_RUNTIME_STATE:-"$HOME/.local/share/ai.muniment.desktop"}
-runtime_config_root=${XDG_CONFIG_HOME:-}
-[[ $runtime_config_root == /* ]] || runtime_config_root="$HOME/Library/Application Support"
-runtime_config=${MUNIMENT_E2E_RUNTIME_CONFIG:-"$runtime_config_root/ai.muniment.desktop"}
+# State and config share one root, and the probe still takes both arguments.
+runtime_state=${MUNIMENT_E2E_RUNTIME_STATE:-"$HOME/.muniment"}
+runtime_config=${MUNIMENT_E2E_RUNTIME_CONFIG:-"$runtime_state"}
 runtime_log="$HOME/Library/Logs/Muniment/runtime.log"
 cleanup_log="$run_root/cleanup.log"
 cleanup_status_ledger=

@@ -13,12 +13,14 @@ const temp = () => {
 afterEach(() => {
   for (const directory of temporary.splice(0)) fs.rmSync(directory, { recursive: true, force: true })
 })
-const plant = (root, name, text) => {
-  const file = path.join(root, 'ai.muniment.desktop', name)
+// Logs sit under the local application data identifier; state sits in the profile root itself.
+const plant = (root, name, text, prefix = 'ai.muniment.desktop') => {
+  const file = path.join(root, prefix, name)
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, text)
   return file
 }
+const plantState = (root, name, text) => plant(root, name, text, '.')
 const collect = (input) => spawnSync(process.execPath, ['test/e2e/support/windows-local-mode-logs.mjs'], {
   input: JSON.stringify(input), encoding: 'utf8',
 })
@@ -26,10 +28,10 @@ const collect = (input) => spawnSync(process.execPath, ['test/e2e/support/window
 it('Collects known-folder and redirected Pi logs before another spec replaces the runtime log.', () => {
   const local = temp(); const roaming = temp(); const redirected = temp(); const destination = temp()
   const runtime = plant(local, 'logs/runtime.log', 'muniment-runtime: run_id=local-run pi_spawn started\n')
-  plant(roaming, 'pi-sessions/local.jsonl', '{"type":"session","id":"local-run"}\n')
-  plant(redirected, 'pi-sessions/redirected.jsonl', '{"type":"session","id":"redirected-run"}\n')
-  plant(roaming, 'credentials.json', 'private credentials')
-  plant(roaming, 'pi-sessions/ignored.txt', 'private non-session file')
+  plantState(roaming, 'sessions/local.jsonl', '{"type":"session","id":"local-run"}\n')
+  plantState(redirected, 'sessions/redirected.jsonl', '{"type":"session","id":"redirected-run"}\n')
+  plantState(roaming, 'agent/auth.json', 'private credentials')
+  plantState(roaming, 'sessions/ignored.txt', 'private non-session file')
   const result = collect({ localRoots: [local, local, null], profileRoots: [roaming, redirected, roaming, ''], destination })
   expect(result.status, result.stderr).toBe(0)
   const session = fs.readFileSync(path.join(destination, 'pi-local-mode-chat.log'), 'utf8')
@@ -50,7 +52,7 @@ it('Collects known-folder and redirected Pi logs before another spec replaces th
 
 it('Names missing logs and ignores directories with session file names.', () => {
   const root = temp(); const destination = temp()
-  fs.mkdirSync(path.join(root, 'ai.muniment.desktop', 'pi-sessions', 'directory.jsonl'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'sessions', 'directory.jsonl'), { recursive: true })
   const result = collect({ localRoots: [root], profileRoots: [root], destination })
   expect(result.status, result.stderr).toBe(0)
   expect(fs.readFileSync(path.join(destination, 'pi-local-mode-chat.log'), 'utf8'))
@@ -61,7 +63,7 @@ it('Names missing logs and ignores directories with session file names.', () => 
 
 it('Reports collection errors instead of treating an unreadable session directory as missing.', () => {
   const root = temp(); const destination = temp()
-  plant(root, 'pi-sessions', 'not a directory')
+  plantState(root, 'sessions', 'not a directory')
   const result = collect({ localRoots: [root], profileRoots: [root], destination })
   expect(result.status).not.toBe(0)
   expect(result.stderr).toContain('ENOTDIR')
@@ -92,6 +94,6 @@ it('Collects local mode logs after failure and before sign-in without changing t
   expect(collection).toBeLessThan(signIn)
   expect(runner.slice(localMode, collection)).toContain('Save-RunnerFailure $_')
   expect(runner.slice(collection, signIn)).toContain('Save-RunnerFailure $_')
-  expect(runner).toContain('profileRoots = @($runtimeAppData, $env:APPDATA)')
-  expect(runner).toContain('[Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)')
+  expect(runner).toContain('profileRoots = @((Get-E2eProfileDirectory))')
+  expect(runner).toContain('[Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)')
 })

@@ -53,67 +53,40 @@ impl std::fmt::Display for DirectoryUnavailableError {
 
 impl std::error::Error for DirectoryUnavailableError {}
 
-pub fn resolve_directory(
-    xdg_value: Option<&OsStr>,
-    home_value: Option<&OsStr>,
-    fallback_segment: impl AsRef<Path>,
-) -> Result<PathBuf, DirectoryUnavailableError> {
-    xdg_value
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| {
-            home_value
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-                .map(|path| path.join(fallback_segment))
-        })
-        .map(|path| path.join(APPLICATION_IDENTIFIER))
-        .ok_or(DirectoryUnavailableError)
+/// The one root for runtime state, desktop config and the agent harness:
+/// `~/.muniment`, or the directory `MUNIMENT_STATE_DIR` names.
+pub fn profile_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    muniment_core::state_root::state_directory().ok_or(DirectoryUnavailableError)
 }
 
-pub fn windows_state_directory_from_app_data(
-    app_data: &Path,
-) -> Result<PathBuf, DirectoryUnavailableError> {
-    if !app_data.is_absolute() {
-        return Err(DirectoryUnavailableError);
+/// Config and state share the root, so the desktop and the runtime read one
+/// local-mode marker and one Home record.
+pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    profile_directory()
+}
+
+/// Resolves the root and moves an earlier install's files under it once. An
+/// adoption failure is logged and the root still answers, so a fresh start
+/// follows a move the filesystem refused.
+pub fn adopt_state_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    use muniment_core::state_root::{adopt_legacy_state, legacy_roots, Adoption};
+    let state = profile_directory()?;
+    match adopt_legacy_state(&state, &legacy_roots()) {
+        Ok(Adoption::Moved) => {
+            muniment_core::runtime_eprintln!(
+                "muniment-runtime: state_adoption outcome=moved state_directory={}",
+                state.display()
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            muniment_core::runtime_eprintln!(
+                "muniment-runtime: state_adoption outcome=failed state_directory={} error={error}",
+                state.display()
+            );
+        }
     }
-    Ok(app_data.join(APPLICATION_IDENTIFIER))
-}
-
-#[cfg(target_os = "windows")]
-fn windows_state_directory() -> Result<PathBuf, DirectoryUnavailableError> {
-    let app_data = muniment_core::windows_known_folders::windows_roaming_app_data()
-        .map_err(|_| DirectoryUnavailableError)?;
-    windows_state_directory_from_app_data(&app_data)
-}
-
-#[cfg(target_os = "windows")]
-pub fn profile_directory() -> Result<PathBuf, DirectoryUnavailableError> {
-    windows_state_directory()
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn profile_directory() -> Result<PathBuf, DirectoryUnavailableError> {
-    let xdg_value = std::env::var_os("XDG_DATA_HOME");
-    let home_value = std::env::var_os("HOME");
-    resolve_directory(xdg_value.as_deref(), home_value.as_deref(), ".local/share")
-}
-
-#[cfg(target_os = "windows")]
-pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
-    windows_state_directory()
-}
-
-#[cfg(target_os = "macos")]
-pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
-    muniment_core::local_mode::macos_config_directory().ok_or(DirectoryUnavailableError)
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
-    let xdg_value = std::env::var_os("XDG_CONFIG_HOME");
-    let home_value = std::env::var_os("HOME");
-    resolve_directory(xdg_value.as_deref(), home_value.as_deref(), ".config")
+    Ok(state)
 }
 
 pub fn macos_log_directory_from_home(home: &Path) -> Result<PathBuf, DirectoryUnavailableError> {
@@ -157,13 +130,12 @@ mod windows_tests {
     use super::*;
 
     #[test]
-    fn profile_directory_uses_the_roaming_known_folder() {
-        let roaming_app_data = muniment_core::windows_known_folders::windows_roaming_app_data()
-            .expect("roaming application data should resolve");
+    fn profile_directory_is_the_user_profile_dotdir() {
+        let profile = std::env::var_os("USERPROFILE").expect("USERPROFILE should be set");
 
         assert_eq!(
             profile_directory(),
-            Ok(roaming_app_data.join(APPLICATION_IDENTIFIER))
+            Ok(PathBuf::from(profile).join(".muniment"))
         );
     }
 

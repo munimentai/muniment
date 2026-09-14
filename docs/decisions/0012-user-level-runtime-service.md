@@ -1138,15 +1138,10 @@ defend against a compromised process running as the same user.
 
 ## Amendment – 2026-08-23: Windows runtime state directory
 
-The Windows runtime state directory is
-`%APPDATA%\ai.muniment.desktop`. The runtime opens the journal and CAS there.
-This path equals both directories that the desktop opens through Tauri.
-
-The author checked Tauri 2.11.5 and its `dirs` 6.0.0 dependency. On Windows,
-Tauri's `app_data_dir` uses `dirs::data_dir`, which resolves to
-`FOLDERID_RoamingAppData`. Tauri's `app_config_dir` uses `dirs::config_dir`,
-which also resolves to `FOLDERID_RoamingAppData`. Tauri appends the application
-identifier to each known-folder path.
+The Windows runtime state directory is `%USERPROFILE%\.muniment`, or the
+directory `MUNIMENT_STATE_DIR` names. The runtime opens the journal and CAS
+there, and the desktop opens the same root through the runtime crate's
+resolver, so no Tauri known-folder path takes part.
 
 ## Amendment – 2026-08-24: Windows attach peer check read order
 

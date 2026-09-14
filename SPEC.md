@@ -393,8 +393,8 @@ is open work: closing it is a gate change first and a symptom ticket second.
 | --- | ---: | --- |
 | `src/lib` | 56 | Largest naming family |
 
-## CI
+## State on disk
 
-Desktop builds run on ephemeral pve01 VM clones through the `desktop-ci`
-driver, two at a time. The lint and structure smoke runs on the shared
-self-hosted runners with no Docker and no GUI. Real builds happen in the VMs.
+Every file the app, the runtime and the agent harness keep sits under one
+root, `~/.muniment`, or the directory `MUNIMENT_STATE_DIR` names. Home is the
+document folder, a different thing. Logs keep their platform paths.
