@@ -609,6 +609,15 @@ pkill() {
     if [[ $key == wdio ]]; then rm -f "$process_root/worker"; fi
   fi
 }
+node() {
+  # The fixture records the forwarder instead of binding a port, and leaves
+  # every other node helper alone.
+  if [[ \${1:-} == test/e2e/support/ollama-forward.mjs ]]; then
+    printf 'ollama-forward: %s\\n' "$2" >>"$cleanup_log"
+    return 0
+  fi
+  command node "$@"
+}
 launchctl() { if [[ $1 == setenv ]]; then
     if [[ $2 == BUN_CONFIG_VERBOSE_FETCH ]]; then printf 'verbose-fetch: %s\\n' "$3" >>"$cleanup_log"; return; fi
     [[ $3 == "$HOME/Library/Application Support" ]]; return; fi
