@@ -445,8 +445,8 @@ dbus-run-session() {
   printf 'session: %s\\n' "$spec" >>"$cleanup_log"
   touch "$raw/xdg-desktop-portal.log" "$raw/driver-app.log"
   printf 'muniment-runtime: run_id=fixture-%s pi_stderr_tail=["provider failed"]\\n' "$spec" >>"$raw/muniment-runtime.log"
-  mkdir -p "$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions"
-  printf '{"message":{"provider":"ollama","stopReason":"error","errorMessage":"%s provider failed"}}\\n' "$spec" >"$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions/session.jsonl"
+  mkdir -p "$MUNIMENT_STATE_DIR/sessions"
+  printf '{"message":{"provider":"ollama","stopReason":"error","errorMessage":"%s provider failed"}}\\n' "$spec" >"$MUNIMENT_STATE_DIR/sessions/session.jsonl"
   for key in app desktop runtime driver wdio; do touch "$process_root/$key"; done
   [[ $spec != "$FAILED_SPEC" ]]
 }
@@ -486,8 +486,8 @@ ${sequence}
 
   it.each(['missing', 'empty', 'multiple', 'copy-failure'])('Collects Pi log evidence with %s session state.', (state) => {
     const directory = temp()
-    const data = path.join(directory, 'data')
-    const sessions = path.join(data, 'ai.muniment.desktop/pi-sessions')
+    const data = path.join(directory, 'state')
+    const sessions = path.join(data, 'sessions')
     if (state !== 'missing') fs.mkdirSync(sessions, { recursive: true })
     if (state === 'multiple' || state === 'copy-failure') {
       fs.writeFileSync(path.join(sessions, 'first.jsonl'), '{"errorMessage":"provider failed with fixture-secret"}\n')
@@ -498,7 +498,7 @@ ${sequence}
     const collector = runner.slice(runner.indexOf('collect_local_mode_pi_log()'), runner.indexOf('\n# shellcheck source=../support/runner-failure.sh'))
     const result = spawnSync('bash', ['-c', `set -uo pipefail
 raw=$1
-XDG_DATA_HOME=$2
+MUNIMENT_STATE_DIR=$2
 cleanup_log="$raw/cleanup.log"
 ${collector}
 ${state === 'copy-failure' ? 'cat() { return 1; }' : ''}
@@ -657,8 +657,8 @@ npm() {
   printf 'session: %s\\n' "$spec" >>"$cleanup_log"
   touch "$raw/first-spec"
   printf 'muniment-runtime: run_id=fixture-%s pi_stderr_tail=["provider failed"]\\n' "$spec" >>"$runtime_log"
-  mkdir -p "$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions"
-  printf '{"message":{"provider":"ollama","stopReason":"error","errorMessage":"%s provider failed"}}\\n' "$spec" >"$XDG_DATA_HOME/ai.muniment.desktop/pi-sessions/session.jsonl"
+  mkdir -p "$HOME/.muniment/sessions"
+  printf '{"message":{"provider":"ollama","stopReason":"error","errorMessage":"%s provider failed"}}\\n' "$spec" >"$HOME/.muniment/sessions/session.jsonl"
   for key in ${processes.join(' ')}; do touch "$process_root/$key"; done
   [[ $spec != "$FAILED_SPEC" ]]
 }
@@ -3972,9 +3972,10 @@ describe('Windows onboarding profile isolation', () => {
   })
 
   it('Resets the known-folder onboarding files for each phase without changing the installed product.', () => {
-    expect(functions).toContain('[Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)')
-    expect(functions).toContain("return Join-Path $roaming 'ai.muniment.desktop'")
+    expect(functions).toContain('[Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)')
+    expect(functions).toContain("return Join-Path $profile '.muniment'")
     expect(functions).not.toContain('$env:APPDATA')
+    expect(functions).not.toContain('$env:USERPROFILE')
     expect(runner).toContain("'test/e2e/specs/local-mode-chat.spec.js' -ProfileState first-run")
     expect(runner).toContain("'test/e2e/specs/real-sign-in.spec.js' -ProfileState signed-out")
     expect(runner).toContain('"Windows onboarding tests failed" -ProfileState first-run')
@@ -3993,8 +3994,8 @@ describe('Windows onboarding profile isolation', () => {
     ['configured', 'invalid', false, false],
   ])('Handles %s state with %s and stop failure %s.', (state, profileState, stopFails, starts) => {
     const directory = temp()
-    const profile = path.join(directory, 'known folder [fixture]', 'ai.muniment.desktop')
-    const redirected = path.join(directory, 'redirected', 'ai.muniment.desktop')
+    const profile = path.join(directory, 'known folder [fixture]', '.muniment')
+    const redirected = path.join(directory, 'redirected', '.muniment')
     fs.mkdirSync(redirected, { recursive: true })
     fs.writeFileSync(path.join(redirected, 'home.json'), 'redirected Home')
     if (state !== 'missing') {
@@ -4113,8 +4114,8 @@ catch { Write-Output $_.Exception.Message; exit 1 }
   }, 30_000)
 })
 
-describe.skipIf(process.platform === 'win32')('macOS WDIO runtime endpoint', () => {
-  it.each(['', '/redirected/data', 'relative/data'])('Keeps the launchd endpoint across isolated spec homes with XDG_DATA_HOME=%s.', (inheritedDataHome) => {
+describe.skipIf(process.platform === 'win32')('macOS WDIO spec homes', () => {
+  it('Redirects each spec home while the login home keeps the runtime.', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/macos-wdio.sh'), 'utf8')
     const sequence = runner.slice(runner.indexOf('# Each spec starts'))
     const specs = ['local-mode-chat', 'real-sign-in', 'onboarding', 'cleanup']
@@ -4126,23 +4127,20 @@ set -uo pipefail
 state_root="$FIXTURE_STATE_ROOT"
 raw="$state_root/raw"
 run_e2e() {
-  printf '%s\\n' "$1" "$HOME" "$XDG_DATA_HOME/ai.muniment.desktop/muniment/attach-v1.sock" "$MUNIMENT_E2E_HOME_PATH"
+  printf '%s\\n' "$1" "$HOME" "$MUNIMENT_E2E_HOME_PATH"
 }
 ${sequence}
 `], {
       encoding: 'utf8', timeout: 10_000,
-      env: { ...process.env, HOME: home, XDG_DATA_HOME: inheritedDataHome, FIXTURE_STATE_ROOT: stateRoot },
+      env: { ...process.env, HOME: home, FIXTURE_STATE_ROOT: stateRoot },
     })
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout.trim().split('\n')).toEqual(specs.flatMap((spec, index) => {
       const phase = index < 2 ? 'degraded' : 'ready'
-      return [
-        spec,
-        path.join(stateRoot, phase),
-        path.join(home, '.local/share/ai.muniment.desktop/muniment/attach-v1.sock'),
-        path.join(stateRoot, `${phase}-home`),
-      ]
+      return [spec, path.join(stateRoot, phase), path.join(stateRoot, `${phase}-home`)]
     }))
+    // The login home's state root links to each spec home, so no data-home variable is needed.
+    expect(sequence).not.toContain('XDG_DATA_HOME')
   })
 })
 

@@ -28,23 +28,23 @@ describe.skipIf(process.platform === 'win32')('Linux sign-in state cleanup', () 
       run_e2e() {
         case \${3:-} in
           *local-mode-chat.spec.js)
-            [[ $XDG_CONFIG_HOME == "$state_root/ready/config" ]] || exit 2
+            [[ $MUNIMENT_STATE_DIR == "$state_root/ready/state" ]] || exit 2
             printf 'local\\n'
-            mkdir -p "$XDG_CONFIG_HOME/ai.muniment.desktop"
+            mkdir -p "$MUNIMENT_STATE_DIR"
             case $scenario in
-              stale|failed-chat) touch "$XDG_CONFIG_HOME/ai.muniment.desktop/local-mode" ;;
-              cleanup-error) mkdir "$XDG_CONFIG_HOME/ai.muniment.desktop/local-mode" ;;
+              stale|failed-chat) touch "$MUNIMENT_STATE_DIR/local-mode" ;;
+              cleanup-error) mkdir "$MUNIMENT_STATE_DIR/local-mode" ;;
             esac
             [[ $scenario != failed-chat ]]
             ;;
           *real-sign-in.spec.js)
-            [[ $XDG_CONFIG_HOME == "$state_root/ready/config" ]] || exit 2
-            [[ ! -e $XDG_CONFIG_HOME/ai.muniment.desktop/local-mode ]] || exit 2
+            [[ $MUNIMENT_STATE_DIR == "$state_root/ready/state" ]] || exit 2
+            [[ ! -e $MUNIMENT_STATE_DIR/local-mode ]] || exit 2
             printf 'sign-in\\n'
             ;;
           *)
             [[ $MUNIMENT_E2E_ONBOARDING_ONLY == 1 ]] || exit 2
-            [[ $XDG_CONFIG_HOME != "$state_root/ready/config" ]] || exit 2
+            [[ $MUNIMENT_STATE_DIR != "$state_root/ready/state" ]] || exit 2
             printf 'onboarding\\n'
             ;;
         esac

@@ -20,15 +20,17 @@ fn directory() -> PathBuf {
         NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = fs::remove_dir_all(&path);
-    let profile = path.join(muniment_runtime::APPLICATION_IDENTIFIER);
+    let profile = path.join(".muniment");
     fs::create_dir_all(&profile).unwrap();
     fs::set_permissions(profile, fs::Permissions::from_mode(0o700)).unwrap();
     path
 }
 
 fn runtime(directory: &PathBuf, exit: &str) -> Output {
+    // The binary reads a temporary home, so this machine's state root stays untouched.
     Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
-        .env("XDG_DATA_HOME", directory)
+        .env("HOME", directory)
+        .env("MUNIMENT_STATE_DIR", directory.join(".muniment"))
         .env_remove("XDG_RUNTIME_DIR")
         .env(MACOS_TEST_EXIT_ENV, exit)
         .output()

@@ -9,8 +9,9 @@ use tauri::Manager;
 use uuid::Uuid;
 
 use muniment_core::local_mode::LOCAL_MODE_MARKER;
-use muniment_core::pi_settings::{merge_pi_settings, pi_agent_directory};
+use muniment_core::pi_settings::merge_pi_settings;
 use muniment_core::sidecar::pi_install::PI_SELECTED_ARTIFACT;
+use muniment_core::state_root::agent_directory;
 
 const CLOUD_PROVIDERS: [&str; 3] = ["anthropic", "google", "openai"];
 const PROVIDERS: [&str; 4] = ["anthropic", "google", "openai", "ollama"];
@@ -62,18 +63,17 @@ fn lock_pi_auth_file(auth_file: &Path) -> Result<PiAuthLock, String> {
     }
 }
 
-fn config_directory<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app;
-        // The launchd runtime and desktop must read the same local-mode marker.
-        muniment_core::local_mode::macos_config_directory()
-            .ok_or_else(|| "Muniment cannot find the local mode folder.".to_string())
-    }
-    #[cfg(not(target_os = "macos"))]
-    app.path()
-        .app_config_dir()
+fn config_directory<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    // The runtime and the desktop read the same local-mode marker under one root.
+    muniment_runtime::profile_directory()
         .map_err(|_| "Muniment cannot find the local mode folder.".to_string())
+}
+
+/// The agent harness's own directory under the state root.
+fn harness_agent_directory(error: &str) -> Result<PathBuf, String> {
+    muniment_runtime::profile_directory()
+        .map(|state| agent_directory(&state))
+        .map_err(|_| error.to_string())
 }
 
 pub(crate) fn is_active<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<bool, String> {
@@ -103,22 +103,12 @@ fn set_local_mode(config_directory: &Path, enabled: bool) -> Result<(), String> 
     }
 }
 
-fn pi_auth_file(
-    home_directory: &Path,
-    agent_directory: Option<&std::ffi::OsStr>,
-) -> Result<PathBuf, String> {
-    pi_agent_directory(home_directory, agent_directory)
-        .map(|directory| directory.join("auth.json"))
-        .map_err(|_| SETTINGS_DIRECTORY_ERROR.to_string())
+fn pi_auth_file(agent: &Path) -> PathBuf {
+    agent.join("auth.json")
 }
 
-fn pi_models_file(
-    home_directory: &Path,
-    agent_directory: Option<&std::ffi::OsStr>,
-) -> Result<PathBuf, String> {
-    pi_agent_directory(home_directory, agent_directory)
-        .map(|directory| directory.join("models.json"))
-        .map_err(|_| SETTINGS_DIRECTORY_ERROR.to_string())
+fn pi_models_file(agent: &Path) -> PathBuf {
+    agent.join("models.json")
 }
 
 fn pi_settings_file(models_file: &Path) -> PathBuf {
@@ -342,45 +332,29 @@ pub(crate) fn local_mode_leave(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) fn local_mode_provider_status(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
 ) -> Result<Vec<ProviderStatus>, String> {
-    let home_directory = app
-        .path()
-        .home_dir()
-        .map_err(|_| READ_SETTINGS_ERROR.to_string())?;
-    let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
-    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref())?;
-    let models_file = pi_models_file(&home_directory, agent_directory.as_deref())?;
-    provider_status(&auth_file, &models_file)
+    let agent = harness_agent_directory(READ_SETTINGS_ERROR)?;
+    provider_status(&pi_auth_file(&agent), &pi_models_file(&agent))
 }
 
 #[tauri::command]
 pub(crate) fn local_mode_store_provider_key(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     provider: String,
     key: String,
 ) -> Result<(), String> {
-    let home_directory = app
-        .path()
-        .home_dir()
-        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
-    let auth_file = pi_auth_file(&home_directory, agent_directory.as_deref())?;
-    store_provider_key(&auth_file, &provider, &key)
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    store_provider_key(&pi_auth_file(&agent), &provider, &key)
 }
 
 #[tauri::command]
 pub(crate) fn local_mode_store_local_provider(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     base_url: String,
 ) -> Result<(), String> {
-    let home_directory = app
-        .path()
-        .home_dir()
-        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let agent_directory = std::env::var_os("PI_CODING_AGENT_DIR");
-    let models_file = pi_models_file(&home_directory, agent_directory.as_deref())?;
-    store_local_provider(&models_file, &base_url)
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    store_local_provider(&pi_models_file(&agent), &base_url)
 }
 
 #[cfg(test)]
@@ -414,24 +388,20 @@ mod tests {
     }
 
     #[test]
-    fn pi_auth_file_matches_pis_directory_resolution() {
-        let home = Path::new("/home/tester");
+    fn harness_files_sit_under_the_agent_directory() {
+        let agent = Path::new("/home/tester/.muniment/agent");
 
         assert_eq!(
-            pi_auth_file(home, None).unwrap(),
-            PathBuf::from("/home/tester/.pi/agent/auth.json")
+            pi_auth_file(agent),
+            PathBuf::from("/home/tester/.muniment/agent/auth.json")
         );
         assert_eq!(
-            pi_auth_file(home, Some(std::ffi::OsStr::new(""))).unwrap(),
-            PathBuf::from("/home/tester/.pi/agent/auth.json")
+            pi_models_file(agent),
+            PathBuf::from("/home/tester/.muniment/agent/models.json")
         );
         assert_eq!(
-            pi_auth_file(home, Some(std::ffi::OsStr::new("~"))).unwrap(),
-            PathBuf::from("/home/tester/auth.json")
-        );
-        assert_eq!(
-            pi_auth_file(home, Some(std::ffi::OsStr::new("~/pi-credentials"))).unwrap(),
-            PathBuf::from("/home/tester/pi-credentials/auth.json")
+            pi_settings_file(&pi_models_file(agent)),
+            PathBuf::from("/home/tester/.muniment/agent/settings.json")
         );
     }
 
@@ -522,14 +492,14 @@ mod tests {
     }
 
     #[test]
-    fn provider_key_command_uses_custom_pi_credential_directory() {
+    fn provider_key_command_writes_under_the_agent_directory() {
         let directory = temporary_directory();
-        let custom_directory = directory.join("custom-pi-directory");
-        let auth_file = pi_auth_file(&directory, Some(custom_directory.as_os_str())).unwrap();
+        let agent = directory.join("agent");
+        let auth_file = pi_auth_file(&agent);
 
         store_provider_key(&auth_file, "openai", "test-key").unwrap();
 
-        assert_eq!(auth_file, custom_directory.join("auth.json"));
+        assert_eq!(auth_file, agent.join("auth.json"));
         let auth: serde_json::Value =
             serde_json::from_slice(&fs::read(&auth_file).unwrap()).unwrap();
         assert_eq!(auth["openai"]["key"], "test-key");

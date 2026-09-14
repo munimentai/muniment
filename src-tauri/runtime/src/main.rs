@@ -5,7 +5,7 @@ use muniment_core::attach::linux::{AttachFilesystem, InstanceLockError, Terminat
 use muniment_core::runtime_eprintln as eprintln;
 #[cfg(target_os = "linux")]
 use muniment_runtime::{
-    config_directory, profile_directory, run_runtime_activation, RuntimeActivationExit,
+    adopt_state_directory, config_directory, run_runtime_activation, RuntimeActivationExit,
 };
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
@@ -23,7 +23,9 @@ const MAX_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
 #[cfg(target_os = "linux")]
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
+// Only the Linux activation exits with this status; macOS names it in a diagnostic path.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 const UPGRADE_REFRESH_EXIT_STATUS: i32 = 75;
 const FAILURE_EXIT_STATUS: i32 = 1;
 const SUCCESS_EXIT_STATUS: i32 = 0;
@@ -56,11 +58,12 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         use muniment_runtime::{
-            profile_directory, record_windows_failed_activation, run_recorded_windows_activation,
-            run_windows_attach_activation, windows_local_app_data, SystemWindowsAttachFactory,
+            adopt_state_directory, record_windows_failed_activation,
+            run_recorded_windows_activation, run_windows_attach_activation, windows_local_app_data,
+            SystemWindowsAttachFactory,
         };
 
-        let state_directory = match profile_directory() {
+        let state_directory = match adopt_state_directory() {
             Ok(directory) => directory,
             Err(error) => {
                 eprintln!("muniment-runtime: {error}");
@@ -143,11 +146,11 @@ fn run_recorded_macos_activation_with_cause(
     cause: &mut &'static str,
 ) -> i32 {
     use muniment_runtime::{
-        profile_directory, record_macos_failed_exit, record_macos_orderly_exit, record_macos_start,
-        MacosDiagnosticEvent, MacosStartDecision,
+        adopt_state_directory, record_macos_failed_exit, record_macos_orderly_exit,
+        record_macos_start, MacosDiagnosticEvent, MacosStartDecision,
     };
 
-    let state_directory = match profile_directory() {
+    let state_directory = match adopt_state_directory() {
         Ok(directory) => directory,
         Err(error) => {
             *cause = "profile directory unavailable";
@@ -384,7 +387,7 @@ fn run(runtime_directory_source: RuntimeDirectorySource) -> Result<RuntimeActiva
     if std::env::var_os(EXIT_AFTER_LOCK_ENV).is_some() {
         return wait_for_instance_lock(wait_timeout).map(|_| RuntimeActivationExit::ManagerStop);
     }
-    let profile_directory = profile_directory().map_err(|error| error.to_string())?;
+    let profile_directory = adopt_state_directory().map_err(|error| error.to_string())?;
     let runtime_directory = match runtime_directory_source {
         RuntimeDirectorySource::Environment => std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)

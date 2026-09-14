@@ -48,8 +48,9 @@ pub fn restore_main_window<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()>
     let window = app
         .get_webview_window(&config.label)
         .expect("The main window must exist before setup.");
-    let saved = std::fs::read(app.path().app_config_dir()?.join(app.handle().filename()))
-        .unwrap_or_default();
+    let state = muniment_runtime::profile_directory()
+        .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
+    let saved = std::fs::read(state.join(app.handle().filename())).unwrap_or_default();
 
     let resized_window = window.clone();
     let resized_config = config.clone();

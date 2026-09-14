@@ -21,8 +21,9 @@ fs.writeFileSync(path.join(destination, 'pi-local-mode-stderr.log'),
   stderr.join('') || 'No runtime log exists for the local mode run.\n')
 
 const sessions = []
+// Each profile root is a state directory, and the harness writes its session logs under it.
 for (const root of unique(profileRoots)) {
-  const directory = path.join(root, 'ai.muniment.desktop', 'pi-sessions')
+  const directory = path.join(root, 'sessions')
   let entries
   try { entries = fs.readdirSync(directory).sort() } catch (error) {
     if (error.code === 'ENOENT') continue

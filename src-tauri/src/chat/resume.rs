@@ -16,9 +16,8 @@ pub(super) fn protect_prompt(
     Err(auth::background_service_error())
 }
 
-pub(crate) fn state_session_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    app.path()
-        .app_data_dir()
+pub(crate) fn state_session_root(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    muniment_runtime::profile_directory()
         .map(|path| ChatProfile::new(path).pi_session_root())
         .map_err(|_| "Conversation history is unavailable.".to_string())
 }

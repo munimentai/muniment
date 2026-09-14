@@ -274,11 +274,11 @@ function Stop-HarnessProcesses {
 }
 
 function Get-E2eProfileDirectory {
-  $roaming = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
-  if ([string]::IsNullOrWhiteSpace($roaming) -or -not [IO.Path]::IsPathRooted($roaming)) {
-    throw "The Windows application data known folder is unavailable."
+  $profile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+  if ([string]::IsNullOrWhiteSpace($profile) -or -not [IO.Path]::IsPathRooted($profile)) {
+    throw "The Windows user profile known folder is unavailable."
   }
-  return Join-Path $roaming 'ai.muniment.desktop'
+  return Join-Path $profile '.muniment'
 }
 
 function Invoke-E2e(
@@ -355,7 +355,7 @@ function Save-LocalModePiLogs {
   $helper = Join-Path $PSScriptRoot '../support/windows-local-mode-logs.mjs'
   $inputText = ConvertTo-Json -Depth 3 -Compress -InputObject @{
     localRoots = @($runtimeLocalAppData, $installLocalAppData, $env:LOCALAPPDATA)
-    profileRoots = @($runtimeAppData, $env:APPDATA)
+    profileRoots = @((Get-E2eProfileDirectory))
     destination = $raw
   }
   Invoke-NativeCommand 'node' "`"$helper`"" $null 'The runner could not collect the Pi local mode logs.' $inputText

@@ -110,8 +110,8 @@ clear_verbose_fetch() {
 }
 
 collect_local_mode_pi_log() {
-  # The launchd runtime keeps the login home, so its state outlives a HOME redirect.
-  local session_root="${XDG_DATA_HOME:-$HOME/.local/share}/ai.muniment.desktop/pi-sessions"
+  # The launchd runtime keeps the login home, whose state root links to the spec home's.
+  local session_root="${macos_login_state:-$HOME/.muniment}/sessions"
   local log="${runtime_log:-}"
   local destination="$raw/pi-local-mode-chat.log" session count=0
   # Keep the local run diagnostics before another spec starts Pi.
@@ -138,7 +138,7 @@ collect_local_mode_pi_log() {
 # spec config links to the spec home. Record what it found and whether that
 # endpoint answers, so a connection failure names the address it used.
 collect_local_mode_pi_route() {
-  local login_agent="${macos_login_pi_agent:-$HOME/.pi/agent}"
+  local login_agent="${macos_login_state:-$HOME/.muniment}/agent"
   local destination="$raw/pi-local-mode-route.log"
   local models="$login_agent/models.json" settings="$login_agent/settings.json" base=
   {
@@ -301,8 +301,7 @@ run_step save-config-directory save_macos_spec_config || exit
 run_step pi-verbose-fetch set_verbose_fetch || exit
 run_step ollama-forward start_ollama_forward || exit
 # Each spec starts with no app, runtime, or driver from the last spec.
-# The launchd runtime uses the login home. Keep its endpoint when a spec redirects HOME.
-export XDG_DATA_HOME="$HOME/.local/share"
+# The launchd runtime uses the login home, whose state root links to each spec home.
 export HOME="$state_root/degraded" MUNIMENT_E2E_HOME_PATH="$state_root/degraded-home"
 run_e2e local-mode-chat "$raw/wdio-local-mode-chat.log" -- --spec test/e2e/specs/local-mode-chat.spec.js || status=1
 cleanup_step collect-local-mode-pi-log collect_local_mode_pi_log

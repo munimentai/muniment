@@ -230,26 +230,15 @@ impl<R: tauri::Runtime> TauriDesktopAttachService<R>
             .state::<muniment_core::attach::DrainState>()
             .inner()
             .clone();
-        let config = app
-            .path()
-            .app_config_dir()
+        let config = muniment_runtime::profile_directory()
             .map_err(|_| ProtocolError::persistence_failed())?;
         let home = resolve_attach_home(
             &config,
             app.path().document_dir().ok(),
             app.path().home_dir().ok(),
         );
-        let idempotency = IdempotencyStore::open(
-            app.path()
-                .app_data_dir()
-                .map_err(|_| ProtocolError::persistence_failed())?
-                .join("attach-idempotency.sqlite3"),
-        )?;
-        let credential_path = app
-            .path()
-            .app_data_dir()
-            .map_err(|_| ProtocolError::persistence_failed())?
-            .join(COMPANION_CREDENTIAL_FILE_NAME);
+        let idempotency = IdempotencyStore::open(config.join("attach-idempotency.sqlite3"))?;
+        let credential_path = config.join(COMPANION_CREDENTIAL_FILE_NAME);
         Ok(Self {
             boundaries: TauriRunStartBoundaries {
                 app,
