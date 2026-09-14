@@ -6,6 +6,8 @@ use std::time::Duration;
 use crate::RuntimeAttachState;
 
 pub(crate) enum RetentionScheduleCommand {
+    // Only the Linux activation sends a recheck.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Recheck,
     Stop,
 }

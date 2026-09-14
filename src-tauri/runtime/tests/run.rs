@@ -1,3 +1,6 @@
+// The run service test drives the Linux attach filesystem.
+#![cfg(target_os = "linux")]
+
 use std::collections::VecDeque;
 use std::fs;
 use std::sync::atomic::AtomicBool;
