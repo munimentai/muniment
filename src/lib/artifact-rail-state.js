@@ -78,7 +78,6 @@ export function createArtifactRailController({
   function pointerDown(event) {
     if (event.button !== 0 || readPointer() !== undefined) return
     event.preventDefault()
-    event.currentTarget.focus()
     onPointer(event.pointerId)
     event.currentTarget.setPointerCapture?.(event.pointerId)
   }

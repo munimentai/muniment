@@ -9,6 +9,7 @@ const RADIUS_EXCEPTIONS = {
   'src/App.svelte': {
     '.active-thread > span': ['50%', '§1.5 circular current-thread status dot'],
     '.artifact-divider': ['0', '§4 square divider reset'],
+    '.sidebar-divider': ['0', '§4 square divider reset'],
     '.tool-dot': ['50%', '§1.5 circular tool status dot'],
   },
   'src/lib/Appearance.svelte': {

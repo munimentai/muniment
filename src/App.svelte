@@ -29,7 +29,7 @@
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { firstRunError } from './lib/onboarding-diagnostics.js'
   import { relativeTime } from './lib/relative-time.js'
-  import { SIDEBAR_STORAGE_KEY, isNewThreadShortcut, isSidebarShortcut, newThreadShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
+  import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_RAIL_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSidebarShortcut, newThreadShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
   import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
   import { thinkingSettle } from './lib/thinking-transition.js'
@@ -242,10 +242,12 @@
   const macOS = navigator.platform.startsWith('Mac')
   const artifactShortcut = artifactRailShortcut()
   let destroyed = false
-  const sidebarWidth = 260
-  const sidebarRailWidth = 52
+  let sidebarWidth = $state(storedSidebarWidth())
+  let sidebarMaximum = $state(SIDEBAR_MAX_WIDTH)
+  let sidebarPointer = $state()
   const minimumThreadWidth = 320
   let sidebarCollapsed = $state(storedSidebarCollapsed())
+  let threadMenu = $state(null)
   const sidebarKeyShortcut = sidebarShortcut()
   const newThreadKeyShortcut = newThreadShortcut()
   const modifierLabel = shortcutDisplayLabel(sidebarKeyShortcut).slice(0, -1)
@@ -296,6 +298,18 @@
     onPointer: (next) => { artifactRailPointer = next },
   })
   const { fit: fitArtifactRail, toggle: toggleArtifactRail, pointerDown: artifactRailPointerDown, pointerMove: artifactRailPointerMove, pointerEnd: artifactRailPointerEnd, keydown: artifactRailKeydown } = artifactRailController
+
+  const sidebarResizeController = createSidebarResizeController({
+    readWidth: () => sidebarWidth,
+    readMaximum: () => sidebarMaximum,
+    readPointer: () => sidebarPointer,
+    readAvailableWidth: availableSidebarWidth,
+    readLeftEdge: () => (workspace?.getBoundingClientRect().left || 0) + workspaceFrameWidth(),
+    onWidth: (next) => { sidebarWidth = next },
+    onMaximum: (next) => { sidebarMaximum = next },
+    onPointer: (next) => { sidebarPointer = next },
+  })
+  const { fit: fitSidebar, pointerDown: sidebarPointerDown, pointerMove: sidebarPointerMove, pointerEnd: sidebarPointerEnd, keydown: sidebarKeydown } = sidebarResizeController
 
   const chatController = createChatController({
     invoke: (...args) => tauri.invoke(...args),
@@ -411,16 +425,59 @@
   }
 
   function askToDeleteThread(threadId) {
+    closeThreadMenu()
     deletingThreadId = threadId
+  }
+
+  function focusThreadRow(threadId) {
+    void tick().then(() => {
+      Array.from(document.querySelectorAll('[data-thread-id]'))
+        .find((row) => row.dataset.threadId === threadId)?.focus()
+    })
   }
 
   function cancelDeleteThread() {
     const threadId = deletingThreadId
     deletingThreadId = null
-    void tick().then(() => {
-      Array.from(document.querySelectorAll('[data-delete-thread]'))
-        .find((button) => button.dataset.deleteThread === threadId)?.focus()
-    })
+    focusThreadRow(threadId)
+  }
+
+  // The row's actions live in a menu on right-click, Control-click or the
+  // keyboard's context menu key, placed at the pointer like the native one.
+  function openThreadMenu(event, threadId) {
+    if (deletingThreadId === threadId) return
+    event.preventDefault()
+    const row = event.currentTarget.getBoundingClientRect()
+    const fromKeyboard = !event.clientX && !event.clientY
+    threadMenu = { threadId, x: fromKeyboard ? row.left : event.clientX, y: fromKeyboard ? row.bottom : event.clientY }
+    document.addEventListener('pointerdown', closeThreadMenuOutside, true)
+  }
+
+  function closeThreadMenuOutside(event) {
+    if (event.target.closest?.('.thread-menu')) return
+    closeThreadMenu()
+  }
+
+  function closeThreadMenu() {
+    document.removeEventListener('pointerdown', closeThreadMenuOutside, true)
+    threadMenu = null
+  }
+
+  function threadMenuKeydown(event) {
+    if (event.key !== 'Escape' && event.key !== 'Tab') return
+    event.preventDefault()
+    const threadId = threadMenu?.threadId
+    closeThreadMenu()
+    focusThreadRow(threadId)
+  }
+
+  function focusMenuOnMount(element) {
+    element.querySelector('button')?.focus()
+  }
+
+  function menuFocusOut(event) {
+    if (event.currentTarget.contains(event.relatedTarget)) return
+    closeThreadMenu()
   }
 
   function deleteConfirmKeydown(event) {
@@ -443,7 +500,18 @@
 
   function availableArtifactRailWidth() {
     // Reserve both outer edges and both panel gaps before sizing the rail.
-    return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - 4 * workspaceFrameWidth() - (sidebarCollapsed ? sidebarRailWidth : sidebarWidth) - minimumThreadWidth))
+    return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - 4 * workspaceFrameWidth() - (sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth) - minimumThreadWidth))
+  }
+
+  function availableSidebarWidth() {
+    // Reserve both outer edges, the panel gaps, the thread minimum and the open rail before sizing the sidebar.
+    const frames = artifactRailOpen ? 4 : 3
+    return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - frames * workspaceFrameWidth() - (artifactRailOpen ? artifactRailWidth : 0) - minimumThreadWidth))
+  }
+
+  function fitPanels() {
+    fitSidebar()
+    fitArtifactRail()
   }
 
   const dictationController = createDictationController({
@@ -1061,7 +1129,7 @@
       }
     }
     document.addEventListener('keydown', shortcuts)
-    window.addEventListener('resize', fitArtifactRail)
+    window.addEventListener('resize', fitPanels)
     let stopDragDrop
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (!workspaceMode() || active) {
@@ -1098,7 +1166,7 @@
       stopDragDrop?.()
       voiceShortcutManager.cleanup()
       document.removeEventListener('keydown', shortcuts)
-      window.removeEventListener('resize', fitArtifactRail)
+      window.removeEventListener('resize', fitPanels)
     }
   })
 
@@ -1223,7 +1291,7 @@
         {#if localEntryError}<p class="record error-record" role="alert">{localEntryError}</p>{/if}
       </section>
     {:else if workspaceMode() && desktopClientStatus}
-      <section class="workspace" data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} bind:this={workspace}>
+      <section class="workspace" data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
@@ -1257,9 +1325,10 @@
                 {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
                 {@const rowTitle = current ? summary.title || currentThreadTitle : title}
                 {@const rowPosition = index + 1 + (freshThread ? 1 : 0)}
-                <li class="thread-record">
+                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                <li class="thread-record" oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
                   {#if current}
-                    <div class="thread-row active-thread" aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} title={rowTitle}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
+                    <div class="thread-row active-thread" data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} title={rowTitle}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
                   {:else}
                     <button class="thread-row" data-thread-id={summary.threadId} title={rowTitle} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></button>
                   {/if}
@@ -1269,8 +1338,12 @@
                       <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>Delete</button>
                       <button type="button" disabled={deletePending} onclick={cancelDeleteThread} onkeydown={deleteConfirmKeydown}>Cancel</button>
                     </div>
-                  {:else}
-                    <button type="button" class="thread-delete" data-delete-thread={summary.threadId} aria-label={`Delete ${rowTitle}`} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>Delete</button>
+                  {/if}
+                  {#if threadMenu?.threadId === summary.threadId}
+                    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                    <div class="thread-menu" role="menu" aria-label={`${rowTitle} actions`} style:left={`${threadMenu.x}px`} style:top={`${threadMenu.y}px`} onkeydown={threadMenuKeydown} onfocusout={menuFocusOut} use:focusMenuOnMount>
+                      <button type="button" role="menuitem" aria-label={`Delete ${rowTitle}`} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>Delete</button>
+                    </div>
                   {/if}
                 </li>
               {/each}
@@ -1302,6 +1375,25 @@
             <button class="side-action" aria-expanded={settingsOpen} aria-controls="settings-menu" aria-label={sidebarCollapsed ? 'Settings' : null} title={sidebarCollapsed ? 'Settings' : null} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} />{#if !sidebarCollapsed}<span>Settings</span>{/if}</button>
           </div>
         </aside>
+        {#if !sidebarCollapsed}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <div
+            class="sidebar-divider"
+            role="separator"
+            aria-labelledby="thread-list-title"
+            aria-controls="sidebar"
+            aria-orientation="vertical"
+            aria-valuemin={SIDEBAR_MIN_WIDTH}
+            aria-valuemax={sidebarMaximum}
+            aria-valuenow={sidebarWidth}
+            tabindex="0"
+            onpointerdown={sidebarPointerDown}
+            onpointermove={sidebarPointerMove}
+            onpointerup={sidebarPointerEnd}
+            onpointercancel={sidebarPointerEnd}
+            onkeydown={sidebarKeydown}
+          ></div>
+        {/if}
         <div class="thread-panel">
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <div class="thread-shell">
@@ -1583,7 +1675,6 @@
           <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
           <div
             class="artifact-divider"
-            class:dragging={artifactRailPointer !== undefined}
             role="separator"
             aria-labelledby="artifact-rail-title"
             aria-controls="artifact-rail"
@@ -1728,43 +1819,40 @@
     line-height: var(--leading-body);
   }
 
-  .workspace { --frame-width: 8px; position: fixed; inset: 0; display: grid; grid-template-rows: 28px minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); gap: var(--frame-width); background: var(--paper); }
-  .workspace { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
-  .workspace.artifact-resizing { transition: none; }
+  .workspace { --frame-width: 8px; --titlebar-height: 28px; position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-height) minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); gap: var(--frame-width); background: var(--paper); }
+  /* The sidebar column is the element's --sidebar-column: the kept width, or 52px collapsed, and the 180ms slide carries both. */
+  .workspace { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
+  .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
-  .workspace.artifact-open { grid-template-columns: minmax(0, 260px) minmax(320px, 1fr) var(--artifact-rail-width); grid-template-areas: "title title title" "side thread rail"; }
-  /* §2.1: the same 180ms grid transition carries the sidebar down to a 52px icon rail. */
-  .workspace.sidebar-collapsed { grid-template-columns: minmax(0, 52px) minmax(0, 1fr); }
-  .workspace.sidebar-collapsed.artifact-open { grid-template-columns: minmax(0, 52px) minmax(320px, 1fr) var(--artifact-rail-width); }
+  .workspace.artifact-open { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--artifact-rail-width); grid-template-areas: "title title title" "side thread rail"; }
   .sidebar, .thread-panel, .artifact-rail { min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .titlebar { grid-area: title; display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 calc(-1 * var(--frame-width)); padding: 0 12px; background: var(--paper); font-size: var(--text-13); user-select: none; }
   /* The title row shares the animated sidebar width so controls never cross during the panel slide. */
-  @property --sidebar-column { syntax: '<length>'; inherits: true; initial-value: 260px; }
-  .workspace.macos { --titlebar-inset: 72px; --sidebar-column: 260px; --titlebar-controls-end: 276px; grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); transition: --sidebar-column 180ms ease; }
-  .workspace.macos.artifact-open { --titlebar-controls-end: 160px; grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--artifact-rail-width); }
-  .workspace.macos.sidebar-collapsed { --sidebar-column: 52px; }
-  .workspace.macos.artifact-resizing { transition: none; }
+  @property --sidebar-column { syntax: '<length>'; inherits: true; initial-value: 195px; }
+  /* Measured on macOS 26: the native title bar band is 32pt, and its three 14pt
+     lights sit at x = 9, 32 and 55 with their centers 16pt below the top edge.
+     The row is the band, so the 24px controls center on the lights, and the
+     row starts one 9pt gap after the last light ends at 69pt. New thread ends
+     at 251px in the installed app and at 252px in the probe's Chromium, and the
+     thread title starts one gap and a rounding pixel later. */
+  .workspace.macos { --titlebar-height: 32px; --titlebar-inset: 78px; --titlebar-controls-end: 262px; transition: --sidebar-column 180ms ease; }
+  .workspace.macos.artifact-resizing, .workspace.macos.sidebar-resizing { transition: none; }
   .workspace:not(.macos) .titlebar-sidebar, .workspace:not(.macos) .titlebar-thread { display: contents; }
   /* The title row is a subgrid with no margin and no padding of its own: padding
      on a subgrid shifts its tracks past the frame in WebKit, which pushed the
      artifact control off the window. The native clearance is the sidebar
      part's padding, so both parts track their panel columns in every engine. */
   .workspace.macos .titlebar { display: grid; grid-template-columns: subgrid; margin: 0; padding: 0; }
-  .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; box-sizing: content-box; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: calc(var(--titlebar-inset) - var(--frame-width)); container-type: inline-size; }
+  /* The sidebar part is at least as wide as its controls, so a narrow sidebar column never hides New thread. */
+  .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; box-sizing: content-box; display: flex; align-items: center; gap: 8px; min-width: calc(var(--titlebar-controls-end) - var(--titlebar-inset)); padding-left: calc(var(--titlebar-inset) - var(--frame-width)); }
   /* Artifacts sits flush right: 4px inside the 8px frame matches the 12px row padding elsewhere. */
   .workspace.macos .titlebar-thread { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: 4px; }
-  /* The collapsed sidebar keeps the controls clear of the native traffic lights. */
-  .workspace.macos.sidebar-collapsed .titlebar-sidebar { width: 184px; }
-  .workspace.macos.sidebar-collapsed.artifact-open .titlebar-sidebar { width: 68px; }
   .workspace.macos .update-slot { order: 1; }
   .workspace.macos .artifacts-toggle { order: 2; }
   .workspace.macos .thread-title { padding-left: 0; }
-  @container (max-width: 170px) {
-    .new-thread span, .new-thread kbd { display: none; }
-  }
   .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 24px; padding: 0 6px; }
   .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .titlebar button:hover:not(:disabled) { background: var(--faint); border-color: transparent; }
@@ -1791,13 +1879,14 @@
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); }
   button.thread-row:hover:not([aria-disabled="true"]) { background: var(--faint); }
   button.thread-row[aria-disabled="true"] { opacity: .55; }
-  .thread-row time { margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); }
+  /* The time always shows: the title takes the rest of the row and fades at its end. */
+  .thread-row time { flex: none; margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); white-space: nowrap; }
   .thread-row > span { flex: 0 0 5px; }
-  .thread-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .thread-delete { position: absolute; top: 4px; right: 5px; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); opacity: 0; transition: opacity 120ms ease; }
-  .thread-record:hover .thread-delete, .thread-record:focus-within .thread-delete { opacity: 1; }
-  .thread-delete:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
-  .thread-delete:focus-visible, .thread-delete-confirm button:focus-visible { outline-color: var(--ink); }
+  .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  .thread-menu { position: fixed; z-index: 4; min-width: 120px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
+  .thread-menu button { width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
+  .thread-menu button:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
+  .thread-menu button:focus-visible, .thread-delete-confirm button:focus-visible { outline-color: var(--ink); }
   .thread-delete-confirm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; padding: 5px 7px; border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
   .thread-delete-confirm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
@@ -1839,10 +1928,11 @@
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
   .quiet { background: transparent; border-color: transparent; }
-  .artifact-divider { grid-area: rail; z-index: 2; align-self: stretch; width: var(--frame-width); margin-left: calc(-.5 * var(--frame-width)); padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
-  .artifact-divider::after { content: ''; display: block; width: 2px; height: 100%; margin: 0 auto; background: transparent; }
-  .artifact-divider:hover::after, .artifact-divider:focus-visible::after, .artifact-divider.dragging::after { background: var(--muted); }
-  .artifact-divider:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  /* Both dividers sit over the panel gap and draw nothing while hovered or dragged. */
+  .artifact-divider, .sidebar-divider { z-index: 2; align-self: stretch; justify-self: start; width: var(--frame-width); margin-left: calc(-.5 * var(--frame-width)); padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
+  .artifact-divider { grid-area: rail; }
+  .sidebar-divider { grid-area: thread; }
+  .artifact-divider:focus-visible, .sidebar-divider:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }

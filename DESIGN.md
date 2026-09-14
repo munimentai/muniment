@@ -129,3 +129,5 @@ The first run is the composer with three mono chips under it, the model source, 
 
 Remote control: [docs/design-reference/remote-control-ux.md](docs/design-reference/remote-control-ux.md)
 records the desktop session UX reference that mobile drives.
+Components: [docs/design-reference/components.md](docs/design-reference/components.md)
+lists every control and surface, its states, and the token each state reads.
