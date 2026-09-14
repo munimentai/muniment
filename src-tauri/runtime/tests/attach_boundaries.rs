@@ -768,6 +768,28 @@ fn runtime_boundaries_answer_all_attach_reads() {
     assert!(status.signed_in);
     assert_eq!(status.subject.as_deref(), Some("user"));
 
+    // Local mode answers the status read without opening the keyring, so a
+    // keyring that refuses every read never reaches the desktop.
+    let local_mode_marker = temporary_profile
+        .config
+        .join(muniment_core::local_mode::LOCAL_MODE_MARKER);
+    fs::write(&local_mode_marker, "1").unwrap();
+    muniment_core::chat_prompt::use_refused_keyring_for_tests(
+        -25293,
+        "refused",
+        true,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    );
+    let local_status = boundaries.session_status().unwrap();
+    assert!(!local_status.signed_in);
+    assert_eq!(local_status.subject, None);
+    assert!(boundaries.entitlement_snapshot().is_err());
+    fs::remove_file(&local_mode_marker).unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    credential_store.clear_session().unwrap();
+    credential_store.save_credentials(&credentials()).unwrap();
+    assert!(boundaries.session_status().unwrap().signed_in);
+
     let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop","expires_at":"2099-01-01T00:00:00Z"},"user":{"id":"30000000-0000-4000-8000-000000000003","email":"user@example.com","status":"active","role":"owner","entitlement_version":7},"org":{"id":"20000000-0000-4000-8000-000000000002","display_name":"Muniment"},"entitlement_snapshot":{"payload":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","entitlement_version":7,"issued_at":"2026-08-01T00:00:00Z","capabilities":[],"grants":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
     let (base_url, summaries_server) = spawn_server(200, session_body.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);

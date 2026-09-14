@@ -709,10 +709,21 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         .map_err(RunStartError::InvalidRequest)
     }
     fn session_status(&self) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+        // Local mode holds no cloud session, so its status read never opens the keychain.
+        if self.local_mode() {
+            return Ok(muniment_core::auth::AuthStatus {
+                signed_in: false,
+                subject: None,
+                expires_at: None,
+            });
+        }
         service::session_status().map_err(|_| ProtocolError::persistence_failed())
     }
 
     fn entitlement_snapshot(&self) -> Result<EntitlementSnapshotResult, ProtocolError> {
+        if self.local_mode() {
+            return Err(ProtocolError::persistence_failed());
+        }
         service::entitlement_snapshot(&self.entitlement_tracker, &self.runtime_activity)
             .map_err(|_| ProtocolError::persistence_failed())
     }

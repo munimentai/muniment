@@ -118,8 +118,9 @@
   }
 
   onMount(() => {
-    void loadHome()
-    void loadScan()
+    // The scan probes assistant folders, some under Documents, so it runs on the
+    // first run only and never raises a folder prompt on a later launch.
+    void loadHome().then(() => { if (onboarding.name !== 'complete') void loadScan() })
     const leave = (event) => {
       if (event.key !== 'Escape' || !settings || busy || picking) return
       event.preventDefault()

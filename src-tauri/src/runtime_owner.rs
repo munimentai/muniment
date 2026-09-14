@@ -11,7 +11,7 @@ pub(crate) enum RuntimeEvent {
     Starting,
     Connected,
     Disconnected,
-    #[cfg(any(test, target_os = "linux"))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos"))]
     Exited,
     StartFailed,
     #[cfg(target_os = "macos")]
@@ -22,6 +22,8 @@ pub(crate) enum RuntimeEvent {
     NotFound,
     #[cfg(target_os = "macos")]
     RegistrationFailed,
+    #[cfg(target_os = "macos")]
+    ChildStarted,
     Stopped,
     StopFailed,
 }
@@ -39,7 +41,7 @@ pub(crate) struct Snapshot {
 #[derive(Default)]
 pub(crate) struct RuntimeOwner {
     state: Mutex<Lifecycle>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     child: Mutex<Option<std::process::Child>>,
 }
 
@@ -192,23 +194,53 @@ impl RuntimeOwner {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn keep_child(&self, child: std::process::Child) {
         *self.child.lock().unwrap() = Some(child);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "macos")]
+    pub(crate) fn child_running(&self) -> bool {
+        self.child
+            .lock()
+            .unwrap()
+            .as_mut()
+            .is_some_and(|process| matches!(process.try_wait(), Ok(None)))
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn stop_child(&self) -> Result<bool, ()> {
         let mut child = self.child.lock().unwrap();
         let Some(process) = child.as_mut() else {
             return Ok(false);
         };
+        // The runtime removes its socket on a termination signal. Kill is the fallback.
+        #[cfg(target_os = "macos")]
+        terminate(process);
         process
             .kill()
             .and_then(|()| process.wait())
             .map_err(|_| ())?;
         *child = None;
         Ok(true)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn terminate(process: &mut std::process::Child) {
+    let Ok(pid) = libc::pid_t::try_from(process.id()) else {
+        return;
+    };
+    // SAFETY: kill sends one signal to the child the desktop spawned and still holds.
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if !matches!(process.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -233,7 +265,10 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         return;
     }
     #[cfg(target_os = "macos")]
-    let event = crate::macos_runtime_service::start();
+    let event = match crate::macos_runtime_service::start() {
+        RuntimeEvent::RegistrationFailed => crate::macos_runtime_service::start_child(&owner),
+        event => event,
+    };
     #[cfg(target_os = "windows")]
     {
         let result = muniment_runtime::profile_directory()
@@ -267,7 +302,11 @@ pub(crate) async fn runtime_stop(app: tauri::AppHandle) -> Result<(), &'static s
             return Err("The runtime has a pending action.");
         }
         #[cfg(target_os = "macos")]
-        let result = crate::macos_runtime_service::stop();
+        let result = match owner.stop_child() {
+            Ok(true) => Ok(()),
+            Ok(false) => crate::macos_runtime_service::stop(),
+            Err(()) => Err(()),
+        };
         #[cfg(target_os = "windows")]
         let result = crate::windows_runtime_service::stop_runtime();
         #[cfg(target_os = "linux")]
@@ -307,7 +346,7 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     std::thread::spawn(move || loop {
         let owner = app.state::<RuntimeOwner>();
         let revision = owner.state.lock().unwrap().snapshot.revision;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let mut child = owner.child.lock().unwrap();
             if let Some(process) = child.as_mut() {

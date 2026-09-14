@@ -294,6 +294,7 @@ describe('entitlement change toast', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'auth_sign_out') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -304,7 +305,9 @@ describe('entitlement change toast', () => {
     await fireEvent.click(profile)
     await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
 
-    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+    // A sign-out lands in local mode.
+    expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('local_mode_enter')
     expect(screen.queryByText(copy)).not.toBeInTheDocument()
   })
 })
@@ -1184,9 +1187,28 @@ describe('workspace composer entry', () => {
     expect(railToggle).toHaveFocus()
   })
 
-  it('does not focus a composer outside the signed-in workspace', async () => {
+  it('launches into local mode when no cloud session exists', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter') return undefined
+      if (command === 'chat_thread_open') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('local_mode_enter')
+    expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
+    expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Use local mode' })).not.toBeInTheDocument()
+    expect(document.querySelector('.lockup')).not.toBeInTheDocument()
+  })
+
+  it('falls back to the sign-in screen when local mode cannot start', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter') throw new Error('marker refused')
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -1199,6 +1221,7 @@ describe('workspace composer entry', () => {
     expect(document.querySelector('.lockup svg')).toHaveAttribute('aria-hidden', 'true')
     expect(document.querySelector('.lockup svg')).not.toHaveAttribute('aria-label')
     expect(screen.getByRole('button', { name: 'Use local mode' })).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Local mode could not start. Try again.')
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
   })
 
@@ -1313,8 +1336,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
 
-    await fireEvent.click(await screen.findByRole('button', { name: 'Use local mode' }))
-
+    await screen.findByTestId('local-mode')
     const composer = await screen.findByPlaceholderText('Ask anything')
     expect(composer).toBeInTheDocument()
     // The chip names the model, so local mode carries no sentence beside it.
@@ -1545,7 +1567,7 @@ describe('workspace composer entry', () => {
     expect(invoke).not.toHaveBeenCalledWith('auth_status')
   })
 
-  it('ignores a connection auth result after the user enters local mode', async () => {
+  it('skips the connection auth check after launching into local mode', async () => {
     const refresh = deferred()
     let authChecks = 0
     invoke.mockImplementation(async (command) => {
@@ -1561,14 +1583,12 @@ describe('workspace composer entry', () => {
     })
 
     render(App)
-    const localMode = await screen.findByRole('button', { name: 'Use local mode' })
+    expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
     desktopClientListener({ payload: { connected: true, supervisor_running: true } })
-    await waitFor(() => expect(authChecks).toBe(2))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_listener_status'))
 
-    await fireEvent.click(localMode)
-    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(authChecks).toBe(1)
     refresh.resolve({ signed_in: false, subject: null })
-
     await waitFor(() => expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
   })
@@ -1591,12 +1611,16 @@ describe('workspace composer entry', () => {
     localStorage.setItem('muniment.local-mode', 'true')
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter') return undefined
+      if (command === 'chat_thread_open') return []
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
 
-    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument()
-    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+    // The marker wins over web storage: the shell asks for the session, then enters local mode.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('auth_status'))
+    expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('local_mode_enter')
   })
 
   it('keeps one focused sign-in button while browser sign-in is pending', async () => {
@@ -1604,10 +1628,13 @@ describe('workspace composer entry', () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
       if (command === 'auth_sign_in') return signInRequest.promise
+      if (command === 'local_mode_enter') throw new Error('marker refused')
       throw new Error(`unexpected command: ${command}`)
     })
     const { container } = render(App)
     const signIn = await screen.findByRole('button', { name: 'Sign in' })
+    // The sign-in screen stays only after local mode refused to start.
+    await screen.findByRole('alert')
     expect(screen.getByText('Sign in for cloud features, or use local mode.')).toHaveAttribute('aria-live', 'polite')
     expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1)
     expect(signIn).not.toHaveAttribute('aria-live')
@@ -1637,6 +1664,7 @@ describe('workspace composer entry', () => {
     const signInRequest = deferred()
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter' || command === 'local_mode_leave') return undefined
       if (command === 'auth_sign_in') return signInRequest.promise
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -1644,7 +1672,11 @@ describe('workspace composer entry', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await screen.findByTestId('local-mode')
+    await fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    const cloudSignIn = await screen.findByRole('button', { name: 'Sign in for cloud features' })
+    await waitFor(() => expect(cloudSignIn).toBeEnabled())
+    await fireEvent.click(cloudSignIn)
     await waitFor(() => expect(registrationRetryListener).toBeDefined())
 
     registrationRetryListener({ payload: { delay_seconds: 30 } })
@@ -1662,6 +1694,7 @@ describe('workspace composer entry', () => {
     const signInRequest = deferred()
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter' || command === 'local_mode_leave') return undefined
       if (command === 'auth_sign_in') return signInRequest.promise
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -1669,7 +1702,11 @@ describe('workspace composer entry', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await screen.findByTestId('local-mode')
+    await fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    const cloudSignIn = await screen.findByRole('button', { name: 'Sign in for cloud features' })
+    await waitFor(() => expect(cloudSignIn).toBeEnabled())
+    await fireEvent.click(cloudSignIn)
     await waitFor(() => expect(chatListener).toBeDefined())
     expect(screen.queryByTestId('sign-in-link')).not.toBeInTheDocument()
 
@@ -1688,12 +1725,16 @@ describe('workspace composer entry', () => {
   it('shows the terminal screen for a non-retryable registration error', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter' || command === 'local_mode_leave') return undefined
       if (command === 'auth_sign_in') throw new Error('native installation registration failed')
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-
-    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await screen.findByTestId('local-mode')
+    await fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    const cloudSignIn = await screen.findByRole('button', { name: 'Sign in for cloud features' })
+    await waitFor(() => expect(cloudSignIn).toBeEnabled())
+    await fireEvent.click(cloudSignIn)
 
     expect(await screen.findByText(/Sign-in not completed: Error: native installation registration failed/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()

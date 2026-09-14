@@ -184,6 +184,15 @@ fn main() {
             #[cfg(all(target_os = "macos", feature = "e2e-webdriver"))]
             e2e_folder_dialog::e2e_folder_dialog_snapshot
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running muniment");
+        .build(tauri::generate_context!())
+        .expect("error while running muniment")
+        .run(|app, event| {
+            // A runtime the desktop runs as its child exits with the desktop.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Exit = event {
+                let _ = app.state::<runtime_owner::RuntimeOwner>().stop_child();
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

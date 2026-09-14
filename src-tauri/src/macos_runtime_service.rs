@@ -346,6 +346,77 @@ pub(crate) fn start() -> crate::runtime_owner::RuntimeEvent {
     }
 }
 
+/// The runtime binary the bundle carries beside the desktop executable.
+fn bundled_runtime_executable(desktop_executable: &Path) -> Option<PathBuf> {
+    let contents = desktop_executable.parent()?.parent()?;
+    Some(contents.join("Library/LaunchServices/muniment-runtime"))
+}
+
+fn write_child_diagnostic(log_directory: &Path, record: &str) -> io::Result<()> {
+    muniment_core::user_diagnostics::append_owner_only_record(
+        log_directory,
+        c"runtime.log",
+        MACOS_RUNTIME_LOG_MAX_BYTES,
+        record.as_bytes(),
+    )
+}
+
+// A build whose code signature the service cannot verify never registers. The
+// desktop then runs the bundled runtime as its own child, stops it when the
+// desktop exits, and the shell says so.
+#[cfg(target_os = "macos")]
+pub(crate) fn start_child(
+    owner: &crate::runtime_owner::RuntimeOwner,
+) -> crate::runtime_owner::RuntimeEvent {
+    use crate::runtime_owner::RuntimeEvent;
+    use std::process::{Command, Stdio};
+    if owner.child_running() {
+        return RuntimeEvent::ChildStarted;
+    }
+    // A runtime that another agent runs already listens. The owner's endpoint watch
+    // connects to it, and a stale socket with no listener falls through to a child.
+    if muniment_runtime::profile_directory().is_ok_and(|profile| {
+        std::os::unix::net::UnixStream::connect(profile.join("muniment/attach-v1.sock")).is_ok()
+    }) {
+        return RuntimeEvent::Starting;
+    }
+    let executable = std::env::current_exe()
+        .ok()
+        .and_then(|desktop| bundled_runtime_executable(&desktop))
+        .filter(|path| path.is_file());
+    let Some(executable) = executable else {
+        return RuntimeEvent::RegistrationFailed;
+    };
+    let log_directory = muniment_core::user_diagnostics::effective_user_home()
+        .ok()
+        .map(|home| home.join("Library/Logs/Muniment"));
+    let spawned = Command::new(&executable)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn();
+    let record = match &spawned {
+        Ok(child) => format!(
+            "event=runtime_service_child_started pid={} executable={}\n",
+            child.id(),
+            serde_json::to_string(&executable.display().to_string()).unwrap_or_default()
+        ),
+        Err(error) => format!(
+            "event=runtime_service_child_start_failed error={}\n",
+            serde_json::to_string(&error.to_string()).unwrap_or_default()
+        ),
+    };
+    if let Some(directory) = log_directory {
+        let _ = write_child_diagnostic(&directory, &record);
+    }
+    match spawned {
+        Ok(child) => {
+            owner.keep_child(child);
+            RuntimeEvent::ChildStarted
+        }
+        Err(_) => RuntimeEvent::RegistrationFailed,
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn requires_approval() -> Option<bool> {
     match MacosRuntimeServiceAdapter::new().status() {
@@ -621,6 +692,36 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    #[test]
+    fn the_bundled_runtime_sits_beside_the_desktop_in_the_bundle() {
+        assert_eq!(
+            bundled_runtime_executable(Path::new(
+                "/Users/me/Applications/muniment.app/Contents/MacOS/muniment-desktop"
+            )),
+            Some(PathBuf::from(
+                "/Users/me/Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime"
+            ))
+        );
+        assert_eq!(
+            bundled_runtime_executable(Path::new("muniment-desktop")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_child_start_record_names_the_event_and_the_executable() {
+        let directory = directory();
+        write_child_diagnostic(
+            &directory,
+            "event=runtime_service_child_started pid=7 executable=\"/a b/muniment-runtime\"\n",
+        )
+        .unwrap();
+        let log = fs::read_to_string(directory.join("runtime.log")).unwrap();
+        assert!(log.starts_with("event=runtime_service_child_started pid=7 executable="));
+        assert!(log.ends_with("\n"));
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

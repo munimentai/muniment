@@ -69,6 +69,31 @@ pre {
   font-variant-numeric: tabular-nums lining-nums;
 }
 
+/* Scroll bars are thin and faint. The thumb shows while the pointer rests on
+   the scrolling region or while it scrolls, and hides otherwise, on every
+   platform's webview. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: var(--radius-chip);
+}
+
+:hover::-webkit-scrollbar-thumb {
+  background: var(--border);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
 /* Read by assistive tech only: no visual footprint, no effect on layout. */
 .visually-hidden {
   position: absolute;

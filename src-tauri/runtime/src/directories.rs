@@ -71,6 +71,8 @@ pub fn config_directory() -> Result<PathBuf, DirectoryUnavailableError> {
 pub fn adopt_state_directory() -> Result<PathBuf, DirectoryUnavailableError> {
     use muniment_core::state_root::{adopt_legacy_state, legacy_roots, Adoption};
     let state = profile_directory()?;
+    // Local mode keeps prompts in files under this root instead of the keychain.
+    muniment_core::chat_prompt::install_local_prompt_store(state.clone());
     match adopt_legacy_state(&state, &legacy_roots()) {
         Ok(Adoption::Moved) => {
             muniment_core::runtime_eprintln!(
