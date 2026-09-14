@@ -336,19 +336,20 @@ async function checkComposerActions(browser, baseUrl) {
           await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
           const layout = await page.locator('.composer-row').evaluate((row) => {
             const box = row.getBoundingClientRect()
+            // Local mode carries no hint: the row holds the actions alone.
             const hint = row.querySelector('#composer-hint')
-            const hintBox = hint.getBoundingClientRect()
+            const hintBox = hint?.getBoundingClientRect()
             const actions = row.querySelector('.composer-actions')
             const actionsBox = actions.getBoundingClientRect()
             const range = document.createRange()
-            range.selectNodeContents(hint)
+            if (hint) range.selectNodeContents(hint)
             return {
               width: box.width,
-              hintWidth: range.getBoundingClientRect().width,
-              hintLines: range.getClientRects().length,
+              hintWidth: hint ? range.getBoundingClientRect().width : 0,
+              hintLines: hint ? range.getClientRects().length : 0,
               actionsWidth: actionsBox.width,
               gap: parseFloat(getComputedStyle(row).columnGap) || 0,
-              separateRows: hintBox.bottom <= actionsBox.top,
+              separateRows: !hint || hintBox.bottom <= actionsBox.top,
               buttons: [...actions.querySelectorAll('button')].map((button) => {
                 const rect = button.getBoundingClientRect()
                 range.selectNodeContents(button)
