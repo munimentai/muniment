@@ -55,7 +55,9 @@ panel slide. `prefers-reduced-motion` removes all of it.
    or backdrop blur, no orbs or ambient animation, no assistant avatar, no
    typing dots, no sparkles or wand iconography, no emoji in UI copy, no pill
    radius, no "AI", "magic", "supercharge" or "unlock" in copy.
-4. **Voice.** Sentence case everywhere. Buttons say what happens. Errors state
+4. **Voice.** Sentence case everywhere. Buttons say what happens, in a label
+   or, for the composer's send and stop control, in a glyph with an accessible
+   name and a tooltip that say it. Errors state
    what happened and the next step and never apologize. Empty states are one
    line and no illustration. No em dash in user-facing text. The shell never
    names its harness. A state line, an empty state and a composer hint are one
@@ -89,9 +91,15 @@ Platform chrome follows the OS and brand tokens stay identical across platforms.
 On macOS the app row sits in the title bar band beside the native traffic
 lights, which macOS places, is the drag region, and holds the sidebar toggle,
 New thread, the thread title, and Artifacts flush right with the update
-control beside it. Windows keeps its native caption controls and Linux keeps
-its decorations. The sidebar holds the threads and one Settings control at its
-foot that expands a menu inside the sidebar: appearance, Home and the account.
+control beside it. New thread, the thread title and Artifacts are one quiet
+row control with the same padding and hover. Windows keeps its native caption
+controls and Linux keeps its decorations. The sidebar holds the threads and one
+Settings control at its foot that expands a menu inside the sidebar:
+appearance, Home and the account. The sidebar is resizable by its divider and
+collapses to nothing: no rail, and Settings hides with it. The platform's
+settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux, expands the
+sidebar with the Settings menu open, and toggles the menu when the sidebar
+already shows.
 The mark appears on the launch screen and in the thinking state, never in
 the sidebar. Icons are Lucide, vendored as inline SVG at a 1.6px stroke. Sidebar, thread and rail sit
 on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
@@ -100,7 +108,13 @@ ink glyph that widens on hover or focus to read `Update` in mono, and it
 appears only when a newer build is downloaded.
 The composer band is one mono row under the composer: the model source chip,
 the Home path, the context meter and the running cost, with the scan chip
-beside them on the first run. The provenance line stays under each reply.
+beside them on the first run. The band's one action control sits at its right
+end: absent while the draft is empty, an ink up-arrow button once the draft has
+text, and a muted stop square while a reply is in flight. Enter sends. A
+message sent while a reply is in flight steers it: the reply picks it up at its
+next check, and the stop control ends the reply. The band shows no hint in
+flight and names no delivery mode. The provenance line stays under each reply,
+and an expanded receipt sits plain under it in mono, with no box.
 The launcher is a 600 by 80 window on `surface` with a hairline and one
 composer line, nothing else. A global shortcut opens it above every app,
 centered in the upper third of the screen. Enter sends the line as the first
