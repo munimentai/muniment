@@ -1179,9 +1179,9 @@
               <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>
             {/if}
             <span class="title-spacer" data-tauri-drag-region></span>
+            <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
+            <button type="button" class="quiet artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
           </div>
-          <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
-          <button type="button" class="quiet artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
         </header>
         <aside id="sidebar" class="sidebar">
           <div class="side-brand">
@@ -1688,19 +1688,19 @@
   .workspace.macos.sidebar-collapsed { --sidebar-column: 52px; }
   .workspace.macos.artifact-resizing { transition: none; }
   .workspace:not(.macos) .titlebar-sidebar, .workspace:not(.macos) .titlebar-thread { display: contents; }
-  /* A flex row, not a subgrid: padding on a subgrid shifts its tracks past the
-     frame in WebKit, which pushed the artifact control off the window. */
-  .workspace.macos .titlebar { display: flex; align-items: center; gap: 8px; padding-left: var(--titlebar-inset); padding-right: 8px; }
-  /* The frame edge is the anchor: WebKit and Blink place a subgrid item's
-     padding differently, so the artifact control leaves the column grid. */
-  .workspace.macos .update-slot { margin-left: auto; }
-  .workspace.macos .titlebar-sidebar { position: relative; z-index: 1; flex: 0 0 auto; width: calc(var(--sidebar-column) + 2 * var(--frame-width) - var(--titlebar-inset)); display: flex; align-items: center; gap: 8px; min-width: 0; container-type: inline-size; }
+  /* The title row is a subgrid with no margin and no padding of its own: padding
+     on a subgrid shifts its tracks past the frame in WebKit, which pushed the
+     artifact control off the window. The native clearance is the sidebar
+     part's padding, so both parts track their panel columns in every engine. */
+  .workspace.macos .titlebar { display: grid; grid-template-columns: subgrid; margin: 0; padding: 0; }
+  .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; box-sizing: content-box; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: calc(var(--titlebar-inset) - var(--frame-width)); container-type: inline-size; }
   /* The composer has a 760px cap, 24px gutters and a 1px panel border. */
-  .workspace.macos .titlebar-thread { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .workspace.macos .titlebar-thread { grid-column: 2; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: max(25px, calc((100% - 760px) / 2)); }
   .workspace.macos:not(.sidebar-collapsed) .side-brand { margin-left: calc(var(--titlebar-inset) - var(--frame-width) - 11px); padding-left: 0; }
   /* The collapsed sidebar keeps the controls clear of the native traffic lights. */
   .workspace.macos.sidebar-collapsed .titlebar-sidebar { width: 184px; }
   .workspace.macos.sidebar-collapsed.artifact-open .titlebar-sidebar { width: 68px; }
+  .workspace.macos .update-slot { order: 1; }
   .workspace.macos .artifacts-toggle { order: 2; }
   .workspace.macos .thread-title { padding-left: 0; }
   @container (max-width: 170px) {

@@ -88,6 +88,8 @@ async function checkWindowChrome(browser, baseUrl) {
             height: rect.height,
             top: rect.top,
             padding: getComputedStyle(row).paddingLeft,
+            // On macOS the native clearance is the sidebar part's padding, measured from the window edge.
+            clearance: row.querySelector('.titlebar-sidebar') ? row.querySelector('.titlebar-sidebar').getBoundingClientRect().left + parseFloat(getComputedStyle(row.querySelector('.titlebar-sidebar')).paddingLeft) : null,
             controls: [...row.querySelectorAll('button, input')].map((control) => {
               const box = control.getBoundingClientRect()
               const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
@@ -104,7 +106,8 @@ async function checkWindowChrome(browser, baseUrl) {
         })
         assert.equal(row.height, 36)
         assert.equal(row.top, 0)
-        assert.equal(row.padding, platform.startsWith('Mac') ? '84px' : '12px')
+        if (platform.startsWith('Mac')) assert.equal(row.clearance, 84)
+        else assert.equal(row.padding, '12px')
         assert.equal(row.controls.length, 4)
         for (const control of row.controls) {
           assert.ok(control.width >= 24 && control.height >= 24, JSON.stringify(control))

@@ -2283,7 +2283,9 @@ describe('window chrome', () => {
     expect(rowHeight).toBe(36)
     expect(controlHeight).toBe(28)
     expect(inset).toBe(84)
-    expect(appRules.get('.workspace.macos .titlebar')).toMatch(/padding-left:\s*var\(--titlebar-inset\)/)
+    // The clearance is the sidebar part's padding: the title row itself is a subgrid with no padding.
+    expect(appRules.get('.workspace.macos .titlebar')).toMatch(/grid-template-columns:\s*subgrid;\s*margin:\s*0;\s*padding:\s*0/)
+    expect(appRules.get('.workspace.macos .titlebar-sidebar')).toMatch(/padding-left:\s*calc\(var\(--titlebar-inset\) - var\(--frame-width\)\)/)
     expect(main.visible).toBe(false)
     expect(main.trafficLightPosition).toEqual({ x: 14, y: (rowHeight - 16) / 2 })
     expect(main.trafficLightPosition.y + 16 / 2).toBe((rowHeight - controlHeight) / 2 + controlHeight / 2)
