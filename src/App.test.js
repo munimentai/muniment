@@ -16,6 +16,11 @@ const appRules = new Map([...appStyles
   .matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
 const accessPanelSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
+const rowControlStyles = fs.readFileSync(path.join(process.cwd(), 'src/lib/RowControl.svelte'), 'utf8').match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
+const rowControlRules = new Map([...rowControlStyles
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
 // The delete action lives in the row's right-click menu and opens the inline confirmation.
 const openDeleteMenu = async (title) => {
   await fireEvent.contextMenu(document.querySelector(`.thread-record [title="${title}"]`))
@@ -1040,21 +1045,21 @@ describe('workspace composer entry', () => {
     expect(invoke).toHaveBeenCalledWith('chat_resume', { runId: 'run-interrupted' })
   })
 
-  it('holds Queue follow-up when the runtime upgrade starts during a live run', async () => {
+  it('keeps the stop control and steers by Enter while a run is live', async () => {
     mockRuntimeUpgrade({ pending: false })
     render(App)
     const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    const queue = await screen.findByRole('button', { name: 'Queue follow-up' })
+    const stop = await screen.findByRole('button', { name: 'Stop' })
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/follow-up|steers/)).not.toBeInTheDocument()
     await fireEvent.input(composer, { target: { value: 'Then summarize it' } })
-    expect(queue).not.toBeDisabled()
+    expect(stop).not.toHaveAttribute('aria-disabled')
+    expect(screen.getAllByRole('button').filter((button) => button.closest('.composer-actions')).map((button) => button.getAttribute('aria-label') ?? button.textContent)).toEqual(['Voice', 'Stop'])
 
-    desktopClientListener({ payload: upgradeStatus(true) })
-
-    await waitFor(() => expect(queue).toBeDisabled())
-    await fireEvent.click(queue)
-    expect(invoke).not.toHaveBeenCalledWith('chat_queue', expect.anything())
+    await fireEvent.keyDown(screen.getByPlaceholderText('Ask anything'), { key: 'Enter' })
+    expect(invoke).toHaveBeenCalledWith('chat_queue', { runId: 'run-upgrade', delivery: 'steer', message: 'Then summarize it' })
   })
 
   it('refuses Send during the first thread restore and keeps the draft for a retry', async () => {
@@ -1067,11 +1072,11 @@ describe('workspace composer entry', () => {
     })
     render(App)
     const composer = await findWorkspaceComposer()
-    const send = screen.getByRole('button', { name: 'Send' })
     await waitFor(() => expect(composer).toBeDisabled())
 
     // A stale input event can land as the thread restore starts.
     await fireEvent.input(composer, { target: { value: 'Keep this prompt' } })
+    const send = screen.getByRole('button', { name: 'Send' })
     expect(send).toBeDisabled()
     expect(send).toHaveAttribute('aria-disabled', 'true')
     const status = screen.getByText('Send waits for the thread. Your draft stays here.')
@@ -1171,15 +1176,20 @@ describe('workspace composer entry', () => {
     expect(screen.queryByText('muniment')).not.toBeInTheDocument()
   })
 
-  it('focuses the primary composer action once when the workspace appears', async () => {
+  it('focuses the composer once when the workspace appears and shows the send control with a draft', async () => {
     render(App)
     const composer = await findWorkspaceComposer()
     await waitFor(() => expect(composer).toBeEnabled())
-    const send = screen.getByRole('button', { name: 'Send' })
 
     expect(composer).toHaveFocus()
-    expect(send).toHaveClass('primary')
-    expect(send).toHaveAttribute('aria-disabled', 'true')
+    // The band's action control is absent while the draft is empty.
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
+    await fireEvent.input(composer, { target: { value: 'A question' } })
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toHaveClass('primary', 'composer-action')
+    expect(send).toHaveAttribute('title', 'Send (⏎)')
+    expect(send.querySelector('[data-icon="arrow-up"]')).toBeInTheDocument()
+    expect(send).not.toHaveAttribute('aria-disabled')
     expect(send).not.toBeDisabled()
     const disabledSendRule = appRules.get('.composer-actions .primary[aria-disabled="true"]')
     expect(disabledSendRule).toMatch(/background:\s*var\(--faint\)/)
@@ -1254,16 +1264,29 @@ describe('workspace composer entry', () => {
     await waitFor(() => expect(document.activeElement).toBe(settings))
   })
 
-  it('expands a collapsed sidebar when Settings opens', async () => {
+  it('hides Settings with a collapsed sidebar and expands it with the menu open from the settings shortcut', async () => {
     localModeStatus = true
     localStorage.setItem('muniment.sidebar-collapsed', 'collapsed')
     render(App)
-    const settings = await screen.findByRole('button', { name: 'Settings' })
-    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
-    await fireEvent.click(settings)
+    expect(await screen.findByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+    const shortcut = navigator.platform.startsWith('Mac') ? { key: ',', metaKey: true } : { key: ',', ctrlKey: true }
+
+    await fireEvent.keyDown(document, shortcut)
+
     expect(await screen.findByRole('region', { name: 'Settings' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
-    expect(settings).toHaveTextContent('Settings')
+    const settings = screen.getByRole('button', { name: 'Settings' })
+    expect(settings).toHaveAttribute('aria-expanded', 'true')
+    expect(settings).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+,' : 'Control+,')
+    expect(settings).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'Settings (⌘,)' : 'Settings (Ctrl ,)')
+
+    // The shortcut toggles the menu while the sidebar shows.
+    await fireEvent.keyDown(document, shortcut)
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Settings' })).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+    await fireEvent.keyDown(document, shortcut)
+    expect(await screen.findByRole('region', { name: 'Settings' })).toBeInTheDocument()
   })
 
   it.each(['System', 'Light', 'Dark'])('persists %s from the local appearance control across remounts', async (label) => {
@@ -1943,7 +1966,7 @@ describe('artifact rail', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     expect(screen.queryByRole('separator', { name: 'Threads' })).not.toBeInTheDocument()
-    expect(workspace.style.getPropertyValue('--sidebar-column')).toBe('52px')
+    expect(workspace.style.getPropertyValue('--sidebar-column')).toBe('0px')
     await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
     expect(screen.getByRole('separator', { name: 'Threads' })).toHaveAttribute('aria-valuenow', '240')
     expect(appRules.get('.artifact-divider, .sidebar-divider')).toMatch(/cursor:\s*col-resize/)
@@ -2412,9 +2435,10 @@ describe('thread name', () => {
   })
 
   it('uses one-line ellipsis styles for both thread names', () => {
-    expect(appRules.get('.thread-title')).toMatch(/overflow:\s*hidden/)
-    expect(appRules.get('.thread-title')).toMatch(/text-overflow:\s*ellipsis/)
-    expect(appRules.get('.thread-title')).toMatch(/white-space:\s*nowrap/)
+    expect(rowControlRules.get('.thread-title')).toMatch(/overflow:\s*hidden/)
+    expect(rowControlRules.get('.thread-title')).toMatch(/text-overflow:\s*ellipsis/)
+    expect(rowControlRules.get('.thread-title')).toMatch(/white-space:\s*nowrap/)
+    expect(appRules.get('input.thread-title')).toMatch(/text-overflow:\s*ellipsis/)
     expect(appRules.get('.thread-row-title')).toMatch(/overflow:\s*hidden/)
     expect(appRules.get('.thread-row-title')).toMatch(/white-space:\s*nowrap/)
     // The row title fades at its end and the time keeps its width, so the time always shows.
@@ -2496,7 +2520,7 @@ describe('sidebar collapse', () => {
     ? { key: '\\', metaKey: true }
     : { key: '\\', ctrlKey: true }
 
-  it('collapses to an icon rail from the app row control and expands again', async () => {
+  it('collapses to nothing from the app row control and expands again', async () => {
     render(App)
     const collapse = await screen.findByRole('button', { name: 'Collapse sidebar' })
     expect(collapse).toHaveAttribute('aria-expanded', 'true')
@@ -2528,7 +2552,10 @@ describe('sidebar collapse', () => {
     expect(expand).toHaveAttribute('title', expect.stringContaining('Expand sidebar'))
     expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'New thread (⌘N)' : 'New thread (Ctrl N)')
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute('title', 'Settings')
+    // Collapsed means gone: no rail, and Settings hides with the sidebar.
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(document.getElementById('sidebar').textContent.trim()).toBe('')
+    expect(within(document.getElementById('sidebar')).queryAllByRole('button')).toHaveLength(0)
     expect(screen.queryByText('Threads')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Alice/i })).not.toBeInTheDocument()
 
@@ -4607,9 +4634,10 @@ describe('interrupted reply resume', () => {
     await fireEvent.click(button)
     expect(screen.getByText('Partial answer')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Resuming interrupted reply…')).toBeDisabled()
-    expect(screen.queryByRole('button', { name: 'Queue follow-up' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'true')
-    expect(screen.getByRole('button', { name: 'Resuming…' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop' })).toHaveAttribute('aria-disabled', 'true')
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(invoke).not.toHaveBeenCalledWith('chat_cancel', expect.anything())
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_resume')).toEqual([
       ['chat_resume', { runId: 'run-interrupted' }],
     ])
@@ -5319,7 +5347,8 @@ describe('thread announcements', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
     expect(screen.queryByText('Reply setup has started. Please wait.')).not.toBeInTheDocument()
     expect(within(error).getByRole('button', { name: 'Try again' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument()
+    await fireEvent.input(composer, { target: { value: 'Another question' } })
+    expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled')
   })
 
   it('announces a permission pause during a streamed run', async () => {
@@ -5431,8 +5460,12 @@ describe('thread announcements', () => {
   it('offers a rejoined reply the controls of a reply this desktop started', async () => {
     signedIn([{ runId: 'run-live', phase: 'streaming', text: 'Half an', prompt: 'A question', receipt: null, toolActivity: [] }])
 
-    expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Queue follow-up' })).toBeInTheDocument()
+    const stop = await screen.findByRole('button', { name: 'Stop' })
+    expect(stop).toHaveClass('stop', 'composer-action')
+    expect(stop).toHaveAttribute('title', 'Stop the reply')
+    expect(stop.querySelector('[data-icon="square"]')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Queue follow-up' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add files' })).not.toBeInTheDocument()
   })
 
@@ -5943,8 +5976,10 @@ describe('active run composer queue', () => {
     const composer = await screen.findByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    await screen.findByRole('button', { name: 'Queue follow-up' })
-    return composer
+    await screen.findByRole('button', { name: 'Stop' })
+    // The workspace remounts once the desktop client status lands, so the
+    // composer that takes Enter is the one on screen now.
+    return screen.getByPlaceholderText('Ask anything')
   }
 
   function expectQueuePayload(payload) {
@@ -5954,25 +5989,19 @@ describe('active run composer queue', () => {
     expect(call?.[1]).toEqual(payload)
   }
 
-  it('queues a follow-up with the exact Rust command payload', async () => {
-    const composer = await startRun()
-    await fireEvent.input(composer, { target: { value: 'Then summarize it' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Queue follow-up' }))
-
-    expectQueuePayload({ runId: 'run-7', delivery: 'followUp', message: 'Then summarize it' })
-  })
-
-  it('steers the active reply with the exact Rust command payload', async () => {
+  it('steers the active reply from Enter with the exact Rust command payload', async () => {
     const composer = await startRun()
     await fireEvent.input(composer, { target: { value: 'Focus on the risks' } })
-    const send = screen.getByRole('button', { name: 'Send' })
-    expect(send).toHaveClass('primary')
-    await fireEvent.click(send)
+    // In flight the band holds the stop square alone: no send control and no delivery mode.
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Queue follow-up' })).not.toBeInTheDocument()
+    expect(document.getElementById('composer-hint')).toBeNull()
+    await fireEvent.keyDown(composer, { key: 'Enter' })
 
     expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'Focus on the risks' })
   })
 
-  it('keeps focus on the same Send button when a run starts', async () => {
+  it('keeps focus on the same action control as it turns from send to stop', async () => {
     render(App)
     const composer = await screen.findByPlaceholderText('Ask anything')
     await waitFor(() => expect(composer).toBeEnabled())
@@ -5983,8 +6012,9 @@ describe('active run composer queue', () => {
     await fireEvent.click(send)
 
     expect(document.activeElement).toBe(send)
-    expect(screen.getByRole('button', { name: 'Send' })).toBe(send)
-    expect(send).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByRole('button', { name: 'Stop' })).toBe(send)
+    expect(send).toHaveClass('stop')
+    expect(send).not.toHaveClass('primary')
   })
 
   it('shows a queue rejection and preserves the draft', async () => {
@@ -5999,7 +6029,7 @@ describe('active run composer queue', () => {
     })
     const composer = await startRun()
     await fireEvent.input(composer, { target: { value: 'Keep this draft' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Queue follow-up' }))
+    await fireEvent.keyDown(composer, { key: 'Enter' })
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not queue this message')
     expect(composer).toHaveValue('Keep this draft')

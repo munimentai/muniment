@@ -9,6 +9,7 @@
   import AccessPanel from './lib/AccessPanel.svelte'
   import Appearance from './lib/Appearance.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
+  import RowControl from './lib/RowControl.svelte'
   import AssistantMarkdown from './lib/AssistantMarkdown.svelte'
   import CodeDiff from './lib/CodeDiff.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
@@ -29,7 +30,7 @@
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { firstRunError } from './lib/onboarding-diagnostics.js'
   import { relativeTime } from './lib/relative-time.js'
-  import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_RAIL_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSidebarShortcut, newThreadShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
+  import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
   import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
   import { thinkingSettle } from './lib/thinking-transition.js'
@@ -93,7 +94,7 @@
   // radio the panel happens to show.
   const composerHint = $derived(
     active?.phase === 'resuming' ? 'Reopening the existing secure session…'
-      : active && active.id !== 'pending' ? '⏎ steers this reply · queue as follow-up'
+      : active ? ''
         : auth.name === 'local' ? ''
           : 'Routing is automatic. Every reply carries its receipt.')
 
@@ -117,8 +118,19 @@
       closeSettings()
       return
     }
-    // The menu lives inside the sidebar, so a collapsed rail expands first.
+    // The menu lives inside the sidebar, so a collapsed sidebar expands first.
     if (sidebarCollapsed) toggleSidebar()
+    settingsOpen = true
+  }
+
+  // The platform's settings shortcut: a collapsed sidebar expands with the menu
+  // open, and a shown sidebar toggles the menu.
+  function settingsShortcutPressed() {
+    if (!sidebarCollapsed) {
+      toggleSettings()
+      return
+    }
+    toggleSidebar()
     settingsOpen = true
   }
 
@@ -250,6 +262,7 @@
   let threadMenu = $state(null)
   const sidebarKeyShortcut = sidebarShortcut()
   const newThreadKeyShortcut = newThreadShortcut()
+  const settingsKeyShortcut = settingsShortcut()
   const modifierLabel = shortcutDisplayLabel(sidebarKeyShortcut).slice(0, -1)
   const sidebarHint = `${modifierLabel}\\`
   // The newest copy attempt in the thread, or null once its confirmation lapses.
@@ -500,7 +513,7 @@
 
   function availableArtifactRailWidth() {
     // Reserve both outer edges and both panel gaps before sizing the rail.
-    return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - 4 * workspaceFrameWidth() - (sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth) - minimumThreadWidth))
+    return Math.max(ARTIFACT_RAIL_MIN_WIDTH, Math.min(ARTIFACT_RAIL_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - 4 * workspaceFrameWidth() - (sidebarCollapsed ? 0 : sidebarWidth) - minimumThreadWidth))
   }
 
   function availableSidebarWidth() {
@@ -1117,6 +1130,11 @@
         toggleSidebar()
         return
       }
+      if (workspaceMode() && onboarding.name === 'complete' && isSettingsShortcut(event)) {
+        event.preventDefault()
+        settingsShortcutPressed()
+        return
+      }
       if (event.key === 'Escape' && artifactRailOpen) {
         event.preventDefault()
         artifactRailOpen = false
@@ -1249,9 +1267,15 @@
     return runtimeUpgradePending() || !draft.trim() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
   }
 
-  function send() {
-    if (sendDisabled()) return
-    active ? chatController.queue('steer') : chatController.send()
+  // The band's one action control: an up arrow that sends while the draft has
+  // text, and a stop square while a reply is in flight. Enter steers in flight.
+  function composerActionInactive() {
+    return active ? active.id === 'pending' || active.phase === 'resuming' : sendDisabled()
+  }
+
+  function composerActionClick() {
+    if (composerActionInactive()) return
+    active ? chatController.cancel() : chatController.send()
   }
 </script>
 
@@ -1291,26 +1315,26 @@
         {#if localEntryError}<p class="record error-record" role="alert">{localEntryError}</p>{/if}
       </section>
     {:else if workspaceMode() && desktopClientStatus}
-      <section class="workspace" data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
               <LucideIcon name={sidebarCollapsed ? 'panel-left-open' : 'panel-left-close'} />
             </button>
-            <button type="button" class="quiet new-thread" aria-label="New thread" title={`New thread (${shortcutDisplayLabel(newThreadKeyShortcut)})`} aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
+            <RowControl kind="new-thread" aria-label="New thread" title={`New thread (${shortcutDisplayLabel(newThreadKeyShortcut)})`} aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
               <LucideIcon name="plus" />
               <span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
-            </button>
+            </RowControl>
           </div>
           <div class="titlebar-thread" data-tauri-drag-region>
             {#if editingThreadTitle}
               <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
             {:else}
-              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><button type="button" class="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:this={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</button></h1>
+              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:element={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
             {/if}
             <span class="title-spacer" data-tauri-drag-region></span>
             <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
-            <button type="button" class="quiet artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
+            <RowControl kind="artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></RowControl>
           </div>
         </header>
         <aside id="sidebar" class="sidebar">
@@ -1355,8 +1379,9 @@
           {#if !sidebarCollapsed && auth.name === 'signed-in'}
             <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
           {/if}
+          {#if !sidebarCollapsed}
           <div class="settings-block">
-            {#if settingsOpen && !sidebarCollapsed}
+            {#if settingsOpen}
               <section id="settings-menu" class="settings-menu" aria-label="Settings" tabindex="-1" bind:this={settingsPopover} onkeydown={settingsKeydown} use:focusSettingsOnMount>
                 <Appearance />
                 <section class="settings-home" aria-labelledby="settings-home-title">
@@ -1372,8 +1397,9 @@
                 {/if}
               </section>
             {/if}
-            <button class="side-action" aria-expanded={settingsOpen} aria-controls="settings-menu" aria-label={sidebarCollapsed ? 'Settings' : null} title={sidebarCollapsed ? 'Settings' : null} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} />{#if !sidebarCollapsed}<span>Settings</span>{/if}</button>
+            <button class="side-action" aria-expanded={settingsOpen} aria-controls="settings-menu" aria-keyshortcuts={settingsKeyShortcut} title={`Settings (${shortcutDisplayLabel(settingsKeyShortcut)})`} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
           </div>
+          {/if}
         </aside>
         {#if !sidebarCollapsed}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -1616,13 +1642,11 @@
             <div class="composer-actions">
               <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet" onclick={chooseFiles}>Add files</button>{/if}
-              {#if active?.phase === 'resuming'}
-                <button disabled>Resuming…</button>
-              {:else if active && active.id !== 'pending'}
-                <button class="quiet follow-up" disabled={!draft.trim() || runtimeUpgradePending()} onclick={() => chatController.queue('followUp')}>Queue follow-up</button>
-                <button onclick={() => chatController.cancel()}>Stop</button>
+              {#if active || draft.trim()}
+                <button type="button" class="composer-action" class:primary={!active} class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} title={active ? 'Stop the reply' : 'Send (⏎)'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
+                  <LucideIcon name={active ? 'square' : 'arrow-up'} variant="action" />
+                </button>
               {/if}
-              <button class="primary" disabled={threadSwitching} aria-disabled={sendDisabled() ? 'true' : undefined} onclick={send}>Send</button>
             </div>
           </div>
           {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
@@ -1820,7 +1844,7 @@
   }
 
   .workspace { --frame-width: 8px; --titlebar-height: 28px; position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-height) minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); gap: var(--frame-width); background: var(--paper); }
-  /* The sidebar column is the element's --sidebar-column: the kept width, or 52px collapsed, and the 180ms slide carries both. */
+  /* The sidebar column is the element's --sidebar-column: the kept width, or zero collapsed, and the 180ms slide carries both. */
   .workspace { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
   .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
@@ -1851,19 +1875,15 @@
   /* Artifacts sits flush right: 4px inside the 8px frame matches the 12px row padding elsewhere. */
   .workspace.macos .titlebar-thread { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: 4px; }
   .workspace.macos .update-slot { order: 1; }
-  .workspace.macos .artifacts-toggle { order: 2; }
-  .workspace.macos .thread-title { padding-left: 0; }
   .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 24px; padding: 0 6px; }
   .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .titlebar button:hover:not(:disabled) { background: var(--faint); border-color: transparent; }
   .titlebar button:focus-visible, .titlebar input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .new-thread, .artifacts-toggle { white-space: nowrap; }
   .titlebar kbd { margin-left: 2px; padding: 0 4px; border-radius: var(--radius-chip); background: var(--faint); }
   .update-slot { flex: 0 0 24px; height: 24px; }
   .thread-title-heading { min-width: 24px; max-width: 100%; margin: 0; font: inherit; }
-  .thread-title { min-width: 24px; max-width: 100%; overflow: hidden; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-  input.thread-title { flex: 0 1 320px; user-select: text; }
-  button.thread-title:disabled { opacity: 1; }
+  /* The rename field keeps the title control's register while it shows. */
+  input.thread-title { flex: 0 1 320px; max-width: 100%; overflow: hidden; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
   kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .title-spacer { flex: 1; align-self: stretch; min-width: 24px; }
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; }
@@ -1920,9 +1940,9 @@
   .provider-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .provider-row label { flex: 1; min-width: 0; }
   .provider-tag { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
-  .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
-  .workspace.sidebar-collapsed .side-action { justify-content: center; gap: 0; padding: 9px 0; }
+  /* Collapsed means gone: the column is zero wide, the empty panel drops its hairline and padding for the slide, and the thread panel takes the gap. */
+  .workspace.sidebar-collapsed .sidebar { padding: 0; border-width: 0; overflow: hidden; }
+  .workspace.sidebar-collapsed .thread-panel { margin-left: calc(-1 * var(--frame-width)); }
   .side-label { margin: 2px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
@@ -1938,7 +1958,8 @@
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }
   .artifact-empty { display: grid; place-items: center; align-content: center; min-height: 45%; text-align: center; }
   .artifact-empty p { margin: 0; color: var(--muted); }
-  .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+  .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; transition: margin-left 180ms ease; }
+  .workspace.sidebar-resizing .thread-panel { transition: none; }
   .thread-shell { position: relative; min-height: 0; }
   .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
   .thread.scrolling::-webkit-scrollbar-thumb { background: var(--border); }
@@ -1996,7 +2017,8 @@
   .receipt-marker.expanded { transform: rotate(45deg); }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
-  .receipt-record { box-sizing: border-box; width: 329px; max-width: 100%; margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); font: var(--text-12) var(--font-mono); }
+  /* The expanded receipt sits plain under the provenance line: no box. */
+  .receipt-record { box-sizing: border-box; width: 329px; max-width: 100%; margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .receipt-record .recall-file { display: block; }
@@ -2042,6 +2064,10 @@
   .model-chip:hover:not(:disabled) { background: var(--faint); }
   .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
+  /* The band's one action control: an ink up arrow while the draft has text, a muted stop square in flight. */
+  .composer-action { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; }
+  .composer-action.stop { background: transparent; border-color: var(--border); color: var(--muted); }
+  .composer-action.stop[aria-disabled="true"] { border-color: transparent; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
   .capture-meter { height: 14px; display: flex; align-items: center; gap: 2px; }
   .capture-meter i { width: 2px; height: 6px; background: var(--muted); animation: capture 900ms ease-in-out infinite alternate; }
@@ -2063,7 +2089,6 @@
   .speech-install-card .close-card { min-width: 24px; min-height: 24px; margin: 0; padding: 0 5px; color: var(--muted); }
   .speech-install-card .close-card:hover { color: var(--ink); }
   .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .follow-up { color: var(--muted); font-family: var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }

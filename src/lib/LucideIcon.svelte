@@ -27,6 +27,11 @@
   {:else if name === 'x'}
     <path d="M18 6 6 18" />
     <path d="m6 6 12 12" />
+  {:else if name === 'arrow-up'}
+    <path d="m5 12 7-7 7 7" />
+    <path d="M12 19V5" />
+  {:else if name === 'square'}
+    <rect width="18" height="18" x="3" y="3" rx="2" />
   {/if}
 </svg>
 

@@ -34,17 +34,18 @@ them.
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
-| Workspace frame | `.workspace` | Grid of title row, sidebar, thread, and rail on the paper frame | `--paper`, 8px frame, `--titlebar-height` title row (28px, 32px on macOS), `--sidebar-column` sidebar column (195px by default, resizable 160px to 420px, kept per device) | Sidebar collapsed: 52px column. Rail open: adds `--artifact-rail-width`. Column change transitions `180ms ease` (raw motion, no token at 180ms). `.artifact-resizing` and `.sidebar-resizing` remove the transition |
+| Workspace frame | `.workspace` | Grid of title row, sidebar, thread, and rail on the paper frame | `--paper`, 8px frame, `--titlebar-height` title row (28px, 32px on macOS), `--sidebar-column` sidebar column (195px by default, resizable 160px to 420px, kept per device) | Sidebar collapsed: zero column, and the thread panel takes the gap with a `margin-left` slide of `180ms ease`. Rail open: adds `--artifact-rail-width`. Column change transitions `180ms ease` (raw motion, no token at 180ms). `.artifact-resizing` and `.sidebar-resizing` remove the transition |
 | Panels | `.sidebar, .thread-panel, .artifact-rail` | The three surfaces inside the frame | `--surface`, 1px `--border`, `--radius-panel` | None |
 | Title bar | `.titlebar` | Drag region with the app row | `--paper`, `--text-13`, padding 0 12px | macOS: subgrid with a 78px inset for the traffic lights, and the 32px row centers its 24px controls on the 14pt lights at 16pt |
-| Title bar controls | `.titlebar button, .titlebar input` | Size floor for the row | 24px min width and height, padding 0 6px | Hover: `--faint` background, transparent border. Focus-visible: global ring |
+| Title bar controls | `.titlebar button, .titlebar input` | Size floor for the sidebar toggle and the rename field | 24px min width and height, padding 0 6px | Hover: `--faint` background, transparent border. Focus-visible: global ring |
+| Row control | `.row-control` in `RowControl.svelte` | The one quiet row control that New thread, the thread title and Artifacts render through | Transparent, 1px transparent border, `--radius-control`, `--ink`, `font: inherit`, gap 6px, 24px min width and height, padding 0 6px | Hover: `--faint` background. Focus-visible: 2px `--ink` ring at offset 2px. Disabled: `--muted` |
 | Sidebar toggle | `.quiet.side-toggle` | Collapses or expands the sidebar | Quiet button with a `LucideIcon` in `--muted` | Hover or focus-visible: `--faint` background, icon `--ink` |
-| New thread | `.quiet.new-thread` | Starts a thread | Quiet button, `plus` icon, label and `kbd` chip, no wrap | Disabled while a run is active. Label and chip hide under a 170px container |
+| New thread | `.row-control.new-thread` | Starts a thread | Row control, `plus` icon, label and `kbd` chip, no wrap | Disabled while a run is active |
 | Title bar kbd | `.titlebar kbd` | Shortcut chip | `--faint` background, `--radius-chip`, padding 0 4px, `--text-12 --font-mono`, `--muted` | None |
-| Thread title button | `button.thread-title` | Opens rename | Transparent, no border, `--ink`, `font: inherit`, `font-weight: 600` (raw, `--weight-semibold` exists), ellipsis | Disabled with no thread: opacity 1 |
-| Thread title input | `input.thread-title` | Renames the thread | Same as the button, flex basis 320px, text selectable | Focus-visible: global ring |
+| Thread title button | `.row-control.thread-title` | Opens rename | Row control, `font-weight: 600` (raw, `--weight-semibold` exists), ellipsis, no wrap | Disabled with no thread: `--ink`, opacity 1 |
+| Thread title input | `input.thread-title` | Renames the thread | Title bar control register, no border, transparent, `--ink`, `font-weight: 600`, ellipsis, flex basis 320px, text selectable | Focus-visible: global ring |
 | Update slot | `.update-slot` | Reserved 24px slot for the update control | 24px by 24px, empty | None |
-| Artifacts toggle | `.quiet.artifacts-toggle` | Opens the rail | Quiet button, label and `kbd` chip, no wrap | Hover: `--faint`. `aria-expanded` follows the rail |
+| Artifacts toggle | `.row-control.artifacts-toggle` | Opens the rail | Row control, label and `kbd` chip, no wrap, `order: 2` on macOS | `aria-expanded` follows the rail |
 | Artifact divider | `.artifact-divider` | Drag handle between thread and rail | Transparent, width 8px, `border-radius: 0` (allowed exception), `col-resize` cursor | Draws nothing on hover or drag. Focus-visible: 2px `--ink` ring at offset -2px |
 | Sidebar divider | `.sidebar-divider` | Drag handle between sidebar and thread, absent while the sidebar is collapsed | Same as the artifact divider | Same as the artifact divider |
 | Artifact rail | `.artifact-rail` | Rail body | Panel surface, padding 22px 24px | Header has 1px `--border` bottom, `h2` at `--text-17` |
@@ -55,7 +56,7 @@ them.
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
-| Sidebar | `.sidebar` | Thread list and settings foot | Panel surface, padding 14px 10px 10px | Collapsed: padding 14px 6px 10px, actions centered |
+| Sidebar | `.sidebar` | Thread list and settings foot | Panel surface, padding 14px 10px 10px | Collapsed: gone. Zero width, no padding, no hairline, nothing inside |
 | Section label | `.side-label` | Heads the thread list | `--muted`, `--text-12 --font-mono`, margin 2px 8px 5px | None |
 | Thread row | `.thread-row` | Opens a thread | Transparent, 1px transparent border, `--radius-control`, `--text-13`, `--ink`, padding 7px 8px, gap 9px | Hover: `--faint`. `aria-disabled` while a run is active: opacity .55 |
 | Current thread | `.thread-row.active-thread` | Marks the open thread | `--faint` background, 5px round `--ink` dot (allowed 50% radius exception) | None |
@@ -65,7 +66,7 @@ them.
 | Thread menu item | `.thread-menu button` | Delete, opens the delete confirm | Quiet, 24px floor, `--ink`, `--text-13`, padding 3px 8px | Hover: `--faint`. Disabled while a run is active. Focus-visible: `outline-color: var(--ink)` |
 | Delete confirm group | `.thread-delete-confirm` | Inline Delete and Cancel | `--surface`, `--radius-control`, `--ink`, `--text-12 --font-mono`, padding 5px 7px | Buttons: quiet, 24px floor, `font: inherit`. Hover: `--faint`. Disabled while `deletePending` |
 | Older threads | `.older-threads` | Loads the next page | Quiet, full width, `--muted`, margin-top 4px | Disabled while loading |
-| Settings control | `.side-action` | Foot control that expands the menu | Transparent, gap 9px, padding 7px 8px, `settings` icon at 18px in `--muted`, `--text-13` | Collapsed: icon only, padding 9px 0, name in `aria-label` |
+| Settings control | `.side-action` | Foot control that expands the menu | Transparent, gap 9px, padding 7px 8px, `settings` icon at 18px in `--muted`, `--text-13`, `aria-keyshortcuts` and tooltip carry ⌘, or Ctrl+, | Hidden with the collapsed sidebar. The shortcut expands the sidebar with the menu open, and toggles the menu when the sidebar shows |
 | Settings block | `.settings-block` | Foot of the sidebar | 1px `--border` top, padding-top 8px, `margin-top: auto` | None |
 
 ## Settings menu
@@ -98,7 +99,7 @@ them.
 | Assistant markdown | `AssistantMarkdown.svelte` | Rendered complete reply | See the assistant markdown table | None |
 | Provenance | `.provenance` | Receipt line under a reply, toggles the record | Transparent button, 24px floor, `--muted`, `--text-provenance` at line-height 1.45 (no token) in `--font-mono`, tabular figures, wraps anywhere | Hover: `--ink`. `.route-segment`: `--signal` (allowed). Unavailable: a `p.provenance` with the same register |
 | Receipt marker | `.receipt-marker` | Chevron on the provenance line | 5px box, 1px `currentColor` edges, rotated -45deg, transition `transform 120ms ease` (raw, `--motion-popover` exists) | `.expanded`: 45deg. Reduced motion: no transition |
-| Receipt record | `.receipt-record` | Expanded receipt list | 329px, 1px `--border`, `--radius-control`, `--muted`, `--text-12 --font-mono`, 88px label column | `.route-value`: `--signal` (allowed). `dd` wraps anywhere |
+| Receipt record | `.receipt-record` | Expanded receipt list, plain under the provenance line | 329px, no border, no padding, `--muted`, `--text-12 --font-mono`, 88px label column | `.route-value`: `--signal` (allowed). `dd` wraps anywhere |
 | Message actions | `.message-actions` | Copy row under a complete reply | opacity 0, transition `opacity 120ms ease` (raw, `--motion-popover` exists), gap 2px | Response hover or focus-within: opacity 1 |
 | Copy | `.message-actions button` | Copies the reply | Quiet, `--muted`, `--text-12`, gap 5px, 14px `action` icon | Hover: `--faint`, `--ink`. Focus-visible: `outline-color: var(--ink)`. Disabled: opacity .45 |
 | Run error | `.run-error` | Failure, stop, or interruption line | `--muted`, `--text-12 --font-mono`, wraps anywhere | `.copy-failure` adds margin-top 4px |
@@ -128,14 +129,11 @@ them.
 | Composer textarea | `textarea` in `App.svelte` | Draft text | Transparent, no border or outline, `--ink`, `font: inherit` at body size | Disabled while resuming or switching threads. Placeholder changes to the resuming line |
 | Selected files | `.attachments li` | Files chosen before Send | 1px `--border`, `--radius-chip`, `--muted`, `--text-12 --font-mono`, padding 4px 6px 4px 9px | Remove button: no border, transparent, inherits color, `--text-12` |
 | Composer row | `.composer-row` | Band under the input | `--muted`, `--text-12`, gap 8px, margin-top 8px | None |
-| Composer hint | `#composer-hint` | One status line in the band | Inherits the row register | Thread switching and dictation replace the hint |
+| Composer hint | `#composer-hint` | One status line in the band, absent in flight | Inherits the row register | Thread switching and dictation replace the hint |
 | Model chip | `.quiet.model-chip` | Model source chip, opens the model panel | 1px `--border`, `--radius-chip`, `--ink`, `--text-12 --font-mono`, 24px floor, padding 2px 8px | Hover: `--faint`. `aria-expanded` follows the panel |
 | Voice | `.composer-actions .quiet` | Hold or toggle dictation | Quiet button | `aria-pressed` while dictating. Disabled while a run is active or dictation finishes |
 | Add files | `.composer-actions .quiet` | Opens the file picker | Quiet button | Hidden while a run is active |
-| Queue follow-up | `.quiet.follow-up` | Queues a draft during a run | Quiet, `--muted`, `--font-mono` | Disabled with an empty draft or a pending upgrade |
-| Stop | `.composer-actions button` | Cancels the run | Shell button | Shown only during a run |
-| Resuming | `.composer-actions button:disabled` | Placeholder while a reply resumes | Shell button, disabled | None |
-| Send | `.composer-actions .primary` | Sends the draft | Primary button | Inactive: `--faint`, `--border`, `--muted`. Disabled while switching threads |
+| Composer action | `.composer-action` | The band's one action control at its right end, absent while the draft is empty | 24px floor, padding 4px, one `action` icon | `.primary` with `arrow-up` once the draft has text: sends, tooltip `Send (⏎)`. Inactive: `--faint`, `--border`, `--muted`. `.stop` with `square` while a reply is in flight: transparent, 1px `--border`, `--muted`, cancels the run, tooltip `Stop the reply`. `aria-disabled` with a transparent border while the run is pending or resuming. Disabled while switching threads |
 | Cancel error | `.cancel-error` | Submit, cancel, or queue failure | `--muted`, `--text-12 --font-mono`, margin-bottom 8px | None |
 | Update notice | `.update-notice` | Runtime upgrade in progress | Grid, gap 2px, `.record` line and `.support` line at `--text-12` | None |
 
