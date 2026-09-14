@@ -127,6 +127,17 @@ impl RuntimeChatEventBroadcast {
         if !self.allows_workspace(workspace) {
             return;
         }
+        self.fan_out(event);
+    }
+
+    /// Sends a device-wide event, such as the sign-in link, to every live
+    /// subscriber. The workspace gate guards run events, and this event names
+    /// no run.
+    pub(crate) fn announce(&self, event: ChatEvent) {
+        self.fan_out(event);
+    }
+
+    fn fan_out(&self, event: ChatEvent) {
         let mut full_queue_drops = Vec::new();
         self.shared
             .subscribers

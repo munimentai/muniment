@@ -9,9 +9,8 @@ resolved graph is the thing that sells.
 muniment desktop is the local app. It is a Tauri v2 shell, a Rust runtime
 service, a Pi sidecar, and on-device voice, with the local graph embedded in
 the runtime. The harness is a component of the local app and never the offer.
-The graph and the report are the product. The local product is published under
-FSL-1.1-Apache-2.0, and each version converts to Apache 2.0 two years after its
-own release.
+The graph and the report are the product. Its licence is FSL-1.1-Apache-2.0,
+and each version converts to Apache 2.0 two years after its own release.
 
 The audience is anyone who runs a business, or wants to, with intelligence and
 the company data in one app. Nobody has to be a developer. They install a local
@@ -59,8 +58,9 @@ stays in the app. At the FSL release this repo becomes `munimentai/muniment`
 by transfer, history included, so every workflow and every commit here is
 written as public.
 
-**muniment-cloud.** Sign-in gates cloud features only. Cloud-backed use passes
-short-lived session tokens and the user's gateway virtual endpoint.
+**muniment-cloud.** Sign-in gates cloud features only. The signing-in screen
+shows the sign-in link for a browser that did not open. Cloud-backed use
+passes short-lived session tokens and the user's gateway virtual endpoint.
 The desktop sends no classification metadata. The cloud classifies every
 request at ingress. The desktop posts the protocol alone to `/v1/chat/grants`.
 The receipt request carries the run id alone. The relay is one
@@ -75,8 +75,8 @@ and queued follow-ups. Approving a proposal from the phone is that card.
 macOS with a readable evidence envelope per platform. The local-mode chat smoke
 is the first installed spec, and real sign-in gates no other spec.
 
-**homebrew-muniment.** The nightly bumps the cask version and hashes, and the
-publish step skips cleanly while the tap is unseeded. Seeding the tap is human.
+**homebrew-muniment.** The nightly bumps the cask version and hashes, and
+publish skips while the tap is unseeded. Seeding the tap is human.
 
 **muniment-site.** `docs/public-evidence/` is lifted verbatim into the public
 docs. A change to what an outside user sees updates it in the same pull request.

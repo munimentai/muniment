@@ -162,7 +162,7 @@ impl RuntimeAttachBoundaries {
             #[cfg(any(unix, target_os = "windows"))]
             approvals,
             sign_in_running,
-            browser_opener: Arc::new(open_browser),
+            browser_opener: Arc::new(sign_in_link_opener(chat_events.clone(), open_browser)),
             chat_events,
             pi_artifact: None,
         }
@@ -1094,6 +1094,39 @@ impl Drop for SignInPermit {
     }
 }
 
+/// The run id and phase of the chat event that carries the sign-in link.
+pub const SIGN_IN_LINK_RUN_ID: &str = "sign-in";
+pub const SIGN_IN_LINK_PHASE: &str = "sign-in-link";
+
+/// Announces the sign-in link on the chat-event stream before the browser
+/// opens, so the desktop shows the link when no browser answers.
+fn sign_in_link_opener(
+    chat_events: RuntimeChatEventBroadcast,
+    open: impl Fn(&str) -> Result<(), BrowserOpenError> + Send + Sync,
+) -> impl Fn(&str) -> Result<(), BrowserOpenError> + Send + Sync {
+    move |url: &str| {
+        chat_events.announce(sign_in_link_event(url));
+        open(url)
+    }
+}
+
+fn sign_in_link_event(url: &str) -> muniment_core::run_events::ChatEvent {
+    muniment_core::run_events::ChatEvent {
+        run_id: SIGN_IN_LINK_RUN_ID.to_owned(),
+        thread_id: None,
+        phase: SIGN_IN_LINK_PHASE.into(),
+        text: url.to_owned(),
+        prompt_storage_notice: None,
+        failure_reason: None,
+        receipt: None,
+        tool_activity: Vec::new(),
+        attachments: Vec::new(),
+        recalls: Vec::new(),
+        applied_diffs: Vec::new(),
+        pending_permission: None,
+    }
+}
+
 fn open_browser(url: &str) -> Result<(), BrowserOpenError> {
     browser_command(url)
         .spawn()
@@ -1171,6 +1204,40 @@ fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sign_in_link_reaches_every_subscriber_before_the_browser_opens() {
+        let broadcast = RuntimeChatEventBroadcast::default();
+        let subscription = broadcast.subscribe();
+        let opened = std::sync::Mutex::new(Vec::new());
+        let opener = sign_in_link_opener(broadcast.clone(), |url: &str| {
+            opened.lock().unwrap().push(url.to_owned());
+            Ok(())
+        });
+        let url = "https://muniment.ai/authorize?state=abc";
+
+        opener(url).unwrap();
+
+        let event = subscription.try_recv().unwrap();
+        assert_eq!(event.run_id, SIGN_IN_LINK_RUN_ID);
+        assert_eq!(event.phase, SIGN_IN_LINK_PHASE);
+        assert_eq!(event.text, url);
+        assert_eq!(event.thread_id, None);
+        assert_eq!(opened.lock().unwrap().as_slice(), [url.to_owned()]);
+    }
+
+    #[test]
+    fn sign_in_link_opener_reports_the_browser_failure() {
+        let broadcast = RuntimeChatEventBroadcast::default();
+        let subscription = broadcast.subscribe();
+        let opener = sign_in_link_opener(broadcast.clone(), |_: &str| Err(BrowserOpenError));
+
+        assert!(opener("https://muniment.ai/authorize").is_err());
+        assert_eq!(
+            subscription.try_recv().unwrap().text,
+            "https://muniment.ai/authorize"
+        );
+    }
 
     #[test]
     fn sign_in_authorization_failure_keeps_its_code_in_the_rpc() {
