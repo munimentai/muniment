@@ -119,7 +119,7 @@ describe('probe harness', () => {
     installTable('local-mode')
     render(App)
 
-    expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
     expect(screen.getByText('The local notes list the lease renewal date and notice period.')).toBeInTheDocument()
     expect(screen.queryByText('Sign in')).not.toBeInTheDocument()
   })

@@ -116,7 +116,6 @@ describe('installed nightly', () => {
     const location = await $('[data-testid="onboarding-home-path"]')
     const signedOut = await $('button=Sign in')
     const localMode = await $('[data-testid="local-mode"]')
-    const cloudSignIn = await $('button=Sign in for cloud features')
     await browser.waitUntil(async () => (
       await location.isDisplayed() || await signedOut.isDisplayed() || await localMode.isDisplayed()
     ), {
@@ -145,7 +144,14 @@ describe('installed nightly', () => {
     }
     const inLocalMode = await localMode.isDisplayed()
     if (inLocalMode) await expandSidebar()
-    const signIn = inLocalMode ? cloudSignIn : signedOut
+    let signIn = signedOut
+    if (inLocalMode) {
+      // The cloud sign-in sits in the Settings menu at the foot of the sidebar.
+      await expandSidebar()
+      await (await $('button=Settings')).click()
+      signIn = await $('button=Sign in for cloud features')
+      await signIn.waitForDisplayed()
+    }
     await signIn.waitForDisplayed()
 
     if (home) {

@@ -2,8 +2,8 @@ describe('fixture cleanup', () => {
   it('best-effort revokes the persisted fixture session', async () => {
     const profile = await $('.profile-button')
     const signIn = await $('button=Sign in')
-    // The signed-out Local mode shell offers the cloud sign-in from its panel and holds no session.
-    const localModeSignIn = await $('button=Sign in for cloud features')
+    // The signed-out local shell holds no session and names itself on the workspace.
+    const localModeSignIn = await $('[data-testid="local-mode"]')
     const onboarding = await $('[data-testid="onboarding-home-path"]')
     let authState
     await browser.waitUntil(async () => {

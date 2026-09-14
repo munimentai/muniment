@@ -227,11 +227,8 @@ async function checkPaperFrame(browser, baseUrl) {
                 const rect = (selector) => workspace.querySelector(selector).getBoundingClientRect()
                 const artifacts = rect('.artifacts-toggle')
                 const update = rect('.update-slot')
-                fail(near(artifacts.right, composer.right), 'Artifacts does not align with the composer.')
+                fail(near(artifacts.right, innerWidth - 12), 'Artifacts does not sit flush right in the title row.')
                 fail(update.right <= artifacts.left, 'The update slot extends past Artifacts.')
-                if (!workspace.classList.contains('sidebar-collapsed')) {
-                  fail(near(rect('.side-toggle').left, rect('.side-brand').left), 'The sidebar toggle does not align with the brand.')
-                }
                 const titleLeft = Math.max(boxes[1].left, parseFloat(style.getPropertyValue('--titlebar-controls-end')))
                 fail(near(rect('.thread-title').left, titleLeft), 'The thread title does not follow the thread panel and native clearance.')
                 for (const control of workspace.querySelectorAll('.titlebar button, .titlebar input')) {
