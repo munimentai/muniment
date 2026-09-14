@@ -94,7 +94,7 @@ describe('installed local-mode chat', () => {
     const prompt = `Muniment local E2E chat ${Date.now()}`
     await composer.setValue(prompt)
     const launchStarted = Date.now()
-    await (await $('button=Send')).click()
+    await (await $('button[aria-label="Send"]')).click()
 
     const userMessage = await $(`//div[contains(concat(' ', normalize-space(@class), ' '), ' user-turn ')]//p[normalize-space()="${prompt}"]`)
     await userMessage.waitForDisplayed()

@@ -49,7 +49,7 @@ describe('installed production chat contract', () => {
 
   it('submits a unique prompt and verifies a nonempty assistant response', () => {
     expect(spec).toMatch(/const prompt = `Muniment E2E chat \$\{Date\.now\(\)\}`/)
-    expect(spec).toContain("const send = await $('button=Send')")
+    expect(spec).toContain('const send = await $(\'button[aria-label="Send"]\')')
     expect(spec).toContain('await send.click()')
     expect(spec).toContain('userMessage.waitForDisplayed()')
     expect(spec).toContain("expect(assistantText).not.toBe('')")

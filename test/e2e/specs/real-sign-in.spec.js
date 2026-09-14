@@ -335,7 +335,7 @@ describe('installed nightly', () => {
     })
     const prompt = `Muniment E2E chat ${Date.now()}`
     await authenticatedMarker.setValue(prompt)
-    const send = await $('button=Send')
+    const send = await $('button[aria-label="Send"]')
     await send.waitForDisplayed()
     await browser.waitUntil(async () => (
       await send.isEnabled() && await send.getAttribute('aria-disabled') !== 'true'

@@ -1,5 +1,5 @@
-// design-spec §2.1: expanded by default (260px), state remembered, collapse
-// (⌘\) animates to a 52px icon rail.
+// DESIGN.md grammar: expanded by default, state remembered, and collapse (⌘\)
+// slides the column to nothing: no rail, and Settings hides with it.
 export const SIDEBAR_STORAGE_KEY = 'muniment.sidebar-collapsed'
 export const SIDEBAR_COLLAPSED = 'collapsed'
 export const SIDEBAR_EXPANDED = 'expanded'
@@ -23,6 +23,20 @@ export function newThreadShortcut(platform = navigator.platform) {
 export function isNewThreadShortcut(event, platform = navigator.platform) {
   const mac = platform.startsWith('Mac')
   return event.key.toLowerCase() === 'n'
+    && (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
+    && !event.altKey
+    && !event.shiftKey
+}
+
+// The platform's settings shortcut expands the sidebar with the Settings menu
+// open, and toggles the menu when the sidebar already shows.
+export function settingsShortcut(platform = navigator.platform) {
+  return platform.startsWith('Mac') ? 'Meta+,' : 'Control+,'
+}
+
+export function isSettingsShortcut(event, platform = navigator.platform) {
+  const mac = platform.startsWith('Mac')
+  return event.key === ','
     && (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
     && !event.altKey
     && !event.shiftKey
@@ -62,7 +76,6 @@ export function serializeSidebarCollapsed(collapsed) {
 // The sidebar resizes like the artifact rail: a pointer drag on its divider,
 // arrow keys on the separator, and the width kept per device.
 export const SIDEBAR_WIDTH_STORAGE_KEY = 'muniment.sidebar-width'
-export const SIDEBAR_RAIL_WIDTH = 52
 export const SIDEBAR_MIN_WIDTH = 160
 export const SIDEBAR_MAX_WIDTH = 420
 export const SIDEBAR_DEFAULT_WIDTH = 195

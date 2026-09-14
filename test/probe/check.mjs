@@ -197,13 +197,17 @@ async function checkPaperFrame(browser, baseUrl) {
               const paper = color('--paper')
               const surface = color('--surface')
               const border = color('--border')
-              const panels = [...workspace.querySelectorAll('.sidebar, .thread-panel, .artifact-rail')]
+              // A collapsed sidebar is gone: the panels are the thread and the rail, and the thread slides to the frame.
+              const collapsed = workspace.classList.contains('sidebar-collapsed')
+              const panels = [...workspace.querySelectorAll(collapsed ? '.thread-panel, .artifact-rail' : '.sidebar, .thread-panel, .artifact-rail')]
               const boxes = panels.map((panel) => panel.getBoundingClientRect())
+              const threadBox = workspace.querySelector('.thread-panel').getBoundingClientRect()
               const fail = (condition, message) => { if (!condition) failures.push(message) }
               const near = (left, right) => Math.abs(left - right) < 1
+              const sliding = transition && (collapsed || parseFloat(getComputedStyle(workspace.querySelector('.thread-panel')).marginLeft) !== 0)
               fail(frame === 8, `Frame width: ${frame}`)
               fail(style.backgroundColor === paper, 'The workspace lacks paper.')
-              fail(near(boxes[0].left, frame), 'The left frame changed.')
+              fail(sliding ? boxes[0].left >= frame - 0.5 : near(boxes[0].left, frame), 'The left frame changed.')
               fail(near(boxes.at(-1).right, innerWidth - frame), 'The right frame changed.')
               for (const [index, panel] of panels.entries()) {
                 const box = boxes[index]
@@ -218,11 +222,11 @@ async function checkPaperFrame(browser, baseUrl) {
                 for (const corner of ['TopLeft', 'TopRight', 'BottomLeft', 'BottomRight']) {
                   fail(panelStyle[`border${corner}Radius`] === style.getPropertyValue('--radius-panel').trim(), `${panel.className} has the wrong radius.`)
                 }
-                if (index) fail(near(box.left - boxes[index - 1].right, frame), 'The panel gap changed.')
+                if (index) fail(index === 1 && sliding ? box.left - boxes[0].right <= frame + 0.5 : near(box.left - boxes[index - 1].right, frame), 'The panel gap changed.')
               }
-              fail(boxes[1].width >= 319.9, 'The thread fell below 320px.')
+              fail(threadBox.width >= 319.9, 'The thread fell below 320px.')
               const composer = workspace.querySelector('.composer').getBoundingClientRect()
-              fail(composer.left > boxes[1].left && composer.right < boxes[1].right && composer.bottom < boxes[1].bottom, 'The composer escaped the thread panel.')
+              fail(composer.left > threadBox.left && composer.right < threadBox.right && composer.bottom < threadBox.bottom, 'The composer escaped the thread panel.')
               if (workspace.classList.contains('macos')) {
                 const rect = (selector) => workspace.querySelector(selector).getBoundingClientRect()
                 const artifacts = rect('.artifacts-toggle')
@@ -230,7 +234,7 @@ async function checkPaperFrame(browser, baseUrl) {
                 fail(near(artifacts.right, innerWidth - 12), 'Artifacts does not sit flush right in the title row.')
                 fail(update.right <= artifacts.left, 'The update slot extends past Artifacts.')
                 const controlsEnd = parseFloat(style.getPropertyValue('--titlebar-controls-end'))
-                const titleLeft = Math.max(boxes[1].left, controlsEnd)
+                const titleLeft = Math.max(threadBox.left, controlsEnd)
                 fail(near(rect('.thread-title').left, titleLeft), 'The thread title does not follow the thread panel and native clearance.')
                 fail(rect('.new-thread').right + frame <= controlsEnd, `New thread ends at ${rect('.new-thread').right}px and runs into the thread title.`)
                 for (const control of workspace.querySelectorAll('.titlebar button, .titlebar input')) {
@@ -251,7 +255,7 @@ async function checkPaperFrame(browser, baseUrl) {
               for (const [x, y] of [[innerWidth / 2, 1], [1, innerHeight / 2], [innerWidth - 1, innerHeight / 2], [innerWidth / 2, innerHeight - 1]]) {
                 fail(backgroundAt(x, y) === paper, 'A window edge lacks paper.')
               }
-              for (let index = 1; index < boxes.length; index++) {
+              for (let index = sliding ? 2 : 1; index < boxes.length; index++) {
                 for (let y = boxes[index].top + 1; y < boxes[index].bottom; y += 4) {
                   fail(backgroundAt(boxes[index - 1].right + 1, y) === paper, 'A panel gap lacks paper.')
                 }
@@ -356,7 +360,7 @@ async function checkComposerActions(browser, baseUrl) {
                 range.selectNodeContents(button)
                 const textRects = [...range.getClientRects()]
                 return {
-                  label: button.textContent,
+                  label: button.getAttribute('aria-label') ?? button.textContent,
                   lines: new Set(textRects.map((rect) => rect.top)).size,
                   width: rect.width,
                   height: rect.height,
@@ -367,9 +371,10 @@ async function checkComposerActions(browser, baseUrl) {
             }
           })
           const context = JSON.stringify({ fixture, rail, width, layout })
+          // The band's one action control is absent while the draft is empty and a stop square in flight.
           assert.deepEqual(layout.buttons.map(({ label }) => label), fixture === 'in-flight.html'
-            ? ['Voice', 'Queue follow-up', 'Stop', 'Send']
-            : ['Voice', 'Add files', 'Send'], context)
+            ? ['Voice', 'Stop']
+            : ['Voice', 'Add files'], context)
           for (const button of layout.buttons) {
             assert.equal(button.lines, 1, context)
             assert.ok(button.width >= 24 && button.height >= 24, context)
