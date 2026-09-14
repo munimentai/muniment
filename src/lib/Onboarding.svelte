@@ -17,6 +17,7 @@
   let homeRequest = 0
   let scanRequest = 0
   const settings = $derived(!!onboarding.savedHomePath)
+  let cleanupKeydown
   const rows = $derived(scanRows(report))
 
   async function loadHome() {
@@ -111,10 +112,22 @@
     }
   }
 
+  function cancelSettings() {
+    homeRequest += 1
+    onboarding = onboardingCancelSettingsState(onboarding)
+  }
+
   onMount(() => {
     void loadHome()
     void loadScan()
-    return () => { homeRequest += 1; scanRequest += 1 }
+    const leave = (event) => {
+      if (event.key !== 'Escape' || !settings || busy || picking) return
+      event.preventDefault()
+      cancelSettings()
+    }
+    document.addEventListener('keydown', leave)
+    cleanupKeydown = () => document.removeEventListener('keydown', leave)
+    return () => { cleanupKeydown?.(); homeRequest += 1; scanRequest += 1 }
   })
 </script>
 
@@ -125,7 +138,7 @@
       <p class="path" data-testid="onboarding-home-path">{onboarding.homePath}</p>
       <div class="actions">
         <button data-testid="onboarding-picker" onclick={chooseHome} disabled={busy || picking || modelOpening}>Change folder…</button>
-        <button data-testid="onboarding-cancel" onclick={() => { homeRequest += 1; onboarding = onboardingCancelSettingsState(onboarding) }} disabled={busy || picking}>Cancel</button>
+        <button data-testid="onboarding-cancel" onclick={cancelSettings} disabled={busy || picking}>Cancel</button>
         <button class="primary" onclick={send} disabled={busy || picking}>Save Home</button>
       </div>
     {:else}
@@ -187,7 +200,9 @@
   .composer:focus-within { border-color: var(--muted); }
   textarea { display: block; width: 100%; min-height: 90px; max-height: 35vh; resize: vertical; box-sizing: border-box; border: 0; outline: none; color: var(--ink); background: transparent; font: var(--text-15) var(--font-human); line-height: 1.55; }
   textarea::placeholder { color: var(--muted); }
-  .composer-row, .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .composer-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .actions { display: flex; align-items: center; justify-content: flex-start; gap: 12px; }
+  .actions .primary { margin-left: auto; }
   .composer-row { margin-top: 12px; color: var(--muted); font-size: var(--text-12); }
   .chips { flex: none; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .chips button { max-width: 100%; border-radius: var(--radius-chip); font: var(--text-12) var(--font-mono); text-align: left; overflow-wrap: anywhere; }
