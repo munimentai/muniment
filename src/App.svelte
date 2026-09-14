@@ -8,6 +8,7 @@
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import Appearance from './lib/Appearance.svelte'
+  import LucideIcon from './lib/LucideIcon.svelte'
   import AssistantMarkdown from './lib/AssistantMarkdown.svelte'
   import CodeDiff from './lib/CodeDiff.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
@@ -112,8 +113,13 @@
   }
 
   function toggleSettings() {
-    if (settingsOpen) closeSettings()
-    else settingsOpen = true
+    if (settingsOpen) {
+      closeSettings()
+      return
+    }
+    // The menu lives inside the sidebar, so a collapsed rail expands first.
+    if (sidebarCollapsed) toggleSidebar()
+    settingsOpen = true
   }
 
   function settingsKeydown(event) {
@@ -205,6 +211,8 @@
   let speechInstallPending = $state(false)
   let speechInstallTimer
   let speechInstallEpoch = 0
+  let speechInstallDismissed = $state(false)
+  let speechInstallNotice = $state('')
   let globalVoiceRegistered = false
   let globalVoiceError = $state(false)
   let globalVoiceShortcutValue = $state(holdToTalkShortcut())
@@ -441,6 +449,7 @@
       dictationDraftSnapshot = state.draftSnapshot
       dictationTranscript = state.transcript
       if (state.status.state === 'modelNotInstalled') void openSpeechInstall()
+      else speechInstallNotice = ''
     },
     onError: (message) => { dictationError = message },
     onInactive: () => voiceGesture.inactive(),
@@ -463,6 +472,7 @@
       } else if (pendingUntilTerminal) {
         speechInstallPending = false
       }
+      if (next.state === 'installed') settleSpeechInstall()
     } catch (_) {
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallError = 'The speech model install state could not be checked. Try again.'
@@ -471,7 +481,27 @@
     }
   }
 
+  // The card leaves once the model is on disk, and the composer hint carries the next step.
+  function settleSpeechInstall() {
+    speechInstallDismissed = true
+    speechInstallNotice = installStateWords('installed')
+  }
+
+  function dismissSpeechInstall() {
+    speechInstallDismissed = true
+    void tick().then(() => composer?.focus())
+  }
+
+  function speechInstallKeydown(event) {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    dismissSpeechInstall()
+  }
+
   async function openSpeechInstall() {
+    speechInstallDismissed = false
+    speechInstallNotice = ''
     if (speechInstallFacts || speechInstallPending) return
     speechInstallPending = true
     speechInstallError = ''
@@ -1177,10 +1207,10 @@
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
-              <svg class="side-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5" /><path d="M9.5 4v16" /><path d={sidebarCollapsed ? 'm14 9 3 3-3 3' : 'm15.5 15-3-3 3-3'} /></svg>
+              <LucideIcon name={sidebarCollapsed ? 'panel-left-open' : 'panel-left-close'} />
             </button>
             <button type="button" class="quiet new-thread" aria-label="New thread" title={`New thread (${shortcutDisplayLabel(newThreadKeyShortcut)})`} aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
-              <svg class="side-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              <LucideIcon name="plus" />
               <span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
             </button>
           </div>
@@ -1196,12 +1226,6 @@
           </div>
         </header>
         <aside id="sidebar" class="sidebar">
-          <div class="side-brand">
-            {#if !sidebarCollapsed}
-              <svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true"><path d={markD} stroke-width="6.3" /></svg>
-              <strong>muniment</strong>
-            {/if}
-          </div>
           {#if !sidebarCollapsed}
             <h2 id="thread-list-title" class="side-label">Threads</h2>
             <ul class="thread-list" aria-labelledby="thread-list-title">
@@ -1235,28 +1259,28 @@
               <button type="button" class="older-threads" disabled={loadingOlderThreads} onclick={loadOlderThreads}>Older threads</button>
             {/if}
           {/if}
+          {#if !sidebarCollapsed && auth.name === 'signed-in'}
+            <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+          {/if}
           <div class="settings-block">
-            <button class="side-action settings-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-label={sidebarCollapsed ? 'Settings' : null} title={sidebarCollapsed ? 'Settings' : null} bind:this={settingsButton} onclick={toggleSettings}><svg class="side-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.25" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>{#if !sidebarCollapsed}<span>Settings</span>{/if}</button>
-            {#if settingsOpen}
-              <div class="settings-popover" role="dialog" aria-label="Settings" tabindex="-1" bind:this={settingsPopover} onkeydown={settingsKeydown} use:focusSettingsOnMount>
-                <header><h2>Settings</h2><button type="button" class="quiet close-settings" aria-label="Close settings" onclick={closeSettings}>×</button></header>
+            {#if settingsOpen && !sidebarCollapsed}
+              <section id="settings-menu" class="settings-menu" aria-label="Settings" tabindex="-1" bind:this={settingsPopover} onkeydown={settingsKeydown} use:focusSettingsOnMount>
                 <Appearance />
                 <section class="settings-home" aria-labelledby="settings-home-title">
                   <h3 id="settings-home-title" class="settings-label">Home</h3>
                   <p class="settings-path">{onboarding.homePath}</p>
                   <button type="button" onclick={openHomeSettings}>Change folder…</button>
                 </section>
-              </div>
+                {#if auth.name === 'local'}
+                  <section class="settings-account" aria-labelledby="settings-account-title">
+                    <h3 id="settings-account-title" class="settings-label">Account</h3>
+                    <button type="button" disabled={!!active} onclick={signIn}>Sign in for cloud features</button>
+                  </section>
+                {/if}
+              </section>
             {/if}
+            <button class="side-action" aria-expanded={settingsOpen} aria-controls="settings-menu" aria-label={sidebarCollapsed ? 'Settings' : null} title={sidebarCollapsed ? 'Settings' : null} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} />{#if !sidebarCollapsed}<span>Settings</span>{/if}</button>
           </div>
-          {#if !sidebarCollapsed && auth.name === 'signed-in'}
-            <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
-          {:else if !sidebarCollapsed && auth.name === 'local'}
-            <section class="local-account" aria-labelledby="local-account-title">
-              <strong id="local-account-title">Local mode</strong>
-              <button type="button" class="quiet" disabled={!!active} onclick={signIn}>Sign in for cloud features</button>
-            </section>
-          {/if}
         </aside>
         <div class="thread-panel">
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
@@ -1398,7 +1422,7 @@
                 {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
                 <!-- §3.2's action row, copy only in this slice. -->
                 <div class="message-actions">
-                  <button type="button" onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>{:else}<svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>{/if}{copyLabel(copy, message.run.id)}</button>
+                  <button type="button" onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<LucideIcon name="check" variant="action" size={14} />{:else}<LucideIcon name="copy" variant="action" size={14} />{/if}{copyLabel(copy, message.run.id)}</button>
                 </div>
                 {#if failure}<div class="run-error copy-failure">{failure}</div>{/if}
               {/if}
@@ -1489,9 +1513,13 @@
               <button class="primary" disabled={threadSwitching} aria-disabled={sendDisabled() ? 'true' : undefined} onclick={send}>Send</button>
             </div>
           </div>
-          {#if dictation.state === 'modelNotInstalled'}
-            <section class="speech-install-card" aria-labelledby="speech-install-title">
-              <strong id="speech-install-title">Speech model install</strong>
+          {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <section class="speech-install-card" aria-labelledby="speech-install-title" onkeydown={speechInstallKeydown}>
+              <header class="speech-install-head">
+                <strong id="speech-install-title">Speech model install</strong>
+                <button type="button" class="quiet close-card" aria-label="Close speech model install" onclick={dismissSpeechInstall}><LucideIcon name="x" variant="action" size={14} /></button>
+              </header>
               {#if speechInstallFacts}
                 <dl>
                   <div><dt>Download</dt><dd>{formatBytes(speechInstallFacts.totalDownloadBytes)}</dd></div>
@@ -1523,7 +1551,8 @@
               {/if}
               {#if speechInstallError}<p class="speech-install-error" role="alert">{speechInstallError}</p>{/if}
             </section>
-          {:else if dictationError}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
+          {:else if speechInstallNotice}<p class="speech-install-notice" role="status">{speechInstallNotice}</p>
+          {:else if dictationError && dictation.state !== 'modelNotInstalled'}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
           {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </div>
         </div>
@@ -1681,7 +1710,7 @@
     line-height: var(--leading-body);
   }
 
-  .workspace { --frame-width: 8px; position: fixed; inset: 0; display: grid; grid-template-rows: 36px minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); gap: var(--frame-width); background: var(--paper); }
+  .workspace { --frame-width: 8px; position: fixed; inset: 0; display: grid; grid-template-rows: 28px minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); gap: var(--frame-width); background: var(--paper); }
   .workspace { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
   .workspace.artifact-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
@@ -1696,7 +1725,7 @@
   .titlebar { grid-area: title; display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 calc(-1 * var(--frame-width)); padding: 0 12px; background: var(--paper); font-size: var(--text-13); user-select: none; }
   /* The title row shares the animated sidebar width so controls never cross during the panel slide. */
   @property --sidebar-column { syntax: '<length>'; inherits: true; initial-value: 260px; }
-  .workspace.macos { --titlebar-inset: 84px; --sidebar-column: 260px; --titlebar-controls-end: 276px; grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); transition: --sidebar-column 180ms ease; }
+  .workspace.macos { --titlebar-inset: 72px; --sidebar-column: 260px; --titlebar-controls-end: 276px; grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); transition: --sidebar-column 180ms ease; }
   .workspace.macos.artifact-open { --titlebar-controls-end: 160px; grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--artifact-rail-width); }
   .workspace.macos.sidebar-collapsed { --sidebar-column: 52px; }
   .workspace.macos.artifact-resizing { transition: none; }
@@ -1707,9 +1736,8 @@
      part's padding, so both parts track their panel columns in every engine. */
   .workspace.macos .titlebar { display: grid; grid-template-columns: subgrid; margin: 0; padding: 0; }
   .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; box-sizing: content-box; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: calc(var(--titlebar-inset) - var(--frame-width)); container-type: inline-size; }
-  /* The composer has a 760px cap, 24px gutters and a 1px panel border. */
-  .workspace.macos .titlebar-thread { grid-column: 2; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: max(25px, calc((100% - 760px) / 2)); }
-  .workspace.macos:not(.sidebar-collapsed) .side-brand { margin-left: calc(var(--titlebar-inset) - var(--frame-width) - 11px); padding-left: 0; }
+  /* Artifacts sits flush right: 4px inside the 8px frame matches the 12px row padding elsewhere. */
+  .workspace.macos .titlebar-thread { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: 4px; }
   /* The collapsed sidebar keeps the controls clear of the native traffic lights. */
   .workspace.macos.sidebar-collapsed .titlebar-sidebar { width: 184px; }
   .workspace.macos.sidebar-collapsed.artifact-open .titlebar-sidebar { width: 68px; }
@@ -1719,7 +1747,7 @@
   @container (max-width: 170px) {
     .new-thread span, .new-thread kbd { display: none; }
   }
-  .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 28px; padding: 2px 6px; }
+  .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 24px; padding: 0 6px; }
   .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .titlebar button:hover:not(:disabled) { background: var(--faint); border-color: transparent; }
   .titlebar button:focus-visible, .titlebar input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -1733,16 +1761,11 @@
   kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .title-spacer { flex: 1; align-self: stretch; min-width: 24px; }
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; }
-  .side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 16px; }
   /* Clip labels during the panel slide without clipping the profile popover. */
-  .side-brand, .side-label, .older-threads, .side-action span { overflow: hidden; }
-  .side-brand path { fill: none; stroke: var(--ink); stroke-linecap: round; }
+  .side-label, .older-threads, .side-action span { overflow: hidden; }
   .side-toggle { line-height: 0; }
   .side-toggle:hover:not(:disabled), .side-toggle:focus-visible { border-color: transparent; background: var(--faint); }
-  .side-toggle:hover:not(:disabled) .side-icon, .side-toggle:focus-visible .side-icon { color: var(--ink); }
-  /* §1.7: one geometric 1.6px-stroke icon set, sized to the mockup's rail. */
-  .side-icon { flex: none; display: block; color: var(--muted); }
-  .side-icon rect, .side-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .side-toggle:hover:not(:disabled) :global(.side-icon), .side-toggle:focus-visible :global(.side-icon) { color: var(--ink); }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
   .thread-list { min-height: 0; padding: 0; overflow-y: auto; list-style: none; }
   .older-threads { width: 100%; margin-top: 4px; border-color: transparent; background: transparent; color: var(--muted); }
@@ -1762,18 +1785,16 @@
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
   .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
   .side-action span { flex: 1; min-width: 0; }
-  .settings-block { position: relative; }
-  .settings-popover { position: absolute; z-index: 6; left: 0; bottom: calc(100% + 8px); width: min(300px, 90vw); display: grid; gap: 12px; padding: 14px 16px 16px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); }
-  .settings-popover:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .settings-popover header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .settings-popover h2 { margin: 0; font-size: var(--text-15); }
-  .close-settings { min-width: 24px; min-height: 24px; padding: 0 6px; }
+  /* The foot of the sidebar: one Settings control, and the menu it expands above itself. */
+  .settings-block { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
+  .settings-menu { display: grid; gap: 12px; padding: 6px 8px 12px; }
+  .settings-menu:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .settings-account { display: grid; gap: 6px; }
+  .settings-account button { justify-self: start; min-height: 28px; padding: 4px 10px; }
   .settings-home { display: grid; gap: 6px; }
   .settings-label { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
   .settings-path { margin: 0; overflow-wrap: anywhere; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .settings-home button { justify-self: start; min-height: 28px; padding: 4px 10px; }
-  .local-account { display: grid; min-height: 0; overflow-y: auto; gap: 7px; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
-  .local-account strong { margin-bottom: 3px; }
   .model-panel label { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .model-panel > input { min-width: 0; padding: 6px 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; }
   .provider-choice { min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -1794,12 +1815,8 @@
   .provider-tag { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* Collapsed rail: icon-only controls, names carried by aria-label + tooltip. */
   .workspace.sidebar-collapsed .sidebar { padding: 14px 6px 10px; }
-  .workspace.sidebar-collapsed .side-brand { padding: 0 0 14px; }
   .workspace.sidebar-collapsed .side-action { justify-content: center; gap: 0; padding: 9px 0; }
-  /* The pinned control is its own group once the threads list is gone. */
-  .workspace.sidebar-collapsed .settings-action { position: relative; margin-top: auto; }
-  .workspace.sidebar-collapsed .settings-action::before { content: ''; position: absolute; inset: -9px -6px auto; height: 1px; background: var(--border); }
-  .side-label { margin: 20px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .side-label { margin: 2px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
@@ -1888,8 +1905,6 @@
   .message-actions button:focus-visible { outline-color: var(--ink); }
   .message-actions button:disabled { opacity: .45; }
   /* Same §1.7 icon geometry as the rail, tracking whatever ink its button carries. */
-  .action-icon { flex: none; display: block; color: inherit; }
-  .action-icon rect, .action-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -1935,6 +1950,10 @@
   .speech-install-progress progress { width: 100%; height: 6px; accent-color: var(--muted); }
   .speech-install-card button { margin-top: 7px; padding: 4px 8px; font: inherit; }
   .speech-install-card .speech-install-error { color: var(--oxide); }
+  .speech-install-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .speech-install-card .close-card { min-width: 24px; min-height: 24px; margin: 0; padding: 0 5px; color: var(--muted); }
+  .speech-install-card .close-card:hover { color: var(--ink); }
+  .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .follow-up { color: var(--muted); font-family: var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .45; } }

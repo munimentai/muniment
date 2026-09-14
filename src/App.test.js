@@ -1152,15 +1152,15 @@ describe('workspace composer entry', () => {
     expect(composer).toHaveAttribute('placeholder', 'Ask anything')
   })
 
-  it('renders only the sidebar brand in the signed-in workspace', async () => {
+  it('renders no mark or wordmark in the signed-in workspace', async () => {
     const { container } = render(App)
 
     await findWorkspaceComposer()
 
     expect(container.querySelector('.lockup')).not.toBeInTheDocument()
     expect(screen.queryByText(/shell v/)).not.toBeInTheDocument()
-    expect(container.querySelectorAll('.side-brand')).toHaveLength(1)
-    expect(screen.getAllByText('muniment')).toHaveLength(1)
+    expect(container.querySelector('.side-brand')).not.toBeInTheDocument()
+    expect(screen.queryByText('muniment')).not.toBeInTheDocument()
   })
 
   it('focuses the primary composer action once when the workspace appears', async () => {
@@ -1200,6 +1200,42 @@ describe('workspace composer entry', () => {
     expect(document.querySelector('.lockup svg')).not.toHaveAttribute('aria-label')
     expect(screen.getByRole('button', { name: 'Use local mode' })).toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
+  })
+
+  it('holds appearance, Home and the cloud sign-in in a menu at the foot of the sidebar', async () => {
+    localModeStatus = true
+    render(App)
+    await screen.findByTestId('local-mode')
+    expect(screen.queryByText('Local mode')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Sign in for cloud features' })).not.toBeInTheDocument()
+
+    const settings = screen.getByRole('button', { name: 'Settings' })
+    expect(settings).toHaveAttribute('aria-expanded', 'false')
+    await fireEvent.click(settings)
+    const menu = await screen.findByRole('region', { name: 'Settings' })
+    expect(settings).toHaveAttribute('aria-expanded', 'true')
+    expect(menu.closest('#sidebar')).not.toBeNull()
+    expect(within(menu).getByRole('group', { name: 'Appearance' })).toBeInTheDocument()
+    expect(within(menu).getByRole('button', { name: 'Change folder…' })).toBeInTheDocument()
+    expect(within(menu).getByRole('button', { name: 'Sign in for cloud features' })).toBeInTheDocument()
+    // The control sits below the menu, at the very foot of the sidebar.
+    expect(menu.compareDocumentPosition(settings)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+
+    await fireEvent.keyDown(menu, { key: 'Escape' })
+    expect(screen.queryByRole('region', { name: 'Settings' })).not.toBeInTheDocument()
+    await waitFor(() => expect(document.activeElement).toBe(settings))
+  })
+
+  it('expands a collapsed sidebar when Settings opens', async () => {
+    localModeStatus = true
+    localStorage.setItem('muniment.sidebar-collapsed', 'collapsed')
+    render(App)
+    const settings = await screen.findByRole('button', { name: 'Settings' })
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+    await fireEvent.click(settings)
+    expect(await screen.findByRole('region', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+    expect(settings).toHaveTextContent('Settings')
   })
 
   it.each(['System', 'Light', 'Dark'])('persists %s from the local appearance control across remounts', async (label) => {
@@ -2301,22 +2337,23 @@ describe('window chrome', () => {
     }
   })
 
-  it('centers the configured traffic lights in the macOS title row', () => {
+  it('lets macOS place the traffic lights and sizes the title row to their band', () => {
     const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
     const main = config.app.windows.find((window) => window.label === 'main')
     const rowHeight = Number(appStyles.match(/grid-template-rows:\s*(\d+)px minmax\(0, 1fr\)/)[1])
     const inset = Number(appRules.get('.workspace.macos').match(/--titlebar-inset:\s*(\d+)px/)[1])
     const controlHeight = Number(appRules.get('.titlebar button, .titlebar input').match(/(?:^|;)\s*height:\s*(\d+)px/)[1])
-    expect(rowHeight).toBe(36)
-    expect(controlHeight).toBe(28)
-    expect(inset).toBe(84)
+    // The native title bar band is 28pt, and macOS centers its 12pt lights in it.
+    expect(main.trafficLightPosition).toBeUndefined()
+    expect(rowHeight).toBe(28)
+    expect(controlHeight).toBe(24)
     // The clearance is the sidebar part's padding: the title row itself is a subgrid with no padding.
     expect(appRules.get('.workspace.macos .titlebar')).toMatch(/grid-template-columns:\s*subgrid;\s*margin:\s*0;\s*padding:\s*0/)
     expect(appRules.get('.workspace.macos .titlebar-sidebar')).toMatch(/padding-left:\s*calc\(var\(--titlebar-inset\) - var\(--frame-width\)\)/)
     expect(main.visible).toBe(false)
-    expect(main.trafficLightPosition).toEqual({ x: 14, y: (rowHeight - 16) / 2 })
-    expect(main.trafficLightPosition.y + 16 / 2).toBe((rowHeight - controlHeight) / 2 + controlHeight / 2)
-    expect(inset).toBeGreaterThanOrEqual(main.trafficLightPosition.x + 3 * 16 + 2 * 7 + 8)
+    // Three 12pt lights from x=7 with 8pt gaps end at 59pt, and the row starts one gap later.
+    expect(inset).toBeGreaterThanOrEqual(7 + 3 * 12 + 2 * 8 + 8)
+    expect(inset).toBe(72)
   })
 
   it('keeps native decorations and grants row drag permission', () => {
@@ -2324,8 +2361,8 @@ describe('window chrome', () => {
     const capabilities = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'))
     expect(config.app.windows[0]).toMatchObject({
       title: 'muniment', titleBarStyle: 'Overlay', hiddenTitle: true,
-      trafficLightPosition: { x: 14, y: 10 },
     })
+    expect(config.app.windows[0]).not.toHaveProperty('trafficLightPosition')
     expect(config.app.windows[0].decorations).not.toBe(false)
     expect(capabilities.permissions).toContain('core:window:allow-start-dragging')
   })
@@ -2746,7 +2783,7 @@ describe('Home onboarding', () => {
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
     fail = false
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
-    expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
     expect(invoke.mock.calls.filter(([command]) => command === 'home_confirm')).toHaveLength(1)
@@ -2792,7 +2829,7 @@ describe('Home onboarding', () => {
       expect(invoke).not.toHaveBeenCalledWith('local_mode_enter')
       expect(screen.queryByTestId('local-mode')).not.toBeInTheDocument()
     } else {
-      expect(await screen.findByText('Local mode')).toBeInTheDocument()
+      expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
       expect(screen.getByTestId('local-mode')).toBeVisible()
       await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
       expect(screen.getByTestId('local-mode')).toBeVisible()
@@ -2857,7 +2894,7 @@ describe('Home onboarding', () => {
 
     desktopClientListener({ payload: { connected: true, supervisor_running: true } })
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
-    expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
     expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
     expect(invoke.mock.calls.filter(([command]) => command === 'local_mode_enter')).toHaveLength(1)
@@ -2895,7 +2932,7 @@ describe('Home onboarding', () => {
     expect(openSettings).toBeEnabled()
     status.resolve({ connected: true, supervisor_running: true })
     await fireEvent.click(openSettings)
-    expect(await screen.findByText('Local mode')).toBeInTheDocument()
+    expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
     expect(screen.queryByLabelText('First-run settings')).not.toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
     expect(invoke.mock.calls.filter(([command]) => command === 'local_mode_enter')).toHaveLength(1)
@@ -3881,10 +3918,42 @@ describe('voice dictation', () => {
     expect(progress).toHaveAttribute('value', '134476861')
     expect(progress).toHaveAttribute('max', '672384307')
     expect(card).toHaveTextContent('128 MB / 641 MB')
-    await waitFor(() => expect(within(card).getByRole('status')).toHaveTextContent('Installed. Press Voice again to dictate.'))
+    // The card leaves once the model is on disk, and the hint carries the next step.
+    expect(await screen.findByText('Installed. Press Voice again to dictate.')).toHaveAttribute('role', 'status')
+    expect(screen.queryByRole('region', { name: 'Speech model install' })).not.toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('parakeet_install_start')
     expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_status')).toHaveLength(3)
-    expect(within(card).queryByRole('button', { name: 'Install' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['its close control', async (card) => { await fireEvent.click(within(card).getByRole('button', { name: 'Close speech model install' })) }],
+    ['Escape', async (card) => { await fireEvent.keyDown(card, { key: 'Escape' }) }],
+  ])('closes the speech model install card with %s and reopens it from Voice', async (_, close) => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'modelNotInstalled', message: 'The speech model is not installed.' }
+      if (command === 'parakeet_install_facts') return {
+        identity: 'parakeet-tdt-0.6b-v3', revision: 'pinned-revision', sourceRepository: 'nvidia/parakeet-tdt-0.6b-v3',
+        totalDownloadBytes: 672_384_307, requiredFreeBytes: 940_819_763, speechModelLicense: 'CC BY 4.0', voiceActivityModelLicense: 'MIT',
+      }
+      if (command === 'parakeet_install_status') return { state: 'notInstalled' }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    await within(card).findByText('641 MB')
+
+    await close(card)
+    expect(screen.queryByRole('region', { name: 'Speech model install' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Voice' }))
+    expect(await screen.findByRole('region', { name: 'Speech model install' })).toBeInTheDocument()
   })
 
   it.each([

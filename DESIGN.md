@@ -84,9 +84,13 @@ provenance line sits under every response in mono at `--text-provenance`, with
 the route in signal. Composer focus shifts the border to `muted`, never signal.
 Platform chrome follows the OS and brand tokens stay identical across platforms.
 On macOS the app row sits in the title bar band beside the native traffic
-lights, is the drag region, and holds the sidebar toggle, New thread, the
-thread title, Artifacts and the update control. Windows keeps its native
-caption controls and Linux keeps its decorations. Sidebar, thread and rail sit
+lights, which macOS places, is the drag region, and holds the sidebar toggle,
+New thread, the thread title, and Artifacts flush right with the update
+control beside it. Windows keeps its native caption controls and Linux keeps
+its decorations. The sidebar holds the threads and one Settings control at its
+foot that expands a menu inside the sidebar: appearance, Home and the account.
+The mark appears on the signed-out screen and in the thinking state, never in
+the sidebar. Icons are Lucide, vendored as inline SVG at a 1.6px stroke. Sidebar, thread and rail sit
 on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
 the frame shows at every edge and between panels. The update control is a 20px
 ink glyph that widens on hover or focus to read `Update` in mono, and it
