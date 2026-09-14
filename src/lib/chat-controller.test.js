@@ -31,6 +31,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
   const onFreshThread = vi.fn()
   const onFocus = vi.fn()
   const onFollow = vi.fn()
+  const onSignInLink = vi.fn()
   const controller = createChatController({
     invoke,
     listen: vi.fn(async (_, callback) => {
@@ -59,6 +60,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
     onFreshThread,
     onFocus,
     onFollow,
+    onSignInLink,
   })
   return {
     controller,
@@ -78,6 +80,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
     onFreshThread,
     onFocus,
     onFollow,
+    onSignInLink,
     summaries: () => threadSummaries,
     setActive: (next) => { active = next },
     setDraft: (next) => { draft = next },
@@ -87,6 +90,21 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
     setThreadId: (next) => { openThreadId = next },
   }
 }
+
+describe('sign-in link', () => {
+  it('hands the announced sign-in link to the shell and touches no run', async () => {
+    const invoke = vi.fn()
+    const context = setup(invoke)
+    await context.start()
+
+    context.event({ runId: 'sign-in', phase: 'sign-in-link', text: 'https://muniment.ai/authorize?state=abc' })
+
+    expect(context.onSignInLink).toHaveBeenCalledWith('https://muniment.ai/authorize?state=abc')
+    expect(context.onMessages).not.toHaveBeenCalled()
+    expect(context.onHistoryError).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+})
 
 describe('chat delivery recovery', () => {
   it.each(['received', 'lost'])('restores the first run when the shell %s its submit acknowledgment', async (acknowledgment) => {
