@@ -1567,6 +1567,33 @@ describe('workspace composer entry', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_sign_in')).toHaveLength(1)
   })
 
+  it('shows the sign-in link the runtime announces while the browser sign-in waits', async () => {
+    const signInRequest = deferred()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'auth_sign_in') return signInRequest.promise
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await waitFor(() => expect(chatListener).toBeDefined())
+    expect(screen.queryByTestId('sign-in-link')).not.toBeInTheDocument()
+
+    chatListener({ payload: { runId: 'sign-in', phase: 'sign-in-link', text: 'https://muniment.ai/authorize?state=abc' } })
+
+    const link = await screen.findByTestId('sign-in-link')
+    expect(link).toHaveAttribute('href', 'https://muniment.ai/authorize?state=abc')
+    expect(link).toHaveTextContent('Open the sign-in page')
+    expect(screen.getByText('Waiting for the browser sign-in…')).toBeInTheDocument()
+
+    signInRequest.resolve({ signed_in: true, subject: 'user-a' })
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(screen.queryByTestId('sign-in-link')).not.toBeInTheDocument()
+  })
+
   it('shows the terminal screen for a non-retryable registration error', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: false, subject: null }

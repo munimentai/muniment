@@ -4,6 +4,7 @@
   import { getCurrentWindow, UserAttentionType } from '@tauri-apps/api/window'
   import { open } from '@tauri-apps/plugin-dialog'
   import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
+  import { openUrl } from '@tauri-apps/plugin-opener'
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import Appearance from './lib/Appearance.svelte'
@@ -232,6 +233,7 @@
     onFollow: followNewContent,
     onFocus: () => tick().then(() => composer?.focus()),
     onSend: () => {},
+    onSignInLink: (link) => { if (auth.name === 'signing-in') auth = { ...auth, link } },
   })
 
   async function loadOlderThreads() {
@@ -684,6 +686,13 @@
     untrack(() => transcriptController.trackParallelTools(transcript))
   })
 
+  // The browser did not open, or the user closed it. The link opens it again.
+  function openSignInLink(event) {
+    event.preventDefault()
+    if (auth.name !== 'signing-in' || !auth.link) return
+    void openUrl(auth.link).catch(() => {})
+  }
+
   async function run(action) {
     const version = ++authRequestVersion
     const command = {
@@ -1077,6 +1086,9 @@
       {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
       <section class="auth-state">
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in for cloud features, or use local mode.'}</p>
+        {#if auth.name === 'signing-in' && auth.link}
+          <a class="sign-in-link" data-testid="sign-in-link" href={auth.link} target="_blank" rel="noopener noreferrer" onclick={openSignInLink}>Open the sign-in page</a>
+        {/if}
         <div class="auth-actions">
           <button class="primary" class:inactive={auth.name === 'signing-in' || localEntryPending} disabled={localEntryPending} aria-disabled={auth.name === 'signing-in' || localEntryPending ? 'true' : undefined} onclick={signIn}>Sign in</button>
           <button disabled={localEntryPending} aria-disabled={auth.name === 'signing-in' || localEntryPending ? 'true' : undefined} onclick={enterLocalMode}>Use local mode</button>
@@ -1526,6 +1538,7 @@
   }
 
   .auth-actions { display: flex; gap: 8px; }
+  .sign-in-link { justify-self: start; color: var(--ink); font-size: var(--text-12); text-decoration: underline; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
   .composer-actions .primary[aria-disabled="true"] { background: var(--faint); border-color: var(--border); color: var(--muted); }
 

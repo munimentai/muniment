@@ -41,6 +41,7 @@ export function createChatController({
   onFollow = () => {},
   onFocus = () => {},
   onSend = () => {},
+  onSignInLink = () => {},
 }) {
   const buffered = new Map()
   // How many calls wait for a run id right now: a submission, a resume, or a
@@ -194,6 +195,11 @@ export function createChatController({
 
   function handleEvent({ payload }) {
     if (destroyed) return
+    // The runtime announces the sign-in link on this stream. It names no run.
+    if (payload.phase === 'sign-in-link') {
+      onSignInLink(payload.text)
+      return
+    }
     if (payload.phase === 'delivery-failed') {
       deliveryFailureReason = payload.failureReason || 'Reply delivery failed.'
       onHistoryError(deliveryFailureReason, { label: 'Restore reply', run: recoverChatEvents })

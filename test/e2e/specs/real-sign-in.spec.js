@@ -178,16 +178,18 @@ describe('installed nightly', () => {
     const password = process.env.MUNIMENT_E2E_PASSWORD
     if (!username || !password) throw new Error('dedicated E2E credentials are unavailable')
 
-    const authUrlFile = process.env.MUNIMENT_E2E_AUTH_URL_FILE
+    // The runtime announces the link before it opens a browser, and the shell
+    // shows it, so the spec reads the link the user sees on every platform.
+    const signInLink = browser.$('[data-testid="sign-in-link"]')
     let authUrl
     await browser.waitUntil(async () => {
       try {
-        authUrl = (await readFile(authUrlFile, 'utf8')).trim()
+        authUrl = ((await signInLink.getAttribute('href')) || '').trim()
         return authUrl.startsWith('https://')
       } catch { return false }
     }, {
       timeout: 120000,
-      timeoutMsg: 'production sign-in continuation was not opened',
+      timeoutMsg: 'production sign-in link did not appear',
     })
     let authDriver
     let signInBrowser
