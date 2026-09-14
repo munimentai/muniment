@@ -22,7 +22,7 @@ describe('chat composer and projection', () => {
   })
 
   it('names the editor commit chord only for editor requests', () => {
-    expect(permissionGateCommitHint('editor', 'MacIntel')).toBe('⌘⏎ submits')
+    expect(permissionGateCommitHint('editor', 'MacIntel')).toBe('⌘ ⏎ submits')
     expect(permissionGateCommitHint('editor', 'Linux x86_64')).toBe('Ctrl ⏎ submits')
     expect(permissionGateCommitHint('confirm', 'MacIntel')).toBeNull()
     expect(permissionGateCommitHint('select', 'MacIntel')).toBeNull()

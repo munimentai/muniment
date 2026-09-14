@@ -46,7 +46,7 @@ describe('artifact rail state', () => {
   })
 
   it('formats platform shortcuts for display', () => {
-    expect(shortcutDisplayLabel('Meta+J')).toBe('⌘J')
+    expect(shortcutDisplayLabel('Meta+J')).toBe('⌘ J')
     expect(shortcutDisplayLabel('Control+J')).toBe('Ctrl J')
   })
 

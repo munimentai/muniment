@@ -37,6 +37,8 @@ enum RuntimeStartOutcome {
     Requested,
     EndpointCheckFailed,
     RequestFailed,
+    /// launchd accepted the start request and never kept the job running.
+    JobInactive,
 }
 
 impl fmt::Display for RuntimeStartOutcome {
@@ -45,6 +47,7 @@ impl fmt::Display for RuntimeStartOutcome {
             Self::SkippedActivation => "skippedActivation",
             Self::EndpointPresent => "endpointPresent",
             Self::Requested => "requested",
+            Self::JobInactive => "jobInactive",
             Self::EndpointCheckFailed => "endpointCheckFailed",
             Self::RequestFailed => "requestFailed",
         })
@@ -108,6 +111,11 @@ trait RuntimeServiceAdapter {
 trait RuntimeStartAdapter {
     fn endpoint_exists(&self) -> Result<bool, ()>;
     fn request_start(&self) -> Result<(), ()>;
+    /// Whether launchd holds the job running after a start request. An adapter
+    /// that cannot tell answers Err, and the request stands.
+    fn job_active(&self) -> Result<bool, ()> {
+        Ok(true)
+    }
     /// The text of the last failed start request, for the diagnostic record.
     fn request_failure(&self) -> Option<String> {
         None
@@ -135,6 +143,28 @@ fn start_enabled_runtime_with_recovery(
         request_enabled_runtime_start(RuntimeServiceActivation::Enabled, start),
         StartRecovery::Reregistered,
     )
+}
+
+// A registered job that launchd cannot keep up, a launch constraint or a
+// configuration exit, answers the start request and never serves the endpoint.
+// The desktop then runs the bundled runtime as its child instead of waiting.
+fn confirm_requested_start(
+    outcome: RuntimeStartOutcome,
+    adapter: &impl RuntimeStartAdapter,
+) -> RuntimeStartOutcome {
+    if outcome == RuntimeStartOutcome::Requested && adapter.job_active() == Ok(false) {
+        return RuntimeStartOutcome::JobInactive;
+    }
+    outcome
+}
+
+/// The service's own state line from `launchctl print`, the one at a single
+/// tab of indentation. Nested endpoint states sit deeper and are not the job.
+fn launchctl_job_state(output: &str) -> Option<&str> {
+    output.lines().find_map(|line| {
+        line.strip_prefix("\tstate = ")
+            .filter(|state| !state.starts_with('\t'))
+    })
 }
 
 fn request_enabled_runtime_start(
@@ -327,6 +357,7 @@ pub(crate) fn start() -> crate::runtime_owner::RuntimeEvent {
             adapter.force_request = true;
             let (outcome, recovery) =
                 start_enabled_runtime_with_recovery(&MacosRuntimeServiceAdapter::new(), &adapter);
+            let outcome = confirm_requested_start(outcome, &adapter);
             (outcome, recovery, adapter.request_failure())
         }
         Err(_) => (
@@ -335,14 +366,25 @@ pub(crate) fn start() -> crate::runtime_owner::RuntimeEvent {
             Some("The runtime profile directory is unavailable.".to_owned()),
         ),
     };
-    if let Some(directory) = log_directory {
-        let _ = write_start_diagnostic(&directory, outcome);
-        let _ = write_start_detail(&directory, outcome, recovery, failure.as_deref());
+    if let Some(directory) = &log_directory {
+        let _ = write_start_diagnostic(directory, outcome);
+        let _ = write_start_detail(directory, outcome, recovery, failure.as_deref());
     }
-    if outcome == RuntimeStartOutcome::Requested {
-        RuntimeEvent::Starting
-    } else {
-        RuntimeEvent::StartFailed
+    // launchd would keep respawning an inactive job. Unregister it, so the
+    // child runtime runs alone until the next start registers again.
+    if outcome == RuntimeStartOutcome::JobInactive {
+        let unregistered = MacosRuntimeServiceAdapter::new().unregister().is_ok();
+        if let Some(directory) = &log_directory {
+            let _ = write_child_diagnostic(
+                directory,
+                &format!("event=runtime_service_job_inactive unregistered={unregistered}\n"),
+            );
+        }
+    }
+    match outcome {
+        RuntimeStartOutcome::Requested => RuntimeEvent::Starting,
+        RuntimeStartOutcome::JobInactive => RuntimeEvent::ServiceInactive,
+        _ => RuntimeEvent::StartFailed,
     }
 }
 
@@ -492,6 +534,46 @@ impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
     fn request_failure(&self) -> Option<String> {
         self.failure.borrow().clone()
     }
+
+    fn job_active(&self) -> Result<bool, ()> {
+        use std::process::{Command, Stdio};
+
+        // The endpoint is the proof of a running job. Wait two seconds for it.
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if std::fs::symlink_metadata(&self.endpoint).is_ok() {
+                return Ok(true);
+            }
+        }
+        // SAFETY: geteuid reads the effective user ID without dereferencing memory.
+        let effective_uid = unsafe { libc::geteuid() };
+        let target = format!("gui/{effective_uid}/ai.muniment.runtime");
+        let output = Command::new("/bin/launchctl")
+            .args(["print", target.as_str()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .map_err(|_| ())?;
+        if !output.status.success() {
+            return Err(());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let Some(state) = launchctl_job_state(&stdout) else {
+            return Err(());
+        };
+        if state == "running" {
+            return Ok(true);
+        }
+        let exit = stdout
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("last exit code = "))
+            .unwrap_or("none");
+        *self.failure.borrow_mut() = Some(format!(
+            "launchctl print {target} state={state} last_exit_code={exit}"
+        ));
+        Ok(false)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -590,6 +672,75 @@ mod tests {
         requests: RefCell<VecDeque<Result<(), ()>>>,
         endpoint_calls: Cell<usize>,
         request_calls: Cell<usize>,
+    }
+
+    /// A start adapter whose launchd job answers one fixed activity reading.
+    struct InactiveJobAdapter(Result<bool, ()>);
+
+    impl RuntimeStartAdapter for InactiveJobAdapter {
+        fn endpoint_exists(&self) -> Result<bool, ()> {
+            Ok(false)
+        }
+
+        fn request_start(&self) -> Result<(), ()> {
+            Ok(())
+        }
+
+        fn job_active(&self) -> Result<bool, ()> {
+            self.0
+        }
+    }
+
+    #[test]
+    fn a_requested_start_whose_job_never_runs_is_inactive() {
+        assert_eq!(
+            confirm_requested_start(
+                RuntimeStartOutcome::Requested,
+                &InactiveJobAdapter(Ok(false))
+            ),
+            RuntimeStartOutcome::JobInactive
+        );
+        assert_eq!(
+            confirm_requested_start(
+                RuntimeStartOutcome::Requested,
+                &InactiveJobAdapter(Ok(true))
+            ),
+            RuntimeStartOutcome::Requested
+        );
+        // An unreadable job leaves the request standing.
+        assert_eq!(
+            confirm_requested_start(RuntimeStartOutcome::Requested, &InactiveJobAdapter(Err(()))),
+            RuntimeStartOutcome::Requested
+        );
+        // Only a request is confirmed; a present endpoint or a failure stays as it is.
+        assert_eq!(
+            confirm_requested_start(
+                RuntimeStartOutcome::EndpointPresent,
+                &InactiveJobAdapter(Ok(false))
+            ),
+            RuntimeStartOutcome::EndpointPresent
+        );
+        assert_eq!(
+            confirm_requested_start(
+                RuntimeStartOutcome::RequestFailed,
+                &InactiveJobAdapter(Ok(false))
+            ),
+            RuntimeStartOutcome::RequestFailed
+        );
+        assert_eq!(RuntimeStartOutcome::JobInactive.to_string(), "jobInactive");
+    }
+
+    #[test]
+    fn launchctl_job_state_reads_the_service_line_and_not_the_nested_endpoints() {
+        let output = "gui/501/ai.muniment.runtime = {\n\tactive count = 0\n\tpath = /Users/a/Applications/muniment.app/Contents/Library/LaunchAgents/ai.muniment.runtime.plist\n\tstate = spawn scheduled\n\tprogram identifier = Contents/Library/LaunchServices/muniment-runtime (mode: 2)\n\tlast exit code = 78: EX_CONFIG\n\tendpoints = {\n\t\t\"ai.muniment.runtime\" = {\n\t\t\tstate = active\n\t\t}\n\t}\n}\n";
+        assert_eq!(launchctl_job_state(output), Some("spawn scheduled"));
+        assert_eq!(
+            launchctl_job_state(
+                "gui/501/ai.muniment.runtime = {\n\tstate = running\n\t\tstate = active\n}\n"
+            ),
+            Some("running")
+        );
+        assert_eq!(launchctl_job_state("Could not find service\n"), None);
     }
 
     impl FakeStartAdapter {

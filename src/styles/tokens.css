@@ -46,7 +46,7 @@
   --muted: #5C6461;
   --border: #E2E5E3;
   --signal: #2A7264;
-  --signal-soft: rgba(47, 126, 109, .10);
+  --signal-soft: rgba(42, 114, 100, .10);
   --oxide: #B4483E;
   --ochre: #B98A2F;
 
@@ -111,7 +111,7 @@
   --muted: #5C6461;
   --border: #E2E5E3;
   --signal: #2A7264;
-  --signal-soft: rgba(47, 126, 109, .10);
+  --signal-soft: rgba(42, 114, 100, .10);
   --oxide: #B4483E;
   --ochre: #B98A2F;
   --shadow-window: 0 1px 2px rgba(0,0,0,.05), 0 12px 40px rgba(0,0,0,.08);

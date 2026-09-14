@@ -123,7 +123,7 @@ async function checkWindowChrome(browser, baseUrl) {
       await checkRow()
       await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
       await checkRow()
-      assert.equal(await page.locator('.new-thread').innerText(), platform.startsWith('Mac') ? 'New thread\n⌘N' : 'New thread\nCtrl N')
+      assert.equal(await page.locator('.new-thread').innerText(), platform.startsWith('Mac') ? 'New thread\n⌘ N' : 'New thread\nCtrl N')
       await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
       await checkRow()
       await page.getByRole('button', { name: 'New thread', exact: true }).click()

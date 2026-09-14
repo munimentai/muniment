@@ -1546,13 +1546,18 @@
                 {#if summary.route !== null || summary.detail}
                   {@const expanded = expandedReceipts.has(message.run.id)}
                   {@const rows = receiptRows(message.run.receipt, message.run.recalls)}
-                  <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
-                  {#if expanded}
-                    <dl class="receipt-record">
-                      {#each rows as row}
-                        <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}{#each row.files ?? [] as file}<span class="recall-file">{file}</span>{/each}</dd></div>
-                      {/each}
-                    </dl>
+                  {#if rows.length > 1}
+                    <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
+                    {#if expanded}
+                      <dl class="receipt-record">
+                        {#each rows as row}
+                          <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}{#each row.files ?? [] as file}<span class="recall-file">{file}</span>{/each}</dd></div>
+                        {/each}
+                      </dl>
+                    {/if}
+                  {:else}
+                    <!-- One row adds nothing beyond the line: a clock stands where the chevron would, and nothing expands. -->
+                    <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}><LucideIcon name="clock" variant="action" size={12} />{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</p>
                   {/if}
                 {:else}
                   <p class="provenance">Receipt unavailable</p>
@@ -1862,7 +1867,7 @@
      row starts one 9pt gap after the last light ends at 69pt. New thread ends
      at 251px in the installed app and at 252px in the probe's Chromium, and the
      thread title starts one gap and a rounding pixel later. */
-  .workspace.macos { --titlebar-height: 32px; --titlebar-inset: 78px; --titlebar-controls-end: 262px; transition: --sidebar-column 180ms ease; }
+  .workspace.macos { --titlebar-height: 32px; --titlebar-inset: 78px; --titlebar-controls-end: 272px; transition: --sidebar-column 180ms ease; }
   .workspace.macos.artifact-resizing, .workspace.macos.sidebar-resizing { transition: none; }
   .workspace:not(.macos) .titlebar-sidebar, .workspace:not(.macos) .titlebar-thread { display: contents; }
   /* The title row is a subgrid with no margin and no padding of its own: padding
@@ -1879,7 +1884,8 @@
   .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .titlebar button:hover:not(:disabled) { background: var(--faint); border-color: transparent; }
   .titlebar button:focus-visible, .titlebar input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .titlebar kbd { margin-left: 2px; padding: 0 4px; border-radius: var(--radius-chip); background: var(--faint); }
+  /* A hairline edge keeps the chip legible over the control's --faint hover. */
+  .titlebar kbd { margin-left: 2px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); }
   .update-slot { flex: 0 0 24px; height: 24px; }
   .thread-title-heading { min-width: 24px; max-width: 100%; margin: 0; font: inherit; }
   /* The rename field keeps the title control's register while it shows. */
@@ -2015,6 +2021,7 @@
   .provenance:hover:not(:disabled) { color: var(--ink); }
   .receipt-marker { display: inline-block; width: 5px; height: 5px; margin-right: 7px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); transition: transform 120ms ease; vertical-align: 1px; }
   .receipt-marker.expanded { transform: rotate(45deg); }
+  .provenance :global(.lucide) { margin-right: 7px; }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
   /* The expanded receipt sits plain under the provenance line: no box. */

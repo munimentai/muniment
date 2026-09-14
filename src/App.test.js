@@ -1279,7 +1279,7 @@ describe('workspace composer entry', () => {
     const settings = screen.getByRole('button', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-expanded', 'true')
     expect(settings).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+,' : 'Control+,')
-    expect(settings).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'Settings (⌘,)' : 'Settings (Ctrl ,)')
+    expect(settings).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'Settings (⌘ ,)' : 'Settings (Ctrl ,)')
 
     // The shortcut toggles the menu while the sidebar shows.
     await fireEvent.keyDown(document, shortcut)
@@ -1857,7 +1857,7 @@ describe('artifact rail', () => {
     expect(toggle).toHaveAttribute('aria-controls', 'artifact-rail')
     expect(toggle).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+J' : 'Control+J')
     expect(within(toggle).getByText('Artifacts')).toBeInTheDocument()
-    expect(within(toggle).getByText(navigator.platform.startsWith('Mac') ? '⌘J' : 'Ctrl J').tagName).toBe('KBD')
+    expect(within(toggle).getByText(navigator.platform.startsWith('Mac') ? '⌘ J' : 'Ctrl J').tagName).toBe('KBD')
     expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
 
     await fireEvent.click(toggle)
@@ -2466,7 +2466,7 @@ describe('window chrome', () => {
       ])
       expect(row.querySelector('.title-spacer')).toHaveAttribute('data-tauri-drag-region')
       expect(row.querySelector('.update-slot')).toBeEmptyDOMElement()
-      expect(row.querySelector('.artifacts-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘J' : 'Ctrl J')
+      expect(row.querySelector('.artifacts-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘ J' : 'Ctrl J')
       for (const control of row.querySelectorAll('button, input, button *')) {
         expect(control).not.toHaveAttribute('data-tauri-drag-region')
       }
@@ -2529,7 +2529,7 @@ describe('sidebar collapse', () => {
     expect(screen.getByText('Threads')).toBeInTheDocument()
     const newThread = document.querySelector('.new-thread')
     expect(newThread).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+N' : 'Control+N')
-    expect(newThread.querySelector('kbd')).toHaveTextContent(navigator.platform.startsWith('Mac') ? '⌘N' : 'Ctrl N')
+    expect(newThread.querySelector('kbd')).toHaveTextContent(navigator.platform.startsWith('Mac') ? '⌘ N' : 'Ctrl N')
     const currentThread = document.querySelector('.thread-row')
     expect(currentThread).toHaveTextContent('New thread')
     expect(currentThread).toHaveAttribute('aria-current', 'true')
@@ -2550,7 +2550,7 @@ describe('sidebar collapse', () => {
     expect(document.activeElement).toBe(expand)
     expect(expand).toHaveAttribute('aria-expanded', 'false')
     expect(expand).toHaveAttribute('title', expect.stringContaining('Expand sidebar'))
-    expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'New thread (⌘N)' : 'New thread (Ctrl N)')
+    expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'New thread (⌘ N)' : 'New thread (Ctrl N)')
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
     // Collapsed means gone: no rail, and Settings hides with the sidebar.
     expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
@@ -4985,7 +4985,7 @@ describe('permission gates', () => {
       prefill: 'rm old.csv',
     })
     const field = await screen.findByRole('textbox', { name: 'Change the request' })
-    const hint = screen.getByText(navigator.platform.startsWith('Mac') ? '⌘⏎ submits' : 'Ctrl ⏎ submits')
+    const hint = screen.getByText(navigator.platform.startsWith('Mac') ? '⌘ ⏎ submits' : 'Ctrl ⏎ submits')
     expect(hint).toHaveClass('permission-editor-hint')
     expect(field).toHaveAttribute('aria-describedby', hint.id)
     await fireEvent.input(field, { target: { value: 'archive old.csv' } })
@@ -5883,20 +5883,29 @@ describe('provenance line', () => {
     expect(line.querySelector('.route-segment')).toBeNull()
   })
 
-  it('renders elapsed time alone for a local receipt', async () => {
+  it('renders elapsed time alone for a local receipt as a plain line with a clock and no expand control', async () => {
     restore({ time: '6.2s' })
 
-    const line = await screen.findByRole('button', { name: 'Expand receipt: 6.2s' })
-    expect(line.textContent).toBe('6.2s')
+    const line = await screen.findByText('6.2s', { selector: 'p.provenance' })
+    expect(line).toHaveAttribute('aria-label', 'Receipt: 6.2s')
+    expect(line.querySelector('[data-icon="clock"]')).toBeInTheDocument()
+    expect(line.querySelector('.receipt-marker')).toBeNull()
     expect(line.querySelector('.route-segment')).toBeNull()
+    expect(screen.queryByRole('button', { name: /receipt/i })).not.toBeInTheDocument()
     expect(screen.queryByText('Receipt unavailable')).not.toBeInTheDocument()
   })
 
   it('renders a route-only receipt without a dangling arrow', async () => {
     restore({ route: 'analysis/high' })
 
-    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high' })
-    expect(line.textContent).toBe('analysis/high')
+    const line = await waitFor(() => {
+      const plain = document.querySelector('p.provenance')
+      expect(plain).not.toBeNull()
+      return plain
+    })
+    expect(line).toHaveAttribute('aria-label', 'Receipt: Routed via analysis/high')
+    expect(line.querySelector('.route-segment')).toHaveTextContent('analysis/high')
+    expect(line.querySelector('[data-icon="clock"]')).toBeInTheDocument()
   })
 
   it('expands to the receipt record and back', async () => {
