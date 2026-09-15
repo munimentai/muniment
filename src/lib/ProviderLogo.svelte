@@ -26,7 +26,7 @@
 {/if}
 
 <style>
-  .logo { display: inline-flex; flex: none; align-items: center; justify-content: center; overflow: hidden; color: var(--ink); }
+  .logo { display: inline-flex; flex: none; align-items: center; justify-content: center; overflow: hidden; }
   .logo :global(svg) { width: 100%; height: 100%; }
   .blank { border: 1px solid var(--border); border-radius: var(--radius-chip); }
   .dark { display: none; }

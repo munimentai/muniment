@@ -48,12 +48,11 @@ a:hover {
   border-color: var(--muted);
 }
 
-/* §1.2 forbids signal on focus rings; §6 fixes the geometry at 1px ink, the
-   composer's hairline thickness, offset 2. Declared once here because Svelte <style> blocks are component-scoped.
-   components override only where a ring needs different geometry. */
+/* State is background, never a border: no control shows a focus ring. The
+   composer and the rename control alone show focus as their muted hairline.
+   Declared once here because Svelte <style> blocks are component-scoped. */
 :focus-visible {
-  outline: 1px solid var(--ink);
-  outline-offset: 2px;
+  outline: 0;
 }
 
 ::selection {

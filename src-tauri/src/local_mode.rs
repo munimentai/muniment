@@ -78,6 +78,9 @@ const CUSTOM_PROVIDER_PREFIX: &str = "custom-";
 const MODELS_RECORD_FILE: &str = "muniment-models.json";
 const CLAUDE_BRIDGE_CONFIG_FILE: &str = "claude-bridge.json";
 const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(30);
+/// One adoption probe, and how many candidates a connect tries before it settles.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+const PROBE_LIMIT: usize = 5;
 const CLAUDE_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
 
@@ -439,13 +442,21 @@ pub(crate) fn local_mode_provider_status(
 }
 
 #[tauri::command]
-pub(crate) fn local_mode_store_provider_key(
+pub(crate) async fn local_mode_store_provider_key(
     _app: tauri::AppHandle,
     provider: String,
     key: String,
 ) -> Result<(), String> {
     let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
-    store_provider_key(&pi_auth_file(&agent), &provider, &key)
+    tauri::async_runtime::spawn_blocking(move || {
+        store_provider_key(&pi_auth_file(&agent), &provider, &key)?;
+        if default_model_unset(&agent) {
+            let _ = adopt_provider_default(&agent, &provider, false);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?
 }
 
 #[tauri::command]
@@ -580,6 +591,7 @@ fn list_pi_models(agent: &Path) -> Vec<(String, InventoryModel)> {
     command
         .arg("--list-models")
         .env("PI_CODING_AGENT_DIR", agent)
+        .env("PI_OFFLINE", "1")
         .env_remove("BUN_BE_BUN")
         .stdin(std::process::Stdio::null());
     run_with_timeout(command, LIST_MODELS_TIMEOUT)
@@ -742,6 +754,97 @@ fn set_default_model(agent: &Path, provider: &str, model: &str) -> Result<(), St
     merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
     lock.check().map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     write_json_for_update(&settings_file, &settings)
+}
+
+/// Whether Pi's settings name no default model yet.
+fn default_model_unset(agent: &Path) -> bool {
+    read_json_store(&pi_settings_file(&pi_models_file(agent)))
+        .ok()
+        .flatten()
+        .and_then(|settings| {
+            settings
+                .get("defaultProvider")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_none()
+}
+
+/// A context column from Pi's model table, `128K` or `1M`, as a token count.
+fn context_tokens(context: &str) -> u64 {
+    let digits: String = context
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let value: f64 = digits.parse().unwrap_or(0.0);
+    let scale = match context.chars().last() {
+        Some('K') | Some('k') => 1_000.0,
+        Some('M') | Some('m') => 1_000_000.0,
+        _ => 1.0,
+    };
+    (value * scale) as u64
+}
+
+/// The models a just-connected provider may start on, largest context first and
+/// list order on a tie. The list is Pi's, so a narrow tuned variant that leads
+/// it alphabetically never wins over the provider's general model.
+fn adoption_candidates<'a>(models: &'a [(String, InventoryModel)], provider: &str) -> Vec<&'a str> {
+    let mut candidates: Vec<&InventoryModel> = models
+        .iter()
+        .filter(|(known, _)| known == provider)
+        .map(|(_, model)| model)
+        .collect();
+    candidates.sort_by_key(|model| std::cmp::Reverse(context_tokens(&model.context)));
+    candidates
+        .into_iter()
+        .map(|model| model.id.as_str())
+        .collect()
+}
+
+/// Whether one short exchange with the model comes back as a reply. An account
+/// plan serves some of a provider's models and refuses the rest, and only the
+/// provider says which.
+fn model_answers(agent: &Path, provider: &str, model: &str) -> bool {
+    let Some(executable) = pi_executable() else {
+        return false;
+    };
+    let mut command = std::process::Command::new(executable);
+    command
+        .args(["-ne", "-p", "--provider", provider, "--model", model])
+        .arg("Reply with the single word ready.")
+        .env("PI_CODING_AGENT_DIR", agent)
+        .env("PI_OFFLINE", "1")
+        .env_remove("BUN_BE_BUN")
+        .stdin(std::process::Stdio::null());
+    run_with_timeout(command, PROBE_TIMEOUT).is_some_and(|output| {
+        let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+        output.status.success() && !text.trim().is_empty() && !text.contains("error")
+    })
+}
+
+/// Makes a just-connected provider's model the default, so the composer sends
+/// to it without a second trip through Settings. With `probe`, the candidates
+/// are tried in turn and the first that answers wins.
+pub(crate) fn adopt_provider_default(
+    agent: &Path,
+    provider: &str,
+    probe: bool,
+) -> Result<(), String> {
+    let models = list_pi_models(agent);
+    let candidates = adoption_candidates(&models, provider);
+    let Some(first) = candidates.first() else {
+        return Err("No model answers for this provider yet.".into());
+    };
+    let chosen = if probe {
+        candidates
+            .iter()
+            .take(PROBE_LIMIT)
+            .find(|model| model_answers(agent, provider, model))
+            .unwrap_or(first)
+    } else {
+        first
+    };
+    set_default_model(agent, provider, chosen)
 }
 
 fn set_model_hidden(agent: &Path, provider: &str, model: &str, hidden: bool) -> Result<(), String> {
@@ -1016,7 +1119,7 @@ pub(crate) fn local_mode_disconnect_provider(
 }
 
 #[tauri::command]
-pub(crate) fn local_mode_store_endpoint(
+pub(crate) async fn local_mode_store_endpoint(
     _app: tauri::AppHandle,
     kind: String,
     name: String,
@@ -1025,7 +1128,15 @@ pub(crate) fn local_mode_store_endpoint(
     models: Vec<String>,
 ) -> Result<String, String> {
     let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
-    store_endpoint_provider(&agent, &kind, &name, &base_url, &key, &models)
+    tauri::async_runtime::spawn_blocking(move || {
+        let provider = store_endpoint_provider(&agent, &kind, &name, &base_url, &key, &models)?;
+        if default_model_unset(&agent) {
+            let _ = adopt_provider_default(&agent, &provider, false);
+        }
+        Ok(provider)
+    })
+    .await
+    .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?
 }
 
 #[tauri::command]
@@ -1049,6 +1160,30 @@ pub(crate) fn local_mode_connect_claude_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_connected_provider_adopts_its_largest_context_model_first_listed_on_a_tie() {
+        let table = "provider  model                context  max-out  thinking  images\n\
+openai-codex  gpt-5.3-codex-spark  128K  16.4K  yes  yes\n\
+openai-codex  gpt-5.4              272K  128K   yes  yes\n\
+openai-codex  gpt-6-astra          272K  128K   yes  yes\n\
+ollama        gemma4:12b           128K  16.4K  no   no\n\
+ollama        llama3.2:3b          128K  16.4K  no   no\n\
+google        gemini-3-pro         1M    64K    yes  yes\n";
+        let models = parse_model_table(table);
+        assert_eq!(
+            adoption_candidates(&models, "openai-codex"),
+            ["gpt-5.4", "gpt-6-astra", "gpt-5.3-codex-spark"]
+        );
+        assert_eq!(
+            adoption_candidates(&models, "ollama"),
+            ["gemma4:12b", "llama3.2:3b"]
+        );
+        assert_eq!(adoption_candidates(&models, "google"), ["gemini-3-pro"]);
+        assert!(adoption_candidates(&models, "xai").is_empty());
+        assert_eq!(context_tokens("1M"), 1_000_000);
+        assert_eq!(context_tokens("16.4K"), 16_400);
+    }
 
     fn temporary_directory() -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("muniment-local-mode-{}", Uuid::new_v4()));

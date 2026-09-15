@@ -116,8 +116,8 @@ Send. After the first run the chips are the composer band: the model source,
 Home, the context meter and the running cost. A global shortcut opens a
 one-line launcher that starts a new thread with what the user typed.
 
-**The model chip.** The chip names the model in use, `Ollama · llama3.2:3b`,
-the saved default when it is shown, else the first shown model. When no
+**The model chip.** The chip shows the provider's mark and the model id in
+use, the saved default when it is shown, else the first shown model. When no
 provider answers it reads `Connect a model`, and the first Send opens
 Settings → Models. There is no free hosted model at the no-account tier, and
 the first run says so plainly.
@@ -126,20 +126,21 @@ the first run says so plainly.
 account sign-in runs Pi's own OAuth flow in an RPC process the desktop owns
 and lands in the same file, and a local or custom endpoint goes into Pi's
 `models.json`, so Pi uses each at once and nothing leaves the machine except
-to that provider. The catalog is Pi's built-in provider table. Connect
-provider opens on Anthropic, OpenAI, xAI, Google, OpenRouter, Ollama, LM
-Studio and a custom endpoint, with a search over the rest, and each provider
-offers its methods: an account where Pi signs in (OpenAI ChatGPT Plus or Pro,
-xAI SuperGrok or X Premium, OpenRouter, GitHub Copilot), Claude Code for
-Anthropic through `pi-claude-bridge`, an API key, or a server URL. A local
-server is a first-class provider beside the hosted ones, never a fallback.
-The custom endpoint form takes a name, a base URL, an optional key and a
-model list, and covers a LiteLLM proxy. The section lists connected
-providers, each with its source tag, `Key`, `Account`, `Local`, `Custom` or
-`Claude Code`, its models from `pi --list-models` with a show switch, the
-default model and one control to disconnect it. The composer chip is a
-picker over the shown models, and choosing one sets Pi's `defaultProvider`
-and `defaultModel`.
+to that provider. The catalog is Pi's built-in provider table. The section
+lists connected providers, each with its source tag, `Key`, `Account`,
+`Local`, `Custom` or `Claude Code`, its models from `pi --list-models` with a
+show switch, the default model and Disconnect, then the popular providers
+not yet connected, Anthropic, OpenAI, xAI, Google, OpenRouter, Ollama, LM
+Studio and a custom endpoint, as rows. Connect provider searches the rest. A provider opens on one view with its first
+method, an account where Pi signs in, Claude Code for Anthropic through
+`pi-claude-bridge`, an API key, or a server URL, with its other methods one
+switch away. The OpenAI redirect lands on the desktop's own page on port
+1455, in muniment's mark and voice, and the desktop hands Pi the code. A
+connect adopts the provider's largest-context model that answers a probe as
+the default, and an account sign-in brings the app to the front. A local server is a
+first-class provider beside the hosted ones, never a fallback. The custom
+endpoint form takes a name, a base URL, an optional key and a model list. The
+chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
 
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one
 control to change it. A configured Home keeps its path. The four folders are

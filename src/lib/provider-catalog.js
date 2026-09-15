@@ -74,6 +74,20 @@ export function searchProviders(query = '') {
   }
 }
 
+// The catalog id a connected Pi provider counts as: the Codex account is
+// OpenAI, the bridge is Anthropic, a named endpoint is the custom endpoint.
+function connectedCatalogId(id) {
+  if (id.startsWith('custom-')) return 'custom'
+  return PROVIDER_ALIASES[id] ?? id
+}
+
+// The popular providers the Models list offers inline, in catalog order,
+// without the ones already connected.
+export function connectableProviders(inventory) {
+  const connected = new Set((inventory?.providers ?? []).map((provider) => connectedCatalogId(provider.id)))
+  return PROVIDERS.filter((provider) => provider.popular && !connected.has(provider.id))
+}
+
 export const SOURCE_TAGS = { key: 'Key', account: 'Account', local: 'Local', custom: 'Custom', 'claude-code': 'Claude Code' }
 
 export function sourceTag(source) {
@@ -114,9 +128,10 @@ export function currentModel(inventory) {
   return first ? { provider: first.id, model: first.models[0].id } : null
 }
 
-// The composer chip: the model in use, `Connect a model` when none answers.
+// The composer chip: the model id in use beside the provider's mark, `Connect a
+// model` when none answers.
 export function modelChipLabel(inventory) {
   const current = currentModel(inventory)
   if (!current) return 'Connect a model'
-  return `${providerName(current.provider, inventory)} · ${current.model}`
+  return current.model
 }

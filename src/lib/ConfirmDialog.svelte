@@ -69,7 +69,6 @@
   .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
   button { min-height: 36px; padding: 7px 18px; border: 1px solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--weight-semibold) var(--text-13) var(--font-human); }
   button:hover:not(:disabled) { background: var(--faint); }
-  button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   button:disabled { opacity: .55; }
   .allow { border-color: var(--ink); background: var(--ink); color: var(--paper); }
   .allow:hover:not(:disabled) { opacity: .9; background: var(--ink); }

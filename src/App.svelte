@@ -10,6 +10,7 @@
   import Settings from './lib/Settings.svelte'
   import ModelPicker from './lib/ModelPicker.svelte'
   import { currentModel, modelChipLabel } from './lib/provider-catalog.js'
+  import ProviderLogo from './lib/ProviderLogo.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
   import RowControl from './lib/RowControl.svelte'
   import AssistantMarkdown from './lib/AssistantMarkdown.svelte'
@@ -81,6 +82,7 @@
           : 'Routing is automatic. Every reply carries its receipt.')
 
   const modelSourceLabel = $derived(modelChipLabel(inventory))
+  const chipModel = $derived(currentModel(inventory))
 
   let settingsOpen = $state(false)
   let settingsSection = $state('models')
@@ -127,13 +129,15 @@
   }
 
   async function chooseModel(provider, model) {
+    const before = inventory
+    if (inventory) inventory = { ...inventory, default_provider: provider, default_model: model }
+    closePicker()
     try {
       await tauri.invoke('local_mode_set_default_model', { provider, model })
-      await refreshInventory()
     } catch (_) {
+      if (inventory && before) inventory = { ...inventory, default_provider: before.default_provider, default_model: before.default_model }
       accountStatus = 'Muniment could not save the model choice. Try again.'
     }
-    closePicker()
   }
 
   function openModelSettings() {
@@ -1532,7 +1536,7 @@
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
             {#if auth.name === 'local'}
-              <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{modelSourceLabel}<LucideIcon name="chevron-down" variant="action" size={12} /></button>
+              <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name="chevron-down" variant="action" size={12} /></button>
             {/if}
             {#if threadSwitching}
               <span id="composer-hint" role="status">Send waits for the thread. Your draft stays here.</span>
@@ -1794,7 +1798,6 @@
   .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 24px; padding: 0 6px; }
   .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .titlebar button:hover:not(:disabled) { background: var(--faint); border-color: transparent; }
-  .titlebar button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   /* A hairline edge keeps the chip legible over the control's --faint hover. */
   .titlebar kbd { margin-left: 2px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); }
   .update-slot { flex: 0 0 24px; height: 24px; }
@@ -1808,8 +1811,8 @@
   /* Clip labels during the panel slide without clipping the profile popover. */
   .side-label, .older-threads, .side-action span { overflow: hidden; }
   .side-toggle { line-height: 0; }
-  .side-toggle:hover:not(:disabled), .side-toggle:focus-visible { border-color: transparent; background: var(--faint); }
-  .side-toggle:hover:not(:disabled) :global(.side-icon), .side-toggle:focus-visible :global(.side-icon) { color: var(--ink); }
+  .side-toggle:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
+  .side-toggle:hover:not(:disabled) :global(.side-icon) { color: var(--ink); }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
   .thread-list { min-height: 0; padding: 0; overflow-y: auto; list-style: none; }
   .older-threads { width: 100%; margin-top: 4px; border-color: transparent; background: transparent; color: var(--muted); }
@@ -1824,7 +1827,6 @@
   .thread-menu { position: fixed; z-index: 4; min-width: 120px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
   .thread-menu button { width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
   .thread-menu button:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
-  .thread-menu button:focus-visible, .thread-delete-confirm button:focus-visible { outline-color: var(--ink); }
   .thread-delete-confirm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; padding: 5px 7px; border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
   .thread-delete-confirm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
@@ -1845,7 +1847,6 @@
   .artifact-divider, .sidebar-divider { z-index: 2; align-self: stretch; justify-self: start; width: var(--frame-width); margin-left: calc(-.5 * var(--frame-width)); padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
   .artifact-divider { grid-area: rail; }
   .sidebar-divider { grid-area: thread; }
-  .artifact-divider:focus-visible, .sidebar-divider:focus-visible { outline: 1px solid var(--ink); outline-offset: -2px; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }
@@ -1929,7 +1930,6 @@
   .message-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-color: transparent; background: transparent; color: var(--muted); font-size: var(--text-12); }
   .message-actions button:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
   /* §1.2: focus rings are ink, never signal. */
-  .message-actions button:focus-visible { outline-color: var(--ink); }
   .message-actions button:disabled { opacity: .45; }
   /* Same §1.7 icon geometry as the rail, tracking whatever ink its button carries. */
   .copy-failure { margin-top: 4px; }
@@ -1956,8 +1956,9 @@
   .composer-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
   .composer-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
-  .model-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); white-space: nowrap; }
+  .model-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 2px 8px; border: 1px solid transparent; border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); white-space: nowrap; }
   .model-chip:hover:not(:disabled) { background: var(--faint); }
+  .model-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
   /* The band's one action control: an ink up arrow while the draft has text, a muted stop square in flight. */

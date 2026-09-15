@@ -4,7 +4,7 @@
   import { onDestroy } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
-  import { catalogProvider, methodLabel, modelKey, providerName, searchProviders, sourceTag } from './provider-catalog.js'
+  import { catalogProvider, connectableProviders, methodLabel, modelKey, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory } = $props()
 
@@ -13,6 +13,8 @@
   let status = $state('')
   let query = $state('')
   let view = $state('list')
+  // Where Back from a provider's view returns: the list or the connector.
+  let origin = $state('list')
   let providerId = $state('')
   let method = $state('')
   let providerQuery = $state('')
@@ -29,6 +31,7 @@
 
   const provider = $derived(catalogProvider(providerId))
   const catalog = $derived(searchProviders(providerQuery))
+  const connectable = $derived(connectableProviders(inventory))
   const hidden = $derived(new Set(inventory?.hidden ?? []))
   const shownProviders = $derived.by(() => {
     if (!inventory) return []
@@ -56,22 +59,32 @@
     return inventory?.default_provider === entry.id && inventory?.default_model === model.id
   }
 
+  // A pick shows at once. The save follows, and a failed save puts the list back.
   async function setDefault(entry, model) {
+    const before = inventory
+    inventory = { ...inventory, default_provider: entry.id, default_model: model.id }
+    oninventory?.(inventory)
+    status = `${model.id} is the default model.`
     try {
       await tauri.invoke('local_mode_set_default_model', { provider: entry.id, model: model.id })
-      status = `${model.id} is the default model.`
-      await load()
     } catch (error) {
+      inventory = before
+      oninventory?.(inventory)
       status = String(error?.message ?? error)
     }
   }
 
   async function toggleHidden(entry, model) {
     const key = modelKey(entry.id, model.id)
+    const before = inventory
+    const shown = !hidden.has(key)
+    inventory = { ...inventory, hidden: shown ? [...(inventory.hidden ?? []), key] : (inventory.hidden ?? []).filter((entry) => entry !== key) }
+    oninventory?.(inventory)
     try {
-      await tauri.invoke('local_mode_set_model_hidden', { provider: entry.id, model: model.id, hidden: !hidden.has(key) })
-      await load()
+      await tauri.invoke('local_mode_set_model_hidden', { provider: entry.id, model: model.id, hidden: shown })
     } catch (error) {
+      inventory = before
+      oninventory?.(inventory)
       status = String(error?.message ?? error)
     }
   }
@@ -92,20 +105,20 @@
   }
 
   function chooseProvider(id) {
+    origin = view
     providerId = id
     formError = ''
     key = ''
     endpointName = ''
     endpointModels = ''
     baseUrl = catalogProvider(id)?.baseUrl ?? ''
-    const methods = catalogProvider(id)?.methods ?? []
-    if (methods.length === 1) chooseMethod(methods[0])
-    else view = 'provider'
+    chooseMethod(catalogProvider(id)?.methods?.[0] ?? 'key')
   }
 
   function chooseMethod(next) {
     method = next
     formError = ''
+    login = null
     view = 'method'
     if (next === 'claude-code') void loadClaudeStatus()
   }
@@ -114,9 +127,7 @@
     if (login?.stage && login.stage !== 'done' && login.stage !== 'failed' && login.stage !== 'cancelled') void cancelLogin()
     login = null
     formError = ''
-    if (view === 'method') view = (provider?.methods.length ?? 0) > 1 ? 'provider' : 'connect'
-    else if (view === 'provider') view = 'connect'
-    else view = 'list'
+    view = view === 'method' ? origin : 'list'
   }
 
   async function finishConnect(message) {
@@ -305,7 +316,7 @@
       <input type="search" aria-label="Search models" placeholder="Search models" bind:value={query}>
     </div>
     {#if inventory && inventory.providers.length === 0}
-      <p class="support empty">No provider is connected. Connect one to pick a model.</p>
+      <p class="support empty">No provider is connected. Pick one below to connect it.</p>
     {/if}
     {#each shownProviders as entry (entry.id)}
       <section class="provider-group" aria-label={entry.name}>
@@ -337,6 +348,16 @@
         {/if}
       </section>
     {/each}
+    {#if inventory && connectable.length}
+      <section class="provider-group connectable" aria-label="Connect">
+        <h5 class="group-label">Connect</h5>
+        <ul class="provider-list">
+          {#each connectable as entry (entry.id)}
+            <li><button type="button" class="quiet provider-row" onclick={() => chooseProvider(entry.id)}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span><span class="tag">{entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
   {:else}
     <header class="connect-head">
       <button type="button" class="quiet back" aria-label="Back" onclick={back}><LucideIcon name="arrow-left" variant="action" size={16} /></button>
@@ -362,13 +383,6 @@
           </ul>
         {/if}
       {/each}
-    {:else if view === 'provider'}
-      <p class="support">Choose how to sign in.</p>
-      <ul class="provider-list">
-        {#each provider.methods as entry (entry)}
-          <li><button type="button" class="quiet provider-row" onclick={() => chooseMethod(entry)}><span>{methodLabel(provider, entry)}</span><span class="tag">{entry === 'account' || entry === 'claude-code' ? 'Browser' : entry === 'key' ? 'Paste a key' : 'Server URL'}</span></button></li>
-        {/each}
-      </ul>
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. It goes into the harness credential store on this device.</p>
       <label for="provider-key">{provider.name} API key</label>
@@ -444,6 +458,13 @@
       {/if}
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
     {/if}
+    {#if view === 'method' && (provider?.methods.length ?? 0) > 1}
+      <p class="method-switch">
+        {#each provider.methods.filter((entry) => entry !== method) as entry (entry)}
+          <button type="button" class="quiet" onclick={() => chooseMethod(entry)}>{entry === 'key' ? 'Use an API key instead' : entry === 'account' ? `Sign in with your ${methodLabel(provider, 'account')} instead` : `Use ${methodLabel(provider, entry)} instead`}</button>
+        {/each}
+      </p>
+    {/if}
   {/if}
 </div>
 
@@ -494,4 +515,9 @@
   .login-code { margin: 0; font: var(--text-22) var(--font-mono); letter-spacing: .08em; }
   .login-url { max-width: 100%; }
   .login-options { display: flex; flex-wrap: wrap; gap: 6px; }
+  .connectable { margin-top: 4px; }
+  .connectable .group-label { margin: 0 0 4px; }
+  .method-switch { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; }
+  .method-switch button { min-height: 24px; padding: 2px 8px; color: var(--muted); font-size: var(--text-12); }
+  .method-switch button:hover:not(:disabled) { color: var(--ink); }
 </style>
