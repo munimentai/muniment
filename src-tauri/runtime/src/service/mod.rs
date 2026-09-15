@@ -1,11 +1,13 @@
 //! Dormant runtime service composition.
 
+mod company;
 pub(crate) mod prompt_storage;
 mod run;
 mod session;
 mod threads;
 mod workspace;
 
+pub use company::{create_company, list_companies, rename_company, select_company};
 pub use run::{
     accept_prompt, answer_permission, cancel_run, configure_run, drive_prompt, queue_run_message,
     resume_run, run_prompt, ConfigureRunError, PromptAcceptance, PromptLaunch,
