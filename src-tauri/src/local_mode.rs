@@ -1082,10 +1082,51 @@ pub(crate) async fn local_mode_provider_inventory(
     tauri::async_runtime::spawn_blocking(move || {
         let _ = refresh_endpoint_models(&agent);
         let models = list_pi_models(&agent);
-        provider_inventory(&agent, models)
+        let mut inventory = provider_inventory(&agent, models)?;
+        adopt_shown_default(&agent, &mut inventory);
+        Ok(inventory)
     })
     .await
     .map_err(|_| READ_SETTINGS_ERROR.to_string())?
+}
+
+/// The chip names the saved default when it is shown, else the first shown
+/// model. Pi picks its own fallback when its settings name none, so a run could
+/// answer from a model the chip never named. The first shown model becomes the
+/// saved default here, so the chip and the run agree.
+fn adopt_shown_default(agent: &Path, inventory: &mut ProviderInventory) {
+    let hidden = |provider: &str, model: &str| {
+        inventory
+            .hidden
+            .iter()
+            .any(|key| key == &format!("{provider}/{model}"))
+    };
+    let saved_shown =
+        match (&inventory.default_provider, &inventory.default_model) {
+            (Some(provider), Some(model)) => {
+                inventory.providers.iter().any(|group| {
+                    &group.id == provider && group.models.iter().any(|m| &m.id == model)
+                }) && !hidden(provider, model)
+            }
+            _ => false,
+        };
+    if saved_shown {
+        return;
+    }
+    let first = inventory.providers.iter().find_map(|group| {
+        group
+            .models
+            .iter()
+            .find(|model| !hidden(&group.id, &model.id))
+            .map(|model| (group.id.clone(), model.id.clone()))
+    });
+    let Some((provider, model)) = first else {
+        return;
+    };
+    if set_default_model(agent, &provider, &model).is_ok() {
+        inventory.default_provider = Some(provider);
+        inventory.default_model = Some(model);
+    }
 }
 
 #[tauri::command]
@@ -1213,6 +1254,55 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
             parse_model_table("No models available. Use /login to log into a provider.\n")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_missing_default_becomes_the_first_shown_model_so_the_chip_and_the_run_agree() {
+        let agent = temporary_directory();
+        fs::write(
+            agent.join("auth.json"),
+            r#"{"openai-codex":{"type":"oauth","access":"a"}}"#,
+        )
+        .unwrap();
+        fs::write(agent.join("settings.json"), r#"{"defaultTools":["read"]}"#).unwrap();
+        fs::write(
+            agent.join(MODELS_RECORD_FILE),
+            r#"{"hidden":["openai-codex/gpt-5.5"]}"#,
+        )
+        .unwrap();
+        let model = |id: &str| InventoryModel {
+            id: id.into(),
+            context: "400K".into(),
+            max_out: "128K".into(),
+            thinking: true,
+            images: true,
+        };
+        let models = vec![
+            ("openai-codex".to_owned(), model("gpt-5.5")),
+            ("openai-codex".to_owned(), model("gpt-5.6-luna")),
+        ];
+        let mut inventory = provider_inventory(&agent, models).unwrap();
+        assert_eq!(inventory.default_model, None);
+        adopt_shown_default(&agent, &mut inventory);
+        assert_eq!(inventory.default_provider.as_deref(), Some("openai-codex"));
+        assert_eq!(inventory.default_model.as_deref(), Some("gpt-5.6-luna"));
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(agent.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(settings["defaultProvider"], "openai-codex");
+        assert_eq!(settings["defaultModel"], "gpt-5.6-luna");
+
+        // A shown saved default stays.
+        let mut again = provider_inventory(
+            &agent,
+            vec![
+                ("openai-codex".to_owned(), model("gpt-5.5")),
+                ("openai-codex".to_owned(), model("gpt-5.6-luna")),
+            ],
+        )
+        .unwrap();
+        adopt_shown_default(&agent, &mut again);
+        assert_eq!(again.default_model.as_deref(), Some("gpt-5.6-luna"));
     }
 
     #[test]

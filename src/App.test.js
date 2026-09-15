@@ -3,6 +3,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { tick } from 'svelte'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -794,7 +795,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await findWorkspaceComposer()
-    await waitFor(() => expect(document.querySelector('.response-prose.streaming')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('.streaming')).toBeInTheDocument())
     requestConnected = false
     desktopClientListener({ payload: { ...chatEventsStatus(false), connected: false } })
     restored = true
@@ -811,7 +812,7 @@ describe('workspace composer entry', () => {
       desktopClientListener({ payload: chatEventsStatus(true) })
     }
     expect(await screen.findByText('The journal kept the reply.')).toBeInTheDocument()
-    await waitFor(() => expect(document.querySelector('.response-prose.streaming')).not.toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('.streaming')).not.toBeInTheDocument())
     expect(invoke).not.toHaveBeenCalledWith('auth_status')
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
@@ -5093,18 +5094,22 @@ describe('thread announcements', () => {
     expect(container.querySelectorAll('.streaming-rule')).toHaveLength(ruleCount)
   })
 
-  it('swaps streaming source text for terminal Markdown', async () => {
+  it('renders Markdown from the first streamed token with the caret in its last block, then settles it', async () => {
     const { container } = signedIn([{
-      runId: 'run-markdown', phase: 'streaming', text: '## Draft',
+      runId: 'run-markdown', phase: 'streaming', text: '## Draft\n\nA first line',
       prompt: 'A question', receipt: null, toolActivity: [], resumable: false,
     }])
 
-    const streaming = await screen.findByText('## Draft')
-    expect(streaming).toHaveProperty('tagName', 'P')
-    expect(streaming).toHaveClass('response-prose', 'streaming')
-    expect(container.querySelector('.caret')).toBeInTheDocument()
-    expect(container.querySelector('.streaming-rule')).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Draft' })).not.toBeInTheDocument()
+    const heading = await screen.findByRole('heading', { name: 'Draft' })
+    expect(heading).toHaveProperty('tagName', 'H3')
+    const streaming = container.querySelector('.streaming')
+    expect(streaming).toContainElement(heading)
+    expect(streaming.querySelector('.assistant-markdown')).toBeInTheDocument()
+    const caret = container.querySelector('.caret')
+    expect(caret.parentElement).toHaveProperty('tagName', 'P')
+    expect(caret.parentElement).toHaveTextContent('A first line')
+    expect(streaming.querySelector('.streaming-rule')).toBeInTheDocument()
+    expect(screen.queryByText('## Draft')).not.toBeInTheDocument()
 
     chatListener({ payload: {
       runId: 'run-markdown', phase: 'complete', text: '## Final',
@@ -5118,17 +5123,16 @@ describe('thread announcements', () => {
     expect(container.querySelector('.streaming-rule')).not.toBeInTheDocument()
   })
 
-  it('keeps a paused reply as plain text', async () => {
+  it('renders a paused reply as Markdown too', async () => {
     const { container } = signedIn([{
       runId: 'run-paused', phase: 'pending-permission', text: '## Not terminal',
       prompt: 'A question', receipt: null, toolActivity: [], resumable: false,
       pendingPermission: null,
     }])
 
-    const reply = await screen.findByText('## Not terminal')
-    expect(reply).toHaveProperty('tagName', 'P')
-    expect(reply).toHaveClass('response-prose')
-    expect(container.querySelector('.assistant-markdown')).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Not terminal' })).toHaveProperty('tagName', 'H3')
+    expect(container.querySelector('.assistant-markdown')).toBeInTheDocument()
+    expect(container.querySelector('.caret')).not.toBeInTheDocument()
   })
 
   it('keeps the mark through streaming, reads Writing after the hold, and settles it with the reply', async () => {
@@ -6089,16 +6093,25 @@ describe('composer auto-grow', () => {
     // stays six rows tall with overflow hidden, so two lines of the user's own
     // draft would be invisible and unreachable.
     rendered = (value) => value.split('\n').length + 2
-    expect(observers).toHaveLength(1)
     // The action row, never the input: observing a box this callback resizes
     // makes the browser report an undelivered ResizeObserver loop on every drag.
-    expect(observers[0].target).toHaveClass('composer-row')
-    observers[0].callback()
+    const rowObserver = observers.find((observer) => observer.target.classList.contains('composer-row'))
+    expect(rowObserver).toBeDefined()
+    rowObserver.callback()
     expect(composer.style.height).toBe(`${8 * row}px`)
     expect(composer.style.overflowY).toBe('hidden')
 
+    // The composer box's own height reaches the thread panel as --composer-height,
+    // so the transcript's bottom padding and the fade above the composer follow it.
+    const boxObserver = observers.find((observer) => observer.target.classList.contains('composer'))
+    expect(boxObserver).toBeDefined()
+    Object.defineProperty(boxObserver.target, 'offsetHeight', { value: 212, configurable: true })
+    boxObserver.callback()
+    await tick()
+    expect(document.querySelector('.thread-panel').style.getPropertyValue('--composer-height')).toBe('212px')
+
     cleanup()
-    expect(observers[0].disconnected).toBe(true)
+    expect(observers.every((observer) => observer.disconnected)).toBe(true)
   })
 })
 

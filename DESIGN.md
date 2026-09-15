@@ -95,8 +95,11 @@ is the reference geometry and animation engine.
 
 Layout is sidebar, thread, and artifact rail (⌘J, closed by default). User
 messages sit right in `faint` bubbles at radius 10. Responses sit plain on
-`paper` with no bubble and no avatar. Streaming is a 2px signal underline and a
-signal caret, never dots. Tool activity draws no card: the mark in flight
+`paper` with no bubble and no avatar, run the thread's full width inside a
+36px gutter, and render as Markdown from the first token. The composer keeps
+its 760px column, and the transcript scrolls on under it and fades into the
+surface above it. Streaming is a 2px signal underline and a signal caret,
+never dots. Tool activity draws no card: the mark in flight
 names the running tool's verb, and the receipt's Tools row tallies the calls
 when the reply lands. The provenance line sits under every response in mono at
 `--text-provenance`, with the route in signal. Composer focus shifts the

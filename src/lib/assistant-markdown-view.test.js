@@ -23,6 +23,26 @@ function restoreProperty(target, name, descriptor) {
 }
 
 describe('assistant Markdown view', () => {
+  it('places the caret at the end of the last text block and moves it as the text grows', async () => {
+    const { container, rerender } = render(AssistantMarkdown, {
+      props: { text: '## Heading\n\n- one\n- two', caret: true },
+    })
+    const caret = () => container.querySelector('.caret')
+    expect(caret().parentElement).toHaveProperty('tagName', 'LI')
+    expect(caret().parentElement).toHaveTextContent('two')
+
+    await rerender({ text: '## Heading\n\n- one\n- two\n\n```js\nconst a = 1\n```', caret: true })
+    expect(caret().parentElement).toHaveClass('assistant-markdown')
+    expect(caret().previousElementSibling).toHaveProperty('tagName', 'PRE')
+
+    await rerender({ text: '## Heading\n\nDone.', caret: true })
+    expect(caret().parentElement).toHaveProperty('tagName', 'P')
+    expect(container.querySelectorAll('.caret')).toHaveLength(1)
+
+    await rerender({ text: '## Heading\n\nDone.', caret: false })
+    expect(caret()).toBeNull()
+  })
+
   it('inserts the sanitized HTML result', () => {
     const { container } = render(AssistantMarkdown, {
       props: { text: '## Heading\n\nA **strong** reply.' },
