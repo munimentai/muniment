@@ -116,32 +116,30 @@ Send. After the first run the chips are the composer band: the model source,
 Home, the context meter and the running cost. A global shortcut opens a
 one-line launcher that starts a new thread with what the user typed.
 
-**The model source chip.** At launch the app resolves a model in this order:
-a key in Pi's credential store, a local server that answers on Ollama's port
-or the one Pi's `models.json` names, and a provider whose environment
-variable from the catalog is set. The chip names the source it found,
-`Anthropic key`, `Local · Ollama` or `Environment · OPENAI_API_KEY`. When none
-answers it reads `Connect a model`, and the first Send opens its panel. There
-is no free hosted model at the no-account tier, and the chip says so plainly.
+**The model chip.** The chip names the model in use, `Ollama · llama3.2:3b`,
+the saved default when it is shown, else the first shown model. When no
+provider answers it reads `Connect a model`, and the first Send opens
+Settings → Models. There is no free hosted model at the no-account tier, and
+the first run says so plainly.
 
-**The provider panel.** A key added here goes into Pi's `auth.json` and a
-local or custom endpoint into Pi's `models.json`, so Pi uses it at once and
-nothing leaves the machine except to that provider. The catalog is the
-models.dev shape, `id`, `name`, `env`, `npm`, `api` and `models` with cost
-and limits, shipped as a pinned snapshot and refreshed on a cache. The panel
-opens on featured tiles, Anthropic, OpenAI, Google, xAI, OpenRouter, Ollama,
-LM Studio and a custom endpoint, with a search over the rest. Most users
-connect one hosted provider with a key, and the panel is built for that
-first. A local server is a first-class provider beside them, never a
-fallback: same panel, same picker, same composer. Each provider offers a key
-field, and a browser or device sign-in only where the provider permits it for
-third-party tools. The custom endpoint form takes a base URL, an optional key
-and a model list, and covers a LiteLLM proxy. The panel lists connected
-providers, each with its source tag, `Key` for a key typed here,
-`Environment` for a catalog variable found at launch, `Local` for a server
-on this machine and `Custom` for an endpoint in `models.json`, and one
-control to disconnect it. The model picker carries the same tag on each row
-and orders rows by the user's last use, not by source.
+**Settings → Models.** A key added here goes into Pi's `auth.json`, an
+account sign-in runs Pi's own OAuth flow in an RPC process the desktop owns
+and lands in the same file, and a local or custom endpoint goes into Pi's
+`models.json`, so Pi uses each at once and nothing leaves the machine except
+to that provider. The catalog is Pi's built-in provider table. Connect
+provider opens on Anthropic, OpenAI, xAI, Google, OpenRouter, Ollama, LM
+Studio and a custom endpoint, with a search over the rest, and each provider
+offers its methods: an account where Pi signs in (OpenAI ChatGPT Plus or Pro,
+xAI SuperGrok or X Premium, OpenRouter, GitHub Copilot), Claude Code for
+Anthropic through `pi-claude-bridge`, an API key, or a server URL. A local
+server is a first-class provider beside the hosted ones, never a fallback.
+The custom endpoint form takes a name, a base URL, an optional key and a
+model list, and covers a LiteLLM proxy. The section lists connected
+providers, each with its source tag, `Key`, `Account`, `Local`, `Custom` or
+`Claude Code`, its models from `pi --list-models` with a show switch, the
+default model and one control to disconnect it. The composer chip is a
+picker over the shown models, and choosing one sets Pi's `defaultProvider`
+and `defaultModel`.
 
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one
 control to change it. A configured Home keeps its path. The four folders are
@@ -292,8 +290,9 @@ system Node dependency to ADR 0008's standalone executable distribution.
 The desktop's Pi carries what the factory's Pi carries, or the local harness
 is weaker than the one that built it. Four items:
 
-1. **The three extension packages** the factory installs: `npm:pi-web-access`,
-   `npm:pi-subagents`, `npm:pi-background-tasks`. They give Pi web search and
+1. **The extension packages** the factory installs: `npm:pi-web-access`,
+   `npm:pi-subagents`, `npm:pi-background-tasks`, and `npm:pi-claude-bridge`
+   for Anthropic through the Claude Code sign-in. They give Pi web search and
    fetch, child agents, and `bg_run` with `bg_status`, `bg_logs` and
    `bg_result`. They render into `settings.json` as
    `{"packages": [...], "defaultTools": [...]}`. `pi-web-access` needs an

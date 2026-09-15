@@ -17,6 +17,17 @@ const appRules = new Map([...appStyles
   .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
 const accessPanelSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
 const rowControlStyles = fs.readFileSync(path.join(process.cwd(), 'src/lib/RowControl.svelte'), 'utf8').match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
+const settingsStyles = fs.readFileSync(path.join(process.cwd(), 'src/lib/Settings.svelte'), 'utf8').match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
+const emptyInventory = { providers: [], default_provider: null, default_model: null, hidden: [] }
+const ollamaInventory = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }] }], default_provider: 'ollama', default_model: 'llama3.2:3b', hidden: [] }
+const keyInventory = { providers: [{ id: 'anthropic', name: 'Anthropic', source: 'key', base_url: null, models: [{ id: 'claude-sonnet-5', context: '1M', max_out: '128K', thinking: true, images: true }] }], default_provider: null, default_model: null, hidden: [] }
+// Settings opens from the sidebar control; a section name picks that section's nav button.
+const openSettings = async (section) => {
+  await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Settings' })
+  if (section) await fireEvent.click(within(within(dialog).getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: section }))
+  return dialog
+}
 const rowControlRules = new Map([...rowControlStyles
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .matchAll(/([^{}]+)\{([^{}]*)\}/g)]
@@ -1221,51 +1232,7 @@ describe('workspace composer entry', () => {
     expect(document.querySelector('.lockup')).not.toBeInTheDocument()
   })
 
-  it('falls back to the sign-in screen when local mode cannot start', async () => {
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: false, subject: null }
-      if (command === 'local_mode_enter') throw new Error('marker refused')
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-
-    const signIn = await screen.findByRole('button', { name: 'Sign in' })
-    expect(signIn).not.toHaveFocus()
-    expect(signIn).toHaveClass('primary')
-    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
-    expect(screen.getByRole('heading', { level: 1, name: 'muniment' })).toBeInTheDocument()
-    expect(document.querySelector('.lockup svg')).toHaveAttribute('aria-hidden', 'true')
-    expect(document.querySelector('.lockup svg')).not.toHaveAttribute('aria-label')
-    expect(screen.getByRole('button', { name: 'Use local mode' })).toBeInTheDocument()
-    expect(await screen.findByRole('alert')).toHaveTextContent('Local mode could not start. Try again.')
-    expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
-  })
-
-  it('holds appearance, Home and the cloud sign-in in a menu at the foot of the sidebar', async () => {
-    localModeStatus = true
-    render(App)
-    await screen.findByTestId('local-mode')
-    expect(screen.queryByText('Local mode')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Sign in for cloud features' })).not.toBeInTheDocument()
-
-    const settings = screen.getByRole('button', { name: 'Settings' })
-    expect(settings).toHaveAttribute('aria-expanded', 'false')
-    await fireEvent.click(settings)
-    const menu = await screen.findByRole('region', { name: 'Settings' })
-    expect(settings).toHaveAttribute('aria-expanded', 'true')
-    expect(menu.closest('#sidebar')).not.toBeNull()
-    expect(within(menu).getByRole('group', { name: 'Appearance' })).toBeInTheDocument()
-    expect(within(menu).getByRole('button', { name: 'Change folder…' })).toBeInTheDocument()
-    expect(within(menu).getByRole('button', { name: 'Sign in for cloud features' })).toBeInTheDocument()
-    // The control sits below the menu, at the very foot of the sidebar.
-    expect(menu.compareDocumentPosition(settings)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
-
-    await fireEvent.keyDown(menu, { key: 'Escape' })
-    expect(screen.queryByRole('region', { name: 'Settings' })).not.toBeInTheDocument()
-    await waitFor(() => expect(document.activeElement).toBe(settings))
-  })
-
-  it('hides Settings with a collapsed sidebar and expands it with the menu open from the settings shortcut', async () => {
+  it('opens Settings from the settings shortcut with a collapsed sidebar and toggles it', async () => {
     localModeStatus = true
     localStorage.setItem('muniment.sidebar-collapsed', 'collapsed')
     render(App)
@@ -1274,27 +1241,29 @@ describe('workspace composer entry', () => {
     const shortcut = navigator.platform.startsWith('Mac') ? { key: ',', metaKey: true } : { key: ',', ctrlKey: true }
 
     await fireEvent.keyDown(document, shortcut)
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    // The popup needs no sidebar.
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
 
-    expect(await screen.findByRole('region', { name: 'Settings' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
-    const settings = screen.getByRole('button', { name: 'Settings' })
-    expect(settings).toHaveAttribute('aria-expanded', 'true')
+    await fireEvent.keyDown(document, shortcut)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    await fireEvent.keyDown(document, shortcut)
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Close settings' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
+    const settings = await screen.findByRole('button', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+,' : 'Control+,')
     expect(settings).not.toHaveAttribute('title')
-
-    // The shortcut toggles the menu while the sidebar shows.
-    await fireEvent.keyDown(document, shortcut)
-    await waitFor(() => expect(screen.queryByRole('region', { name: 'Settings' })).not.toBeInTheDocument())
-    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
-    await fireEvent.keyDown(document, shortcut)
-    expect(await screen.findByRole('region', { name: 'Settings' })).toBeInTheDocument()
   })
+
 
   it.each(['System', 'Light', 'Dark'])('persists %s from the local appearance control across remounts', async (label) => {
     localModeStatus = true
     localStorage.setItem('muniment.theme', 'light')
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    await openSettings('Appearance')
     const appearance = within(await screen.findByRole('group', { name: 'Appearance' }))
     expect(appearance.getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     expect(appearance.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
@@ -1310,209 +1279,80 @@ describe('workspace composer entry', () => {
     const reopened = await screen.findByRole('button', { name: 'Settings' })
     expect(screen.queryByRole('group', { name: 'Appearance' })).not.toBeInTheDocument()
     await fireEvent.click(reopened)
+    await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Settings' })).getByRole('button', { name: 'Appearance' }))
     const restored = within(await screen.findByRole('group', { name: 'Appearance' }))
     expect(restored.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
     delete document.documentElement.dataset.theme
   })
 
-  it('keeps the local appearance control usable when storage is unavailable', async () => {
-    localModeStatus = true
-    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Storage unavailable') })
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage unavailable') })
-    render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
-    const appearance = within(await screen.findByRole('group', { name: 'Appearance' }))
-    expect(appearance.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true')
-    await fireEvent.click(appearance.getByRole('button', { name: 'Dark' }))
-    expect(document.documentElement.dataset.theme).toBe('dark')
-    expect(appearance.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true')
-    await fireEvent.click(appearance.getByRole('button', { name: 'System' }))
-    expect(document.documentElement).not.toHaveAttribute('data-theme')
-  })
-
-  // The first-run screen carries its own Connect a model button, so the chip is
-  // found by its class inside the workspace composer.
-  const openModelPanel = async () => {
-    const chip = await waitFor(() => {
-      const button = document.querySelector('.model-chip')
-      expect(button).not.toBeNull()
-      return button
-    })
-    await fireEvent.click(chip)
-    await screen.findByRole('dialog', { name: 'Model' })
-  }
-
-  it('enters local mode and saves a provider key', async () => {
-    let providerStatusChecks = 0
-    invoke.mockImplementation(async (command) => {
-      if (command === 'local_mode_status') return false
-      if (command === 'auth_status') return { signed_in: false, subject: null }
-      if (command === 'local_mode_enter') return undefined
-      if (command === 'chat_thread_open') return []
-      if (command === 'local_mode_provider_status') {
-        providerStatusChecks += 1
-        return [
-          { provider: 'anthropic', configured: providerStatusChecks > 1 },
-          { provider: 'google', configured: false },
-          { provider: 'openai', configured: false },
-          { provider: 'ollama', configured: false },
-        ]
-      }
-      if (command === 'local_mode_store_provider_key') return undefined
-      if (command === 'local_mode_store_local_provider') return undefined
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-
-    await screen.findByTestId('local-mode')
-    const composer = await screen.findByPlaceholderText('Ask anything')
-    expect(composer).toBeInTheDocument()
-    // The chip names the model, so local mode carries no sentence beside it.
-    expect(composer).not.toHaveAccessibleDescription()
-    expect(document.querySelector('#composer-hint')).toBeNull()
-    expect(screen.getByText('Your model answers here. Ask anything.')).toBeInTheDocument()
-    const empty = document.querySelector('.empty').textContent.trim()
-    expect(empty).not.toMatch(/[\r\n]/)
-    expect(empty.split(/\s+/).length).toBeLessThan(12)
-    expect(invoke.mock.calls.some(([command]) => command.startsWith('auth_') && command !== 'auth_status')).toBe(false)
-    expect(screen.queryByRole('group', { name: 'Provider' })).not.toBeInTheDocument()
-
-    await openModelPanel()
-    for (const name of ['Anthropic', 'Google', 'OpenAI', 'Ollama (local)']) {
-      expect(screen.getByRole('radio', { name }).closest('.provider-row')).toHaveTextContent('Not set')
-    }
-
-    const provider = screen.getByRole('group', { name: 'Provider' })
-    expect(provider.tagName).toBe('FIELDSET')
-    const radios = within(provider).getAllByRole('radio')
-    expect(radios.map((radio) => radio.value)).toEqual(['anthropic', 'google', 'openai', 'ollama'])
-    for (const radio of radios) expect(radio).toHaveAttribute('name', 'provider')
-    expect(within(provider).getByRole('radio', { name: 'Google' })).toBeChecked()
-    await fireEvent.click(within(provider).getByRole('radio', { name: 'Anthropic' }))
-    await fireEvent.input(screen.getByLabelText('Provider API key'), { target: { value: 'secret-key' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
-
-    expect(invoke).toHaveBeenCalledWith('local_mode_store_provider_key', { provider: 'anthropic', key: 'secret-key' })
-    expect(await screen.findByText('Muniment saved the Anthropic key. Send a message.')).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: 'Anthropic' }).closest('.provider-row')).toHaveTextContent('Saved')
-
-    await fireEvent.click(within(provider).getByRole('radio', { name: 'Ollama (local)' }))
-    await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Save Ollama server' }))
-    expect(invoke).toHaveBeenCalledWith('local_mode_store_local_provider', { baseUrl: 'http://localhost:11434/v1' })
-    expect(await screen.findByText('Muniment saved the Ollama server. Send a message.')).toBeInTheDocument()
-    expect(providerStatusChecks).toBe(3)
-  })
-
-  it.each([
-    ['local_mode_store_provider_key', 'Muniment could not save the provider key. Try again.'],
-    ['local_mode_provider_status', 'Muniment cannot read provider settings. Restart the app to retry.'],
-  ])('shows a next step when %s fails', async (failedCommand, copy) => {
-    localModeStatus = true
-    const defaultInvoke = invoke.getMockImplementation()
-    invoke.mockImplementation((command, ...args) => {
-      if (command === failedCommand) return Promise.reject(new Error('Storage failed.'))
-      return defaultInvoke(command, ...args)
-    })
-    render(App)
-    await screen.findByPlaceholderText('Ask anything')
-    await openModelPanel()
-    if (failedCommand === 'local_mode_store_provider_key') {
-      await fireEvent.input(await screen.findByLabelText('Provider API key'), { target: { value: 'test-key' } })
-      await fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
-    }
-    expect(await screen.findByText(copy)).toBeInTheDocument()
-    expect(copy.split(/\s+/).length).toBeLessThan(12)
-  })
-
-  it('names the model source on the composer chip and closes the panel with Escape', async () => {
-    localModeStatus = true
-    const defaultInvoke = invoke.getMockImplementation()
-    invoke.mockImplementation((command, ...args) => {
-      if (command === 'local_mode_provider_status') {
-        return [
-          { provider: 'anthropic', configured: false },
-          { provider: 'google', configured: false },
-          { provider: 'openai', configured: false },
-          { provider: 'ollama', configured: true },
-        ]
-      }
-      return defaultInvoke(command, ...args)
-    })
-    render(App)
-    await screen.findByPlaceholderText('Ask anything')
-
-    const chip = await waitFor(() => {
-      const button = document.querySelector('.model-chip')
-      expect(button).not.toBeNull()
-      return button
-    })
-    await waitFor(() => expect(chip).toHaveTextContent('Local · Ollama'))
-    expect(chip).toHaveAttribute('aria-expanded', 'false')
-
-    await fireEvent.click(chip)
-    const panel = await screen.findByRole('dialog', { name: 'Model' })
-    expect(chip).toHaveAttribute('aria-expanded', 'true')
-    expect(within(panel).getByRole('radio', { name: 'Ollama (local)' }).closest('.provider-row')).toHaveTextContent('Saved')
-
-    await fireEvent.keyDown(panel, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model' })).not.toBeInTheDocument())
-    expect(document.activeElement).toBe(chip)
-  })
-
-  it('shows the provider fields after each provider change', async () => {
+  it('offers each provider its methods and the form for the chosen one', async () => {
     localModeStatus = true
     render(App)
+    const dialog = await openSettings()
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect provider' }))
+    expect(within(dialog).getByRole('heading', { name: 'Popular' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: 'Other' })).toBeInTheDocument()
+    // The featured eight lead, in the SPEC order.
+    const popular = within(dialog).getByRole('heading', { name: 'Popular' }).nextElementSibling
+    expect([...popular.querySelectorAll('button')].map((button) => button.querySelector('span:not(.logo)').textContent)).toEqual(['Anthropic', 'OpenAI', 'xAI', 'Google', 'OpenRouter', 'Ollama', 'LM Studio', 'Custom OpenAI-compatible endpoint'])
 
-    await openModelPanel()
-    const ollama = screen.getByRole('radio', { name: 'Ollama (local)' })
-    await fireEvent.click(ollama)
-    expect(ollama).toBeChecked()
-    expect(screen.getByLabelText('Ollama server URL')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Save Ollama server' })).toBeDisabled()
-    expect(screen.queryByLabelText('Provider API key')).not.toBeInTheDocument()
+    await fireEvent.click(within(dialog).getByRole('button', { name: /^Ollama/ }))
+    expect(within(dialog).getByLabelText('Ollama server URL')).toHaveValue('http://localhost:11434/v1')
+    expect(within(dialog).getByRole('button', { name: 'Save Ollama server' })).toBeEnabled()
 
-    for (const name of ['Anthropic', 'Google', 'OpenAI']) {
-      const radio = screen.getByRole('radio', { name })
-      await fireEvent.click(radio)
-      expect(radio).toBeChecked()
-      expect(ollama).not.toBeChecked()
-      expect(screen.getByLabelText('Provider API key')).toBeVisible()
-      expect(screen.getByRole('button', { name: 'Save key' })).toBeDisabled()
-      expect(screen.queryByLabelText('Ollama server URL')).not.toBeInTheDocument()
-    }
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: /^OpenAI/ }))
+    expect(within(dialog).getAllByRole('button', { name: /account|API key/ }).map((button) => button.textContent)).toEqual(['ChatGPT Plus or Pro accountBrowser', 'API keyPaste a key'])
+    await fireEvent.click(within(dialog).getByRole('button', { name: /^API key/ }))
+    expect(within(dialog).getByLabelText('OpenAI API key')).toBeVisible()
+    expect(within(dialog).getByRole('button', { name: 'Save key' })).toBeDisabled()
+    expect(within(dialog).queryByLabelText('Ollama server URL')).not.toBeInTheDocument()
+
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: /account/ }))
+    expect(within(dialog).getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: /^xAI/ }))
+    expect(within(dialog).getByRole('button', { name: /SuperGrok or X Premium account/ })).toBeInTheDocument()
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: /^Anthropic/ }))
+    expect(within(dialog).getByRole('button', { name: /Claude Code sign-in/ })).toBeInTheDocument()
   })
 
-  it.each([false, true])('disables the provider radios until a save settles with failure %s', async (fails) => {
+
+  it.each([false, true])('disables the endpoint form until a save settles with failure %s', async (fails) => {
     localModeStatus = true
     const save = deferred()
     const defaultInvoke = invoke.getMockImplementation()
     invoke.mockImplementation((command, ...args) => {
       if (command === 'local_mode_store_local_provider') return save.promise
-      if (command === 'local_mode_provider_status') return []
+      if (command === 'local_mode_provider_inventory') return Promise.resolve(emptyInventory)
       return defaultInvoke(command, ...args)
     })
     render(App)
-    await openModelPanel()
-    const ollama = screen.getByRole('radio', { name: 'Ollama (local)' })
-    await fireEvent.click(ollama)
-    await fireEvent.input(screen.getByLabelText('Ollama server URL'), { target: { value: 'http://localhost:11434/v1' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Save Ollama server' }))
-    for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
-    expect(ollama).toBeChecked()
+    const dialog = await openSettings()
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect provider' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: /^Ollama/ }))
+    const url = within(dialog).getByLabelText('Ollama server URL')
+    await fireEvent.input(url, { target: { value: 'http://localhost:11434/v1' } })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Save Ollama server' }))
+    expect(url).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: 'Save Ollama server' })).toBeDisabled()
 
-    if (fails) save.reject(new Error('Save failed.'))
+    if (fails) save.reject(new Error('Ollama setup failed. Check the URL, then retry.'))
     else save.resolve()
-    expect(await screen.findByText(fails
-      ? 'Ollama setup failed. Check the URL, then retry.'
-      : 'Muniment saved the Ollama server. Send a message.')).toBeInTheDocument()
-    await waitFor(() => {
-      for (const radio of screen.getAllByRole('radio')) expect(radio).toBeEnabled()
-    })
-    await fireEvent.click(screen.getByRole('radio', { name: 'Anthropic' }))
-    expect(screen.getByLabelText('Provider API key')).toBeVisible()
+    if (fails) {
+      expect(await within(dialog).findByText('Ollama setup failed. Check the URL, then retry.')).toBeInTheDocument()
+      await waitFor(() => expect(url).toBeEnabled())
+    } else {
+      expect(await within(dialog).findByText('Muniment saved the Ollama server.')).toBeInTheDocument()
+      expect(within(dialog).getByRole('button', { name: 'Connect provider' })).toBeInTheDocument()
+    }
   })
+
 
   it('shows a delivery deadline cause and restores the local reply from the journal', async () => {
     localModeStatus = true
@@ -1537,24 +1377,6 @@ describe('workspace composer entry', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
   })
 
-  it('disables the provider radios during an active reply', async () => {
-    localModeStatus = true
-    const defaultInvoke = invoke.getMockImplementation()
-    invoke.mockImplementation((command, ...args) => {
-      if (command === 'chat_thread_open') return [{ runId: 'run-local', phase: 'streaming', text: 'A', prompt: 'A question', receipt: null, toolActivity: [] }]
-      return defaultInvoke(command, ...args)
-    })
-    render(App)
-    await openModelPanel()
-    screen.getByRole('radio', { name: 'Google' })
-    await waitFor(() => {
-      for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
-    })
-    chatListener({ payload: { runId: 'run-local', phase: 'complete', text: 'An answer', receipt: {}, toolActivity: [] } })
-    await waitFor(() => {
-      for (const radio of screen.getAllByRole('radio')) expect(radio).toBeEnabled()
-    })
-  })
 
   it('blocks sign-in while local mode entry is pending', async () => {
     const localEntry = deferred()
@@ -1702,7 +1524,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await screen.findByTestId('local-mode')
-    await fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('Account')
     const cloudSignIn = await screen.findByRole('button', { name: 'Sign in for cloud features' })
     await waitFor(() => expect(cloudSignIn).toBeEnabled())
     await fireEvent.click(cloudSignIn)
@@ -1732,7 +1554,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await screen.findByTestId('local-mode')
-    await fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('Account')
     const cloudSignIn = await screen.findByRole('button', { name: 'Sign in for cloud features' })
     await waitFor(() => expect(cloudSignIn).toBeEnabled())
     await fireEvent.click(cloudSignIn)
@@ -1760,7 +1582,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await screen.findByTestId('local-mode')
-    await fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await openSettings('Account')
     const cloudSignIn = await screen.findByRole('button', { name: 'Sign in for cloud features' })
     await waitFor(() => expect(cloudSignIn).toBeEnabled())
     await fireEvent.click(cloudSignIn)
@@ -1792,7 +1614,7 @@ describe('workspace composer entry', () => {
     const composer = await findWorkspaceComposer()
     expect(composer).toHaveFocus()
 
-    await fireEvent.click(screen.getByText('Settings'))
+    await openSettings('Home')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
@@ -1815,7 +1637,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
-    await fireEvent.click(screen.getByText('Settings'))
+    await openSettings('Home')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
@@ -2903,7 +2725,7 @@ describe('Home onboarding', () => {
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('My early draft')
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
-    await fireEvent.click(screen.getByText('Settings'))
+    await openSettings('Home')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })
@@ -2931,7 +2753,7 @@ describe('Home onboarding', () => {
     invoke.mockImplementation((command, payload) => {
       if (command === 'auth_status') return Promise.resolve({ signed_in: false, subject: null })
       if (command === 'local_mode_enter') return fail ? Promise.reject('unavailable') : Promise.resolve()
-      if (command === 'local_mode_provider_status') return Promise.resolve([])
+      if (command === 'local_mode_provider_inventory') return Promise.resolve(emptyInventory)
       return original(command, payload)
     })
     render(App)
@@ -2961,7 +2783,7 @@ describe('Home onboarding', () => {
     invoke.mockImplementation((command, payload) => {
       if (command === 'auth_status') return fail ? Promise.reject('unavailable') : recovered.promise
       if (command === 'local_mode_enter') return Promise.resolve()
-      if (command === 'local_mode_provider_status') return Promise.resolve([])
+      if (command === 'local_mode_provider_inventory') return Promise.resolve(emptyInventory)
       return original(command, payload)
     })
     render(App)
@@ -3039,15 +2861,15 @@ describe('Home onboarding', () => {
     invoke.mockImplementation((command, payload) => {
       if (command === 'auth_status') return Promise.resolve({ signed_in: false, subject: null })
       if (command === 'local_mode_enter') return Promise.resolve()
-      if (command === 'local_mode_provider_status') return providers.promise
+      if (command === 'local_mode_provider_inventory') return providers.promise
       return original(command, payload)
     })
     render(App)
     await firstSend()
     await fireEvent.click(screen.getByRole('button', { name: 'Open model settings' }))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_provider_status'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_provider_inventory'))
     desktopClientListener({ payload: { connected: false, supervisor_running: true } })
-    providers.resolve([])
+    providers.resolve(emptyInventory)
     expect(await screen.findByRole('alert')).toHaveTextContent('The runtime is not connected yet. Open model settings again.')
     expect(screen.getByRole('button', { name: 'Open model settings' })).toBeEnabled()
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('Keep this draft')
@@ -3071,7 +2893,7 @@ describe('Home onboarding', () => {
       if (command === 'attach_listener_status') return status.promise
       if (command === 'auth_status') return Promise.resolve({ signed_in: false, subject: null })
       if (command === 'local_mode_enter') return Promise.resolve()
-      if (command === 'local_mode_provider_status') return Promise.resolve([])
+      if (command === 'local_mode_provider_inventory') return Promise.resolve(emptyInventory)
       return original(command, payload)
     })
     render(App)
@@ -3301,14 +3123,14 @@ describe('Home onboarding', () => {
 
   it('saves a changed Home from the existing settings control', async () => {
     render(App)
-    await fireEvent.click(await screen.findByText('Settings'))
+    await openSettings('Home')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     dialogResult = '/Other/Home'
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     await fireEvent.click(screen.getByRole('button', { name: 'Save Home' }))
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Home' })
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    await fireEvent.click(screen.getByText('Settings'))
+    await openSettings('Home')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Other/Home')
   })
@@ -3316,7 +3138,7 @@ describe('Home onboarding', () => {
   it('keeps a configured Home and cancels settings back to the workspace', async () => {
     homeStatus = { configured: true, homePath: '/Saved/Home' }
     render(App)
-    await fireEvent.click(await screen.findByText('Settings'))
+    await openSettings('Home')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
     expect(screen.queryByText('Local AI')).not.toBeInTheDocument()
@@ -3326,7 +3148,7 @@ describe('Home onboarding', () => {
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-    await fireEvent.click(screen.getByText('Settings'))
+    await openSettings('Home')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })

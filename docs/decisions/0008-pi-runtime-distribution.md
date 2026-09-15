@@ -86,7 +86,7 @@ The candidate descriptors are:
 | Linux x64 | `pi-linux-x64.tar.gz` | 42,560,927 | `494e498f47d74d21f40b3386f6a5e921a3d49531a169cab55bbdaca0ea1fe25a` |
 | Windows x64 | `pi-windows-x64.zip` | 45,009,021 | `002fa95b90d521245b9985d8f168caebc237ad56e7e30b319807dee1b2e17e1c` |
 
-The candidate pins these four packages from [pi.dev/packages](https://pi.dev/packages):
+The candidate pins these five packages from [pi.dev/packages](https://pi.dev/packages):
 
 | Package | Version |
 | --- | --- |
@@ -94,6 +94,7 @@ The candidate pins these four packages from [pi.dev/packages](https://pi.dev/pac
 | [pi-subagents](https://pi.dev/packages/pi-subagents) | `0.65.1` |
 | [pi-background-tasks](https://pi.dev/packages/pi-background-tasks) | `2.5.0` |
 | [pi-mcp-adapter](https://pi.dev/packages/pi-mcp-adapter) | `2.32.1` |
+| [pi-claude-bridge](https://pi.dev/packages/pi-claude-bridge) | `0.7.0` |
 
 Every candidate chat launch merges these exact npm sources into the Pi agent directory's `settings.json`.
 The same merge sets `defaultTools` to `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`.
@@ -128,7 +129,7 @@ The selected Node line is **24, Active LTS**, which satisfies that floor.
 The [Node release schedule](https://github.com/nodejs/Release/blob/main/schedule.json) governs the Active LTS requirement.
 Node 22 defines the minimum, not the selected Active LTS line.
 The standalone executable includes its runtime.
-The desktop acquires the four packages through the verified executable's embedded Bun package manager before RPC starts.
+The desktop acquires the five packages through the verified executable's embedded Bun package manager before RPC starts.
 It sets [`BUN_BE_BUN=1`](https://bun.com/docs/bundler/executables#act-as-the-bun-cli) only for acquisition and disables install scripts and peer dependencies.
 The package cache lives in the Pi agent directory's `npm` directory.
 An OS lock excludes concurrent desktop installs and releases after a crash.

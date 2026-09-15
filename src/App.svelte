@@ -7,7 +7,9 @@
   import { openUrl } from '@tauri-apps/plugin-opener'
 
   import AccessPanel from './lib/AccessPanel.svelte'
-  import Appearance from './lib/Appearance.svelte'
+  import Settings from './lib/Settings.svelte'
+  import ModelPicker from './lib/ModelPicker.svelte'
+  import { currentModel, modelChipLabel } from './lib/provider-catalog.js'
   import LucideIcon from './lib/LucideIcon.svelte'
   import RowControl from './lib/RowControl.svelte'
   import AssistantMarkdown from './lib/AssistantMarkdown.svelte'
@@ -65,79 +67,48 @@
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
   let localEntryError = $state('')
-  let providerKey = $state('')
-  let providerBaseUrl = $state('')
-  let selectedProvider = $state('google')
-  let providerKeyStatus = $state('')
-  let providerKeyPending = $state(false)
-  let providerStatuses = $state([
-    { provider: 'anthropic', configured: false },
-    { provider: 'google', configured: false },
-    { provider: 'openai', configured: false },
-    { provider: 'ollama', configured: false },
-  ])
-  const providerNames = { anthropic: 'Anthropic', google: 'Google', openai: 'OpenAI', ollama: 'Ollama' }
-  let providerStatusRequestVersion = 0
-  let modelPanelOpen = $state(false)
+  let accountStatus = $state('')
+  // The connected providers and their models, as Settings → Models and the picker read them.
+  let inventory = $state(null)
+  let inventoryRequestVersion = 0
+  let pickerOpen = $state(false)
   let modelChip = $state()
 
-  const configuredProviders = $derived(providerStatuses
-    .filter((status) => status.configured)
-    .map((status) => status.provider))
-
-  // The chip names the source that answers, so a saved provider wins over the
-  // radio the panel happens to show.
   const composerHint = $derived(
     active?.phase === 'resuming' ? 'Reopening the existing secure session…'
       : active ? ''
         : auth.name === 'local' ? ''
           : 'Routing is automatic. Every reply carries its receipt.')
 
-  const modelSourceLabel = $derived.by(() => {
-    if (configuredProviders.length === 0) return 'Connect a model'
-    const source = configuredProviders.includes(selectedProvider) ? selectedProvider : configuredProviders[0]
-    return source === 'ollama' ? 'Local · Ollama' : `${providerNames[source]} key`
-  })
+  const modelSourceLabel = $derived(modelChipLabel(inventory))
 
   let settingsOpen = $state(false)
+  let settingsSection = $state('models')
   let settingsButton = $state()
-  let settingsPopover = $state()
+  // The control that opened Settings takes focus back when it closes.
+  let settingsOpener = null
+
+  function openSettings(section = 'models', opener = settingsButton) {
+    settingsSection = section
+    settingsOpener = opener ?? null
+    pickerOpen = false
+    settingsOpen = true
+  }
 
   function closeSettings() {
     settingsOpen = false
-    void tick().then(() => settingsButton?.focus())
+    const opener = settingsOpener ?? settingsButton ?? composer
+    void tick().then(() => opener?.focus?.())
   }
 
   function toggleSettings() {
-    if (settingsOpen) {
-      closeSettings()
-      return
-    }
-    // The menu lives inside the sidebar, so a collapsed sidebar expands first.
-    if (sidebarCollapsed) toggleSidebar()
-    settingsOpen = true
+    if (settingsOpen) closeSettings()
+    else openSettings(settingsSection)
   }
 
-  // The platform's settings shortcut: a collapsed sidebar expands with the menu
-  // open, and a shown sidebar toggles the menu.
+  // The platform's settings shortcut toggles the popup.
   function settingsShortcutPressed() {
-    if (!sidebarCollapsed) {
-      toggleSettings()
-      return
-    }
-    toggleSidebar()
-    settingsOpen = true
-  }
-
-  function settingsKeydown(event) {
-    if (event.key !== 'Escape') return
-    event.preventDefault()
-    event.stopPropagation()
-    closeSettings()
-  }
-
-  function focusSettingsOnMount(element) {
-    element.focus()
+    toggleSettings()
   }
 
   function openHomeSettings() {
@@ -145,29 +116,29 @@
     onboarding = onboardingSettingsState(onboarding)
   }
 
-  function openModelPanel() {
-    modelPanelOpen = true
-  }
-
-  function closeModelPanel() {
-    modelPanelOpen = false
+  function closePicker() {
+    pickerOpen = false
     void tick().then(() => modelChip?.focus())
   }
 
-  function toggleModelPanel() {
-    if (modelPanelOpen) closeModelPanel()
-    else openModelPanel()
+  function togglePicker() {
+    if (pickerOpen) closePicker()
+    else pickerOpen = true
   }
 
-  function modelPanelKeydown(event) {
-    if (event.key !== 'Escape') return
-    event.preventDefault()
-    event.stopPropagation()
-    closeModelPanel()
+  async function chooseModel(provider, model) {
+    try {
+      await tauri.invoke('local_mode_set_default_model', { provider, model })
+      await refreshInventory()
+    } catch (_) {
+      accountStatus = 'Muniment could not save the model choice. Try again.'
+    }
+    closePicker()
   }
 
-  function focusModelPanelOnMount(element) {
-    element.focus()
+  function openModelSettings() {
+    pickerOpen = false
+    openSettings('models', modelChip)
   }
   let draft = $state('')
   let selectedFiles = $state([])
@@ -905,15 +876,15 @@
     }
   }
 
-  async function refreshProviderStatuses() {
-    const version = ++providerStatusRequestVersion
+  async function refreshInventory() {
+    const version = ++inventoryRequestVersion
     try {
-      const statuses = await tauri.invoke('local_mode_provider_status')
-      if (version === providerStatusRequestVersion) providerStatuses = statuses
+      const next = await tauri.invoke('local_mode_provider_inventory')
+      if (version === inventoryRequestVersion) inventory = next
       return true
     } catch (_) {
-      if (version === providerStatusRequestVersion) {
-        providerKeyStatus = 'Muniment cannot read provider settings. Restart the app to retry.'
+      if (version === inventoryRequestVersion) {
+        accountStatus = 'Muniment cannot read provider settings. Restart the app to retry.'
       }
       return false
     }
@@ -937,7 +908,7 @@
       await tauri.invoke('local_mode_enter')
       markerStartupLocalMode = true
       auth = { name: 'local', subject: null }
-      await refreshProviderStatuses()
+      await refreshInventory()
       await chatController.loadHistory()
       return true
     } catch (_) {
@@ -950,41 +921,17 @@
 
   async function signIn() {
     if (localEntryPending || (auth.name !== 'signed-out' && auth.name !== 'local')) return
+    settingsOpen = false
     if (auth.name === 'local') {
       try {
         await tauri.invoke('local_mode_leave')
         markerStartupLocalMode = false
       } catch (_) {
-        providerKeyStatus = 'Cloud sign-in could not start. Try again.'
+        accountStatus = 'Cloud sign-in could not start. Try again.'
         return
       }
     }
     void run('sign-in')
-  }
-
-  async function saveProviderSettings() {
-    const provider = selectedProvider
-    if (providerKeyPending || (provider === 'ollama' ? !providerBaseUrl.trim() : !providerKey.trim())) return
-    providerKeyPending = true
-    providerKeyStatus = ''
-    try {
-      if (provider === 'ollama') {
-        await tauri.invoke('local_mode_store_local_provider', { baseUrl: providerBaseUrl })
-        providerBaseUrl = ''
-        providerKeyStatus = 'Muniment saved the Ollama server. Send a message.'
-      } else {
-        await tauri.invoke('local_mode_store_provider_key', { provider, key: providerKey })
-        providerKey = ''
-        providerKeyStatus = `Muniment saved the ${providerNames[provider]} key. Send a message.`
-      }
-      await refreshProviderStatuses()
-    } catch (_) {
-      providerKeyStatus = provider === 'ollama'
-        ? 'Ollama setup failed. Check the URL, then retry.'
-        : 'Muniment could not save the provider key. Try again.'
-    } finally {
-      providerKeyPending = false
-    }
   }
 
   function startWorkspace() {
@@ -993,7 +940,7 @@
       markerStartupLocalMode = active
       if (active) {
         auth = { name: 'local', subject: null }
-        void refreshProviderStatuses()
+        void refreshInventory()
         await chatController.loadHistory()
       } else {
         await run('status')
@@ -1239,8 +1186,8 @@
       throw firstRunError(tauri, 'runtime')
     }
     onboarding = { name: 'complete', homePath: onboarding.homePath }
-    // SPEC.md: the first Send opens the model panel when no source answers.
-    openModelPanel()
+    // SPEC.md: the first Send opens Settings → Models when no source answers.
+    openSettings('models')
   }
 
   function keydown(event) {
@@ -1375,23 +1322,7 @@
           {/if}
           {#if !sidebarCollapsed}
           <div class="settings-block">
-            {#if settingsOpen}
-              <section id="settings-menu" class="settings-menu" aria-label="Settings" tabindex="-1" bind:this={settingsPopover} onkeydown={settingsKeydown} use:focusSettingsOnMount>
-                <Appearance />
-                <section class="settings-home" aria-labelledby="settings-home-title">
-                  <h3 id="settings-home-title" class="settings-label">Home</h3>
-                  <p class="settings-path">{onboarding.homePath}</p>
-                  <button type="button" onclick={openHomeSettings}>Change folder…</button>
-                </section>
-                {#if auth.name === 'local'}
-                  <section class="settings-account" aria-labelledby="settings-account-title">
-                    <h3 id="settings-account-title" class="settings-label">Account</h3>
-                    <button type="button" disabled={!!active || localEntryPending} onclick={signIn}>Sign in for cloud features</button>
-                  </section>
-                {/if}
-              </section>
-            {/if}
-            <button class="side-action" aria-expanded={settingsOpen} aria-controls="settings-menu" aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
+            <button class="side-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
           </div>
           {/if}
         </aside>
@@ -1575,35 +1506,8 @@
         <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
         </div>
         <div class="composer">
-        {#if modelPanelOpen}
-          <div class="model-panel" role="dialog" aria-labelledby="model-panel-title" tabindex="-1" onkeydown={modelPanelKeydown} use:focusModelPanelOnMount>
-            <div class="model-panel-head">
-              <strong id="model-panel-title">Model</strong>
-              <button type="button" class="quiet" onclick={closeModelPanel}>Close</button>
-            </div>
-            <fieldset class="provider-choice" disabled={!!active || providerKeyPending}>
-              <legend>Provider</legend>
-              {#each Object.entries(providerNames) as [provider, name]}
-                <div class="provider-row">
-                  <label for="provider-{provider}">
-                    <input id="provider-{provider}" type="radio" name="provider" value={provider} bind:group={selectedProvider}>
-                    {name}{provider === 'ollama' ? ' (local)' : ''}
-                  </label>
-                  <span class="provider-tag">{configuredProviders.includes(provider) ? 'Saved' : 'Not set'}</span>
-                </div>
-              {/each}
-            </fieldset>
-            {#if selectedProvider === 'ollama'}
-              <label for="provider-base-url">Ollama server URL</label>
-              <input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={providerBaseUrl} disabled={!!active || providerKeyPending}>
-              <button type="button" disabled={!!active || providerKeyPending || !providerBaseUrl.trim()} onclick={saveProviderSettings}>Save Ollama server</button>
-            {:else}
-              <label for="provider-key">Provider API key</label>
-              <input id="provider-key" type="password" autocomplete="off" bind:value={providerKey} disabled={!!active || providerKeyPending}>
-              <button type="button" disabled={!!active || providerKeyPending || !providerKey.trim()} onclick={saveProviderSettings}>Save key</button>
-            {/if}
-            {#if providerKeyStatus}<p class="support" role="status">{providerKeyStatus}</p>{/if}
-          </div>
+        {#if pickerOpen}
+          <ModelPicker {inventory} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onclose={closePicker} />
         {/if}
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
@@ -1628,7 +1532,7 @@
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
             {#if auth.name === 'local'}
-              <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={modelPanelOpen} onclick={toggleModelPanel}>{modelSourceLabel}</button>
+              <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{modelSourceLabel}<LucideIcon name="chevron-down" variant="action" size={12} /></button>
             {/if}
             {#if threadSwitching}
               <span id="composer-hint" role="status">Send waits for the thread. Your draft stays here.</span>
@@ -1739,6 +1643,9 @@
   {/if}
 </main>
 
+  {#if settingsOpen}
+    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} oninventory={(next) => { inventory = next }} />
+  {/if}
 {#if pairingRequests[0]}
   {#key pairingRequests[0]}
     <ConfirmDialog title="Approve Muniment connection" onDecision={decidePairing}>
@@ -1925,32 +1832,7 @@
   .side-action span { flex: 1; min-width: 0; }
   /* The foot of the sidebar: one Settings control, and the menu it expands above itself. */
   .settings-block { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
-  .settings-menu { display: grid; gap: 12px; padding: 6px 8px 12px; }
-  .settings-menu:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
-  .settings-account { display: grid; gap: 6px; }
-  .settings-account button { justify-self: start; min-height: 28px; padding: 4px 10px; }
-  .settings-home { display: grid; gap: 6px; }
-  .settings-label { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
-  .settings-path { margin: 0; overflow-wrap: anywhere; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .settings-home button { justify-self: start; min-height: 28px; padding: 4px 10px; }
-  .model-panel label { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .model-panel > input { min-width: 0; padding: 6px 8px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; }
-  .provider-choice { min-width: 0; margin: 0; padding: 0; border: 0; }
-  .provider-choice legend { margin-bottom: 4px; padding: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .provider-choice label { display: flex; align-items: center; gap: 8px; min-height: 32px; border-radius: var(--radius-control); color: var(--ink); font: inherit; cursor: pointer; }
-  .provider-choice:not(:disabled) label:hover { background: var(--faint); }
-  .provider-choice:disabled label { opacity: .55; cursor: default; }
-  .provider-choice input { flex: none; width: 24px; height: 24px; margin: 0; accent-color: var(--ink); cursor: inherit; }
-  .provider-choice input:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
-  .model-panel .support { margin: 0; font: var(--text-12) var(--font-mono); }
   /* The panel is one popup over the thread, never a second settings surface. */
-  .model-panel { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: min(380px, 100%); max-height: 60vh; display: grid; gap: 7px; padding: 14px 16px 16px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); }
-  .model-panel:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
-  .model-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .model-panel-head button { min-width: 24px; min-height: 24px; padding: 2px 8px; }
-  .provider-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .provider-row label { flex: 1; min-width: 0; }
-  .provider-tag { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* Collapsed means gone: the column is zero wide, the empty panel drops its hairline and padding for the slide, and the thread panel takes the gap. */
   .workspace.sidebar-collapsed .sidebar { padding: 0; border-width: 0; overflow: hidden; }
   .workspace.sidebar-collapsed .thread-panel { margin-left: calc(-1 * var(--frame-width)); }
@@ -2074,7 +1956,7 @@
   .composer-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
   .composer-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
-  .model-chip { flex: none; min-width: 24px; min-height: 24px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); white-space: nowrap; }
+  .model-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); white-space: nowrap; }
   .model-chip:hover:not(:disabled) { background: var(--faint); }
   .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
