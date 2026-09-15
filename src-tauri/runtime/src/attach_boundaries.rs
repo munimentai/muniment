@@ -781,6 +781,32 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         service::revoke_companion(&self.companion_registry, client_identity)
     }
 
+    fn list_companies(&self) -> Result<Vec<muniment_core::record::CompanySummary>, ProtocolError> {
+        service::list_companies(&self.profile_directory)
+    }
+
+    fn create_company(
+        &self,
+        name: &str,
+    ) -> Result<muniment_core::record::CompanySummary, ProtocolError> {
+        service::create_company(&self.profile_directory, name)
+    }
+
+    fn select_company(
+        &self,
+        company_id: &str,
+    ) -> Result<muniment_core::record::CompanySummary, ProtocolError> {
+        service::select_company(&self.profile_directory, company_id)
+    }
+
+    fn rename_company(
+        &self,
+        company_id: &str,
+        name: &str,
+    ) -> Result<muniment_core::record::CompanySummary, ProtocolError> {
+        service::rename_company(&self.profile_directory, company_id, name)
+    }
+
     fn list_threads(
         &self,
         workspace: &str,

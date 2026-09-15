@@ -29,8 +29,10 @@ copied while open and never placed in a synced folder.
 The graph opens with `journal_mode = WAL`, `foreign_keys = on` and
 `synchronous = NORMAL`. `tenant_id` is absent locally: one file is one tenant.
 `entity.data`, `edge.props`, `kind.schema`, `kind_extension.schema` and the
-event `before` and `after` columns are JSON1 text. `event.id` is an integer
-primary key in append order and `event.at` is RFC 3339 text. `body_text` and
+event `before` and `after` columns are JSON1 text. Every id is a UUIDv7
+string, `event.id` included, and nothing autoincrements. `event.seq` is the
+append order the writer assigns inside its transaction, the way the run
+journal assigns `run_seq`, and `event.at` is RFC 3339 text. `body_text` and
 `title` feed an FTS5 table kept current by triggers. Vectors wait for
 sqlite-vec when semantic search lands. The `principal` check constraint
 `type = 'human' or on_behalf_of is not null` is in the schema. The bundled

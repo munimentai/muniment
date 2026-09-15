@@ -68,13 +68,14 @@ pub use migration::{run_migration_takeover, MigrationTakeoverError};
 #[cfg(any(unix, target_os = "windows"))]
 pub use service::open_companion_registry;
 pub use service::{
-    accept_prompt, answer_permission, apply_retention, cancel_run, configure_run, create_thread,
-    delete_thread, drive_prompt, ensure_home, ensure_native_session, entitlement_snapshot,
-    list_companions, list_devices, onboard_workspace, open_profile_storage, queue_run_message,
-    rename_thread, resume_run, revoke_companion, run_prompt, select_thread, session_status,
-    sign_in, sign_out, stream_run, subscribe_run_commits, thread_page, thread_summaries,
-    ConfigureRunError, EntitlementSnapshotError, EntitlementSnapshotResult, PromptAcceptance,
-    PromptLaunch, SignOutError,
+    accept_prompt, answer_permission, apply_retention, cancel_run, configure_run, create_company,
+    create_thread, delete_thread, drive_prompt, ensure_home, ensure_native_session,
+    entitlement_snapshot, list_companies, list_companions, list_devices, onboard_workspace,
+    open_profile_storage, queue_run_message, rename_company, rename_thread, resume_run,
+    revoke_companion, run_prompt, select_company, select_thread, session_status, sign_in, sign_out,
+    stream_run, subscribe_run_commits, thread_page, thread_summaries, ConfigureRunError,
+    EntitlementSnapshotError, EntitlementSnapshotResult, PromptAcceptance, PromptLaunch,
+    SignOutError,
 };
 pub use sink::{
     RuntimeChatEventBroadcast, RuntimeChatEventSink, RuntimeChatEventTarget,
