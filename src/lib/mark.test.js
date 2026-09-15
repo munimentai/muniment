@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { MILLED_RING_PATH, ringPath, solidMilledRingPath } from './mark.js'
+import { MILLED_RING_PATH, SEAL_BAND_WIDTH, ringPath, sealBandPath, sealTracePath, solidMilledRingPath } from './mark.js'
 
 describe('ringPath', () => {
   it('returns the canonical vendored geometry', () => {
@@ -49,5 +49,44 @@ describe('solidMilledRingPath', () => {
     }
 
     expect(edges.map(peakCount)).toEqual([22, 22])
+  })
+})
+
+describe('sealBandPath', () => {
+  const coordinates = (subpath) => [...subpath.matchAll(/[ML](-?\d+\.\d+),(-?\d+\.\d+)/g)]
+    .map(([, x, y]) => [Number(x), Number(y)])
+  const radii = (points) => points.map(([x, y]) => Math.hypot(x - 24, y - 24))
+
+  it('draws the seal as two closed edges of 22 teeth, five vertices each', () => {
+    const edges = sealBandPath().split(' Z').slice(0, 2).map(coordinates)
+    expect(sealBandPath().match(/\bZ/g)).toHaveLength(2)
+    expect(edges.map((edge) => edge.length)).toEqual([110, 110])
+    expect(sealBandPath()).toBe(sealBandPath(1, 1, SEAL_BAND_WIDTH))
+  })
+
+  it('keeps the rest band between the measured seal radii', () => {
+    const [outer, inner] = sealBandPath().split(' Z').slice(0, 2).map(coordinates).map(radii)
+    expect(Math.min(...outer)).toBeCloseTo(20.967, 2)
+    expect(Math.max(...outer)).toBeCloseTo(23.906, 2)
+    expect(Math.min(...inner)).toBeCloseTo(17.170, 2)
+    expect(Math.max(...inner)).toBeCloseTo(19.945, 2)
+  })
+
+  it('flexes scale, milling depth and band width together', () => {
+    const rest = sealBandPath().split(' Z').slice(0, 2).map(coordinates).map(radii)
+    const swell = sealBandPath(1.6, 1.032, SEAL_BAND_WIDTH * 1.18).split(' Z').slice(0, 2).map(coordinates).map(radii)
+    const depth = (edge) => Math.max(...edge) - Math.min(...edge)
+    expect(depth(swell[0])).toBeGreaterThan(depth(rest[0]))
+    expect(Math.max(...swell[0])).toBeGreaterThan(Math.max(...rest[0]))
+    expect(Math.min(...swell[1])).toBeLessThan(Math.min(...rest[1]))
+    const wide = sealBandPath(1, 1, 6).split(' Z').slice(0, 2).map(coordinates).map(radii)
+    expect(Math.max(...wide[0]) - Math.max(...rest[0])).toBeCloseTo((6 - SEAL_BAND_WIDTH) / 2, 2)
+  })
+
+  it('runs the trace along the band centreline', () => {
+    const trace = radii(coordinates(sealTracePath()))
+    expect(trace).toHaveLength(44)
+    expect(Math.min(...trace)).toBeCloseTo((20.967 + 17.170) / 2, 2)
+    expect(Math.max(...trace)).toBeCloseTo((23.906 + 19.945) / 2, 2)
   })
 })

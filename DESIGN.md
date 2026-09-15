@@ -102,11 +102,12 @@ when the reply lands. The provenance line sits under every response in mono at
 `--text-provenance`, with the route in signal. Composer focus shifts the
 border to `muted`, never signal.
 Platform chrome follows the OS and brand tokens stay identical across platforms.
-On macOS the app row sits in the title bar band beside the native traffic
-lights, which macOS places, is the drag region, and holds the sidebar toggle,
-New thread, the thread title, and Artifacts flush right with the update
-control beside it. New thread, the thread title and Artifacts are one quiet
-row control with the same padding. State is background, never a border: the
+On macOS the app row sits in the 36px band above the panels beside the native
+traffic lights, and the row's controls and the lights center on that band. The
+row is the drag region and holds the sidebar toggle, New thread, the thread
+title, and Artifacts flush right with the update control beside it. New
+thread, the thread title and Artifacts are one quiet row control with the same
+padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption

@@ -18,7 +18,8 @@ const ALLOWED = {
     '.swatch-signal': '§1.3 the signal mark on a theme swatch',
   },
   'src/lib/RunMark.svelte': {
-    '.thinking path': "§1.2 the mark's thinking state (§1.8)",
+    '.thinking .body': "§1.2 the mark's thinking state (§1.8)",
+    '.thinking .accent': "§1.2 the trace that runs the mark's outline while thinking (§1.8)",
   },
   // Nothing in the access popover is computation: badges and device states
   // are all on §1.2's forbidden list.
