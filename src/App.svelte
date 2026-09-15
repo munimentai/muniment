@@ -453,12 +453,11 @@
     return selectedThreadIds.has(threadId) && selectedThreadIds.size > 1 ? [...selectedThreadIds] : [threadId]
   }
 
-  // The control's name, the confirm's name, and the confirm's words, which quote the title.
+  // The control's name, and the confirm group's spoken question.
   function deleteLabel(threadId, rowTitle, form = 'name') {
     const count = deletionTargets(threadId).length
     if (count > 1) return form === 'name' ? `Delete ${count}` : `Delete ${count} threads?`
-    if (form === 'name') return `Delete ${rowTitle}`
-    return form === 'question' ? `Delete ${rowTitle}?` : `Delete “${rowTitle}”?`
+    return form === 'name' ? `Delete ${rowTitle}` : `Delete ${rowTitle}?`
   }
 
   function askToDeleteThread(threadId) {
@@ -1384,12 +1383,7 @@
                   {/if}
                   {#if deletingThreadId === summary.threadId}
                     <div class="thread-delete-confirm" role="group" aria-label={deleteLabel(summary.threadId, rowTitle, 'question')}>
-                      {#if deletingThreadIds.length > 1}
-                        <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>{deleteLabel(summary.threadId, rowTitle)}</button>
-                      {:else}
-                        <span>{deleteLabel(summary.threadId, rowTitle, 'words')}</span>
-                        <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>Delete</button>
-                      {/if}
+                      <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>{deletingThreadIds.length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
                       <button type="button" disabled={deletePending} onclick={cancelDeleteThread} onkeydown={deleteConfirmKeydown}>Cancel</button>
                     </div>
                   {/if}
@@ -1934,7 +1928,6 @@
   .thread-menu button { width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
   .thread-menu button:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   .thread-delete-confirm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; padding: 5px 7px; border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
-  .thread-delete-confirm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
   /* A narrow sidebar shortens the first control, never its start. */
   .thread-delete-confirm button:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }

@@ -2065,7 +2065,7 @@ describe('thread name', () => {
     expect(appStyles).toMatch(/\.thread-record:hover \.thread-delete/)
     await waitFor(() => expect(hoverDelete).toBeEnabled())
     await fireEvent.click(hoverDelete)
-    expect(screen.getByLabelText('Delete Vendor audit?')).toHaveTextContent('Delete “Vendor audit”?')
+    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete', 'Cancel'])
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
     const menu = screen.getByRole('menu', { name: 'Vendor audit actions' })
@@ -2082,7 +2082,7 @@ describe('thread name', () => {
     expect(screen.getByRole('menu', { name: 'Vendor audit actions' })).toHaveStyle({ left: '0px', top: '0px' })
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Vendor audit' }))
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Delete Vendor audit?')).toHaveTextContent('Delete “Vendor audit”?')
+    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete', 'Cancel'])
 
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByLabelText('Delete Vendor audit?')).not.toBeInTheDocument()
@@ -2134,7 +2134,7 @@ describe('thread name', () => {
     // Delete on a focused row opens the confirm for that row alone.
     const budget = screen.getByRole('button', { name: 'Budget notes' })
     await fireEvent.keyDown(budget, { key: 'Delete' })
-    expect(screen.getByLabelText('Delete Budget notes?')).toHaveTextContent('Delete “Budget notes”?')
+    expect(within(screen.getByLabelText('Delete Budget notes?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete', 'Cancel'])
   })
 
   it('deletes a selection that holds the open thread and lands on a fresh thread', async () => {
