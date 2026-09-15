@@ -1,31 +1,71 @@
+// One rail column at the right of the workspace, and two panels that can fill
+// it: the artifact rail and the record panel. Opening one closes the other.
+// Each occupant carries its own width bounds, and the record panel can
+// maximize over the sidebar and the thread until the shortcut or Escape
+// restores them.
+
 export const ARTIFACT_RAIL_MIN_WIDTH = 380
 export const ARTIFACT_RAIL_MAX_WIDTH = 560
+export const RECORD_PANEL_MIN_WIDTH = 480
+export const RECORD_PANEL_MAX_WIDTH = 960
 export const ARTIFACT_RAIL_KEYBOARD_STEP = 20
 
+export const RAIL_OCCUPANTS = Object.freeze({
+  artifacts: Object.freeze({ min: ARTIFACT_RAIL_MIN_WIDTH, max: ARTIFACT_RAIL_MAX_WIDTH, share: 0.34 }),
+  record: Object.freeze({ min: RECORD_PANEL_MIN_WIDTH, max: RECORD_PANEL_MAX_WIDTH, share: 0.5 }),
+})
+
+export function railBounds(occupant) {
+  return RAIL_OCCUPANTS[occupant] ?? RAIL_OCCUPANTS.artifacts
+}
+
+export function clampRailWidth(width, occupant = 'artifacts', maximum) {
+  const bounds = railBounds(occupant)
+  const upper = Number.isFinite(maximum) ? Math.max(bounds.min, maximum) : bounds.max
+  const candidate = Number.isFinite(width) ? width : bounds.min
+  return Math.round(Math.min(upper, Math.max(bounds.min, candidate)))
+}
+
+export function defaultRailWidth(viewportWidth, occupant = 'artifacts') {
+  return clampRailWidth(viewportWidth * railBounds(occupant).share, occupant)
+}
+
+export function railWidthFromPointer(clientX, rightEdge, occupant = 'artifacts', maximum) {
+  return clampRailWidth(rightEdge - clientX, occupant, maximum)
+}
+
+export function railWidthFromKey(width, key, occupant = 'artifacts', maximum) {
+  const bounds = railBounds(occupant)
+  if (key === 'Home') return bounds.min
+  if (key === 'End') return clampRailWidth(maximum ?? bounds.max, occupant, maximum)
+  if (key === 'ArrowLeft') return clampRailWidth(width + ARTIFACT_RAIL_KEYBOARD_STEP, occupant, maximum)
+  if (key === 'ArrowRight') return clampRailWidth(width - ARTIFACT_RAIL_KEYBOARD_STEP, occupant, maximum)
+  return width
+}
+
+// The artifact rail's own names stay, so a caller that knows one occupant reads as before.
 export function clampArtifactRailWidth(width, maximum = ARTIFACT_RAIL_MAX_WIDTH) {
-  const upper = Number.isFinite(maximum) ? Math.max(ARTIFACT_RAIL_MIN_WIDTH, maximum) : ARTIFACT_RAIL_MAX_WIDTH
-  const candidate = Number.isFinite(width) ? width : ARTIFACT_RAIL_MIN_WIDTH
-  return Math.round(Math.min(upper, Math.max(ARTIFACT_RAIL_MIN_WIDTH, candidate)))
+  return clampRailWidth(width, 'artifacts', maximum)
 }
 
 export function defaultArtifactRailWidth(viewportWidth) {
-  return clampArtifactRailWidth(viewportWidth * 0.34)
+  return defaultRailWidth(viewportWidth, 'artifacts')
 }
 
 export function artifactRailWidthFromPointer(clientX, rightEdge, maximum = ARTIFACT_RAIL_MAX_WIDTH) {
-  return clampArtifactRailWidth(rightEdge - clientX, maximum)
+  return railWidthFromPointer(clientX, rightEdge, 'artifacts', maximum)
 }
 
 export function artifactRailWidthFromKey(width, key, maximum = ARTIFACT_RAIL_MAX_WIDTH) {
-  if (key === 'Home') return ARTIFACT_RAIL_MIN_WIDTH
-  if (key === 'End') return clampArtifactRailWidth(maximum, maximum)
-  if (key === 'ArrowLeft') return clampArtifactRailWidth(width + ARTIFACT_RAIL_KEYBOARD_STEP, maximum)
-  if (key === 'ArrowRight') return clampArtifactRailWidth(width - ARTIFACT_RAIL_KEYBOARD_STEP, maximum)
-  return width
+  return railWidthFromKey(width, key, 'artifacts', maximum)
 }
 
 export function artifactRailShortcut(platform = navigator.platform) {
   return platform.startsWith('Mac') ? 'Meta+J' : 'Control+J'
+}
+
+export function recordPanelShortcut(platform = navigator.platform) {
+  return platform.startsWith('Mac') ? 'Meta+K' : 'Control+K'
 }
 
 export function shortcutDisplayLabel(shortcut) {
@@ -35,45 +75,74 @@ export function shortcutDisplayLabel(shortcut) {
   return shortcut
 }
 
-export function isArtifactRailShortcut(event, platform = navigator.platform) {
+function isPlainSuperKey(event, key, platform) {
   const mac = platform.startsWith('Mac')
-  return event.key.toLowerCase() === 'j'
+  return event.key.toLowerCase() === key
     && (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
     && !event.altKey
     && !event.shiftKey
 }
 
-export function createArtifactRailController({
-  readOpen,
+export function isArtifactRailShortcut(event, platform = navigator.platform) {
+  return isPlainSuperKey(event, 'j', platform)
+}
+
+export function isRecordPanelShortcut(event, platform = navigator.platform) {
+  return isPlainSuperKey(event, 'k', platform)
+}
+
+// The one rail column's controller. `readOccupant` answers null, 'artifacts'
+// or 'record'. The record panel alone maximizes.
+export function createRailController({
+  readOccupant,
+  onOccupant,
   readWidth,
+  onWidth,
   readMaximum,
+  onMaximum,
   readPointer,
+  onPointer,
   readAvailableWidth,
   readRightEdge,
   readViewportWidth,
-  onOpen,
-  onWidth,
-  onMaximum,
-  onPointer,
+  readMaximized = () => false,
+  onMaximized = () => {},
 }) {
-  function resetWidth() {
-    const maximum = readAvailableWidth()
+  function resetWidth(occupant) {
+    const maximum = readAvailableWidth(occupant)
     onMaximum(maximum)
-    onWidth(clampArtifactRailWidth(defaultArtifactRailWidth(readViewportWidth()), maximum))
+    onWidth(clampRailWidth(defaultRailWidth(readViewportWidth(), occupant), occupant, maximum))
   }
 
   function fit() {
-    if (!readOpen()) return
-    const maximum = readAvailableWidth()
+    const occupant = readOccupant()
+    if (!occupant) return
+    const maximum = readAvailableWidth(occupant)
     onMaximum(maximum)
-    onWidth(clampArtifactRailWidth(readWidth(), maximum))
+    onWidth(clampRailWidth(readWidth(), occupant, maximum))
   }
 
-  function toggle() {
-    const open = !readOpen()
-    onOpen(open)
+  function open(occupant) {
     onPointer(undefined)
-    if (open) resetWidth()
+    onMaximized(false)
+    onOccupant(occupant)
+    resetWidth(occupant)
+  }
+
+  function close() {
+    onPointer(undefined)
+    onMaximized(false)
+    onOccupant(null)
+  }
+
+  function toggle(occupant) {
+    if (readOccupant() === occupant) close()
+    else open(occupant)
+  }
+
+  function toggleMaximized() {
+    if (readOccupant() !== 'record') return
+    onMaximized(!readMaximized())
   }
 
   function pointerDown(event) {
@@ -85,7 +154,7 @@ export function createArtifactRailController({
 
   function pointerMove(event) {
     if (event.pointerId !== readPointer()) return
-    onWidth(artifactRailWidthFromPointer(event.clientX, readRightEdge(), readMaximum()))
+    onWidth(railWidthFromPointer(event.clientX, readRightEdge(), readOccupant(), readMaximum()))
   }
 
   function pointerEnd(event) {
@@ -95,11 +164,29 @@ export function createArtifactRailController({
   }
 
   function keydown(event) {
-    const width = artifactRailWidthFromKey(readWidth(), event.key, readMaximum())
+    const width = railWidthFromKey(readWidth(), event.key, readOccupant(), readMaximum())
     if (width === readWidth() && !['Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
     event.preventDefault()
     onWidth(width)
   }
 
-  return { fit, toggle, pointerDown, pointerMove, pointerEnd, keydown }
+  return { fit, open, close, toggle, toggleMaximized, pointerDown, pointerMove, pointerEnd, keydown }
+}
+
+// The artifact rail's controller of one occupant, kept for callers that read `open`.
+export function createArtifactRailController({ readOpen, onOpen, readAvailableWidth, ...rest }) {
+  const controller = createRailController({
+    ...rest,
+    readOccupant: () => (readOpen() ? 'artifacts' : null),
+    onOccupant: (next) => onOpen(next === 'artifacts'),
+    readAvailableWidth: () => readAvailableWidth(),
+  })
+  return {
+    fit: controller.fit,
+    toggle: () => controller.toggle('artifacts'),
+    pointerDown: controller.pointerDown,
+    pointerMove: controller.pointerMove,
+    pointerEnd: controller.pointerEnd,
+    keydown: controller.keydown,
+  }
 }

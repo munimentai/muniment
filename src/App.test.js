@@ -70,6 +70,8 @@ let unregisterGlobalShortcut
 let registeredShortcuts
 let threadSummaryResult
 let olderThreadSummaryResult
+let recordCompaniesResult
+let recordKindsResult
 let localModeStatus
 let runtimeState
 let runtimeListener
@@ -213,6 +215,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   localStorage.clear()
+  recordCompaniesResult = { companies: [{ id: 'company-1', name: 'Northwind', created_at: '2026-01-01T00:00:00.000Z', owner_principal_id: 'owner-1', current: true }, { id: 'company-2', name: 'Surfoff', created_at: '2026-01-02T00:00:00.000Z', owner_principal_id: 'owner-2', current: false }], current: 'company-1' }
+  recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'person', schema: { properties: { full_name: {}, job_title: {} } }, states: null, extension: null }, { name: 'deal', schema: { properties: { name: {}, stage: {} } }, states: ['discovery', 'won'], extension: null }, { name: 'x_vendor', schema: { properties: { x_name: {} } }, states: null, extension: null }] }
   threadSummaryResult = [{ threadId: 'thread-1', title: '', updatedAt: '' }]
   olderThreadSummaryResult = null
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
@@ -257,6 +261,13 @@ beforeEach(() => {
     if (command === 'auth_devices') return []
     if (command === 'attach_companions') return []
     if (command === 'attach_listener_status') return { started: true, failure: null }
+    if (command === 'record_companies') return recordCompaniesResult
+    if (command === 'record_kinds') return recordKindsResult
+    if (command === 'record_company_create') {
+      recordCompaniesResult = { companies: [{ id: 'company-1', name: payload.name, created_at: '2026-01-01T00:00:00.000Z', owner_principal_id: 'owner-1', current: true }], current: 'company-1' }
+      return { company: recordCompaniesResult.companies[0] }
+    }
+    if (command === 'record_company_select') return { company: { id: payload.companyId, current: true } }
     throw new Error(`unexpected command: ${command}`)
   })
 })
@@ -1746,6 +1757,100 @@ describe('workspace composer entry', () => {
 
 })
 
+describe('record panel', () => {
+  it('sits flush right of Artifacts with its shortcut, opens on the kind list, and closes Artifacts', async () => {
+    render(App)
+    const record = await screen.findByRole('button', { name: 'Open record panel' })
+    const artifacts = screen.getByRole('button', { name: 'Open artifact rail' })
+    const mac = navigator.platform.startsWith('Mac')
+    expect(record).toHaveAttribute('aria-controls', 'record-panel')
+    expect(record).toHaveAttribute('aria-keyshortcuts', mac ? 'Meta+K' : 'Control+K')
+    expect(within(record).getByText(mac ? '⌘ K' : 'Ctrl K').tagName).toBe('KBD')
+    const row = record.closest('.titlebar-thread') ?? record.parentElement
+    const controls = [...row.querySelectorAll('.row-control')]
+    expect(controls.indexOf(artifacts)).toBeLessThan(controls.indexOf(record))
+    expect(controls.at(-1)).toBe(record)
+
+    await fireEvent.click(artifacts)
+    expect(screen.getByRole('complementary', { name: 'Artifacts' })).toBeInTheDocument()
+    await fireEvent.click(record)
+    expect(record).toHaveAttribute('aria-expanded', 'true')
+    expect(record).toHaveAccessibleName('Close record panel')
+    expect(artifacts).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    expect(within(panel).getByRole('heading', { level: 2, name: 'Record' })).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('record_companies')
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_kinds', { companyId: 'company-1' }))
+    const picker = await within(panel).findByRole('combobox', { name: 'Company' })
+    expect(picker).toHaveValue('company-1')
+    expect(within(picker).getAllByRole('option').map((option) => option.textContent)).toEqual(['Northwind', 'Surfoff'])
+    const kinds = within(panel).getByRole('navigation', { name: 'Kinds' })
+    const names = within(kinds).getAllByRole('button').map((button) => button.querySelector('.record-kind-name').textContent)
+    expect(names).toEqual(['person', 'deal', 'vendor'])
+    expect(within(kinds).getAllByRole('button')[1]).toHaveTextContent('2 properties, 2 states')
+
+    await fireEvent.click(within(kinds).getAllByRole('button')[1])
+    expect(screen.getByRole('region', { name: 'deal properties' })).toHaveTextContent('No deal records yet')
+    expect(screen.getByRole('region', { name: 'deal properties' })).toHaveTextContent('name · stage')
+
+    await fireEvent.change(picker, { target: { value: 'company-2' } })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_company_select', { companyId: 'company-2' }))
+
+    await fireEvent.click(record)
+    expect(screen.queryByRole('complementary', { name: 'Record' })).not.toBeInTheDocument()
+  })
+
+  it('toggles with the platform shortcut, maximizes over the sidebar and thread, and restores with the shortcut then closes with Escape', async () => {
+    render(App)
+    const record = await screen.findByRole('button', { name: 'Open record panel' })
+    const mac = navigator.platform.startsWith('Mac')
+    await fireEvent.keyDown(document, { key: 'k', metaKey: mac, ctrlKey: !mac })
+    expect(record).toHaveAttribute('aria-expanded', 'true')
+    const workspace = document.querySelector('.workspace')
+    expect(workspace).toHaveClass('rail-open')
+    expect(screen.getByRole('separator', { name: 'Record' })).toHaveAttribute('aria-valuemin', '480')
+
+    const maximize = screen.getByRole('button', { name: 'Maximize the record over the thread' })
+    await fireEvent.click(maximize)
+    expect(workspace).toHaveClass('record-maximized')
+    expect(screen.queryByRole('separator', { name: 'Record' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Restore the thread beside the record' })).toHaveAttribute('aria-pressed', 'true')
+
+    await fireEvent.keyDown(document, { key: 'k', metaKey: mac, ctrlKey: !mac })
+    expect(workspace).not.toHaveClass('record-maximized')
+    expect(record).toHaveAttribute('aria-expanded', 'true')
+
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    expect(record).toHaveAttribute('aria-expanded', 'false')
+    expect(workspace).not.toHaveClass('rail-open')
+  })
+
+  it('offers to create the first company and names a record failure in one line', async () => {
+    recordCompaniesResult = { companies: [], current: null }
+    render(App)
+    const record = await screen.findByRole('button', { name: 'Open record panel' })
+    await fireEvent.click(record)
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    await within(panel).findByText('No company yet')
+    const name = within(panel).getByRole('textbox', { name: 'Company name' })
+    const create = within(panel).getByRole('button', { name: 'Create company' })
+    expect(create).toBeDisabled()
+    await fireEvent.input(name, { target: { value: 'Northwind' } })
+    expect(create).toBeEnabled()
+    await fireEvent.click(create)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_company_create', { name: 'Northwind' }))
+    await within(panel).findByRole('combobox', { name: 'Company' })
+    expect(within(panel).getByRole('navigation', { name: 'Kinds' })).toBeInTheDocument()
+
+    recordKindsResult = { error: { code: 'unknown_company', message: 'No company has id x. Pick another one.' } }
+    await fireEvent.click(record)
+    await fireEvent.click(record)
+    await within(panel.isConnected ? panel : screen.getByRole('complementary', { name: 'Record' })).findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent('No company has id x.')
+  })
+})
+
 describe('artifact rail', () => {
   it('uses one accessible heading for the rail', () => {
     const railMarkup = appSource.match(/<aside id="artifact-rail"[\s\S]*?<\/aside>/)?.[0] ?? ''
@@ -2449,11 +2554,12 @@ describe('window chrome', () => {
       expect(row).toHaveAttribute('data-tauri-drag-region')
       expect(row.closest('.workspace').classList.contains('macos')).toBe(platform.startsWith('Mac'))
       expect([...row.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
-        'Collapse sidebar', 'New thread', 'Rename thread', 'Open artifact rail',
+        'Collapse sidebar', 'New thread', 'Rename thread', 'Open artifact rail', 'Open record panel',
       ])
       expect(row.querySelector('.title-spacer')).toHaveAttribute('data-tauri-drag-region')
       expect(row.querySelector('.update-slot')).toBeEmptyDOMElement()
       expect(row.querySelector('.artifacts-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘ J' : 'Ctrl J')
+      expect(row.querySelector('.record-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘ K' : 'Ctrl K')
       for (const control of row.querySelectorAll('button, input, button *')) {
         expect(control).not.toHaveAttribute('data-tauri-drag-region')
       }

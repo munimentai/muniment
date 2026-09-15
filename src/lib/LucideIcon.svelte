@@ -19,6 +19,16 @@
   {:else if name === 'plus'}
     <path d="M5 12h14" />
     <path d="M12 5v14" />
+  {:else if name === 'maximize-2'}
+    <path d="M15 3h6v6" />
+    <path d="M9 21H3v-6" />
+    <path d="M21 3l-7 7" />
+    <path d="M3 21l7-7" />
+  {:else if name === 'minimize-2'}
+    <path d="M4 14h6v6" />
+    <path d="M20 10h-6V4" />
+    <path d="M14 10l7-7" />
+    <path d="M3 21l7-7" />
   {:else if name === 'mic'}
     <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
     <path d="M19 10v2a7 7 0 0 1-14 0v-2" />

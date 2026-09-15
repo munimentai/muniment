@@ -130,9 +130,10 @@ describe('Windows runtime bundle paths', () => {
 })
 
 describe('macOS runtime bundle paths', () => {
-  it('places the runtime and LaunchAgent in the bundle Library', () => {
+  it('places the runtime, the record server and the LaunchAgent in the bundle Library', () => {
     expect(macosConfig.bundle.macOS.files).toEqual({
       'Library/LaunchServices/muniment-runtime': 'target/universal-apple-darwin/release/muniment-runtime',
+      'Library/LaunchServices/muniment-cli': 'target/universal-apple-darwin/release/muniment-cli',
       'Library/LaunchAgents/ai.muniment.runtime.plist': 'packaging/ai.muniment.runtime.plist',
     })
   })
@@ -140,7 +141,8 @@ describe('macOS runtime bundle paths', () => {
   it('stages and checks the universal runtime before macOS bundle builds', () => {
     expect(macosBuild).toContain('["x86_64-apple-darwin", "aarch64-apple-darwin"]')
     expect(macosBuild).toContain('mustRun("lipo"')
-    expect(macosBuild).toContain('if (!existsSync(runtime))')
+    expect(macosBuild).toContain('"--package", "muniment-cli"')
+    expect(macosBuild).toContain('if (!existsSync(output))')
     expect(macosAppBuild.indexOf('build-macos-runtime.mjs'))
       .toBeLessThan(macosAppBuild.indexOf('tauri("build"'))
     expect(ci).toContain('node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin')

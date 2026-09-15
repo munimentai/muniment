@@ -110,7 +110,7 @@ async function checkWindowChrome(browser, baseUrl) {
         assert.equal(row.top, 0)
         if (platform.startsWith('Mac')) assert.equal(row.clearance, 78)
         else assert.equal(row.padding, '12px')
-        assert.equal(row.controls.length, 4)
+        assert.equal(row.controls.length, 5)
         for (const control of row.controls) {
           assert.ok(control.width >= 24 && control.height >= 24, JSON.stringify(control))
           assert.ok(control.visible && control.inside && control.flush, JSON.stringify(control))
@@ -232,8 +232,10 @@ async function checkPaperFrame(browser, baseUrl) {
               if (workspace.classList.contains('macos')) {
                 const rect = (selector) => workspace.querySelector(selector).getBoundingClientRect()
                 const artifacts = rect('.artifacts-toggle')
+                const record = rect('.record-toggle')
                 const update = rect('.update-slot')
-                fail(near(artifacts.right, innerWidth - 12), 'Artifacts does not sit flush right in the title row.')
+                fail(near(record.right, innerWidth - 12), 'Record does not sit flush right in the title row.')
+                fail(artifacts.right <= record.left, 'Artifacts does not sit left of Record.')
                 fail(update.right <= artifacts.left, 'The update slot extends past Artifacts.')
                 const controlsEnd = parseFloat(style.getPropertyValue('--titlebar-controls-end'))
                 const titleLeft = Math.max(threadBox.left, controlsEnd)

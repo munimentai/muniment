@@ -24,6 +24,7 @@ mod model_install;
 mod onboarding_diagnostics;
 mod onboarding_import;
 mod onboarding_scan;
+mod record;
 mod runtime_owner;
 #[cfg(test)]
 mod test_support;
@@ -165,6 +166,11 @@ fn main() {
             attach_service::attach_companions,
             attach_service::attach_listener_status,
             attach_service::attach_revoke_companion,
+            record::record_companies,
+            record::record_company_create,
+            record::record_company_select,
+            record::record_company_rename,
+            record::record_kinds,
             restart_muniment,
             launcher::launcher_register,
             launcher::launcher_start_failed,

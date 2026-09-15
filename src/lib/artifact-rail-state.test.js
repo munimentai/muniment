@@ -66,3 +66,81 @@ describe('artifact rail state', () => {
     expect(isArtifactRailShortcut({ key: 'j', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, target: editable }, 'Win32')).toBe(true)
   })
 })
+
+import {
+  RECORD_PANEL_MAX_WIDTH,
+  RECORD_PANEL_MIN_WIDTH,
+  clampRailWidth,
+  createRailController,
+  defaultRailWidth,
+  isRecordPanelShortcut,
+  railWidthFromKey,
+  recordPanelShortcut,
+} from './artifact-rail-state.js'
+
+describe('the rail column with two occupants', () => {
+  it('gives the record panel its own bounds and default share', () => {
+    expect(clampRailWidth(300, 'record')).toBe(RECORD_PANEL_MIN_WIDTH)
+    expect(clampRailWidth(2000, 'record')).toBe(RECORD_PANEL_MAX_WIDTH)
+    expect(clampRailWidth(700, 'record', 600)).toBe(600)
+    expect(defaultRailWidth(1400, 'record')).toBe(700)
+    expect(defaultRailWidth(1400, 'artifacts')).toBe(476)
+    expect(railWidthFromKey(500, 'Home', 'record')).toBe(RECORD_PANEL_MIN_WIDTH)
+    expect(railWidthFromKey(500, 'End', 'record')).toBe(RECORD_PANEL_MAX_WIDTH)
+  })
+
+  it('names the record shortcut per platform and recognizes it', () => {
+    expect(recordPanelShortcut('MacIntel')).toBe('Meta+K')
+    expect(recordPanelShortcut('Win32')).toBe('Control+K')
+    expect(isRecordPanelShortcut({ key: 'k', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, 'MacIntel')).toBe(true)
+    expect(isRecordPanelShortcut({ key: 'K', metaKey: false, ctrlKey: true, altKey: false, shiftKey: false }, 'Linux')).toBe(true)
+    expect(isRecordPanelShortcut({ key: 'k', metaKey: true, ctrlKey: false, altKey: false, shiftKey: true }, 'MacIntel')).toBe(false)
+    expect(isRecordPanelShortcut({ key: 'j', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, 'MacIntel')).toBe(false)
+  })
+
+  it('opens one occupant at a time, resets the width per occupant, and maximizes the record alone', () => {
+    const state = { occupant: null, width: 0, maximum: 0, pointer: undefined, maximized: false }
+    const controller = createRailController({
+      readOccupant: () => state.occupant,
+      onOccupant: (next) => { state.occupant = next },
+      readWidth: () => state.width,
+      onWidth: (next) => { state.width = next },
+      readMaximum: () => state.maximum,
+      onMaximum: (next) => { state.maximum = next },
+      readPointer: () => state.pointer,
+      onPointer: (next) => { state.pointer = next },
+      readAvailableWidth: (occupant) => (occupant === 'record' ? 800 : 500),
+      readRightEdge: () => 1400,
+      readViewportWidth: () => 1400,
+      readMaximized: () => state.maximized,
+      onMaximized: (next) => { state.maximized = next },
+    })
+
+    controller.toggle('artifacts')
+    expect(state.occupant).toBe('artifacts')
+    expect(state.width).toBe(476)
+    expect(state.maximum).toBe(500)
+
+    controller.toggleMaximized()
+    expect(state.maximized).toBe(false)
+
+    controller.toggle('record')
+    expect(state.occupant).toBe('record')
+    expect(state.width).toBe(700)
+    expect(state.maximum).toBe(800)
+
+    controller.toggleMaximized()
+    expect(state.maximized).toBe(true)
+    controller.toggle('record')
+    expect(state.occupant).toBeNull()
+    expect(state.maximized).toBe(false)
+
+    controller.open('record')
+    controller.toggleMaximized()
+    controller.toggle('artifacts')
+    expect(state.occupant).toBe('artifacts')
+    expect(state.maximized).toBe(false)
+    controller.close()
+    expect(state.occupant).toBeNull()
+  })
+})

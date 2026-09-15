@@ -11,7 +11,7 @@ async function checkCandidatePackages() {
     ['pi-web-access', '0.28.0'],
     ['pi-subagents', '0.65.1'],
     ['pi-background-tasks', '2.5.0'],
-    ['pi-mcp-adapter', '2.32.1'],
+    ['pi-mcp-adapter', '2.34.0'],
     ['pi-claude-bridge', '0.7.0'],
   ]
   const settings = JSON.parse(await readFile(path.join(agentDirectory, 'settings.json'), 'utf8'))
