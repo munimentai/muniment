@@ -1559,7 +1559,7 @@
               {/if}
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
-                {@const recorded = summary.route !== null || summary.detail}
+                {@const recorded = summary.route !== null || summary.model !== null || summary.segments.length > 0}
                 {@const rows = recorded ? receiptRows(message.run.receipt, message.run.recalls) : []}
                 {@const expanded = rows.length > 1 && expandedReceipts.has(message.run.id)}
                 {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
@@ -1567,10 +1567,10 @@
                 <div class="receipt-line">
                   {#if recorded}
                     {#if rows.length > 1}
-                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
+                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}{#each summary.segments as segment, index}{#if index > 0 || summary.route !== null || summary.model !== null}{' '}{/if}<span>{segment}</span>{/each}</button>
                     {:else}
                       <!-- One row adds nothing beyond the line: a clock stands where the chevron would, and nothing expands. -->
-                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}><LucideIcon name="clock" variant="action" size={12} />{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</p>
+                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}><LucideIcon name="clock" variant="action" size={12} />{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}{#each summary.segments as segment, index}{#if index > 0 || summary.route !== null || summary.model !== null}{' '}{/if}<span>{segment}</span>{/each}</p>
                     {/if}
                   {:else}
                     <p class="provenance">Receipt unavailable</p>
@@ -2016,9 +2016,10 @@
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
      font-variant-numeric, so tabular-nums follows it. */
   button.provenance:hover:not(:disabled) { color: var(--ink); }
-  .receipt-marker { display: inline-block; width: 5px; height: 5px; margin-right: 7px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); transition: transform 120ms ease; vertical-align: 1px; }
+  .receipt-marker { display: inline-block; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); transition: transform 120ms ease; vertical-align: 1px; }
   .receipt-marker.expanded { transform: rotate(45deg); }
-  .provenance :global(.lucide) { margin-right: 7px; }
+  /* Segments sit apart on the row's gap, with no separator glyph between them. A flex row drops its whitespace-only text nodes, so the gap and not a space carries the spacing. */
+  .provenance { gap: 9px; }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
   /* The expanded receipt sits plain under the provenance line: no box. */

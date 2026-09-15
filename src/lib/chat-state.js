@@ -38,26 +38,31 @@ export function codeDiffPermissionAnswer(gate) {
 // render as a stray separator.
 const recorded = (value) => value !== undefined && value !== null && value !== ''
 
+const count = (value) => Number(value).toLocaleString('en-US')
+
+function toolsTotal(receipt) {
+  return (receipt?.tools ?? []).reduce((sum, tool) => sum + (Number(tool?.calls) || 0), 0)
+}
+
 function receiptTrailing(receipt) {
   const trailing = [receipt?.cost, receipt?.time].filter(recorded)
   for (const capability of receipt?.capabilities ?? []) {
     if (recorded(capability?.name) && recorded(capability?.version)) trailing.push(`${capability.name}@${capability.version}`)
   }
+  const calls = toolsTotal(receipt)
+  if (calls > 0) trailing.push(`${calls} ${calls === 1 ? 'tool call' : 'tool calls'}`)
   return trailing
 }
 
-// The provenance summary is `route → model · cost · time` (design-spec §2.2).
-// Route stays a named field rather than the head of a flat array: §1.2 permits
-// --signal on the route segment only, so a receipt without a route must never
-// paint whatever follows green.
+// The provenance summary is the route, an arrow to the model, then the cost,
+// the time, the capabilities and the tool calls as spaced segments with no
+// separator glyph. Route stays a named field rather than the head of a flat
+// array: §1.2 permits --signal on the route segment only, so a receipt without
+// a route must never paint whatever follows green.
 export function receiptSummary(receipt = {}) {
   const route = recorded(receipt?.route) ? receipt.route : null
   const model = recorded(receipt?.model) ? receipt.model : null
-  const detail = [model, ...receiptTrailing(receipt)].filter(recorded)
-  // The arrow states the route→model relation and nothing else; any other
-  // neighbour of the route takes the plain separator.
-  const separator = route === null || detail.length === 0 ? '' : model === null ? ' · ' : ' → '
-  return { route, separator, detail: detail.join(' · ') }
+  return { route, model, segments: receiptTrailing(receipt) }
 }
 
 // What a screen reader hears instead of the summary: engines pronounce →
@@ -77,10 +82,27 @@ export function receiptRows(receipt = {}, recalls = []) {
   for (const [field, label] of [['route', 'Route'], ['model', 'Model'], ['cost', 'Cost'], ['time', 'Time']]) {
     if (receipt[field] !== undefined && receipt[field] !== null) rows.push({ label, value: receipt[field], route: field === 'route' })
   }
+  const tokens = receipt.tokens
+  if (tokens && recorded(tokens.input) && recorded(tokens.output)) {
+    const parts = [`${count(tokens.input)} in`, `${count(tokens.output)} out`]
+    if (Number(tokens.cacheRead) > 0) parts.push(`${count(tokens.cacheRead)} cached`)
+    if (Number(tokens.cacheWrite) > 0) parts.push(`${count(tokens.cacheWrite)} written to cache`)
+    if (Number(tokens.reasoning) > 0) parts.push(`${count(tokens.reasoning)} reasoning`)
+    rows.push({ label: 'Tokens', value: parts.join(', '), route: false })
+  }
+  if (recorded(receipt.turns)) rows.push({ label: 'Turns', value: count(receipt.turns), route: false })
+  const tools = (receipt.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls))
+  if (tools.length) {
+    const calls = toolsTotal(receipt)
+    const failed = tools.reduce((sum, tool) => sum + (Number(tool.failed) || 0), 0)
+    const parts = [`${count(calls)} ${calls === 1 ? 'call' : 'calls'}`, ...tools.map((tool) => `${tool.name} ${count(tool.calls)}`)]
+    if (failed > 0) parts.push(`${count(failed)} failed`)
+    rows.push({ label: 'Tools', value: parts.join(', '), route: false })
+  }
   for (const recall of recalls ?? []) {
     const files = recall?.files ?? []
-    const count = files.length
-    rows.push({ label: 'Memory', value: `${recall?.query ?? ''} · ${count} ${count === 1 ? 'file' : 'files'}`, files, route: false })
+    const total = files.length
+    rows.push({ label: 'Memory', value: `${recall?.query ?? ''}, ${total} ${total === 1 ? 'file' : 'files'}`, files, route: false })
   }
   for (const capability of receipt.capabilities ?? []) {
     if (capability?.name !== undefined && capability?.name !== null && capability?.version !== undefined && capability?.version !== null) {

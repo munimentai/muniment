@@ -217,43 +217,61 @@ describe('chat composer and projection', () => {
     expect(toolStatus({ status: 'failed' })).toBe('failed')
   })
 
-  it('summarizes a full receipt as route → model · cost · time', () => {
+  it('summarizes a full receipt as the route, the model, and spaced segments with no separator glyph', () => {
     expect(receiptSummary({
       route: 'analysis/high', model: 'glm-5.2', cost: '$0.0041', time: '3.8s',
       capabilities: [{ name: 'search', version: '2' }],
-    })).toEqual({ route: 'analysis/high', separator: ' → ', detail: 'glm-5.2 · $0.0041 · 3.8s · search@2' })
-  })
-
-  it('keeps the arrow for the route→model relation alone', () => {
-    // No model to point at: the route joins the rest with the plain separator.
+      tools: [{ name: 'read', calls: 2, failed: 0 }, { name: 'bash', calls: 1, failed: 1 }],
+    })).toEqual({ route: 'analysis/high', model: 'glm-5.2', segments: ['$0.0041', '3.8s', 'search@2', '3 tool calls'] })
     expect(receiptSummary({ route: 'analysis/high', cost: '$0.0041' }))
-      .toEqual({ route: 'analysis/high', separator: ' · ', detail: '$0.0041' })
+      .toEqual({ route: 'analysis/high', model: null, segments: ['$0.0041'] })
     expect(receiptSummary({ route: 'analysis/high', model: 'glm-5.2' }))
-      .toEqual({ route: 'analysis/high', separator: ' → ', detail: 'glm-5.2' })
+      .toEqual({ route: 'analysis/high', model: 'glm-5.2', segments: [] })
+    expect(receiptSummary({ time: '3.8s', tools: [{ name: 'read', calls: 1, failed: 0 }] }).segments).toEqual(['3.8s', '1 tool call'])
   })
 
   it('names the route field so signal never lands on another segment', () => {
     // design-spec §1.2: --signal is the route segment's alone.
     expect(receiptSummary({ model: 'glm-5.2', cost: '$0.0041' }))
-      .toEqual({ route: null, separator: '', detail: 'glm-5.2 · $0.0041' })
+      .toEqual({ route: null, model: 'glm-5.2', segments: ['$0.0041'] })
     expect(receiptSummary({ capabilities: [{ name: 'search', version: '2' }] }))
-      .toEqual({ route: null, separator: '', detail: 'search@2' })
+      .toEqual({ route: null, model: null, segments: ['search@2'] })
   })
 
-  it('summarizes partial receipts without a stray separator or dangling arrow', () => {
+  it('summarizes partial receipts without inventing a segment', () => {
     expect(receiptSummary({ route: 'analysis/high' }))
-      .toEqual({ route: 'analysis/high', separator: '', detail: '' })
-    expect(receiptSummary({})).toEqual({ route: null, separator: '', detail: '' })
-    expect(receiptSummary(null)).toEqual({ route: null, separator: '', detail: '' })
+      .toEqual({ route: 'analysis/high', model: null, segments: [] })
+    expect(receiptSummary({})).toEqual({ route: null, model: null, segments: [] })
+    expect(receiptSummary(null)).toEqual({ route: null, model: null, segments: [] })
     expect(receiptSummary({ route: '', model: 'glm-5.2', cost: '', time: '3.8s' }))
-      .toEqual({ route: null, separator: '', detail: 'glm-5.2 · 3.8s' })
+      .toEqual({ route: null, model: 'glm-5.2', segments: ['3.8s'] })
     expect(receiptSummary({ route: 'free', model: 'glm-5.2', cost: 0 }))
-      .toEqual({ route: 'free', separator: ' → ', detail: 'glm-5.2 · 0' })
+      .toEqual({ route: 'free', model: 'glm-5.2', segments: [0] })
   })
 
   it('does not invent missing receipt values', () => {
-    expect(receiptSummary({ route: 'fast', capabilities: [{ name: 'search' }, { version: '2' }, null] }))
-      .toEqual({ route: 'fast', separator: '', detail: '' })
+    expect(receiptSummary({ route: 'fast', capabilities: [{ name: 'search' }, { version: '2' }, null], tools: [{ name: 'read' }] }))
+      .toEqual({ route: 'fast', model: null, segments: [] })
+  })
+
+  it('projects the local run record as Tokens, Turns and Tools rows after Time', () => {
+    // A local reply carries no route, so nothing on it reads in signal.
+    expect(receiptRows({
+      model: 'ollama/llama3.2:3b', cost: '$0.013 est.', time: '4.2s',
+      tokens: { input: 11414, output: 64, cacheRead: 1200, cacheWrite: 0, reasoning: 0, total: 12678 },
+      turns: 2,
+      tools: [{ name: 'bash', calls: 1, failed: 1 }, { name: 'read', calls: 2, failed: 0 }],
+    })).toEqual([
+      { label: 'Model', value: 'ollama/llama3.2:3b', route: false },
+      { label: 'Cost', value: '$0.013 est.', route: false },
+      { label: 'Time', value: '4.2s', route: false },
+      { label: 'Tokens', value: '11,414 in, 64 out, 1,200 cached', route: false },
+      { label: 'Turns', value: '2', route: false },
+      { label: 'Tools', value: '3 calls, bash 1, read 2, 1 failed', route: false },
+    ])
+    expect(receiptRows({ time: '0.4s' })).toEqual([{ label: 'Time', value: '0.4s', route: false }])
+    expect(receiptSummary({ model: 'ollama/llama3.2:3b', cost: '$0.013 est.', time: '4.2s', tools: [{ name: 'read', calls: 2, failed: 0 }] }))
+      .toEqual({ route: null, model: 'ollama/llama3.2:3b', segments: ['$0.013 est.', '4.2s', '2 tool calls'] })
   })
 
   it('states the route-to-model relation in words for screen readers', () => {
@@ -297,8 +315,8 @@ describe('chat composer and projection', () => {
       { label: 'Model', value: 'glm-5.2', route: false },
       { label: 'Cost', value: '$0.04', route: false },
       { label: 'Time', value: '1.8s', route: false },
-      { label: 'Memory', value: 'lease · 2 files', files: ['/Documents/Muniment/lease.pdf', '/Documents/Muniment/notes.md'], route: false },
-      { label: 'Memory', value: 'missing clause · 0 files', files: [], route: false },
+      { label: 'Memory', value: 'lease, 2 files', files: ['/Documents/Muniment/lease.pdf', '/Documents/Muniment/notes.md'], route: false },
+      { label: 'Memory', value: 'missing clause, 0 files', files: [], route: false },
       { label: 'Capability', value: 'files@1', route: false },
     ])
   })
