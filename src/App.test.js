@@ -1383,6 +1383,27 @@ describe('workspace composer entry', () => {
     expect(within(dialog).getByRole('region', { name: 'Connect' })).toBeInTheDocument()
   })
 
+  it('draws the models the shell holds before the fresh inventory read answers', async () => {
+    localModeStatus = true
+    const ollama = { id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }] }
+    const held = { providers: [ollama], default_provider: 'ollama', default_model: 'llama3.2:3b', hidden: [] }
+    const fresh = deferred()
+    let reads = 0
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'local_mode_provider_inventory') return ++reads === 1 ? Promise.resolve(held) : fresh.promise
+      return defaultInvoke(command, ...args)
+    })
+    render(App)
+    await waitFor(() => expect(reads).toBe(1))
+    const dialog = await openSettings()
+    // The startup read seeds the page, so the list shows while the fresh read runs.
+    expect(within(dialog).getByRole('region', { name: 'Ollama' })).toBeInTheDocument()
+    expect(within(dialog).getByText('llama3.2:3b')).toBeInTheDocument()
+    expect(reads).toBe(2)
+    fresh.resolve({ ...held, providers: [{ ...ollama, models: [...ollama.models, { id: 'granite4.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }] }] })
+    expect(await within(dialog).findByText('granite4.2:3b')).toBeInTheDocument()
+  })
 
   it.each([false, true])('disables the endpoint form until a save settles with failure %s', async (fails) => {
     localModeStatus = true

@@ -18,6 +18,7 @@
     onsignin,
     accountStatus = '',
     oninventory,
+    inventory = null,
   } = $props()
 
   const sections = [['models', 'Models'], ['appearance', 'Preferences'], ['home', 'Home'], ['account', 'Account']]
@@ -74,7 +75,7 @@
       </header>
       <div class="settings-content">
         {#if section === 'models'}
-          <ModelsSection {tauri} {listen} {oninventory} />
+          <ModelsSection {tauri} {listen} {oninventory} {inventory} />
         {:else if section === 'appearance'}
           <Appearance />
         {:else if section === 'home'}
