@@ -1993,7 +1993,9 @@
   .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
      font-variant-numeric, so tabular-nums follows it. */
-  button.provenance:hover:not(:disabled) { color: var(--ink); }
+  /* The receipt toggle takes the copy control's padding and hover, and its negative margin keeps the line's text on the prose edge. */
+  button.provenance { padding: 4px 8px; margin-left: -8px; border-radius: var(--radius-control); }
+  button.provenance:hover:not(:disabled) { background: var(--faint); color: var(--ink); }
   .receipt-marker { display: inline-block; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); transition: transform 120ms ease; vertical-align: 1px; }
   .receipt-marker.expanded { transform: rotate(45deg); }
   /* Segments sit apart on the row's gap, with no separator glyph between them. A flex row drops its whitespace-only text nodes, so the gap and not a space carries the spacing. */
