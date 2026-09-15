@@ -192,8 +192,10 @@
   function back() {
     error = null
     if (creating) creating = false
-    else if (detail) detail = null
-    else if (selectedKind) {
+    else if (detail) {
+      detail = null
+      void loadPage()
+    } else if (selectedKind) {
       selectedKind = null
       page = null
     }
@@ -248,7 +250,7 @@
       <button type="submit" class="record-create-button" disabled={!validCompanyName(newCompanyName)}>Create company</button>
     </form>
   {:else if kind && creating}
-    <RecordForm {kind} {propose} {commit} oncancel={() => { creating = false }} oncreated={(id) => { creating = false; void openEntity(id) }} />
+    <RecordForm {kind} {propose} {commit} oncancel={() => { creating = false }} oncreated={(id) => { creating = false; void loadPage().then(() => openEntity(id)) }} />
   {:else if kind && detail}
     <RecordView {detail} onopen={openEntity} />
   {:else if kind}
