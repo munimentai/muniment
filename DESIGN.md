@@ -11,22 +11,26 @@ render the same graph, and nothing in the shell is decoration.
 
 `src/styles/tokens.css` is the token source. Light and dark are both
 first-class, the OS picks the default, and a user override persists per device.
+Eight themes carry the same ten color tokens, four light (Paper, Vellum,
+Ledger, Foolscap) and four dark (Moss, Vault, Graphite, Inkwell), each one
+`:root[data-theme]` block. Paper and Vault are the two defaults below.
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `--paper` | `#F6F7F6` | `#141716` | App background |
-| `--surface` | `#FFFFFF` | `#1C201E` | Cards, composer, bars |
-| `--faint` | `#EDEFEE` | `#222624` | User bubbles, kbd chips, hover |
-| `--ink` | `#1A1D1C` | `#E8EBE9` | Text, primary buttons |
-| `--muted` | `#5C6461` | `#8A928E` | Secondary text, icons at rest |
-| `--border` | `#E2E5E3` | `#2A2F2C` | Hairlines |
+| `--paper` | `#F6F7F6` | `#000000` | App background |
+| `--surface` | `#FFFFFF` | `#0E1110` | Cards, composer, bars |
+| `--faint` | `#EDEFEE` | `#161A18` | User bubbles, kbd chips, hover |
+| `--ink` | `#1A1D1C` | `#ECEFED` | Text, primary buttons |
+| `--muted` | `#5C6461` | `#9AA29E` | Secondary text, icons at rest |
+| `--border` | `#E2E5E3` | `#262B28` | Hairlines |
 | `--signal` | `#2A7264` | `#58B39F` | Computation only |
 | `--signal-soft` | `rgba(42,114,100,.10)` | `rgba(88,179,159,.12)` | Signal backgrounds |
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
 
-Every neutral carries a faint green cast that ties it to signal. Never pure
-`#FFF` or `#000`.
+Every neutral carries a faint green cast that ties it to signal. The one
+exception is Vault's black paper: its surface and faint keep the cast, so the
+frame is black and every panel on it still ties to signal.
 
 Type: Schibsted Grotesk for everything human, Commit Mono for everything that
 is evidence. Every component type size resolves through the named `--text-*`
@@ -45,7 +49,8 @@ panel slide. `prefers-reduced-motion` removes all of it.
 1. **Color means computation.** `--signal` appears only on the mark's thinking
    state, the running-tool status pulse, the streaming underline and caret on
    the active line, the route segment of the provenance line, the live voice
-   polish flash, and workflow-run indicators. Buttons, links,
+   polish flash, the enabled state of the Models show switch, and workflow-run
+   indicators. Buttons, links,
    selection, icons at rest, badges and the mark at rest are ink on paper.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, tool activity, audit

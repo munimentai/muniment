@@ -1299,10 +1299,12 @@ describe('workspace composer entry', () => {
     const appearance = within(await screen.findByRole('group', { name: 'Appearance' }))
     expect(appearance.getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     expect(appearance.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
+    const themes = within(screen.getByRole('group', { name: 'Themes' }))
+    expect(themes.getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Moss', 'Vault', 'Graphite', 'Inkwell'])
 
     await fireEvent.click(appearance.getByRole('button', { name: label }))
-    expect(localStorage.getItem('muniment.theme')).toBe(label.toLowerCase())
-    expect(document.documentElement.dataset.theme).toBe(label === 'System' ? undefined : label.toLowerCase())
+    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: label.toLowerCase(), light: 'paper', dark: 'vault' })
+    expect(document.documentElement.dataset.theme).toBe({ System: undefined, Light: 'paper', Dark: 'vault' }[label])
     expect(appearance.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
 
     cleanup()
@@ -5082,6 +5084,7 @@ describe('thread announcements', () => {
       resumable: false,
     }])
 
+    // A restored run in thought with text already written reads Thinking.
     if (phase === 'thinking') await screen.findByLabelText('Thinking')
     else await screen.findByText('A response long enough to represent prose.')
     expect(container.querySelectorAll('.streaming-rule')).toHaveLength(ruleCount)
@@ -5125,13 +5128,13 @@ describe('thread announcements', () => {
     expect(container.querySelector('.assistant-markdown')).not.toBeInTheDocument()
   })
 
-  it('keeps the thinking chip mounted through its eased handoff to streaming', async () => {
+  it('keeps the mark through streaming, reads Writing after the hold, and settles it with the reply', async () => {
     signedIn([{
       runId: 'run-thinking', phase: 'thinking', text: '', prompt: 'A question',
       receipt: null, toolActivity: [], resumable: false,
     }])
     const chip = await screen.findByText('Routing')
-    const mark = screen.getByLabelText('Thinking').querySelector('path')
+    const mark = screen.getByLabelText('Routing').querySelector('path')
     expect(mark).toHaveAttribute('fill-rule', 'evenodd')
     expect(mark).not.toHaveAttribute('stroke')
 
@@ -5142,10 +5145,35 @@ describe('thread announcements', () => {
 
     expect(chip).toBeInTheDocument()
     expect(await screen.findByText('First token')).toBeInTheDocument()
+    await waitFor(() => expect(chip).toHaveTextContent('Writing'), { timeout: 1500 })
+    expect(screen.getByLabelText('Writing')).toBeInTheDocument()
+
+    chatListener({ payload: {
+      runId: 'run-thinking', phase: 'complete', text: 'First token',
+      receipt: {}, toolActivity: [], pendingPermission: null,
+    } })
     await waitFor(() => expect(chip).not.toBeInTheDocument(), { timeout: 500 })
   })
 
-  it('removes the thinking chip without motion when reduced motion is preferred', async () => {
+  it('names the running tool by its verb and returns to Thinking when it ends', async () => {
+    signedIn([{
+      runId: 'run-tool', phase: 'thinking', text: '', prompt: 'A question',
+      receipt: null, toolActivity: [], resumable: false,
+    }])
+    const chip = await screen.findByText('Routing')
+    chatListener({ payload: {
+      runId: 'run-tool', phase: 'thinking', text: '', turnStarted: true,
+      receipt: null, toolActivity: [{ effectId: 'e1', displayName: 'grep', status: 'running' }], pendingPermission: null,
+    } })
+    await waitFor(() => expect(chip).toHaveTextContent('Reading'), { timeout: 1500 })
+    chatListener({ payload: {
+      runId: 'run-tool', phase: 'thinking', text: '', turnStarted: true,
+      receipt: null, toolActivity: [{ effectId: 'e1', displayName: 'grep', status: 'completed' }], pendingPermission: null,
+    } })
+    await waitFor(() => expect(chip).toHaveTextContent('Thinking'), { timeout: 1500 })
+  })
+
+  it('removes the mark without motion when reduced motion is preferred', async () => {
     const originalMatchMedia = window.matchMedia
     window.matchMedia = vi.fn(() => ({ matches: true }))
     try {
@@ -5156,8 +5184,8 @@ describe('thread announcements', () => {
       const chip = await screen.findByText('Routing')
 
       chatListener({ payload: {
-        runId: 'run-reduced', phase: 'streaming', text: 'First token',
-        receipt: null, toolActivity: [], pendingPermission: null,
+        runId: 'run-reduced', phase: 'complete', text: 'First token',
+        receipt: {}, toolActivity: [], pendingPermission: null,
       } })
 
       await waitFor(() => expect(chip).not.toBeInTheDocument())
@@ -6359,13 +6387,15 @@ describe('signed-in access popover', () => {
     expect(dark).toHaveAttribute('aria-pressed', 'false')
 
     await fireEvent.click(dark)
-    expect(document.documentElement.dataset.theme).toBe('dark')
-    expect(localStorage.getItem('muniment.theme')).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('vault')
+    expect(document.documentElement.dataset.scheme).toBe('dark')
+    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: 'dark', light: 'paper', dark: 'vault' })
     expect(dark).toHaveAttribute('aria-pressed', 'true')
 
     await fireEvent.click(system)
     expect(document.documentElement).not.toHaveAttribute('data-theme')
-    expect(localStorage.getItem('muniment.theme')).toBe('system')
+    expect(document.documentElement).not.toHaveAttribute('data-scheme')
+    expect(JSON.parse(localStorage.getItem('muniment.theme')).mode).toBe('system')
     expect(system).toHaveAttribute('aria-pressed', 'true')
   })
 

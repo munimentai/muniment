@@ -1127,6 +1127,8 @@ fn sign_in_link_event(url: &str) -> muniment_core::run_events::ChatEvent {
         thread_id: None,
         phase: SIGN_IN_LINK_PHASE.into(),
         text: url.to_owned(),
+        prompt_accepted: false,
+        turn_started: false,
         prompt_storage_notice: None,
         failure_reason: None,
         receipt: None,

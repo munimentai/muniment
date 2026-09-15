@@ -498,10 +498,11 @@
   .model-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--text-12) var(--font-mono); }
   .use { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
   .default { color: var(--ink); }
-  /* The show switch: a hairline track, an ink knob at the right when the model shows. */
+  /* The show switch: a hairline track and a muted knob when the model is hidden, a signal track and knob at the right when it shows. §1.2 lists the switch. */
   .switch { position: relative; flex: none; width: 30px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
   .switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: var(--radius-chip); background: var(--muted); transition: transform 120ms ease, background 120ms ease; }
-  .switch[aria-checked="true"] span { transform: translateX(12px); background: var(--ink); }
+  .switch[aria-checked="true"] { border-color: var(--signal); background: var(--signal-soft); }
+  .switch[aria-checked="true"] span { transform: translateX(12px); background: var(--signal); }
   .switch:hover:not(:disabled) { background: var(--faint); }
   .group-label { margin: 6px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
   .provider-row { display: flex; width: 100%; align-items: center; gap: 10px; min-height: 36px; padding: 6px 8px; text-align: left; font-size: var(--text-13); }

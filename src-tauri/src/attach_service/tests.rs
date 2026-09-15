@@ -9,6 +9,42 @@ mod cases {
     };
     use muniment_core::journal::RunJournal;
 
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_history_read_waits_a_bounded_time_for_the_desktop_client_connection() {
+        use std::time::{Duration, Instant};
+
+        let state = AttachCompanionState::default();
+        assert!(matches!(
+            state.desktop_client_session_within(Duration::from_millis(50)),
+            DesktopClientSession::NoSupervisor
+        ));
+        state.set_desktop_client_for_test(false, |_, _| std::thread::spawn(|| {}));
+        let started = Instant::now();
+        assert!(matches!(
+            state.desktop_client_session_within(Duration::from_millis(100)),
+            DesktopClientSession::Disconnected
+        ));
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                state.record_connected(true);
+            });
+            let started = Instant::now();
+            assert!(matches!(
+                state.desktop_client_session_within(Duration::from_secs(5)),
+                DesktopClientSession::Connected(_)
+            ));
+            assert!(started.elapsed() < Duration::from_secs(5));
+        });
+        assert!(matches!(
+            state.desktop_client_session_within(Duration::from_secs(5)),
+            DesktopClientSession::Connected(_)
+        ));
+        state.stop_desktop_client_for_test();
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn runtime_start_waits_for_commands_and_chat_events() {

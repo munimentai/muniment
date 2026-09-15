@@ -98,6 +98,47 @@ export function toolStatus(activity = {}) {
   return ['running', 'completed', 'failed'].includes(activity.status) ? activity.status : 'status unknown'
 }
 
+// The in-flight word is the plain verb of the run's last event. It names no
+// vendor, no model and no harness, and it never rotates.
+const toolVerbs = new Map([
+  ['read', 'Reading'], ['grep', 'Reading'], ['find', 'Reading'], ['ls', 'Reading'],
+  ['write', 'Editing'], ['edit', 'Editing'],
+  ['bash', 'Running'], ['powershell', 'Running'],
+  ['web_search', 'Searching'], ['fetch_content', 'Searching'],
+  ['subagent', 'Delegating'],
+  ['mcp', 'Calling a server'],
+])
+
+export function toolVerb(name = '') {
+  const tool = String(name ?? '').trim()
+  if (toolVerbs.has(tool)) return toolVerbs.get(tool)
+  if (tool.startsWith('bg_')) return 'Working in the background'
+  const [prefix, server] = tool.split('__')
+  if (prefix === 'mcp' && server) return `Calling ${server}`
+  return 'Working'
+}
+
+const stageWords = { routing: 'Routing', thinking: 'Thinking', writing: 'Writing' }
+
+export function stageWord(stage = 'routing') {
+  if (typeof stage === 'string' && stage.startsWith('tool:')) return toolVerb(stage.slice(5))
+  return stageWords[stage] ?? stageWords.routing
+}
+
+// A projection names what the run does now: the tool that runs, text that grew
+// since the last projection, or the thought between them. Routing holds until
+// the runtime reports the started turn.
+export function runStage(previous, next) {
+  const running = [...(next.toolActivity ?? [])].reverse().find((tool) => tool.status === 'running')
+  if (running) return `tool:${running.displayName ?? ''}`
+  // A restored run has no earlier projection: its phase names the word.
+  if (!previous) return next.phase === 'streaming' ? 'writing' : next.turnStarted || next.text ? 'thinking' : 'routing'
+  if ((next.text ?? '').length > (previous.text ?? '').length) return 'writing'
+  if ((previous.toolActivity ?? []).some((tool) => tool.status === 'running')) return 'thinking'
+  if (previous.stage && previous.stage !== 'routing') return previous.stage
+  return next.turnStarted ? 'thinking' : 'routing'
+}
+
 const generating = 'Generating a reply.'
 
 const runPhaseAnnouncements = {
@@ -154,7 +195,7 @@ export function formatByteSize(bytes) {
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
   const pendingPermission = event.pendingPermission ?? null
-  if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, phase: event.phase, failureReason: event.failureReason ?? null, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
+  if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
   if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text, pendingPermission }
   if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {}, recalls: event.recalls ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
@@ -170,7 +211,7 @@ export function applyBufferedChatEvents(run, events) {
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, promptStorageNotice: entry.promptStorageNotice ?? null, phase: entry.phase, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, promptStorageNotice: entry.promptStorageNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
 

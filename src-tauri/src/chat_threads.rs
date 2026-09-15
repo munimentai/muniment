@@ -56,9 +56,14 @@ fn chat_subject(
     }
 }
 
+/// How long the first history read waits for the runtime connection before it
+/// reports the service unreachable.
+#[cfg(any(unix, target_os = "windows"))]
+const HISTORY_CONNECT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
 #[cfg(target_os = "macos")]
-fn require_runtime(attach_state: &AttachCompanionState) -> Result<(), String> {
-    match attach_state.desktop_client_session() {
+fn require_runtime(session: &DesktopClientSession) -> Result<(), String> {
+    match session {
         DesktopClientSession::Connected(_) => Ok(()),
         DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
             Err(auth::background_service_error())
@@ -280,12 +285,12 @@ fn desktop_thread_history_error(error: ClientError) -> String {
 #[cfg(any(unix, target_os = "windows"))]
 fn chat_thread_summaries_command(
     storage: Option<&SharedStorage>,
-    attach_state: &AttachCompanionState,
+    session: DesktopClientSession,
     subject: Option<&str>,
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    match attach_state.desktop_client_session() {
+    match session {
         DesktopClientSession::NoSupervisor => {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             return Err(auth::background_service_error());
@@ -468,12 +473,22 @@ pub async fn chat_thread_summaries(
     limit: usize,
     cursor: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let waiting_app = app_handle.clone();
+    let session = tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        waiting_app
+            .state::<AttachCompanionState>()
+            .desktop_client_session_within(HISTORY_CONNECT_WAIT)
+    })
+    .await
+    .map_err(|_| auth::background_service_error())?;
+    let _ = &attach_state;
     #[cfg(target_os = "macos")]
-    require_runtime(&attach_state)?;
+    require_runtime(&session)?;
     let subject = chat_subject(&app_handle, &auth_state)?;
     chat_thread_summaries_command(
         state.storage().ok(),
-        &attach_state,
+        session,
         subject.as_deref(),
         limit,
         cursor.as_deref(),
@@ -518,7 +533,7 @@ pub async fn chat_rename_thread(
     title: String,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    require_runtime(&attach_state)?;
+    require_runtime(&attach_state.desktop_client_session())?;
     let subject = chat_subject(&app_handle, &auth_state)?;
     rename_thread_command(
         state.storage().ok(),
@@ -539,7 +554,7 @@ pub async fn chat_delete_thread(
     thread_id: String,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    require_runtime(&attach_state)?;
+    require_runtime(&attach_state.desktop_client_session())?;
     let subject = chat_subject(&app_handle, &auth_state)?;
     delete_thread_command(
         attach_state.desktop_client_session().into(),
@@ -593,7 +608,7 @@ pub async fn chat_thread_open(
     cursor: Option<String>,
 ) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
-    require_runtime(&attach_state)?;
+    require_runtime(&attach_state.desktop_client_session())?;
     let subject = chat_subject(&app_handle, &auth_state)?;
     let session_root = state_session_root(&app_handle)?;
     chat_thread_open_command(
@@ -926,7 +941,7 @@ mod tests {
         ) -> Result<Value, String> {
             chat_thread_summaries_command(
                 Some(app.state::<ChatState>().storage().unwrap()),
-                &app.state::<AttachCompanionState>(),
+                app.state::<AttachCompanionState>().desktop_client_session(),
                 Some("owner"),
                 limit,
                 cursor,

@@ -36,7 +36,7 @@
   import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
   import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
-  import { thinkingSettle } from './lib/thinking-transition.js'
+  import RunMark from './lib/RunMark.svelte'
   import { threadTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
@@ -355,10 +355,12 @@
     // desktop resubscribes after a retry. No window saw the events inside that
     // gap, so the shell reads the open thread and the newest list page again
     // on the recovery. The first status compares against no earlier status, so
-    // it re-reads nothing.
+    // it re-reads nothing, unless a history read already failed before the
+    // connection came up: that read repeats once the runtime connects.
     const chatEventsRecovered = desktopClientStatus?.chat_events_connected === false
       && status?.chat_events_connected === true
-    const requestsRecovered = desktopClientStatus?.connected === false && status?.connected === true
+    const requestsRecovered = status?.connected === true
+      && (desktopClientStatus?.connected === false || (!desktopClientStatus && chatController.historyReadFailed()))
     desktopClientStatus = status
     if (chatEventsRecovered || (requestsRecovered && workspaceMode())) {
       void startupReady.then(() => chatController.recoverChatEvents())
@@ -1466,10 +1468,11 @@
                   <p>{message.run.promptStorageNotice}</p>
                 </details>
               {/if}
+              <!-- One mark for the whole run in flight, in its own block so its exit holds nothing else back. -->
+              {#if message.run.phase === 'thinking' || message.run.phase === 'streaming'}<RunMark stage={message.run.stage} d={thinkingMarkD} />{/if}
               {#if message.run.phase === 'acquiring-pi'}
                 <p class="thinking">{runAnnouncement(message.run)}</p>
               {:else if message.run.phase === 'thinking'}
-                <span class="thinking" out:thinkingSettle><svg width="17" height="17" viewBox="0 0 48 48" aria-label="Thinking"><path d={thinkingMarkD} fill-rule="evenodd" /></svg><span>Routing</span></span>
               {:else if message.run.phase === 'streaming'}<p class="response-prose streaming" use:streamingUnderline={message.run.text}>{message.run.text}<span class="caret" aria-hidden="true"></span><span class="streaming-rule" aria-hidden="true"></span></p>
               {:else if ['complete', 'failed', 'interrupted', 'cancelled'].includes(message.run.phase)}<AssistantMarkdown text={message.run.text} />
               {:else}<p class="response-prose">{message.run.text}</p>{/if}
@@ -1680,7 +1683,7 @@
             {/if}
             </div>
             <div class="composer-actions">
-              <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
+              <button type="button" class="quiet composer-icon" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
               {#if active || draft.trim()}
                 <button type="button" class="composer-action" class:primary={!active} class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
                   <LucideIcon name={active ? 'square' : 'arrow-up'} variant="action" />
@@ -1935,7 +1938,8 @@
   .side-action span { flex: 1; min-width: 0; }
   /* The foot of the sidebar: Settings above the account row, under one edge-to-edge hairline. */
   .side-foot { margin-top: auto; padding: 4px 6px 6px; border-top: 1px solid var(--border); }
-  .settings-block { padding: 0; }
+  /* Settings is its own group: one hairline under it, above the sign-in button or the account panel. */
+  .settings-block { padding: 0 0 4px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
   .side-foot :global(.profile-block) { margin-top: 0; padding-top: 0; border-top: 0; }
   .side-foot :global(.profile-button) { min-height: 28px; padding: 4px 8px; }
   /* The panel is one popup over the thread, never a second settings surface. */
@@ -1981,7 +1985,6 @@
   .streaming-rule { position: absolute; height: 2px; background: var(--signal); pointer-events: none; }
   .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .thinking path { fill: var(--signal); animation: breathe 1.8s ease-in-out infinite; }
   .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-13) var(--font-mono); }
   .tool-list { margin: 0; padding: 0; list-style: none; }
   .tool-row { display: flex; align-items: center; gap: 8px; min-height: 20px; }
@@ -2060,7 +2063,8 @@
   .composer-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
   .composer-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
-  .model-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 2px 8px; border: 1px solid transparent; border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); white-space: nowrap; }
+  /* The three composer controls share the plus button's box: 4px padding, a 24px minimum, the control radius. */
+  .model-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 4px; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); font: var(--text-12) var(--font-mono); white-space: nowrap; }
   .model-chip:hover:not(:disabled) { background: var(--faint); }
   .model-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
@@ -2096,7 +2100,6 @@
   .speech-install-popover .close-card:hover { color: var(--ink); }
   .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
-  @keyframes breathe { 50% { opacity: .45; } }
   @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
   @keyframes capture { to { transform: scaleY(.55); } }
   @keyframes toast-enter { from { opacity: 0; transform: translate(-50%, 2px); } }
@@ -2104,7 +2107,6 @@
     /* Unlike the blanket duration rule, removing this animation keeps the meter
        at its full-height resting state instead of the keyframe's 55% endpoint. */
     .capture-meter i { animation: none; }
-    .thinking path { animation: none; }
     .receipt-marker { transition: none; }
   }
 </style>
