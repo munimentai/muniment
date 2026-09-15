@@ -70,12 +70,11 @@ const renderer = {
   image({ text }) {
     return escapeHtml(text)
   },
-  link({ href, title, tokens }) {
+  link({ href, tokens }) {
     const label = this.parser.parseInline(tokens)
     const safeHref = approvedHref(href)
     if (!safeHref) return label
-    const safeTitle = title == null ? '' : ` title="${escapeHtml(title)}"`
-    return `<a href="${escapeHtml(safeHref)}"${safeTitle} target="_blank" rel="noopener noreferrer">${label}</a>`
+    return `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${label}</a>`
   },
   list(token) {
     if (token.items.some((item) => item.task)) return escapeHtml(token.raw)

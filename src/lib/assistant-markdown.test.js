@@ -49,7 +49,7 @@ describe('assistant Markdown', () => {
     }
     expect(result).toContain('class="language-javascript"')
     expect(result).toContain('href="https://example.com/"')
-    expect(result).toContain('title="Title"')
+    expect(result).not.toContain('title=')
     expect(result).toContain('target="_blank"')
     expect(result).toContain('rel="noopener noreferrer"')
     expect(result).not.toContain('start=')

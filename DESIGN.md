@@ -57,9 +57,8 @@ panel slide. `prefers-reduced-motion` removes all of it.
    radius, no "AI", "magic", "supercharge" or "unlock" in copy.
 4. **Voice.** Sentence case everywhere. Buttons say what happens, in a label
    or, for the composer's send and stop control, in a glyph with an accessible
-   name and a tooltip that say it. Errors state
-   what happened and the next step and never apologize. Empty states are one
-   line and no illustration. No em dash in user-facing text. The shell never
+   name that says it. Errors state what happened and the next step and never
+   apologize. Empty states are one line and no illustration. No em dash in user-facing text. The shell never
    names its harness. A state line, an empty state and a composer hint are one
    line each and under twelve words.
 

@@ -153,7 +153,7 @@
       </div>
       <div class="chips" aria-label="First-run settings">
         <button data-testid="onboarding-model" aria-expanded={panel === 'model'} aria-controls="onboarding-model-panel" onclick={() => { panel = panel === 'model' ? null : 'model' }}>Connect a model</button>
-        <button class="home-chip" data-testid="onboarding-home-path" title={onboarding.homePath} aria-expanded={panel === 'home'} aria-controls="onboarding-home-panel" onclick={() => { panel = panel === 'home' ? null : 'home' }}>{onboarding.homePath || (onboarding.name === 'loading' ? 'Finding Home…' : 'Home unavailable')}</button>
+        <button class="home-chip" data-testid="onboarding-home-path" aria-expanded={panel === 'home'} aria-controls="onboarding-home-panel" onclick={() => { panel = panel === 'home' ? null : 'home' }}>{onboarding.homePath || (onboarding.name === 'loading' ? 'Finding Home…' : 'Home unavailable')}</button>
         <button data-testid="onboarding-scan" aria-expanded={panel === 'scan'} aria-controls="onboarding-scan-panel" onclick={() => { panel = panel === 'scan' ? null : 'scan' }}>{scanError ? 'Scan unavailable' : report ? (report.errors.length && !rows.some((row) => row.fileCount > 0) ? 'Assistant memory scan incomplete' : scanSummary(rows)) : 'Scanning assistant memory…'}</button>
       </div>
       {#if panel === 'model'}

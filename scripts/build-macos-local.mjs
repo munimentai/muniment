@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   codesignArguments,
+  intermediateCertificateImportArguments,
   keychainSearchListArguments,
   signingCertificateImportArguments,
   signingIdentityArguments,
@@ -72,12 +73,20 @@ const certificatePath = join(workDir, "certificate.p12");
 const priorKeychains = capture("read keychain search list", "security", ["list-keychains", "-d", "user"]);
 let keychainCreated = false;
 let tokenIssued = false;
+// trustd builds the signer's chain from the login keychain, not from a keychain
+// the run adds to the search list, so the public Developer ID G2 intermediate
+// sits in the login keychain for the run and leaves with it. The identity never does.
+const loginKeychain = join(home, "Library", "Keychains", "login.keychain-db");
+const intermediateCertificate = join(".github", "certs", "DeveloperIDG2CA.cer");
+const intermediateSha1 = capture("read intermediate fingerprint", "openssl", ["x509", "-inform", "der", "-in", intermediateCertificate, "-noout", "-fingerprint", "-sha1"]).replace(/^.*=/s, "").replace(/:/g, "").trim();
+let intermediatePlaced = false;
 process.on("exit", () => {
   if (tokenIssued) spawnSync("curl", ["-sk", "-X", "POST", "-H", `@${headerFile}`, `${openbao}/v1/auth/token/revoke-self`]);
   if (keychainCreated) {
     spawnSync("security", keychainSearchListArguments("", priorKeychains).filter((arg) => arg !== ""));
     spawnSync("security", ["delete-keychain", keychain]);
   }
+  if (intermediatePlaced) spawnSync("security", ["delete-certificate", "-Z", intermediateSha1, loginKeychain]);
   rmSync(workDir, { recursive: true, force: true });
 });
 
@@ -118,6 +127,12 @@ mustRun("keychain settings", "security", ["set-keychain-settings", keychain]);
 mustRun("unlock keychain", "security", ["unlock-keychain", "-p", keychainPassword, keychain]);
 mustRun("import certificate", "security", signingCertificateImportArguments(certificatePath, keychain, secret[passwordField]), { stdio: ["ignore", "ignore", "inherit"] });
 mustRun("authorize codesign", "security", signingKeyPartitionListArguments(keychain, keychainPassword), { stdio: ["ignore", "ignore", "inherit"] });
+const intermediatePresent = spawnSync("security", ["find-certificate", "-Z", "-c", "Developer ID Certification Authority", loginKeychain], { encoding: "utf8" });
+if (intermediatePresent.error) throw intermediatePresent.error;
+if (!(intermediatePresent.stdout || "").includes(intermediateSha1)) {
+  mustRun("place intermediate", "security", intermediateCertificateImportArguments(intermediateCertificate, loginKeychain), { stdio: ["ignore", "ignore", "inherit"] });
+  intermediatePlaced = true;
+}
 mustRun("register keychain", "security", keychainSearchListArguments(keychain, priorKeychains));
 const identities = capture("list identities", "security", signingIdentityArguments(keychain));
 const identity = identities.match(/^\s*\d+\) ([0-9A-F]{40})[ \t]+"((?:Developer ID Application|Apple Development|Apple Distribution):[^"\r\n]+)"/m);
