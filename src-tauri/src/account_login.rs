@@ -117,7 +117,7 @@ fn callback_page(connected: Option<&str>) -> String {
 <title>Muniment</title>
 <style>
 :root {{ color-scheme: light dark; --paper: #F6F7F6; --ink: #1A1D1C; --muted: #5C6461; }}
-@media (prefers-color-scheme: dark) {{ :root {{ --paper: #141716; --ink: #E8EBE9; --muted: #8A928E; }} }}
+@media (prefers-color-scheme: dark) {{ :root {{ --paper: #000000; --ink: #ECEFED; --muted: #9AA29E; }} }}
 * {{ box-sizing: border-box; }}
 body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--paper); color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; text-align: center; }}
 main {{ display: grid; justify-items: center; gap: 12px; max-width: 480px; }}

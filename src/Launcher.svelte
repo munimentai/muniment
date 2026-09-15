@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { THEME_STORAGE_KEY, parseTheme } from './lib/theme-state.js'
+  import { THEME_STORAGE_KEY, applyTheme, readStoredTheme } from './lib/theme-state.js'
 
   const api = window.__TAURI__
   let input
@@ -10,10 +10,7 @@
   let error = $state('')
 
   function syncAppearance() {
-    let theme = 'system'
-    try { theme = parseTheme(localStorage.getItem(THEME_STORAGE_KEY)) } catch (_) {}
-    if (theme === 'system') delete document.documentElement.dataset.theme
-    else document.documentElement.dataset.theme = theme
+    applyTheme(document.documentElement, readStoredTheme())
   }
 
   function storageChanged(event) {

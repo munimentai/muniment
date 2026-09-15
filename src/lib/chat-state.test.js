@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage, settledPhases, toolName, toolStatus, unsettledRun } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage, runStage, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -67,6 +67,39 @@ describe('chat composer and projection', () => {
     expect(applyChatEvent(live, { runId: 'r', phase: 'complete', text: 'Reply' }).promptStorageNotice).toBe(promptStorageNotice)
     expect(historyMessages([{ ...entry, prompt: null }])[0].run.promptStorageNotice).toBe(promptStorageNotice)
     expect(applyChatEvent(initial, { ...entry, runId: 'other' })).toBe(initial)
+  })
+
+  it('tracks the in-flight word from the projections: Routing, Thinking, the tool verb, Writing', () => {
+    let run = { id: 'r', phase: 'thinking', text: '' }
+    expect(stageWord(run.stage)).toBe('Routing')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('Routing')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('Thinking')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [{ effectId: 'e1', displayName: 'bash', status: 'running' }] })
+    expect(stageWord(run.stage)).toBe('Running')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [{ effectId: 'e1', displayName: 'bash', status: 'completed' }] })
+    expect(stageWord(run.stage)).toBe('Thinking')
+    run = applyChatEvent(run, { runId: 'r', phase: 'streaming', text: 'Hi', turnStarted: true, toolActivity: [{ effectId: 'e1', displayName: 'bash', status: 'completed' }] })
+    expect(stageWord(run.stage)).toBe('Writing')
+    run = applyChatEvent(run, { runId: 'r', phase: 'streaming', text: 'Hi', turnStarted: true, toolActivity: [{ effectId: 'e1', displayName: 'bash', status: 'completed' }, { effectId: 'e2', displayName: 'mcp__linear__list_issues', status: 'running' }] })
+    expect(stageWord(run.stage)).toBe('Calling linear')
+    expect(runStage(null, { phase: 'streaming', text: 'Restored', toolActivity: [] })).toBe('writing')
+    expect(historyMessages([{ runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [] }])[0].run.stage).toBe('thinking')
+  })
+
+  it('names every tool by a plain verb and never by a vendor, a model or a harness', () => {
+    for (const tool of ['read', 'grep', 'find', 'ls']) expect(toolVerb(tool)).toBe('Reading')
+    for (const tool of ['write', 'edit']) expect(toolVerb(tool)).toBe('Editing')
+    for (const tool of ['bash', 'powershell']) expect(toolVerb(tool)).toBe('Running')
+    for (const tool of ['web_search', 'fetch_content']) expect(toolVerb(tool)).toBe('Searching')
+    expect(toolVerb('subagent')).toBe('Delegating')
+    for (const tool of ['bg_run', 'bg_status', 'bg_logs', 'bg_kill']) expect(toolVerb(tool)).toBe('Working in the background')
+    expect(toolVerb('mcp')).toBe('Calling a server')
+    expect(toolVerb('mcp__github__search')).toBe('Calling github')
+    expect(toolVerb('unknown_tool')).toBe('Working')
+    expect(stageWord(undefined)).toBe('Routing')
+    for (const word of ['Routing', 'Thinking', 'Writing', toolVerb('subagent')]) expect(word).not.toMatch(/pi|muniment|claude|openai|gpt/i)
   })
 
   it('moves thinking to streaming and removes signal on every terminal event', () => {

@@ -114,17 +114,18 @@ describe('launcher', () => {
 
   it('syncs Light, Dark, and System from another window while hidden and on reopen', async () => {
     const input = await open()
-    for (const theme of ['light', 'dark', 'system', 'dark', 'light']) {
+    const applied = { light: 'paper', dark: 'vault', system: undefined, moss: 'moss' }
+    for (const theme of ['light', 'dark', 'system', 'dark', 'light', 'moss']) {
       await fireEvent.keyDown(input, { key: 'Escape' })
       localStorage.setItem('muniment.theme', theme)
       await fireEvent(window, new StorageEvent('storage', {
         key: 'muniment.theme', newValue: theme, storageArea: localStorage,
       }))
-      expect(document.documentElement.dataset.theme).toBe(theme === 'system' ? undefined : theme)
+      expect(document.documentElement.dataset.theme).toBe(applied[theme])
       // Reopening repairs a missed storage event.
       document.documentElement.dataset.theme = 'stale'
       handlers['launcher-opened']()
-      expect(document.documentElement.dataset.theme).toBe(theme === 'system' ? undefined : theme)
+      expect(document.documentElement.dataset.theme).toBe(applied[theme])
     }
     localStorage.clear()
     await fireEvent(window, new StorageEvent('storage', { key: null, storageArea: localStorage }))
@@ -134,10 +135,10 @@ describe('launcher', () => {
   it('uses System for malformed or unavailable storage and ignores unrelated changes', async () => {
     localStorage.setItem('muniment.theme', 'dark')
     await open()
-    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('vault')
     localStorage.setItem('muniment.theme', 'invalid')
     await fireEvent(window, new StorageEvent('storage', { key: 'other', storageArea: localStorage }))
-    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('vault')
     handlers['launcher-opened']()
     expect(document.documentElement.dataset.theme).toBeUndefined()
     const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })

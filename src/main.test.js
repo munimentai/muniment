@@ -15,8 +15,12 @@ afterEach(() => {
 })
 
 it.each([
-  ['light', 'light'],
-  ['dark', 'dark'],
+  ['light', 'paper'],
+  ['dark', 'vault'],
+  ['moss', 'moss'],
+  ['{"mode":"light","light":"ledger","dark":"vault"}', 'ledger'],
+  ['{"mode":"dark","light":"ledger","dark":"vault"}', 'vault'],
+  ['{"mode":"system","light":"ledger","dark":"vault"}', undefined],
   ['system', undefined],
   [null, undefined],
   ['', undefined],

@@ -31,9 +31,9 @@
   .blank { border: 1px solid var(--border); border-radius: var(--radius-chip); }
   .dark { display: none; }
   @media (prefers-color-scheme: dark) {
-    :global(:root:not([data-theme="light"])) .light { display: none; }
-    :global(:root:not([data-theme="light"])) .dark { display: inline-flex; }
+    :global(:root:not([data-scheme="light"])) .light { display: none; }
+    :global(:root:not([data-scheme="light"])) .dark { display: inline-flex; }
   }
-  :global(:root[data-theme="dark"]) .light { display: none; }
-  :global(:root[data-theme="dark"]) .dark { display: inline-flex; }
+  :global(:root[data-scheme="dark"]) .light { display: none; }
+  :global(:root[data-scheme="dark"]) .dark { display: inline-flex; }
 </style>

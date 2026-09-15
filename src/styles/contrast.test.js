@@ -17,11 +17,13 @@ const block = (pattern) => {
   return declarations(body)
 }
 
+const themes = ['paper', 'vellum', 'ledger', 'foolscap', 'moss', 'vault', 'graphite', 'inkwell']
+const themeBlock = (name) => new RegExp(`:root\\[data-theme="${name}"\\][^{]*\\{([^}]*)\\}`)
+
 const palettes = {
   'default light': block(/^:root\s*\{([^}]*)\}/m),
-  'explicit light': block(/:root\[data-theme="light"\]\s*\{([^}]*)\}/),
   'default dark': block(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}/),
-  'explicit dark': block(/:root\[data-theme="dark"\]\s*\{([^}]*)\}/),
+  ...Object.fromEntries(themes.map((name) => [name, block(themeBlock(name))])),
 }
 
 const linearChannel = (channel) => {
@@ -50,6 +52,19 @@ describe('§1.3 text token contrast', () => {
         ).toBeGreaterThanOrEqual(4.5)
       }
     }
+  })
+
+  it('gives every theme all ten color tokens, a scheme, and a swatch selector', () => {
+    const tokens = ['paper', 'surface', 'faint', 'ink', 'muted', 'border', 'signal', 'signal-soft', 'oxide', 'ochre']
+    for (const name of themes) {
+      const body = source.match(themeBlock(name))[1]
+      for (const token of tokens) expect(body, `${name} --${token}`).toMatch(new RegExp(`--${token}:`))
+      expect(body).toMatch(/color-scheme:\s*(light|dark)\s*;/)
+      expect(source).toContain(`[data-swatch][data-theme="${name}"]`)
+    }
+    expect(palettes.paper).toEqual(palettes['default light'])
+    expect(palettes.vault).toEqual(palettes['default dark'])
+    expect(palettes.vault.paper).toBe('#000000')
   })
 
   it('detects a color below the contrast floor', () => {

@@ -16,6 +16,8 @@ const RADIUS_EXCEPTIONS = {
     '.theme-options button': ['0', '§4 square inner edges in the segmented control'],
     '.theme-options button:first-child': ['var(--radius-control) 0 0 var(--radius-control)', '§4 segmented-control corner composition'],
     '.theme-options button:last-child': ['0 var(--radius-control) var(--radius-control) 0', '§4 segmented-control corner composition'],
+    '.swatch-ring': ['50%', '§1.5 circular theme swatch ring'],
+    '.swatch': ['50%', '§1.5 circular theme swatch of paper and surface'],
   },
 }
 

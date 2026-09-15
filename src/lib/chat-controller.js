@@ -53,6 +53,8 @@ export function createChatController({
   let registration
   let registrationFailed = false
   let historyReadFailed = false
+  // The whole-history read failed, so a reconnect repeats it instead of a page refresh.
+  let historyLoadFailed = false
   let destroyed = false
   let switchingThread = false
   let switchBlocked = false
@@ -260,6 +262,7 @@ export function createChatController({
     try {
       const { summaries, nextCursor } = await invoke('chat_thread_summaries', { limit: 20 })
       if (destroyed) return
+      historyLoadFailed = false
       threadPageCount = 1
       nextThreadCursor = nextCursor
       onThreadSummaries(summaries)
@@ -294,7 +297,10 @@ export function createChatController({
       }
       await openThread(newest, switchBlocked)
     } catch (error) {
-      if (!destroyed) onHistoryError(historyReadError(error), { label: 'Restore history', run: loadHistory }, true)
+      if (!destroyed) {
+        historyLoadFailed = true
+        onHistoryError(historyReadError(error), { label: 'Restore history', run: loadHistory }, true)
+      }
     }
   }
 
@@ -517,6 +523,13 @@ export function createChatController({
     try {
       do {
         recoveryPending = false
+        // A history read that failed before the runtime connected is the hole to
+        // repair. Read the whole history again, and a failure retries below.
+        if (historyLoadFailed) {
+          await loadHistory()
+          recoveryPending = historyLoadFailed
+          break
+        }
         // The first lost frame can name a new thread. Resolve it before reading the journal.
         if (!await refreshThreads(true) || active()?.id === 'pending' || switchingThread || refreshingOpenThread) {
           recoveryPending = true
@@ -757,5 +770,5 @@ export function createChatController({
     buffered.clear()
   }
 
-  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, recoverChatEvents, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, recoverChatEvents, historyReadFailed: () => historyLoadFailed, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

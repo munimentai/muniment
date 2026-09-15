@@ -4,16 +4,9 @@ import './styles/base.css'
 import './styles/code-diff.css'
 import App from './App.svelte'
 import Launcher from './Launcher.svelte'
-import { THEME_STORAGE_KEY, parseTheme } from './lib/theme-state.js'
+import { applyTheme, readStoredTheme } from './lib/theme-state.js'
 
-let theme
-try {
-  theme = parseTheme(localStorage.getItem(THEME_STORAGE_KEY))
-} catch (_) {
-  theme = parseTheme(null)
-}
-if (theme === 'system') delete document.documentElement.dataset.theme
-else document.documentElement.dataset.theme = theme
+applyTheme(document.documentElement, readStoredTheme())
 mount(new URLSearchParams(location.search).has('launcher') ? Launcher : App, {
   target: document.getElementById('app'),
 })

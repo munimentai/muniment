@@ -73,6 +73,8 @@ pub struct AttachCompanionState {
     #[cfg(any(unix, target_os = "windows"))]
     pub(super) connected: Mutex<bool>,
     #[cfg(any(unix, target_os = "windows"))]
+    pub(super) connected_changed: Condvar,
+    #[cfg(any(unix, target_os = "windows"))]
     pub(super) chat_events_connected: Mutex<bool>,
 }
 
@@ -201,6 +203,7 @@ impl AttachCompanionState {
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
             connected: Mutex::new(false),
+            connected_changed: Condvar::new(),
             chat_events_connected: Mutex::new(false),
         }
     }
@@ -571,11 +574,45 @@ impl AttachCompanionState {
         }
     }
 
+    /// The session once the client connects, or after `wait` with no connection.
+    /// A history read at window open lands before the first connection, and
+    /// this wait keeps that read from reporting the service unreachable.
+    #[cfg(any(unix, target_os = "windows"))]
+    pub(crate) fn desktop_client_session_within(
+        &self,
+        wait: std::time::Duration,
+    ) -> DesktopClientSession {
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            match self.desktop_client_session() {
+                DesktopClientSession::Disconnected => {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        return DesktopClientSession::Disconnected;
+                    }
+                    let connected = self
+                        .connected
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if *connected {
+                        continue;
+                    }
+                    let _ = self
+                        .connected_changed
+                        .wait_timeout(connected, deadline - now)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+                session => return session,
+            }
+        }
+    }
+
     pub(super) fn record_connected(&self, connected: bool) {
         *self
             .connected
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = connected;
+        self.connected_changed.notify_all();
     }
 
     pub(super) fn record_chat_events_connected(&self, connected: bool) {
@@ -654,6 +691,7 @@ impl Default for AttachCompanionState {
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
             connected: Mutex::new(false),
+            connected_changed: Condvar::new(),
             chat_events_connected: Mutex::new(false),
         }
     }
@@ -702,6 +740,7 @@ impl Default for AttachCompanionState {
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
             connected: Mutex::new(false),
+            connected_changed: Condvar::new(),
             chat_events_connected: Mutex::new(false),
         }
     }
@@ -717,6 +756,7 @@ impl Default for AttachCompanionState {
             desktop_client_holder: DesktopClientHolder::new(),
             chat_events: Mutex::new(None),
             connected: Mutex::new(false),
+            connected_changed: Condvar::new(),
             chat_events_connected: Mutex::new(false),
         }
     }

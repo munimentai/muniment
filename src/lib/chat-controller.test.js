@@ -224,6 +224,35 @@ describe('chat delivery recovery', () => {
     }
   })
 
+  it('reads the whole history again on recovery when the first read landed before the connection', async () => {
+    let connected = false
+    const invoke = vi.fn(async (command) => {
+      if (!connected) throw new Error('Muniment cannot reach its background service.')
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-1' }], nextCursor: null }
+      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_select_thread') return null
+      if (command === 'chat_thread_open') return { entries: [{ runId: 'run-1', phase: 'complete', text: 'Restored' }], nextCursor: null }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const context = setup(invoke)
+    try {
+      await context.start()
+      await context.controller.loadHistory()
+      expect(context.controller.historyReadFailed()).toBe(true)
+      expect(context.onHistoryError).toHaveBeenLastCalledWith(
+        'Muniment could not restore conversation history. Muniment cannot reach its background service.',
+        expect.objectContaining({ label: 'Restore history' }),
+      )
+      connected = true
+      await context.controller.recoverChatEvents()
+      expect(context.controller.historyReadFailed()).toBe(false)
+      expect(context.messages()[0].run.text).toBe('Restored')
+      expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+    } finally {
+      context.controller.cleanup()
+    }
+  })
+
   it('cancels the recovery retry on cleanup', async () => {
     vi.useFakeTimers()
     const invoke = vi.fn().mockRejectedValue(new Error('The request socket closed.'))

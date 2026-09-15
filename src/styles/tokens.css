@@ -86,13 +86,13 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    /* §1.3 dark color tokens */
-    --paper: #141716;
-    --surface: #1C201E;
-    --faint: #222624;
-    --ink: #E8EBE9;
-    --muted: #8A928E;
-    --border: #2A2F2C;
+    /* §1.3 dark color tokens: Vault, black paper with the green cast kept on surface and faint */
+    --paper: #000000;
+    --surface: #0E1110;
+    --faint: #161A18;
+    --ink: #ECEFED;
+    --muted: #9AA29E;
+    --border: #262B28;
     --signal: #58B39F;
     --signal-soft: rgba(88, 179, 159, .12);
     --oxide: #C96A61;
@@ -102,8 +102,13 @@
   }
 }
 
-/* Explicit user overrides have higher specificity than the OS media block. */
-:root[data-theme="light"] {
+/*
+ * The eight themes. An explicit pick sets data-theme on the root, which
+ * outranks the OS media block. A swatch element carries the same block, so
+ * Appearance shows every theme's paper and surface without a second source.
+ */
+/* The default light: the §1.3 light set. */
+:root[data-theme="paper"], [data-swatch][data-theme="paper"] {
   --paper: #F6F7F6;
   --surface: #FFFFFF;
   --faint: #EDEFEE;
@@ -114,12 +119,56 @@
   --signal-soft: rgba(42, 114, 100, .10);
   --oxide: #B4483E;
   --ochre: #B98A2F;
-  --shadow-window: 0 1px 2px rgba(0,0,0,.05), 0 12px 40px rgba(0,0,0,.08);
-  --shadow-overlay: 0 4px 24px rgba(0,0,0,.14);
   color-scheme: light;
 }
 
-:root[data-theme="dark"] {
+/* The light set on warm cream neutrals. */
+:root[data-theme="vellum"], [data-swatch][data-theme="vellum"] {
+  --paper: #F7F4EC;
+  --surface: #FDFBF5;
+  --faint: #EFEAE0;
+  --ink: #1F1B15;
+  --muted: #6B6257;
+  --border: #E5DFD2;
+  --signal: #2A7264;
+  --signal-soft: rgba(42, 114, 100, .10);
+  --oxide: #B4483E;
+  --ochre: #B98A2F;
+  color-scheme: light;
+}
+
+/* The light set on cool slate neutrals. */
+:root[data-theme="ledger"], [data-swatch][data-theme="ledger"] {
+  --paper: #F3F5F8;
+  --surface: #FBFCFE;
+  --faint: #E9EDF2;
+  --ink: #171B21;
+  --muted: #5A6470;
+  --border: #DCE2E9;
+  --signal: #2A7264;
+  --signal-soft: rgba(42, 114, 100, .10);
+  --oxide: #B4483E;
+  --ochre: #B98A2F;
+  color-scheme: light;
+}
+
+/* The light set on a near-white paper with a darker ink. */
+:root[data-theme="foolscap"], [data-swatch][data-theme="foolscap"] {
+  --paper: #FCFCFB;
+  --surface: #FEFEFD;
+  --faint: #F2F3F1;
+  --ink: #0F1211;
+  --muted: #4E5552;
+  --border: #E4E6E4;
+  --signal: #2A7264;
+  --signal-soft: rgba(42, 114, 100, .10);
+  --oxide: #B4483E;
+  --ochre: #B98A2F;
+  color-scheme: light;
+}
+
+/* The §1.3 dark set on green-cast neutrals. */
+:root[data-theme="moss"], [data-swatch][data-theme="moss"] {
   --paper: #141716;
   --surface: #1C201E;
   --faint: #222624;
@@ -130,7 +179,50 @@
   --signal-soft: rgba(88, 179, 159, .12);
   --oxide: #C96A61;
   --ochre: #CBA14E;
-  --shadow-window: 0 1px 2px rgba(0,0,0,.05), 0 12px 40px rgba(0,0,0,.08);
-  --shadow-overlay: 0 4px 24px rgba(0,0,0,.14);
+  color-scheme: dark;
+}
+
+/* The default dark: black paper, surface and faint stepped up from black with the green cast kept, and a hairline border that reads on both. */
+:root[data-theme="vault"], [data-swatch][data-theme="vault"] {
+  --paper: #000000;
+  --surface: #0E1110;
+  --faint: #161A18;
+  --ink: #ECEFED;
+  --muted: #9AA29E;
+  --border: #262B28;
+  --signal: #58B39F;
+  --signal-soft: rgba(88, 179, 159, .12);
+  --oxide: #C96A61;
+  --ochre: #CBA14E;
+  color-scheme: dark;
+}
+
+/* The dark set on plain gray neutrals with no green cast. */
+:root[data-theme="graphite"], [data-swatch][data-theme="graphite"] {
+  --paper: #141414;
+  --surface: #1C1C1C;
+  --faint: #232323;
+  --ink: #E8E8E8;
+  --muted: #8E8E8E;
+  --border: #2B2B2B;
+  --signal: #58B39F;
+  --signal-soft: rgba(88, 179, 159, .12);
+  --oxide: #C96A61;
+  --ochre: #CBA14E;
+  color-scheme: dark;
+}
+
+/* The dark set on blue-black neutrals. */
+:root[data-theme="inkwell"], [data-swatch][data-theme="inkwell"] {
+  --paper: #101318;
+  --surface: #171B22;
+  --faint: #1E232B;
+  --ink: #E6E9EE;
+  --muted: #8C95A3;
+  --border: #2A3039;
+  --signal: #58B39F;
+  --signal-soft: rgba(88, 179, 159, .12);
+  --oxide: #C96A61;
+  --ochre: #CBA14E;
   color-scheme: dark;
 }

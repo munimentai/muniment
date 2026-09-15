@@ -23,6 +23,8 @@ fn event() -> ChatEvent {
         thread_id: None,
         phase: "running".into(),
         text: "hello".into(),
+        prompt_accepted: false,
+        turn_started: false,
         prompt_storage_notice: None,
         failure_reason: None,
         receipt: None,

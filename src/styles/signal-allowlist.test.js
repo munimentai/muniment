@@ -10,14 +10,21 @@ const ALLOWED = {
   'src/App.svelte': {
     '.streaming-rule': '§1.2 the streaming underline on the active line',
     '.caret': '§1.2 the caret on the active line',
-    '.thinking path': "§1.2 the mark's thinking state (§1.8)",
     '.tool-running': '§1.2 the running-tool status pulse',
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
   },
+  'src/lib/RunMark.svelte': {
+    '.thinking path': "§1.2 the mark's thinking state (§1.8)",
+  },
   // Nothing in the access popover is computation: badges and device states
   // are all on §1.2's forbidden list.
   'src/lib/AccessPanel.svelte': {},
+  // The show switch reads as on or off by signal, not by a shade of gray.
+  'src/lib/ModelsSection.svelte': {
+    '.switch[aria-checked="true"]': '§1.2 the track of an enabled model\'s show switch',
+    '.switch[aria-checked="true"] span': '§1.2 the knob of an enabled model\'s show switch',
+  },
 }
 
 // Repo root: `npm test` runs vitest with `--root .`, as test/desktop-e2e-harness.test.js assumes.
