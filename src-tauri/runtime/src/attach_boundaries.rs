@@ -835,6 +835,14 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         self.records.commit(actor, body)
     }
 
+    fn record_kinds(
+        &self,
+        actor: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.records.kinds(actor, body)
+    }
+
     fn list_threads(
         &self,
         workspace: &str,

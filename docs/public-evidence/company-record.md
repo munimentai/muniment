@@ -58,3 +58,9 @@ The desktop's own assistant reaches the same server without setup. The runtime w
 Every query lands in `sql-audit.sqlite3` beside the company's graph, with its text, its row count and any error. A query stops after five seconds, and a result is cut at 500 rows or 64 KiB. A commit through a harness is recorded as an agent principal named for that harness, acting for the company's owner.
 
 Windows has no companion client yet, so the server answers there with a platform error.
+
+## The Record panel
+
+The **Record** control sits at the right end of the app row, after **Artifacts**. Press **Command K** on macOS or **Control K** on Windows and Linux to open or close it, and **Escape** to close it. The panel opens beside the thread, and opening it closes the artifact rail. **Maximize** gives the panel the whole window until you press the shortcut or **Escape** again.
+
+The header shows the current company as a picker. With no company yet, the panel offers one field and **Create company**. Below the header the kind list names every kind in the company's catalogue with a property count and, for a kind with states, the state count. Selecting a kind shows its properties.

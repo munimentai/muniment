@@ -77,7 +77,7 @@ export const config = {
     ? ['./specs/cleanup.spec.js']
     : process.env.MUNIMENT_E2E_ONBOARDING_ONLY === '1'
       ? ['./specs/onboarding.spec.js']
-      : ['./specs/local-mode-chat.spec.js', './specs/real-sign-in.spec.js'],
+      : ['./specs/local-mode-chat.spec.js', './specs/record-panel.spec.js', './specs/real-sign-in.spec.js'],
   bail: 0,
   before: async (_capabilities, specs) => {
     specName = path.basename(specs[0], '.spec.js').replace(/[^A-Za-z0-9._-]/g, '_')

@@ -123,6 +123,27 @@ impl RecordRegistry {
         }
     }
 
+    /// The company a request names, or the current one. An absent company is
+    /// a body the caller reads.
+    fn resolve_company_id(
+        &self,
+        company_id: Option<&str>,
+    ) -> Result<Result<String, Value>, ProtocolError> {
+        match company_id {
+            Some(id) => Ok(Ok(id.to_owned())),
+            None => match self.root.current() {
+                Ok(Some(id)) => Ok(Ok(id)),
+                Ok(None) => Ok(Err(error_body(
+                    "no_company",
+                    "No company exists yet. Create one in the desktop's Record panel.",
+                ))),
+                Err(error) => Err(ProtocolError::persistence_failed_with_reason(
+                    error.to_string(),
+                )),
+            },
+        }
+    }
+
     /// Resolves the company, the current one when none is named, and opens
     /// it once. An absent or unknown company is a body the agent reads.
     fn with_record<T>(
@@ -130,20 +151,9 @@ impl RecordRegistry {
         company_id: Option<&str>,
         work: impl FnOnce(&mut OpenRecord) -> Result<T, ProtocolError>,
     ) -> Result<Result<T, Value>, ProtocolError> {
-        let company_id = match company_id {
-            Some(id) => id.to_owned(),
-            None => match self.root.current() {
-                Ok(Some(id)) => id,
-                Ok(None) => return Ok(Err(error_body(
-                    "no_company",
-                    "No company exists yet. Create one in the desktop's Record panel or Settings.",
-                ))),
-                Err(error) => {
-                    return Err(ProtocolError::persistence_failed_with_reason(
-                        error.to_string(),
-                    ))
-                }
-            },
+        let company_id = match self.resolve_company_id(company_id)? {
+            Ok(id) => id,
+            Err(body) => return Ok(Err(body)),
         };
         let mut open = self
             .open
@@ -188,6 +198,22 @@ impl RecordRegistry {
             .get_mut(&company_id)
             .ok_or_else(ProtocolError::persistence_failed)?;
         work(entry).map(Ok)
+    }
+
+    /// The kind catalogue of one company, with the company id it belongs to.
+    pub fn kinds(&self, _actor: &str, body: Value) -> Result<Value, ProtocolError> {
+        let named = company_id(&body)?;
+        let resolved = match self.resolve_company_id(named.as_deref())? {
+            Ok(id) => id,
+            Err(body) => return Ok(body),
+        };
+        let outcome = self.with_record(Some(&resolved), |entry| {
+            let kinds = entry.record.kinds().map_err(|error| {
+                ProtocolError::persistence_failed_with_reason(error.to_string())
+            })?;
+            Ok(json!({"company_id": resolved, "kinds": kinds}))
+        })?;
+        Ok(outcome.unwrap_or_else(|body| body))
     }
 
     /// Runs one read-only query as the actor named.
@@ -309,6 +335,10 @@ mod tests {
             .sql("cli:claude-code", json!({"sql": "select 1"}))
             .unwrap();
         assert_eq!(answer["error"]["code"], "no_company");
+        assert_eq!(
+            registry.kinds("cli", json!({})).unwrap()["error"]["code"],
+            "no_company"
+        );
 
         CompaniesRoot::new(&state).create("Northwind").unwrap();
         let answer = registry
@@ -398,6 +428,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(rows["result"]["row_count"], 2);
+
+        let kinds = registry.kinds(DESKTOP_ACTOR, json!({})).unwrap();
+        assert_eq!(kinds["company_id"], company.id);
+        assert_eq!(kinds["kinds"].as_array().unwrap().len(), 20);
+        assert_eq!(kinds["kinds"][0]["name"], "commitment");
 
         let bad = registry
             .propose("cli", json!({"operation": {"op": "explode"}}))

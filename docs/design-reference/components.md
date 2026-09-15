@@ -46,6 +46,11 @@ them.
 | Thread title input | `input.thread-title` | Renames the thread | Title bar control register, no border, transparent, `--ink`, `font-weight: 600`, ellipsis, flex basis 320px, text selectable | Focus-visible: global ring |
 | Update slot | `.update-slot` | Reserved 24px slot for the update control | 24px by 24px, empty | None |
 | Artifacts toggle | `.row-control.artifacts-toggle` | Opens the rail | Row control, label and `kbd` chip, no wrap, `order: 2` on macOS | `aria-expanded` follows the rail |
+| Record toggle | `.row-control.record-toggle` | Opens the record panel, flush right of Artifacts | Row control, label and `kbd` chip (`⌘ K`), no wrap, `order: 3` on macOS | `aria-expanded` follows the panel. Opening it closes the artifact rail |
+| Record panel | `.record-panel` | The rail column's second occupant, 480px minimum | Panel surface, grid of header, kind list and detail, padding 14px 16px 16px | `.workspace.record-maximized` gives it the whole frame and hides the sidebar and thread |
+| Record header | `.record-header` | `Record`, the company picker, Maximize | One mono row (`--text-13 --font-mono`), `h2` in body type at `--text-15`, hairline below | Maximize is a quiet control with `aria-pressed`; the picker is a native `select` at 24px |
+| Kind list | `.record-kinds .record-kind` | One row per kind, name left and summary right | 28px rows, hairlines between, name in body type, summary in `--text-12 --font-mono --muted`; an own kind reads `(own)` | Hover and `aria-pressed`: `--faint` background |
+| Record state line | `.record-state` | One line: empty, reading, or the first sentence of a failure | `--muted --text-13 --font-mono` | A failure is `role="alert"` |
 | Artifact divider | `.artifact-divider` | Drag handle between thread and rail | Transparent, width 8px, `border-radius: 0` (allowed exception), `col-resize` cursor | Draws nothing on hover or drag. Focus-visible: 2px `--ink` ring at offset -2px |
 | Sidebar divider | `.sidebar-divider` | Drag handle between sidebar and thread, absent while the sidebar is collapsed | Same as the artifact divider | Same as the artifact divider |
 | Artifact rail | `.artifact-rail` | Rail body | Panel surface, padding 22px 24px | Header has 1px `--border` bottom, `h2` at `--text-17` |
