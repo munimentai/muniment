@@ -97,7 +97,7 @@ checkable in the diff:
   deeper than the app binary, so its path is `../../Resources`. The Linux e2e
   runner exports no `LD_LIBRARY_PATH`, so the probe proves the real install.
 - A saved cloud session launches signed in. Any other launch enters the thread
-  surface in local mode, with sign-in in the Settings menu. The Pi sidecar
+  surface in local mode, with sign-in at the sidebar foot. The Pi sidecar
   authenticates with Pi's own credential store, never a cloud virtual key.
 - The runtime logs its startup and the desktop logs the native-auth call, so a
   silent auth path names its cause from an envelope.

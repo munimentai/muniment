@@ -55,8 +55,9 @@ a:hover {
   outline: 0;
 }
 
+/* Selected text reads in both themes: ink at a fifth over the paper, never signal. */
 ::selection {
-  background: var(--faint);
+  background: color-mix(in srgb, var(--ink) 24%, var(--paper));
   color: var(--ink);
 }
 

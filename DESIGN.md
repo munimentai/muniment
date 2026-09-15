@@ -98,8 +98,13 @@ row control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption
-controls and Linux keeps its decorations. The sidebar holds the threads and one
-Settings control at its foot. Settings is a popup over the workspace with a
+controls and Linux keeps its decorations. The sidebar is dense: 28px rows,
+threads under project headings with one `Untitled` project by default,
+hairlines edge to edge, and a foot of Settings above the account row, which
+reads `Sign in to cloud` until an account signs in. A thread row shows a delete
+control on hover and focus, Shift and Command clicks select rows, and the
+right-click menu or the Delete key removes the selection after one confirm.
+Settings is a popup over the workspace with a
 section list on its left, Models, Appearance, Home and Account, and the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
@@ -117,7 +122,8 @@ on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
 the frame shows at every edge and between panels. The update control is a 20px
 ink glyph that widens on hover or focus to read `Update` in mono, and it
 appears only when a newer build is downloaded.
-The composer band is one mono row under the composer: the model source chip,
+The composer band is one mono row under the composer: an Add files plus at
+its left, then the model source chip,
 the Home path, the context meter and the running cost, with the scan chip
 beside them on the first run. The band's one action control sits at its right
 end: absent while the draft is empty, an ink up-arrow button once the draft has
@@ -132,7 +138,7 @@ chevron, and it does not expand.
 The launcher is a 600 by 80 window on `surface` with a hairline and one
 composer line, nothing else. A global shortcut opens it above every app,
 centered in the upper third of the screen. Enter sends the line as the first
-message of a new thread and brings the shell forward. Escape closes it.
+message of a new thread and brings the shell forward. Escape closes it. A microphone closes the row at its right, and a missing speech model opens a popover over the composer like the model picker: one sentence, the download size, the free disk required and one Install control, with the source and licenses one Details disclosure away. An attached file sits above the text under a hairline the composer's full inner width.
 
 Conversation, tool, permission, and receipt state is rebuilt from the
 append-only local run journal. Reopen reduces committed events; snapshots are

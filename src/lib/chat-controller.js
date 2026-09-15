@@ -602,7 +602,10 @@ export function createChatController({
 
   async function deleteThread(threadId) {
     if (!threadId || active() || switchingThread || switchBlocked) return false
-    const deletingCurrent = threadId === readThreadId()
+    // The thread on screen counts as open: the shell shows the newest thread's
+    // transcript before a selection is recorded, and the sidebar marks it the same way.
+    const shownThreadId = readThreadId() ?? (freshThread ? null : readThreadSummaries()[0]?.threadId ?? null)
+    const deletingCurrent = threadId === shownThreadId
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
