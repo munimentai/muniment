@@ -2022,7 +2022,7 @@
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
   /* The expanded receipt sits plain under the provenance line: no box. */
-  .receipt-record { box-sizing: border-box; width: 329px; max-width: 100%; margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .receipt-record { display: grid; row-gap: 6px; box-sizing: border-box; width: 329px; max-width: 100%; margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .receipt-record .recall-file { display: block; }
