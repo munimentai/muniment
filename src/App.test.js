@@ -23,7 +23,8 @@ const rowControlRules = new Map([...rowControlStyles
   .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
 // The delete action lives in the row's right-click menu and opens the inline confirmation.
 const openDeleteMenu = async (title) => {
-  await fireEvent.contextMenu(document.querySelector(`.thread-record [title="${title}"]`))
+  const row = [...document.querySelectorAll('.thread-record .thread-row')].find((row) => row.querySelector('.thread-row-title').textContent === title)
+  await fireEvent.contextMenu(row)
   await fireEvent.click(screen.getByRole('menuitem', { name: `Delete ${title}` }))
 }
 const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/code-diff/1/modified.json'), 'utf8'))
@@ -1187,7 +1188,7 @@ describe('workspace composer entry', () => {
     await fireEvent.input(composer, { target: { value: 'A question' } })
     const send = screen.getByRole('button', { name: 'Send' })
     expect(send).toHaveClass('primary', 'composer-action')
-    expect(send).toHaveAttribute('title', 'Send (⏎)')
+    expect(send).not.toHaveAttribute('title')
     expect(send.querySelector('[data-icon="arrow-up"]')).toBeInTheDocument()
     expect(send).not.toHaveAttribute('aria-disabled')
     expect(send).not.toBeDisabled()
@@ -1279,7 +1280,7 @@ describe('workspace composer entry', () => {
     const settings = screen.getByRole('button', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-expanded', 'true')
     expect(settings).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+,' : 'Control+,')
-    expect(settings).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'Settings (⌘ ,)' : 'Settings (Ctrl ,)')
+    expect(settings).not.toHaveAttribute('title')
 
     // The shortcut toggles the menu while the sidebar shows.
     await fireEvent.keyDown(document, shortcut)
@@ -2380,7 +2381,7 @@ describe('thread name', () => {
     expect(current.closest('.thread-row')).toHaveAttribute('aria-current', 'true')
     expect(document.querySelectorAll('.thread-row')).toHaveLength(3)
     for (const summary of threadSummaryResult) {
-      expect(document.querySelector(`time[datetime="${summary.updatedAt}"]`)).toHaveAttribute('title', new Date(summary.updatedAt).toLocaleString())
+      expect(document.querySelector(`time[datetime="${summary.updatedAt}"]`)).not.toHaveAttribute('title')
     }
     const archive = screen.getByRole('button', { name: /^Archive review/ })
     expect(archive.tabIndex).toBe(0)
@@ -2400,10 +2401,9 @@ describe('thread name', () => {
     const titlebarName = document.querySelector('.thread-title')
     const sidebarName = document.querySelector('.thread-row')
     expect(titlebarName).toHaveTextContent('New thread')
-    expect(titlebarName).toHaveAttribute('title', 'New thread')
+    expect(titlebarName).not.toHaveAttribute('title')
     expect(sidebarName).toHaveTextContent('New thread')
-    expect(sidebarName).toHaveAttribute('title', 'New thread')
-    expect(sidebarName.querySelector('time')).toHaveAttribute('title', '')
+    expect(sidebarName).not.toHaveAttribute('title')
     expect(screen.queryByText('local · durable')).not.toBeInTheDocument()
   })
 
@@ -2428,9 +2428,9 @@ describe('thread name', () => {
     const titlebarName = document.querySelector('.thread-title')
     const sidebarName = document.querySelector('.thread-row')
     expect(titlebarName).toHaveTextContent('Review the lease renewal')
-    expect(titlebarName).toHaveAttribute('title', 'Review the lease renewal')
+    expect(titlebarName).not.toHaveAttribute('title')
     expect(sidebarName).toHaveTextContent('Review the lease renewal')
-    expect(sidebarName).toHaveAttribute('title', 'Review the lease renewal')
+    expect(sidebarName).not.toHaveAttribute('title')
     expect(screen.queryByText('local · durable')).not.toBeInTheDocument()
   })
 
@@ -2481,7 +2481,17 @@ describe('window chrome', () => {
     }
   })
 
-  it('lets macOS place the traffic lights and sizes the title row to their band', () => {
+  it('shows no tooltip on any element of the shell', () => {
+    const files = fs.readdirSync('src', { recursive: true }).filter((file) => file.endsWith('.svelte'))
+    expect(files.length).toBeGreaterThan(5)
+    for (const file of files) {
+      // A lowercase tag is an HTML element, and a title attribute there is a hover tooltip. A component prop named title is a heading.
+      expect(fs.readFileSync(`src/${file}`, 'utf8'), file).not.toMatch(/<[a-z][^>]*\stitle=/)
+    }
+    expect(fs.readFileSync('src/lib/assistant-markdown.js', 'utf8')).not.toMatch(/title=/)
+  })
+
+  it('lets macOS place the traffic lights and ends the title row at the lights\' controls', () => {
     const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
     const main = config.app.windows.find((window) => window.label === 'main')
     expect(appStyles).toMatch(/grid-template-rows:\s*var\(--titlebar-height\) minmax\(0, 1fr\)/)
@@ -2489,11 +2499,14 @@ describe('window chrome', () => {
     const inset = Number(appRules.get('.workspace.macos').match(/--titlebar-inset:\s*(\d+)px/)[1])
     const controlHeight = Number(appRules.get('.titlebar button, .titlebar input').match(/(?:^|;)\s*height:\s*(\d+)px/)[1])
     // Measured on macOS 26: the native title bar band is 32pt and the 14pt lights center 16pt below the top edge.
-    // A 24px control centered in a 32px row shares that center.
+    // A 24px control at the end of a 28px row shares that center, and the paper under it is the frame.
     expect(main.trafficLightPosition).toBeUndefined()
-    expect(rowHeight).toBe(32)
+    expect(rowHeight).toBe(28)
     expect(controlHeight).toBe(24)
-    expect(rowHeight / 2).toBe(16)
+    expect(rowHeight - controlHeight / 2).toBe(16)
+    for (const selector of ['.titlebar', '.workspace.macos .titlebar-sidebar', '.workspace.macos .titlebar-thread']) {
+      expect(appRules.get(selector), selector).toMatch(/align-items:\s*end/)
+    }
     // The clearance is the sidebar part's padding: the title row itself is a subgrid with no padding.
     expect(appRules.get('.workspace.macos .titlebar')).toMatch(/grid-template-columns:\s*subgrid;\s*margin:\s*0;\s*padding:\s*0/)
     expect(appRules.get('.workspace.macos .titlebar-sidebar')).toMatch(/padding-left:\s*calc\(var\(--titlebar-inset\) - var\(--frame-width\)\)/)
@@ -2549,8 +2562,8 @@ describe('sidebar collapse', () => {
     expect(expand).toBe(collapse)
     expect(document.activeElement).toBe(expand)
     expect(expand).toHaveAttribute('aria-expanded', 'false')
-    expect(expand).toHaveAttribute('title', expect.stringContaining('Expand sidebar'))
-    expect(screen.getByRole('button', { name: 'New thread' })).toHaveAttribute('title', navigator.platform.startsWith('Mac') ? 'New thread (⌘ N)' : 'New thread (Ctrl N)')
+    expect(expand).not.toHaveAttribute('title')
+    expect(screen.getByRole('button', { name: 'New thread' })).not.toHaveAttribute('title')
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
     // Collapsed means gone: no rail, and Settings hides with the sidebar.
     expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
@@ -5245,7 +5258,7 @@ describe('thread announcements', () => {
     }
     const summary = await screen.findByText('Prompt text stays in runtime memory for this run.')
     expect(summary.tagName).toBe('SUMMARY')
-    expect(summary).toHaveAttribute('title', promptStorageNotice)
+    expect(summary).not.toHaveAttribute('title')
     expect(summary.closest('details')).toHaveClass('prompt-storage-notice')
     expect(appRules.get('.prompt-storage-notice')).toContain('var(--font-mono)')
     expect(appRules.get('.prompt-storage-notice summary')).toContain('white-space: nowrap')
@@ -5462,7 +5475,7 @@ describe('thread announcements', () => {
 
     const stop = await screen.findByRole('button', { name: 'Stop' })
     expect(stop).toHaveClass('stop', 'composer-action')
-    expect(stop).toHaveAttribute('title', 'Stop the reply')
+    expect(stop).not.toHaveAttribute('title')
     expect(stop.querySelector('[data-icon="square"]')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Queue follow-up' })).not.toBeInTheDocument()
@@ -6417,7 +6430,7 @@ describe('signed-in access popover', () => {
   it('identifies the profile and keeps access snapshot metadata in its section', async () => {
     render(App)
     const profile = await screen.findByRole('button', { name: /Alice/i })
-    expect(profile).toHaveAttribute('title', 'Acme · owner')
+    expect(profile).not.toHaveAttribute('title')
     await fireEvent.click(profile)
 
     const dialog = screen.getByRole('dialog', { name: 'Profile' })
@@ -6479,9 +6492,9 @@ describe('signed-in access popover', () => {
 
     pendingCompanions.resolve([{ identity: 'client-1', claimed_kind: longKind, claimed_version: longVersion, approved_at: null }])
     const kind = await within(dialog).findByText(longKind)
-    expect(kind).toHaveAttribute('title', longKind)
+    expect(kind).not.toHaveAttribute('title')
     expect(within(dialog).getByText('Claimed kind')).toBeInTheDocument()
-    expect(within(dialog).getByText(`Claimed version: ${longVersion}`)).toHaveAttribute('title', longVersion)
+    expect(within(dialog).getByText(`Claimed version: ${longVersion}`)).not.toHaveAttribute('title')
     expect(within(dialog).getByText('Approval time unavailable')).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('client-1')
   })

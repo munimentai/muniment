@@ -97,6 +97,8 @@ async function checkWindowChrome(browser, baseUrl) {
                 name: control.getAttribute('aria-label'),
                 width: box.width,
                 height: box.height,
+                // The row ends where its controls end, so the paper under them is the frame.
+                flush: Math.abs(box.bottom - rect.bottom) < 0.5,
                 visible: control.contains(target),
                 inside: box.left >= rect.left && box.right <= rect.right && box.top >= rect.top && box.bottom <= rect.bottom,
                 draggable: control.hasAttribute('data-tauri-drag-region'),
@@ -104,14 +106,14 @@ async function checkWindowChrome(browser, baseUrl) {
             }),
           }
         })
-        assert.equal(row.height, platform.startsWith('Mac') ? 32 : 28)
+        assert.equal(row.height, 28)
         assert.equal(row.top, 0)
         if (platform.startsWith('Mac')) assert.equal(row.clearance, 78)
         else assert.equal(row.padding, '12px')
         assert.equal(row.controls.length, 4)
         for (const control of row.controls) {
           assert.ok(control.width >= 24 && control.height >= 24, JSON.stringify(control))
-          assert.ok(control.visible && control.inside, JSON.stringify(control))
+          assert.ok(control.visible && control.inside && control.flush, JSON.stringify(control))
           assert.equal(control.draggable, false)
         }
       }

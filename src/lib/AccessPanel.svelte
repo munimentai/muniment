@@ -273,7 +273,7 @@
 </script>
 
 <div class="profile-block">
-  <button bind:this={profileButton} class="profile-button" title={profileDetails} aria-haspopup="dialog" aria-expanded={accessOpen} onclick={() => accessOpen ? closeAccess() : openAccess()}><span><strong>{profileName}</strong><small>{profileDetails}</small></span></button>
+  <button bind:this={profileButton} class="profile-button" aria-haspopup="dialog" aria-expanded={accessOpen} onclick={() => accessOpen ? closeAccess() : openAccess()}><span><strong>{profileName}</strong><small>{profileDetails}</small></span></button>
   {#if accessOpen}
     <div bind:this={accessPopover} class="access-popover" role="dialog" aria-label="Profile" tabindex="-1">
       <header><div><h2>{profileName}</h2><p>{profileDetails}</p></div><button class="quiet close-access" aria-label="Close profile" onclick={closeAccess}>×</button></header>
@@ -365,8 +365,8 @@
                       </div>
                     </div>
                   {:else}
-                    <div class="companion-heading"><strong title={companion.claimed_kind}>{companion.claimed_kind}</strong><span>Claimed kind</span></div>
-                    <p class="companion-version" title={companion.claimed_version}>Claimed version: {companion.claimed_version}</p>
+                    <div class="companion-heading"><strong>{companion.claimed_kind}</strong><span>Claimed kind</span></div>
+                    <p class="companion-version">Claimed version: {companion.claimed_version}</p>
                     {#if companion.approved_at}<time datetime={companion.approved_at}>Approved {lastActive(companion.approved_at)}</time>{:else}<p class="companion-time">Approval time unavailable</p>{/if}
                     <button type="button" class="companion-revoke" data-revoke-companion={companion.identity} aria-label={`Revoke ${companion.claimed_kind}`} onclick={() => askToRevokeCompanion(companion.identity)}>Revoke</button>
                   {/if}

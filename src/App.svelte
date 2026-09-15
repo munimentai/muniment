@@ -62,11 +62,6 @@
       : 'unknown'
   }
 
-  function fullDateTime(timestamp) {
-    const date = new Date(timestamp)
-    return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
-  }
-
   const tauri = window.__TAURI__?.core
   let auth = $state(bootState)
   let localEntryError = $state('')
@@ -264,7 +259,6 @@
   const newThreadKeyShortcut = newThreadShortcut()
   const settingsKeyShortcut = settingsShortcut()
   const modifierLabel = shortcutDisplayLabel(sidebarKeyShortcut).slice(0, -1)
-  const sidebarHint = `${modifierLabel}\\`
   // The newest copy attempt in the thread, or null once its confirmation lapses.
   let copy = $state(null)
   const streamingUnderline = createStreamingUnderlineAction(tick)
@@ -421,7 +415,7 @@
   function threadTitleButtonKeydown(event) {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
-    editThreadTitle(event.currentTarget.title)
+    editThreadTitle(currentThreadTitle)
   }
 
   function commitThreadTitle() {
@@ -1318,10 +1312,10 @@
       <section class="workspace" data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:artifact-open={artifactRailOpen} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
-            <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar (${sidebarHint})`} onclick={toggleSidebar}>
+            <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
               <LucideIcon name={sidebarCollapsed ? 'panel-left-open' : 'panel-left-close'} />
             </button>
-            <RowControl kind="new-thread" aria-label="New thread" title={`New thread (${shortcutDisplayLabel(newThreadKeyShortcut)})`} aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
+            <RowControl kind="new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
               <LucideIcon name="plus" />
               <span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
             </RowControl>
@@ -1330,7 +1324,7 @@
             {#if editingThreadTitle}
               <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
             {:else}
-              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" title={currentThreadTitle} disabled={!currentThreadId} bind:element={threadTitleButton} onclick={(event) => editThreadTitle(event.currentTarget.title)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
+              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" disabled={!currentThreadId} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
             {/if}
             <span class="title-spacer" data-tauri-drag-region></span>
             <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
@@ -1342,7 +1336,7 @@
             <h2 id="thread-list-title" class="side-label">Threads</h2>
             <ul class="thread-list" aria-labelledby="thread-list-title">
               {#if freshThread}
-                <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(1)} title={currentThreadTitle}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
+                <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(1)}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
               {/if}
               {#each threadSummaries as summary, index (summary.threadId)}
                 {@const title = summary.title || 'New thread'}
@@ -1352,9 +1346,9 @@
                 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                 <li class="thread-record" oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
                   {#if current}
-                    <div class="thread-row active-thread" data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} title={rowTitle}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></div>
+                    <div class="thread-row active-thread" data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
                   {:else}
-                    <button class="thread-row" data-thread-id={summary.threadId} title={rowTitle} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt} title={fullDateTime(summary.updatedAt)}>{relativeTime(summary.updatedAt)}</time></button>
+                    <button class="thread-row" data-thread-id={summary.threadId} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
                   {/if}
                   {#if deletingThreadId === summary.threadId}
                     <div class="thread-delete-confirm" role="group" aria-label={`Delete ${rowTitle}?`}>
@@ -1397,7 +1391,7 @@
                 {/if}
               </section>
             {/if}
-            <button class="side-action" aria-expanded={settingsOpen} aria-controls="settings-menu" aria-keyshortcuts={settingsKeyShortcut} title={`Settings (${shortcutDisplayLabel(settingsKeyShortcut)})`} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
+            <button class="side-action" aria-expanded={settingsOpen} aria-controls="settings-menu" aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
           </div>
           {/if}
         </aside>
@@ -1449,7 +1443,7 @@
             <div class="response">
               {#if message.run.promptStorageNotice}
                 <details class="prompt-storage-notice">
-                  <summary title={message.run.promptStorageNotice}>Prompt text stays in runtime memory for this run.</summary>
+                  <summary>Prompt text stays in runtime memory for this run.</summary>
                   <p>{message.run.promptStorageNotice}</p>
                 </details>
               {/if}
@@ -1648,7 +1642,7 @@
               <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
               {#if !active}<button type="button" class="quiet" onclick={chooseFiles}>Add files</button>{/if}
               {#if active || draft.trim()}
-                <button type="button" class="composer-action" class:primary={!active} class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} title={active ? 'Stop the reply' : 'Send (⏎)'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
+                <button type="button" class="composer-action" class:primary={!active} class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
                   <LucideIcon name={active ? 'square' : 'arrow-up'} variant="action" />
                 </button>
               {/if}
@@ -1858,16 +1852,18 @@
   .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .titlebar { grid-area: title; display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 calc(-1 * var(--frame-width)); padding: 0 12px; background: var(--paper); font-size: var(--text-13); user-select: none; }
+  /* The row ends where its 24px controls end, so the paper under them is the grid gap, the frame. */
+  .titlebar { grid-area: title; display: flex; align-items: end; gap: 8px; min-width: 0; margin: 0 calc(-1 * var(--frame-width)); padding: 0 12px; background: var(--paper); font-size: var(--text-13); user-select: none; }
   /* The title row shares the animated sidebar width so controls never cross during the panel slide. */
   @property --sidebar-column { syntax: '<length>'; inherits: true; initial-value: 195px; }
   /* Measured on macOS 26: the native title bar band is 32pt, and its three 14pt
      lights sit at x = 9, 32 and 55 with their centers 16pt below the top edge.
-     The row is the band, so the 24px controls center on the lights, and the
-     row starts one 9pt gap after the last light ends at 69pt. New thread ends
+     The 24px controls end at the 28px row, so they center on the lights, the
+     paper under them is the frame, and the row starts one 9pt gap after the
+     last light ends at 69pt. New thread ends
      at 251px in the installed app and at 252px in the probe's Chromium, and the
      thread title starts one gap and a rounding pixel later. */
-  .workspace.macos { --titlebar-height: 32px; --titlebar-inset: 78px; --titlebar-controls-end: 272px; transition: --sidebar-column 180ms ease; }
+  .workspace.macos { --titlebar-height: 28px; --titlebar-inset: 78px; --titlebar-controls-end: 272px; transition: --sidebar-column 180ms ease; }
   .workspace.macos.artifact-resizing, .workspace.macos.sidebar-resizing { transition: none; }
   .workspace:not(.macos) .titlebar-sidebar, .workspace:not(.macos) .titlebar-thread { display: contents; }
   /* The title row is a subgrid with no margin and no padding of its own: padding
@@ -1876,9 +1872,9 @@
      part's padding, so both parts track their panel columns in every engine. */
   .workspace.macos .titlebar { display: grid; grid-template-columns: subgrid; margin: 0; padding: 0; }
   /* The sidebar part is at least as wide as its controls, so a narrow sidebar column never hides New thread. */
-  .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; box-sizing: content-box; display: flex; align-items: center; gap: 8px; min-width: calc(var(--titlebar-controls-end) - var(--titlebar-inset)); padding-left: calc(var(--titlebar-inset) - var(--frame-width)); }
+  .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; box-sizing: content-box; display: flex; align-items: end; gap: 8px; min-width: calc(var(--titlebar-controls-end) - var(--titlebar-inset)); padding-left: calc(var(--titlebar-inset) - var(--frame-width)); }
   /* Artifacts sits flush right: 4px inside the 8px frame matches the 12px row padding elsewhere. */
-  .workspace.macos .titlebar-thread { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: 4px; }
+  .workspace.macos .titlebar-thread { grid-column: 2 / -1; display: flex; align-items: end; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: 4px; }
   .workspace.macos .update-slot { order: 1; }
   .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 24px; padding: 0 6px; }
   .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
@@ -1887,7 +1883,7 @@
   /* A hairline edge keeps the chip legible over the control's --faint hover. */
   .titlebar kbd { margin-left: 2px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); }
   .update-slot { flex: 0 0 24px; height: 24px; }
-  .thread-title-heading { min-width: 24px; max-width: 100%; margin: 0; font: inherit; }
+  .thread-title-heading { display: flex; min-width: 24px; max-width: 100%; margin: 0; font: inherit; }
   /* The rename field keeps the title control's register while it shows. */
   input.thread-title { flex: 0 1 320px; max-width: 100%; overflow: hidden; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
   kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }

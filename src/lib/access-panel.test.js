@@ -96,7 +96,7 @@ describe('contract entitlement snapshot', () => {
     })
     renderPanel(invoke)
     const profile = await screen.findByRole('button', { name: /ada@example.test/ })
-    expect(profile).toHaveAttribute('title', 'Acme · user')
+    expect(profile).not.toHaveAttribute('title')
     await fireEvent.click(profile)
     const section = screen.getByRole('dialog', { name: 'Profile' }).querySelector('.entitlements-section')
     expect(section).toHaveTextContent('Snapshot v42')
@@ -253,7 +253,7 @@ describe('access popover layout', () => {
     expect(rules.get('.profile-button small')).toMatch(/overflow:\s*hidden/)
     expect(rules.get('.profile-button small')).toMatch(/text-overflow:\s*ellipsis/)
     expect(rules.get('.profile-button small')).toMatch(/white-space:\s*nowrap/)
-    expect(source).toMatch(/class="profile-button" title=\{profileDetails\}/)
+    expect(source).not.toMatch(/class="profile-button"[^>]*\btitle=/)
   })
 
   it('renders every connected program state and a missing approval time', () => {
@@ -271,9 +271,9 @@ describe('access popover layout', () => {
     expect(source).toMatch(/onclick=\{loadCompanions\}>Try again/)
   })
 
-  it('keeps claimed program text on one line with its full value available', () => {
-    expect(source).toMatch(/<strong title=\{companion\.claimed_kind\}>/)
-    expect(source).toMatch(/class="companion-version" title=\{companion\.claimed_version\}/)
+  it('keeps claimed program text on one line', () => {
+    expect(source).not.toMatch(/<strong[^>]*\btitle=/)
+    expect(source).not.toMatch(/class="companion-version"[^>]*\btitle=/)
     expect(rules.get('.companion-heading strong, .companion-version')).toMatch(/text-overflow:\s*ellipsis/)
     expect(rules.get('.companion-heading strong, .companion-version')).toMatch(/white-space:\s*nowrap/)
   })
