@@ -3,16 +3,21 @@ export const THEME_SYSTEM = 'system'
 export const THEME_LIGHT = 'light'
 export const THEME_DARK = 'dark'
 
-// Eight themes: four light, four dark. Each is one `:root[data-theme]` block of
-// the ten color tokens in src/styles/tokens.css. System follows the OS and
-// uses the default of each scheme.
-export const LIGHT_THEMES = ['paper', 'vellum', 'ledger', 'foolscap']
-export const DARK_THEMES = ['moss', 'vault', 'graphite', 'inkwell']
+// The themes, light then dark. Each is one `:root[data-theme]` block of the
+// ten color tokens in src/styles/tokens.css. The first four of each scheme are
+// the house sets, the next ones carry the neutrals of a well-known editor
+// theme, and the last one of each is the high contrast set. System follows the
+// OS and uses the default of each scheme.
+export const LIGHT_THEMES = ['paper', 'vellum', 'ledger', 'foolscap', 'parchment', 'manila', 'linen', 'broadsheet']
+export const DARK_THEMES = ['moss', 'vault', 'graphite', 'inkwell', 'lagoon', 'umber', 'fjord', 'plum', 'nocturne', 'nightshade', 'basalt', 'obsidian', 'carbon']
 export const DEFAULT_LIGHT_THEME = 'paper'
 export const DEFAULT_DARK_THEME = 'vault'
 export const THEME_NAMES = {
   paper: 'Paper', vellum: 'Vellum', ledger: 'Ledger', foolscap: 'Foolscap',
+  parchment: 'Parchment', manila: 'Manila', linen: 'Linen', broadsheet: 'Broadsheet',
   moss: 'Moss', vault: 'Vault', graphite: 'Graphite', inkwell: 'Inkwell',
+  lagoon: 'Lagoon', umber: 'Umber', fjord: 'Fjord', plum: 'Plum', nocturne: 'Nocturne',
+  nightshade: 'Nightshade', basalt: 'Basalt', obsidian: 'Obsidian', carbon: 'Carbon',
 }
 
 const modes = new Set([THEME_SYSTEM, THEME_LIGHT, THEME_DARK])

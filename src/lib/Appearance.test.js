@@ -16,18 +16,19 @@ const pressed = (group) => within(group).getAllByRole('button').filter((button) 
 describe('Appearance', () => {
   it('offers three modes and eight themes, each with a swatch of its own paper and surface', () => {
     render(Appearance)
-    const modes = screen.getByRole('group', { name: 'Appearance' })
+    const modes = screen.getByRole('group', { name: 'Mode' })
     expect(within(modes).getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     const themes = screen.getByRole('group', { name: 'Themes' })
-    expect(within(themes).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Moss', 'Vault', 'Graphite', 'Inkwell'])
-    expect([...themes.querySelectorAll('[data-swatch]')].map((swatch) => swatch.dataset.theme)).toEqual(['paper', 'vellum', 'ledger', 'foolscap', 'moss', 'vault', 'graphite', 'inkwell'])
+    expect(within(themes).getAllByRole('button').map((button) => button.textContent.trim())).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon']])
+    expect([...themes.querySelectorAll('[data-swatch]')].map((swatch) => swatch.dataset.theme)).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon']].map((name) => name.toLowerCase()))
+    expect([...themes.querySelectorAll('p')].map((label) => label.textContent)).toEqual(['Light', 'Dark'])
     expect(pressed(modes)).toEqual(['System'])
     expect(pressed(themes)).toEqual(['Paper', 'Vault'])
   })
 
   it('picks a theme with its mode, keeps the last pick per mode, and follows the OS in System', async () => {
     render(Appearance)
-    const modes = screen.getByRole('group', { name: 'Appearance' })
+    const modes = screen.getByRole('group', { name: 'Mode' })
     const themes = screen.getByRole('group', { name: 'Themes' })
     await fireEvent.click(within(themes).getByRole('button', { name: 'Vault' }))
     expect(document.documentElement.dataset).toMatchObject({ theme: 'vault', scheme: 'dark' })

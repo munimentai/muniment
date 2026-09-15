@@ -103,7 +103,7 @@
 }
 
 /*
- * The eight themes. An explicit pick sets data-theme on the root, which
+ * The themes. An explicit pick sets data-theme on the root, which
  * outranks the OS media block. A swatch element carries the same block, so
  * Appearance shows every theme's paper and surface without a second source.
  */
@@ -224,5 +224,200 @@
   --signal-soft: rgba(88, 179, 159, .12);
   --oxide: #C96A61;
   --ochre: #CBA14E;
+  color-scheme: dark;
+}
+
+/* Solarized light on its cream bases. */
+:root[data-theme="parchment"], [data-swatch][data-theme="parchment"] {
+  --paper: #FDF6E3;
+  --surface: #FFFCF2;
+  --faint: #EEE8D5;
+  --ink: #073642;
+  --muted: #4F6670;
+  --border: #E0D8C0;
+  --signal: #2A7264;
+  --signal-soft: rgba(42, 114, 100, .10);
+  --oxide: #B5281F;
+  --ochre: #B58900;
+  color-scheme: light;
+}
+
+/* Gruvbox light on its warm folder yellows. */
+:root[data-theme="manila"], [data-swatch][data-theme="manila"] {
+  --paper: #FBF1C7;
+  --surface: #FDF6DC;
+  --faint: #EBDBB2;
+  --ink: #3C3836;
+  --muted: #5F574D;
+  --border: #D5C4A1;
+  --signal: #2A6A5A;
+  --signal-soft: rgba(42, 106, 90, .12);
+  --oxide: #9D0006;
+  --ochre: #B57614;
+  color-scheme: light;
+}
+
+/* Catppuccin Latte on its cool pastel grays. */
+:root[data-theme="linen"], [data-swatch][data-theme="linen"] {
+  --paper: #EFF1F5;
+  --surface: #F7F8FA;
+  --faint: #E6E9EF;
+  --ink: #4C4F69;
+  --muted: #5F6278;
+  --border: #CCD0DA;
+  --signal: #2A7264;
+  --signal-soft: rgba(42, 114, 100, .10);
+  --oxide: #D20F39;
+  --ochre: #DF8E1D;
+  color-scheme: light;
+}
+
+/* High contrast light: black ink on white with strong hairlines. */
+:root[data-theme="broadsheet"], [data-swatch][data-theme="broadsheet"] {
+  --paper: #FFFFFF;
+  --surface: #FFFFFF;
+  --faint: #EDEDED;
+  --ink: #000000;
+  --muted: #2B2B2B;
+  --border: #6E6E6E;
+  --signal: #0F5A4B;
+  --signal-soft: rgba(15, 90, 75, .14);
+  --oxide: #A80000;
+  --ochre: #6F4A00;
+  color-scheme: light;
+}
+
+/* Solarized dark on its deep teal bases. */
+:root[data-theme="lagoon"], [data-swatch][data-theme="lagoon"] {
+  --paper: #002B36;
+  --surface: #073642;
+  --faint: #0A3F4B;
+  --ink: #EEE8D5;
+  --muted: #9DABAB;
+  --border: #1B5563;
+  --signal: #58B39F;
+  --signal-soft: rgba(88, 179, 159, .14);
+  --oxide: #E0645C;
+  --ochre: #D2A21C;
+  color-scheme: dark;
+}
+
+/* Gruvbox dark on its warm browns. */
+:root[data-theme="umber"], [data-swatch][data-theme="umber"] {
+  --paper: #282828;
+  --surface: #32302F;
+  --faint: #3C3836;
+  --ink: #EBDBB2;
+  --muted: #BDAE93;
+  --border: #504945;
+  --signal: #58B39F;
+  --signal-soft: rgba(88, 179, 159, .12);
+  --oxide: #FB4934;
+  --ochre: #FABD2F;
+  color-scheme: dark;
+}
+
+/* Nord on its polar night blues, with its frost teal as signal. */
+:root[data-theme="fjord"], [data-swatch][data-theme="fjord"] {
+  --paper: #2E3440;
+  --surface: #343A48;
+  --faint: #3B4252;
+  --ink: #ECEFF4;
+  --muted: #A6B0C3;
+  --border: #4C566A;
+  --signal: #8FBCBB;
+  --signal-soft: rgba(143, 188, 187, .14);
+  --oxide: #BF616A;
+  --ochre: #EBCB8B;
+  color-scheme: dark;
+}
+
+/* Catppuccin Mocha on its violet-black bases. */
+:root[data-theme="plum"], [data-swatch][data-theme="plum"] {
+  --paper: #1E1E2E;
+  --surface: #252536;
+  --faint: #313244;
+  --ink: #CDD6F4;
+  --muted: #A6ADC8;
+  --border: #45475A;
+  --signal: #58B39F;
+  --signal-soft: rgba(88, 179, 159, .12);
+  --oxide: #F38BA8;
+  --ochre: #F9E2AF;
+  color-scheme: dark;
+}
+
+/* Tokyo Night on its indigo blacks. */
+:root[data-theme="nocturne"], [data-swatch][data-theme="nocturne"] {
+  --paper: #1A1B26;
+  --surface: #1F2335;
+  --faint: #292E42;
+  --ink: #C0CAF5;
+  --muted: #A9B1D6;
+  --border: #3B4261;
+  --signal: #58B39F;
+  --signal-soft: rgba(88, 179, 159, .12);
+  --oxide: #F7768E;
+  --ochre: #E0AF68;
+  color-scheme: dark;
+}
+
+/* Dracula on its violet grays. */
+:root[data-theme="nightshade"], [data-swatch][data-theme="nightshade"] {
+  --paper: #282A36;
+  --surface: #2F3140;
+  --faint: #44475A;
+  --ink: #F8F8F2;
+  --muted: #B6BBD1;
+  --border: #4F5268;
+  --signal: #7FD6C2;
+  --signal-soft: rgba(127, 214, 194, .14);
+  --oxide: #FF5555;
+  --ochre: #F1FA8C;
+  color-scheme: dark;
+}
+
+/* Monokai on its olive blacks. */
+:root[data-theme="basalt"], [data-swatch][data-theme="basalt"] {
+  --paper: #272822;
+  --surface: #2D2E27;
+  --faint: #3E3D32;
+  --ink: #F8F8F2;
+  --muted: #B3AF98;
+  --border: #49483E;
+  --signal: #66BFAB;
+  --signal-soft: rgba(102, 191, 171, .12);
+  --oxide: #F92672;
+  --ochre: #E6DB74;
+  color-scheme: dark;
+}
+
+/* One Dark on its blue-gray blacks. */
+:root[data-theme="obsidian"], [data-swatch][data-theme="obsidian"] {
+  --paper: #282C34;
+  --surface: #2C313A;
+  --faint: #353B45;
+  --ink: #DCDFE4;
+  --muted: #ABB2BF;
+  --border: #3E4451;
+  --signal: #66BFAB;
+  --signal-soft: rgba(102, 191, 171, .12);
+  --oxide: #E06C75;
+  --ochre: #E5C07B;
+  color-scheme: dark;
+}
+
+/* High contrast dark: white ink on black with strong hairlines. */
+:root[data-theme="carbon"], [data-swatch][data-theme="carbon"] {
+  --paper: #000000;
+  --surface: #000000;
+  --faint: #1C1C1C;
+  --ink: #FFFFFF;
+  --muted: #D6D6D6;
+  --border: #9A9A9A;
+  --signal: #7FE0C8;
+  --signal-soft: rgba(127, 224, 200, .16);
+  --oxide: #FF7B72;
+  --ochre: #FFD166;
   color-scheme: dark;
 }

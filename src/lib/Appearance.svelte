@@ -3,7 +3,7 @@
 
   let theme = $state(readStoredTheme())
   const modeOptions = [['System', 'system'], ['Light', 'light'], ['Dark', 'dark']]
-  const themeRows = [LIGHT_THEMES, DARK_THEMES]
+  const themeGroups = [['Light', LIGHT_THEMES], ['Dark', DARK_THEMES]]
 
   function commit(next) {
     theme = next
@@ -28,20 +28,23 @@
 </script>
 
 <section aria-labelledby="appearance-heading">
-  <h3 id="appearance-heading" class="access-label">Appearance</h3>
-  <div class="theme-options" role="group" aria-labelledby="appearance-heading">
+  <h3 id="appearance-heading" class="access-label">Themes</h3>
+  <div class="theme-options" role="group" aria-label="Mode">
     {#each modeOptions as option}
       <button type="button" aria-pressed={theme.mode === option[1]} onclick={() => chooseMode(option[1])}>{option[0]}</button>
     {/each}
   </div>
-  <div class="theme-grid" role="group" aria-label="Themes">
-    {#each themeRows as row}
-      {#each row as name}
-        <button type="button" class="theme-pick" aria-pressed={picked(name)} onclick={() => chooseTheme(name)}>
-          <span class="swatch-ring" aria-hidden="true"><span class="swatch" data-swatch data-theme={name}></span></span>
-          <span>{THEME_NAMES[name]}</span>
-        </button>
-      {/each}
+  <div class="themes" role="group" aria-labelledby="appearance-heading">
+    {#each themeGroups as [label, row]}
+      <p class="group-label">{label}</p>
+      <div class="theme-grid">
+        {#each row as name}
+          <button type="button" class="theme-pick" aria-pressed={picked(name)} onclick={() => chooseTheme(name)}>
+            <span class="swatch-ring" aria-hidden="true"><span class="swatch" data-swatch data-theme={name}></span></span>
+            <span>{THEME_NAMES[name]}</span>
+          </button>
+        {/each}
+      </div>
     {/each}
   </div>
 </section>
@@ -55,8 +58,10 @@
   .theme-options button:last-child { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
   .theme-options button:hover { background: var(--faint); color: var(--ink); }
   .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
-  /* Four light themes on one row, four dark on the next: a swatch of the theme's paper and surface beside its name. */
-  .theme-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 10px; max-width: 480px; }
+  /* The light themes under one label and the dark under another, four to a row, a swatch of each theme's paper and surface beside its name. */
+  .themes { margin-top: 10px; max-width: 480px; }
+  .group-label { margin: 8px 0 4px; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
+  .theme-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .theme-pick { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }
   .theme-pick > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .theme-pick:hover { background: var(--faint); color: var(--ink); }
