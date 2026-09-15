@@ -13,7 +13,6 @@ use muniment_core::pi_settings::merge_pi_settings;
 use muniment_core::sidecar::pi_install::PI_SELECTED_ARTIFACT;
 use muniment_core::state_root::agent_directory;
 
-const CLOUD_PROVIDERS: [&str; 3] = ["anthropic", "google", "openai"];
 const PROVIDERS: [&str; 4] = ["anthropic", "google", "openai", "ollama"];
 const OLLAMA_PROVIDER: &str = "ollama";
 const OLLAMA_MODEL: &str = "llama3.2:latest";
@@ -32,6 +31,87 @@ struct PiAuthLock(PathBuf);
 pub(crate) struct ProviderStatus {
     provider: &'static str,
     configured: bool,
+}
+
+/// Pi's built-in providers that take an API key in `auth.json`, by Pi id and display name.
+const KEY_PROVIDERS: &[(&str, &str)] = &[
+    ("anthropic", "Anthropic"),
+    ("openai", "OpenAI"),
+    ("google", "Google"),
+    ("xai", "xAI"),
+    ("openrouter", "OpenRouter"),
+    ("deepseek", "DeepSeek"),
+    ("mistral", "Mistral"),
+    ("groq", "Groq"),
+    ("cerebras", "Cerebras"),
+    ("nvidia", "NVIDIA NIM"),
+    ("amazon-bedrock", "Amazon Bedrock"),
+    ("azure-openai-responses", "Azure OpenAI"),
+    ("vercel-ai-gateway", "Vercel Gateway"),
+    ("cloudflare-ai-gateway", "Cloudflare Gateway"),
+    ("cloudflare-workers-ai", "Cloudflare Workers"),
+    ("zai", "ZAI Coding Plan"),
+    ("opencode", "OpenCode Zen"),
+    ("opencode-go", "OpenCode Go"),
+    ("huggingface", "Hugging Face"),
+    ("fireworks", "Fireworks"),
+    ("together", "Together"),
+    ("baseten", "Baseten"),
+    ("kimi-coding", "Kimi For Coding"),
+    ("minimax", "MiniMax"),
+    ("qwen-token-plan", "Qwen Token Plan"),
+    ("radius", "Radius"),
+];
+/// Providers Pi signs into with an account, by Pi id and display name.
+const ACCOUNT_PROVIDERS: &[(&str, &str)] = &[
+    ("openai-codex", "OpenAI"),
+    ("xai", "xAI"),
+    ("openrouter", "OpenRouter"),
+    ("github-copilot", "GitHub Copilot"),
+    ("anthropic", "Anthropic"),
+];
+/// The pi-claude-bridge provider: Anthropic through the Claude Code sign-in.
+const CLAUDE_BRIDGE_PROVIDER: &str = "claude-bridge";
+const LM_STUDIO_PROVIDER: &str = "lmstudio";
+const CUSTOM_PROVIDER_PREFIX: &str = "custom-";
+/// The desktop's own record beside Pi's files: hidden models, endpoint names, the Claude Code connection.
+const MODELS_RECORD_FILE: &str = "muniment-models.json";
+const CLAUDE_BRIDGE_CONFIG_FILE: &str = "claude-bridge.json";
+const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(30);
+const CLAUDE_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Serialize, PartialEq)]
+pub(crate) struct InventoryModel {
+    id: String,
+    context: String,
+    max_out: String,
+    thinking: bool,
+    images: bool,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub(crate) struct InventoryProvider {
+    id: String,
+    name: String,
+    /// `key`, `account`, `local`, `custom` or `claude-code`.
+    source: &'static str,
+    base_url: Option<String>,
+    models: Vec<InventoryModel>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub(crate) struct ProviderInventory {
+    providers: Vec<InventoryProvider>,
+    default_provider: Option<String>,
+    default_model: Option<String>,
+    hidden: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub(crate) struct ClaudeCodeStatus {
+    installed: bool,
+    logged_in: bool,
+    path: Option<String>,
 }
 
 impl Drop for PiAuthLock {
@@ -70,7 +150,7 @@ fn config_directory<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> Result<Pat
 }
 
 /// The agent harness's own directory under the state root.
-fn harness_agent_directory(error: &str) -> Result<PathBuf, String> {
+pub(crate) fn harness_agent_directory(error: &str) -> Result<PathBuf, String> {
     muniment_runtime::profile_directory()
         .map(|state| agent_directory(&state))
         .map_err(|_| error.to_string())
@@ -165,8 +245,15 @@ fn provider_status(auth_file: &Path, models_file: &Path) -> Result<Vec<ProviderS
         .collect())
 }
 
+fn key_provider_name(provider: &str) -> Option<&'static str> {
+    KEY_PROVIDERS
+        .iter()
+        .find(|(id, _)| *id == provider)
+        .map(|(_, name)| *name)
+}
+
 fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(), String> {
-    if !CLOUD_PROVIDERS.contains(&provider)
+    if key_provider_name(provider).is_none()
         || key.is_empty()
         || key.len() > 16 * 1024
         || key.trim() != key
@@ -357,6 +444,537 @@ pub(crate) fn local_mode_store_local_provider(
     store_local_provider(&pi_models_file(&agent), &base_url)
 }
 
+fn models_record_file(agent: &Path) -> PathBuf {
+    agent.join(MODELS_RECORD_FILE)
+}
+
+fn claude_bridge_config_file(agent: &Path) -> PathBuf {
+    agent.join(CLAUDE_BRIDGE_CONFIG_FILE)
+}
+
+fn read_models_record(agent: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    match fs::read(models_record_file(agent)) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| READ_SETTINGS_ERROR.to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
+        Err(_) => Err(READ_SETTINGS_ERROR.into()),
+    }
+}
+
+fn write_models_record(
+    agent: &Path,
+    record: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    write_json_for_update(&models_record_file(agent), record)
+}
+
+fn record_strings(record: &serde_json::Map<String, serde_json::Value>, key: &str) -> Vec<String> {
+    record
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn provider_display_name(
+    provider: &str,
+    record: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    if let Some(name) = record
+        .get("names")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|names| names.get(provider))
+        .and_then(serde_json::Value::as_str)
+    {
+        return name.to_owned();
+    }
+    if provider == OLLAMA_PROVIDER {
+        return "Ollama".into();
+    }
+    if provider == LM_STUDIO_PROVIDER {
+        return "LM Studio".into();
+    }
+    if provider == CLAUDE_BRIDGE_PROVIDER {
+        return "Anthropic".into();
+    }
+    key_provider_name(provider)
+        .or_else(|| {
+            ACCOUNT_PROVIDERS
+                .iter()
+                .find(|(id, _)| *id == provider)
+                .map(|(_, name)| *name)
+        })
+        .map(str::to_owned)
+        .unwrap_or_else(|| provider.to_owned())
+}
+
+/// Parses Pi's `--list-models` table: a header row, then one row per model.
+fn parse_model_table(output: &str) -> Vec<(String, InventoryModel)> {
+    let mut rows = Vec::new();
+    for line in output
+        .lines()
+        .skip_while(|line| !line.starts_with("provider"))
+        .skip(1)
+    {
+        let columns: Vec<&str> = line.split_whitespace().collect();
+        if columns.len() < 6 {
+            continue;
+        }
+        rows.push((
+            columns[0].to_owned(),
+            InventoryModel {
+                id: columns[1].to_owned(),
+                context: columns[2].to_owned(),
+                max_out: columns[3].to_owned(),
+                thinking: columns[4] == "yes",
+                images: columns[5] == "yes",
+            },
+        ));
+    }
+    rows
+}
+
+fn run_with_timeout(
+    mut command: std::process::Command,
+    timeout: Duration,
+) -> Option<std::process::Output> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(command.output());
+    });
+    receiver.recv_timeout(timeout).ok().and_then(Result::ok)
+}
+
+/// The pinned Pi executable under the state root, once a chat has installed it.
+pub(crate) fn pi_executable() -> Option<PathBuf> {
+    let state = muniment_core::state_root::state_directory()?;
+    let root = state.join(muniment_core::state_root::HARNESS_DIRECTORY_NAME);
+    muniment_core::sidecar::pi_install::resolve_current_for(&root, PI_SELECTED_ARTIFACT).ok()
+}
+
+/// Every model Pi can serve from the agent directory, by provider, from the pinned executable.
+fn list_pi_models(agent: &Path) -> Vec<(String, InventoryModel)> {
+    let Some(executable) = pi_executable() else {
+        return Vec::new();
+    };
+    let mut command = std::process::Command::new(executable);
+    command
+        .arg("--list-models")
+        .env("PI_CODING_AGENT_DIR", agent)
+        .env_remove("BUN_BE_BUN")
+        .stdin(std::process::Stdio::null());
+    run_with_timeout(command, LIST_MODELS_TIMEOUT)
+        .filter(|output| output.status.success())
+        .map(|output| parse_model_table(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
+}
+
+fn provider_inventory(
+    agent: &Path,
+    models: Vec<(String, InventoryModel)>,
+) -> Result<ProviderInventory, String> {
+    let auth = read_json_store(&pi_auth_file(agent))?.unwrap_or_default();
+    let models_file = read_json_store(&pi_models_file(agent))?.unwrap_or_default();
+    let settings = read_json_store(&pi_settings_file(&pi_models_file(agent)))?.unwrap_or_default();
+    let record = read_models_record(agent)?;
+    let mut providers: Vec<InventoryProvider> = Vec::new();
+    for (provider, entry) in auth.iter().filter(|(_, entry)| entry.is_object()) {
+        let source = if entry.get("type").and_then(serde_json::Value::as_str) == Some("oauth") {
+            "account"
+        } else {
+            "key"
+        };
+        providers.push(InventoryProvider {
+            id: provider.clone(),
+            name: provider_display_name(provider, &record),
+            source,
+            base_url: None,
+            models: Vec::new(),
+        });
+    }
+    if let Some(endpoints) = models_file
+        .get("providers")
+        .and_then(serde_json::Value::as_object)
+    {
+        for (provider, entry) in endpoints.iter().filter(|(_, entry)| entry.is_object()) {
+            if providers.iter().any(|known| known.id == *provider) {
+                continue;
+            }
+            let source = if provider == OLLAMA_PROVIDER || provider == LM_STUDIO_PROVIDER {
+                "local"
+            } else {
+                "custom"
+            };
+            providers.push(InventoryProvider {
+                id: provider.clone(),
+                name: provider_display_name(provider, &record),
+                source,
+                base_url: entry
+                    .get("baseUrl")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                models: Vec::new(),
+            });
+        }
+    }
+    if record
+        .get("claudeCode")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        providers.push(InventoryProvider {
+            id: CLAUDE_BRIDGE_PROVIDER.into(),
+            name: provider_display_name(CLAUDE_BRIDGE_PROVIDER, &record),
+            source: "claude-code",
+            base_url: None,
+            models: Vec::new(),
+        });
+    }
+    for (provider, model) in models {
+        if let Some(known) = providers.iter_mut().find(|known| known.id == provider) {
+            known.models.push(model);
+        }
+    }
+    Ok(ProviderInventory {
+        providers,
+        default_provider: settings
+            .get("defaultProvider")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        default_model: settings
+            .get("defaultModel")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        hidden: record_strings(&record, "hidden"),
+    })
+}
+
+fn valid_identifier(value: &str, limit: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= limit
+        && value.trim() == value
+        && !value.contains(char::is_control)
+}
+
+fn set_default_model(agent: &Path, provider: &str, model: &str) -> Result<(), String> {
+    if !valid_identifier(provider, 128) || !valid_identifier(model, 512) {
+        return Err("Choose a provider and a model.".into());
+    }
+    let settings_file = pi_settings_file(&pi_models_file(agent));
+    fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let lock = muniment_core::pi_settings::lock_settings(&settings_file)
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let mut settings = read_json_for_update(&settings_file)?;
+    settings.insert("defaultProvider".into(), provider.into());
+    settings.insert("defaultModel".into(), model.into());
+    merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
+    lock.check().map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    write_json_for_update(&settings_file, &settings)
+}
+
+fn set_model_hidden(agent: &Path, provider: &str, model: &str, hidden: bool) -> Result<(), String> {
+    if !valid_identifier(provider, 128) || !valid_identifier(model, 512) {
+        return Err("Choose a provider and a model.".into());
+    }
+    let key = format!("{provider}/{model}");
+    let mut record = read_models_record(agent)?;
+    let mut list = record_strings(&record, "hidden");
+    list.retain(|entry| *entry != key);
+    if hidden {
+        list.push(key);
+    }
+    record.insert("hidden".into(), list.into());
+    write_models_record(agent, &record)
+}
+
+fn remove_json_entry(path: &Path, key: &str) -> Result<(), String> {
+    let _lock = lock_pi_auth_file(path).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let mut root = read_json_for_update(path)?;
+    let mut changed = root.remove(key).is_some();
+    if let Some(providers) = root
+        .get_mut("providers")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        changed |= providers.remove(key).is_some();
+    }
+    if changed {
+        write_json_for_update(path, &root)?;
+    }
+    Ok(())
+}
+
+fn disconnect_provider(agent: &Path, provider: &str) -> Result<(), String> {
+    if !valid_identifier(provider, 128) {
+        return Err("Choose a provider.".into());
+    }
+    if provider == CLAUDE_BRIDGE_PROVIDER {
+        let mut record = read_models_record(agent)?;
+        record.insert("claudeCode".into(), false.into());
+        write_models_record(agent, &record)?;
+        match fs::remove_file(claude_bridge_config_file(agent)) {
+            Ok(()) | Err(_) => {}
+        }
+    } else {
+        if pi_auth_file(agent).is_file() {
+            remove_json_entry(&pi_auth_file(agent), provider)?;
+        }
+        if pi_models_file(agent).is_file() {
+            remove_json_entry(&pi_models_file(agent), provider)?;
+        }
+    }
+    let settings_file = pi_settings_file(&pi_models_file(agent));
+    if settings_file.is_file() {
+        let lock = muniment_core::pi_settings::lock_settings(&settings_file)
+            .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+        let mut settings = read_json_for_update(&settings_file)?;
+        if settings
+            .get("defaultProvider")
+            .and_then(serde_json::Value::as_str)
+            == Some(provider)
+        {
+            settings.remove("defaultProvider");
+            settings.remove("defaultModel");
+            merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
+            lock.check().map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+            write_json_for_update(&settings_file, &settings)?;
+        }
+    }
+    Ok(())
+}
+
+fn endpoint_url(base_url: &str, message: &str) -> Result<url::Url, String> {
+    if base_url.is_empty() || base_url.len() > 16 * 1024 || base_url.trim() != base_url {
+        return Err(message.into());
+    }
+    let parsed = url::Url::parse(base_url).map_err(|_| message.to_owned())?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(message.into());
+    }
+    Ok(parsed)
+}
+
+fn custom_provider_id(name: &str) -> String {
+    let slug: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    format!(
+        "{CUSTOM_PROVIDER_PREFIX}{}",
+        if slug.is_empty() {
+            "endpoint".to_owned()
+        } else {
+            slug
+        }
+    )
+}
+
+/// An OpenAI-compatible endpoint: LM Studio or a named custom server such as a LiteLLM proxy.
+fn store_endpoint_provider(
+    agent: &Path,
+    kind: &str,
+    name: &str,
+    base_url: &str,
+    key: &str,
+    models: &[String],
+) -> Result<String, String> {
+    const MESSAGE: &str = "Enter a valid server URL.";
+    endpoint_url(base_url, MESSAGE)?;
+    if key.len() > 16 * 1024 || key.trim() != key {
+        return Err("Enter a valid API key.".into());
+    }
+    let models: Vec<&String> = models
+        .iter()
+        .filter(|model| valid_identifier(model, 512))
+        .collect();
+    if models.is_empty() {
+        return Err("Name at least one model the server serves.".into());
+    }
+    let provider = match kind {
+        "lmstudio" => LM_STUDIO_PROVIDER.to_owned(),
+        "custom" if valid_identifier(name, 80) => custom_provider_id(name),
+        _ => return Err("Name the endpoint.".into()),
+    };
+    let models_file = pi_models_file(agent);
+    fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let _models_lock =
+        lock_pi_auth_file(&models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let mut root = read_json_for_update(&models_file)?;
+    let providers = root
+        .entry("providers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
+    providers.insert(
+        provider.clone(),
+        serde_json::json!({
+            "baseUrl": base_url,
+            "api": "openai-completions",
+            "apiKey": if key.is_empty() { "local" } else { key },
+            "models": models.iter().map(|id| serde_json::json!({ "id": id })).collect::<Vec<_>>()
+        }),
+    );
+    write_json_for_update(&models_file, &root)?;
+    if kind == "custom" {
+        let mut record = read_models_record(agent)?;
+        let names = record
+            .entry("names")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
+        names.insert(provider.clone(), name.into());
+        write_models_record(agent, &record)?;
+    }
+    Ok(provider)
+}
+
+fn claude_code_executable() -> Option<PathBuf> {
+    let home = muniment_core::state_root::home_directory_value().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(paths) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&paths).map(|dir| dir.join("claude")));
+    }
+    if let Some(home) = &home {
+        candidates.push(home.join(".local").join("bin").join("claude"));
+        candidates.push(home.join(".claude").join("local").join("claude"));
+    }
+    candidates.push(PathBuf::from("/opt/homebrew/bin/claude"));
+    candidates.push(PathBuf::from("/usr/local/bin/claude"));
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn claude_code_status() -> ClaudeCodeStatus {
+    let Some(path) = claude_code_executable() else {
+        return ClaudeCodeStatus {
+            installed: false,
+            logged_in: false,
+            path: None,
+        };
+    };
+    let mut command = std::process::Command::new(&path);
+    command
+        .args(["auth", "status"])
+        .stdin(std::process::Stdio::null());
+    let logged_in = run_with_timeout(command, CLAUDE_STATUS_TIMEOUT)
+        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
+        .and_then(|status| status.get("loggedIn").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    ClaudeCodeStatus {
+        installed: true,
+        logged_in,
+        path: Some(path.to_string_lossy().into_owned()),
+    }
+}
+
+/// Connects Anthropic through Claude Code: the bridge reads its executable path, and the desktop lists the provider.
+fn connect_claude_code(agent: &Path, executable: &str) -> Result<(), String> {
+    if !valid_identifier(executable, 4096) || !Path::new(executable).is_file() {
+        return Err("Install Claude Code and sign in, then retry.".into());
+    }
+    fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let mut config = read_json_for_update(&claude_bridge_config_file(agent))?;
+    let provider = config
+        .entry("provider")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
+    provider.insert("pathToClaudeCodeExecutable".into(), executable.into());
+    write_json_for_update(&claude_bridge_config_file(agent), &config)?;
+    let mut record = read_models_record(agent)?;
+    record.insert("claudeCode".into(), true.into());
+    write_models_record(agent, &record)
+}
+
+#[tauri::command]
+pub(crate) async fn local_mode_provider_inventory(
+    _app: tauri::AppHandle,
+) -> Result<ProviderInventory, String> {
+    let agent = harness_agent_directory(READ_SETTINGS_ERROR)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let models = list_pi_models(&agent);
+        provider_inventory(&agent, models)
+    })
+    .await
+    .map_err(|_| READ_SETTINGS_ERROR.to_string())?
+}
+
+#[tauri::command]
+pub(crate) fn local_mode_set_default_model(
+    _app: tauri::AppHandle,
+    provider: String,
+    model: String,
+) -> Result<(), String> {
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    set_default_model(&agent, &provider, &model)
+}
+
+#[tauri::command]
+pub(crate) fn local_mode_set_model_hidden(
+    _app: tauri::AppHandle,
+    provider: String,
+    model: String,
+    hidden: bool,
+) -> Result<(), String> {
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    set_model_hidden(&agent, &provider, &model, hidden)
+}
+
+#[tauri::command]
+pub(crate) fn local_mode_disconnect_provider(
+    _app: tauri::AppHandle,
+    provider: String,
+) -> Result<(), String> {
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    disconnect_provider(&agent, &provider)
+}
+
+#[tauri::command]
+pub(crate) fn local_mode_store_endpoint(
+    _app: tauri::AppHandle,
+    kind: String,
+    name: String,
+    base_url: String,
+    key: String,
+    models: Vec<String>,
+) -> Result<String, String> {
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    store_endpoint_provider(&agent, &kind, &name, &base_url, &key, &models)
+}
+
+#[tauri::command]
+pub(crate) async fn local_mode_claude_code_status(
+    _app: tauri::AppHandle,
+) -> Result<ClaudeCodeStatus, String> {
+    tauri::async_runtime::spawn_blocking(claude_code_status)
+        .await
+        .map_err(|_| READ_SETTINGS_ERROR.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn local_mode_connect_claude_code(
+    _app: tauri::AppHandle,
+    executable: String,
+) -> Result<(), String> {
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    connect_claude_code(&agent, &executable)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +983,234 @@ mod tests {
         let path = std::env::temp_dir().join(format!("muniment-local-mode-{}", Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn the_model_table_parses_pis_list_models_output() {
+        let output = "provider  model        context  max-out  thinking  images\nollama    llama3.2:3b  128K     16.4K    no        no\nopenai-codex  gpt-5.5  400K  128K  yes  yes\n";
+        let rows = parse_model_table(output);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "ollama");
+        assert_eq!(
+            rows[0].1,
+            InventoryModel {
+                id: "llama3.2:3b".into(),
+                context: "128K".into(),
+                max_out: "16.4K".into(),
+                thinking: false,
+                images: false
+            }
+        );
+        assert_eq!(rows[1].0, "openai-codex");
+        assert!(rows[1].1.thinking && rows[1].1.images);
+        assert!(
+            parse_model_table("No models available. Use /login to log into a provider.\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_inventory_reads_keys_accounts_endpoints_the_bridge_and_the_default() {
+        let agent = temporary_directory();
+        fs::write(agent.join("auth.json"), r#"{"anthropic":{"type":"api_key","key":"k"},"openai-codex":{"type":"oauth","access":"a"}}"#).unwrap();
+        fs::write(agent.join("models.json"), r#"{"providers":{"ollama":{"baseUrl":"http://localhost:11434/v1","api":"openai-completions"},"custom-proxy":{"baseUrl":"http://proxy:4000/v1","api":"openai-completions"}}}"#).unwrap();
+        fs::write(
+            agent.join("settings.json"),
+            r#"{"defaultProvider":"ollama","defaultModel":"llama3.2:3b"}"#,
+        )
+        .unwrap();
+        fs::write(agent.join(MODELS_RECORD_FILE), r#"{"hidden":["anthropic/claude-haiku-4-5"],"names":{"custom-proxy":"My proxy"},"claudeCode":true}"#).unwrap();
+        let models = vec![
+            (
+                "ollama".to_owned(),
+                InventoryModel {
+                    id: "llama3.2:3b".into(),
+                    context: "128K".into(),
+                    max_out: "16K".into(),
+                    thinking: false,
+                    images: false,
+                },
+            ),
+            (
+                "anthropic".to_owned(),
+                InventoryModel {
+                    id: "claude-sonnet-5".into(),
+                    context: "1M".into(),
+                    max_out: "128K".into(),
+                    thinking: true,
+                    images: true,
+                },
+            ),
+            (
+                "unknown".to_owned(),
+                InventoryModel {
+                    id: "x".into(),
+                    context: "1".into(),
+                    max_out: "1".into(),
+                    thinking: false,
+                    images: false,
+                },
+            ),
+        ];
+        let inventory = provider_inventory(&agent, models).unwrap();
+        let ids: Vec<(&str, &str)> = inventory
+            .providers
+            .iter()
+            .map(|p| (p.id.as_str(), p.source))
+            .collect();
+        // Keys first, then endpoints, then the bridge; each group in the file's key order.
+        assert_eq!(
+            ids,
+            vec![
+                ("anthropic", "key"),
+                ("openai-codex", "account"),
+                ("custom-proxy", "custom"),
+                ("ollama", "local"),
+                ("claude-bridge", "claude-code")
+            ]
+        );
+        let names: Vec<&str> = inventory
+            .providers
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["Anthropic", "OpenAI", "My proxy", "Ollama", "Anthropic"]
+        );
+        assert_eq!(
+            inventory.providers[3].base_url.as_deref(),
+            Some("http://localhost:11434/v1")
+        );
+        assert_eq!(inventory.providers[3].models[0].id, "llama3.2:3b");
+        assert_eq!(inventory.providers[0].models.len(), 1);
+        assert_eq!(inventory.default_provider.as_deref(), Some("ollama"));
+        assert_eq!(inventory.default_model.as_deref(), Some("llama3.2:3b"));
+        assert_eq!(inventory.hidden, vec!["anthropic/claude-haiku-4-5"]);
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn the_default_and_the_hidden_list_persist_and_a_disconnect_clears_both() {
+        let agent = temporary_directory();
+        fs::write(
+            agent.join("auth.json"),
+            r#"{"anthropic":{"type":"api_key","key":"k"},"google":{"type":"api_key","key":"g"}}"#,
+        )
+        .unwrap();
+        set_default_model(&agent, "anthropic", "claude-sonnet-5").unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(agent.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["defaultProvider"], "anthropic");
+        assert_eq!(settings["defaultModel"], "claude-sonnet-5");
+        assert!(set_default_model(&agent, "", "x").is_err());
+
+        set_model_hidden(&agent, "anthropic", "claude-haiku-4-5", true).unwrap();
+        set_model_hidden(&agent, "google", "gemini", true).unwrap();
+        set_model_hidden(&agent, "anthropic", "claude-haiku-4-5", false).unwrap();
+        let record = read_models_record(&agent).unwrap();
+        assert_eq!(record_strings(&record, "hidden"), vec!["google/gemini"]);
+
+        disconnect_provider(&agent, "anthropic").unwrap();
+        let auth: serde_json::Value =
+            serde_json::from_slice(&fs::read(agent.join("auth.json")).unwrap()).unwrap();
+        assert!(auth.get("anthropic").is_none());
+        assert!(auth.get("google").is_some());
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(agent.join("settings.json")).unwrap()).unwrap();
+        assert!(settings.get("defaultProvider").is_none());
+        assert!(settings.get("defaultModel").is_none());
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn endpoints_land_in_models_json_with_their_name_and_the_bridge_connects_through_the_record() {
+        let agent = temporary_directory();
+        assert_eq!(
+            store_endpoint_provider(
+                &agent,
+                "lmstudio",
+                "LM Studio",
+                "http://localhost:1234/v1",
+                "",
+                &["qwen3".into()]
+            )
+            .unwrap(),
+            "lmstudio"
+        );
+        let id = store_endpoint_provider(
+            &agent,
+            "custom",
+            "My LiteLLM Proxy",
+            "http://proxy:4000/v1",
+            "sk-x",
+            &["gpt-5.5".into(), "".into()],
+        )
+        .unwrap();
+        assert_eq!(id, "custom-my-litellm-proxy");
+        let models: serde_json::Value =
+            serde_json::from_slice(&fs::read(agent.join("models.json")).unwrap()).unwrap();
+        assert_eq!(models["providers"]["lmstudio"]["apiKey"], "local");
+        assert_eq!(models["providers"]["lmstudio"]["models"][0]["id"], "qwen3");
+        assert_eq!(models["providers"][&id]["apiKey"], "sk-x");
+        assert_eq!(
+            models["providers"][&id]["models"].as_array().unwrap().len(),
+            1
+        );
+        let record = read_models_record(&agent).unwrap();
+        assert_eq!(record["names"][&id], "My LiteLLM Proxy");
+        assert!(
+            store_endpoint_provider(&agent, "custom", "x", "ftp://bad", "", &["m".into()]).is_err()
+        );
+        assert!(store_endpoint_provider(
+            &agent,
+            "lmstudio",
+            "",
+            "http://localhost:1234/v1",
+            "",
+            &[]
+        )
+        .is_err());
+        assert!(store_endpoint_provider(
+            &agent,
+            "other",
+            "x",
+            "http://localhost:1234/v1",
+            "",
+            &["m".into()]
+        )
+        .is_err());
+
+        let executable = agent.join("claude");
+        fs::write(&executable, "#!/bin/sh\n").unwrap();
+        connect_claude_code(&agent, executable.to_str().unwrap()).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_slice(&fs::read(agent.join(CLAUDE_BRIDGE_CONFIG_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(
+            config["provider"]["pathToClaudeCodeExecutable"],
+            executable.to_str().unwrap()
+        );
+        assert_eq!(read_models_record(&agent).unwrap()["claudeCode"], true);
+        assert!(connect_claude_code(&agent, "/nowhere/claude").is_err());
+        disconnect_provider(&agent, CLAUDE_BRIDGE_PROVIDER).unwrap();
+        assert_eq!(read_models_record(&agent).unwrap()["claudeCode"], false);
+        assert!(!agent.join(CLAUDE_BRIDGE_CONFIG_FILE).exists());
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn every_key_provider_stores_a_key_and_an_unknown_one_does_not() {
+        let agent = temporary_directory();
+        let auth_file = agent.join("auth.json");
+        for (provider, _) in KEY_PROVIDERS {
+            store_provider_key(&auth_file, provider, "k").unwrap();
+        }
+        assert!(store_provider_key(&auth_file, "nobody", "k").is_err());
+        let auth: serde_json::Value =
+            serde_json::from_slice(&fs::read(&auth_file).unwrap()).unwrap();
+        assert_eq!(auth.as_object().unwrap().len(), KEY_PROVIDERS.len());
+        fs::remove_dir_all(agent).unwrap();
     }
 
     #[cfg(target_os = "macos")]

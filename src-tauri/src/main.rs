@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account_login;
 mod attach_service;
 mod auth;
 mod chat;
@@ -112,6 +113,7 @@ fn main() {
                 app.manage(chat::ChatState::new(runtime_activity.clone()));
             }
             runtime_owner::setup(app.handle());
+            app.manage(account_login::AccountLoginState::default());
             let parakeet_root = state.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
@@ -133,6 +135,17 @@ fn main() {
             local_mode::local_mode_provider_status,
             local_mode::local_mode_store_provider_key,
             local_mode::local_mode_store_local_provider,
+            local_mode::local_mode_provider_inventory,
+            local_mode::local_mode_set_default_model,
+            local_mode::local_mode_set_model_hidden,
+            local_mode::local_mode_disconnect_provider,
+            local_mode::local_mode_store_endpoint,
+            local_mode::local_mode_claude_code_status,
+            local_mode::local_mode_connect_claude_code,
+            account_login::local_mode_account_login_start,
+            account_login::local_mode_account_login_answer,
+            account_login::local_mode_account_login_cancel,
+            account_login::local_mode_open_url,
             chat::chat_submit,
             chat::chat_file_metadata,
             chat::chat_resume,

@@ -12,6 +12,7 @@ async function checkCandidatePackages() {
     ['pi-subagents', '0.65.1'],
     ['pi-background-tasks', '2.5.0'],
     ['pi-mcp-adapter', '2.32.1'],
+    ['pi-claude-bridge', '0.7.0'],
   ]
   const settings = JSON.parse(await readFile(path.join(agentDirectory, 'settings.json'), 'utf8'))
   expect(settings.packages).toEqual(packages.map(([name, version]) => `npm:${name}@${version}`))
@@ -70,25 +71,24 @@ describe('installed local-mode chat', () => {
     const composer = await $('textarea[placeholder="Ask anything"]')
     await composer.waitForDisplayed({ timeout: 120000 })
     expect(await composer.getValue()).toBe('Help me organize my notes.')
-    // The first Send opens the model panel, and the chip reopens it.
-    const modelChip = await localMode.$('.model-chip')
-    await modelChip.waitForDisplayed()
-    if (await modelChip.getAttribute('aria-expanded') !== 'true') await modelChip.click()
-    const modelPanel = await localMode.$('.model-panel')
-    await modelPanel.waitForDisplayed()
-    const provider = await modelPanel.$('label[for="provider-ollama"]')
-    await provider.waitForDisplayed()
-    await provider.click()
-    expect(await (await modelPanel.$('#provider-ollama')).isSelected()).toBe(true)
+    // The first Send opens Settings → Models; the composer chip's picker reopens it through Manage models.
+    const settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
+    if (!(await settings.isDisplayed())) {
+      const modelChip = await localMode.$('.model-chip')
+      await modelChip.waitForDisplayed()
+      await modelChip.click()
+      await (await $('button=Manage models')).click()
+      await settings.waitForDisplayed()
+    }
+    await (await settings.$('button=Connect provider')).click()
+    await (await settings.$('button*=Ollama')).click()
     const baseUrlInput = await $('#provider-base-url')
     await baseUrlInput.waitForDisplayed()
-    expect(await baseUrlInput.isDisplayed()).toBe(true)
     await baseUrlInput.setValue(OLLAMA_BASE_URL)
     await (await $('button=Save Ollama server')).click()
-    await (await $('p=Muniment saved the Ollama server. Send a message.')).waitForDisplayed({ timeout: 30000 })
-    expect(await baseUrlInput.getValue()).toBe('')
-    await (await modelPanel.$('button=Close')).click()
-    await modelPanel.waitForDisplayed({ reverse: true, timeout: 10000 })
+    await (await $('p=Muniment saved the Ollama server.')).waitForDisplayed({ timeout: 30000 })
+    await (await settings.$('button[aria-label="Close settings"]')).click()
+    await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
 
     await waitForDesktopClient()
     const prompt = `Muniment local E2E chat ${Date.now()}`

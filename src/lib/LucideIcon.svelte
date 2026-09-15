@@ -35,6 +35,14 @@
   {:else if name === 'clock'}
     <circle cx="12" cy="12" r="10" />
     <path d="M12 6v6l4 2" />
+  {:else if name === 'arrow-left'}
+    <path d="m12 19-7-7 7-7" />
+    <path d="M19 12H5" />
+  {:else if name === 'search'}
+    <circle cx="11" cy="11" r="8" />
+    <path d="m21 21-4.3-4.3" />
+  {:else if name === 'chevron-down'}
+    <path d="m6 9 6 6 6-6" />
   {/if}
 </svg>
 

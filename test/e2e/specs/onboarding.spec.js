@@ -141,8 +141,11 @@ describe('installed nightly model-ready onboarding', () => {
       } catch {}
       throw new Error(`${waitError.message} Model settings: ${failure} ${await shellState()}`)
     }
-    expect(await (await $('#provider-key')).isDisplayed()).toBe(true)
-    expect(await (await $('button=Save key')).isDisplayed()).toBe(true)
+    const settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
+    await settings.waitForDisplayed()
+    expect(await (await settings.$('button=Connect provider')).isDisplayed()).toBe(true)
+    await (await settings.$('button[aria-label="Close settings"]')).click()
+    await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
     expect(await (await $('[aria-label="First-run settings"]')).isExisting()).toBe(false)
 
     await expandSidebar()

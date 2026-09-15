@@ -52,9 +52,11 @@ panel slide. `prefers-reduced-motion` removes all of it.
    entries, costs, model names, file paths and keyboard chips render in Commit
    Mono. Conversation renders in Schibsted Grotesk.
 3. **Anti-patterns are hard fails.** No gradients, no violet, no glassmorphism
-   or backdrop blur, no orbs or ambient animation, no assistant avatar, no
-   typing dots, no sparkles or wand iconography, no emoji in UI copy, no pill
-   radius, no "AI", "magic", "supercharge" or "unlock" in copy.
+   or backdrop blur on a surface, no orbs or ambient animation, no assistant
+   avatar, no typing dots, no sparkles or wand iconography, no emoji in UI
+   copy, no pill radius, no "AI", "magic", "supercharge" or "unlock" in copy.
+   The one blur is the Settings scrim: the workspace under Settings darkens
+   and blurs while the popup covers most of it.
 4. **Voice.** Sentence case everywhere. Buttons say what happens, in a label
    or, for the composer's send and stop control, in a glyph with an accessible
    name that says it. Errors state what happened and the next step and never
@@ -95,12 +97,16 @@ row control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and focus rings are 1px ink. Windows keeps its native caption
 controls and Linux keeps its decorations. The sidebar holds the threads and one
-Settings control at its foot that expands a menu inside the sidebar:
-appearance, Home and the account. The sidebar is resizable by its divider and
-collapses to nothing: no rail, and Settings hides with it. The platform's
-settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux, expands the
-sidebar with the Settings menu open, and toggles the menu when the sidebar
-already shows.
+Settings control at its foot. Settings is a popup over the workspace with a
+section list on its left, Models, Appearance, Home and Account, and the
+section on its right; the sidebar control, the composer's model chip and the
+platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
+open it, and Escape or its close control returns focus to the opener. Models
+lists connected providers with their real marks, a source tag, their models
+with a show switch and Disconnect; Connect provider searches the catalog with
+the featured eight first and offers each provider's methods. The model chip
+opens a picker over the shown models with Manage models at its foot. The
+sidebar is resizable by its divider and collapses to nothing: no rail.
 The mark appears on the launch screen and in the thinking state, never in
 the sidebar. Icons are Lucide, vendored as inline SVG at a 1.6px stroke. Sidebar, thread and rail sit
 on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
