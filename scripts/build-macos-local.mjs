@@ -57,6 +57,8 @@ const capture = (label, cmd, args, options = {}) => {
   return result.stdout;
 };
 
+// The candidate Pi track is the one path: the switch is read at compile time by both crates.
+process.env.MUNIMENT_PI_CANDIDATE = "1";
 // Build first, so a build failure never touches the credential.
 // The bundle config reads the runtime from the universal path; a local build is arm64 only.
 mustRun("build runtime", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime", "--release", "--locked", "--target", "aarch64-apple-darwin"]);
