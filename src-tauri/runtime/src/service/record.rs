@@ -4,8 +4,8 @@
 
 use muniment_core::attach::ProtocolError;
 use muniment_core::record::{
-    CompaniesRoot, CompanyError, CompanyRecord, Operation, RecordError, SqlTool, ValidationError,
-    DESKTOP_ACTOR,
+    CompaniesRoot, CompanyError, CompanyRecord, Operation, QueryOptions, RecordError, SqlTool,
+    ValidationError, DESKTOP_ACTOR,
 };
 use muniment_core::serde_json::{self, json, Value};
 use std::collections::HashMap;
@@ -212,6 +212,39 @@ impl RecordRegistry {
                 ProtocolError::persistence_failed_with_reason(error.to_string())
             })?;
             Ok(json!({"company_id": resolved, "kinds": kinds}))
+        })?;
+        Ok(outcome.unwrap_or_else(|body| body))
+    }
+
+    /// One page of a kind's rows for the panel's table view.
+    pub fn query(&self, _actor: &str, body: Value) -> Result<Value, ProtocolError> {
+        let kind = text(&body, "kind")?;
+        let mut options = body.clone();
+        if let Some(object) = options.as_object_mut() {
+            for key in ["kind", "company_id", "client"] {
+                object.remove(key);
+            }
+        }
+        let options: QueryOptions =
+            serde_json::from_value(options).map_err(|_| ProtocolError::invalid_request())?;
+        let outcome = self.with_record(company_id(&body)?.as_deref(), |entry| {
+            Ok(match entry.record.query(&kind, &options) {
+                Ok(page) => json!({"page": page}),
+                Err(error) => record_failure(error),
+            })
+        })?;
+        Ok(outcome.unwrap_or_else(|body| body))
+    }
+
+    /// One entity with everything that touches it, for the record view.
+    pub fn entity(&self, _actor: &str, body: Value) -> Result<Value, ProtocolError> {
+        let id = text(&body, "entity")?;
+        let outcome = self.with_record(company_id(&body)?.as_deref(), |entry| {
+            Ok(match entry.record.entity_detail(&id) {
+                Ok(Some(detail)) => json!({"entity": detail}),
+                Ok(None) => error_body("unknown_entity", format!("No entity has id {id}.")),
+                Err(error) => record_failure(error),
+            })
         })?;
         Ok(outcome.unwrap_or_else(|body| body))
     }
@@ -428,6 +461,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(rows["result"]["row_count"], 2);
+
+        let page = registry
+            .query(DESKTOP_ACTOR, json!({"kind": "org", "sort": "title"}))
+            .unwrap();
+        assert_eq!(page["page"]["total"], 1);
+        assert_eq!(page["page"]["rows"][0]["title"], "Northwind");
+        let org_id = page["page"]["rows"][0]["id"].as_str().unwrap().to_owned();
+        let detail = registry
+            .entity(DESKTOP_ACTOR, json!({"entity": org_id}))
+            .unwrap();
+        assert_eq!(detail["entity"]["entity"]["data"]["industry"], "Logistics");
+        assert_eq!(
+            detail["entity"]["identities"][0]["value"],
+            "northwind.example"
+        );
+        assert_eq!(detail["entity"]["events"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            registry
+                .entity(DESKTOP_ACTOR, json!({"entity": "nope"}))
+                .unwrap()["error"]["code"],
+            "unknown_entity"
+        );
+        assert_eq!(
+            registry
+                .query(DESKTOP_ACTOR, json!({"kind": "org", "sort": "bogus"}))
+                .unwrap()["error"]["code"],
+            "validation"
+        );
 
         let kinds = registry.kinds(DESKTOP_ACTOR, json!({})).unwrap();
         assert_eq!(kinds["company_id"], company.id);

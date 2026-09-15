@@ -72,6 +72,10 @@ let threadSummaryResult
 let olderThreadSummaryResult
 let recordCompaniesResult
 let recordKindsResult
+let recordQueryResult
+let recordEntityResult
+let recordProposeResult
+let recordCommitResult
 let localModeStatus
 let runtimeState
 let runtimeListener
@@ -215,8 +219,12 @@ beforeAll(async () => {
 
 beforeEach(() => {
   localStorage.clear()
+  recordQueryResult = { page: { kind: 'deal', total: 1, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [{ id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', created_at: '2026-09-15T10:00:00.000Z', body_text: 'Northwind renewal: won.', data: { name: 'Northwind renewal', stage: 'won' } }] } }
+  recordEntityResult = { entity: { entity: { id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', body_text: 'Northwind renewal: won.', data: { name: 'Northwind renewal', stage: 'won' } }, kind: { name: 'deal', schema: { properties: { name: {}, stage: {} }, stateProperty: 'stage' }, states: ['discovery', 'won'], extension: null }, identities: [{ kind: 'external', value: 'hubspot:deal:1', entity_id: 'deal-1' }], edges: [{ id: 'edge-1', relation: 'concerns', src_id: 'deal-1', dst_id: 'org-1', dst_title: 'Northwind', dst_kind: 'org', src_title: 'Northwind renewal', src_kind: 'deal', valid_from: '2026-09-15T10:00:00.000Z', valid_to: null }], events: [{ id: 'ev-1', seq: 3, at: '2026-09-15T10:00:00.000Z', verb: 'created', actor_id: 'owner-1', on_behalf_of: null }] } }
+  recordProposeResult = { proposal: { id: 'proposal-1', warnings: ['Northwind Traders has an open deal closing 2026-09-16'], diff: { op: 'update', before: { data: { name: 'Northwind renewal', stage: 'won' } }, after: { data: { name: 'Northwind renewal FY27', stage: 'won' } } } } }
+  recordCommitResult = { result: { event_seq: 4, entity_ids: ['deal-1'] } }
   recordCompaniesResult = { companies: [{ id: 'company-1', name: 'Northwind', created_at: '2026-01-01T00:00:00.000Z', owner_principal_id: 'owner-1', current: true }, { id: 'company-2', name: 'Surfoff', created_at: '2026-01-02T00:00:00.000Z', owner_principal_id: 'owner-2', current: false }], current: 'company-1' }
-  recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'person', schema: { properties: { full_name: {}, job_title: {} } }, states: null, extension: null }, { name: 'deal', schema: { properties: { name: {}, stage: {} } }, states: ['discovery', 'won'], extension: null }, { name: 'x_vendor', schema: { properties: { x_name: {} } }, states: null, extension: null }] }
+  recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'person', schema: { properties: { full_name: {}, job_title: {} } }, states: null, extension: null }, { name: 'deal', schema: { properties: { name: {}, stage: {} }, stateProperty: 'stage' }, states: ['discovery', 'won'], extension: null }, { name: 'x_vendor', schema: { properties: { x_name: {} } }, states: null, extension: null }] }
   threadSummaryResult = [{ threadId: 'thread-1', title: '', updatedAt: '' }]
   olderThreadSummaryResult = null
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
@@ -268,6 +276,10 @@ beforeEach(() => {
       return { company: recordCompaniesResult.companies[0] }
     }
     if (command === 'record_company_select') return { company: { id: payload.companyId, current: true } }
+    if (command === 'record_query') return recordQueryResult
+    if (command === 'record_entity') return recordEntityResult
+    if (command === 'record_propose') return recordProposeResult
+    if (command === 'record_commit') return recordCommitResult
     throw new Error(`unexpected command: ${command}`)
   })
 })
@@ -1790,15 +1802,91 @@ describe('record panel', () => {
     expect(names).toEqual(['person', 'deal', 'vendor'])
     expect(within(kinds).getAllByRole('button')[1]).toHaveTextContent('2 properties, 2 states')
 
-    await fireEvent.click(within(kinds).getAllByRole('button')[1])
-    expect(screen.getByRole('region', { name: 'deal properties' })).toHaveTextContent('No deal records yet')
-    expect(screen.getByRole('region', { name: 'deal properties' })).toHaveTextContent('name · stage')
-
     await fireEvent.change(picker, { target: { value: 'company-2' } })
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_company_select', { companyId: 'company-2' }))
 
     await fireEvent.click(record)
     expect(screen.queryByRole('complementary', { name: 'Record' })).not.toBeInTheDocument()
+  })
+
+  it('opens a kind as a generated table, a row as the record view, and edits a cell through propose and commit', async () => {
+    render(App)
+    const record = await screen.findByRole('button', { name: 'Open record panel' })
+    await fireEvent.click(record)
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await fireEvent.click(within(kinds).getAllByRole('button')[1])
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_query', expect.objectContaining({ kind: 'deal', sort: 'updated_at', descending: true })))
+    const table = await within(panel).findByRole('table', { name: 'deal records' })
+    const headers = within(table).getAllByRole('columnheader').map((header) => header.textContent.trim())
+    expect(headers).toEqual(['title', 'state', 'updated v', 'name'])
+    expect(within(table).getAllByRole('columnheader')[1]).toHaveClass('mono')
+    expect(within(table).getAllByRole('columnheader')[0]).not.toHaveClass('mono')
+    expect(within(panel).getByText('1 record')).toBeInTheDocument()
+    const row = within(table).getAllByRole('row')[1]
+    expect(within(row).getAllByRole('cell')[1]).toHaveTextContent('won')
+    expect(within(row).getAllByRole('cell')[1]).toHaveClass('mono')
+    expect(within(row).getAllByRole('cell')[2]).toHaveTextContent('2026-09-15 10:30')
+
+    await fireEvent.click(within(table).getByRole('columnheader', { name: /title/ }).querySelector('button'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_query', expect.objectContaining({ sort: 'title', descending: false })))
+
+    const nameCell = within(row).getAllByRole('cell')[3]
+    await fireEvent.dblClick(nameCell)
+    const input = within(panel).getByRole('textbox', { name: 'name for Northwind renewal' })
+    expect(input).toHaveValue('Northwind renewal')
+    await fireEvent.input(input, { target: { value: 'Northwind renewal FY27' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_propose', { companyId: 'company-1', operation: { op: 'update', entity: 'entity:deal-1', data: { name: 'Northwind renewal FY27' } } }))
+    const change = await within(panel).findByRole('group', { name: 'Proposed change' })
+    expect(change).toHaveTextContent('name: Northwind renewal to Northwind renewal FY27')
+    expect(change).toHaveTextContent('Northwind Traders has an open deal closing 2026-09-16')
+    await fireEvent.click(within(change).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_commit', { companyId: 'company-1', proposal: 'proposal-1' }))
+    await waitFor(() => expect(within(panel).queryByRole('group', { name: 'Proposed change' })).not.toBeInTheDocument())
+
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Northwind renewal' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_entity', { companyId: 'company-1', entity: 'deal-1' }))
+    const view = await within(panel).findByRole('article', { name: 'Northwind renewal' })
+    expect(view).toHaveTextContent('Northwind renewal: won.')
+    expect(within(view).getByRole('region', { name: 'Identities' })).toHaveTextContent('external: hubspot:deal:1')
+    expect(within(view).getByRole('region', { name: 'Relations' })).toHaveTextContent('concerns')
+    expect(within(view).getByRole('button', { name: 'Northwind' })).toBeInTheDocument()
+    expect(within(view).getByRole('region', { name: 'History' })).toHaveTextContent('3 · 2026-09-15 10:00 · created · owner-1')
+
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Back' }))
+    await within(panel).findByRole('table', { name: 'deal records' })
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Back' }))
+    expect(within(panel).getByRole('navigation', { name: 'Kinds' })).toBeInTheDocument()
+  })
+
+  it('proposes a new record from a form generated from the kind and commits it', async () => {
+    recordProposeResult = { proposal: { id: 'proposal-2', warnings: [], diff: { op: 'create', after: { id: 'deal-2', data: { name: 'Contoso pilot', stage: 'discovery', expected_close: '2026-12-01' } } } } }
+    recordCommitResult = { result: { event_seq: 5, entity_ids: ['deal-2'] } }
+    recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'deal', schema: { properties: { name: { type: 'string' }, stage: { type: 'string', enum: ['discovery', 'won'] }, expected_close: { type: 'string', format: 'date' }, amount: { type: 'number' } }, required: ['name', 'stage', 'expected_close'], stateProperty: 'stage' }, states: ['discovery', 'won'], extension: null }] }
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await fireEvent.click(within(kinds).getAllByRole('button')[0])
+    await within(panel).findByRole('table', { name: 'deal records' })
+    await fireEvent.click(within(panel).getByRole('button', { name: 'New deal' }))
+    const form = within(panel).getByRole('form', { name: 'New deal' })
+    const labels = [...form.querySelectorAll('.record-field-label')].map((label) => label.textContent)
+    expect(labels).toEqual(['stage *', 'name *', 'expected close *', 'amount'])
+    const propose = within(form).getByRole('button', { name: 'Propose' })
+    expect(propose).toBeDisabled()
+    await fireEvent.change(form.querySelector('select'), { target: { value: 'discovery' } })
+    await fireEvent.input(form.querySelectorAll('input')[0], { target: { value: 'Contoso pilot' } })
+    await fireEvent.input(form.querySelectorAll('input')[1], { target: { value: '2026-12-01' } })
+    expect(propose).toBeEnabled()
+    await fireEvent.click(propose)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_propose', { companyId: 'company-1', operation: { op: 'create', kind: 'deal', data: { stage: 'discovery', name: 'Contoso pilot', expected_close: '2026-12-01' } } }))
+    const proposed = await within(form).findByRole('group', { name: 'Proposed record' })
+    expect(proposed).toHaveTextContent('name: Contoso pilot')
+    await fireEvent.click(within(proposed).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_commit', { companyId: 'company-1', proposal: 'proposal-2' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_entity', { companyId: 'company-1', entity: 'deal-2' }))
   })
 
   it('toggles with the platform shortcut, maximizes over the sidebar and thread, and restores with the shortcut then closes with Escape', async () => {
@@ -1846,7 +1934,7 @@ describe('record panel', () => {
     recordKindsResult = { error: { code: 'unknown_company', message: 'No company has id x. Pick another one.' } }
     await fireEvent.click(record)
     await fireEvent.click(record)
-    await within(panel.isConnected ? panel : screen.getByRole('complementary', { name: 'Record' })).findByRole('alert')
+    await screen.findByRole('alert')
     expect(screen.getByRole('alert')).toHaveTextContent('No company has id x.')
   })
 })
