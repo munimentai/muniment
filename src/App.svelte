@@ -1537,30 +1537,33 @@
               {/if}
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
-                {#if summary.route !== null || summary.detail}
-                  {@const expanded = expandedReceipts.has(message.run.id)}
-                  {@const rows = receiptRows(message.run.receipt, message.run.recalls)}
-                  {#if rows.length > 1}
-                    <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
-                    {#if expanded}
-                      <dl class="receipt-record">
-                        {#each rows as row}
-                          <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}{#each row.files ?? [] as file}<span class="recall-file">{file}</span>{/each}</dd></div>
-                        {/each}
-                      </dl>
+                {@const recorded = summary.route !== null || summary.detail}
+                {@const rows = recorded ? receiptRows(message.run.receipt, message.run.recalls) : []}
+                {@const expanded = rows.length > 1 && expandedReceipts.has(message.run.id)}
+                {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
+                <!-- One line: the receipt, then §3.2's action row at its right, copy only in this slice. -->
+                <div class="receipt-line">
+                  {#if recorded}
+                    {#if rows.length > 1}
+                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</button>
+                    {:else}
+                      <!-- One row adds nothing beyond the line: a clock stands where the chevron would, and nothing expands. -->
+                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}><LucideIcon name="clock" variant="action" size={12} />{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</p>
                     {/if}
                   {:else}
-                    <!-- One row adds nothing beyond the line: a clock stands where the chevron would, and nothing expands. -->
-                    <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}><LucideIcon name="clock" variant="action" size={12} />{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{summary.separator}{summary.detail}</p>
+                    <p class="provenance">Receipt unavailable</p>
                   {/if}
-                {:else}
-                  <p class="provenance">Receipt unavailable</p>
-                {/if}
-                {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
-                <!-- §3.2's action row, copy only in this slice. -->
-                <div class="message-actions">
-                  <button type="button" onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<LucideIcon name="check" variant="action" size={14} />{:else}<LucideIcon name="copy" variant="action" size={14} />{/if}{copyLabel(copy, message.run.id)}</button>
+                  <div class="message-actions">
+                    <button type="button" onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<LucideIcon name="check" variant="action" size={14} />{:else}<LucideIcon name="copy" variant="action" size={14} />{/if}{copyLabel(copy, message.run.id)}</button>
+                  </div>
                 </div>
+                {#if expanded}
+                  <dl class="receipt-record">
+                    {#each rows as row}
+                      <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}{#each row.files ?? [] as file}<span class="recall-file">{file}</span>{/each}</dd></div>
+                    {/each}
+                  </dl>
+                {/if}
                 {#if failure}<div class="run-error copy-failure">{failure}</div>{/if}
               {/if}
             </div>{/if}
@@ -1814,8 +1817,13 @@
     cursor: pointer;
   }
 
+  /* State is background, never a border: the composer and the rename control are the two exceptions. */
   button:hover:not(:disabled):not([aria-disabled="true"]) {
-    border-color: var(--muted);
+    background: var(--faint);
+  }
+
+  .primary:hover:not(:disabled):not([aria-disabled="true"]) {
+    background: var(--ink);
   }
 
   button:disabled {
@@ -1879,13 +1887,14 @@
   .titlebar button, .titlebar input { min-width: 24px; min-height: 24px; height: 24px; padding: 0 6px; }
   .titlebar .quiet { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .titlebar button:hover:not(:disabled) { background: var(--faint); border-color: transparent; }
-  .titlebar button:focus-visible, .titlebar input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .titlebar button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   /* A hairline edge keeps the chip legible over the control's --faint hover. */
   .titlebar kbd { margin-left: 2px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); }
   .update-slot { flex: 0 0 24px; height: 24px; }
   .thread-title-heading { display: flex; min-width: 24px; max-width: 100%; margin: 0; font: inherit; }
   /* The rename field keeps the title control's register while it shows. */
-  input.thread-title { flex: 0 1 320px; max-width: 100%; overflow: hidden; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+  /* Editing is the rename control's active state: the composer's muted hairline, no ring. */
+  input.thread-title { flex: 0 1 320px; max-width: 100%; overflow: hidden; border: 1px solid var(--muted); outline: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
   kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .title-spacer { flex: 1; align-self: stretch; min-width: 24px; }
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; }
@@ -1917,7 +1926,7 @@
   /* The foot of the sidebar: one Settings control, and the menu it expands above itself. */
   .settings-block { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
   .settings-menu { display: grid; gap: 12px; padding: 6px 8px 12px; }
-  .settings-menu:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .settings-menu:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   .settings-account { display: grid; gap: 6px; }
   .settings-account button { justify-self: start; min-height: 28px; padding: 4px 10px; }
   .settings-home { display: grid; gap: 6px; }
@@ -1932,11 +1941,11 @@
   .provider-choice:not(:disabled) label:hover { background: var(--faint); }
   .provider-choice:disabled label { opacity: .55; cursor: default; }
   .provider-choice input { flex: none; width: 24px; height: 24px; margin: 0; accent-color: var(--ink); cursor: inherit; }
-  .provider-choice input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .provider-choice input:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   .model-panel .support { margin: 0; font: var(--text-12) var(--font-mono); }
   /* The panel is one popup over the thread, never a second settings surface. */
   .model-panel { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: min(380px, 100%); max-height: 60vh; display: grid; gap: 7px; padding: 14px 16px 16px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); }
-  .model-panel:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .model-panel:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   .model-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .model-panel-head button { min-width: 24px; min-height: 24px; padding: 2px 8px; }
   .provider-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1954,7 +1963,7 @@
   .artifact-divider, .sidebar-divider { z-index: 2; align-self: stretch; justify-self: start; width: var(--frame-width); margin-left: calc(-.5 * var(--frame-width)); padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
   .artifact-divider { grid-area: rail; }
   .sidebar-divider { grid-area: thread; }
-  .artifact-divider:focus-visible, .sidebar-divider:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .artifact-divider:focus-visible, .sidebar-divider:focus-visible { outline: 1px solid var(--ink); outline-offset: -2px; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }
@@ -2011,10 +2020,12 @@
   .permission-approve-actions { justify-content: flex-end; margin-left: auto; }
   .permission-actions button { padding: 4px 8px; font: inherit; }
   .permission-card .run-error { margin-top: 6px; }
-  .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
+  /* One line under the reply: the receipt, then Copy at its right. */
+  .receipt-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
      font-variant-numeric, so tabular-nums follows it. */
-  .provenance:hover:not(:disabled) { color: var(--ink); }
+  button.provenance:hover:not(:disabled) { color: var(--ink); }
   .receipt-marker { display: inline-block; width: 5px; height: 5px; margin-right: 7px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); transition: transform 120ms ease; vertical-align: 1px; }
   .receipt-marker.expanded { transform: rotate(45deg); }
   .provenance :global(.lucide) { margin-right: 7px; }
@@ -2031,7 +2042,7 @@
      button keeps its place in the tab order. `visibility: hidden` would strip it from
      that order exactly as `display: none` does, which would make focus unreachable
      and the :focus-within reveal below unreachable with it. */
-  .message-actions { display: flex; gap: 2px; margin-top: 8px; opacity: 0; transition: opacity 120ms ease; }
+  .message-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 120ms ease; }
   .response:hover .message-actions, .response:focus-within .message-actions { opacity: 1; }
   .message-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-color: transparent; background: transparent; color: var(--muted); font-size: var(--text-12); }
   .message-actions button:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }

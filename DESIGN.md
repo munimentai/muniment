@@ -91,7 +91,9 @@ On macOS the app row sits in the title bar band beside the native traffic
 lights, which macOS places, is the drag region, and holds the sidebar toggle,
 New thread, the thread title, and Artifacts flush right with the update
 control beside it. New thread, the thread title and Artifacts are one quiet
-row control with the same padding and hover. Windows keeps its native caption
+row control with the same padding. State is background, never a border: the
+composer and the thread title's rename control alone show hover, focus and
+editing as the composer's muted hairline, and focus rings are 1px ink. Windows keeps its native caption
 controls and Linux keeps its decorations. The sidebar holds the threads and one
 Settings control at its foot that expands a menu inside the sidebar:
 appearance, Home and the account. The sidebar is resizable by its divider and
@@ -112,8 +114,9 @@ end: absent while the draft is empty, an ink up-arrow button once the draft has
 text, and a muted stop square while a reply is in flight. Enter sends. A
 message sent while a reply is in flight steers it: the reply picks it up at its
 next check, and the stop control ends the reply. The band shows no hint in
-flight and names no delivery mode. The provenance line stays under each reply,
-and an expanded receipt sits plain under it in mono, with no box. A receipt whose
+flight and names no delivery mode. The provenance line stays under each reply with
+Copy at its right on the same line, the time takes no hover, and an expanded
+receipt sits plain under it in mono, with no box. A receipt whose
 record holds one row is the plain line with a clock glyph in place of the
 chevron, and it does not expand.
 The launcher is a 600 by 80 window on `surface` with a hairline and one

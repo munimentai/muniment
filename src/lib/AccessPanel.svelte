@@ -395,7 +395,7 @@
 
 <style>
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
-  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:hover:not(:disabled) { background: var(--faint); }
   .profile-block { position: relative; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
   .profile-button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px 8px; border-color: transparent; background: transparent; text-align: left; }
   .profile-button > span:last-child { min-width: 0; display: grid; }
