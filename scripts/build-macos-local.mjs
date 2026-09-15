@@ -1,26 +1,38 @@
 // Build, sign and install the macOS desktop app for the local proof.
-// The bundler signs nothing; this script signs every Mach-O leaf first, then
-// the runtime, then the app, with one identity, the order the nightly uses in
-// .github/build-macos-app.mjs. One identity on every Mach-O is what dyld and
-// launchd check, and no hand codesign follows.
-import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+// The bundler signs nothing. The Apple signing certificate is read from
+// OpenBao at sign time into a throwaway keychain, every Mach-O is signed leaf
+// first, then the runtime, then the app, with the nightly's codesign arguments
+// from .github/build-macos-app.mjs, and the keychain is deleted on exit.
+// Nothing here stores the certificate, and no hand codesign follows.
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
+import { randomBytes } from "node:crypto";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import {
+  codesignArguments,
+  keychainSearchListArguments,
+  signingCertificateImportArguments,
+  signingIdentityArguments,
+  signingKeyPartitionListArguments,
+} from "../.github/lib/macos-signing.mjs";
 
-const identity = process.env.MUNIMENT_SIGNING_IDENTITY ?? "Muniment Local";
-// The local identity carries no Team ID, and the hardened runtime's library
-// validation admits only a dylib from the same Team ID, so the local build
-// signs without the runtime option. The nightly's Developer ID has a team and
-// keeps it. No timestamp: a self-signed signature has nothing to timestamp.
-const codesignArguments = (identityName, file) => ["--force", "--sign", identityName, file];
+const home = homedir();
+// The certificate lives in OpenBao, the homelab secret store. The read
+// credential is the `ansible` AppRole in the homelab repo's vault.yml, which
+// ~/.vault_pass opens. See ~/gk/homelab/docs/services/openbao.md.
+const homelab = process.env.MUNIMENT_HOMELAB_DIR ?? join(home, "gk", "homelab");
+const openbao = "https://10.1.10.107:50080";
+const secretPath = "homelab/data/muniment";
+const certificateField = "muniment_desktop_macos_signing_certificate_b64";
+const passwordField = "muniment_desktop_macos_signing_certificate_password";
+
 const target = join("src-tauri", "target");
 const runtimeSource = join(target, "aarch64-apple-darwin", "release", "muniment-runtime");
 const runtimeBundled = join(target, "universal-apple-darwin", "release", "muniment-runtime");
 const app = join(target, "release", "bundle", "macos", "muniment.app");
 const runtime = join(app, "Contents", "Library", "LaunchServices", "muniment-runtime");
-const home = homedir();
 const installed = join(home, "Applications", "muniment.app");
 
 const mustRun = (label, cmd, args, options = {}) => {
@@ -31,13 +43,81 @@ const mustRun = (label, cmd, args, options = {}) => {
     process.exit(result.status ?? 1);
   }
 };
+// Capture stdout for a command whose output must never reach the terminal.
+const capture = (label, cmd, args, options = {}) => {
+  const result = spawnSync(cmd, args, { encoding: "utf8", stdio: ["pipe", "pipe", "inherit"], ...options });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    console.error(`${label} FAILED (${cmd} rc=${result.status})`);
+    process.exit(result.status ?? 1);
+  }
+  return result.stdout;
+};
 
+// Build first, so a build failure never touches the credential.
 // The bundle config reads the runtime from the universal path; a local build is arm64 only.
 mustRun("build runtime", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime", "--release", "--locked", "--target", "aarch64-apple-darwin"]);
 mkdirSync(join(target, "universal-apple-darwin", "release"), { recursive: true });
 cpSync(runtimeSource, runtimeBundled);
-
 mustRun("build app", process.execPath, [join("node_modules", "@tauri-apps", "cli", "tauri.js"), "build", "--bundles", "app", "--no-sign"]);
+
+// Everything secret-bearing lives in a throwaway directory removed on exit.
+const workDir = mkdtempSync(join(tmpdir(), "muniment-local-signing-"));
+const keychain = join(workDir, "muniment-local-signing.keychain-db");
+const keychainPassword = randomBytes(24).toString("hex");
+const headerFile = join(workDir, "token.header");
+const certificatePath = join(workDir, "certificate.p12");
+const priorKeychains = capture("read keychain search list", "security", ["list-keychains", "-d", "user"]);
+let keychainCreated = false;
+let tokenIssued = false;
+process.on("exit", () => {
+  if (tokenIssued) spawnSync("curl", ["-sk", "-X", "POST", "-H", `@${headerFile}`, `${openbao}/v1/auth/token/revoke-self`]);
+  if (keychainCreated) {
+    spawnSync("security", keychainSearchListArguments("", priorKeychains).filter((arg) => arg !== ""));
+    spawnSync("security", ["delete-keychain", keychain]);
+  }
+  rmSync(workDir, { recursive: true, force: true });
+});
+
+const vault = capture("read AppRole credential", "ansible-vault", ["view", join("inventory", "group_vars", "all", "vault.yml")], { cwd: homelab });
+const roleId = vault.match(/^openbao_ansible_role_id:\s*"?([^"\s]+)/m)?.[1];
+const secretId = vault.match(/^openbao_ansible_secret_id:\s*"?([^"\s]+)/m)?.[1];
+if (!roleId || !secretId) {
+  console.error("vault.yml carries no openbao_ansible_role_id and openbao_ansible_secret_id");
+  process.exit(1);
+}
+const login = capture("OpenBao login", "curl", ["-sk", "-X", "POST", "--data-binary", "@-", `${openbao}/v1/auth/approle/login`], { input: JSON.stringify({ role_id: roleId, secret_id: secretId }) });
+const token = JSON.parse(login)?.auth?.client_token;
+if (!token) {
+  console.error("OpenBao login answered no client token");
+  process.exit(1);
+}
+writeFileSync(headerFile, `X-Vault-Token: ${token}\n`, { mode: 0o600 });
+tokenIssued = true;
+const secret = JSON.parse(capture("read signing certificate", "curl", ["-sk", "-H", `@${headerFile}`, `${openbao}/v1/${secretPath}`]))?.data?.data ?? {};
+for (const field of [certificateField, passwordField]) {
+  if (!secret[field]) {
+    console.error(`OpenBao ${secretPath} has no field ${field}. An admin writes it with: bao kv patch homelab/muniment ${field}=<value>`);
+    process.exit(1);
+  }
+}
+writeFileSync(certificatePath, Buffer.from(secret[certificateField], "base64"), { mode: 0o600 });
+
+// The throwaway keychain holds the identity for this run alone.
+mustRun("create keychain", "security", ["create-keychain", "-p", keychainPassword, keychain]);
+keychainCreated = true;
+mustRun("keychain settings", "security", ["set-keychain-settings", keychain]);
+mustRun("unlock keychain", "security", ["unlock-keychain", "-p", keychainPassword, keychain]);
+mustRun("import certificate", "security", signingCertificateImportArguments(certificatePath, keychain, secret[passwordField]), { stdio: ["ignore", "ignore", "inherit"] });
+mustRun("authorize codesign", "security", signingKeyPartitionListArguments(keychain, keychainPassword), { stdio: ["ignore", "ignore", "inherit"] });
+mustRun("register keychain", "security", keychainSearchListArguments(keychain, priorKeychains));
+const identities = capture("list identities", "security", signingIdentityArguments(keychain));
+const identity = identities.match(/^\s*\d+\) ([0-9A-F]{40})[ \t]+"((?:Developer ID Application|Apple Development|Apple Distribution):[^"\r\n]+)"/m);
+if (!identity) {
+  console.error("The certificate holds no Developer ID Application or Apple Development identity");
+  process.exit(1);
+}
+console.log(`signing identity: ${identity[2]}`);
 
 const nested = [];
 const collectDylibs = async (dir) => {
@@ -48,9 +128,9 @@ const collectDylibs = async (dir) => {
   }
 };
 await collectDylibs(app);
-for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArguments(identity, file));
-mustRun("codesign runtime", "codesign", codesignArguments(identity, runtime));
-mustRun("codesign app", "codesign", codesignArguments(identity, app));
+for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArguments(identity[1], file));
+mustRun("codesign runtime", "codesign", codesignArguments(identity[1], runtime));
+mustRun("codesign app", "codesign", codesignArguments(identity[1], app));
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
 // Stop the old build and clear what it left, so the proof is clean.
@@ -66,4 +146,4 @@ for (const path of [
 if (!existsSync(join(home, "Applications"))) mkdirSync(join(home, "Applications"));
 mustRun("install app", "cp", ["-R", app, installed]);
 mustRun("verify installed signature", "codesign", ["--verify", "--deep", "--strict", installed]);
-console.log(`installed ${installed} signed as ${identity}`);
+console.log(`installed ${installed} signed as ${identity[2]}`);
