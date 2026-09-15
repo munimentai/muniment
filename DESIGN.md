@@ -4,7 +4,7 @@ muniment desktop is the local app for muniment, the company system of record.
 The interface is the user's territory and the model is a visitor. The design
 language comes from institutions that hold things in trust: registries,
 standards bodies, ledgers. Calm, permanent, meticulous about records. The
-thread surface, the provenance line, the tool cards and the local report all
+thread surface, the provenance line, the receipt and the local report all
 render the same graph, and nothing in the shell is decoration.
 
 ## Tokens
@@ -47,19 +47,19 @@ display serif. No italic except semantic emphasis in user content.
 Shape: radius `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
 Nothing pill-shaped. Hairline borders do the work, and `--shadow-window` and
 `--shadow-overlay` are the only two depth tokens. Motion is purposeful and
-rare: the mark's thinking state, the streaming underline, the tool pulse, the
+rare: the mark's thinking state, the streaming underline, the
 panel slide. `prefers-reduced-motion` removes all of it.
 
 ## Laws
 
 1. **Color means computation.** `--signal` appears only on the mark's thinking
-   state, the running-tool status pulse, the streaming underline and caret on
+   state, the streaming underline and caret on
    the active line, the route segment of the provenance line, the live voice
    polish flash, the enabled state of the Models show switch, and workflow-run
    indicators. Buttons, links,
    selection, icons at rest, badges and the mark at rest are ink on paper.
    `src/styles/signal-allowlist.test.js` enforces the list.
-2. **If it is a record, it is mono.** Provenance lines, tool activity, audit
+2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
    entries, costs, model names, file paths and keyboard chips render in Commit
    Mono. Conversation renders in Schibsted Grotesk.
 3. **Anti-patterns are hard fails.** No gradients, no violet, no glassmorphism
@@ -96,10 +96,11 @@ is the reference geometry and animation engine.
 Layout is sidebar, thread, and artifact rail (⌘J, closed by default). User
 messages sit right in `faint` bubbles at radius 10. Responses sit plain on
 `paper` with no bubble and no avatar. Streaming is a 2px signal underline and a
-signal caret, never dots. Tool activity is an inline mono card with a status
-dot that pulses while running and collapses to its header when done. The
-provenance line sits under every response in mono at `--text-provenance`, with
-the route in signal. Composer focus shifts the border to `muted`, never signal.
+signal caret, never dots. Tool activity draws no card: the mark in flight
+names the running tool's verb, and the receipt's Tools row tallies the calls
+when the reply lands. The provenance line sits under every response in mono at
+`--text-provenance`, with the route in signal. Composer focus shifts the
+border to `muted`, never signal.
 Platform chrome follows the OS and brand tokens stay identical across platforms.
 On macOS the app row sits in the title bar band beside the native traffic
 lights, which macOS places, is the drag region, and holds the sidebar toggle,

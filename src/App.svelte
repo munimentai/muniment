@@ -21,7 +21,7 @@
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import { solidMilledRingPath } from './lib/mark.js'
-  import { codeDiffPermissionAnswer, composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage, toolName, toolStatus } from './lib/chat-state.js'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
   import { listenForLauncher } from './lib/launcher-bridge.js'
   import { composerHeight } from './lib/composer-size.js'
@@ -1457,10 +1457,6 @@
                 </div>
               </div>
             {:else}
-            {@const activity = message.run.toolActivity ?? []}
-            {@const groupedIds = parallelTools.get(message.run.id) ?? []}
-            {@const groupedTools = activity.filter((tool) => groupedIds.includes(tool.effectId))}
-            {@const singleTools = activity.filter((tool) => !groupedIds.includes(tool.effectId))}
             <div class="response">
               {#if message.run.promptStorageNotice}
                 <details class="prompt-storage-notice">
@@ -1536,41 +1532,20 @@
                   {#if answerState?.error}<div class="run-error" role="alert">{answerState.error}</div>{/if}
                 </div>
               {/if}
-              {#if groupedTools.length}
-                <div class="tool-card tool-group" role="group" aria-label={`Parallel tool activity: ${groupedTools.map((tool) => `${toolName(tool)} ${toolStatus(tool)}`).join(', ')}`}>
-                  <div class="tool-group-title">Parallel tool activity</div>
-                  <ul class="tool-list">
-                    {#each groupedTools as tool}
-                      <li class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-row" aria-label={`${toolName(tool)} ${toolStatus(tool)}`}>
-                        <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
-                      </li>
-                    {/each}
-                  </ul>
-                </div>
-              {/if}
-              {#if singleTools.length}
-                <ul class="tool-list" aria-label="Tool activity">
-                  {#each singleTools as tool}
-                    <li class:tool-running={toolStatus(tool) === 'running'} class:tool-failed={toolStatus(tool) === 'failed'} class="tool-card tool-row" aria-label={`${toolName(tool)} ${toolStatus(tool)}`}>
-                      <span class="tool-dot" aria-hidden="true"></span><span class="tool-name">{toolName(tool)}</span><span class="tool-status">{toolStatus(tool)}</span>
-                    </li>
-                  {/each}
-                </ul>
-              {/if}
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
-                {@const recorded = summary.route !== null || summary.model !== null || summary.segments.length > 0}
-                {@const rows = recorded ? receiptRows(message.run.receipt, message.run.recalls) : []}
-                {@const expanded = rows.length > 1 && expandedReceipts.has(message.run.id)}
+                {@const rows = receiptRows(message.run.receipt, message.run.recalls)}
+                {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || rows.length > 0}
+                {@const expanded = rows.length > 0 && expandedReceipts.has(message.run.id)}
                 {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
                 <!-- One line: the receipt, then §3.2's action row at its right, copy only in this slice. -->
                 <div class="receipt-line">
                   {#if recorded}
-                    {#if rows.length > 1}
-                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}{#each summary.segments as segment, index}{#if index > 0 || summary.route !== null || summary.model !== null}{' '}{/if}<span>{segment}</span>{/each}</button>
+                    {#if rows.length > 0}
+                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}{#if summary.time !== null}{#if summary.route !== null || summary.model !== null}{' '}{/if}<span class="receipt-time"><LucideIcon name="clock" variant="action" size={12} />{summary.time}</span>{/if}</button>
                     {:else}
                       <!-- One row adds nothing beyond the line: a clock stands where the chevron would, and nothing expands. -->
-                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}><LucideIcon name="clock" variant="action" size={12} />{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}{#each summary.segments as segment, index}{#if index > 0 || summary.route !== null || summary.model !== null}{' '}{/if}<span>{segment}</span>{/each}</p>
+                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}{#if summary.time !== null}{#if summary.route !== null || summary.model !== null}{' '}{/if}<span class="receipt-time"><LucideIcon name="clock" variant="action" size={12} />{summary.time}</span>{/if}</p>
                     {/if}
                   {:else}
                     <p class="provenance">Receipt unavailable</p>
@@ -1986,16 +1961,6 @@
   .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-13) var(--font-mono); }
-  .tool-list { margin: 0; padding: 0; list-style: none; }
-  .tool-row { display: flex; align-items: center; gap: 8px; min-height: 20px; }
-  .tool-group-title { margin-bottom: 4px; color: var(--muted); }
-  .tool-group .tool-row + .tool-row { margin-top: 4px; }
-  .tool-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
-  .tool-name { min-width: 0; overflow-wrap: anywhere; }
-  .tool-status { margin-left: auto; }
-  .tool-running { color: var(--signal); }
-  .tool-running .tool-dot { animation: tool-pulse 1.4s ease-in-out infinite; }
-  .tool-failed .tool-status { color: var(--oxide); }
   .permission-card { color: var(--ink); }
   .permission-card strong, .applied-diff strong { font-weight: 600; }
   .permission-card p, .applied-diff p { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -2022,8 +1987,9 @@
   .provenance { gap: 9px; }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
+  .receipt-time { display: inline-flex; align-items: center; gap: 4px; }
   /* The expanded receipt sits plain under the provenance line: no box. */
-  .receipt-record { display: grid; row-gap: 6px; box-sizing: border-box; width: 329px; max-width: 100%; margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .receipt-record { display: grid; row-gap: 6px; box-sizing: border-box; width: min(100%, 560px); margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .receipt-record .recall-file { display: block; }
@@ -2101,7 +2067,6 @@
   .speech-install-popover .close-card:hover { color: var(--ink); }
   .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
-  @keyframes tool-pulse { 50% { opacity: .3; transform: scale(.75); } }
   @keyframes capture { to { transform: scaleY(.55); } }
   @keyframes toast-enter { from { opacity: 0; transform: translate(-50%, 2px); } }
   @media (prefers-reduced-motion: reduce) {

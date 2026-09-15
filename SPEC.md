@@ -215,9 +215,9 @@ e2e onboarding spec proves the composer, the three chips and a first Send.
    happened and the next step and never apologize. No em dash in user-facing
    text, in any form. Enforcer: `npm run lint:copy`.
 7. **The provenance line ships under every response and is never optional.**
-   The line reads `route → model`, then cost, time, `capability@version` and
-   tool calls as spaced segments, no separator glyph. The rows add Tokens, Turns,
-   Tools and Memory. A local reply has no route, and its cost reads estimate.
+   The line reads `route → model` and the clock time, the model id with spaces
+   for its hyphens. The rows carry Cost, Tokens, Turns, Tools, Memory and
+   Capability, nothing twice. A local reply has no route; its cost reads estimate.
 8. **Sandbox honesty.** Permission gates by default. Full-auto only with
    `sandbox.full_auto` and real isolation: bubblewrap on Linux, Seatbelt on
    macOS. Never promise laptop isolation on Windows.

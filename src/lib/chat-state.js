@@ -40,49 +40,40 @@ const recorded = (value) => value !== undefined && value !== null && value !== '
 
 const count = (value) => Number(value).toLocaleString('en-US')
 
-function toolsTotal(receipt) {
-  return (receipt?.tools ?? []).reduce((sum, tool) => sum + (Number(tool?.calls) || 0), 0)
+// A model id reads as words on the line: hyphens become spaces, and the
+// provider keeps its slash. The receipt keeps the raw id.
+export function modelLabel(model) {
+  return recorded(model) ? String(model).replaceAll('-', ' ') : null
 }
 
-function receiptTrailing(receipt) {
-  const trailing = [receipt?.cost, receipt?.time].filter(recorded)
-  for (const capability of receipt?.capabilities ?? []) {
-    if (recorded(capability?.name) && recorded(capability?.version)) trailing.push(`${capability.name}@${capability.version}`)
-  }
-  const calls = toolsTotal(receipt)
-  if (calls > 0) trailing.push(`${calls} ${calls === 1 ? 'tool call' : 'tool calls'}`)
-  return trailing
-}
-
-// The provenance summary is the route, an arrow to the model, then the cost,
-// the time, the capabilities and the tool calls as spaced segments with no
-// separator glyph. Route stays a named field rather than the head of a flat
-// array: §1.2 permits --signal on the route segment only, so a receipt without
-// a route must never paint whatever follows green.
+// The provenance line is `route → model` and the clock time, nothing else. The
+// rows carry the rest, and nothing appears twice. Route stays a named field
+// rather than the head of a flat array: §1.2 permits --signal on the route
+// segment only, so a receipt without a route must never paint whatever
+// follows green.
 export function receiptSummary(receipt = {}) {
   const route = recorded(receipt?.route) ? receipt.route : null
-  const model = recorded(receipt?.model) ? receipt.model : null
-  return { route, model, segments: receiptTrailing(receipt) }
+  const model = modelLabel(receipt?.model)
+  const time = recorded(receipt?.time) ? receipt.time : null
+  return { route, model, time }
 }
 
-// What a screen reader hears instead of the summary: engines pronounce →
+// What a screen reader hears instead of the line: engines pronounce →
 // inconsistently, so the accessible name states the relation in words.
 export function receiptLabel(receipt = {}) {
-  const route = recorded(receipt?.route) ? receipt.route : null
-  const model = recorded(receipt?.model) ? receipt.model : null
+  const { route, model, time } = receiptSummary(receipt)
   const relation = route !== null && model !== null ? `Routed via ${route} to model ${model}`
     : route !== null ? `Routed via ${route}`
     : model !== null ? `Model ${model}`
     : null
-  return [relation, ...receiptTrailing(receipt)].filter(recorded).join(', ')
+  return [relation, time].filter(recorded).join(', ')
 }
 
+// The rows under the line: everything the line does not show, in record order.
 export function receiptRows(receipt = {}, recalls = []) {
   const rows = []
-  for (const [field, label] of [['route', 'Route'], ['model', 'Model'], ['cost', 'Cost'], ['time', 'Time']]) {
-    if (receipt[field] !== undefined && receipt[field] !== null) rows.push({ label, value: receipt[field], route: field === 'route' })
-  }
-  const tokens = receipt.tokens
+  if (recorded(receipt?.cost)) rows.push({ label: 'Cost', value: receipt.cost, route: false })
+  const tokens = receipt?.tokens
   if (tokens && recorded(tokens.input) && recorded(tokens.output)) {
     const parts = [`${count(tokens.input)} in`, `${count(tokens.output)} out`]
     if (Number(tokens.cacheRead) > 0) parts.push(`${count(tokens.cacheRead)} cached`)
@@ -90,13 +81,10 @@ export function receiptRows(receipt = {}, recalls = []) {
     if (Number(tokens.reasoning) > 0) parts.push(`${count(tokens.reasoning)} reasoning`)
     rows.push({ label: 'Tokens', value: parts.join(', '), route: false })
   }
-  if (recorded(receipt.turns)) rows.push({ label: 'Turns', value: count(receipt.turns), route: false })
-  const tools = (receipt.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls))
+  if (recorded(receipt?.turns)) rows.push({ label: 'Turns', value: count(receipt.turns), route: false })
+  const tools = (receipt?.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls))
   if (tools.length) {
-    const calls = toolsTotal(receipt)
-    const failed = tools.reduce((sum, tool) => sum + (Number(tool.failed) || 0), 0)
-    const parts = [`${count(calls)} ${calls === 1 ? 'call' : 'calls'}`, ...tools.map((tool) => `${tool.name} ${count(tool.calls)}`)]
-    if (failed > 0) parts.push(`${count(failed)} failed`)
+    const parts = tools.map((tool) => `${tool.name} ${count(tool.calls)}${Number(tool.failed) > 0 ? ` (${count(tool.failed)} failed)` : ''}`)
     rows.push({ label: 'Tools', value: parts.join(', '), route: false })
   }
   for (const recall of recalls ?? []) {
@@ -104,7 +92,7 @@ export function receiptRows(receipt = {}, recalls = []) {
     const total = files.length
     rows.push({ label: 'Memory', value: `${recall?.query ?? ''}, ${total} ${total === 1 ? 'file' : 'files'}`, files, route: false })
   }
-  for (const capability of receipt.capabilities ?? []) {
+  for (const capability of receipt?.capabilities ?? []) {
     if (capability?.name !== undefined && capability?.name !== null && capability?.version !== undefined && capability?.version !== null) {
       rows.push({ label: 'Capability', value: `${capability.name}@${capability.version}`, route: false })
     }
