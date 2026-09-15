@@ -18,7 +18,7 @@
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createRailController, defaultArtifactRailWidth, isArtifactRailShortcut, isRecordPanelShortcut, railBounds, recordPanelShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
-  import { currentCompany, kindLabel, kindSummary, orderKinds, recordErrorLine, validCompanyName } from './lib/record-panel-state.js'
+  import RecordPanel from './record/RecordPanel.svelte'
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import { solidMilledRingPath } from './lib/mark.js'
@@ -219,14 +219,6 @@
   let artifactRailMaximum = $state(ARTIFACT_RAIL_MAX_WIDTH)
   let artifactRailPointer = $state()
   let recordMaximized = $state(false)
-  let recordCompanies = $state([])
-  let recordCompany = $derived(currentCompany(recordCompanies))
-  let recordKinds = $state([])
-  let recordSelectedKind = $state(null)
-  let recordError = $state(null)
-  let recordLoading = $state(false)
-  let recordNewCompanyName = $state('')
-  let recordLoadVersion = 0
   let workspace = $state()
   let entitlementToastVisible = $state(false)
   let pairingRequests = $state([])
@@ -303,10 +295,7 @@
   })
   const { fit: fitArtifactRail, pointerDown: artifactRailPointerDown, pointerMove: artifactRailPointerMove, pointerEnd: artifactRailPointerEnd, keydown: artifactRailKeydown } = railController
   const toggleArtifactRail = () => railController.toggle('artifacts')
-  const toggleRecordPanel = () => {
-    railController.toggle('record')
-    if (railOccupant === 'record') void loadRecord()
-  }
+  const toggleRecordPanel = () => railController.toggle('record')
   const closeRail = () => railController.close()
   const toggleRecordMaximized = () => railController.toggleMaximized()
 
@@ -591,70 +580,6 @@
     const railOpen = railOccupant !== null
     const frames = railOpen ? 4 : 3
     return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, (workspace?.clientWidth || window.innerWidth) - frames * workspaceFrameWidth() - (railOpen ? artifactRailWidth : 0) - minimumThreadWidth))
-  }
-
-  // The record panel reads the companies, then the current company's kinds. A
-  // stale answer never lands: each load carries its version.
-  async function loadRecord(preferredCompanyId) {
-    if (!tauri) return
-    const version = ++recordLoadVersion
-    recordLoading = true
-    recordError = null
-    try {
-      const listed = await tauri.invoke('record_companies')
-      if (version !== recordLoadVersion) return
-      const companies = Array.isArray(listed?.companies) ? listed.companies : []
-      recordCompanies = companies
-      const chosen = (preferredCompanyId && companies.find((company) => company.id === preferredCompanyId)) || currentCompany(companies)
-      if (!chosen) {
-        recordKinds = []
-        recordSelectedKind = null
-        return
-      }
-      const answer = await tauri.invoke('record_kinds', { companyId: chosen.id })
-      if (version !== recordLoadVersion) return
-      if (answer?.error) {
-        recordError = recordErrorLine(answer.error.message)
-        recordKinds = []
-        return
-      }
-      recordKinds = orderKinds(answer?.kinds)
-      if (!recordKinds.some((kind) => kind.name === recordSelectedKind)) recordSelectedKind = null
-    } catch (error) {
-      if (version !== recordLoadVersion) return
-      recordError = recordErrorLine(error)
-      recordKinds = []
-    } finally {
-      if (version === recordLoadVersion) recordLoading = false
-    }
-  }
-
-  async function selectRecordCompany(companyId) {
-    if (!tauri || !companyId || companyId === recordCompany?.id) return
-    recordError = null
-    try {
-      await tauri.invoke('record_company_select', { companyId })
-    } catch (error) {
-      recordError = recordErrorLine(error)
-      return
-    }
-    await loadRecord(companyId)
-  }
-
-  async function createRecordCompany(event) {
-    event?.preventDefault?.()
-    if (!tauri || !validCompanyName(recordNewCompanyName)) return
-    const name = recordNewCompanyName.trim()
-    recordError = null
-    try {
-      const created = await tauri.invoke('record_company_create', { name })
-      recordNewCompanyName = ''
-      const id = created?.company?.id
-      if (id && recordCompanies.length > 0) await tauri.invoke('record_company_select', { companyId: id })
-      await loadRecord(id)
-    } catch (error) {
-      recordError = recordErrorLine(error)
-    }
   }
 
   function fitPanels() {
@@ -1826,59 +1751,7 @@
               onkeydown={artifactRailKeydown}
             ></div>
           {/if}
-          <aside id="record-panel" class="record-panel" aria-labelledby="record-panel-title" data-testid="record-panel">
-            <header class="record-header">
-              <h2 id="record-panel-title">Record</h2>
-              {#if recordCompanies.length > 0}
-                <label>
-                  <span class="visually-hidden">Company</span>
-                  <select class="record-company-picker" aria-label="Company" value={recordCompany?.id ?? ''} onchange={(event) => selectRecordCompany(event.currentTarget.value)}>
-                    {#each recordCompanies as company (company.id)}
-                      <option value={company.id}>{company.name}</option>
-                    {/each}
-                  </select>
-                </label>
-              {/if}
-              <span class="record-header-spacer"></span>
-              <button type="button" class="quiet record-maximize" aria-pressed={recordMaximized} aria-label={recordMaximized ? 'Restore the thread beside the record' : 'Maximize the record over the thread'} onclick={toggleRecordMaximized}>
-                <LucideIcon name={recordMaximized ? 'minimize-2' : 'maximize-2'} size={14} />
-                <span>{recordMaximized ? 'Restore' : 'Maximize'}</span>
-              </button>
-            </header>
-            {#if recordError}
-              <p class="record-state" role="alert">{recordError}</p>
-            {:else if recordLoading && recordKinds.length === 0}
-              <p class="record-state">Reading the record</p>
-            {:else if recordCompanies.length === 0}
-              <form class="record-create" onsubmit={createRecordCompany}>
-                <p class="record-state">No company yet</p>
-                <input class="record-company-name" type="text" aria-label="Company name" placeholder="Company name" maxlength="120" bind:value={recordNewCompanyName}>
-                <button type="submit" class="record-create-button" disabled={!validCompanyName(recordNewCompanyName)}>Create company</button>
-              </form>
-            {:else}
-              <nav class="record-kinds" aria-label="Kinds">
-                <ul>
-                  {#each recordKinds as kind (kind.name)}
-                    <li>
-                      <button type="button" class="quiet record-kind" class:own={kind.name.startsWith('x_')} aria-pressed={recordSelectedKind === kind.name} onclick={() => { recordSelectedKind = kind.name }}>
-                        <span class="record-kind-name">{kindLabel(kind.name)}</span>
-                        <span class="record-kind-summary">{kindSummary(kind)}</span>
-                      </button>
-                    </li>
-                  {/each}
-                </ul>
-              </nav>
-              {#if recordSelectedKind}
-                {@const selected = recordKinds.find((kind) => kind.name === recordSelectedKind)}
-                {#if selected}
-                  <section class="record-kind-detail" aria-label={`${kindLabel(selected.name)} properties`}>
-                    <p class="record-state">No {kindLabel(selected.name)} records yet</p>
-                    <p class="record-kind-properties">{[...Object.keys(selected.schema?.properties ?? {}), ...Object.keys(selected.extension?.properties ?? {})].join(' · ')}</p>
-                  </section>
-                {/if}
-              {/if}
-            {/if}
-          </aside>
+          <RecordPanel {tauri} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} />
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a
              copy confirmation into the run-phase region above would overwrite whatever
@@ -2019,7 +1892,7 @@
   /* A maximized record takes the whole frame; the sidebar and the thread stay mounted and hidden. */
   .workspace.record-maximized { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "rail"; }
   .workspace.record-maximized .sidebar, .workspace.record-maximized .thread-panel, .workspace.record-maximized .sidebar-divider { display: none; }
-  .sidebar, .thread-panel, .artifact-rail, .record-panel { min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .sidebar, .thread-panel, .artifact-rail { min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -2121,31 +1994,6 @@
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }
   .artifact-empty { display: grid; place-items: center; align-content: center; min-height: 45%; text-align: center; }
   .artifact-empty p { margin: 0; color: var(--muted); }
-  /* The record panel: a mono header row, then the kind list. */
-  .record-panel { grid-area: rail; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; padding: 14px 16px 16px; overflow: hidden; }
-  .record-header { display: flex; align-items: center; gap: 10px; min-height: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--border); font: var(--text-13) var(--font-mono); }
-  .record-header h2 { margin: 0; font: 600 var(--text-15)/1.3 var(--font-body); }
-  .record-company-picker { max-width: 220px; height: 24px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; }
-  .record-header-spacer { flex: 1; }
-  .record-maximize { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); font: inherit; cursor: pointer; }
-  .record-maximize:hover { background: var(--faint); }
-  .record-state { margin: 12px 0 0; color: var(--muted); font: var(--text-13) var(--font-mono); }
-  .record-create { display: grid; gap: 8px; align-content: start; }
-  .record-company-name { height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-body); }
-  .record-company-name:focus { outline: none; border-color: var(--muted); }
-  .record-create-button { justify-self: start; height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--ink); color: var(--paper); font: var(--text-13) var(--font-body); cursor: pointer; }
-  .record-create-button:disabled { background: var(--faint); color: var(--muted); cursor: default; }
-  .record-kinds { min-height: 0; overflow-y: auto; }
-  .record-kinds ul { margin: 0; padding: 0; list-style: none; }
-  .record-kinds li + li { border-top: 1px solid var(--border); }
-  .record-kind { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); text-align: left; font: var(--text-13) var(--font-body); cursor: pointer; }
-  .record-kind:hover { background: var(--faint); }
-  .record-kind[aria-pressed="true"] { background: var(--faint); }
-  .record-kind-name { text-transform: none; }
-  .record-kind.own .record-kind-name::after { content: " (own)"; color: var(--muted); }
-  .record-kind-summary { color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; }
-  .record-kind-detail { padding-top: 10px; border-top: 1px solid var(--border); }
-  .record-kind-properties { margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   /* One grid cell: the thread fills it and the composer sits at its end, so the transcript scrolls on under the composer. */
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); transition: margin-left 180ms ease; }
   .workspace.sidebar-resizing .thread-panel { transition: none; }

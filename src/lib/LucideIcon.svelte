@@ -19,6 +19,8 @@
   {:else if name === 'plus'}
     <path d="M5 12h14" />
     <path d="M12 5v14" />
+  {:else if name === 'chevron-left'}
+    <path d="m15 18-6-6 6-6" />
   {:else if name === 'maximize-2'}
     <path d="M15 3h6v6" />
     <path d="M9 21H3v-6" />

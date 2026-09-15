@@ -71,6 +71,81 @@ pub async fn record_company_rename(
     with_desktop_client(app, move |client| client.rename_company(&company_id, &name)).await
 }
 
+fn record_body(company_id: Option<String>, fields: Vec<(&str, Value)>) -> Value {
+    let mut body = serde_json::Map::new();
+    if let Some(company_id) = company_id {
+        body.insert("company_id".to_owned(), Value::String(company_id));
+    }
+    for (key, value) in fields {
+        if !value.is_null() {
+            body.insert(key.to_owned(), value);
+        }
+    }
+    Value::Object(body)
+}
+
+/// One page of a kind's rows.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn record_query(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+    kind: String,
+    limit: Option<u64>,
+    offset: Option<u64>,
+    sort: Option<String>,
+    descending: Option<bool>,
+    state: Option<String>,
+    search: Option<String>,
+) -> Result<Value, String> {
+    let body = record_body(
+        company_id,
+        vec![
+            ("kind", Value::String(kind)),
+            ("limit", limit.map_or(Value::Null, Value::from)),
+            ("offset", offset.map_or(Value::Null, Value::from)),
+            ("sort", sort.map_or(Value::Null, Value::String)),
+            ("descending", descending.map_or(Value::Null, Value::Bool)),
+            ("state", state.map_or(Value::Null, Value::String)),
+            ("search", search.map_or(Value::Null, Value::String)),
+        ],
+    );
+    with_desktop_client(app, move |client| client.record_query(body)).await
+}
+
+/// One entity with its kind, identities, edges and events.
+#[tauri::command]
+pub async fn record_entity(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+    entity: String,
+) -> Result<Value, String> {
+    let body = record_body(company_id, vec![("entity", Value::String(entity))]);
+    with_desktop_client(app, move |client| client.record_entity(body)).await
+}
+
+/// Validates one change and returns its diff. The desktop acts as the owner.
+#[tauri::command]
+pub async fn record_propose(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+    operation: Value,
+) -> Result<Value, String> {
+    let body = record_body(company_id, vec![("operation", operation)]);
+    with_desktop_client(app, move |client| client.record_propose(body)).await
+}
+
+/// Applies one proposal as the owner.
+#[tauri::command]
+pub async fn record_commit(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+    proposal: String,
+) -> Result<Value, String> {
+    let body = record_body(company_id, vec![("proposal", Value::String(proposal))]);
+    with_desktop_client(app, move |client| client.record_commit(body)).await
+}
+
 /// The kind catalogue of the named company, or of the current one.
 #[tauri::command]
 pub async fn record_kinds(

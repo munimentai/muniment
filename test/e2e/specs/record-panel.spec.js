@@ -42,6 +42,14 @@ describe('installed record panel', () => {
     expect(names).toContain('deal')
     expect(await (await panel.$('select[aria-label="Company"]')).isDisplayed()).toBe(true)
 
+    // A kind opens as a generated table; org has no records yet, so its one line says so.
+    await (await kinds.$('.record-kind*=org')).click()
+    const search = await panel.$('input[aria-label="Search org"]')
+    await search.waitForDisplayed({ timeout: 30000 })
+    await (await panel.$('p=No org records yet')).waitForDisplayed({ timeout: 30000 })
+    await (await panel.$('button[aria-label="Back"]')).click()
+    await kinds.waitForDisplayed({ timeout: 10000 })
+
     await browser.keys('Escape')
     await panel.waitForDisplayed({ reverse: true, timeout: 10000 })
     expect(await record.getAttribute('aria-expanded')).toBe('false')
