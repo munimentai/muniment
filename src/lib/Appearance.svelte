@@ -40,7 +40,7 @@
       <div class="theme-grid">
         {#each row as name}
           <button type="button" class="theme-pick" aria-pressed={picked(name)} onclick={() => chooseTheme(name)}>
-            <span class="swatch-ring" aria-hidden="true"><span class="swatch" data-swatch data-theme={name}></span></span>
+            <span class="swatch" data-swatch data-theme={name} aria-hidden="true"><span class="swatch-card"><i class="swatch-ink"></i><i class="swatch-muted"></i><i class="swatch-signal"></i></span></span>
             <span>{THEME_NAMES[name]}</span>
           </button>
         {/each}
@@ -59,15 +59,18 @@
   .theme-options button:hover { background: var(--faint); color: var(--ink); }
   .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
   /* The light themes under one label and the dark under another, four to a row, a swatch of each theme's paper and surface beside its name. */
-  .themes { margin-top: 10px; max-width: 480px; }
+  .themes { margin-top: 10px; max-width: 560px; }
   .group-label { margin: 8px 0 4px; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
   .theme-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .theme-pick { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }
   .theme-pick > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .theme-pick:hover { background: var(--faint); color: var(--ink); }
   .theme-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
-  .swatch-ring { flex: none; display: inline-flex; padding: 1px; border: 1px solid var(--border); border-radius: 50%; }
-  /* The swatch element carries the theme's own tokens, so paper fills its left half and surface its right. */
-  .swatch { position: relative; display: block; width: 14px; height: 14px; overflow: hidden; border-radius: 50%; background: var(--paper); }
-  .swatch::after { content: ''; position: absolute; inset: 0 0 0 50%; background: var(--surface); }
+  /* The swatch element carries the theme's own tokens: a page of its paper, a surface card on it, an ink line, a muted line and a signal mark. */
+  .swatch { flex: none; display: block; box-sizing: border-box; width: 40px; height: 28px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
+  .swatch-card { display: grid; align-content: start; gap: 3px; box-sizing: border-box; height: 100%; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--surface); }
+  .swatch i { display: block; height: 2px; }
+  .swatch-ink { width: 80%; background: var(--ink); }
+  .swatch-muted { width: 50%; background: var(--muted); }
+  .swatch-signal { width: 8px; background: var(--signal); }
 </style>

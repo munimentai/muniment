@@ -14,6 +14,10 @@ const ALLOWED = {
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
   },
+  // A theme tile shows the theme's own signal, a swatch of the token and not a use of it.
+  'src/lib/Appearance.svelte': {
+    '.swatch-signal': '§1.3 the signal mark on a theme swatch',
+  },
   'src/lib/RunMark.svelte': {
     '.thinking path': "§1.2 the mark's thinking state (§1.8)",
   },
