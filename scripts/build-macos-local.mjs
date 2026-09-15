@@ -24,9 +24,11 @@ const home = homedir();
 // ~/.vault_pass opens. See ~/gk/homelab/docs/services/openbao.md.
 const homelab = process.env.MUNIMENT_HOMELAB_DIR ?? join(home, "gk", "homelab");
 const openbao = "https://10.1.10.107:50080";
-const secretPath = "homelab/data/muniment";
-const certificateField = "muniment_desktop_macos_signing_certificate_b64";
-const passwordField = "muniment_desktop_macos_signing_certificate_password";
+// The Developer ID Application certificate sits with the company's other Apple
+// credentials under the greenkangaroo group, base64 of the .p12.
+const secretPath = "homelab/data/greenkangaroo";
+const certificateField = "greenkangaroo_apple_devid_certificate_p12";
+const passwordField = "greenkangaroo_apple_devid_certificate_password";
 
 const target = join("src-tauri", "target");
 const runtimeSource = join(target, "aarch64-apple-darwin", "release", "muniment-runtime");
@@ -97,11 +99,17 @@ tokenIssued = true;
 const secret = JSON.parse(capture("read signing certificate", "curl", ["-sk", "-H", `@${headerFile}`, `${openbao}/v1/${secretPath}`]))?.data?.data ?? {};
 for (const field of [certificateField, passwordField]) {
   if (!secret[field]) {
-    console.error(`OpenBao ${secretPath} has no field ${field}. An admin writes it with: bao kv patch homelab/muniment ${field}=<value>`);
+    console.error(`OpenBao ${secretPath} has no field ${field}. An admin writes it with: bao kv patch homelab/greenkangaroo ${field}=<value>`);
     process.exit(1);
   }
 }
-writeFileSync(certificatePath, Buffer.from(secret[certificateField], "base64"), { mode: 0o600 });
+// A PKCS#12 file is a DER sequence, so its first byte is 0x30.
+const certificate = Buffer.from(secret[certificateField].trim(), "base64");
+if (certificate[0] !== 0x30) {
+  console.error(`OpenBao ${certificateField} is not the base64 of a .p12 file`);
+  process.exit(1);
+}
+writeFileSync(certificatePath, certificate, { mode: 0o600 });
 
 // The throwaway keychain holds the identity for this run alone.
 mustRun("create keychain", "security", ["create-keychain", "-p", keychainPassword, keychain]);
