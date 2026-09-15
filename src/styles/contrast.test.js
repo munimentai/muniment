@@ -17,7 +17,10 @@ const block = (pattern) => {
   return declarations(body)
 }
 
-const themes = ['paper', 'vellum', 'ledger', 'foolscap', 'moss', 'vault', 'graphite', 'inkwell']
+const themes = [
+  'paper', 'vellum', 'ledger', 'foolscap', 'parchment', 'manila', 'linen', 'broadsheet',
+  'moss', 'vault', 'graphite', 'inkwell', 'lagoon', 'umber', 'fjord', 'plum', 'nocturne', 'nightshade', 'basalt', 'obsidian', 'carbon',
+]
 const themeBlock = (name) => new RegExp(`:root\\[data-theme="${name}"\\][^{]*\\{([^}]*)\\}`)
 
 const palettes = {
@@ -65,6 +68,9 @@ describe('§1.3 text token contrast', () => {
     expect(palettes.paper).toEqual(palettes['default light'])
     expect(palettes.vault).toEqual(palettes['default dark'])
     expect(palettes.vault.paper).toBe('#000000')
+    // The two high contrast sets hold pure ink on pure paper.
+    expect([palettes.broadsheet.ink, palettes.broadsheet.paper]).toEqual(['#000000', '#FFFFFF'])
+    expect([palettes.carbon.ink, palettes.carbon.paper]).toEqual(['#FFFFFF', '#000000'])
   })
 
   it('detects a color below the contrast floor', () => {

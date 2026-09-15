@@ -11,9 +11,15 @@ render the same graph, and nothing in the shell is decoration.
 
 `src/styles/tokens.css` is the token source. Light and dark are both
 first-class, the OS picks the default, and a user override persists per device.
-Eight themes carry the same ten color tokens, four light (Paper, Vellum,
-Ledger, Foolscap) and four dark (Moss, Vault, Graphite, Inkwell), each one
-`:root[data-theme]` block. Paper and Vault are the two defaults below.
+Every theme carries the same ten color tokens in one `:root[data-theme]`
+block. The house sets are Paper, Vellum, Ledger and Foolscap in light and
+Moss, Vault, Graphite and Inkwell in dark. Parchment, Manila and Linen carry
+the light neutrals of Solarized, Gruvbox and Catppuccin, and Lagoon, Umber,
+Fjord, Plum, Nocturne, Nightshade, Basalt and Obsidian carry the dark
+neutrals of Solarized, Gruvbox, Nord, Catppuccin, Tokyo Night, Dracula,
+Monokai and One Dark. Broadsheet and Carbon are the high contrast sets, pure
+ink on pure paper with strong hairlines. Paper and Vault are the two defaults
+below.
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
