@@ -219,7 +219,6 @@
   .note, .error { color: var(--muted); }
   button { min-height: 28px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
-  button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   button:disabled, button[aria-disabled="true"] { color: var(--muted); cursor: default; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
   .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

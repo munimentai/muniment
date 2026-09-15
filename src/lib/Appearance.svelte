@@ -38,5 +38,4 @@
   .theme-options button:last-child { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
   .theme-options button:hover { background: var(--faint); color: var(--ink); }
   .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
-  .theme-options button:focus-visible { z-index: 1; }
 </style>

@@ -20,6 +20,9 @@ export default function (pi) {
           signal: controller.signal,
           prompt: async (prompt) => {
             if (prompt.type === "select") {
+              // The browser method is the desktop's: a sign-in never asks which.
+              const browser = prompt.options.find((option) => /browser/i.test(`${option.label ?? ""} ${option.id ?? ""}`))
+              if (browser) return browser.id
               const labels = prompt.options.map((option) => option.label ?? option.id)
               const chosen = await ctx.ui.select(prompt.message, labels)
               return prompt.options.find((option) => (option.label ?? option.id) === chosen)?.id ?? chosen

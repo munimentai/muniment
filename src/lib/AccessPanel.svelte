@@ -402,7 +402,6 @@
   .profile-button strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--text-13); }
   .profile-button small { overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
   .access-popover { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 330px; max-height: calc(100vh - 82px); display: flex; flex-direction: column; overflow: hidden; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow-overlay); outline: none; }
-  .access-popover:focus-visible { border-color: var(--muted); }
   .access-popover header { display: flex; flex: none; align-items: start; justify-content: space-between; padding: 14px; border-bottom: 1px solid var(--border); }
   .access-popover h2 { margin: 0; font-size: var(--text-13); }
   .access-popover header p, .access-label { margin: 3px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -459,7 +458,6 @@
   .companion-row:hover .companion-revoke, .companion-row:focus-within .companion-revoke { opacity: 1; }
   .companion-row:hover .companion-heading span, .companion-row:focus-within .companion-heading span { visibility: hidden; }
   .companion-revoke:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
-  .companion-revoke:focus-visible, .companion-confirm button:focus-visible { outline-color: var(--ink); }
   .companion-confirm { color: var(--ink); font-size: var(--text-12); }
   .companion-confirm p { margin: 0; }
   .companion-confirm strong { font-weight: 600; }

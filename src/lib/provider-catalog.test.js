@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PROVIDERS, catalogProvider, currentModel, methodLabel, modelChipLabel, pickerGroups, providerName, searchProviders, sourceTag } from './provider-catalog.js'
+import { PROVIDERS, catalogProvider, connectableProviders, currentModel, methodLabel, modelChipLabel, pickerGroups, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
 const inventory = {
   providers: [
@@ -57,9 +57,16 @@ describe('provider catalog', () => {
     expect(pickerGroups(null)).toEqual([])
   })
 
+  it('offers the popular providers that are not connected, counting aliases as connected', () => {
+    expect(connectableProviders(inventory).map((provider) => provider.id)).toEqual(['xai', 'google', 'openrouter', 'lmstudio', 'custom'])
+    const withEndpoint = { providers: [{ id: 'custom-litellm', name: 'LiteLLM', source: 'custom', models: [] }, { id: 'claude-bridge', name: 'Anthropic', source: 'claude-code', models: [] }] }
+    expect(connectableProviders(withEndpoint).map((provider) => provider.id)).toEqual(['openai', 'xai', 'google', 'openrouter', 'ollama', 'lmstudio'])
+    expect(connectableProviders(null)).toHaveLength(8)
+  })
+
   it('reads the saved default when it is shown, else the first shown model, and labels the chip', () => {
     expect(currentModel(inventory)).toEqual({ provider: 'ollama', model: 'llama3.2:3b' })
-    expect(modelChipLabel(inventory)).toBe('Ollama · llama3.2:3b')
+    expect(modelChipLabel(inventory)).toBe('llama3.2:3b')
     const hiddenDefault = { ...inventory, hidden: ['ollama/llama3.2:3b'] }
     expect(currentModel(hiddenDefault)).toEqual({ provider: 'openai-codex', model: 'gpt-5.5' })
     expect(modelChipLabel({ providers: [], hidden: [] })).toBe('Connect a model')

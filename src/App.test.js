@@ -1335,23 +1335,49 @@ describe('workspace composer entry', () => {
 
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^OpenAI/ }))
-    expect(within(dialog).getAllByRole('button', { name: /account|API key/ }).map((button) => button.textContent)).toEqual(['ChatGPT Plus or Pro accountBrowser', 'API keyPaste a key'])
-    await fireEvent.click(within(dialog).getByRole('button', { name: /^API key/ }))
+    // The account leads on one view. The key is one switch away, never a second list.
+    expect(within(dialog).getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+    expect(within(dialog).getByText(/Sign in with your ChatGPT Plus or Pro account\./)).toBeInTheDocument()
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Use an API key instead' }))
     expect(within(dialog).getByLabelText('OpenAI API key')).toBeVisible()
     expect(within(dialog).getByRole('button', { name: 'Save key' })).toBeDisabled()
     expect(within(dialog).queryByLabelText('Ollama server URL')).not.toBeInTheDocument()
-
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
-    await fireEvent.click(within(dialog).getByRole('button', { name: /account/ }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: /Sign in with your ChatGPT Plus or Pro account instead/ }))
     expect(within(dialog).getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
 
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^xAI/ }))
-    expect(within(dialog).getByRole('button', { name: /SuperGrok or X Premium account/ })).toBeInTheDocument()
+    expect(within(dialog).getByText(/Sign in with your SuperGrok or X Premium account\./)).toBeInTheDocument()
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Anthropic/ }))
-    expect(within(dialog).getByRole('button', { name: /Claude Code sign-in/ })).toBeInTheDocument()
+    expect(within(dialog).getByText(/Anthropic through your Claude Code sign-in\./)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Use an API key instead' })).toBeInTheDocument()
+  })
+
+  it('offers the popular providers inline and opens one with a single click', async () => {
+    localModeStatus = true
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => {
+      if (command === 'local_mode_provider_inventory') return Promise.resolve({
+        providers: [
+          { id: 'google', name: 'Google', source: 'key', base_url: null, models: [] },
+          { id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }] },
+        ],
+        default_provider: 'ollama',
+        default_model: 'llama3.2:3b',
+        hidden: [],
+      })
+      return defaultInvoke(command, ...args)
+    })
+    render(App)
+    const dialog = await openSettings()
+    await within(dialog).findByRole('region', { name: 'Ollama' })
+    const connect = within(dialog).getByRole('region', { name: 'Connect' })
+    expect([...connect.querySelectorAll('button')].map((button) => button.querySelector('span:not(.logo)').textContent)).toEqual(['Anthropic', 'OpenAI', 'xAI', 'OpenRouter', 'LM Studio', 'Custom OpenAI-compatible endpoint'])
+    await fireEvent.click(within(connect).getByRole('button', { name: /^OpenAI/ }))
+    expect(within(dialog).getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    expect(within(dialog).getByRole('region', { name: 'Connect' })).toBeInTheDocument()
   })
 
 

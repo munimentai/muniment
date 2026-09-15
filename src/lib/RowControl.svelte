@@ -10,9 +10,8 @@
   .row-control { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 24px; min-height: 24px; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
   .quiet { background: transparent; border-color: transparent; }
   .row-control:hover:not(:disabled) { background: var(--faint); border-color: transparent; }
-  .row-control:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   /* The rename control is the one row control that shows state as a border: the composer's muted hairline. */
-  .thread-title:hover:not(:disabled), .thread-title:focus-visible { outline: 0; border-color: var(--muted); background: transparent; }
+  .thread-title:hover:not(:disabled), .thread-title:focus-visible { border-color: var(--muted); background: transparent; }
   .row-control:disabled { color: var(--muted); cursor: default; }
   .new-thread, .artifacts-toggle { white-space: nowrap; }
   /* The title takes the row's remaining width and fades to an ellipsis at its end. */

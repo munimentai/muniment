@@ -45,7 +45,7 @@ panel slide. `prefers-reduced-motion` removes all of it.
 1. **Color means computation.** `--signal` appears only on the mark's thinking
    state, the running-tool status pulse, the streaming underline and caret on
    the active line, the route segment of the provenance line, the live voice
-   polish flash, and workflow-run indicators. Buttons, links, focus rings,
+   polish flash, and workflow-run indicators. Buttons, links,
    selection, icons at rest, badges and the mark at rest are ink on paper.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, tool activity, audit
@@ -96,7 +96,8 @@ New thread, the thread title, and Artifacts flush right with the update
 control beside it. New thread, the thread title and Artifacts are one quiet
 row control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
-editing as the composer's muted hairline, and focus rings are 1px ink. Windows keeps its native caption
+editing as the composer's muted hairline, and no control shows a focus ring or any
+other focus state. Windows keeps its native caption
 controls and Linux keeps its decorations. The sidebar holds the threads and one
 Settings control at its foot. Settings is a popup over the workspace with a
 section list on its left, Models, Appearance, Home and Account, and the
@@ -104,8 +105,10 @@ section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it, and Escape or its close control returns focus to the opener. Models
 lists connected providers with their real marks, a source tag, their models
-with a show switch and Disconnect; Connect provider searches the catalog with
-the featured eight first and offers each provider's methods. The model chip
+with a show switch and Disconnect, then the popular providers not yet
+connected as rows; Connect provider searches the rest, and a provider opens
+on one view with its first method and the others one switch away. The model
+chip shows the provider's mark in its brand colors beside the model id, and
 opens a picker over the shown models with Manage models at its foot. The
 sidebar is resizable by its divider and collapses to nothing: no rail.
 The mark appears on the launch screen and in the thinking state, never in
