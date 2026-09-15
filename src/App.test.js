@@ -24,8 +24,8 @@ const keyInventory = { providers: [{ id: 'anthropic', name: 'Anthropic', source:
 // Settings opens from the sidebar control; a section name picks that section's nav button.
 const openSettings = async (section) => {
   await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
-  const dialog = await screen.findByRole('dialog', { name: 'Preferences' })
-  if (section) await fireEvent.click(within(within(dialog).getByRole('navigation', { name: 'Preferences sections' })).getByRole('button', { name: section }))
+  const dialog = await screen.findByRole('dialog', { name: 'Settings' })
+  if (section) await fireEvent.click(within(within(dialog).getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: section }))
   return dialog
 }
 const rowControlRules = new Map([...rowControlStyles
@@ -1232,7 +1232,7 @@ describe('workspace composer entry', () => {
     expect(document.querySelector('.lockup')).not.toBeInTheDocument()
   })
 
-  it('opens Settings as a popup with Models, Appearance, Home and Account sections', async () => {
+  it('opens Settings as a popup with Models, Preferences, Home and Account sections', async () => {
     localModeStatus = true
     render(App)
     await screen.findByTestId('local-mode')
@@ -1241,18 +1241,18 @@ describe('workspace composer entry', () => {
     const settings = screen.getByRole('button', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-expanded', 'false')
     await fireEvent.click(settings)
-    const dialog = await screen.findByRole('dialog', { name: 'Preferences' })
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-expanded', 'true')
     expect(dialog).toHaveAttribute('aria-modal', 'true')
     expect(screen.getByTestId('settings-scrim')).toContainElement(dialog)
     // The workspace under the popup blurs behind the theme's paper: dark in dark mode, light in light mode.
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*color-mix\(in srgb, var\(--paper\)/)
-    const nav = within(dialog).getByRole('navigation', { name: 'Preferences sections' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models', 'Appearance', 'Home', 'Account'])
+    const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models', 'Preferences', 'Home', 'Account'])
     expect(within(nav).getByRole('button', { name: 'Models' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).getByRole('button', { name: 'Connect provider' })).toBeInTheDocument()
-    await fireEvent.click(within(nav).getByRole('button', { name: 'Appearance' }))
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Preferences' }))
     expect(within(dialog).getByRole('group', { name: 'Mode' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Home' }))
     expect(within(dialog).getByRole('button', { name: 'Change folder…' })).toBeInTheDocument()
@@ -1260,7 +1260,7 @@ describe('workspace composer entry', () => {
     expect(within(dialog).getByRole('button', { name: 'Sign in for cloud features' })).toBeInTheDocument()
 
     await fireEvent.keyDown(document, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Preferences' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
     await waitFor(() => expect(document.activeElement).toBe(settings))
   })
 
@@ -1273,16 +1273,16 @@ describe('workspace composer entry', () => {
     const shortcut = navigator.platform.startsWith('Mac') ? { key: ',', metaKey: true } : { key: ',', ctrlKey: true }
 
     await fireEvent.keyDown(document, shortcut)
-    expect(await screen.findByRole('dialog', { name: 'Preferences' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
     // The popup needs no sidebar.
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
 
     await fireEvent.keyDown(document, shortcut)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Preferences' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
     await fireEvent.keyDown(document, shortcut)
-    expect(await screen.findByRole('dialog', { name: 'Preferences' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Close settings' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Preferences' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
 
     await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
     const settings = await screen.findByRole('button', { name: 'Settings' })
@@ -1295,7 +1295,7 @@ describe('workspace composer entry', () => {
     localModeStatus = true
     localStorage.setItem('muniment.theme', 'light')
     render(App)
-    await openSettings('Appearance')
+    await openSettings('Preferences')
     const appearance = within(await screen.findByRole('group', { name: 'Mode' }))
     expect(appearance.getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     expect(appearance.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
@@ -1313,7 +1313,7 @@ describe('workspace composer entry', () => {
     const reopened = await screen.findByRole('button', { name: 'Settings' })
     expect(screen.queryByRole('group', { name: 'Mode' })).not.toBeInTheDocument()
     await fireEvent.click(reopened)
-    await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Preferences' })).getByRole('button', { name: 'Appearance' }))
+    await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Settings' })).getByRole('button', { name: 'Preferences' }))
     const restored = within(await screen.findByRole('group', { name: 'Mode' }))
     expect(restored.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')

@@ -20,9 +20,9 @@
     oninventory,
   } = $props()
 
-  const sections = [['models', 'Models'], ['appearance', 'Appearance'], ['home', 'Home'], ['account', 'Account']]
+  const sections = [['models', 'Models'], ['appearance', 'Preferences'], ['home', 'Home'], ['account', 'Account']]
   let panel = $state()
-  const sectionLabel = $derived(sections.find(([id]) => id === section)?.[1] ?? 'Preferences')
+  const sectionLabel = $derived(sections.find(([id]) => id === section)?.[1] ?? 'Settings')
 
   onMount(() => {
     void tick().then(() => panel?.querySelector('[aria-current="true"]')?.focus())
@@ -59,8 +59,8 @@
 
 <div class="settings-scrim" data-testid="settings-scrim" onclick={scrimClick}>
   <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" bind:this={panel}>
-    <nav class="settings-nav" aria-label="Preferences sections">
-      <h2 id="settings-title">Preferences</h2>
+    <nav class="settings-nav" aria-label="Settings sections">
+      <h2 id="settings-title">Settings</h2>
       <ul>
         {#each sections as [id, label]}
           <li><button type="button" class="quiet" aria-current={section === id ? 'true' : undefined} onclick={() => { section = id }}>{label}</button></li>
