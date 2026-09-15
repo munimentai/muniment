@@ -157,7 +157,7 @@
 
   async function saveEndpoint() {
     const models = endpointModels.split(/[\n,]/).map((model) => model.trim()).filter(Boolean)
-    if (pending || !baseUrl.trim() || models.length === 0 || (providerId === 'custom' && !endpointName.trim())) return
+    if (pending || !baseUrl.trim() || (providerId === 'custom' && !endpointName.trim())) return
     pending = true
     formError = ''
     try {
@@ -376,7 +376,7 @@
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" disabled={pending || !key.trim()} onclick={saveKey}>Save key</button>
     {:else if method === 'ollama'}
-      <p class="support">Point Muniment at a running Ollama server.</p>
+      <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
       <label for="provider-base-url">Ollama server URL</label>
       <input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={baseUrl} disabled={pending}>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
@@ -393,8 +393,9 @@
       <input id="endpoint-key" type="password" autocomplete="off" bind:value={key} disabled={pending}>
       <label for="endpoint-models">Models, one per line</label>
       <textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea>
+      <p class="support">Leave the list empty and Muniment asks the server for its models.</p>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" disabled={pending || !baseUrl.trim() || !endpointModels.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
+      <button type="button" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
     {:else if method === 'claude-code'}
       <p class="support">Anthropic through your Claude Code sign-in. Muniment installs the bridge package and routes Claude models through it.</p>
       {#if claude === null}

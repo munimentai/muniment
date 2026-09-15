@@ -55,8 +55,9 @@ panel slide. `prefers-reduced-motion` removes all of it.
    or backdrop blur on a surface, no orbs or ambient animation, no assistant
    avatar, no typing dots, no sparkles or wand iconography, no emoji in UI
    copy, no pill radius, no "AI", "magic", "supercharge" or "unlock" in copy.
-   The one blur is the Settings scrim: the workspace under Settings darkens
-   and blurs while the popup covers most of it.
+   The one blur is the Settings scrim: the workspace under Settings blurs
+   behind the theme's paper, dark in dark mode and light in light mode, while
+   the popup covers most of it.
 4. **Voice.** Sentence case everywhere. Buttons say what happens, in a label
    or, for the composer's send and stop control, in a glyph with an accessible
    name that says it. Errors state what happened and the next step and never

@@ -106,8 +106,8 @@
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
-  /* The one blur in the app: the workspace under Settings darkens and blurs, and Settings covers most of it. */
-  .settings-scrim { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; padding: 40px; background: color-mix(in srgb, var(--ink) 34%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  /* The one blur in the app: the workspace under Settings blurs behind the theme's paper, dark in dark mode and light in light mode, and Settings covers most of it. */
+  .settings-scrim { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; padding: 40px; background: color-mix(in srgb, var(--paper) 58%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
   .settings-panel { width: min(1080px, 100%); height: min(760px, 100%); display: grid; grid-template-columns: 216px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); }
   .settings-nav { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 20px 12px; border-right: 1px solid var(--border); background: var(--paper); }
   .settings-nav h2 { margin: 0 8px 12px; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }

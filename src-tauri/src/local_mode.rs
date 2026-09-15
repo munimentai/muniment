@@ -79,6 +79,7 @@ const MODELS_RECORD_FILE: &str = "muniment-models.json";
 const CLAUDE_BRIDGE_CONFIG_FILE: &str = "claude-bridge.json";
 const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(30);
 const CLAUDE_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct InventoryModel {
@@ -344,6 +345,18 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
+    // The server names its own models; the pinned id stands in when it does not answer.
+    let discovered = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
+    let model_ids: Vec<String> = if discovered.is_empty() {
+        vec![OLLAMA_MODEL.to_owned()]
+    } else {
+        discovered
+    };
+    let default_model = if model_ids.iter().any(|id| id == OLLAMA_MODEL) {
+        OLLAMA_MODEL.to_owned()
+    } else {
+        model_ids[0].clone()
+    };
     providers.insert(
         OLLAMA_PROVIDER.to_owned(),
         serde_json::json!({
@@ -354,11 +367,11 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
                 "supportsDeveloperRole": false,
                 "supportsReasoningEffort": false
             },
-            "models": [{ "id": OLLAMA_MODEL }]
+            "models": model_ids.iter().map(|id| serde_json::json!({ "id": id })).collect::<Vec<_>>()
         }),
     );
     settings.insert("defaultProvider".to_owned(), OLLAMA_PROVIDER.into());
-    settings.insert("defaultModel".to_owned(), OLLAMA_MODEL.into());
+    settings.insert("defaultModel".to_owned(), default_model.into());
     merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
 
     // Write the route first. A later models write failure cannot fall back to a cloud model.
@@ -573,6 +586,59 @@ fn list_pi_models(agent: &Path) -> Vec<(String, InventoryModel)> {
         .filter(|output| output.status.success())
         .map(|output| parse_model_table(&String::from_utf8_lossy(&output.stdout)))
         .unwrap_or_default()
+}
+
+/// Rewrites each endpoint's model list from what its server serves now.
+fn refresh_endpoint_models(agent: &Path) -> Result<(), String> {
+    let models_file = pi_models_file(agent);
+    if !models_file.is_file() {
+        return Ok(());
+    }
+    let _lock = lock_pi_auth_file(&models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let mut root = read_json_for_update(&models_file)?;
+    let mut changed = false;
+    if let Some(providers) = root
+        .get_mut("providers")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for entry in providers
+            .values_mut()
+            .filter_map(serde_json::Value::as_object_mut)
+        {
+            let Some(base_url) = entry.get("baseUrl").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let discovered =
+                muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
+            if discovered.is_empty() {
+                continue;
+            }
+            let current: Vec<&str> = entry
+                .get("models")
+                .and_then(serde_json::Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|model| model.get("id").and_then(serde_json::Value::as_str))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if current != discovered.iter().map(String::as_str).collect::<Vec<_>>() {
+                entry.insert(
+                    "models".into(),
+                    discovered
+                        .iter()
+                        .map(|id| serde_json::json!({ "id": id }))
+                        .collect::<Vec<_>>()
+                        .into(),
+                );
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        write_json_for_update(&models_file, &root)?;
+    }
+    Ok(())
 }
 
 fn provider_inventory(
@@ -799,12 +865,16 @@ fn store_endpoint_provider(
     if key.len() > 16 * 1024 || key.trim() != key {
         return Err("Enter a valid API key.".into());
     }
-    let models: Vec<&String> = models
+    let mut models: Vec<String> = models
         .iter()
         .filter(|model| valid_identifier(model, 512))
+        .cloned()
         .collect();
     if models.is_empty() {
-        return Err("Name at least one model the server serves.".into());
+        models = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
+    }
+    if models.is_empty() {
+        return Err("The server named no models. Start it, or list its models here.".into());
     }
     let provider = match kind {
         "lmstudio" => LM_STUDIO_PROVIDER.to_owned(),
@@ -907,6 +977,7 @@ pub(crate) async fn local_mode_provider_inventory(
 ) -> Result<ProviderInventory, String> {
     let agent = harness_agent_directory(READ_SETTINGS_ERROR)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _ = refresh_endpoint_models(&agent);
         let models = list_pi_models(&agent);
         provider_inventory(&agent, models)
     })
