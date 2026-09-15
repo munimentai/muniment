@@ -172,6 +172,10 @@
   let threadTitleBeforeEdit = ''
   let deletingThreadId = $state(null)
   let deletePending = $state(false)
+  // The rows a confirm covers, and the rows a Shift or Command click gathered.
+  let deletingThreadIds = $state([])
+  let selectedThreadIds = $state(new Set())
+  let selectionAnchor = null
   let permissionAnswer = $state(null)
   let permissionValues = $state({})
   let thread = $state()
@@ -406,9 +410,72 @@
     event.currentTarget.value = limited
   }
 
+  // A Shift click takes the range from the last picked row, a Command or
+  // Control click adds or drops one row, and a plain click opens the thread.
+  function threadRowClick(event, threadId) {
+    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+      event.preventDefault()
+      selectThread(threadId, event.shiftKey)
+      return
+    }
+    clearThreadSelection()
+    void chatController.openThread(threadId)
+  }
+
+  // The open thread's row is not a button, so a modifier click alone selects it.
+  function currentRowClick(event, threadId) {
+    if (!(event.shiftKey || event.metaKey || event.ctrlKey)) return
+    event.preventDefault()
+    selectThread(threadId, event.shiftKey)
+  }
+
+  function selectThread(threadId, range) {
+    const next = new Set(selectedThreadIds)
+    const ids = threadSummaries.map((summary) => summary.threadId)
+    if (range && selectionAnchor && ids.includes(selectionAnchor)) {
+      const [from, to] = [ids.indexOf(selectionAnchor), ids.indexOf(threadId)].sort((a, b) => a - b)
+      for (const id of ids.slice(from, to + 1)) next.add(id)
+    } else {
+      if (next.has(threadId)) next.delete(threadId)
+      else next.add(threadId)
+      selectionAnchor = threadId
+    }
+    selectedThreadIds = next
+  }
+
+  function clearThreadSelection() {
+    if (selectedThreadIds.size) selectedThreadIds = new Set()
+    selectionAnchor = null
+  }
+
+  // The rows one delete covers: the selection when the row is part of it, else the row alone.
+  function deletionTargets(threadId) {
+    return selectedThreadIds.has(threadId) && selectedThreadIds.size > 1 ? [...selectedThreadIds] : [threadId]
+  }
+
+  // The control's name, the confirm's name, and the confirm's words, which quote the title.
+  function deleteLabel(threadId, rowTitle, form = 'name') {
+    const count = deletionTargets(threadId).length
+    if (count > 1) return form === 'name' ? `Delete ${count}` : `Delete ${count} threads?`
+    if (form === 'name') return `Delete ${rowTitle}`
+    return form === 'question' ? `Delete ${rowTitle}?` : `Delete “${rowTitle}”?`
+  }
+
   function askToDeleteThread(threadId) {
     closeThreadMenu()
+    deletingThreadIds = deletionTargets(threadId)
     deletingThreadId = threadId
+  }
+
+  function threadRowKeydown(event, threadId) {
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      if (active || threadSwitching) return
+      event.preventDefault()
+      askToDeleteThread(threadId)
+    } else if (event.key === 'Escape' && selectedThreadIds.size) {
+      event.preventDefault()
+      clearThreadSelection()
+    }
   }
 
   function focusThreadRow(threadId) {
@@ -421,6 +488,7 @@
   function cancelDeleteThread() {
     const threadId = deletingThreadId
     deletingThreadId = null
+    deletingThreadIds = []
     focusThreadRow(threadId)
   }
 
@@ -429,6 +497,7 @@
   function openThreadMenu(event, threadId) {
     if (deletingThreadId === threadId) return
     event.preventDefault()
+    if (selectedThreadIds.size && !selectedThreadIds.has(threadId)) clearThreadSelection()
     const row = event.currentTarget.getBoundingClientRect()
     const fromKeyboard = !event.clientX && !event.clientY
     threadMenu = { threadId, x: fromKeyboard ? row.left : event.clientX, y: fromKeyboard ? row.bottom : event.clientY }
@@ -471,9 +540,14 @@
   async function confirmDeleteThread(threadId) {
     if (deletePending) return
     deletePending = true
-    await chatController.deleteThread(threadId)
+    const targets = deletingThreadIds.length ? deletingThreadIds : [threadId]
+    for (const id of targets) {
+      if (!(await chatController.deleteThread(id))) break
+    }
     deletePending = false
     deletingThreadId = null
+    deletingThreadIds = []
+    clearThreadSelection()
   }
 
   function workspaceFrameWidth() {
@@ -1285,6 +1359,8 @@
         <aside id="sidebar" class="sidebar">
           {#if !sidebarCollapsed}
             <h2 id="thread-list-title" class="side-label">Threads</h2>
+            <div class="side-scroll">
+            <h3 class="side-group">Untitled</h3>
             <ul class="thread-list" aria-labelledby="thread-list-title">
               {#if freshThread}
                 <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(1)}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
@@ -1294,24 +1370,33 @@
                 {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
                 {@const rowTitle = current ? summary.title || currentThreadTitle : title}
                 {@const rowPosition = index + 1 + (freshThread ? 1 : 0)}
+                {@const selected = selectedThreadIds.has(summary.threadId)}
                 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-                <li class="thread-record" oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
+                <li class="thread-record" class:selected oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
                   {#if current}
-                    <div class="thread-row active-thread" data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
+                    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+                    <div class="thread-row active-thread" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
                   {:else}
-                    <button class="thread-row" data-thread-id={summary.threadId} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={() => chatController.openThread(summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
+                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
+                  {/if}
+                  {#if deletingThreadId !== summary.threadId}
+                    <button type="button" class="quiet thread-delete" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}><LucideIcon name="trash-2" variant="action" size={14} /></button>
                   {/if}
                   {#if deletingThreadId === summary.threadId}
-                    <div class="thread-delete-confirm" role="group" aria-label={`Delete ${rowTitle}?`}>
-                      <span>Delete “{rowTitle}”?</span>
-                      <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>Delete</button>
+                    <div class="thread-delete-confirm" role="group" aria-label={deleteLabel(summary.threadId, rowTitle, 'question')}>
+                      {#if deletingThreadIds.length > 1}
+                        <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>{deleteLabel(summary.threadId, rowTitle)}</button>
+                      {:else}
+                        <span>{deleteLabel(summary.threadId, rowTitle, 'words')}</span>
+                        <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>Delete</button>
+                      {/if}
                       <button type="button" disabled={deletePending} onclick={cancelDeleteThread} onkeydown={deleteConfirmKeydown}>Cancel</button>
                     </div>
                   {/if}
                   {#if threadMenu?.threadId === summary.threadId}
                     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                     <div class="thread-menu" role="menu" aria-label={`${rowTitle} actions`} style:left={`${threadMenu.x}px`} style:top={`${threadMenu.y}px`} onkeydown={threadMenuKeydown} onfocusout={menuFocusOut} use:focusMenuOnMount>
-                      <button type="button" role="menuitem" aria-label={`Delete ${rowTitle}`} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>Delete</button>
+                      <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
                     </div>
                   {/if}
                 </li>
@@ -1320,13 +1405,18 @@
             {#if moreThreads}
               <button type="button" class="older-threads" disabled={loadingOlderThreads} onclick={loadOlderThreads}>Older threads</button>
             {/if}
-          {/if}
-          {#if !sidebarCollapsed && auth.name === 'signed-in'}
-            <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+            </div>
           {/if}
           {#if !sidebarCollapsed}
-          <div class="settings-block">
-            <button class="side-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
+          <div class="side-foot">
+            <div class="settings-block">
+              <button class="side-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
+            </div>
+            {#if auth.name === 'signed-in'}
+              <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+            {:else}
+              <button class="side-action" disabled={!!active || localEntryPending} onclick={signIn}><LucideIcon name="log-in" size={18} /><span>Sign in to cloud</span></button>
+            {/if}
           </div>
           {/if}
         </aside>
@@ -1513,6 +1603,51 @@
         {#if pickerOpen}
           <ModelPicker {inventory} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onclose={closePicker} />
         {/if}
+        {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <section class="speech-install-popover" aria-labelledby="speech-install-title" onkeydown={speechInstallKeydown}>
+            <header class="speech-install-head">
+              <strong id="speech-install-title">Speech model install</strong>
+              <button type="button" class="quiet close-card" aria-label="Close speech model install" onclick={dismissSpeechInstall}><LucideIcon name="x" variant="action" size={14} /></button>
+            </header>
+            {#if speechInstallFacts}
+              <p class="speech-install-lead">Dictation runs on this device. Voice needs one download.</p>
+              <dl>
+                <div><dt>Download</dt><dd>{formatBytes(speechInstallFacts.totalDownloadBytes)}</dd></div>
+                <div><dt>Free disk required</dt><dd>{formatBytes(speechInstallFacts.requiredFreeBytes)}</dd></div>
+              </dl>
+              <details class="speech-install-details">
+                <summary>Details</summary>
+                <dl>
+                  <div><dt>Source</dt><dd>{speechInstallFacts.sourceRepository}</dd></div>
+                  <div><dt>Speech model license</dt><dd>{speechInstallFacts.speechModelLicense}</dd></div>
+                  <div><dt>Voice activity model license</dt><dd>{speechInstallFacts.voiceActivityModelLicense}</dd></div>
+                </dl>
+              </details>
+              {#if speechInstallStatus?.state === 'installing'}
+                <div class="speech-install-progress">
+                  <progress
+                    aria-label="Speech model download progress"
+                    max={Math.max(speechInstallStatus.totalBytes, 1)}
+                    value={Math.min(speechInstallStatus.completedBytes, speechInstallStatus.totalBytes)}
+                  ></progress>
+                  <span>{formatBytes(speechInstallStatus.completedBytes)} / {formatBytes(speechInstallStatus.totalBytes)}</span>
+                </div>
+              {/if}
+              {#if speechInstallStatus}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
+              {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
+                <button type="button" disabled={speechInstallPending} onclick={startSpeechInstall}>Install</button>
+              {:else if speechInstallStatus?.state === 'installing'}
+                <button type="button" disabled={speechInstallPending} onclick={cancelSpeechInstall}>Cancel install</button>
+              {/if}
+            {:else if speechInstallPending}
+              <p role="status">Loading install details.</p>
+            {:else}
+              <button type="button" onclick={openSpeechInstall}>Try again</button>
+            {/if}
+            {#if speechInstallError}<p class="speech-install-error" role="alert">{speechInstallError}</p>{/if}
+          </section>
+        {/if}
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
@@ -1535,6 +1670,7 @@
           {/if}
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
+            {#if !active}<button type="button" class="quiet composer-icon" aria-label="Add files" onclick={chooseFiles}><LucideIcon name="plus" variant="action" size={16} /></button>{/if}
             {#if auth.name === 'local'}
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name="chevron-down" variant="action" size={12} /></button>
             {/if}
@@ -1550,8 +1686,7 @@
             {/if}
             </div>
             <div class="composer-actions">
-              <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick}>Voice</button>
-              {#if !active}<button type="button" class="quiet" onclick={chooseFiles}>Add files</button>{/if}
+              <button type="button" class="quiet" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
               {#if active || draft.trim()}
                 <button type="button" class="composer-action" class:primary={!active} class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
                   <LucideIcon name={active ? 'square' : 'arrow-up'} variant="action" />
@@ -1559,45 +1694,7 @@
               {/if}
             </div>
           </div>
-          {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
-            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-            <section class="speech-install-card" aria-labelledby="speech-install-title" onkeydown={speechInstallKeydown}>
-              <header class="speech-install-head">
-                <strong id="speech-install-title">Speech model install</strong>
-                <button type="button" class="quiet close-card" aria-label="Close speech model install" onclick={dismissSpeechInstall}><LucideIcon name="x" variant="action" size={14} /></button>
-              </header>
-              {#if speechInstallFacts}
-                <dl>
-                  <div><dt>Download</dt><dd>{formatBytes(speechInstallFacts.totalDownloadBytes)}</dd></div>
-                  <div><dt>Source</dt><dd>{speechInstallFacts.sourceRepository}</dd></div>
-                  <div><dt>Speech model license</dt><dd>{speechInstallFacts.speechModelLicense}</dd></div>
-                  <div><dt>Voice activity model license</dt><dd>{speechInstallFacts.voiceActivityModelLicense}</dd></div>
-                  <div><dt>Free disk required</dt><dd>{formatBytes(speechInstallFacts.requiredFreeBytes)}</dd></div>
-                </dl>
-                {#if speechInstallStatus?.state === 'installing'}
-                  <div class="speech-install-progress">
-                    <progress
-                      aria-label="Speech model download progress"
-                      max={Math.max(speechInstallStatus.totalBytes, 1)}
-                      value={Math.min(speechInstallStatus.completedBytes, speechInstallStatus.totalBytes)}
-                    ></progress>
-                    <span>{formatBytes(speechInstallStatus.completedBytes)} / {formatBytes(speechInstallStatus.totalBytes)}</span>
-                  </div>
-                {/if}
-                {#if speechInstallStatus}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
-                {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
-                  <button type="button" disabled={speechInstallPending} onclick={startSpeechInstall}>Install</button>
-                {:else if speechInstallStatus?.state === 'installing'}
-                  <button type="button" disabled={speechInstallPending} onclick={cancelSpeechInstall}>Cancel install</button>
-                {/if}
-              {:else if speechInstallPending}
-                <p role="status">Loading install details.</p>
-              {:else}
-                <button type="button" onclick={openSpeechInstall}>Try again</button>
-              {/if}
-              {#if speechInstallError}<p class="speech-install-error" role="alert">{speechInstallError}</p>{/if}
-            </section>
-          {:else if speechInstallNotice}<p class="speech-install-notice" role="status">{speechInstallNotice}</p>
+          {#if speechInstallNotice}<p class="speech-install-notice" role="status">{speechInstallNotice}</p>
           {:else if dictationError && dictation.state !== 'modelNotInstalled'}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
           {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </div>
@@ -1807,18 +1904,27 @@
   input.thread-title { flex: 0 1 320px; max-width: 100%; overflow: hidden; border: 1px solid var(--muted); outline: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
   kbd { margin-left: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .title-spacer { flex: 1; align-self: stretch; min-width: 24px; }
-  .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 14px 10px 10px; }
+  .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 0; }
+  .side-scroll { flex: 1; min-height: 0; padding: 4px 6px 8px; overflow-y: auto; }
+  .side-group { margin: 6px 8px 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* Clip labels during the panel slide without clipping the profile popover. */
   .side-label, .older-threads, .side-action span { overflow: hidden; }
   .side-toggle { line-height: 0; }
   .side-toggle:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   .side-toggle:hover:not(:disabled) :global(.side-icon) { color: var(--ink); }
-  .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-color: transparent; background: transparent; text-align: left; }
-  .thread-list { min-height: 0; padding: 0; overflow-y: auto; list-style: none; }
+  .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 8px; border-color: transparent; background: transparent; text-align: left; }
+  .thread-list { padding: 0; list-style: none; }
   .older-threads { width: 100%; margin-top: 4px; border-color: transparent; background: transparent; color: var(--muted); }
   .thread-record { position: relative; }
-  .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); }
+  .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); user-select: none; -webkit-user-select: none; }
   button.thread-row:hover:not([aria-disabled="true"]) { background: var(--faint); }
+  /* A selected row reads darker than the open thread's faint row, so a selection and the open thread never look alike. */
+  .thread-row.selected { background: color-mix(in srgb, var(--ink) 14%, var(--surface)); }
+  /* The row's delete control shows while the pointer or focus rests on the row, in the time's place. */
+  .thread-delete { position: absolute; top: 50%; right: 4px; min-width: 22px; min-height: 22px; padding: 0 4px; transform: translateY(-50%); color: var(--muted); opacity: 0; pointer-events: none; }
+  .thread-record:hover .thread-delete, .thread-record:focus-within .thread-delete { opacity: 1; pointer-events: auto; }
+  .thread-record:hover .thread-row time, .thread-record:focus-within .thread-row time { visibility: hidden; }
+  .thread-delete:hover:not(:disabled) { color: var(--ink); background: var(--faint); }
   button.thread-row[aria-disabled="true"] { opacity: .55; }
   /* The time always shows: the title takes the rest of the row and fades at its end. */
   .thread-row time { flex: none; margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); white-space: nowrap; }
@@ -1830,15 +1936,20 @@
   .thread-delete-confirm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; padding: 5px 7px; border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
   .thread-delete-confirm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
+  /* A narrow sidebar shortens the first control, never its start. */
+  .thread-delete-confirm button:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
   .thread-delete-confirm button:hover:not(:disabled) { background: var(--faint); }
   .side-action span { flex: 1; min-width: 0; }
-  /* The foot of the sidebar: one Settings control, and the menu it expands above itself. */
-  .settings-block { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
+  /* The foot of the sidebar: Settings above the account row, under one edge-to-edge hairline. */
+  .side-foot { margin-top: auto; padding: 4px 6px 6px; border-top: 1px solid var(--border); }
+  .settings-block { padding: 0; }
+  .side-foot :global(.profile-block) { margin-top: 0; padding-top: 0; border-top: 0; }
+  .side-foot :global(.profile-button) { min-height: 28px; padding: 4px 8px; }
   /* The panel is one popup over the thread, never a second settings surface. */
   /* Collapsed means gone: the column is zero wide, the empty panel drops its hairline and padding for the slide, and the thread panel takes the gap. */
   .workspace.sidebar-collapsed .sidebar { padding: 0; border-width: 0; overflow: hidden; }
   .workspace.sidebar-collapsed .thread-panel { margin-left: calc(-1 * var(--frame-width)); }
-  .side-label { margin: 2px 8px 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .side-label { flex: none; margin: 0; padding: 10px 14px 8px; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
@@ -1943,7 +2054,7 @@
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .composer { position: relative; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .composer:focus-within { border-color: var(--muted); }
-  .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; }
+  .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 -12px 8px; padding: 0 12px 8px; border-bottom: 1px solid var(--border); list-style: none; }
   .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: var(--text-12); }
@@ -1961,6 +2072,8 @@
   .model-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
+  .composer-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; color: var(--muted); }
+  .composer-icon:hover:not(:disabled), .composer-icon[aria-pressed="true"] { color: var(--ink); background: var(--faint); }
   /* The band's one action control: an ink up arrow while the draft has text, a muted stop square in flight. */
   .composer-action { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; }
   .composer-action.stop { background: transparent; border-color: var(--border); color: var(--muted); }
@@ -1971,20 +2084,23 @@
   .capture-meter i:nth-child(2), .capture-meter i:nth-child(4) { height: 10px; animation-delay: -300ms; }
   .capture-meter i:nth-child(3) { height: 14px; animation-delay: -600ms; }
   .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .speech-install-card { margin-top: 9px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
-  .speech-install-card strong { font-weight: 600; }
-  .speech-install-card dl { margin: 7px 0; }
-  .speech-install-card dl div { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 2fr); gap: 12px; }
-  .speech-install-card dt { color: var(--muted); }
-  .speech-install-card dd { margin: 0; overflow-wrap: anywhere; }
-  .speech-install-card p { margin: 7px 0 0; color: var(--muted); }
+  .speech-install-popover { position: absolute; z-index: 5; right: 0; bottom: calc(100% + 8px); width: min(340px, 100%); padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
+  .speech-install-lead { margin: 7px 0 0; color: var(--ink); font: var(--text-13) var(--font-human); }
+  .speech-install-details { margin-top: 7px; color: var(--muted); }
+  .speech-install-details summary { cursor: pointer; }
+  .speech-install-popover strong { font-weight: 600; }
+  .speech-install-popover dl { margin: 7px 0; }
+  .speech-install-popover dl div { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 2fr); gap: 12px; }
+  .speech-install-popover dt { color: var(--muted); }
+  .speech-install-popover dd { margin: 0; overflow-wrap: anywhere; }
+  .speech-install-popover p { margin: 7px 0 0; color: var(--muted); }
   .speech-install-progress { display: grid; gap: 4px; margin-top: 9px; color: var(--muted); }
   .speech-install-progress progress { width: 100%; height: 6px; accent-color: var(--muted); }
-  .speech-install-card button { margin-top: 7px; padding: 4px 8px; font: inherit; }
-  .speech-install-card .speech-install-error { color: var(--oxide); }
+  .speech-install-popover button { margin-top: 7px; padding: 4px 8px; font: inherit; }
+  .speech-install-popover .speech-install-error { color: var(--oxide); }
   .speech-install-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .speech-install-card .close-card { min-width: 24px; min-height: 24px; margin: 0; padding: 0 5px; color: var(--muted); }
-  .speech-install-card .close-card:hover { color: var(--ink); }
+  .speech-install-popover .close-card { min-width: 24px; min-height: 24px; margin: 0; padding: 0 5px; color: var(--muted); }
+  .speech-install-popover .close-card:hover { color: var(--ink); }
   .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   @keyframes blink { 50% { opacity: 0; } }
   @keyframes breathe { 50% { opacity: .45; } }

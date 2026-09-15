@@ -2060,9 +2060,13 @@ describe('thread name', () => {
     render(App)
     const row = await screen.findByRole('button', { name: 'Vendor audit' })
 
-    // No hover control: the row's actions live in a menu on right-click.
-    expect(screen.queryByRole('button', { name: 'Delete Vendor audit' })).not.toBeInTheDocument()
-    expect(appStyles).not.toMatch(/\.thread-delete(?![-\w])/)
+    // The row carries a delete control that shows on hover and focus, and the right-click menu is the second path.
+    const hoverDelete = screen.getByRole('button', { name: 'Delete Vendor audit' })
+    expect(appStyles).toMatch(/\.thread-record:hover \.thread-delete/)
+    await waitFor(() => expect(hoverDelete).toBeEnabled())
+    await fireEvent.click(hoverDelete)
+    expect(screen.getByLabelText('Delete Vendor audit?')).toHaveTextContent('Delete “Vendor audit”?')
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
     const menu = screen.getByRole('menu', { name: 'Vendor audit actions' })
     expect(menu).toHaveStyle({ left: '120px', top: '80px' })
@@ -2092,6 +2096,85 @@ describe('thread name', () => {
     // The current thread's row opens the same menu.
     await openDeleteMenu('Lease renewal')
     expect(screen.getByLabelText('Delete Lease renewal?')).toBeInTheDocument()
+  })
+
+  it('selects rows with Shift and Command clicks and deletes the selection in one confirm', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' },
+      { threadId: 'thread-3', title: 'Archive review', updatedAt: '' },
+      { threadId: 'thread-4', title: 'Budget notes', updatedAt: '' },
+    ]
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'chat_delete_thread') return undefined
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const vendor = await screen.findByRole('button', { name: 'Vendor audit' })
+    const archive = screen.getByRole('button', { name: 'Archive review' })
+    await fireEvent.click(vendor, { metaKey: true })
+    await fireEvent.click(archive, { shiftKey: true })
+    expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(2)
+
+    await fireEvent.contextMenu(archive)
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete 2' }))
+    // Several rows confirm with two controls and no sentence.
+    const confirm = screen.getByLabelText('Delete 2 threads?')
+    expect(within(confirm).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete 2', 'Cancel'])
+    await fireEvent.click(within(confirm).getByRole('button', { name: 'Delete 2' }))
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
+    expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' })
+    expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-3' })
+    expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(0)
+
+    // Delete on a focused row opens the confirm for that row alone.
+    const budget = screen.getByRole('button', { name: 'Budget notes' })
+    await fireEvent.keyDown(budget, { key: 'Delete' })
+    expect(screen.getByLabelText('Delete Budget notes?')).toHaveTextContent('Delete “Budget notes”?')
+  })
+
+  it('deletes a selection that holds the open thread and lands on a fresh thread', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' },
+      { threadId: 'thread-3', title: 'Archive review', updatedAt: '' },
+    ]
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }]
+      if (command === 'chat_delete_thread') return undefined
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByText('Answer')
+    const current = document.querySelector('.thread-row[aria-current="true"]')
+    expect(current).toHaveTextContent('Lease renewal')
+    await fireEvent.click(current, { metaKey: true })
+    await fireEvent.click(screen.getByRole('button', { name: 'Vendor audit' }), { metaKey: true })
+    expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(2)
+
+    // A right-click on a row outside the selection makes that row the selection.
+    await fireEvent.contextMenu(screen.getByRole('button', { name: 'Archive review' }))
+    expect(screen.getByRole('menuitem', { name: 'Delete Archive review' })).toBeInTheDocument()
+    expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(0)
+    await fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+
+    await fireEvent.click(current, { metaKey: true })
+    await fireEvent.click(screen.getByRole('button', { name: 'Vendor audit' }), { metaKey: true })
+    await fireEvent.contextMenu(current)
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete 2' }))
+    await fireEvent.click(within(screen.getByLabelText('Delete 2 threads?')).getByRole('button', { name: 'Delete 2' }))
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
+    await waitFor(() => expect(screen.queryByText('Answer')).not.toBeInTheDocument())
+    expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Threads' })).getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
   })
 
   it('closes the thread menu on a pointer press outside it', async () => {

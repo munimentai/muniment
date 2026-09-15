@@ -373,10 +373,10 @@ async function checkComposerActions(browser, baseUrl) {
             }
           })
           const context = JSON.stringify({ fixture, rail, width, layout })
-          // The band's one action control is absent while the draft is empty and a stop square in flight.
+          // Add files leads the row at its left; the actions hold the microphone, and a stop square in flight.
           assert.deepEqual(layout.buttons.map(({ label }) => label), fixture === 'in-flight.html'
             ? ['Voice', 'Stop']
-            : ['Voice', 'Add files'], context)
+            : ['Voice'], context)
           for (const button of layout.buttons) {
             assert.equal(button.lines, 1, context)
             assert.ok(button.width >= 24 && button.height >= 24, context)

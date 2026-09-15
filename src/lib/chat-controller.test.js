@@ -371,6 +371,46 @@ describe('chat controller', () => {
     expect(context.messages()).toBe(previous)
   })
 
+  it('treats the newest thread as open when no selection is recorded and lands on a fresh thread', async () => {
+    const shown = [{ role: 'user', text: 'The newest transcript' }]
+    let summaries = [{ threadId: 'thread-1' }, { threadId: 'thread-2' }]
+    const context = setup(vi.fn().mockResolvedValue(undefined))
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    const onFreshThread = vi.fn()
+    const onThreadSelected = vi.fn()
+    context.setMessages(shown)
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => null,
+      readThreadSummaries: () => summaries,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSummaries: (next) => { summaries = next },
+      onThreadSelected,
+      onFreshThread,
+    })
+
+    await expect(controller.deleteThread('thread-1')).resolves.toBe(true)
+
+    expect(summaries).toEqual([{ threadId: 'thread-2' }])
+    expect(context.messages()).toEqual([])
+    expect(onFreshThread).toHaveBeenCalledWith(true)
+    expect(onThreadSelected).toHaveBeenCalledWith(null)
+  })
+
   it('clears the selected thread only after a successful delete', async () => {
     const request = deferred()
     const previous = [{ role: 'user', text: 'Delete this transcript' }]
