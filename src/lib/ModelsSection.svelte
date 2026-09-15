@@ -6,9 +6,12 @@
   import ProviderLogo from './ProviderLogo.svelte'
   import { catalogProvider, connectableProviders, methodLabel, modelKey, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
-  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory } = $props()
+  // `inventory` seeds the list from what the shell already holds, so the page
+  // draws at once and the fresh read replaces it.
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null } = $props()
 
-  let inventory = $state(null)
+  // svelte-ignore state_referenced_locally
+  let inventory = $state(initial)
   let loadError = $state('')
   let status = $state('')
   let query = $state('')

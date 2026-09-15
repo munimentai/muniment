@@ -600,11 +600,12 @@ fn list_pi_models(agent: &Path) -> Vec<(String, InventoryModel)> {
         .unwrap_or_default()
 }
 
-/// Rewrites each endpoint's model list from what its server serves now.
-fn refresh_endpoint_models(agent: &Path) -> Result<(), String> {
+/// Rewrites each endpoint's model list from what its server serves now, and
+/// answers whether any list changed.
+fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
     let models_file = pi_models_file(agent);
     if !models_file.is_file() {
-        return Ok(());
+        return Ok(false);
     }
     let _lock = lock_pi_auth_file(&models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let mut root = read_json_for_update(&models_file)?;
@@ -650,7 +651,7 @@ fn refresh_endpoint_models(agent: &Path) -> Result<(), String> {
     if changed {
         write_json_for_update(&models_file, &root)?;
     }
-    Ok(())
+    Ok(changed)
 }
 
 fn provider_inventory(
@@ -1080,8 +1081,15 @@ pub(crate) async fn local_mode_provider_inventory(
 ) -> Result<ProviderInventory, String> {
     let agent = harness_agent_directory(READ_SETTINGS_ERROR)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = refresh_endpoint_models(&agent);
-        let models = list_pi_models(&agent);
+        // The endpoint discovery and the Pi listing run side by side, so the
+        // page waits for the slower one, not both. A changed endpoint list
+        // relists once, so the inventory reads what the server serves now.
+        let discovery_agent = agent.clone();
+        let discovery = std::thread::spawn(move || refresh_endpoint_models(&discovery_agent));
+        let mut models = list_pi_models(&agent);
+        if discovery.join().ok().and_then(Result::ok) == Some(true) {
+            models = list_pi_models(&agent);
+        }
         let mut inventory = provider_inventory(&agent, models)?;
         adopt_shown_default(&agent, &mut inventory);
         Ok(inventory)
