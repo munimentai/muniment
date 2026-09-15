@@ -10,7 +10,6 @@ const RADIUS_EXCEPTIONS = {
     '.active-thread > span': ['50%', '§1.5 circular current-thread status dot'],
     '.artifact-divider': ['0', '§4 square divider reset'],
     '.sidebar-divider': ['0', '§4 square divider reset'],
-    '.tool-dot': ['50%', '§1.5 circular tool status dot'],
   },
   'src/lib/Appearance.svelte': {
     '.theme-options button': ['0', '§4 square inner edges in the segmented control'],

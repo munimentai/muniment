@@ -5482,7 +5482,9 @@ describe('thread announcements', () => {
 
     chatListener({ payload: { runId: 'run-old', phase: 'complete', text: 'Restored answer', receipt: {}, toolActivity: [{ effectId: 'tool-1', displayName: 'Read file', status: 'completed' }] } })
 
-    expect(await screen.findByRole('listitem', { name: 'Read file completed' })).toBeInTheDocument()
+    // The event applies without a card: the thread draws no tool activity.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(screen.queryByText('Read file')).not.toBeInTheDocument()
     expect(drain()).toEqual([])
     expect(region.textContent).toBe('')
   })
@@ -5540,163 +5542,30 @@ describe('thread announcements', () => {
   })
 })
 
-describe('tool activity cards', () => {
-  const statuses = [
-    ['running', 'running'],
-    ['completed', 'completed'],
-    ['failed', 'failed'],
-    ['unexpected', 'status unknown'],
-  ]
-  const historyWith = (toolActivity, phase = 'complete') => [{
-    runId: 'run-tools', phase, text: 'I used tools.', prompt: 'Do work', receipt: {}, toolActivity,
-  }]
-
-  function restore(toolActivity, phase) {
+describe('tool activity', () => {
+  it('draws no card for tool activity: the receipt tallies the calls instead', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return historyWith(toolActivity, phase)
-      if (command === 'auth_entitlement_snapshot') return snapshot()
-      if (command === 'auth_devices') return []
-      throw new Error(`unexpected command: ${command}`)
-    })
-    return render(App)
-  }
-
-  it.each(statuses)('matches visible and accessible %s status text in a single card', async (status, label) => {
-    restore([{ effectId: 'tool-1', displayName: 'Search files', status }])
-
-    const row = await screen.findByRole('listitem', { name: `Search files ${label}` })
-    const visibleText = [...row.querySelectorAll('.tool-name, .tool-status')].map((part) => part.textContent).join(' ')
-    expect(visibleText).toBe(row.getAttribute('aria-label'))
-  })
-
-  it('renders three sequential tools as one named list without status roles', async () => {
-    restore([
-      { effectId: 'tool-1', displayName: 'Search files', status: 'completed' },
-      { effectId: 'tool-2', displayName: 'Read file', status: 'completed' },
-      { effectId: 'tool-3', displayName: 'Summarize file', status: 'completed' },
-    ])
-
-    const list = await screen.findByRole('list', { name: 'Tool activity' })
-    expect(within(list).getAllByRole('listitem')).toHaveLength(3)
-    expect(document.querySelectorAll('[role="status"]')).toHaveLength(0)
-  })
-
-  it('updates a live running card to completed', async () => {
-    restore([{ effectId: 'tool-1', displayName: 'Read file', status: 'running' }], 'streaming')
-    expect(await screen.findByRole('listitem', { name: 'Read file running' })).toBeInTheDocument()
-    await waitFor(() => expect(chatListener).toBeTypeOf('function'))
-
-    chatListener({ payload: {
-      runId: 'run-tools', phase: 'complete', text: 'I used tools.', receipt: {},
-      toolActivity: [{ effectId: 'tool-1', displayName: 'Read file', status: 'completed' }],
-    } })
-
-    expect(await screen.findByRole('listitem', { name: 'Read file completed' })).toBeInTheDocument()
-    expect(screen.queryByRole('listitem', { name: 'Read file running' })).not.toBeInTheDocument()
-  })
-
-  it('labels failed activity with text and supplies a neutral missing name', async () => {
-    restore([{ effectId: 'tool-1', displayName: null, status: 'failed' }])
-
-    const card = await screen.findByRole('listitem', { name: 'Tool activity failed' })
-    expect(card).toHaveTextContent('Tool activity')
-    expect(card).toHaveTextContent('failed')
-  })
-
-  it('renders the failed status as static oxide text without generated content or fill', () => {
-    expect(appRules.has('.tool-failed .tool-status::before')).toBe(false)
-    expect(appRules.get('.tool-failed .tool-status')).toMatch(/color:\s*var\(--oxide\)/)
-    expect(appRules.get('.tool-failed .tool-status')).not.toMatch(/\b(?:animation|background|content)\s*:/)
-  })
-
-  it.each(statuses)('matches visible and accessible %s status text in a parallel group', async (status, label) => {
-    restore([
-      { effectId: 'tool-1', displayName: 'Search files', status: 'running' },
-      { effectId: 'tool-2', displayName: 'Read file', status: 'running' },
-    ], 'streaming')
-    await screen.findByRole('group', { name: 'Parallel tool activity: Search files running, Read file running' })
-
-    if (status !== 'running') {
-      await waitFor(() => expect(chatListener).toBeTypeOf('function'))
-      chatListener({ payload: {
-        runId: 'run-tools', phase: 'complete', text: 'I used tools.', receipt: {},
+      if (command === 'chat_thread_open') return [{
+        runId: 'run-tools', phase: 'complete', text: 'I used tools.', prompt: 'Do work',
+        receipt: { model: 'glm-5.2', time: '6.2s', tools: [{ name: 'bash', calls: 1, failed: 0 }, { name: 'grep', calls: 4, failed: 1 }] },
         toolActivity: [
-          { effectId: 'tool-1', displayName: 'Search files', status },
-          { effectId: 'tool-2', displayName: 'Read file', status },
+          { effectId: 'tool-1', displayName: 'Search files', status: 'completed' },
+          { effectId: 'tool-2', displayName: 'Read file', status: 'failed' },
         ],
-      } })
-    }
-
-    const group = await screen.findByRole('group', { name: `Parallel tool activity: Search files ${label}, Read file ${label}` })
-    for (const name of ['Search files', 'Read file']) {
-      const row = within(group).getByRole('listitem', { name: `${name} ${label}` })
-      const visibleText = [...row.querySelectorAll('.tool-name, .tool-status')].map((part) => part.textContent).join(' ')
-      expect(visibleText).toBe(row.getAttribute('aria-label'))
-    }
-  })
-
-  it('groups parallel running effects and keeps every status row visible when settled', async () => {
-    restore([
-      { effectId: 'tool-1', displayName: 'Search files', status: 'running' },
-      { effectId: 'tool-2', displayName: 'Read file', status: 'running' },
-    ], 'streaming')
-
-    const group = await screen.findByRole('group', { name: /Parallel tool activity: Search files running, Read file running/ })
-    expect(within(group).getByRole('listitem', { name: 'Search files running' })).toBeInTheDocument()
-    expect(within(group).getByRole('listitem', { name: 'Read file running' })).toBeInTheDocument()
-    await waitFor(() => expect(chatListener).toBeTypeOf('function'))
-
-    chatListener({ payload: {
-      runId: 'run-tools', phase: 'complete', text: 'I used tools.', receipt: {},
-      toolActivity: [
-        { effectId: 'tool-1', displayName: 'Search files', status: 'completed' },
-        { effectId: 'tool-2', displayName: 'Read file', status: 'failed' },
-      ],
-    } })
-
-    const settled = await screen.findByRole('group', { name: /Search files completed, Read file failed/ })
-    expect(within(settled).getByRole('listitem', { name: 'Search files completed' })).toBeInTheDocument()
-    expect(within(settled).getByRole('listitem', { name: 'Read file failed' })).toBeInTheDocument()
-  })
-
-  it('clears stale parallel grouping when history is reloaded', async () => {
-    let signedIn = true
-    let historyLoads = 0
-    invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: signedIn, subject: signedIn ? 'user-a' : null }
-      if (command === 'auth_sign_out') {
-        signedIn = false
-        return { signed_in: false, subject: null }
-      }
-      if (command === 'auth_sign_in') {
-        signedIn = true
-        return { signed_in: true, subject: 'user-a' }
-      }
-      if (command === 'chat_thread_open') {
-        historyLoads += 1
-        return historyLoads === 1
-          ? historyWith([
-              { effectId: 'tool-1', displayName: 'Search files', status: 'running' },
-              { effectId: 'tool-2', displayName: 'Read file', status: 'running' },
-            ], 'streaming')
-          : historyWith([
-              { effectId: 'tool-1', displayName: 'Search files', status: 'completed' },
-            ])
-      }
+      }]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    expect(await screen.findByRole('group', { name: /Parallel tool activity/ })).toBeInTheDocument()
+    expect(await screen.findByText('I used tools.')).toBeInTheDocument()
+    expect(screen.queryByText('Search files')).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: /tool activity/i })).not.toBeInTheDocument()
+    expect(document.querySelector('.tool-row, .tool-dot')).toBeNull()
 
-    await fireEvent.click(screen.getByRole('button', { name: /Access unavailable|Alice/ }))
-    await fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
-    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
-
-    expect(await screen.findByRole('listitem', { name: 'Search files completed' })).toBeInTheDocument()
-    expect(screen.queryByRole('group', { name: /Parallel tool activity/ })).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: /^Expand receipt:/ }))
+    expect(document.querySelector('.receipt-record').textContent).toBe('Toolsbash 1, grep 4 (1 failed)')
   })
 })
 
@@ -5870,11 +5739,12 @@ describe('provenance line', () => {
     return render(App)
   }
 
-  it('renders route → model, cost and time as spaced segments with signal on the route segment', async () => {
+  it('renders route → model and the clock time with signal on the route segment', async () => {
     restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
-    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model glm-5.2, $0.0089, 6.2s' })
-    expect(line.textContent).toBe('analysis/high → glm-5.2 $0.0089 6.2s')
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model glm 5.2, 6.2s' })
+    expect(line.textContent).toBe('analysis/high → glm 5.2 6.2s')
+    expect(line.querySelector('.receipt-time [data-icon="clock"]')).toBeInTheDocument()
     expect(within(line).getByText('analysis/high')).toHaveClass('route-segment')
     expect(line.querySelectorAll('.route-segment')).toHaveLength(1)
   })
@@ -5882,8 +5752,8 @@ describe('provenance line', () => {
   it('paints nothing green when the receipt records no route', async () => {
     restore({ model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
-    const line = await screen.findByRole('button', { name: 'Expand receipt: Model glm-5.2, $0.0089, 6.2s' })
-    expect(line.textContent).toBe('glm-5.2 $0.0089 6.2s')
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Model glm 5.2, 6.2s' })
+    expect(line.textContent).toBe('glm 5.2 6.2s')
     expect(line.querySelector('.route-segment')).toBeNull()
   })
 
@@ -5909,7 +5779,8 @@ describe('provenance line', () => {
     })
     expect(line).toHaveAttribute('aria-label', 'Receipt: Routed via analysis/high')
     expect(line.querySelector('.route-segment')).toHaveTextContent('analysis/high')
-    expect(line.querySelector('[data-icon="clock"]')).toBeInTheDocument()
+    // No time, so no clock: the clock belongs to the time segment alone.
+    expect(line.querySelector('[data-icon="clock"]')).toBeNull()
   })
 
   it('expands to the receipt record and back', async () => {
@@ -5917,15 +5788,16 @@ describe('provenance line', () => {
 
     const line = await screen.findByRole('button', { name: /^Expand receipt:/ })
     const marker = line.querySelector('.receipt-marker')
-    expect(line.textContent).toBe('analysis/high → glm-5.2 $0.0089 6.2s search@2')
+    expect(line.textContent).toBe('analysis/high → glm 5.2 6.2s')
     expect(marker).toHaveAttribute('aria-hidden', 'true')
     expect(marker).not.toHaveClass('expanded')
     await fireEvent.click(line)
 
     const record = document.querySelector('.receipt-record')
-    expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sCapabilitysearch@2')
-    expect(record.querySelectorAll('.route-value')).toHaveLength(1)
-    expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model glm-5.2, $0.0089, 6.2s, search@2' })).toBe(line)
+    // The rows carry what the line does not: nothing appears twice.
+    expect(record.textContent).toBe('Cost$0.0089Capabilitysearch@2')
+    expect(record.querySelectorAll('.route-value')).toHaveLength(0)
+    expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model glm 5.2, 6.2s' })).toBe(line)
     expect(marker).toHaveClass('expanded')
 
     await fireEvent.click(line)
@@ -5945,7 +5817,7 @@ describe('provenance line', () => {
     await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
 
     const record = document.querySelector('.receipt-record')
-    expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sMemorylease, 2 filesDocuments/Muniment/lease.pdfDocuments/Muniment/notes.mdMemorymissing clause, 0 files')
+    expect(record.textContent).toBe('Cost$0.0089Memorylease, 2 filesDocuments/Muniment/lease.pdfDocuments/Muniment/notes.mdMemorymissing clause, 0 files')
     expect([...record.querySelectorAll('.recall-file')].map((file) => file.textContent)).toEqual([
       'Documents/Muniment/lease.pdf',
       'Documents/Muniment/notes.md',

@@ -10,7 +10,6 @@ const ALLOWED = {
   'src/App.svelte': {
     '.streaming-rule': '§1.2 the streaming underline on the active line',
     '.caret': '§1.2 the caret on the active line',
-    '.tool-running': '§1.2 the running-tool status pulse',
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
   },

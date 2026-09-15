@@ -7,7 +7,6 @@ const WRAPPING_SELECTORS = {
   '.provenance': 'provenance can contain server-supplied routes, models, and capabilities',
   '.user-message': 'user messages can contain pasted identifiers and paths',
   '.response-prose': 'streaming and paused responses can contain unbreakable text',
-  '.tool-name': 'tool names can come from external tool definitions',
   '.permission-card p': 'permission details can contain commands, paths, and hosts',
   '.receipt-record dd': 'receipt values can contain routes, models, capabilities, and identifiers',
 }
