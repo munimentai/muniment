@@ -18,45 +18,36 @@ app without asking anyone and run a harness such as Claude Code.
 
 ## What this repo is
 
-- The shell: the thread surface, the composer, the artifact rail, the
-  provenance line under every reply, and the generated local UI. The shell is
-  an ACP client of the runtime service, and mobile and any web client speak
-  the same protocol to the same server.
-- The runtime service: the single local executor. It runs with no window open,
-  hosts the local graph, serves the SQL tool, runs local workflows, and holds
-  the one relay leg that mobile drives. One component in the shell owns its
-  lifecycle for every window.
-- The Pi sidecar: the agent harness, at parity with the factory's Pi.
-- The two local models: a bundled router classifier and an optional extractor
-  download.
-- The event-sourced run journal, the attach protocol, the CAS store, the memory
-  index, the code-diff crates, ACP interop, and the ASR and read-aloud stack.
+The shell: the thread surface, the composer, the artifact rail, the record
+panel and the provenance line under every reply, an ACP client of the runtime
+service that mobile and any web client also speak to. The runtime service: the
+single local executor, which runs with no window open, hosts the companies,
+serves the SQL tool, runs local workflows and holds the one relay leg mobile
+drives, with one shell component owning its lifecycle for every window. The
+Pi sidecar at parity with the factory's Pi. The bundled router classifier and
+the optional extractor download. The run journal, attach, the CAS store, the
+memory index, the code-diff crates, ACP interop and the voice stack.
 
 ## What this repo is not
 
-- Not the product. The graph and the grooming report are.
-- Not the cloud console. Sharing, scheduled execution off the machine, routing
-  enforcement, SSO, SCIM, billing, and cross-user audit live in muniment-cloud.
-- Not mobile. Mobile is a remote-control window onto this runtime.
-- Not a second store of the graph. The webview holds no copy of it.
-- Not a sign-in wall. Local mode reaches the thread surface with no cloud
-  session.
-- Not a harness for sale. Pi, OpenClaw, opencode and their peers are free.
+Not the product: the graph and the grooming report are. Not the cloud
+console: sharing, scheduled execution off the machine, routing enforcement,
+SSO, SCIM, billing and cross-user audit live in muniment-cloud. Not mobile,
+which is a remote-control window onto this runtime. Not a second store of the
+graph: the webview holds no copy of it. Not a sign-in wall: local mode needs
+no cloud session. Not a harness for sale: Pi, OpenClaw, opencode and their
+peers are free.
 
 ## Interfaces
 
 **The public core.** One app, one download, the FSL app at every tier. With
 no account the whole local product works. A free account adds the mobile
 connection through the relay. Payment unlocks sharing, scheduled execution and
-routing enforcement in the same app. The graph, the read-only SQL tool, the Go
-importers, the local report and the generated UI are built in this repo beside
-the runtime service, attach, the run journal, the Pi sidecar integration, the
-per-thread permission policy, the CAS store, the memory index, the code-diff
-crates, ACP interop and the voice stack. The runtime opens the SQLite graph
-through rusqlite and serves the SQL tool to a harness. The cloud client code
-stays in the app. At the FSL release this repo becomes `munimentai/muniment`
-by transfer, history included, so every workflow and every commit here is
-written as public.
+routing enforcement in the same app. The graph, the SQL tool, the readers, the
+local report and the record panel are built here beside everything the list
+above names. The cloud client code stays in the app. At the FSL release this
+repo becomes `munimentai/muniment` by transfer, history included, so every
+workflow and every commit here is written as public.
 
 **muniment-cloud.** Sign-in gates cloud features only. The signing-in screen
 shows the sign-in link for a browser that did not open. Cloud-backed use
@@ -71,9 +62,8 @@ fallback, end-to-end encrypted, and it needs a free MUNICLOUD account.
 live tool stream, the permission-gate card that becomes a run receipt, Stop,
 and queued follow-ups. Approving a proposal from the phone is that card.
 
-**muniment-qa.** The nightly runs the installed build on Linux, Windows and
-macOS with a readable evidence envelope per platform. The local-mode chat smoke
-is the first installed spec, and real sign-in gates no other spec.
+**muniment-qa.** The local-mode chat smoke is the first installed nightly spec
+on Linux, Windows and macOS, and real sign-in gates no other spec.
 
 **homebrew-muniment.** The nightly bumps the cask version and hashes, and
 publish skips while the tap is unseeded. Seeding the tap is human.
@@ -83,9 +73,9 @@ docs. A change to what an outside user sees updates it in the same pull request.
 
 **Updates.** The package manager is the update path before the first public
 release, ADR 0029. That release adds the in-app updater: the app reads the
-public release feed the nightly publishes, sends nothing that names the user or
-the machine, shows one control in the app row once a build is downloaded, and
-installs on the click.
+public release feed the nightly publishes, sends nothing that names the user
+or the machine, shows one control in the app row once a build is downloaded,
+and installs on the click.
 
 ## The definition of working
 
@@ -196,12 +186,11 @@ e2e onboarding spec proves the composer, the three chips and a first Send.
 2. **Cloud credentials stay scoped.** Local mode passes no cloud virtual key.
    Entitlement snapshots are display hints. The server enforces cloud use.
 3. **One mode.** The desktop runs a single mode, **the thread surface**. No
-   mode switcher exists. This file and the ROADMAP name that mode identically
-   and never as a chat. [docs/desktop-single-mode.md](docs/desktop-single-mode.md)
-   records the mode name and the cloud routing-surface name it maps to.
-   Enforcers: `test/smoke.sh`, and in `src-tauri/core/src/chat_grant.rs` the
-   tests `the_grant_request_carries_no_client_classification` and
-   `the_receipt_request_carries_only_the_run_id`.
+   mode switcher exists, and the artifact rail and the record panel are panels
+   of it. This file and the ROADMAP name that mode identically and never as a
+   chat. [docs/desktop-single-mode.md](docs/desktop-single-mode.md) records
+   the mode name and the cloud routing-surface name it maps to. Enforcer:
+   `test/smoke.sh`.
 4. **Color law.** Color means computation. `--signal` appears only on the
    mark's thinking state, the running-tool pulse, the streaming underline and
    caret, the provenance route segment, the voice polish flash, and
@@ -234,33 +223,58 @@ e2e onboarding spec proves the composer, the three chips and a first Send.
     reference prose with copy-pasteable commands, no roadmap speculation, no
     internal codenames, no pricing.
 13. **The write path is propose and commit.** A model never writes a row. The
-    SQL tool is read-only. Kind validation applies to every write.
+    SQL tool is read-only. Kind validation applies to every write. No reader
+    writes back to a source.
 14. **Monetization, launch and publicity are owner-only.**
 
 ## The local graph
 
-The single-player graph lives in SQLite through the rusqlite the desktop
-already carries. It is the one engine that runs inside the runtime service
-with no window open, which local scheduled workflows and the mobile relay
-require. `data` uses JSON1, `body_text` uses FTS5, vectors use sqlite-vec, and
-`event` is not partitioned locally. The agent-facing SQL dialect is SQLite.
+A company is one SQLite graph at `~/.muniment/companies/<id>/graph.sqlite3`
+beside a `company.json` that names it, opened through the rusqlite the desktop
+carries, the one engine that runs inside the runtime with no window open.
+`data` uses JSON1, `body_text` uses FTS5, vectors use sqlite-vec, and `event`
+is not partitioned locally. The runtime holds one current company, and the
+SQL tool, the record panel and every reader use that one. A free install
+holds any number of companies. The paid tenant is one company. A backup is a
+`VACUUM INTO` copy to a path the user picks, never a file copy while open.
 
-The SQL tool runs on a dedicated read-only connection: `PRAGMA query_only`, an
-authorizer set at compile time and never changed on a live connection, a
-progress handler or interrupt timer, a hard heap limit, the `sqlite3_limit`
-values for untrusted SQL, `SQLITE_DBCONFIG_DEFENSIVE` on, a row cap and a byte
-cap per result, CSV output, and an audit log of every query with its error.
-Curated views named in the system prompt cover the joins the audit log shows
-the agent repeating. Backup runs through the online backup API or `VACUUM
-INTO`, never a file copy while open. Third-party data is queried from the
-graph, never from the source API.
+**The catalogue.** The seventeen core kinds and seventeen relations seed every
+company, with three more kinds: `mapping`, the import mapping, `workflow`, a
+trigger and its steps, and `view`, a saved filter, sort, group, column set and
+layout over one kind. A new table is an extension-only kind under `x_`, a new
+column is a `kind_extension` property under `x_`, and a core property never
+changes. propose validates against the kind, resolves every identity and
+returns a diff, an id and warnings, writing nothing. commit applies the diff
+in one transaction and appends one event naming the actor and `on_behalf_of`.
+
+**The SQL tool** runs on a dedicated read-only connection: `PRAGMA
+query_only`, an authorizer set at compile time and never changed on a live
+connection, a progress handler or interrupt timer, a hard heap limit, the
+`sqlite3_limit` values for untrusted SQL, `SQLITE_DBCONFIG_DEFENSIVE` on, a
+row cap and a byte cap per result, CSV output, and an audit log of every query
+in a file beside the graph, never in it. Curated views named in the system
+prompt cover the joins the audit log shows the agent repeating. `muniment-cli
+mcp` serves `sql`, `propose` and `commit` as one MCP server over stdio, to
+Claude Code and to the desktop's Pi alike.
+
+**The record panel.** The Record control at the app row's right end opens the
+panel in the rail's grid area, beside the thread and exclusive with the
+artifact rail. Its table view, record view, board over the kind's states and
+saved views all generate from `kind`, `kind_extension` and `kind.states`, and
+no screen is hand-written for one kind. An edit calls propose, shows the diff
+and its warnings, and commits on the user's confirm.
+
+**Readers.** Every source implements Objects, Describe, Page and Delta, and
+nothing else about it reaches the graph. File readers run in Rust inside the
+runtime. Network readers are Go: one bundled sidecar, a subcommand per source,
+JSON over stdio, no SQLite access. The runtime holds each cursor and does
+every write. Third-party data is queried from the graph, never from the source API.
 
 ## Pi version policy
 
 The desktop owns its Pi release cycle. Its agent harness is Pi alone. It takes
-neither the Claude Agent SDK nor the Claude Code CLI.
-[ADR 0008](docs/decisions/0008-pi-runtime-distribution.md) governs executable
-acquisition and rollback.
+neither the Claude Agent SDK nor the Claude Code CLI. [ADR 0008](docs/decisions/0008-pi-runtime-distribution.md)
+governs executable acquisition and rollback.
 
 ### Production pin and candidate
 
@@ -271,15 +285,12 @@ Only passing nightly evidence on Linux, macOS and Windows qualifies a candidate
 for promotion. Neither track follows npm `latest`, a semver range, or a mutable
 release manifest. The pin moves to the version the factory runs, and a pin
 move keeps exactly one verified predecessor resolvable for rollback.
-
 The production executable pin is 0.73.1. The candidate is 0.85.1 with 0.73.1 as its verified predecessor.
 The nightly and the local build select the candidate with the build-time switch `MUNIMENT_PI_CANDIDATE=1`.
 
 The harness installs only packages listed on [pi.dev/packages](https://pi.dev/packages)
 and executables from the official [earendil-works/pi repository](https://github.com/earendil-works/pi)
 or a Muniment-controlled mirror that preserves ADR 0008's provenance checks.
-
-### Node floor
 
 The Node floor comes from the pinned Pi package's `engines.node` field. The
 selected Node release satisfies that range and belongs to an Active LTS line.
@@ -309,8 +320,6 @@ is weaker than the one that built it. Four items:
    prompt says pass one on every call, 60 quick, 600 for a build, longer to `bg_run`.
 4. **The version pin** moves to the version the factory runs.
 
-### Built-in tool selection
-
 The desktop enables every built-in tool the pinned registry defines and sets
 `defaultTools` in `settings.json` to that full set. It never uses `--tools`,
 because that allowlist also covers extension tools. Tool names come from the
@@ -333,17 +342,15 @@ deterministic gate locates the span, strips wrapping quotation marks, and
 rejects a quote it cannot find. The pin is Qwen3.5-4B, and local extraction
 ships on no model measured so far.
 
-**Rules for every bundled or downloaded model.**
-
-- Apache-2.0 or MIT only, verified against the HuggingFace model card. Gemma
-  and Llama-licensed models are excluded.
-- Per-channel int8 is mandatory and is retested per model.
-- The head and the taxonomy version with the encoder.
-- The ADR names the bytes: path, size, sha256.
-- The lifecycle machinery in [ADR 0021](docs/decisions/0021-on-device-classifier-store.md)
-  and [ADR 0027](docs/decisions/0027-pinned-model-artifact-lifecycle.md)
-  carries the download: staging, resumable `.part` files, the `current`,
-  `previous` and `rejected` pointers, and the install lock.
+**Rules for every bundled or downloaded model.** Apache-2.0 or MIT only,
+verified against the HuggingFace model card, so Gemma and Llama-licensed
+models are out. Per-channel int8 is mandatory and retested per model. The
+head and the taxonomy version with the encoder. The ADR names the bytes: path,
+size, sha256. The lifecycle machinery in
+[ADR 0021](docs/decisions/0021-on-device-classifier-store.md) and
+[ADR 0027](docs/decisions/0027-pinned-model-artifact-lifecycle.md) carries
+the download: staging, resumable `.part` files, the `current`, `previous` and
+`rejected` pointers, and the install lock.
 
 ## Production-ready gates (release gate)
 
@@ -357,10 +364,9 @@ is open work: closing it is a gate change first and a symptom ticket second.
 2. The PR compile and build matrix is green on linux, windows and macos.
    Enforcer: the desktop-compile and desktop-build jobs in `ci.yml`.
 3. Windows installers are signed and verified. The per-user MSI and the NSIS
-   setup are the default download, need no administration and register for
-   the user. The `-machine.msi` is the managed install for MDM and RMM and
-   registers for the machine. Enforcer: `test/windows-installers.ps1` in the
-   desktop-build job.
+   setup are the default download, need no administration and register for the
+   user. The `-machine.msi` registers for the machine, the managed install for
+   MDM and RMM. Enforcer: `test/windows-installers.ps1` in the desktop-build job.
 4. macOS builds are signed, notarized and stapled once Apple clears the
    enrollment. Owner-gated. Enforcer: `docs/macos-signing.md` plus the
    fail-fast behavior in `.github/lib/macos-signing.mjs`.
@@ -375,23 +381,16 @@ is open work: closing it is a gate change first and a symptom ticket second.
 
 ## Folder hierarchy standard
 
-- **Ceiling:** a directory holds at most 50 source files. At the ceiling, split
-  along the largest naming family.
-- **Floor:** a new folder needs at least 5 files or a machine reader named in
-  the pull request.
-- **Depth:** at most 3 directory levels below the source root.
-- **Naming families first:** related files share a prefix stem. A family of 15
-  or more files is the designated split when the ceiling hits.
-- **Tests mirror source,** except layouts a test harness requires.
-- **Ceiling exemptions:** append-only stores, generated, vendored and asset trees.
-- **Frozen machine-read paths:** `docs/public-evidence/`, `protocol-fixtures/`, `docs/decisions/`. Move one only with a consumer sweep.
-- **Recorded gaps:** a directory over the ceiling is a recorded gap. A gap
-  closes gate-first: the split ships with a check that holds the new shape. New
-  files must not push a recorded directory past its recorded count.
-
-| Directory | Recorded file count | Designated split |
-| --- | ---: | --- |
-| `src/lib` | 56 | Largest naming family |
+A directory holds at most 50 source files and splits along its largest naming
+family at the ceiling. A new folder needs 5 files or a machine reader named in
+the pull request. Depth stops at 3 levels below the source root. Related files
+share a prefix stem, and a family of 15 or more is the designated split. Tests
+mirror source except where a harness needs a layout. Append-only stores,
+generated, vendored and asset trees are exempt. `docs/public-evidence/`,
+`protocol-fixtures/` and `docs/decisions/` are frozen machine-read paths that
+move only with a consumer sweep. A directory over the ceiling is a recorded
+gap, closed gate-first with a check that holds the new shape, and new files
+never push it past its recorded count: `src/lib` at 56, split by naming family.
 
 ## State on disk
 

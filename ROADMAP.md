@@ -7,7 +7,7 @@ Tickets in Plane carry the slices. No dates.
 
 An installed build on all three platforms launches, enters local mode on
 the thread surface, sends a message and sees a reply begin, proven by a green
-nightly rather than asserted. This lands before any graph work starts.
+nightly rather than asserted.
 
 - The production pin moves to the version the factory runs, with its Node
   floor, and keeps one verified predecessor for rollback.
@@ -27,10 +27,27 @@ build.
 
 ## The graph runs in the runtime
 
-The runtime service opens the eight-table SQLite graph through rusqlite with no
-window open. One read-only SQL tool over curated views is served to a harness,
-Claude Code first, under the safety controls in `SPEC.md`. propose and commit
-are the only write path. The first corpus is the owner's own portfolio.
+The runtime opens a company's eight-table SQLite graph through rusqlite with no
+window open, seeds the catalogue, and holds any number of companies with one
+current. `sql`, `propose` and `commit` reach Claude Code and the desktop's Pi
+as one MCP server over stdio under the safety controls in `SPEC.md`. propose
+and commit are the only write path. The first corpus is the owner's own
+portfolio.
+
+## The record panel
+
+The Record control opens the panel beside the thread. Its table view, record
+view, board and saved views generate from the `kind` table with no hand-written
+screen per kind, an edit runs through propose and commit, and Ask sends the
+open view's SQL to the composer.
+
+## Readers fill the graph
+
+File readers in the runtime take CSV and JSON first. The Go reader sidecar
+takes Stripe first, then GitHub, Gmail metadata, Slack and the helpdesk, behind
+Objects, Describe, Page and Delta. The mapping is a record edited in the panel
+or proposed by the agent, the runtime holds the cursor and does every write,
+and the resolve queue holds what the mapping could not place.
 
 ## The extractor downloads on request
 
@@ -41,19 +58,20 @@ install lock. The gate writes `start_char` and `end_char` from the verbatim
 quote and rejects a quote it cannot find. The router stays bundled and its
 result stays off the cloud-bound wire.
 
-## The local report and the generated UI
+## The local report
 
-The shell renders the grooming report computed over the local graph, and it
-renders every kind from the `kind` table with no hand-written screen per kind.
-This is the harness download the waitlist is waiting for, and the beta opens
-when it exists.
+The panel renders the grooming report computed over the local graph as a table
+of proposals with accept and deny. This is the harness download the waitlist
+is waiting for, and the beta opens when it exists.
 
 ## Local workflows run unattended
 
 Scheduled local workflows run in the runtime under an unattended-write policy
 built from the per-thread permission policy: versioned ledger events, exact
-resource matching, and resolution inside the coordinate loop alone. A model
-proposes, the policy or a person approves, and code commits.
+resource matching, and resolution inside the coordinate loop alone. A step is
+import, agent, act or export, and act calls a tool of an MCP server the user
+connected, never a muniment connector. A model proposes, the policy or a
+person approves, and code commits.
 
 ## Mobile drives the runtime
 

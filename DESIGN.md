@@ -93,7 +93,8 @@ is the reference geometry and animation engine.
 
 ## Grammar
 
-Layout is sidebar, thread, and artifact rail (⌘J, closed by default). User
+Layout is sidebar, thread, and one rail column that the artifact rail (⌘J)
+or the record panel (⌘K) fills, both closed by default. User
 messages sit right in `faint` bubbles at radius 10. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
 36px gutter, and render as Markdown from the first token. The composer keeps
@@ -108,9 +109,9 @@ Platform chrome follows the OS and brand tokens stay identical across platforms.
 On macOS the app row sits in the 36px band above the panels beside the native
 traffic lights, and the row's controls and the lights center on that band. The
 row is the drag region and holds the sidebar toggle, New thread, the thread
-title, and Artifacts flush right with the update control beside it. New
-thread, the thread title and Artifacts are one quiet row control with the same
-padding. State is background, never a border: the
+title, and Artifacts then Record flush right with the update control beside
+them. New thread, the thread title, Artifacts and Record are one quiet row
+control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption
@@ -121,7 +122,7 @@ reads `Sign in to cloud` until an account signs in. A thread row shows a delete
 control on hover and focus, Shift and Command clicks select rows, and the
 right-click menu or the Delete key removes the selection after one confirm.
 Settings is a popup over the workspace with a
-section list on its left, Models, Appearance, Home and Account, and the
+section list on its left, Models, Appearance, Home, Companies and Account, and the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it, and Escape or its close control returns focus to the opener. Models
@@ -155,6 +156,21 @@ The launcher is a 600 by 80 window on `surface` with a hairline and one
 composer line, nothing else. A global shortcut opens it above every app,
 centered in the upper third of the screen. Enter sends the line as the first
 message of a new thread and brings the shell forward. Escape closes it. A microphone closes the row at its right, and a missing speech model opens a popover over the composer like the model picker: one sentence, the download size, the free disk required and one Install control, with the source and licenses one Details disclosure away. An attached file sits above the text under a hairline the composer's full inner width.
+
+The record panel takes the rail column at a 480px minimum and its own
+remembered width, and one control maximizes it over the sidebar and the
+thread until ⌘K or Escape restores them. Its header is one mono row: the
+company name as a picker, the kind list, a search field and Maximize. The
+table view sets column headers, identifiers, dates, amounts, states and
+sources in Commit Mono and the title and prose fields in Schibsted Grotesk,
+with 28px hairline rows and no zebra fill. A cell in edit shows the
+composer's muted hairline. A proposed change renders its diff in mono under
+the row with Commit and Discard, and a warning from propose sits in ochre
+text above them. The board's columns are the kind's states, its cards are
+`surface` on `paper` at `--radius-control`, and a card in flight shows no
+color. A workflow run in progress is the one place the panel shows signal.
+Ask sends the open view's SQL to the composer as a mono reference. The empty
+state of a kind is one line.
 
 Conversation, tool, permission, and receipt state is rebuilt from the
 append-only local run journal. Reopen reduces committed events; snapshots are
