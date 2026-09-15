@@ -49,8 +49,10 @@ The signed client compiles both the new descriptor and exactly one retained
 predecessor descriptor during a pin update. Pointer resolution accepts only
 those identities, verifies each revision with its own size, digest, archive
 name and executable layout, and atomically repoints `current` to `previous`
-when supervisor activation of the new pin fails. It never resolves an
-arbitrary version or filesystem path from pointer contents.
+when supervisor activation of the new pin fails. `current` resolves the pin
+alone and `previous` resolves the retained predecessor, so a host that holds
+only the predecessor acquires the pin instead of running the predecessor. It
+never resolves an arbitrary version or filesystem path from pointer contents.
 
 ### Amendment 2026-09-05: desktop-owned version policy
 

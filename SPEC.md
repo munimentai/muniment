@@ -274,7 +274,7 @@ release manifest. The pin moves to the version the factory runs, and a pin
 move keeps exactly one verified predecessor resolvable for rollback.
 
 The production executable pin is 0.73.1. The candidate is 0.85.1 with 0.73.1 as its verified predecessor.
-The nightly selects the candidate with the build-time switch `MUNIMENT_PI_CANDIDATE=1`.
+The nightly and the local build select the candidate with the build-time switch `MUNIMENT_PI_CANDIDATE=1`.
 
 The harness installs only packages listed on [pi.dev/packages](https://pi.dev/packages)
 and executables from the official [earendil-works/pi repository](https://github.com/earendil-works/pi)
@@ -303,10 +303,10 @@ is weaker than the one that built it. Four items:
    HTTP with SSE fallback, and Unix sockets. This is how the local harness
    reaches the user's MCP servers and, on a paid account, the cloud graph's six
    tools.
-3. **The bash timeout rule.** Pi reads the `bash` tool's `timeout` in seconds
-   with no default. The desktop's Pi system prompt carries the factory
-   paragraph: pass a timeout on every call, 60 for a quick command, up to 600
-   for a build, and send anything longer to `bg_run`.
+3. **The system prompt.** The desktop passes Pi its own prompt: the assistant's
+   purpose, its tools, and the bash timeout rule, with no harness or product
+   name. Pi reads the `bash` tool's `timeout` in seconds with no default, so the
+   prompt says pass one on every call, 60 quick, 600 for a build, longer to `bg_run`.
 4. **The version pin** moves to the version the factory runs.
 
 ### Built-in tool selection
