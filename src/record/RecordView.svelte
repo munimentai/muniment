@@ -9,8 +9,10 @@
 
   const entity = $derived(detail?.entity)
   const fields = $derived(tableColumns(detail?.kind).filter((column) => !column.base))
-  const coreFields = $derived(fields.filter((column) => !column.own))
-  const ownFields = $derived(fields.filter((column) => column.own))
+  // Only the fields that hold a value: an absent one is not a fact.
+  const held = (column) => cellText(entity?.data?.[column.key], column) !== ''
+  const coreFields = $derived(fields.filter((column) => !column.own && held(column)))
+  const ownFields = $derived(fields.filter((column) => column.own && held(column)))
   const edgeGroups = $derived(groupEdges(detail?.edges, entity?.id))
 
   function when(text) {
