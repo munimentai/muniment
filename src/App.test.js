@@ -1232,6 +1232,38 @@ describe('workspace composer entry', () => {
     expect(document.querySelector('.lockup')).not.toBeInTheDocument()
   })
 
+  it('opens Settings as a popup with Models, Appearance, Home and Account sections', async () => {
+    localModeStatus = true
+    render(App)
+    await screen.findByTestId('local-mode')
+    expect(screen.queryByRole('button', { name: 'Sign in for cloud features' })).not.toBeInTheDocument()
+
+    const settings = screen.getByRole('button', { name: 'Settings' })
+    expect(settings).toHaveAttribute('aria-expanded', 'false')
+    await fireEvent.click(settings)
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' })
+    expect(settings).toHaveAttribute('aria-expanded', 'true')
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(screen.getByTestId('settings-scrim')).toContainElement(dialog)
+    // The workspace under the popup blurs behind the theme's paper: dark in dark mode, light in light mode.
+    expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
+    expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*color-mix\(in srgb, var\(--paper\)/)
+    const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models', 'Appearance', 'Home', 'Account'])
+    expect(within(nav).getByRole('button', { name: 'Models' })).toHaveAttribute('aria-current', 'true')
+    expect(within(dialog).getByRole('button', { name: 'Connect provider' })).toBeInTheDocument()
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Appearance' }))
+    expect(within(dialog).getByRole('group', { name: 'Appearance' })).toBeInTheDocument()
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Home' }))
+    expect(within(dialog).getByRole('button', { name: 'Change folder…' })).toBeInTheDocument()
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
+    expect(within(dialog).getByRole('button', { name: 'Sign in for cloud features' })).toBeInTheDocument()
+
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    await waitFor(() => expect(document.activeElement).toBe(settings))
+  })
+
   it('opens Settings from the settings shortcut with a collapsed sidebar and toggles it', async () => {
     localModeStatus = true
     localStorage.setItem('muniment.sidebar-collapsed', 'collapsed')
