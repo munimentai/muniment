@@ -1949,8 +1949,9 @@
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); transition: margin-left 180ms ease; }
   .workspace.sidebar-resizing .thread-panel { transition: none; }
   .thread-shell { grid-area: 1 / 1; position: relative; min-height: 0; }
-  /* The transcript fades into the surface above the composer, so the text under the composer disappears. */
-  .thread-shell::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--composer-height, 120px) + 72px); background: linear-gradient(to bottom, transparent, var(--surface) 56px); pointer-events: none; }
+  /* The transcript fades into the surface at both ends: a short fade under the top edge, and one above the composer that reaches the surface at the composer's midpoint, so text stays readable halfway under it. */
+  .thread-shell::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 48px; background: linear-gradient(to bottom, var(--surface), transparent); pointer-events: none; }
+  .thread-shell::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--composer-height, 120px) + 72px); background: linear-gradient(to bottom, transparent, var(--surface) calc(var(--composer-height, 120px) / 2 + 48px)); pointer-events: none; }
   /* Responses run the panel's full width inside a 36px gutter. The bottom padding is the composer and the fade, so the last line scrolls clear of both. */
   .thread { width: 100%; height: 100%; margin: 0; padding: 42px 36px calc(var(--composer-height, 120px) + 64px); overflow-y: auto; }
   .thread.scrolling::-webkit-scrollbar-thumb { background: var(--border); }
