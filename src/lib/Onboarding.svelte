@@ -208,7 +208,7 @@
   .chips { flex: none; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .chips button { max-width: 100%; border-radius: var(--radius-chip); font: var(--text-12) var(--font-mono); text-align: left; overflow-wrap: anywhere; }
   .home-chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chips button[aria-expanded="true"] { border-color: var(--muted); background: var(--faint); }
+  .chips button[aria-expanded="true"] { background: var(--faint); }
   .panel { min-height: 0; overflow-y: auto; margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
   h1 { font-size: var(--text-22); }
   h2 { margin: 0 0 12px; font-size: var(--text-15); font-weight: 600; }
@@ -218,8 +218,8 @@
   li { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
   .note, .error { color: var(--muted); }
   button { min-height: 28px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); cursor: pointer; }
-  button:hover:not(:disabled) { border-color: var(--muted); }
-  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  button:hover:not(:disabled) { background: var(--faint); }
+  button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   button:disabled, button[aria-disabled="true"] { color: var(--muted); cursor: default; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
   .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

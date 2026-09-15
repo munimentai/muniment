@@ -39,6 +39,9 @@ const signalSelectors = (source) => [
 const unpermitted = (source, allowed) => signalSelectors(source).filter((selector) => !(selector in allowed))
 
 const FOCUS_EXCEPTIONS = {
+  'src/lib/RowControl.svelte': {
+    '.thread-title:focus-visible': "the rename control shows focus as the composer's muted hairline, not a ring",
+  },
   'src/App.svelte': {
     '.artifact-divider:focus-visible': '§6: the 9px divider uses an inset ring so it does not bleed into the thread and rail',
     '.sidebar-divider:focus-visible': '§6: the 9px divider uses an inset ring so it does not bleed into the sidebar and thread',
@@ -57,10 +60,10 @@ const focusOutlineRules = (source) => [
   .filter(({ selector, declarations }) => selector.toLowerCase().includes(':focus-visible') && declarations.length)
 
 const validFocusDeclaration = ([property, value]) => ({
-  outline: value === '2px solid var(--ink)',
+  outline: value === '1px solid var(--ink)',
   'outline-color': value === 'var(--ink)',
   'outline-style': value === 'solid',
-  'outline-width': value === '2px',
+  'outline-width': value === '1px',
   'outline-offset': value === '2px',
 })[property]
 
@@ -122,14 +125,14 @@ describe('§1.2 signal allowlist', () => {
 })
 
 describe('§1.2/§6 focus ring', () => {
-  it('is one global 2px ink outline at offset 2', () => {
+  it('is one global 1px ink outline at offset 2', () => {
     // The leading anchor keeps this to the bare `:focus-visible` selector, not
     // a component-qualified one.
     const rules = [...read('src/styles/base.css')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .matchAll(/(?:^|[};])\s*:focus-visible\s*\{([^}]*)\}/g)]
     expect(rules).toHaveLength(1)
-    expect(rules[0][1]).toMatch(/outline:\s*2px solid var\(--ink\)\s*;/)
+    expect(rules[0][1]).toMatch(/outline:\s*1px solid var\(--ink\)\s*;/)
     expect(rules[0][1]).toMatch(/outline-offset:\s*2px\s*;/)
   })
 
@@ -154,7 +157,7 @@ describe('§1.2/§6 focus ring', () => {
   })
 
   it('accepts mixed-case property and pseudo-class names on the global ring', () => {
-    const valid = '<style>.theme-options button:FOCUS-VISIBLE { Outline: 2px solid var(--ink); Outline-Offset: 2px; }</style>'
+    const valid = '<style>.theme-options button:FOCUS-VISIBLE { Outline: 1px solid var(--ink); Outline-Offset: 2px; }</style>'
     expect(invalidFocusRules(valid)).toEqual([])
   })
 })
