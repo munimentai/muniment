@@ -5870,11 +5870,11 @@ describe('provenance line', () => {
     return render(App)
   }
 
-  it('renders route → model · cost · time with signal on the route segment', async () => {
+  it('renders route → model, cost and time as spaced segments with signal on the route segment', async () => {
     restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
     const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model glm-5.2, $0.0089, 6.2s' })
-    expect(line.textContent).toBe('analysis/high → glm-5.2 · $0.0089 · 6.2s')
+    expect(line.textContent).toBe('analysis/high → glm-5.2 $0.0089 6.2s')
     expect(within(line).getByText('analysis/high')).toHaveClass('route-segment')
     expect(line.querySelectorAll('.route-segment')).toHaveLength(1)
   })
@@ -5883,15 +5883,15 @@ describe('provenance line', () => {
     restore({ model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
     const line = await screen.findByRole('button', { name: 'Expand receipt: Model glm-5.2, $0.0089, 6.2s' })
-    expect(line.textContent).toBe('glm-5.2 · $0.0089 · 6.2s')
+    expect(line.textContent).toBe('glm-5.2 $0.0089 6.2s')
     expect(line.querySelector('.route-segment')).toBeNull()
   })
 
   it('renders elapsed time alone for a local receipt as a plain line with a clock and no expand control', async () => {
     restore({ time: '6.2s' })
 
-    const line = await screen.findByText('6.2s', { selector: 'p.provenance' })
-    expect(line).toHaveAttribute('aria-label', 'Receipt: 6.2s')
+    const line = await screen.findByLabelText('Receipt: 6.2s', { selector: 'p.provenance' })
+    expect(line.textContent).toBe('6.2s')
     expect(line.querySelector('[data-icon="clock"]')).toBeInTheDocument()
     expect(line.querySelector('.receipt-marker')).toBeNull()
     expect(line.querySelector('.route-segment')).toBeNull()
@@ -5917,7 +5917,7 @@ describe('provenance line', () => {
 
     const line = await screen.findByRole('button', { name: /^Expand receipt:/ })
     const marker = line.querySelector('.receipt-marker')
-    expect(line.textContent).toBe('analysis/high → glm-5.2 · $0.0089 · 6.2s · search@2')
+    expect(line.textContent).toBe('analysis/high → glm-5.2 $0.0089 6.2s search@2')
     expect(marker).toHaveAttribute('aria-hidden', 'true')
     expect(marker).not.toHaveClass('expanded')
     await fireEvent.click(line)
@@ -5945,7 +5945,7 @@ describe('provenance line', () => {
     await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
 
     const record = document.querySelector('.receipt-record')
-    expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sMemorylease · 2 filesDocuments/Muniment/lease.pdfDocuments/Muniment/notes.mdMemorymissing clause · 0 files')
+    expect(record.textContent).toBe('Routeanalysis/highModelglm-5.2Cost$0.0089Time6.2sMemorylease, 2 filesDocuments/Muniment/lease.pdfDocuments/Muniment/notes.mdMemorymissing clause, 0 files')
     expect([...record.querySelectorAll('.recall-file')].map((file) => file.textContent)).toEqual([
       'Documents/Muniment/lease.pdf',
       'Documents/Muniment/notes.md',

@@ -266,9 +266,10 @@ fn local_mode_run(configured: bool) {
     assert_eq!(payloads[5]["effect_id"].as_str(), Some("tool-1"));
     assert_eq!(payloads[5].as_object().unwrap().len(), 1);
     let receipt = payloads[6]["receipt"].as_object().unwrap();
-    // A local reply says so: the route reads local beside the time, and the stub names no model.
+    // A local reply carries no route: the time and the tool tally, and the stub names no model.
     assert_eq!(receipt.len(), 2);
-    assert_eq!(receipt["route"].as_str(), Some("local"));
+    assert!(receipt.get("route").is_none());
+    assert_eq!(receipt["tools"][0]["name"].as_str(), Some("read"));
     let elapsed = receipt["time"].as_str().unwrap();
     assert!(elapsed.ends_with('s'));
     assert!(elapsed.trim_end_matches('s').parse::<f64>().is_ok());
