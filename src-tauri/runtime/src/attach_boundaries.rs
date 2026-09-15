@@ -61,6 +61,7 @@ use muniment_core::run_start::{
     accepted_time_now, new_run_id, AttachPromptAccepted, AttachResumeAccepted, RunAttachBoundaries,
 };
 use muniment_core::run_start::{ActiveRun, RunStartBoundaries, RunStartError, RunStartLaunch};
+use muniment_core::serde_json;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 
@@ -93,6 +94,7 @@ pub struct RuntimeAttachBoundaries {
     browser_opener: Arc<dyn BrowserOpener>,
     chat_events: RuntimeChatEventBroadcast,
     pi_artifact: Option<PiArtifactDescriptor>,
+    records: Arc<service::RecordRegistry>,
 }
 
 impl RuntimeAttachBoundaries {
@@ -147,6 +149,7 @@ impl RuntimeAttachBoundaries {
         chat_events: RuntimeChatEventBroadcast,
     ) -> Self {
         let chat_events = chat_events.with_config_directory(config_directory.clone());
+        let records = Arc::new(service::RecordRegistry::new(&profile_directory));
         Self {
             storage,
             active,
@@ -165,6 +168,7 @@ impl RuntimeAttachBoundaries {
             browser_opener: Arc::new(sign_in_link_opener(chat_events.clone(), open_browser)),
             chat_events,
             pi_artifact: None,
+            records,
         }
     }
 
@@ -805,6 +809,30 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         name: &str,
     ) -> Result<muniment_core::record::CompanySummary, ProtocolError> {
         service::rename_company(&self.profile_directory, company_id, name)
+    }
+
+    fn record_sql(
+        &self,
+        actor: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.records.sql(actor, body)
+    }
+
+    fn record_propose(
+        &self,
+        actor: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.records.propose(actor, body)
+    }
+
+    fn record_commit(
+        &self,
+        actor: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.records.commit(actor, body)
     }
 
     fn list_threads(

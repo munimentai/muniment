@@ -35,3 +35,26 @@ The runtime answers four operations on its attach protocol:
 | `company.rename` | `{"company_id": "...", "name": "..."}` | the renamed `company` |
 
 `company.create`, `company.select` and `company.rename` carry an idempotency key. A companion client cannot call any of the four.
+
+## Reach it from a harness
+
+The runtime serves the record to any MCP client through `muniment-cli mcp`, a stdio server for the protocol revision of 2026-07-28. It offers three tools: `sql`, one read-only query that answers CSV, `propose`, which validates a change and returns its diff, and `commit`, which applies a proposal. The binary sits beside the runtime:
+
+| Platform | Path |
+| --- | --- |
+| macOS | `/Applications/muniment.app/Contents/Library/LaunchServices/muniment-cli` |
+| Linux | `/usr/lib/muniment/muniment-cli` |
+
+Add it to Claude Code with one command, using the path for your platform:
+
+```sh
+claude mcp add muniment -- /Applications/muniment.app/Contents/Library/LaunchServices/muniment-cli mcp
+```
+
+The first call pairs the harness with the desktop. The desktop shows the pairing and you approve it once. On Linux the harness needs `XDG_RUNTIME_DIR` set, as a desktop session sets it.
+
+The desktop's own assistant reaches the same server without setup. The runtime writes a `record` entry into `~/.muniment/agent/mcp.json` with `protocolVersion` pinned to `2026-07-28` and keeps every other server you list there.
+
+Every query lands in `sql-audit.sqlite3` beside the company's graph, with its text, its row count and any error. A query stops after five seconds, and a result is cut at 500 rows or 64 KiB. A commit through a harness is recorded as an agent principal named for that harness, acting for the company's owner.
+
+Windows has no companion client yet, so the server answers there with a platform error.
