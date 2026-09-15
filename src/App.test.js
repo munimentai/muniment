@@ -2456,19 +2456,23 @@ describe('window chrome', () => {
     expect(fs.readFileSync('src/lib/assistant-markdown.js', 'utf8')).not.toMatch(/title=/)
   })
 
-  it('lets macOS place the traffic lights and ends the title row at the lights\' controls', () => {
+  it('centers the title row controls and the traffic lights on the 36px band above the panels', () => {
     const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
     const main = config.app.windows.find((window) => window.label === 'main')
     expect(appStyles).toMatch(/grid-template-rows:\s*var\(--titlebar-height\) minmax\(0, 1fr\)/)
+    expect(appStyles).toMatch(/row-gap:\s*calc\(var\(--titlebar-band\) - var\(--titlebar-height\)\);\s*column-gap:\s*var\(--frame-width\)/)
+    const band = Number(appStyles.match(/--titlebar-band:\s*(\d+)px/)[1])
     const rowHeight = Number(appRules.get('.workspace.macos').match(/--titlebar-height:\s*(\d+)px/)[1])
     const inset = Number(appRules.get('.workspace.macos').match(/--titlebar-inset:\s*(\d+)px/)[1])
     const controlHeight = Number(appRules.get('.titlebar button, .titlebar input').match(/(?:^|;)\s*height:\s*(\d+)px/)[1])
-    // Measured on macOS 26: the native title bar band is 32pt and the 14pt lights center 16pt below the top edge.
-    // A 24px control at the end of a 28px row shares that center, and the paper under it is the frame.
-    expect(main.trafficLightPosition).toBeUndefined()
-    expect(rowHeight).toBe(28)
+    // The band runs from the top edge to the panels, so the controls at the end of the row and the 14pt lights both center on it.
+    // Measured on macOS 26: AppKit tops the 14pt lights at 9pt from x = 9, and the row's default matches the frame gap.
+    expect(band).toBe(36)
+    expect(rowHeight).toBe(30)
+    expect(Number(appStyles.match(/--frame-width: 8px; --titlebar-band: \d+px; --titlebar-height:\s*(\d+)px/)[1])).toBe(rowHeight)
     expect(controlHeight).toBe(24)
-    expect(rowHeight - controlHeight / 2).toBe(16)
+    expect(rowHeight - controlHeight / 2).toBe(band / 2)
+    expect(main.trafficLightPosition).toEqual({ x: 9, y: band / 2 - 14 / 2 })
     for (const selector of ['.titlebar', '.workspace.macos .titlebar-sidebar', '.workspace.macos .titlebar-thread']) {
       expect(appRules.get(selector), selector).toMatch(/align-items:\s*end/)
     }
@@ -2487,7 +2491,6 @@ describe('window chrome', () => {
     expect(config.app.windows[0]).toMatchObject({
       title: 'muniment', titleBarStyle: 'Overlay', hiddenTitle: true,
     })
-    expect(config.app.windows[0]).not.toHaveProperty('trafficLightPosition')
     expect(config.app.windows[0].decorations).not.toBe(false)
     expect(capabilities.permissions).toContain('core:window:allow-start-dragging')
   })

@@ -43,7 +43,6 @@
   import { createWindowTitle } from './lib/window-title.js'
 
   const sealD = solidMilledRingPath()
-  const thinkingMarkD = sealD
   const version = __APP_VERSION__
 
   function boundedAttachClaim(value) {
@@ -1465,7 +1464,7 @@
                 </details>
               {/if}
               <!-- One mark for the whole run in flight, in its own block so its exit holds nothing else back. -->
-              {#if message.run.phase === 'thinking' || message.run.phase === 'streaming'}<RunMark stage={message.run.stage} d={thinkingMarkD} />{/if}
+              {#if message.run.phase === 'thinking' || message.run.phase === 'streaming'}<RunMark stage={message.run.stage} />{/if}
               {#if message.run.phase === 'acquiring-pi'}
                 <p class="thinking">{runAnnouncement(message.run)}</p>
               {:else if message.run.phase === 'thinking'}
@@ -1830,7 +1829,8 @@
     line-height: var(--leading-body);
   }
 
-  .workspace { --frame-width: 8px; --titlebar-height: 28px; position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-height) minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); gap: var(--frame-width); background: var(--paper); }
+  /* The band above the panels is --titlebar-band tall: the title row, then the paper gap to the panels. */
+  .workspace { --frame-width: 8px; --titlebar-band: 36px; --titlebar-height: 30px; position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-height) minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); row-gap: calc(var(--titlebar-band) - var(--titlebar-height)); column-gap: var(--frame-width); background: var(--paper); }
   /* The sidebar column is the element's --sidebar-column: the kept width, or zero collapsed, and the 180ms slide carries both. */
   .workspace { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
   .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
@@ -1840,18 +1840,19 @@
   .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  /* The row ends where its 24px controls end, so the paper under them is the grid gap, the frame. */
+  /* The row ends where its 24px controls end, so the paper under them is the rest of the band. */
   .titlebar { grid-area: title; display: flex; align-items: end; gap: 8px; min-width: 0; margin: 0 calc(-1 * var(--frame-width)); padding: 0 12px; background: var(--paper); font-size: var(--text-13); user-select: none; }
   /* The title row shares the animated sidebar width so controls never cross during the panel slide. */
   @property --sidebar-column { syntax: '<length>'; inherits: true; initial-value: 195px; }
-  /* Measured on macOS 26: the native title bar band is 32pt, and its three 14pt
-     lights sit at x = 9, 32 and 55 with their centers 16pt below the top edge.
-     The 24px controls end at the 28px row, so they center on the lights, the
-     paper under them is the frame, and the row starts one 9pt gap after the
+  /* The band the eye reads runs from the top edge to the panels, 36px, so its
+     center is 18px. The 24px controls end at the 30px row and center there.
+     Measured on macOS 26: the three 14pt lights sit at x = 9, 32 and 55 and
+     AppKit tops them at 9pt, so tauri.conf.json tops them at 11pt and they
+     center at 18pt too. The row starts one 9pt gap after the
      last light ends at 69pt. New thread ends
      at 251px in the installed app and at 252px in the probe's Chromium, and the
      thread title starts one gap and a rounding pixel later. */
-  .workspace.macos { --titlebar-height: 28px; --titlebar-inset: 78px; --titlebar-controls-end: 272px; transition: --sidebar-column 180ms ease; }
+  .workspace.macos { --titlebar-height: 30px; --titlebar-inset: 78px; --titlebar-controls-end: 272px; transition: --sidebar-column 180ms ease; }
   .workspace.macos.artifact-resizing, .workspace.macos.sidebar-resizing { transition: none; }
   .workspace:not(.macos) .titlebar-sidebar, .workspace:not(.macos) .titlebar-thread { display: contents; }
   /* The title row is a subgrid with no margin and no padding of its own: padding
@@ -2031,9 +2032,10 @@
   .composer-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
   /* The three composer controls share the plus button's box: 4px padding, a 24px minimum, the control radius. */
-  .model-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 4px; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); font: var(--text-12) var(--font-mono); white-space: nowrap; }
+  .model-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 3px 4px; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); font: var(--text-12) var(--font-mono); white-space: nowrap; }
   .model-chip:hover:not(:disabled) { background: var(--faint); }
-  .model-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* The label's line box holds the mono descenders the clip would take off a g or a p. */
+  .model-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
   .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
   .composer-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; color: var(--muted); }

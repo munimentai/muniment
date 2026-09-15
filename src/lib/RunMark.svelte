@@ -1,14 +1,23 @@
 <script>
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import { stageWord } from './chat-state.js'
   import { thinkingSettle } from './thinking-transition.js'
+  import { sealBandPath } from './mark.js'
+  import { REST_POSE, paint, subscribe } from './ring-motion.js'
 
   // The mark in flight: its motion and color stay, and the word tracks what the
   // run does. A word holds at least this long, so a fast tool never flickers.
   const HOLD_MS = 800
-  let { stage = 'routing', d } = $props()
+  // 20px, where the seal band's 22 teeth resolve, at the band width the
+  // reference draws for that size.
+  const SIZE = 20
+  const WIDTH = 5.8
+  let { stage = 'routing' } = $props()
   let shown = $state(stageWord(stage))
   let shownAt = Date.now()
+  let group
+  let body
+  let accent
 
   $effect(() => {
     const next = stageWord(stage)
@@ -24,15 +33,21 @@
       return () => clearTimeout(timer)
     })
   })
+
+  // Every mark on screen follows the one organism, so two runs in flight
+  // breathe and turn together. Under reduced motion the still pose stays.
+  onMount(() => {
+    const parts = { group, body, accent, width: WIDTH }
+    paint(REST_POSE, parts)
+    return subscribe((pose) => paint(pose, parts))
+  })
 </script>
 
-<span class="thinking" out:thinkingSettle|global><svg width="17" height="17" viewBox="0 0 48 48" aria-label={shown}><path {d} fill-rule="evenodd" /></svg><span>{shown}</span></span>
+<span class="thinking" out:thinkingSettle|global><svg width={SIZE} height={SIZE} viewBox="0 0 48 48" aria-label={shown}><g bind:this={group}><path class="body" bind:this={body} d={sealBandPath(1, 1, WIDTH)} fill-rule="evenodd" /><path class="accent" bind:this={accent} aria-hidden="true" /></g></svg><span>{shown}</span></span>
 
 <style>
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .thinking path { fill: var(--signal); animation: breathe 1.8s ease-in-out infinite; }
-  @keyframes breathe { 50% { opacity: .45; } }
-  @media (prefers-reduced-motion: reduce) {
-    .thinking path { animation: none; }
-  }
+  .thinking svg { overflow: visible; }
+  .thinking .body { fill: var(--signal); }
+  .thinking .accent { fill: none; stroke: var(--signal); stroke-linecap: round; opacity: 0; }
 </style>

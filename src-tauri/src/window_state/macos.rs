@@ -29,8 +29,24 @@ define_class!(
     struct TrafficLights;
 
     impl TrafficLights {
+        // AppKit finishes the title bar layout after the frame notification, and a
+        // title change puts the zoom light back on the native row after this call
+        // returns. Apply now for the frame and once more on the next run loop turn.
         #[unsafe(method(layoutChanged:))]
         fn layout_changed(&self, _notification: &NSNotification) {
+            self.apply();
+            unsafe {
+                let _: () = msg_send![
+                    self,
+                    performSelector: sel!(applyDeferred:),
+                    withObject: Option::<&NSObject>::None,
+                    afterDelay: 0.0f64
+                ];
+            }
+        }
+
+        #[unsafe(method(applyDeferred:))]
+        fn apply_deferred(&self, _sender: Option<&NSObject>) {
             self.apply();
         }
     }
