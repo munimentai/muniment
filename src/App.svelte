@@ -203,6 +203,9 @@
   let globalVoiceShortcutValue = $state(holdToTalkShortcut())
   let globalVoiceChanging = $state(true)
   let composer = $state()
+  // The composer box's height, so the thread's bottom padding and the fade above the composer follow it.
+  let composerBox = $state()
+  let composerBoxHeight = $state(120)
   let composerRow = $state()
   let composerInputDraft
   let wasInWorkspace = false
@@ -882,6 +885,13 @@
   })
 
   $effect(() => {
+    if (!composerBox || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => { composerBoxHeight = composerBox.offsetHeight })
+    observer.observe(composerBox)
+    return () => observer.disconnect()
+  })
+
+  $effect(() => {
     messages
     followNewContent()
   })
@@ -1434,7 +1444,7 @@
             onkeydown={sidebarKeydown}
           ></div>
         {/if}
-        <div class="thread-panel">
+        <div class="thread-panel" style:--composer-height="{composerBoxHeight}px">
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <div class="thread-shell">
         <div class="thread" class:scrolling={threadScrolling} role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={onThreadScroll}>
@@ -1468,9 +1478,8 @@
               {#if message.run.phase === 'acquiring-pi'}
                 <p class="thinking">{runAnnouncement(message.run)}</p>
               {:else if message.run.phase === 'thinking'}
-              {:else if message.run.phase === 'streaming'}<p class="response-prose streaming" use:streamingUnderline={message.run.text}>{message.run.text}<span class="caret" aria-hidden="true"></span><span class="streaming-rule" aria-hidden="true"></span></p>
-              {:else if ['complete', 'failed', 'interrupted', 'cancelled'].includes(message.run.phase)}<AssistantMarkdown text={message.run.text} />
-              {:else}<p class="response-prose">{message.run.text}</p>{/if}
+              {:else if message.run.phase === 'streaming'}<div class="streaming" use:streamingUnderline={message.run.text}><AssistantMarkdown text={message.run.text} caret /><span class="streaming-rule" aria-hidden="true"></span></div>
+              {:else}<AssistantMarkdown text={message.run.text} />{/if}
               {#each message.run.appliedDiffs ?? [] as appliedDiff}
                 <div class="applied-diff tool-card">
                   <strong>Applied file changes</strong>
@@ -1570,7 +1579,7 @@
              run phase is read as one sentence, and never re-read per streamed chunk. -->
         <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
         </div>
-        <div class="composer">
+        <div class="composer" bind:this={composerBox}>
         {#if pickerOpen}
           <ModelPicker {inventory} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onclose={closePicker} />
         {/if}
@@ -1936,12 +1945,16 @@
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }
   .artifact-empty { display: grid; place-items: center; align-content: center; min-height: 45%; text-align: center; }
   .artifact-empty p { margin: 0; color: var(--muted); }
-  .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; transition: margin-left 180ms ease; }
+  /* One grid cell: the thread fills it and the composer sits at its end, so the transcript scrolls on under the composer. */
+  .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); transition: margin-left 180ms ease; }
   .workspace.sidebar-resizing .thread-panel { transition: none; }
-  .thread-shell { position: relative; min-height: 0; }
-  .thread { width: min(760px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: 42px 0; overflow-y: auto; }
+  .thread-shell { grid-area: 1 / 1; position: relative; min-height: 0; }
+  /* The transcript fades into the surface above the composer, so the text under the composer disappears. */
+  .thread-shell::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--composer-height, 120px) + 72px); background: linear-gradient(to bottom, transparent, var(--surface) 56px); pointer-events: none; }
+  /* Responses run the panel's full width inside a 36px gutter. The bottom padding is the composer and the fade, so the last line scrolls clear of both. */
+  .thread { width: 100%; height: 100%; margin: 0; padding: 42px 36px calc(var(--composer-height, 120px) + 64px); overflow-y: auto; }
   .thread.scrolling::-webkit-scrollbar-thumb { background: var(--border); }
-  .latest { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
+  .latest { position: absolute; z-index: 2; left: 50%; bottom: calc(var(--composer-height, 120px) + 38px); transform: translateX(-50%); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-turn { margin: 0 0 28px auto; }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
@@ -1956,10 +1969,8 @@
   .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: var(--text-12); }
   .attachment-delivery-rule { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .response { margin: 0 0 34px; }
-  .response-prose { max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; }
   .streaming { position: relative; }
   .streaming-rule { position: absolute; height: 2px; background: var(--signal); pointer-events: none; }
-  .caret { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-13) var(--font-mono); }
   .permission-card { color: var(--ink); }
@@ -2016,7 +2027,7 @@
   .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
   .update-notice .support { font-size: var(--text-12); }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
-  .composer { position: relative; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .composer { grid-area: 1 / 1; align-self: end; z-index: 1; position: relative; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .composer:focus-within { border-color: var(--muted); }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 -12px 8px; padding: 0 12px 8px; border-bottom: 1px solid var(--border); list-style: none; }
   .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -2068,7 +2079,6 @@
   .speech-install-popover .close-card { min-width: 24px; min-height: 24px; margin: 0; padding: 0 5px; color: var(--muted); }
   .speech-install-popover .close-card:hover { color: var(--ink); }
   .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  @keyframes blink { 50% { opacity: 0; } }
   @keyframes capture { to { transform: scaleY(.55); } }
   @keyframes toast-enter { from { opacity: 0; transform: translate(-50%, 2px); } }
   @media (prefers-reduced-motion: reduce) {

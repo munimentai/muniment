@@ -9,13 +9,15 @@ import path from 'node:path'
 const ALLOWED = {
   'src/App.svelte': {
     '.streaming-rule': '§1.2 the streaming underline on the active line',
-    '.caret': '§1.2 the caret on the active line',
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
   },
   // A theme tile shows the theme's own signal, a swatch of the token and not a use of it.
   'src/lib/Appearance.svelte': {
     '.swatch-signal': '§1.3 the signal mark on a theme swatch',
+  },
+  'src/lib/AssistantMarkdown.svelte': {
+    '.assistant-markdown :global(.caret)': '§1.2 the caret on the active line',
   },
   'src/lib/RunMark.svelte': {
     '.thinking .body': "§1.2 the mark's thinking state (§1.8)",
