@@ -34,6 +34,8 @@ const passwordField = "greenkangaroo_apple_devid_certificate_password";
 const target = join("src-tauri", "target");
 const runtimeSource = join(target, "aarch64-apple-darwin", "release", "muniment-runtime");
 const runtimeBundled = join(target, "universal-apple-darwin", "release", "muniment-runtime");
+const cliSource = join(target, "aarch64-apple-darwin", "release", "muniment-cli");
+const cliBundled = join(target, "universal-apple-darwin", "release", "muniment-cli");
 const app = join(target, "release", "bundle", "macos", "muniment.app");
 const runtime = join(app, "Contents", "Library", "LaunchServices", "muniment-runtime");
 const installed = join(home, "Applications", "muniment.app");
@@ -61,9 +63,10 @@ const capture = (label, cmd, args, options = {}) => {
 process.env.MUNIMENT_PI_CANDIDATE = "1";
 // Build first, so a build failure never touches the credential.
 // The bundle config reads the runtime from the universal path; a local build is arm64 only.
-mustRun("build runtime", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime", "--release", "--locked", "--target", "aarch64-apple-darwin"]);
+mustRun("build runtime", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime", "--package", "muniment-cli", "--release", "--locked", "--target", "aarch64-apple-darwin"]);
 mkdirSync(join(target, "universal-apple-darwin", "release"), { recursive: true });
 cpSync(runtimeSource, runtimeBundled);
+cpSync(cliSource, cliBundled);
 mustRun("build app", process.execPath, [join("node_modules", "@tauri-apps", "cli", "tauri.js"), "build", "--bundles", "app", "--no-sign"]);
 
 // Everything secret-bearing lives in a throwaway directory removed on exit.

@@ -75,7 +75,7 @@ pub use service::{
     revoke_companion, run_prompt, select_company, select_thread, session_status, sign_in, sign_out,
     stream_run, subscribe_run_commits, thread_page, thread_summaries, ConfigureRunError,
     EntitlementSnapshotError, EntitlementSnapshotResult, PromptAcceptance, PromptLaunch,
-    SignOutError,
+    RecordRegistry, SignOutError,
 };
 pub use sink::{
     RuntimeChatEventBroadcast, RuntimeChatEventSink, RuntimeChatEventTarget,

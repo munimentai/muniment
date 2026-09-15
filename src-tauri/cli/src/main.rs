@@ -9,6 +9,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 pub mod code_diff_render;
+pub mod mcp;
 
 const HELP: &str = "\
 Usage: muniment [--workspace <directory>] <command>
@@ -18,6 +19,7 @@ Commands:
   threads open <thread-id>
   run start
   workspace init
+  mcp                      serve the company record over stdio (MCP 2026-07-28)
 
 Options:
   -h, --help  Print help
@@ -78,6 +80,15 @@ fn run_args(
 fn run_command(mut args: Vec<OsString>) -> Result<(), CliError> {
     let opened = std::env::current_dir().map_err(|_| CliError::Workspace)?;
     let workspace = workspace_argument(&mut args)?.unwrap_or_else(|| opened.clone());
+    if args == [OsString::from("mcp")] {
+        let mut backend = RuntimeRecordBackend::new(
+            opened.to_string_lossy().into_owned(),
+            workspace.to_string_lossy().into_owned(),
+        );
+        let stdin = io::stdin();
+        return mcp::serve(&mut backend, stdin.lock(), io::stdout().lock())
+            .map_err(|_| CliError::Workspace);
+    }
     if !recognized_command(&args) {
         return Err(CliError::Usage);
     }
@@ -125,6 +136,155 @@ fn run_command(mut args: Vec<OsString>) -> Result<(), CliError> {
             Ok(client)
         },
     )
+}
+
+/// The record server's reach into the runtime: one companion client, opened
+/// on the first tool call and reopened after it closes. Every failure is one
+/// sentence for the agent, never a panic and never a line on stdout.
+struct RuntimeRecordBackend {
+    opened: String,
+    workspace: String,
+    client: Option<muniment_attach::AuthorizedClient>,
+}
+
+impl RuntimeRecordBackend {
+    fn new(opened: String, workspace: String) -> Self {
+        Self {
+            opened,
+            workspace,
+            client: None,
+        }
+    }
+
+    fn client(&mut self) -> Result<&mut muniment_attach::AuthorizedClient, String> {
+        if self.client.is_none() {
+            let client = connect_record_client(&self.opened, &self.workspace)?;
+            self.client = Some(client);
+        }
+        self.client
+            .as_mut()
+            .ok_or_else(|| "the desktop connection is not open".to_owned())
+    }
+
+    fn call(
+        &mut self,
+        call: impl Fn(
+            &mut muniment_attach::AuthorizedClient,
+            serde_json::Value,
+        ) -> Result<serde_json::Value, ClientError>,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let client = self.client()?;
+        match call(client, body) {
+            Ok(answer) => Ok(answer),
+            Err(error) => {
+                if matches!(
+                    error,
+                    ClientError::ConnectionClosed
+                        | ClientError::AuthorizationExpired
+                        | ClientError::CapabilityRevoked
+                        | ClientError::DesktopUnavailable
+                        | ClientError::Timeout
+                ) {
+                    self.client = None;
+                }
+                Err(format!("{error}. {}", record_guidance(&error)))
+            }
+        }
+    }
+}
+
+impl mcp::RecordBackend for RuntimeRecordBackend {
+    fn sql(&mut self, body: serde_json::Value) -> Result<serde_json::Value, String> {
+        self.call(|client, body| client.record_sql(body), body)
+    }
+
+    fn propose(&mut self, body: serde_json::Value) -> Result<serde_json::Value, String> {
+        self.call(|client, body| client.record_propose(body), body)
+    }
+
+    fn commit(&mut self, body: serde_json::Value) -> Result<serde_json::Value, String> {
+        self.call(|client, body| client.record_commit(body), body)
+    }
+}
+
+fn record_guidance(error: &ClientError) -> &'static str {
+    match error {
+        ClientError::DesktopUnavailable | ClientError::RuntimeDirectoryMissing => {
+            "Open the Muniment desktop, then try again."
+        }
+        ClientError::Timeout | ClientError::ConnectionClosed => {
+            "Approve the pairing in the Muniment desktop, then try again."
+        }
+        ClientError::AuthorizationExpired | ClientError::CapabilityRevoked => {
+            "The desktop ended this pairing. The next call pairs again."
+        }
+        ClientError::UnsupportedPlatform => "The record server has no client on this platform yet.",
+        _ => "Try the call again.",
+    }
+}
+
+/// The runtime's socket: `$XDG_RUNTIME_DIR/muniment/attach-v1.sock` where a
+/// desktop session sets that variable, else the state root's `muniment/`
+/// directory, which is where the macOS runtime listens.
+#[cfg(unix)]
+fn record_endpoint() -> Result<PathBuf, String> {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            std::env::var_os("MUNIMENT_STATE_DIR")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+        })
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".muniment")))
+        .ok_or_else(|| "neither XDG_RUNTIME_DIR nor HOME is set".to_owned())?;
+    Ok(runtime.join("muniment").join("attach-v1.sock"))
+}
+
+#[cfg(unix)]
+fn connect_record_client(
+    opened: &str,
+    workspace: &str,
+) -> Result<muniment_attach::AuthorizedClient, String> {
+    let identity = authorized_client_identity().map_err(|error| guidance(&error).to_owned())?;
+    let credential = authorized_client_credential().map_err(|error| guidance(&error).to_owned())?;
+    let endpoint = record_endpoint()?;
+    let stream = std::os::unix::net::UnixStream::connect(&endpoint).map_err(|_| {
+        format!(
+            "{}. {}",
+            ClientError::DesktopUnavailable,
+            record_guidance(&ClientError::DesktopUnavailable)
+        )
+    })?;
+    let mut client = muniment_attach::handshake_stream_with_credential(
+        stream,
+        env!("CARGO_PKG_VERSION"),
+        &identity,
+        credential.as_deref(),
+        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(300),
+        || eprintln!("muniment: approve this harness in the Muniment desktop to reach the record."),
+    )
+    .map_err(|error| format!("{error}. {}", record_guidance(&error)))?;
+    persist_authorized_client_credential(client.authorized_client_credential())
+        .map_err(|error| guidance(&error).to_owned())?;
+    client
+        .onboard_workspace(opened, workspace)
+        .map_err(|error| format!("{error}. {}", record_guidance(&error)))?;
+    Ok(client)
+}
+
+#[cfg(not(unix))]
+fn connect_record_client(
+    _opened: &str,
+    _workspace: &str,
+) -> Result<muniment_attach::AuthorizedClient, String> {
+    Err(format!(
+        "{}. {}",
+        ClientError::UnsupportedPlatform,
+        record_guidance(&ClientError::UnsupportedPlatform)
+    ))
 }
 
 fn authorized_client_identity() -> Result<String, CliError> {
