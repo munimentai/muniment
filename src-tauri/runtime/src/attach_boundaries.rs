@@ -497,6 +497,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         let active = Arc::clone(&self.active);
         let chat_events = self.chat_events.clone();
         let pi_artifact = self.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT);
+        let earlier_models = earlier_thread_models(&storage, &thread_id, &launch.run_id);
         std::thread::spawn(move || {
             muniment_core::chat_coordinate::coordinate(
                 RuntimeChatEventSink::new(
@@ -506,7 +507,8 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                     thread_id,
                     launch.grant.workspace.clone(),
                 )
-                .with_pi_artifact(pi_artifact),
+                .with_pi_artifact(pi_artifact)
+                .with_earlier_models(earlier_models),
                 storage,
                 runtime,
                 runtime_activity,
@@ -528,6 +530,45 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
             clear_active_run(&active, &launch.run_id);
         });
     }
+}
+
+/// The models that answered this thread's earlier runs, from their receipts,
+/// oldest first. A run without a receipt, or one that cannot be read, adds
+/// nothing: the facts never guess.
+fn earlier_thread_models(
+    storage: &SharedStorage,
+    thread_id: &str,
+    current_run_id: &str,
+) -> Vec<String> {
+    const RUNS_READ: usize = 100;
+    let Ok(mut storage) = storage.lock() else {
+        return Vec::new();
+    };
+    let Ok(page) = storage.journal.thread_run_ids(thread_id, RUNS_READ, None) else {
+        return Vec::new();
+    };
+    let mut models = Vec::new();
+    for run_id in page.run_ids {
+        if run_id == current_run_id {
+            continue;
+        }
+        let Ok(events) = storage.journal.events(&run_id) else {
+            continue;
+        };
+        let Ok((projection, _)) = muniment_core::journal::reducer::project_chat_with_state(&events)
+        else {
+            continue;
+        };
+        if let Some(model) = projection
+            .receipt
+            .as_ref()
+            .and_then(|receipt| receipt.get("model"))
+            .and_then(|model| model.as_str())
+        {
+            models.push(model.to_owned());
+        }
+    }
+    models
 }
 
 fn open_selected_files(files: Vec<SelectedFile>) -> Result<Vec<OpenSelectedFile>, RunStartError> {
