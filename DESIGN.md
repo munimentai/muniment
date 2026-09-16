@@ -187,8 +187,8 @@ right, each opening one form in the record's place: a relation and target
 kind as 24px selects, a search field with a list of matches by title, the
 diff, and Commit and Discard. On the kind list, Rename beside the company
 picker turns the picker into one text field with Save. Import first lists
-the sources as one quiet list, CSV file, Stripe and HubSpot, with a mono note
-beside each. A file opens the file dialog. A network source not yet connected
+the sources as one quiet list, CSV file, Stripe, HubSpot and Pipedrive, with a
+mono note beside each. A file opens the file dialog. A network source not yet connected
 shows one sentence and one password field for its credential, then its objects as
 the same list. The object then fills the kind body with one mono table of its
 columns: the column name,

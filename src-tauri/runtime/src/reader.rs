@@ -156,7 +156,7 @@ pub trait Reader {
 /// The one source name a file reader answers to.
 pub const CSV_SOURCE: &str = "csv";
 /// The network sources the Go sidecar reads, each behind its own secret.
-pub const SIDECAR_SOURCES: [&str; 2] = ["stripe", "hubspot"];
+pub const SIDECAR_SOURCES: [&str; 3] = ["stripe", "hubspot", "pipedrive"];
 
 /// Opens the reader for a source. `object` is the file path for a file
 /// reader and the object name for a network source, whose secret comes from
@@ -207,12 +207,12 @@ pub fn source_label(source: &str) -> String {
 }
 
 /// What a source calls its credential: HubSpot issues a private app access
-/// token, every other source a secret key.
+/// token, Pipedrive an API token, every other source a secret key.
 pub fn secret_label(source: &str) -> &'static str {
-    if source == "hubspot" {
-        "private app access token"
-    } else {
-        "secret key"
+    match source {
+        "hubspot" => "private app access token",
+        "pipedrive" => "API token",
+        _ => "secret key",
     }
 }
 
@@ -367,5 +367,7 @@ mod tests {
         assert_eq!(source_label("hubspot"), "HubSpot");
         assert_eq!(secret_label("hubspot"), "private app access token");
         assert_eq!(secret_label("stripe"), "secret key");
+        assert_eq!(secret_label("pipedrive"), "API token");
+        assert_eq!(source_label("pipedrive"), "Pipedrive");
     }
 }
