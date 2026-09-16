@@ -79,11 +79,12 @@ export function suggestFields(description, kind) {
 }
 
 // The sources an import reads: a CSV file, then every network source the
-// sidecar knows.
+// sidecar knows, each naming the credential it connects with.
 export function sourceOptions() {
   return [
     { value: 'csv', label: 'CSV file', note: 'a file on this machine' },
-    { value: 'stripe', label: 'Stripe', note: 'customers, subscriptions, invoices' },
+    { value: 'stripe', label: 'Stripe', note: 'customers, subscriptions, invoices', secret: 'secret key' },
+    { value: 'hubspot', label: 'HubSpot', note: 'contacts, companies, deals, tickets', secret: 'private app access token' },
   ]
 }
 

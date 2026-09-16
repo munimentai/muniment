@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"muniment.ai/reader/contract"
+	"muniment.ai/reader/hubspot"
 	"muniment.ai/reader/stripe"
 )
 
@@ -24,6 +25,12 @@ func openSource(name string) (Source, *contract.Failure) {
 			return nil, fail("not_connected", "Connect Stripe with its secret key first.")
 		}
 		return stripe.New(secret, os.Getenv("MUNIMENT_STRIPE_BASE_URL")), nil
+	case "hubspot":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect HubSpot with its private app access token first.")
+		}
+		return hubspot.New(secret, os.Getenv("MUNIMENT_HUBSPOT_BASE_URL")), nil
 	default:
 		return nil, fail("unknown_source", "No reader reads %s.", name)
 	}

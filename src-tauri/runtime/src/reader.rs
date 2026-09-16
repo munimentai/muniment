@@ -156,7 +156,7 @@ pub trait Reader {
 /// The one source name a file reader answers to.
 pub const CSV_SOURCE: &str = "csv";
 /// The network sources the Go sidecar reads, each behind its own secret.
-pub const SIDECAR_SOURCES: [&str; 1] = ["stripe"];
+pub const SIDECAR_SOURCES: [&str; 2] = ["stripe", "hubspot"];
 
 /// Opens the reader for a source. `object` is the file path for a file
 /// reader and the object name for a network source, whose secret comes from
@@ -171,8 +171,9 @@ pub fn open_reader(source: &str, object: &str) -> Result<Box<dyn Reader>, Reader
     let secret = crate::reader_secret::read(source).ok_or_else(|| ReaderError::Source {
         code: "not_connected".to_owned(),
         message: format!(
-            "Connect {} with its secret key first.",
-            source_label(source)
+            "Connect {} with its {} first.",
+            source_label(source),
+            secret_label(source)
         ),
     })?;
     open_sidecar(source, secret)
@@ -193,12 +194,25 @@ pub fn open_sidecar(source: &str, secret: String) -> Result<Box<dyn Reader>, Rea
     )))
 }
 
-/// The name a source shows: `Stripe` for `stripe`.
+/// The name a source shows: `Stripe` for `stripe`, `HubSpot` for `hubspot`.
 pub fn source_label(source: &str) -> String {
+    if source == "hubspot" {
+        return "HubSpot".to_owned();
+    }
     let mut chars = source.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+/// What a source calls its credential: HubSpot issues a private app access
+/// token, every other source a secret key.
+pub fn secret_label(source: &str) -> &'static str {
+    if source == "hubspot" {
+        "private app access token"
+    } else {
+        "secret key"
     }
 }
 
@@ -350,5 +364,8 @@ mod tests {
         );
         std::env::remove_var("MUNIMENT_READER_SECRET_STRIPE");
         assert_eq!(source_label("stripe"), "Stripe");
+        assert_eq!(source_label("hubspot"), "HubSpot");
+        assert_eq!(secret_label("hubspot"), "private app access token");
+        assert_eq!(secret_label("stripe"), "secret key");
     }
 }
