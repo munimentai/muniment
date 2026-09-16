@@ -44,6 +44,12 @@ describe('record table state', () => {
     expect(tableColumns(null)).toEqual([])
   })
 
+  it('shows a property that shares a base column name once and still asks for it in the form', () => {
+    const task = { name: 'task', schema: { properties: { title: { type: 'string' }, status: { type: 'string', enum: ['todo', 'done'] }, due_at: { type: 'string', format: 'date-time' } }, required: ['title', 'status'], stateProperty: 'status' }, states: ['todo', 'done'] }
+    expect(tableColumns(task).map((column) => column.key)).toEqual(['title', 'state', 'updated_at', 'due_at'])
+    expect(formFields(task).map((field) => field.key)).toEqual(['status', 'title', 'due_at'])
+  })
+
   it('reads and formats a cell', () => {
     const row = { id: 'e1', title: 'Renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', data: { amount: 96000, tags: ['a', 'b'], live: true } }
     const columns = tableColumns(deal)
@@ -91,5 +97,54 @@ describe('record table state', () => {
     expect(groups.map((group) => group.relation)).toEqual(['works_at', 'owns', 'reports_to (incoming)'])
     expect(groups[0].items.map((item) => item.otherTitle)).toEqual(['Contoso', 'Northwind'])
     expect(groups[2].items[0]).toMatchObject({ outgoing: false, otherTitle: 'Dana' })
+  })
+})
+
+import { NO_STATE_COLUMN, askSql, boardColumns, moveOperation, viewData, viewSettings, viewsFor } from './record-table-state.js'
+
+describe('board, saved views and Ask', () => {
+  const kind = { name: 'deal', schema: { properties: { name: { type: 'string' }, stage: { type: 'string', enum: ['discovery', 'won'] }, amount: { type: 'number' } }, stateProperty: 'stage' }, states: ['discovery', 'won'] }
+  const rows = [
+    { id: 'a', title: 'A', state: 'won', data: {} },
+    { id: 'b', title: 'B', state: 'discovery', data: {} },
+    { id: 'c', title: 'C', state: null, data: {} },
+  ]
+
+  it('lays the rows into one column per state and one for none', () => {
+    const columns = boardColumns(kind, rows)
+    expect(columns.map((column) => column.label)).toEqual(['discovery', 'won', NO_STATE_COLUMN])
+    expect(columns[0].rows.map((row) => row.id)).toEqual(['b'])
+    expect(columns[1].rows.map((row) => row.id)).toEqual(['a'])
+    expect(columns[2].rows.map((row) => row.id)).toEqual(['c'])
+    expect(boardColumns(kind, rows.slice(0, 2)).map((column) => column.label)).toEqual(['discovery', 'won'])
+    expect(boardColumns({ name: 'person', schema: {} }, [])).toEqual([])
+  })
+
+  it('moves a card as one update of the state property', () => {
+    expect(moveOperation(rows[1], kind, 'won')).toEqual({ op: 'update', entity: 'entity:b', data: { stage: 'won' } })
+    expect(moveOperation(rows[0], kind, 'won')).toBeNull()
+    expect(moveOperation(rows[0], { name: 'person', schema: {} }, 'won')).toBeNull()
+  })
+
+  it('round-trips a saved view through the view kind', () => {
+    const data = viewData('Won deals', kind, { layout: 'board', sort: { sort: 'amount', descending: true }, state: 'won', search: 'renewal', columns: ['title', 'amount'] })
+    expect(data).toEqual({
+      name: 'Won deals', kind: 'deal', layout: 'board',
+      sort: [{ column: 'amount', descending: true }],
+      filters: [{ property: 'state', equals: 'won' }, { property: 'search', matches: 'renewal' }],
+      columns: ['title', 'amount'],
+    })
+    expect(viewSettings({ data })).toEqual({ layout: 'board', sort: { sort: 'amount', descending: true }, state: 'won', search: 'renewal' })
+    expect(viewSettings({ data: { name: 'Plain', kind: 'deal' } })).toEqual({ layout: 'table', sort: { sort: 'updated_at', descending: true }, state: null, search: '' })
+    expect(viewData('All', kind)).toEqual({ name: 'All', kind: 'deal', layout: 'table' })
+    expect(viewsFor([{ kind: 'view', data: { kind: 'deal' } }, { kind: 'view', data: { kind: 'org' } }, { kind: 'deal', data: {} }], 'deal')).toHaveLength(1)
+  })
+
+  it('spells the open view as SQL over the generated view', () => {
+    expect(askSql(kind, { sort: { sort: 'amount', descending: true }, state: 'won', search: "o'neil renewal" })).toBe(
+      'select "title", "state", "updated_at", "name", "amount"\nfrom "v_deal"\nwhere state = \'won\' and id in (select entity_id from entity_search where entity_search match \'"o\'\'neil" "renewal"\')\norder by "amount" desc\nlimit 200',
+    )
+    expect(askSql(kind)).toBe('select "title", "state", "updated_at", "name", "amount"\nfrom "v_deal"\norder by "updated_at" desc\nlimit 200')
+    expect(askSql(null)).toBe('')
   })
 })

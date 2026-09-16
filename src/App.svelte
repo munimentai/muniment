@@ -297,6 +297,13 @@
   const toggleArtifactRail = () => railController.toggle('artifacts')
   const toggleRecordPanel = () => railController.toggle('record')
   const closeRail = () => railController.close()
+  // Ask puts the open view's SQL into the composer as a fenced block, so the reply starts from what the person sees.
+  function askAboutView(sql) {
+    if (!sql) return
+    const fence = '```sql\n' + sql + '\n```'
+    draft = draft.trim() ? `${draft.trimEnd()}\n\n${fence}\n` : `${fence}\n`
+    void tick().then(() => composer?.focus())
+  }
   const toggleRecordMaximized = () => railController.toggleMaximized()
 
   const sidebarResizeController = createSidebarResizeController({
@@ -1751,7 +1758,7 @@
               onkeydown={artifactRailKeydown}
             ></div>
           {/if}
-          <RecordPanel {tauri} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} />
+          <RecordPanel {tauri} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onask={askAboutView} />
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a
              copy confirmation into the run-phase region above would overwrite whatever

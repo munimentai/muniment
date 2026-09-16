@@ -1889,6 +1889,66 @@ describe('record panel', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_entity', { companyId: 'company-1', entity: 'deal-2' }))
   })
 
+  it('switches a kind with states to the board, moves a card through propose and commit, saves a view and asks about it', async () => {
+    recordQueryResult = { page: { kind: 'deal', total: 2, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [
+      { id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', created_at: '2026-09-15T10:00:00.000Z', data: { name: 'Northwind renewal', stage: 'won' } },
+      { id: 'deal-2', kind: 'deal', title: 'Contoso pilot', state: 'discovery', updated_at: '2026-09-14T10:30:00.000Z', created_at: '2026-09-14T10:00:00.000Z', data: { name: 'Contoso pilot', stage: 'discovery' } },
+    ] } }
+    recordProposeResult = { proposal: { id: 'proposal-3', warnings: [], diff: { op: 'update', before: { data: { name: 'Contoso pilot', stage: 'discovery' } }, after: { data: { name: 'Contoso pilot', stage: 'won' } } } } }
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await fireEvent.click(within(kinds).getAllByRole('button')[1])
+    await within(panel).findByRole('table', { name: 'deal records' })
+    const toolbar = within(panel).getByRole('toolbar', { name: 'View' })
+    expect(within(toolbar).getByRole('button', { name: 'Table' })).toHaveAttribute('aria-pressed', 'true')
+
+    await fireEvent.click(within(toolbar).getByRole('button', { name: 'Board' }))
+    const board = await within(panel).findByRole('region', { name: 'deal board' })
+    expect(within(panel).queryByRole('table')).not.toBeInTheDocument()
+    const discovery = within(board).getByRole('region', { name: 'discovery' })
+    const won = within(board).getByRole('region', { name: 'won' })
+    expect(within(discovery).getByRole('button', { name: 'Contoso pilot' })).toBeInTheDocument()
+    expect(within(won).getByRole('button', { name: 'Northwind renewal' })).toBeInTheDocument()
+
+    const card = within(discovery).getByRole('button', { name: 'Contoso pilot' }).closest('.record-card')
+    await fireEvent.pointerDown(card, { button: 0, clientX: 10, clientY: 10 })
+    await fireEvent.pointerMove(won, { clientX: 240, clientY: 12 })
+    expect(won).toHaveClass('over')
+    expect(card).toHaveClass('dragging')
+    await fireEvent.pointerUp(won, { clientX: 240, clientY: 12 })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_propose', { companyId: 'company-1', operation: { op: 'update', entity: 'entity:deal-2', data: { stage: 'won' } } }))
+    const move = await within(panel).findByRole('group', { name: 'Proposed move' })
+    expect(move).toHaveTextContent('stage: discovery to won')
+    await fireEvent.click(within(move).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_commit', { companyId: 'company-1', proposal: 'proposal-3' }))
+    await waitFor(() => expect(within(panel).queryByRole('group', { name: 'Proposed move' })).not.toBeInTheDocument())
+
+    await fireEvent.change(within(toolbar).getByRole('combobox', { name: 'State' }), { target: { value: 'won' } })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_query', expect.objectContaining({ kind: 'deal', state: 'won' })))
+
+    recordProposeResult = { proposal: { id: 'proposal-4', warnings: [], diff: { op: 'create', after: { data: { name: 'Won deals', kind: 'deal', layout: 'board' } } } } }
+    recordCommitResult = { result: { event_seq: 5, entity_ids: ['view-1'] } }
+    await fireEvent.click(within(toolbar).getByRole('button', { name: 'Save view' }))
+    const save = within(panel).getByRole('form', { name: 'Save view' })
+    await fireEvent.input(within(save).getByRole('textbox', { name: 'View name' }), { target: { value: 'Won deals' } })
+    await fireEvent.click(within(save).getByRole('button', { name: 'Propose' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_propose', { companyId: 'company-1', operation: { op: 'create', kind: 'view', data: { name: 'Won deals', kind: 'deal', layout: 'board', sort: [{ column: 'updated_at', descending: true }], filters: [{ property: 'state', equals: 'won' }] } } }))
+    const proposedView = await within(panel).findByRole('group', { name: 'Proposed view' })
+    expect(proposedView).toHaveTextContent('layout: board')
+    recordQueryResult = { page: { kind: 'view', total: 1, offset: 0, limit: 200, sort: 'title', descending: false, rows: [{ id: 'view-1', kind: 'view', title: 'Won deals', state: null, updated_at: '2026-09-15T11:00:00.000Z', data: { name: 'Won deals', kind: 'deal', layout: 'board', sort: [{ column: 'updated_at', descending: true }], filters: [{ property: 'state', equals: 'won' }] } }] } }
+    await fireEvent.click(within(proposedView).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_commit', { companyId: 'company-1', proposal: 'proposal-4' }))
+    const picker = await within(toolbar).findByRole('combobox', { name: 'Saved view' })
+    expect(within(picker).getByRole('option', { name: 'Won deals' })).toBeInTheDocument()
+    await waitFor(() => expect(picker).toHaveValue('view-1'))
+
+    await fireEvent.click(within(toolbar).getByRole('button', { name: 'Ask' }))
+    const composer = await findWorkspaceComposer()
+    expect(composer.value).toBe('```sql\nselect "title", "state", "updated_at", "name"\nfrom "v_deal"\nwhere state = \'won\'\norder by "updated_at" desc\nlimit 200\n```\n')
+  })
+
   it('toggles with the platform shortcut, maximizes over the sidebar and thread, and restores with the shortcut then closes with Escape', async () => {
     render(App)
     const record = await screen.findByRole('button', { name: 'Open record panel' })
