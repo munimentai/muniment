@@ -448,9 +448,9 @@ function fixtureRendered() {
       && notice.querySelector('button')?.textContent === 'Start runtime'
   }
   if (signedOutFixture) {
-    const heading = document.querySelector('.lockup h1')
-    const signIn = document.querySelector('.auth-state button')
-    return heading?.textContent === 'muniment' && signIn?.textContent === 'Sign in'
+    // Signed out is the local workspace with its empty thread and the sidebar's cloud sign-in control.
+    const signIn = [...document.querySelectorAll('.workspace button')].find((button) => button.textContent.trim() === 'Sign in to cloud')
+    return document.querySelector('.workspace .empty') !== null && signIn !== undefined
   }
   if (onboardingFixture) {
     const composer = document.querySelector('#first-message')
@@ -464,7 +464,7 @@ function fixtureRendered() {
   if (accessFixture) {
     const popover = document.querySelector('.access-popover')
     const headings = Array.from(popover?.querySelectorAll('.access-label') ?? [], (heading) => heading.textContent)
-    return ['Appearance', 'Thread retention', 'Your access', 'Devices', 'Connected programs', 'Voice shortcut']
+    return ['Themes', 'Type', 'Thread retention', 'Your access', 'Devices', 'Connected programs', 'Voice shortcut']
       .every((heading) => headings.includes(heading))
       && popover.querySelector('.current-device')?.textContent === 'This device'
       && popover.querySelector('.revoked .device-state')?.textContent === 'Revoked'
