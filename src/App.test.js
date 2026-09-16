@@ -2133,7 +2133,7 @@ describe('record panel', () => {
     await fireEvent.click(within(panel).getByRole('button', { name: 'Import' }))
     await fireEvent.click(within(within(panel).getByRole('list', { name: 'Sources' })).getByRole('button', { name: /Stripe/ }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_objects', { companyId: 'company-1', source: 'stripe' }))
-    const connect = await within(panel).findByRole('form', { name: 'Connect stripe' })
+    const connect = await within(panel).findByRole('form', { name: 'Connect Stripe' })
     expect(connect).toHaveTextContent('The key stays in this machine\'s keychain')
     const key = within(connect).getByLabelText('Secret key')
     expect(key).toHaveAttribute('type', 'password')

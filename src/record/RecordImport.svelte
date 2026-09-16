@@ -39,6 +39,7 @@
 
   function chooseSource(name) {
     source = name
+    sourceLabel = sources.find((option) => option.value === name)?.label ?? name
     error = null
     if (name === 'csv') step = 'picking'
     else void listObjects()
