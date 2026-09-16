@@ -54,14 +54,8 @@ impl RuntimeChatEventBroadcast {
 
     fn allows_workspace(&self, workspace: &str) -> bool {
         if let Some(directory) = &self.config_directory {
-            // Local mode owns the local workspace. A run records that workspace
-            // so a companion pairs without an account, and the record outlives
-            // the marker, so outside local mode it never answers for "local".
             if muniment_core::local_mode::is_local_mode(directory) {
                 return workspace == "local";
-            }
-            if workspace == "local" {
-                return false;
             }
         }
         self.approval
