@@ -16,7 +16,7 @@ const appRules = new Map([...appStyles
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
-const accessPanelSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
+const accountSettingsSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccountSettings.svelte'), 'utf8')
 const rowControlStyles = fs.readFileSync(path.join(process.cwd(), 'src/lib/RowControl.svelte'), 'utf8').match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
 const settingsStyles = fs.readFileSync(path.join(process.cwd(), 'src/lib/Settings.svelte'), 'utf8').match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
 const emptyInventory = { providers: [], default_provider: null, default_model: null, hidden: [] }
@@ -350,7 +350,7 @@ describe('entitlement change toast', () => {
     expect(await screen.findByText(copy)).toBeInTheDocument()
 
     await fireEvent.click(profile)
-    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }))
 
     // A sign-out lands in local mode.
     expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
@@ -2266,7 +2266,7 @@ describe('artifact rail', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await fireEvent.click(toggle)
     await fireEvent.click(screen.getByRole('button', { name: /Alice/i }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }))
     await screen.findByRole('button', { name: 'Sign in' })
     await fireEvent.keyDown(document, shortcut)
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
@@ -3864,9 +3864,7 @@ describe('voice dictation', () => {
     const composer = await screen.findByPlaceholderText('Ask anything')
     await fireEvent.keyDown(composer, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
     expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
-    const profile = await screen.findByRole('button', { name: /Alice/i })
-    await fireEvent.click(profile)
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const dialog = await openSettings('Account')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
 
     await fireEvent.click(capture)
@@ -3891,8 +3889,7 @@ describe('voice dictation', () => {
   it('captures the artifact rail chord without toggling the rail', async () => {
     render(App)
     const railToggle = await screen.findByRole('button', { name: 'Open artifact rail' })
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const dialog = await openSettings('Account')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     const mac = navigator.platform.startsWith('Mac')
 
@@ -3910,8 +3907,7 @@ describe('voice dictation', () => {
       globalShortcutHandler = handler
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const dialog = await openSettings('Account')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -3927,8 +3923,7 @@ describe('voice dictation', () => {
   it('keeps the registered and displayed shortcut when persistence fails', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('private storage detail', 'QuotaExceededError') })
     const view = render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const dialog = await openSettings('Account')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -3949,8 +3944,7 @@ describe('voice dictation', () => {
       registeredShortcuts.delete(shortcut)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const dialog = await openSettings('Account')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -3971,8 +3965,8 @@ describe('voice dictation', () => {
       globalShortcutHandler = handler
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const capture = within(screen.getByRole('dialog', { name: 'Profile' })).getByRole('button', { name: /Change voice shortcut/ })
+    await openSettings('Account')
+    const capture = within(screen.getByRole('dialog', { name: 'Settings' })).getByRole('button', { name: /Change voice shortcut/ })
     expect(capture).toBeDisabled()
     await fireEvent.click(capture)
     expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
@@ -3997,8 +3991,7 @@ describe('voice dictation', () => {
         registeredShortcuts.delete(shortcut)
       })
     }
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const dialog = await openSettings('Account')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -5741,7 +5734,7 @@ describe('thread announcements', () => {
     await waitFor(() => expect(screen.getByTestId('run-announcement')).toHaveTextContent('Reply complete.'))
 
     await fireEvent.click(screen.getByRole('button', { name: /Alice/i }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
 
     expect(await screen.findByText('Restored answer')).toBeInTheDocument()
@@ -5778,7 +5771,7 @@ describe('thread announcements', () => {
     expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
 
     await fireEvent.click(screen.getByRole('button', { name: /Alice/i }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }))
     // The run kept streaming while the window was signed out.
     text = 'Half an answer'
     await fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
@@ -6452,7 +6445,8 @@ describe('signed-in access popover', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') {
         accessCalls += 1
-        if (accessCalls <= 2) return snapshot()
+        // The sidebar reads the snapshot once per signed-in session.
+        if (accessCalls <= 1) return snapshot()
         return newSessionAccess
       }
       if (command === 'auth_devices') return []
@@ -6464,7 +6458,7 @@ describe('signed-in access popover', () => {
     render(App)
     const oldProfile = await screen.findByRole('button', { name: /Alice/i })
     await fireEvent.click(oldProfile)
-    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }))
     await screen.findByRole('button', { name: 'Sign in' })
 
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
@@ -6473,14 +6467,14 @@ describe('signed-in access popover', () => {
     expect(screen.queryByText('Alice')).not.toBeInTheDocument()
     expect(screen.queryByText('Acme · owner')).not.toBeInTheDocument()
 
-    expect(accessCalls).toBe(3)
+    expect(accessCalls).toBe(2)
     rejectNewSessionAccess(new Error('offline'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(screen.queryByText('Alice')).not.toBeInTheDocument()
     expect(screen.queryByText('Acme · owner')).not.toBeInTheDocument()
   })
 
-  it('keeps fetch states local, retries, expands duplicate grants independently, and closes accessibly', async () => {
+  it('keeps fetch states local, retries, and expands duplicate grants independently', async () => {
     let rejectOpen
     const pendingOpen = new Promise((_, reject) => { rejectOpen = reject })
     let accessCalls = 0
@@ -6504,9 +6498,8 @@ describe('signed-in access popover', () => {
 
     render(App)
     const profile = await screen.findByRole('button', { name: /Alice/i })
-    await fireEvent.click(profile)
+    const dialog = await openSettings('Account')
 
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
     expect(within(dialog).getByText('Checking your current access…')).toBeInTheDocument()
     expect(profile).toHaveTextContent('Acme · owner')
     expect(screen.getByText(/Ask anything/)).toBeInTheDocument()
@@ -6528,17 +6521,6 @@ describe('signed-in access popover', () => {
     expect(within(dialog).getByText('The grant has no expiration.')).toBeInTheDocument()
     expect(within(dialog).queryByText('group · members')).not.toBeInTheDocument()
 
-    document.body.focus()
-    await fireEvent.keyDown(document, { key: 'Escape' })
-    expect(screen.queryByRole('dialog', { name: 'Profile' })).not.toBeInTheDocument()
-    expect(profile).toHaveFocus()
-    expect(profile).toHaveAttribute('aria-expanded', 'false')
-
-    await fireEvent.click(profile)
-    await screen.findByRole('dialog', { name: 'Profile' })
-    await fireEvent.click(document.body)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Profile' })).not.toBeInTheDocument())
-    expect(profile).toHaveFocus()
   })
 
   it('renders mixed device states in deterministic order without disturbing grants', async () => {
@@ -6554,9 +6536,10 @@ describe('signed-in access popover', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
-    const rows = await within(dialog).findAllByRole('listitem')
+    const dialog = await openSettings('Account')
+    // The settings nav is a list too, so read the device list itself.
+    await within(dialog).findByText('Android')
+    const rows = [...dialog.querySelectorAll('.device-list li')]
     expect(rows.map((row) => row.textContent)).toEqual(expect.arrayContaining([
       expect.stringContaining('This device'), expect.stringContaining('Active'), expect.stringContaining('Revoked'),
     ]))
@@ -6566,7 +6549,7 @@ describe('signed-in access popover', () => {
     expect(rows[2]).toHaveClass('revoked')
     const activeIdentifier = within(rows[1]).getByText('Android')
     const revokedIdentifier = within(rows[2]).getByText('iOS')
-    const revokedRule = accessPanelSource.match(/\.revoked \.device-heading strong\s*\{([^}]*)\}/)?.[1]
+    const revokedRule = accountSettingsSource.match(/\.revoked \.device-heading strong\s*\{([^}]*)\}/)?.[1]
     expect(revokedIdentifier.tagName).toBe('STRONG')
     expect(activeIdentifier.tagName).toBe('STRONG')
     expect(revokedRule).toMatch(/color:\s*var\(--oxide\)/)
@@ -6579,13 +6562,13 @@ describe('signed-in access popover', () => {
 
   it('renders an empty device response', async () => {
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    await openSettings('Account')
     expect(await screen.findByText('No devices found')).toBeInTheDocument()
   })
 
   it('applies and persists an accessible per-device appearance choice', async () => {
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    await openSettings('Preferences')
     const appearance = within(screen.getByRole('group', { name: 'Mode' }))
     const system = appearance.getByRole('button', { name: 'System' })
     const dark = appearance.getByRole('button', { name: 'Dark' })
@@ -6606,18 +6589,14 @@ describe('signed-in access popover', () => {
     expect(system).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('keeps the primary action fixed and orders the scrolling profile sections', async () => {
+  it('orders the account sections and leaves sign out to the sidebar', async () => {
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
-    const content = dialog.querySelector('.access-content')
-    const signOut = within(dialog).getByRole('button', { name: 'Sign out' })
+    const dialog = await openSettings('Account')
+    const content = dialog.querySelector('.account-sections')
 
     expect(content).toBeInTheDocument()
-    expect(content).not.toContainElement(signOut)
-    expect(signOut.closest('.access-footer')).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
     expect([...content.querySelectorAll(':scope > section')].map((section) => section.getAttribute('aria-labelledby'))).toEqual([
-      'appearance-heading',
       'retention-heading',
       'entitlements-heading',
       'devices-heading',
@@ -6627,20 +6606,17 @@ describe('signed-in access popover', () => {
     expect(content.querySelector('.entitlements-section')).toHaveTextContent('Your admins set access.')
   })
 
-  it('identifies the profile and keeps access snapshot metadata in its section', async () => {
+  it('identifies the profile in the sidebar and keeps snapshot metadata in its section', async () => {
     render(App)
     const profile = await screen.findByRole('button', { name: /Alice/i })
     expect(profile).not.toHaveAttribute('title')
-    await fireEvent.click(profile)
+    expect(profile).toHaveTextContent('Alice')
+    expect(profile).toHaveTextContent('Acme · owner')
+    expect(profile).not.toHaveTextContent('Snapshot')
 
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
-    const header = dialog.querySelector(':scope > header')
+    const dialog = await openSettings('Account')
     const accessSection = dialog.querySelector('.entitlements-section')
-    expect(header).toHaveTextContent('Alice')
-    expect(header).toHaveTextContent('Acme · owner')
-    expect(within(dialog).getByRole('button', { name: 'Close profile' })).toBeInTheDocument()
     expect(within(dialog).getAllByRole('heading', { name: 'Your access' })).toHaveLength(1)
-    expect(header).not.toHaveTextContent('Snapshot')
     expect(accessSection).toHaveTextContent('Snapshot v2')
     expect(dialog).not.toHaveTextContent('Your groups')
   })
@@ -6661,8 +6637,7 @@ describe('signed-in access popover', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const dialog = await openSettings('Account')
     expect(await within(dialog).findByText('Devices could not be loaded.')).toBeInTheDocument()
     expect(dialog).not.toHaveTextContent('raw backend secret')
     expect(within(dialog).getByRole('button', { name: 'allow use · gpt' })).toBeInTheDocument()
@@ -6686,8 +6661,7 @@ describe('signed-in access popover', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
-    const dialog = screen.getByRole('dialog', { name: 'Profile' })
+    const dialog = await openSettings('Account')
     expect(within(dialog).getByText('Loading connected programs…')).toBeInTheDocument()
 
     pendingCompanions.resolve([{ identity: 'client-1', claimed_kind: longKind, claimed_version: longVersion, approved_at: null }])
@@ -6701,7 +6675,7 @@ describe('signed-in access popover', () => {
 
   it('renders an empty connected program response', async () => {
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    await openSettings('Account')
     expect(await screen.findByText('No connected programs found')).toBeInTheDocument()
   })
 
@@ -6721,7 +6695,7 @@ describe('signed-in access popover', () => {
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /Alice/i }))
+    await openSettings('Account')
     const section = screen.getByRole('heading', { name: 'Connected programs' }).closest('section')
     expect(await within(section).findByText('Connected programs could not be loaded.')).toBeInTheDocument()
     expect(section).not.toHaveTextContent('raw backend secret')

@@ -4,14 +4,15 @@ import path from 'node:path'
 
 const app = fs.readFileSync(path.join(process.cwd(), 'src/App.svelte'), 'utf8')
 const accessPanel = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccessPanel.svelte'), 'utf8')
-const style = [app, accessPanel].map((source) => source.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? '').join('\n')
+const accountSettings = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccountSettings.svelte'), 'utf8')
+const style = [app, accessPanel, accountSettings].map((source) => source.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? '').join('\n')
 const selectors = [
   '.thread-menu button',
   '.thread-delete-confirm button',
   '.run-error button',
   '.provenance',
   '.companion-revoke',
-  '.close-access',
+  '.profile-menu button',
   '.retention-options input',
 ]
 

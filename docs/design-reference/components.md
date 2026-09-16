@@ -25,9 +25,9 @@ them.
 | Scroll bar | `::-webkit-scrollbar-thumb` in `base.css` | 10px, transparent at rest, `--border` while the region is hovered, `--muted` on thumb hover, `--radius-chip` |
 | Reduced motion | `@media (prefers-reduced-motion: reduce)` in `base.css` | Every animation and transition collapses to 0.001ms |
 | Shell button | `button` in `App.svelte` | `font: inherit` at `--text-13`, `--ink` on `--surface`, 1px `--border`, `--radius-control`, padding 5px 12px. Hover: border `--muted`. Disabled or `aria-disabled` with `.inactive`: `--muted` color |
-| Quiet button | `.quiet` in `App.svelte` and `AccessPanel.svelte` | Transparent background and border over the shell button |
+| Quiet button | `.quiet` in `App.svelte` and `AccountSettings.svelte` | Transparent background and border over the shell button |
 | Primary button | `.primary` in `App.svelte` and `Onboarding.svelte` | `--ink` background and border, `--paper` color. Inactive `.composer-actions .primary[aria-disabled="true"]`: `--faint` background, `--border` border, `--muted` color |
-| Access panel button | `button` in `AccessPanel.svelte` | Same as the shell button. Hover: border `--muted` |
+| Account settings button | `button` in `AccountSettings.svelte` | Same as the shell button. Hover: border `--muted` |
 | Onboarding button | `button` in `Onboarding.svelte` | Same as the shell button with min-height 28px and padding 5px 10px. Disabled: `--muted` color |
 
 ## Frame and title bar
@@ -185,14 +185,23 @@ them.
 | Lockup | `.lockup` | Seal and wordmark on the launch screen | 34px seal in `--ink`, `.name` at `--text-28`, `font-weight: 600` (raw, `--weight-semibold` exists), `letter-spacing: -0.01em` (raw, `--tracking-heading` exists), `--leading-body` | None |
 | Version | `.meta` | Shell version under the lockup | `--font-mono`, `--text-12`, `--muted`, margin-top 18px | None |
 
-## Access panel
+## Profile menu
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
 | Profile block | `.profile-block` | Foot of the sidebar for a signed-in user | 1px `--border` top, padding-top 10px | None |
-| Profile button | `.profile-button` | Opens the popover | Transparent, full width, gap 9px, padding 9px 8px, name at `--text-13`, details in `--muted` `--text-12 --font-mono` | Hover: border `--muted`. `aria-expanded` follows the popover |
-| Access popover | `.access-popover` | Profile dialog above the button | 330px, `--paper`, 1px `--border`, `--radius-control`, `--shadow-overlay`, no outline | Focus-visible: border `--muted` |
-| Popover header | `.access-popover header` | Name, details, Close | 1px `--border` bottom, padding 14px, `h2` at `--text-13`, `p` in `--muted` `--text-12 --font-mono` | Close `.close-access`: quiet, 24px floor, `--text-17` |
+| Profile button | `.profile-button` | Opens the menu | Transparent, full width, gap 9px, padding 9px 8px, name at `--text-13`, details in `--muted` `--text-12 --font-mono` | Hover: `--faint`. `aria-expanded` follows the menu |
+| Profile menu | `.profile-menu` | Menu above the button | Sidebar width, padding 4px, `--surface`, 1px `--border`, `--radius-control`, `--shadow-overlay` | Escape or an outside click closes it and returns focus |
+| Sign out | `.profile-menu button` | The one item | Full width, 24px floor, padding 3px 8px, transparent border, `--ink`, `--text-13`, left aligned | Hover: `--faint` |
+
+## Account settings
+
+The Account section of Settings. Everything about the signed-in account except
+signing out.
+
+| Component | Selector | Purpose | Rest | States |
+| --- | --- | --- | --- | --- |
+| Section list | `.account-sections` | Holds the account sections | margin-top 14px | None |
 | Section label | `.access-label` | Heads each section | `--muted`, `--text-12 --font-mono`, uppercase, `letter-spacing: .04em` | None |
 | Section | `.retention-section, .entitlements-section, .devices-section, .companions-section, .voice-section` | Dividers between sections | margin-top 14px, padding-top 12px, 1px `--border` top | None |
 | Retention help | `.retention-help` | One sentence | `--muted`, `--text-12` | None |
@@ -214,7 +223,6 @@ them.
 | Shortcut actions | `.shortcut-actions button` | Cancel and Apply | Panel buttons, gap 6px | Apply disabled without a pending shortcut |
 | Restore default | `.quiet.restore-shortcut` | Resets the shortcut | Quiet, `--muted`, padding 3px 0 | Disabled at the default |
 | Shortcut error | `.shortcut-error` | Capture failure | `--oxide`, `--text-12` | None |
-| Footer and sign out | `.access-footer .quiet.sign-out` | Sign out | 1px `--border` top, padding 9px 14px, quiet `--muted` button | Hover: border `--muted` |
 
 ## Appearance
 
@@ -310,7 +318,7 @@ label tracking, the 1.45 provenance line height, and every opacity.
 | Test | Rule |
 | --- | --- |
 | `signal-allowlist.test.js` | `--signal` appears only on the listed App selectors, never in markup, every component focus ring is 2px `--ink` at offset 2, and base.css collapses all motion under reduced motion |
-| `target-size.test.js` | `.thread-menu button`, the delete confirm buttons, `.run-error button`, `.provenance`, `.companion-revoke`, `.close-access`, and the retention radios hold a 24 by 24 minimum |
+| `target-size.test.js` | `.thread-menu button`, the delete confirm buttons, `.run-error button`, `.provenance`, `.companion-revoke`, `.profile-menu button`, and the retention radios hold a 24 by 24 minimum |
 | `control-name.test.js` | Every input and textarea in App and Onboarding carries `aria-label`, `aria-labelledby`, or a `label for` |
 | `shape-scale.test.js` | Every radius is one of the three radius tokens and every shadow one of the two depth tokens, except the listed dots, the divider reset, and the segmented control corners |
 | `type-scale.test.js` | Every `font-size` and `font` shorthand resolves through a `--text-*` token, with `font: inherit` the one size-free form |

@@ -462,13 +462,12 @@ function fixtureRendered() {
       && (!scanFixture || document.querySelector('#onboarding-scan-panel li'))
   }
   if (accessFixture) {
-    const popover = document.querySelector('.access-popover')
-    const headings = Array.from(popover?.querySelectorAll('.access-label') ?? [], (heading) => heading.textContent)
-    return ['Themes', 'Type', 'Thread retention', 'Your access', 'Devices', 'Connected programs', 'Voice shortcut']
+    const sections = document.querySelector('.account-sections')
+    const headings = Array.from(sections?.querySelectorAll('.access-label') ?? [], (heading) => heading.textContent)
+    return ['Thread retention', 'Your access', 'Devices', 'Connected programs', 'Voice shortcut']
       .every((heading) => headings.includes(heading))
-      && popover.querySelector('.current-device')?.textContent === 'This device'
-      && popover.querySelector('.revoked .device-state')?.textContent === 'Revoked'
-      && popover.querySelector('.sign-out')?.textContent === 'Sign out'
+      && sections.querySelector('.current-device')?.textContent === 'This device'
+      && sections.querySelector('.revoked .device-state')?.textContent === 'Revoked'
   }
   const workspace = document.querySelector('.workspace')
   if (!workspace) return false
@@ -489,9 +488,17 @@ function advanceScanFixture() {
   document.querySelector('[data-testid="onboarding-scan"][aria-expanded="false"]')?.click()
 }
 
+// The account sections live in Settings, so the fixture opens that section.
 function advanceAccessFixture() {
   if (!accessFixture || fixtureRendered()) return
-  document.querySelector('.profile-button[aria-expanded="false"]')?.click()
+  const panel = document.querySelector('.settings-panel')
+  if (!panel) {
+    document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    return
+  }
+  const account = Array.from(panel.querySelectorAll('.settings-nav button'))
+    .find((button) => button.textContent.trim() === 'Account')
+  if (account && account.getAttribute('aria-current') !== 'true') account.click()
 }
 
 async function markProbeReady() {

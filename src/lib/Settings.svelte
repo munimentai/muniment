@@ -5,6 +5,7 @@
   import LucideIcon from './LucideIcon.svelte'
   import Appearance from './Appearance.svelte'
   import ModelsSection from './ModelsSection.svelte'
+  import AccountSettings from './AccountSettings.svelte'
 
   let {
     tauri,
@@ -19,6 +20,10 @@
     accountStatus = '',
     oninventory,
     inventory = null,
+    voiceShortcut = '',
+    voiceShortcutChanging = false,
+    onVoiceShortcutChange = async () => true,
+    defaultVoiceShortcut = '',
   } = $props()
 
   const sections = [['models', 'Models'], ['appearance', 'Preferences'], ['home', 'Home'], ['account', 'Account']]
@@ -91,10 +96,11 @@
             {#if local}
               <p class="support">Local mode runs on this device with your own providers. A free account adds the mobile relay.</p>
               <button type="button" disabled={signInDisabled} onclick={onsignin}>Sign in for cloud features</button>
-            {:else}
-              <p class="support">Signed in.</p>
             {/if}
             {#if accountStatus}<p class="support" role="status">{accountStatus}</p>{/if}
+            {#if !local}
+              <AccountSettings {tauri} {voiceShortcut} {voiceShortcutChanging} {onVoiceShortcutChange} {defaultVoiceShortcut} />
+            {/if}
           </section>
         {/if}
       </div>
