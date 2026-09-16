@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // The env contract for macOS Developer ID signing + notarization. These arrive
@@ -112,6 +113,10 @@ export const signingKeyPartitionListArguments = (keychain, password) => [
 export const intermediateCertificateImportArguments = (certificate, keychain) => [
   "import", certificate, "-k", keychain,
 ];
+
+// `security find-certificate -Z` and `delete-certificate -Z` name a certificate by the
+// upper-case SHA-1 of its DER bytes.
+export const certificateSha1 = (der) => createHash("sha1").update(der).digest("hex").toUpperCase();
 
 export const intermediateCertificateImportSucceeded = (result) =>
   !result.error && (result.status === 0 || (result.status === 1 &&

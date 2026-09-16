@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   SIGNING_VARIABLES,
   NOTARIZATION_DEADLINE_SECONDS,
+  certificateSha1,
   codesignArguments,
   intermediateCertificateImportArguments,
   intermediateCertificateImportSucceeded,
@@ -229,6 +230,10 @@ describe("Signing, notarization, and stapling commands", () => {
     expect(fingerprint).toBe(
       "F1:6C:D3:C5:4C:7F:83:CE:A4:BF:1A:3E:6A:08:19:C8:AA:A8:E4:A1:52:8F:D1:44:71:5F:35:06:43:D2:DF:3A",
     );
+  });
+
+  it("names a certificate by the upper-case SHA-1 of its DER bytes", () => {
+    expect(certificateSha1(Buffer.from("abc"))).toBe("A9993E364706816ABA3E25717850C26C9CD0D89D");
   });
 
   it("builds the Developer ID G2 intermediate import arguments", () => {

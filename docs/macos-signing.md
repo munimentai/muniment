@@ -36,8 +36,9 @@ Set the `MACOS_SIGNING_ENABLED` repository variable to `true` after all six secr
 `build-macos-app.mjs` (macOS build VM only):
 1. The build creates the universal `.app` with Tauri's `--no-sign` flag.
 2. The build imports the `.p12` into a throwaway keychain.
-3. The build imports the vendored Apple Developer ID G2 intermediate certificate.
-   The build skips the import when the keychain already holds the intermediate.
+3. The build places the vendored Apple Developer ID G2 intermediate certificate in the login keychain.
+   trustd builds the signer's chain from the login keychain alone, so a keychain the run adds to the search list cannot supply it.
+   The build skips the placement when the login keychain already holds the intermediate, and it removes a certificate it placed on exit.
 4. The build prepends the throwaway keychain to the user search list and includes the System Roots keychain.
 5. The build checks for a valid Developer ID Application identity before any `codesign` call.
 6. The build finds the Developer ID Installer identity by SHA-1.
@@ -48,10 +49,11 @@ Set the `MACOS_SIGNING_ENABLED` repository variable to `true` after all six secr
 10. The build packages `muniment.app.zip` from the signed and stapled bundle.
 11. The build creates the signed `.pkg`, notarizes it, and staples its ticket.
 
-The throwaway keychain holds both Developer ID identities, their private keys, and the Developer ID G2 intermediate.
+The throwaway keychain holds both Developer ID identities and their private keys.
+The login keychain holds the public Developer ID G2 intermediate for the run.
 The search list preserves existing keychains and includes `/System/Library/Keychains/SystemRootCertificates.keychain` exactly once.
 That keychain supplies the trusted Apple root for the Developer ID chain without changing root trust settings.
-The build does not import a root certificate or change the login keychain contents.
+The build does not import a root certificate, and it never places an identity or a private key in the login keychain.
 The macOS VM must supply the Apple Root CA in System Roots.
 
 Tauri skips its own signing so it cannot sign the bundle before the script checks trust.
