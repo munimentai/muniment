@@ -50,7 +50,7 @@ ships with the app and migrates every company on open.
 
 ### The write path
 
-propose takes a create, update, link or merge. It validates the data against
+propose takes a create, update, link, merge or delete. It validates the data against
 the kind's core schema and the company's extension, resolves every identity to
 an entity, and returns a diff, warnings and a proposal id. It writes nothing.
 Proposals live in runtime memory and expire after one hour. commit takes the

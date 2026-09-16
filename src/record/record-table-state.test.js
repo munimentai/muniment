@@ -5,7 +5,11 @@ import {
   cellValue,
   coerceInput,
   createOperation,
+  deleteOperation,
   diffLines,
+  linkOperation,
+  mergeOperation,
+  relationsFrom,
   editOperation,
   formFields,
   groupEdges,
@@ -86,6 +90,16 @@ describe('record table state', () => {
   it('spells a diff one line per change and groups edges by relation', () => {
     expect(diffLines({ op: 'update', before: { data: { industry: 'Shipping', city: 'Porto' } }, after: { data: { industry: 'Logistics', city: 'Porto' } } })).toEqual(['industry: Shipping to Logistics'])
     expect(diffLines({ op: 'update', before: { data: {} }, after: { data: { city: 'Porto' } } })).toEqual(['city: empty to Porto'])
+    expect(diffLines({ op: 'delete', before: { kind: 'org', title: 'Northwind' } })).toEqual(['org Northwind is deleted'])
+    expect(diffLines({ op: 'merge', loser: { title: 'Northwind Inc' }, survivor: { title: 'Northwind' }, identities_moved: 2 })).toEqual(['Northwind Inc into Northwind, 2 identities move'])
+    expect(deleteOperation('org-1')).toEqual({ op: 'delete', entity: 'entity:org-1' })
+    expect(linkOperation('person-1', 'works_at', 'org-1')).toEqual({ op: 'link', src: 'entity:person-1', relation: 'works_at', dst: 'entity:org-1' })
+    expect(mergeOperation('org-2', 'org-1')).toEqual({ op: 'merge', loser: 'entity:org-2', survivor: 'entity:org-1' })
+    const relations = [{ name: 'works_at', from: ['person'], to: ['org'] }, { name: 'about', from: ['any'], to: ['any'] }, { name: 'billed_to', from: ['invoice'], to: ['org'] }]
+    const kinds = [{ name: 'person' }, { name: 'org' }]
+    expect(relationsFrom(relations, 'person', kinds)).toEqual([{ name: 'works_at', targets: ['org'] }, { name: 'about', targets: ['person', 'org'] }])
+    expect(relationsFrom(relations, 'invoice', kinds)).toEqual([{ name: 'about', targets: ['person', 'org'] }, { name: 'billed_to', targets: ['org'] }])
+    expect(relationsFrom(null, 'org', kinds)).toEqual([])
     expect(diffLines({ op: 'create', after: { data: { name: 'N', amount: 5 } } })).toEqual(['name: N', 'amount: 5'])
     expect(diffLines(null)).toEqual([])
     const groups = groupEdges([
@@ -142,7 +156,7 @@ describe('board, saved views and Ask', () => {
 
   it('spells the open view as SQL over the generated view', () => {
     expect(askSql(kind, { sort: { sort: 'amount', descending: true }, state: 'won', search: "o'neil renewal" })).toBe(
-      'select "title", "state", "updated_at", "name", "amount"\nfrom "v_deal"\nwhere state = \'won\' and id in (select entity_id from entity_search where entity_search match \'"o\'\'neil" "renewal"\')\norder by "amount" desc\nlimit 200',
+      'select "title", "state", "updated_at", "name", "amount"\nfrom "v_deal"\nwhere state = \'won\' and id in (select entity_id from entity_search where entity_search match \'"o\'\'neil"* "renewal"*\')\norder by "amount" desc\nlimit 200',
     )
     expect(askSql(kind)).toBe('select "title", "state", "updated_at", "name", "amount"\nfrom "v_deal"\norder by "updated_at" desc\nlimit 200')
     expect(askSql(null)).toBe('')

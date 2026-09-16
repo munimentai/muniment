@@ -180,7 +180,13 @@ quiet controls with `aria-pressed`, the state filter and the saved-view
 picker are 24px native selects, and Import, Save view and Ask are quiet
 controls. A saved view is a `view` record and Save view proposes it like any
 change. Ask sends the open view's SQL to the composer as a fenced block. The
-empty state of a kind is one line. Import opens the file dialog, then fills
+empty state of a kind is one line. Under a table that holds more rows than it
+shows, Show more is one quiet mono control that appends the next page. An
+open record carries Link, Merge and Delete as quiet controls at the header's
+right, each opening one form in the record's place: a relation and target
+kind as 24px selects, a search field with a list of matches by title, the
+diff, and Commit and Discard. On the kind list, Rename beside the company
+picker turns the picker into one text field with Save. Import opens the file dialog, then fills
 the kind body with one mono table of the file's columns: the column name,
 what its samples read as with three examples, and a 24px select of the
 property it fills, with `skip` first. One select under it names the column

@@ -7,16 +7,18 @@
   import RecordBoard from './RecordBoard.svelte'
   import RecordForm from './RecordForm.svelte'
   import RecordImport from './RecordImport.svelte'
+  import RecordRelate from './RecordRelate.svelte'
   import RecordTable from './RecordTable.svelte'
   import RecordView from './RecordView.svelte'
   import { currentCompany, kindLabel, kindSummary, orderKinds, recordErrorLine, validCompanyName } from './record-panel-state.js'
   import { askSql, diffLines, viewData, viewSettings, viewsFor } from './record-table-state.js'
 
-  let { tauri, maximized = false, ontogglemaximized, onask } = $props()
+  let { tauri, maximized = false, refresh = 0, ontogglemaximized, onask } = $props()
 
   let companies = $state([])
   let company = $derived(currentCompany(companies))
   let kinds = $state([])
+  let relations = $state([])
   let selectedKind = $state(null)
   let kind = $derived(kinds.find((candidate) => candidate.name === selectedKind) ?? null)
   let page = $state(null)
@@ -34,6 +36,12 @@
   let creating = $state(false)
   // null, or { mapping } for a run of a committed mapping record.
   let importing = $state(null)
+  // null, or 'link', 'merge' or 'delete' over the open record.
+  let relating = $state(null)
+  let renaming = $state(false)
+  let renameDraft = $state('')
+  let loadingMore = $state(false)
+  const hasMore = $derived(!!page && page.rows.length < page.total)
   let error = $state(null)
   let loading = $state(false)
   let newCompanyName = $state('')
@@ -41,6 +49,18 @@
 
   $effect(() => {
     void loadCompanies()
+  })
+
+  // A run that ended or a window that regained focus may have committed
+  // records this panel shows, so it rereads them when nothing is mid-edit.
+  let seenRefresh = refresh
+  $effect(() => {
+    if (refresh === seenRefresh) return
+    seenRefresh = refresh
+    if (importing || creating || relating || !company) return
+    if (detail) void openEntity(detail.entity.id)
+    else if (selectedKind) void loadPage()
+    else void loadCompanies(company.id)
   })
 
   // A stale answer never lands: each load carries its version.
@@ -67,6 +87,7 @@
         return
       }
       kinds = orderKinds(answer?.kinds)
+      relations = Array.isArray(answer?.relations) ? answer.relations : []
       if (!kinds.some((candidate) => candidate.name === selectedKind)) selectedKind = null
     } catch (failure) {
       if (version !== loadVersion) return
@@ -108,11 +129,27 @@
     }
   }
 
+  async function renameCompany(event) {
+    event?.preventDefault?.()
+    if (!tauri || !company || !validCompanyName(renameDraft)) return
+    const name = renameDraft.trim()
+    error = null
+    try {
+      await tauri.invoke('record_company_rename', { companyId: company.id, name })
+    } catch (failure) {
+      error = recordErrorLine(failure)
+      return
+    }
+    renaming = false
+    await loadCompanies(company.id)
+  }
+
   async function openKind(name) {
     selectedKind = name
     detail = null
     creating = false
     importing = null
+    relating = null
     sort = { sort: 'updated_at', descending: true }
     search = ''
     stateFilter = null
@@ -183,10 +220,13 @@
     await loadPage()
   }
 
-  async function loadPage() {
+  // The first page holds 200 rows. Show more asks for the next 200 from the
+  // rows already shown and appends them, so the count and the table agree.
+  async function loadPage(append = false) {
     if (!tauri || !company || !selectedKind) return
     const version = ++loadVersion
-    loading = true
+    if (append) loadingMore = true
+    else loading = true
     error = null
     try {
       const answer = await tauri.invoke('record_query', {
@@ -197,19 +237,24 @@
         state: stateFilter || null,
         search: search.trim() || null,
         limit: 200,
+        offset: append ? (page?.rows.length ?? 0) : 0,
       })
       if (version !== loadVersion) return
       if (answer?.error) {
         error = recordErrorLine(answer.error.message)
-        page = null
+        if (!append) page = null
         return
       }
-      page = answer?.page ?? null
+      const next = answer?.page ?? null
+      page = append && page && next ? { ...next, offset: 0, rows: [...page.rows, ...next.rows] } : next
     } catch (failure) {
       if (version !== loadVersion) return
       error = recordErrorLine(failure)
     } finally {
-      if (version === loadVersion) loading = false
+      if (version === loadVersion) {
+        loading = false
+        loadingMore = false
+      }
     }
   }
 
@@ -283,9 +328,21 @@
     importing = { mapping: detail.entity.id }
   }
 
+  // A link keeps the record open, a merge opens the survivor, and a delete
+  // returns to the table without the row.
+  async function afterRelate(opens) {
+    const mode = relating
+    relating = null
+    if (mode === 'delete' || !opens) {
+      detail = null
+      await loadPage()
+    } else await openEntity(opens)
+  }
+
   function back() {
     error = null
     if (importing) importing = null
+    else if (relating) relating = null
     else if (creating) creating = false
     else if (detail) {
       detail = null
@@ -302,6 +359,7 @@
     if (importing && detail) parts.push(detail.entity?.title ?? '', 'run')
     else if (importing) parts.push('import')
     else if (creating) parts.push('new')
+    else if (detail && relating) parts.push(detail.entity?.title ?? '', relating)
     else if (detail) parts.push(detail.entity?.title ?? '')
     return parts
   })
@@ -313,7 +371,12 @@
       <button type="button" class="record-back" aria-label="Back" onclick={back}><LucideIcon name="chevron-left" size={14} /></button>
     {/if}
     <h2 id="record-panel-title">Record</h2>
-    {#if companies.length > 0}
+    {#if companies.length > 0 && renaming}
+      <form class="record-rename" aria-label="Rename company" onsubmit={renameCompany}>
+        <input class="record-company-name" type="text" aria-label="Company name" maxlength="120" bind:value={renameDraft} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); renaming = false } }}>
+        <button type="submit" class="record-tool" disabled={!validCompanyName(renameDraft)}>Save</button>
+      </form>
+    {:else if companies.length > 0}
       <label>
         <span class="visually-hidden">Company</span>
         <select class="record-company-picker" aria-label="Company" value={company?.id ?? ''} onchange={(event) => selectCompany(event.currentTarget.value)}>
@@ -322,6 +385,9 @@
           {/each}
         </select>
       </label>
+      {#if !selectedKind}
+        <button type="button" class="record-tool" onclick={() => { renameDraft = company?.name ?? ''; renaming = true }}>Rename</button>
+      {/if}
     {/if}
     {#each crumb as part, index (index)}
       <span class="record-crumb" aria-hidden="true">/</span>
@@ -331,8 +397,13 @@
     {#if kind && !creating && !detail && !importing}
       <button type="button" class="record-new" onclick={() => { creating = true }}><LucideIcon name="plus" size={14} /><span>New {kindLabel(kind.name)}</span></button>
     {/if}
-    {#if kind && detail && detail.kind?.name === 'mapping' && !importing}
+    {#if kind && detail && detail.kind?.name === 'mapping' && !importing && !relating}
       <button type="button" class="record-new" onclick={runMapping}><LucideIcon name="play" size={14} /><span>Run</span></button>
+    {/if}
+    {#if kind && detail && !importing && !relating}
+      <button type="button" class="record-tool" onclick={() => { relating = 'link' }}>Link</button>
+      <button type="button" class="record-tool" onclick={() => { relating = 'merge' }}>Merge</button>
+      <button type="button" class="record-tool" onclick={() => { relating = 'delete' }}>Delete</button>
     {/if}
     <button type="button" class="record-maximize" aria-pressed={maximized} aria-label={maximized ? 'Restore the thread beside the record' : 'Maximize the record over the thread'} onclick={ontogglemaximized}>
       <LucideIcon name={maximized ? 'minimize-2' : 'maximize-2'} size={14} />
@@ -353,6 +424,8 @@
     <RecordImport {tauri} companyId={company?.id} kind={importing.mapping && detail?.entity?.data?.kind ? (kinds.find((candidate) => candidate.name === detail.entity.data.kind) ?? kind) : kind} mapping={importing.mapping} {propose} {commit} oncancel={() => { importing = null }} ondone={afterImport} />
   {:else if kind && creating}
     <RecordForm {kind} {propose} {commit} oncancel={() => { creating = false }} oncreated={(id) => { creating = false; void loadPage().then(() => openEntity(id)) }} />
+  {:else if kind && detail && relating}
+    <RecordRelate mode={relating} {detail} {kinds} {relations} {tauri} companyId={company?.id} {propose} {commit} oncancel={() => { relating = null }} oncommitted={afterRelate} />
   {:else if kind && detail}
     <RecordView {detail} onopen={openEntity} />
   {:else if kind}
@@ -405,6 +478,9 @@
       {:else}
         <RecordTable {kind} {page} {sort} {search} {loading} onsort={changeSort} onsearch={changeSearch} onopen={openEntity} {propose} {commit} oncommitted={afterCommit} />
       {/if}
+      {#if hasMore && layout !== 'board'}
+        <button type="button" class="record-more" disabled={loadingMore} onclick={() => loadPage(true)}>{loadingMore ? 'Reading more' : `Show ${Math.min(200, page.total - page.rows.length)} more`}</button>
+      {/if}
     </div>
   {:else}
     <nav class="record-kinds" aria-label="Kinds">
@@ -439,7 +515,13 @@
   .record-company-name:focus { outline: none; border-color: var(--muted); }
   .record-create-button { justify-self: start; height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--ink); color: var(--paper); font: var(--text-13) var(--font-body); cursor: pointer; }
   .record-create-button:disabled { background: var(--faint); color: var(--muted); cursor: default; }
-  .record-kind-body { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0; }
+  .record-kind-body { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; }
+  .record-more { justify-self: start; height: 26px; margin-top: 8px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); cursor: pointer; }
+  .record-more:hover { background: var(--faint); }
+  .record-more:disabled { color: var(--muted); cursor: default; }
+  .record-rename { display: flex; align-items: center; gap: 6px; }
+  .record-rename .record-company-name { height: 24px; width: 180px; }
+  .record-tool:disabled { color: var(--muted); cursor: default; }
   .record-toolbar { display: flex; align-items: center; gap: 8px; padding-top: 10px; font: var(--text-12) var(--font-mono); }
   .record-layouts { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); overflow: hidden; }
   .record-layout { height: 24px; padding: 0 8px; border: 0; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); cursor: pointer; }
