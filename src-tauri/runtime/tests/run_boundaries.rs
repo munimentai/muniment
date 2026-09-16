@@ -327,6 +327,9 @@ fn local_mode_run(configured: bool) {
             .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
     )
     .unwrap();
+    // The run recorded the local workspace, and that approval answers on its own,
+    // so the marker governs delivery only once the approval is cleared.
+    state.signed_workspace_approval().clear();
     assert!(service.subscribe_chat_events().unwrap().try_recv().is_err());
     std::fs::write(
         profile
