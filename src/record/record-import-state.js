@@ -85,6 +85,7 @@ export function sourceOptions() {
     { value: 'csv', label: 'CSV file', note: 'a file on this machine' },
     { value: 'stripe', label: 'Stripe', note: 'customers, subscriptions, invoices', secret: 'secret key' },
     { value: 'hubspot', label: 'HubSpot', note: 'contacts, companies, deals, tickets', secret: 'private app access token' },
+    { value: 'pipedrive', label: 'Pipedrive', note: 'people, organizations, deals', secret: 'API token' },
   ]
 }
 
