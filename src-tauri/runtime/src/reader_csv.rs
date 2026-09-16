@@ -7,7 +7,7 @@ use crate::reader::{
     guess_type, Cursor, Delta, Description, FieldDescription, ObjectInfo, Page, Reader,
     ReaderError, Row,
 };
-use sha2::{Digest, Sha256};
+use muniment_core::sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};

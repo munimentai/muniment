@@ -384,14 +384,14 @@ pub fn parse_date(cell: &str) -> Option<String> {
         "%d %b %Y",
         "%B %d, %Y",
     ] {
-        if let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, pattern) {
+        if let Ok(date) = muniment_core::chrono::NaiveDate::parse_from_str(trimmed, pattern) {
             return Some(date.format("%Y-%m-%d").to_string());
         }
     }
     let head: String = trimmed.chars().take(10).collect();
     if trimmed.len() > 10
         && matches!(trimmed.as_bytes()[10], b'T' | b' ')
-        && chrono::NaiveDate::parse_from_str(&head, "%Y-%m-%d").is_ok()
+        && muniment_core::chrono::NaiveDate::parse_from_str(&head, "%Y-%m-%d").is_ok()
     {
         return Some(head);
     }
@@ -402,11 +402,11 @@ pub fn parse_date(cell: &str) -> Option<String> {
 /// read as UTC, a bare date at midnight, or Unix seconds or milliseconds.
 pub fn parse_date_time(cell: &str) -> Option<String> {
     let trimmed = cell.trim();
-    if let Ok(instant) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+    if let Ok(instant) = muniment_core::chrono::DateTime::parse_from_rfc3339(trimmed) {
         return Some(
             instant
-                .with_timezone(&chrono::Utc)
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                .with_timezone(&muniment_core::chrono::Utc)
+                .to_rfc3339_opts(muniment_core::chrono::SecondsFormat::Secs, true),
         );
     }
     for pattern in [
@@ -417,23 +417,23 @@ pub fn parse_date_time(cell: &str) -> Option<String> {
         "%m/%d/%Y %H:%M:%S",
         "%m/%d/%Y %H:%M",
     ] {
-        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(trimmed, pattern) {
+        if let Ok(naive) = muniment_core::chrono::NaiveDateTime::parse_from_str(trimmed, pattern) {
             return Some(
                 naive
                     .and_utc()
-                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    .to_rfc3339_opts(muniment_core::chrono::SecondsFormat::Secs, true),
             );
         }
     }
     if let Some(date) = trimmed
-        .parse::<chrono::NaiveDate>()
+        .parse::<muniment_core::chrono::NaiveDate>()
         .ok()
-        .or_else(|| chrono::NaiveDate::parse_from_str(trimmed, "%m/%d/%Y").ok())
+        .or_else(|| muniment_core::chrono::NaiveDate::parse_from_str(trimmed, "%m/%d/%Y").ok())
     {
         return Some(
             date.and_hms_opt(0, 0, 0)?
                 .and_utc()
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                .to_rfc3339_opts(muniment_core::chrono::SecondsFormat::Secs, true),
         );
     }
     if trimmed.chars().all(|c| c.is_ascii_digit()) {
@@ -442,8 +442,10 @@ pub fn parse_date_time(cell: &str) -> Option<String> {
             13 => trimmed.parse::<i64>().ok()? / 1000,
             _ => return None,
         };
-        return chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
-            .map(|instant| instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        return muniment_core::chrono::DateTime::<muniment_core::chrono::Utc>::from_timestamp(
+            seconds, 0,
+        )
+        .map(|instant| instant.to_rfc3339_opts(muniment_core::chrono::SecondsFormat::Secs, true));
     }
     None
 }
