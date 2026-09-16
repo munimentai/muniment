@@ -6467,7 +6467,8 @@ describe('signed-in access popover', () => {
     expect(screen.queryByText('Alice')).not.toBeInTheDocument()
     expect(screen.queryByText('Acme · owner')).not.toBeInTheDocument()
 
-    expect(accessCalls).toBe(2)
+    // The sidebar retries a failed snapshot, so the count is a floor.
+    expect(accessCalls).toBeGreaterThanOrEqual(2)
     rejectNewSessionAccess(new Error('offline'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(screen.queryByText('Alice')).not.toBeInTheDocument()

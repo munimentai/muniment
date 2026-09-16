@@ -85,6 +85,22 @@ describe('signed-in profile menu', () => {
     expect(rules.get('.profile-menu button')).toMatch(/text-align:\s*left/)
   })
 
+  it('retries a failed snapshot and reads it again when the menu opens', async () => {
+    let calls = 0
+    const invoke = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) throw new Error('not connected yet')
+      return snapshot
+    })
+    renderPanel(invoke)
+
+    expect(await screen.findByRole('button', { name: /user-1/ })).toHaveTextContent('Access unavailable')
+    await waitFor(() => expect(screen.getByRole('button', { name: /Alice/ })).toBeInTheDocument(), { timeout: 3000 })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Alice/ }))
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(3))
+  })
+
   it('keeps profile metadata on one readable line', () => {
     expect(rules.get('.profile-button small')).toMatch(/overflow:\s*hidden/)
     expect(rules.get('.profile-button small')).toMatch(/text-overflow:\s*ellipsis/)

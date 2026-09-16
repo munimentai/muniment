@@ -8,19 +8,29 @@
   let menuOpen = $state(false)
   let profileButton = $state()
   let profileMenu = $state()
+  let mounted = true
   let profileName = $derived(profileSnapshot?.user_display_name ?? subject ?? 'Signed in')
   let profileDetails = $derived(profileSnapshot ? `${profileSnapshot.organization_display_name ?? profileSnapshot.org_id} · ${profileSnapshot.role}` : 'Access unavailable')
 
-  async function loadProfile() {
+  // The snapshot can fail while the desktop client is still connecting, so the
+  // first reads retry and every open reads again.
+  const RETRY_DELAYS = [400, 1000, 2500, 5000]
+
+  async function loadProfile(retries = 0) {
     try {
       profileSnapshot = await tauri.invoke('auth_entitlement_snapshot')
     } catch (_) {
       profileSnapshot = null
+      const delay = RETRY_DELAYS[retries]
+      if (delay === undefined || !mounted) return
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      if (mounted) await loadProfile(retries + 1)
     }
   }
 
   function openMenu() {
     menuOpen = true
+    void loadProfile()
     requestAnimationFrame(() => profileMenu?.querySelector('button')?.focus())
   }
 
@@ -31,7 +41,7 @@
   }
 
   onMount(() => {
-    loadProfile()
+    void loadProfile()
     const outside = (event) => {
       const path = event.composedPath()
       if (menuOpen && !path.includes(profileMenu) && !path.includes(profileButton)) closeMenu()
@@ -44,6 +54,7 @@
     document.addEventListener('click', outside)
     document.addEventListener('keydown', escape)
     return () => {
+      mounted = false
       document.removeEventListener('click', outside)
       document.removeEventListener('keydown', escape)
     }
