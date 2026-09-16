@@ -296,7 +296,7 @@ release_binary=$(command -v muniment-desktop || command -v muniment) || { runner
 run_setup node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
 # Build both bundle resources declared in tauri.linux.conf.json before the Tauri bundle.
 cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked >>"$installer_log" 2>&1 || { runner_failure 'muniment-acp build failed'; exit; }
-cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --release --locked >>"$installer_log" 2>&1 || { runner_failure 'muniment-runtime build failed'; exit; }
+cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --release --locked >>"$installer_log" 2>&1 || { runner_failure 'muniment-runtime build failed'; exit; }
 run_setup npm run tauri build -- --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
 e2e_app_binary="$PWD/src-tauri/target/release/muniment-desktop"
 [[ -x $e2e_app_binary ]] || { runner_failure 'E2E application binary is unavailable'; exit; }
