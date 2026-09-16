@@ -314,10 +314,11 @@ is weaker than the one that built it. Four items:
    HTTP with SSE fallback, and Unix sockets. This is how the local harness
    reaches the user's MCP servers and, on a paid account, the cloud graph's six
    tools.
-3. **The system prompt.** The desktop passes Pi its own prompt: the assistant's
-   purpose, its tools, and the bash timeout rule, with no harness or product
-   name. Pi reads the `bash` tool's `timeout` in seconds with no default, so the
-   prompt says pass one on every call, 60 quick, 600 for a build, longer to `bg_run`.
+3. **The system prompt.** The desktop passes Pi its own prompt: purpose, tools, the bash
+   timeout rule, and the launch facts: the model, earlier thread models, host and shell, and
+   the working directory, which is Home and the agent's `cwd`. Each message opens with its
+   send time. No harness or product name. Pi reads `bash` `timeout` in seconds with no
+   default, so the prompt says pass one on every call, 60 quick, 600 for a build, longer to `bg_run`.
 4. **The version pin** moves to the version the factory runs.
 
 The desktop enables every built-in tool the pinned registry defines and sets

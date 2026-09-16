@@ -206,10 +206,14 @@ fn local_mode_run(configured: bool) {
     for folder in ["memory", "agents", "projects", "sessions"] {
         assert!(expected_home.join(folder).join("README.md").is_file());
     }
-    assert_eq!(
-        std::fs::read_to_string(prompt_capture).unwrap().trim(),
-        "local prompt"
+    // The message opens with the time it was sent, then the user's text.
+    let captured = std::fs::read_to_string(prompt_capture).unwrap();
+    let (stamp, text) = captured.trim().split_once('\n').unwrap();
+    assert!(
+        stamp.starts_with("[sent 20") && stamp.ends_with(']'),
+        "{stamp}"
     );
+    assert_eq!(text, "local prompt");
 
     let delivered = std::iter::from_fn(|| chat_events.try_recv().ok()).collect::<Vec<_>>();
     assert!(delivered

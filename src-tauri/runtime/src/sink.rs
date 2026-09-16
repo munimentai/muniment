@@ -193,6 +193,7 @@ pub struct RuntimeChatEventSink {
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     thread_id: String,
     workspace: String,
+    earlier_models: Vec<String>,
 }
 
 impl RuntimeChatEventSink {
@@ -241,11 +242,18 @@ impl RuntimeChatEventSink {
             memory_runtime,
             thread_id,
             workspace,
+            earlier_models: Vec::new(),
         }
     }
 
     pub fn with_pi_artifact(mut self, pi_artifact: PiArtifactDescriptor) -> Self {
         self.pi_artifact = pi_artifact;
+        self
+    }
+
+    /// The models that answered earlier runs of this thread, for the prompt's facts.
+    pub fn with_earlier_models(mut self, earlier_models: Vec<String>) -> Self {
+        self.earlier_models = earlier_models;
         self
     }
 }
@@ -287,5 +295,9 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
 
     fn memory_agent_extension_path(&self) -> Option<PathBuf> {
         Some(self.memory_runtime.agent_extension_path())
+    }
+
+    fn earlier_models(&self) -> Vec<String> {
+        self.earlier_models.clone()
     }
 }

@@ -97,7 +97,9 @@ fn queued_message_reaches_a_live_runtime_run(
 
     let captured = fs::read_to_string(steer_capture).unwrap();
     assert!(captured.contains(&format!(r#""type":"{command}""#)));
-    assert!(captured.contains(&format!(r#""message":"{message}""#)));
+    // The queued text arrives behind the line that says when it was sent.
+    assert!(captured.contains(r#""message":"[sent 20"#), "{captured}");
+    assert!(captured.contains(&format!(r#"\n{message}""#)), "{captured}");
     for id in [run_id, "018f0000-0000-7000-8000-000000000999"] {
         assert!(boundaries
             .queue_attach_message("workspace-a", id, ChatDelivery::Steer, "too late")
