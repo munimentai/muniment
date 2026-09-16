@@ -33,9 +33,9 @@ use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 #[cfg(unix)]
-use std::sync::{Arc, Condvar};
+use std::sync::Arc;
+use std::sync::{Condvar, Mutex};
 #[cfg(any(unix, target_os = "windows"))]
 use std::time::Duration;
 #[cfg(unix)]
