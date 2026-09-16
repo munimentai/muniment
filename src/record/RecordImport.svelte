@@ -5,8 +5,7 @@
   // and the run pages the rows through propose and commit until it is done.
   // Every row the mapping could not place lists with its reason.
   import { open } from '@tauri-apps/plugin-dialog'
-  import { diffLines } from './record-table-state.js'
-  import { accumulateRun, identityOptions, importErrorLine, mappedCount, mappingData, runSummaryLines, suggestFields, suggestIdentity, targetProperties } from './record-import-state.js'
+  import { accumulateRun, identityOptions, importErrorLine, mappedCount, mappingData, mappingLines, runSummaryLines, suggestFields, suggestIdentity, targetProperties } from './record-import-state.js'
 
   let { tauri, companyId, kind, mapping: existingMapping = null, propose, commit, oncancel, ondone } = $props()
 
@@ -68,7 +67,7 @@
       error = importErrorLine(answer)
       return
     }
-    pending = { proposal: answer.proposal?.id, lines: diffLines(answer.proposal?.diff), warnings: answer.proposal?.warnings ?? [] }
+    pending = { proposal: answer.proposal?.id, lines: mappingLines(description, kind, fields, identity), warnings: answer.proposal?.warnings ?? [] }
     step = 'proposed'
   }
 
@@ -229,10 +228,11 @@
   .record-select { height: 24px; max-width: 200px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
   .record-import-identity { display: flex; align-items: center; gap: 8px; font: var(--text-12) var(--font-mono); color: var(--ink); }
   .record-import-diff { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
-  .record-diff-line { margin: 0; font: var(--text-12) var(--font-mono); }
-  .record-diff-warning { margin: 0; color: var(--ochre); font: var(--text-12) var(--font-mono); }
-  .record-import-error { margin: 0; color: var(--oxide); font: var(--text-12) var(--font-mono); }
-  .record-import-line { margin: 0; font: var(--text-12) var(--font-mono); }
+  .record-diff-line { margin: 0; font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
+  .record-diff-warning { margin: 0; color: var(--ochre); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
+  .record-import-error { margin: 0; color: var(--oxide); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
+  .record-import-line { margin: 0; font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
+  .record-import-queue td { white-space: normal; overflow-wrap: anywhere; }
   .record-import-actions { display: flex; gap: 8px; }
   .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-body); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }

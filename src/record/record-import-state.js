@@ -112,6 +112,16 @@ export function mappingData(description, kind, fields, identity) {
   return data
 }
 
+// The proposed mapping as one mono line per column, then the key, the kind
+// and the file, so the diff reads as what the run will do.
+export function mappingLines(description, kind, fields, identity) {
+  const lines = Object.entries(fields ?? {}).filter(([, property]) => property).map(([column, property]) => `${column} fills ${property}`)
+  lines.push(`keyed on ${identity ? identity.replace(/^([a-z_]+):(.*)$/, (_, kindName, rest) => `${kindName} in ${rest.split(':').pop()}`) : 'the title'}`)
+  lines.push(`kind ${kind?.name ?? ''}`.trim())
+  lines.push(`file ${description?.label ?? description?.object ?? ''}`.trim())
+  return lines
+}
+
 export function mappedCount(fields) {
   return Object.values(fields ?? {}).filter(Boolean).length
 }

@@ -261,13 +261,7 @@ impl RecordRegistry {
                             Landed::Unplaced(reason) => Err((plan.title, reason)),
                             other => Ok(other),
                         },
-                        Err(reason) => Err((
-                            row.values()
-                                .find(|cell| !cell.trim().is_empty())
-                                .map(|cell| cell.chars().take(80).collect())
-                                .unwrap_or_default(),
-                            reason,
-                        )),
+                        Err(refusal) => Err((refusal.title, refusal.reason)),
                     };
                     match landed {
                         Ok(Landed::Created) => created += 1,
@@ -518,6 +512,7 @@ mod tests {
         assert!(reasons[0].contains("no identity"), "{reasons:?}");
         assert!(reasons[1].contains("mail provider"), "{reasons:?}");
         assert_eq!(reasons[2], "Employees: many is not a whole number");
+        assert_eq!(run["queue"][0]["title"], "No Site");
         assert_eq!(run["queue"][2]["title"], "Bad Count");
         assert_eq!(run["queue"][2]["cells"]["Website"], "fabrikam.example");
 
