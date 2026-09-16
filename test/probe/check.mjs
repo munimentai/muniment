@@ -215,7 +215,8 @@ async function checkPaperFrame(browser, baseUrl) {
               for (const [index, panel] of panels.entries()) {
                 const box = boxes[index]
                 const panelStyle = getComputedStyle(panel)
-                fail(near(box.top, workspace.querySelector('.titlebar').getBoundingClientRect().height + frame), 'The top frame changed.')
+                // The panels start at the 36px band the workspace grid names, not at the title row plus the frame.
+                fail(near(box.top, parseFloat(style.getPropertyValue('--titlebar-band'))), 'The top frame changed.')
                 fail(near(box.bottom, innerHeight - frame), 'The bottom frame changed.')
                 fail(panelStyle.backgroundColor === surface, `${panel.className} lacks surface.`)
                 for (const edge of ['Top', 'Right', 'Bottom', 'Left']) {
