@@ -77,7 +77,7 @@
         {#if section === 'models'}
           <ModelsSection {tauri} {listen} {oninventory} {inventory} />
         {:else if section === 'appearance'}
-          <Appearance />
+          <Appearance {tauri} />
         {:else if section === 'home'}
           <section class="settings-home" aria-labelledby="settings-home-title">
             <h4 id="settings-home-title" class="settings-label">Home</h4>

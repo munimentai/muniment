@@ -222,6 +222,8 @@ them.
 | --- | --- | --- | --- | --- |
 | Segmented control | `.theme-options` | System, Light, Dark | Inline flex, 1px `--border`, `--radius-control` | None |
 | Segment | `.theme-options button` | One theme | Transparent, `border-radius: 0` (allowed exception), `--muted`, `--text-13`, padding 5px 12px, 1px `--border` between segments. First and last segments compose `--radius-control` on their outer corners | Hover or `aria-pressed="true"`: `--faint`, `--ink`. Focus-visible: global ring, z-index 1 |
+| Type size | `.type-size` | Smaller, readout, Larger, Default | Three `--surface` buttons with hairlines at `--radius-control`, each with its `kbd` in `--text-12 --font-mono --muted`, around a `--text-12` mono readout of the body size | Disabled at the range ends and at the default |
+| Font pick | `.font-search`, `.font-list .font-pick` | One register's family from the installed fonts | 28px search input, then a two-column list of quiet picks, the shipped family first with a mono `shipped` note, each installed name set in its own face | `aria-pressed="true"`: `--faint`, `--ink` |
 
 ## Confirm dialog
 

@@ -1,7 +1,42 @@
 <script>
+  import { onMount } from 'svelte'
   import { DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
+  import { SHIPPED_FONTS, SIZE_STEP_MAX, SIZE_STEP_MIN, TYPE_EVENT, bodySize, commitType, filterFonts, readStoredType, stepType, typeSizeShortcut, typeSizeShortcutLabel } from './type-state.js'
+
+  let { tauri } = $props()
 
   let theme = $state(readStoredTheme())
+
+  // Type: one size step for the body register, and a family for each register
+  // picked from the fonts installed on this device. The shipped pair stays the default.
+  let type = $state(readStoredType())
+  let fonts = $state([])
+  let fontsRead = $state(false)
+  let query = $state({ human: '', mono: '' })
+  const registers = [['human', 'Human'], ['mono', 'Mono']]
+
+  onMount(() => {
+    const follow = (event) => { type = event.detail }
+    window.addEventListener(TYPE_EVENT, follow)
+    void (async () => {
+      try {
+        const names = await tauri?.invoke('installed_fonts')
+        fonts = Array.isArray(names) ? names : []
+      } catch (_) {
+        fonts = []
+      }
+      fontsRead = true
+    })()
+    return () => window.removeEventListener(TYPE_EVENT, follow)
+  })
+
+  function step(delta) {
+    type = commitType(delta === 0 ? { ...type, step: 0 } : stepType(type, delta))
+  }
+
+  function chooseFont(register, family) {
+    type = commitType({ ...type, [register]: family })
+  }
   const modeOptions = [['System', 'system'], ['Light', 'light'], ['Dark', 'dark']]
   const themeGroups = [['Light', LIGHT_THEMES], ['Dark', DARK_THEMES]]
 
@@ -49,6 +84,29 @@
   </div>
 </section>
 
+<section class="type-section" aria-labelledby="type-heading">
+  <h3 id="type-heading" class="access-label">Type</h3>
+  <div class="type-size" role="group" aria-label="Size">
+    <button type="button" aria-label="Smaller type" aria-keyshortcuts={typeSizeShortcut('smaller')} disabled={type.step <= SIZE_STEP_MIN} onclick={() => step(-1)}>Smaller <kbd>{typeSizeShortcutLabel('smaller')}</kbd></button>
+    <span class="type-readout" role="status">{bodySize(type.step)} px body</span>
+    <button type="button" aria-label="Larger type" aria-keyshortcuts={typeSizeShortcut('larger')} disabled={type.step >= SIZE_STEP_MAX} onclick={() => step(1)}>Larger <kbd>{typeSizeShortcutLabel('larger')}</kbd></button>
+    <button type="button" class="type-reset" aria-label="Default type size" aria-keyshortcuts={typeSizeShortcut('default')} disabled={type.step === 0} onclick={() => step(0)}>Default <kbd>{typeSizeShortcutLabel('default')}</kbd></button>
+  </div>
+  {#each registers as [register, label] (register)}
+    <div class="type-font" role="group" aria-label="{label} font">
+      <p class="group-label">{label}</p>
+      <input type="search" class="font-search" aria-label="Search {label.toLowerCase()} fonts" placeholder="Search installed fonts" bind:value={query[register]}>
+      <ul class="font-list">
+        <li><button type="button" class="font-pick" aria-pressed={type[register] === null} onclick={() => chooseFont(register, null)}><span class="font-name">{SHIPPED_FONTS[register]}</span><span class="font-note">shipped</span></button></li>
+        {#each filterFonts(fonts, query[register]) as name (name)}
+          <li><button type="button" class="font-pick" aria-pressed={type[register] === name} onclick={() => chooseFont(register, name)}><span class="font-name" style:font-family={`'${name}'`}>{name}</span></button></li>
+        {/each}
+      </ul>
+      {#if fontsRead && fonts.length === 0}<p class="font-note">No installed fonts were read from this device.</p>{/if}
+    </div>
+  {/each}
+</section>
+
 <style>
   .access-label { margin: 0 0 6px; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; }
   .theme-options { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); }
@@ -73,4 +131,22 @@
   .swatch-ink { width: 80%; background: var(--ink); }
   .swatch-muted { width: 50%; background: var(--muted); }
   .swatch-signal { width: 8px; background: var(--signal); }
+  /* Type: the size row is three quiet buttons around a mono readout, and each register is one search over the installed families with the shipped family first. */
+  .type-section { margin-top: 22px; max-width: 560px; }
+  .type-size { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .type-size button { display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 10px; cursor: pointer; }
+  .type-size button:hover:not(:disabled) { background: var(--faint); }
+  .type-size button:disabled { color: var(--muted); cursor: default; }
+  .type-size kbd { font: var(--text-12) var(--font-mono); color: var(--muted); }
+  .type-readout { min-width: 96px; text-align: center; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .type-reset { margin-left: 4px; }
+  .type-font { margin-top: 10px; }
+  .font-search { box-sizing: border-box; width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); }
+  .font-search:focus { outline: none; border-color: var(--muted); }
+  .font-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+  .font-pick { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }
+  .font-pick:hover { background: var(--faint); color: var(--ink); }
+  .font-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
+  .font-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .font-note { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
 </style>

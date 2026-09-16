@@ -270,6 +270,7 @@ beforeEach(() => {
     if (command === 'attach_companions') return []
     if (command === 'attach_listener_status') return { started: true, failure: null }
     if (command === 'record_companies') return recordCompaniesResult
+    if (command === 'installed_fonts') return ['Avenir Next', 'Inter', 'Iosevka']
     if (command === 'record_kinds') return recordKindsResult
     if (command === 'record_company_create') {
       recordCompaniesResult = { companies: [{ id: 'company-1', name: payload.name, created_at: '2026-01-01T00:00:00.000Z', owner_principal_id: 'owner-1', current: true }], current: 'company-1' }
@@ -1342,6 +1343,49 @@ describe('workspace composer entry', () => {
     expect(restored.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
     delete document.documentElement.dataset.theme
+  })
+
+  it('steps the body type size from Preferences and the super key, and picks installed fonts per register', async () => {
+    localModeStatus = true
+    localStorage.removeItem('muniment.type')
+    render(App)
+    await openSettings('Preferences')
+    const size = within(await screen.findByRole('group', { name: 'Size' }))
+    expect(size.getByRole('status')).toHaveTextContent('15 px body')
+    expect(size.getByRole('button', { name: 'Default type size' })).toBeDisabled()
+    const mac = navigator.platform.startsWith('Mac')
+    expect(size.getByRole('button', { name: 'Larger type' })).toHaveAttribute('aria-keyshortcuts', mac ? 'Meta+=' : 'Control+=')
+
+    await fireEvent.click(size.getByRole('button', { name: 'Larger type' }))
+    expect(size.getByRole('status')).toHaveTextContent('16.5 px body')
+    expect(document.documentElement.style.getPropertyValue('--text-15')).toBe('16.5px')
+    expect(document.documentElement.style.getPropertyValue('--text-provenance')).toBe('12.7px')
+    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 1, human: null, mono: null })
+
+    await fireEvent.keyDown(document, { key: '=', metaKey: mac, ctrlKey: !mac })
+    expect(size.getByRole('status')).toHaveTextContent('18 px body')
+    await fireEvent.keyDown(document, { key: '-', metaKey: mac, ctrlKey: !mac })
+    expect(size.getByRole('status')).toHaveTextContent('16.5 px body')
+    await fireEvent.keyDown(document, { key: '0', metaKey: mac, ctrlKey: !mac })
+    expect(size.getByRole('status')).toHaveTextContent('15 px body')
+    expect(document.documentElement.style.getPropertyValue('--text-15')).toBe('')
+    expect(size.getByRole('button', { name: 'Default type size' })).toBeDisabled()
+
+    const human = within(await screen.findByRole('group', { name: 'Human font' }))
+    expect(human.getByRole('button', { name: /Schibsted Grotesk/ })).toHaveAttribute('aria-pressed', 'true')
+    await waitFor(() => expect(human.getByRole('button', { name: 'Inter' })).toBeInTheDocument())
+    await fireEvent.input(human.getByRole('searchbox', { name: 'Search human fonts' }), { target: { value: 'ios' } })
+    expect(human.getAllByRole('button').map((button) => button.querySelector('.font-name').textContent)).toEqual(['Schibsted Grotesk', 'Iosevka'])
+    await fireEvent.click(human.getByRole('button', { name: 'Iosevka' }))
+    expect(document.documentElement.style.getPropertyValue('--font-human')).toBe("'Iosevka', 'Schibsted Grotesk', system-ui, sans-serif")
+    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: 'Iosevka', mono: null })
+    const mono = within(screen.getByRole('group', { name: 'Mono font' }))
+    expect(mono.getByRole('button', { name: /Commit Mono/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(document.documentElement.style.getPropertyValue('--font-mono')).toBe('')
+
+    await fireEvent.click(human.getByRole('button', { name: /Schibsted Grotesk/ }))
+    expect(document.documentElement.style.getPropertyValue('--font-human')).toBe('')
+    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: null, mono: null })
   })
 
   it('offers each provider its methods and the form for the chosen one', async () => {
