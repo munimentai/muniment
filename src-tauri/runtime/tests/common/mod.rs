@@ -17,7 +17,7 @@ use muniment_core::auth::{
 };
 use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_grant::ChatGrant;
-use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
+use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
 static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -277,10 +277,12 @@ pub fn credentials_with_expiry(expires_at: u64) -> NativeCredentials {
     }
 }
 
+/// The stub stands in for the artifact this build selects, so the launch path's
+/// selection check and the pointer both resolve on either track.
 pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
     let pi_root = temporary_root.join("pi");
-    let revision_root = pi_root.join("revisions").join(PI_ARTIFACT.version);
-    let staged_stub = revision_root.join(PI_ARTIFACT.executable);
+    let revision_root = pi_root.join("revisions").join(PI_SELECTED_ARTIFACT.version);
+    let staged_stub = revision_root.join(PI_SELECTED_ARTIFACT.executable);
     fs::create_dir_all(staged_stub.parent().unwrap()).unwrap();
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -314,19 +316,23 @@ pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
     let built_stub = build_root.join("debug").join(stub_name);
     fs::copy(built_stub, staged_stub).unwrap();
     let stub_archive = b"muniment-sidecar-test-stub\n";
-    fs::write(revision_root.join(PI_ARTIFACT.archive), stub_archive).unwrap();
+    fs::write(
+        revision_root.join(PI_SELECTED_ARTIFACT.archive),
+        stub_archive,
+    )
+    .unwrap();
     fs::write(
         pi_root.join("current"),
-        format!("muniment-pi-pointer-v1\n{}\n", PI_ARTIFACT.version),
+        format!("muniment-pi-pointer-v1\n{}\n", PI_SELECTED_ARTIFACT.version),
     )
     .unwrap();
     std::env::set_var("MUNIMENT_PI_ROOT", pi_root);
 
     PiArtifactDescriptor {
-        version: PI_ARTIFACT.version,
-        archive: PI_ARTIFACT.archive,
+        version: PI_SELECTED_ARTIFACT.version,
+        archive: PI_SELECTED_ARTIFACT.archive,
         byte_size: stub_archive.len() as u64,
         sha256: "758b0db8f6304639edfca2b779e886f3006afeb006417e49dd6bce53ff2a65ab",
-        executable: PI_ARTIFACT.executable,
+        executable: PI_SELECTED_ARTIFACT.executable,
     }
 }
