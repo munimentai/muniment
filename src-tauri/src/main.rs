@@ -8,6 +8,7 @@ mod chat_threads;
 mod dictation;
 #[cfg(all(target_os = "macos", feature = "e2e-webdriver"))]
 mod e2e_folder_dialog;
+mod fonts;
 mod home;
 mod launcher;
 #[cfg(target_os = "linux")]
@@ -125,6 +126,7 @@ fn main() {
         .on_window_event(launcher::window_event)
         .invoke_handler(tauri::generate_handler![
             onboarding_diagnostics::onboarding_model_settings_error,
+            fonts::installed_fonts,
             auth::auth_sign_in,
             auth::auth_status,
             auth::auth_entitlement_snapshot,

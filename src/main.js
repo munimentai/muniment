@@ -5,8 +5,10 @@ import './styles/code-diff.css'
 import App from './App.svelte'
 import Launcher from './Launcher.svelte'
 import { applyTheme, readStoredTheme } from './lib/theme-state.js'
+import { applyType, readStoredType } from './lib/type-state.js'
 
 applyTheme(document.documentElement, readStoredTheme())
+applyType(document.documentElement, readStoredType())
 mount(new URLSearchParams(location.search).has('launcher') ? Launcher : App, {
   target: document.getElementById('app'),
 })

@@ -17,6 +17,7 @@
   import CodeDiff from './lib/CodeDiff.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
+  import { commitType, readStoredType, stepType, typeSizeShortcutStep } from './lib/type-state.js'
   import { ARTIFACT_RAIL_MAX_WIDTH, ARTIFACT_RAIL_MIN_WIDTH, artifactRailShortcut, createRailController, defaultArtifactRailWidth, isArtifactRailShortcut, isRecordPanelShortcut, railBounds, recordPanelShortcut, shortcutDisplayLabel } from './lib/artifact-rail-state.js'
   import RecordPanel from './record/RecordPanel.svelte'
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
@@ -111,6 +112,13 @@
   // The platform's settings shortcut toggles the popup.
   function settingsShortcutPressed() {
     toggleSettings()
+  }
+
+  // The super key with =, - or 0 moves the body type size one step, the same
+  // step Preferences offers, and 0 returns the default.
+  function typeSizeShortcutPressed(step) {
+    const current = readStoredType()
+    commitType(step === 0 ? { ...current, step: 0 } : stepType(current, step))
   }
 
   function openHomeSettings() {
@@ -1156,6 +1164,12 @@
       voiceShortcutManager.start()
     }
     const shortcuts = (event) => {
+      const sizeStep = typeSizeShortcutStep(event)
+      if (sizeStep !== null) {
+        event.preventDefault()
+        typeSizeShortcutPressed(sizeStep)
+        return
+      }
       const rowPosition = threadRowShortcutPosition(event)
       if (workspaceMode() && onboarding.name === 'complete' && rowPosition !== null) {
         event.preventDefault()

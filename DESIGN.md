@@ -43,6 +43,12 @@ is evidence. Every component type size resolves through the named `--text-*`
 register. Desktop scale 12 / 13 / 15 body / 17 / 22 / 28, mono one step
 smaller than adjacent body text, line-height 1.55 body and 1.3 headings. No
 display serif. No italic except semantic emphasis in user content.
+Preferences moves two things and nothing else: a size step scales every
+`--text-*` token and `--text-provenance` together by a tenth per step, from
+two steps down to four up, and a family picked from the device's installed
+fonts sits in front of the shipped stack in `--font-human` or `--font-mono`.
+The super key with `=`, `-` and `0` moves the same step. Both live on the
+device beside the theme and the shipped pair stays the default.
 
 Shape: radius `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
 Nothing pill-shaped. Hairline borders do the work, and `--shadow-window` and
