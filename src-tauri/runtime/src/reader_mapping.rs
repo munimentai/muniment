@@ -153,34 +153,61 @@ pub struct RowPlan {
     pub title: String,
 }
 
+/// Why one row cannot land, with the title the queue shows for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowRefusal {
+    pub title: String,
+    pub reason: String,
+}
+
+/// The title the record would give a row: its kind's title template over the
+/// mapped cells, else the first mapped cell that holds text, else the first
+/// cell there is.
+fn row_title(kind: &KindRow, data: &Map<String, Value>, row: &Row, mapping: &Mapping) -> String {
+    let rendered =
+        muniment_core::record::render_template(&kind.title_template, &Value::Object(data.clone()));
+    if !rendered.trim().is_empty() {
+        return rendered.chars().take(80).collect();
+    }
+    mapping
+        .fields
+        .keys()
+        .chain(row.keys())
+        .filter_map(|column| row.get(column))
+        .map(|cell| cell.trim())
+        .find(|cell| !cell.is_empty())
+        .map(|cell| cell.chars().take(80).collect())
+        .unwrap_or_default()
+}
+
 /// Reads one row into a plan, or the one reason it cannot land.
-pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan, String> {
+pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan, RowRefusal> {
     let mut data = Map::new();
-    let mut first_cell = String::new();
+    let refuse = |data: &Map<String, Value>, reason: String| RowRefusal {
+        title: row_title(kind, data, row, mapping),
+        reason,
+    };
     for (column, property) in &mapping.fields {
         let cell = row.get(column).map(|cell| cell.trim()).unwrap_or_default();
         if cell.is_empty() {
             continue;
         }
-        let schema = property_schema(kind, property)
-            .ok_or_else(|| format!("{property} is not a property of {}", kind.name))?;
-        let value = coerce(cell, &schema).map_err(|reason| format!("{column}: {reason}"))?;
-        if first_cell.is_empty() {
-            first_cell = cell.chars().take(80).collect();
-        }
+        let Some(schema) = property_schema(kind, property) else {
+            return Err(refuse(
+                &data,
+                format!("{property} is not a property of {}", kind.name),
+            ));
+        };
+        let value = match coerce(cell, &schema) {
+            Ok(value) => value,
+            Err(reason) => return Err(refuse(&data, format!("{column}: {reason}"))),
+        };
         data.insert(property.clone(), value);
     }
     if data.is_empty() {
-        return Err("every mapped cell is empty".to_owned());
+        return Err(refuse(&data, "every mapped cell is empty".to_owned()));
     }
-    // The queue names a row the way the record would title it.
-    let rendered =
-        muniment_core::record::render_template(&kind.title_template, &Value::Object(data.clone()));
-    let title = if rendered.trim().is_empty() {
-        first_cell
-    } else {
-        rendered.chars().take(80).collect()
-    };
+    let title = row_title(kind, &data, row, mapping);
     let identity = match &mapping.identity {
         Some(spec) => {
             let cell = row
@@ -188,9 +215,12 @@ pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan,
                 .map(|cell| cell.trim())
                 .unwrap_or_default();
             if cell.is_empty() {
-                return Err(format!(
-                    "the {} cell is empty, so the row has no identity",
-                    spec.column
+                return Err(refuse(
+                    &data,
+                    format!(
+                        "the {} cell is empty, so the row has no identity",
+                        spec.column
+                    ),
                 ));
             }
             let value = match &spec.prefix {
@@ -202,9 +232,9 @@ pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan,
                 value,
             })
         }
-        None => (!rendered.trim().is_empty()).then(|| IdentityInput {
+        None => Some(IdentityInput {
             kind: "name_key".to_owned(),
-            value: rendered,
+            value: title.clone(),
         }),
     };
     Ok(RowPlan {
@@ -552,20 +582,20 @@ mod tests {
 
         let mut bad = row.clone();
         bad.insert("Seats".into(), "twelve".into());
-        assert_eq!(
-            row_plan(&mapping, &org_kind(), &bad).unwrap_err(),
-            "Seats: twelve is not a whole number"
-        );
+        let refusal = row_plan(&mapping, &org_kind(), &bad).unwrap_err();
+        assert_eq!(refusal.reason, "Seats: twelve is not a whole number");
+        assert_eq!(refusal.title, "Northwind");
         bad = row.clone();
         bad.insert("Band".into(), "huge".into());
         assert!(row_plan(&mapping, &org_kind(), &bad)
             .unwrap_err()
+            .reason
             .starts_with("Band: huge is not one of"));
         bad = row.clone();
         bad.insert("Website".into(), " ".into());
-        assert!(row_plan(&mapping, &org_kind(), &bad)
-            .unwrap_err()
-            .contains("no identity"));
+        let refusal = row_plan(&mapping, &org_kind(), &bad).unwrap_err();
+        assert!(refusal.reason.contains("no identity"));
+        assert_eq!(refusal.title, "Northwind");
 
         let keyed_on_title = Mapping::from_entity(&mapping_entity(json!({
             "source": "csv", "object": "/tmp/customers.csv", "kind": "org", "fields": {"Company": "name"}
@@ -576,7 +606,9 @@ mod tests {
         let mut blank = Row::new();
         blank.insert("Company".into(), "".into());
         assert_eq!(
-            row_plan(&keyed_on_title, &org_kind(), &blank).unwrap_err(),
+            row_plan(&keyed_on_title, &org_kind(), &blank)
+                .unwrap_err()
+                .reason,
             "every mapped cell is empty"
         );
     }

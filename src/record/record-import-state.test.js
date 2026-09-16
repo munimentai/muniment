@@ -6,6 +6,7 @@ import {
   importErrorLine,
   mappedCount,
   mappingData,
+  mappingLines,
   runSummaryLines,
   suggestFields,
   suggestIdentity,
@@ -77,6 +78,9 @@ describe('record import state', () => {
       approved: true,
     })
     expect(mappingData(description, org, { Company: 'name' }, '')).not.toHaveProperty('identity')
+    expect(mappingLines(description, org, { Company: 'name', Website: 'domain', Notes: '' }, 'domain:Website')).toEqual(['Company fills name', 'Website fills domain', 'keyed on domain in Website', 'kind org', 'file Customers 2026.csv'])
+    expect(mappingLines(description, org, { Company: 'name' }, 'external:csv:customers_2026:Company')).toEqual(['Company fills name', 'keyed on external in Company', 'kind org', 'file Customers 2026.csv'])
+    expect(mappingLines(description, org, { Company: 'name' }, '')).toContain('keyed on the title')
   })
 
   it('reads a run as mono lines and tallies the calls of one run', () => {
