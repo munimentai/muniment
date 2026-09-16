@@ -28,6 +28,11 @@ impl RuntimeDirectory {
         ));
         std::fs::create_dir(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // The runtime keeps one state root, so each test names its own instead
+        // of the runner's home.
+        let state = path.join("state");
+        std::fs::create_dir(&state).unwrap();
+        std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }
 
@@ -37,8 +42,16 @@ impl RuntimeDirectory {
             .env("XDG_RUNTIME_DIR", &self.0)
             .env("XDG_DATA_HOME", &self.0)
             .env("XDG_CONFIG_HOME", &self.0)
+            .env(
+                muniment_core::state_root::STATE_DIRECTORY_OVERRIDE,
+                self.state_directory(),
+            )
             .env(WAIT_TIMEOUT_ENV, timeout_ms.to_string());
         command
+    }
+
+    fn state_directory(&self) -> PathBuf {
+        self.0.join("state")
     }
 
     fn exit_after_lock_command(&self, timeout_ms: u64) -> Command {
@@ -170,7 +183,7 @@ fn logs_version_state_directory_and_served_endpoint_at_startup() {
         format!(
             "muniment-runtime: started version={} state_directory={} endpoint={}\n",
             env!("CARGO_PKG_VERSION"),
-            runtime.0.join("ai.muniment.desktop").display(),
+            runtime.state_directory().display(),
             endpoint.display()
         )
     );
