@@ -211,7 +211,11 @@ impl RecordRegistry {
             let kinds = entry.record.kinds().map_err(|error| {
                 ProtocolError::persistence_failed_with_reason(error.to_string())
             })?;
-            Ok(json!({"company_id": resolved, "kinds": kinds}))
+            Ok(json!({
+                "company_id": resolved,
+                "kinds": kinds,
+                "relations": muniment_core::record::relations(),
+            }))
         })?;
         Ok(outcome.unwrap_or_else(|body| body))
     }

@@ -285,6 +285,10 @@ beforeEach(() => {
       return { company: recordCompaniesResult.companies[0] }
     }
     if (command === 'record_company_select') return { company: { id: payload.companyId, current: true } }
+    if (command === 'record_company_rename') {
+      recordCompaniesResult = { ...recordCompaniesResult, companies: recordCompaniesResult.companies.map((company) => (company.id === payload.companyId ? { ...company, name: payload.name } : company)) }
+      return { company: recordCompaniesResult.companies.find((company) => company.id === payload.companyId) }
+    }
     if (command === 'record_query') return recordQueryResult
     if (command === 'record_entity') return recordEntityResult
     if (command === 'record_propose') return recordProposeResult
@@ -1990,6 +1994,113 @@ describe('record panel', () => {
     await fireEvent.click(within(result).getByRole('button', { name: 'Done' }))
     await within(panel).findByRole('table', { name: 'org records' })
     expect(within(panel).getByText('2 records')).toBeInTheDocument()
+  })
+
+  it('appends the next page with Show more, and rereads the table when a run ends and when the window regains focus', async () => {
+    const rows = (from, count) => Array.from({ length: count }, (_, index) => ({ id: `deal-${from + index}`, kind: 'deal', title: `Deal ${from + index}`, state: 'won', updated_at: '2026-09-15T10:30:00.000Z', data: { name: `Deal ${from + index}`, stage: 'won' } }))
+    recordQueryResult = { page: { kind: 'deal', total: 260, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: rows(0, 200) } }
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await fireEvent.click(within(kinds).getAllByRole('button')[1])
+    await within(panel).findByRole('table', { name: 'deal records' })
+    expect(within(panel).getByText('260 records')).toBeInTheDocument()
+    const more = within(panel).getByRole('button', { name: 'Show 60 more' })
+    recordQueryResult = { page: { kind: 'deal', total: 260, offset: 200, limit: 200, sort: 'updated_at', descending: true, rows: rows(200, 60) } }
+    await fireEvent.click(more)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_query', expect.objectContaining({ kind: 'deal', offset: 200, limit: 200 })))
+    await waitFor(() => expect(within(panel).getAllByRole('row')).toHaveLength(261))
+    expect(within(panel).queryByRole('button', { name: /Show .* more/ })).not.toBeInTheDocument()
+
+    const queries = invoke.mock.calls.filter(([command]) => command === 'record_query').length
+    await fireEvent(window, new Event('focus'))
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'record_query').length).toBe(queries + 1))
+  })
+
+  it('renames the company from the kind list', async () => {
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Rename' }))
+    const name = within(panel).getByRole('textbox', { name: 'Company name' })
+    expect(name).toHaveValue('Northwind')
+    await fireEvent.input(name, { target: { value: 'Northwind Traders' } })
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_company_rename', { companyId: 'company-1', name: 'Northwind Traders' }))
+    const picker = await within(panel).findByRole('combobox', { name: 'Company' })
+    expect(within(picker).getByRole('option', { name: 'Northwind Traders' })).toBeInTheDocument()
+  })
+
+  it('links, merges and deletes an open record through propose and commit', async () => {
+    recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'org', schema: { properties: { name: {} } }, states: null, extension: null }, { name: 'person', schema: { properties: { full_name: {} } }, states: null, extension: null }], relations: [{ name: 'works_at', from: ['person'], to: ['org'] }, { name: 'about', from: ['any'], to: ['any'] }, { name: 'owns', from: ['person'], to: ['org'] }] }
+    recordQueryResult = { page: { kind: 'org', total: 2, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [
+      { id: 'org-1', kind: 'org', title: 'Northwind', state: null, updated_at: '2026-09-15T10:30:00.000Z', data: { name: 'Northwind' } },
+      { id: 'org-2', kind: 'org', title: 'Northwind Inc', state: null, updated_at: '2026-09-14T10:30:00.000Z', data: { name: 'Northwind Inc' } },
+    ] } }
+    recordEntityResult = { entity: { entity: { id: 'org-2', kind: 'org', title: 'Northwind Inc', state: null, updated_at: '2026-09-14T10:30:00.000Z', body_text: 'Northwind Inc.', data: { name: 'Northwind Inc' } }, kind: recordKindsResult.kinds[0], identities: [], edges: [], events: [] } }
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await fireEvent.click(within(kinds).getAllByRole('button')[0])
+    await within(panel).findByRole('table', { name: 'org records' })
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Northwind Inc' }))
+    await within(panel).findByRole('article', { name: 'Northwind Inc' })
+
+    // Link: the relations the vocabulary allows from an org, a target found by title.
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Link' }))
+    const link = within(panel).getByRole('form', { name: 'Link Northwind Inc' })
+    const relation = within(link).getByRole('combobox', { name: 'Relation' })
+    expect(within(relation).getAllByRole('option').map((option) => option.textContent)).toEqual(['about'])
+    expect(within(link).getByRole('combobox', { name: 'Target kind' })).toHaveValue('org')
+    await fireEvent.input(within(link).getByRole('searchbox', { name: 'Search org' }), { target: { value: 'North' } })
+    await fireEvent.click(within(link).getByRole('button', { name: 'Find' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_query', expect.objectContaining({ kind: 'org', search: 'North', limit: 20 })))
+    const matches = await within(link).findByRole('list', { name: 'Matches' })
+    expect(within(matches).queryByRole('button', { name: /Northwind Inc/ })).not.toBeInTheDocument()
+    recordProposeResult = { proposal: { id: 'proposal-6', warnings: [], diff: { op: 'link', link: { relation: 'about' }, src_title: 'Northwind Inc', dst_title: 'Northwind' } } }
+    recordCommitResult = { result: { event_seq: 7, entity_ids: ['org-2', 'org-1'] } }
+    await fireEvent.click(within(matches).getByRole('button', { name: 'Northwind' }))
+    await fireEvent.click(within(link).getByRole('button', { name: 'Propose' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_propose', { companyId: 'company-1', operation: { op: 'link', src: 'entity:org-2', relation: 'about', dst: 'entity:org-1' } }))
+    const proposedLink = await within(link).findByRole('group', { name: 'Proposed link' })
+    expect(proposedLink).toHaveTextContent('about: Northwind Inc to Northwind')
+    await fireEvent.click(within(proposedLink).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_commit', { companyId: 'company-1', proposal: 'proposal-6' }))
+    await within(panel).findByRole('article', { name: 'Northwind Inc' })
+
+    // Merge: the survivor is of the same kind, and the panel opens it after the commit.
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Merge' }))
+    const merge = within(panel).getByRole('form', { name: 'Merge Northwind Inc into' })
+    await fireEvent.click(within(merge).getByRole('button', { name: 'Find' }))
+    const survivors = await within(merge).findByRole('list', { name: 'Matches' })
+    await fireEvent.click(within(survivors).getByRole('button', { name: 'Northwind' }))
+    recordProposeResult = { proposal: { id: 'proposal-7', warnings: [], diff: { op: 'merge', loser: { title: 'Northwind Inc' }, survivor: { title: 'Northwind' }, identities_moved: 1 } } }
+    recordCommitResult = { result: { event_seq: 8, entity_ids: ['org-1', 'org-2'] } }
+    await fireEvent.click(within(merge).getByRole('button', { name: 'Propose' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_propose', { companyId: 'company-1', operation: { op: 'merge', loser: 'entity:org-2', survivor: 'entity:org-1' } }))
+    const proposedMerge = await within(merge).findByRole('group', { name: 'Proposed merge' })
+    expect(proposedMerge).toHaveTextContent('Northwind Inc into Northwind, 1 identity move')
+    recordEntityResult = { entity: { entity: { id: 'org-1', kind: 'org', title: 'Northwind', state: null, updated_at: '2026-09-15T10:30:00.000Z', body_text: 'Northwind.', data: { name: 'Northwind' } }, kind: recordKindsResult.kinds[0], identities: [], edges: [], events: [] } }
+    await fireEvent.click(within(proposedMerge).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_entity', { companyId: 'company-1', entity: 'org-1' }))
+    await within(panel).findByRole('article', { name: 'Northwind' })
+
+    // Delete: one sentence, the diff, and the table without the row.
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Delete' }))
+    const remove = within(panel).getByRole('form', { name: 'Delete Northwind' })
+    recordProposeResult = { proposal: { id: 'proposal-8', warnings: [], diff: { op: 'delete', before: { kind: 'org', title: 'Northwind' } } } }
+    recordCommitResult = { result: { event_seq: 9, entity_ids: ['org-1'] } }
+    await fireEvent.click(within(remove).getByRole('button', { name: 'Propose' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_propose', { companyId: 'company-1', operation: { op: 'delete', entity: 'entity:org-1' } }))
+    const proposedDelete = await within(remove).findByRole('group', { name: 'Proposed delete' })
+    expect(proposedDelete).toHaveTextContent('org Northwind is deleted')
+    recordQueryResult = { page: { kind: 'org', total: 0, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [] } }
+    await fireEvent.click(within(proposedDelete).getByRole('button', { name: 'Commit' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_commit', { companyId: 'company-1', proposal: 'proposal-8' }))
+    await within(panel).findByText('No org records yet')
   })
 
   it('runs a mapping record again from its own view', async () => {

@@ -92,6 +92,29 @@ export function editOperation(row, column, value) {
   return { op: 'update', entity: `entity:${row.id}`, data }
 }
 
+// The three record actions a record view offers beside its fields.
+export function deleteOperation(entityId) {
+  return { op: 'delete', entity: `entity:${entityId}` }
+}
+
+export function linkOperation(srcId, relation, dstId) {
+  return { op: 'link', src: `entity:${srcId}`, relation, dst: `entity:${dstId}` }
+}
+
+export function mergeOperation(loserId, survivorId) {
+  return { op: 'merge', loser: `entity:${loserId}`, survivor: `entity:${survivorId}` }
+}
+
+// The relations that run from one kind, each with the kinds it reaches, so
+// a link form offers only what the vocabulary accepts. `any` reaches every kind.
+export function relationsFrom(relations, srcKind, kinds) {
+  const names = (kinds ?? []).map((kind) => kind.name)
+  return (relations ?? [])
+    .filter((relation) => relation.from.includes('any') || relation.from.includes(srcKind))
+    .map((relation) => ({ name: relation.name, targets: relation.to.includes('any') ? names : relation.to.filter((name) => names.includes(name)) }))
+    .filter((relation) => relation.targets.length)
+}
+
 export function createOperation(kind, data) {
   const cleaned = Object.fromEntries(Object.entries(data ?? {}).filter(([, value]) => value !== null && value !== '' && value !== undefined))
   return { op: 'create', kind: kind.name, data: cleaned }
@@ -125,7 +148,8 @@ export function diffLines(diff) {
       .map((key) => `${key}: ${cellText(before[key], {}) || 'empty'} to ${cellText(after[key], {}) || 'empty'}`)
   }
   if (diff.op === 'link') return [`${diff.link?.relation}: ${diff.src_title} to ${diff.dst_title}`]
-  if (diff.op === 'merge') return [`${diff.loser?.title} into ${diff.survivor?.title}`]
+  if (diff.op === 'merge') return [`${diff.loser?.title} into ${diff.survivor?.title}${diff.identities_moved ? `, ${diff.identities_moved} ${diff.identities_moved === 1 ? 'identity' : 'identities'} move` : ''}`]
+  if (diff.op === 'delete') return [`${diff.before?.kind ?? 'record'} ${diff.before?.title ?? ''} is deleted`.trim()]
   return []
 }
 
@@ -213,7 +237,7 @@ export function askSql(kind, { sort, state, search, limit = 200 } = {}) {
   const clauses = []
   if (state) clauses.push(`state = ${quote(state)}`)
   if (search?.trim()) {
-    const words = search.trim().split(/\s+/).map((word) => `"${word.replaceAll('"', '""')}"`).join(' ')
+    const words = search.trim().split(/\s+/).map((word) => `"${word.replaceAll('"', '""')}"*`).join(' ')
     clauses.push(`id in (select entity_id from entity_search where entity_search match ${quote(words)})`)
   }
   const order = sort?.sort ? `${identifier(sort.sort)} ${sort.descending ? 'desc' : 'asc'}` : '"updated_at" desc'

@@ -227,6 +227,16 @@
   let artifactRailMaximum = $state(ARTIFACT_RAIL_MAX_WIDTH)
   let artifactRailPointer = $state()
   let recordMaximized = $state(false)
+  // The record panel reloads what it shows when this changes: after a run
+  // ends, because the agent may have committed, and when the window regains
+  // focus, because a harness outside the app may have.
+  let recordRefresh = $state(0)
+  let recordRefreshActive = null
+  $effect(() => {
+    const ended = recordRefreshActive !== null && active === null
+    recordRefreshActive = active
+    if (ended && recordPanelOpen) recordRefresh = untrack(() => recordRefresh) + 1
+  })
   let workspace = $state()
   let entitlementToastVisible = $state(false)
   let pairingRequests = $state([])
@@ -1219,6 +1229,8 @@
     }
     document.addEventListener('keydown', shortcuts)
     window.addEventListener('resize', fitPanels)
+    const refreshRecord = () => { if (recordPanelOpen) recordRefresh += 1 }
+    window.addEventListener('focus', refreshRecord)
     let stopDragDrop
     if (tauri) getCurrentWebview().onDragDropEvent(({ payload }) => {
         if (!workspaceMode() || active) {
@@ -1256,6 +1268,7 @@
       voiceShortcutManager.cleanup()
       document.removeEventListener('keydown', shortcuts)
       window.removeEventListener('resize', fitPanels)
+      window.removeEventListener('focus', refreshRecord)
     }
   })
 
@@ -1772,7 +1785,7 @@
               onkeydown={artifactRailKeydown}
             ></div>
           {/if}
-          <RecordPanel {tauri} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onask={askAboutView} />
+          <RecordPanel {tauri} maximized={recordMaximized} refresh={recordRefresh} ontogglemaximized={toggleRecordMaximized} onask={askAboutView} />
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a
              copy confirmation into the run-phase region above would overwrite whatever
