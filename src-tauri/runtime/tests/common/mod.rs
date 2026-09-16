@@ -277,10 +277,11 @@ pub fn credentials_with_expiry(expires_at: u64) -> NativeCredentials {
     }
 }
 
-/// The stub stands in for the artifact this build selects, so the launch path's
-/// selection check and the pointer both resolve on either track.
+/// The stub stands in for the artifact this build selects, staged under the
+/// profile's own install root, so a run resolves it with or without the
+/// `MUNIMENT_PI_ROOT` override.
 pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
-    let pi_root = temporary_root.join("pi");
+    let pi_root = muniment_core::chat_profile::ChatProfile::new(temporary_root).pi_install_root();
     let revision_root = pi_root.join("revisions").join(PI_SELECTED_ARTIFACT.version);
     let staged_stub = revision_root.join(PI_SELECTED_ARTIFACT.executable);
     fs::create_dir_all(staged_stub.parent().unwrap()).unwrap();
