@@ -36,6 +36,16 @@ The runtime answers four operations on its attach protocol:
 
 `company.create`, `company.select` and `company.rename` carry an idempotency key. A companion client cannot call any of the four.
 
+Three more operations read a source into the record:
+
+| Operation | Body | Answer |
+| --- | --- | --- |
+| `reader.describe` | `{"source": "csv", "object": "<file path>"}` | the `description`: the file's `label`, `rows`, `bytes`, `hash` and `fields`, each with its `name`, the type its samples read as in `guess`, three `samples` and its `filled` count |
+| `reader.run` | `{"mapping": "<entity id>", "offset": 0}` | the `run`: `created`, `updated`, `unchanged` and `unplaced` counts, `next_offset`, `done`, `total`, `changed` and the first hundred `queue` rows |
+| `reader.queue` | `{"mapping": "<entity id>"}` | the `queue` rows the last run could not place, each with `row`, `title`, `reason` and `cells` |
+
+`reader.run` carries an idempotency key and works for about two and a half seconds per call. It answers `done` false with a `next_offset`, and the caller sends that offset back until `done` is true. A companion client cannot call any of the three.
+
 ## Reach it from a harness
 
 The runtime serves the record to any MCP client through `muniment-cli mcp`, a stdio server for the protocol revision of 2026-07-28. It offers three tools: `sql`, one read-only query that answers CSV, `propose`, which validates a change and returns its diff, and `commit`, which applies a proposal. The binary sits beside the runtime:
@@ -66,5 +76,7 @@ The **Record** control sits at the right end of the app row, after **Artifacts**
 The header shows the current company as a picker. With no company yet, the panel offers one field and **Create company**. Below the header the kind list names every kind in the company's catalogue with a property count and, for a kind with states, the state count. Selecting a kind shows its properties.
 
 Selecting a kind opens its table. The columns are the entity's title, its state when the kind has one, the time it changed, and then every property of the kind, with typed values in mono. A header click sorts. The search field runs full text over titles and prose. Double-click a cell to edit it and press **Enter**: the panel shows the change as one line per property with any warning, and **Commit** applies it while **Escape** discards it. A title opens the record: its prose, fields, identities, relations with their validity windows, and history. **New** opens a form generated from the kind with the required properties first, and **Propose** then **Commit** creates the record.
+
+**Import** on a kind reads a CSV file into it. Pick the file, and the panel lists its columns with what each one reads as and three sample values. Each column has a select of the property it fills, with the likely one chosen and **skip** for the rest. **Key each row on** names the column that identifies a row: an email, a website or a phone the file carries, an id column, or the record's title. **Propose mapping** shows the `mapping` record the panel will commit, **Commit and run** applies it and runs it, and the run reports its progress as `n of total rows`. The result names how many rows were created, updated or unchanged, and lists every row the mapping could not place with its row number, title and reason, such as an empty identity cell, a value that is not a whole number, or a free mail domain in a company's website column. Run the same file again and the rows it keyed update, with none added twice. A `mapping` record's view offers **Run** to read the file again, so a refreshed export lands with one click. The rows not placed also wait in `resolve-<mapping id>.json` beside the company's graph.
 
 A kind with states, such as `deal` or `task`, offers **Board** beside **Table** and a state filter. The board shows one column per state. Drag a card to another column to propose the change, then **Commit**. **Save view** stores the layout, sort and filters as a `view` record you can pick again. **Ask** puts the open view's SQL into the composer, so a question to the assistant starts from what you see.

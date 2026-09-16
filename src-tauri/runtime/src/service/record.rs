@@ -13,14 +13,14 @@ use std::path::Path;
 use std::sync::Mutex;
 
 pub struct RecordRegistry {
-    root: CompaniesRoot,
+    pub(super) root: CompaniesRoot,
     open: Mutex<HashMap<String, OpenRecord>>,
 }
 
-struct OpenRecord {
-    record: CompanyRecord,
+pub(super) struct OpenRecord {
+    pub(super) record: CompanyRecord,
     sql: SqlTool,
-    owner_principal_id: String,
+    pub(super) owner_principal_id: String,
 }
 
 struct SqlBody {
@@ -38,14 +38,14 @@ struct CommitBody {
     company_id: Option<String>,
 }
 
-fn text(body: &Value, key: &str) -> Result<String, ProtocolError> {
+pub(super) fn text(body: &Value, key: &str) -> Result<String, ProtocolError> {
     body.get(key)
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(ProtocolError::invalid_request)
 }
 
-fn company_id(body: &Value) -> Result<Option<String>, ProtocolError> {
+pub(super) fn company_id(body: &Value) -> Result<Option<String>, ProtocolError> {
     match body.get("company_id") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(id)) => Ok(Some(id.clone())),
@@ -77,12 +77,12 @@ fn parse_commit(body: &Value) -> Result<CommitBody, ProtocolError> {
     })
 }
 
-fn error_body(code: &str, message: impl Into<String>) -> Value {
+pub(super) fn error_body(code: &str, message: impl Into<String>) -> Value {
     json!({"error": {"code": code, "message": message.into()}})
 }
 
 /// Every record failure an agent can act on, as a body it reads.
-fn record_failure(error: RecordError) -> Value {
+pub(super) fn record_failure(error: RecordError) -> Value {
     let code = match &error {
         RecordError::UnknownKind(_) => "unknown_kind",
         RecordError::KindExists(_)
@@ -125,7 +125,7 @@ impl RecordRegistry {
 
     /// The company a request names, or the current one. An absent company is
     /// a body the caller reads.
-    fn resolve_company_id(
+    pub(super) fn resolve_company_id(
         &self,
         company_id: Option<&str>,
     ) -> Result<Result<String, Value>, ProtocolError> {
@@ -146,7 +146,7 @@ impl RecordRegistry {
 
     /// Resolves the company, the current one when none is named, and opens
     /// it once. An absent or unknown company is a body the agent reads.
-    fn with_record<T>(
+    pub(super) fn with_record<T>(
         &self,
         company_id: Option<&str>,
         work: impl FnOnce(&mut OpenRecord) -> Result<T, ProtocolError>,

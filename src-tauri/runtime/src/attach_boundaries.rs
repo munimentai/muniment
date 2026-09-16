@@ -917,6 +917,30 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         self.records.entity(actor, body)
     }
 
+    fn reader_describe(
+        &self,
+        actor: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.records.reader_describe(actor, body)
+    }
+
+    fn reader_run(
+        &self,
+        actor: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.records.reader_run(actor, body)
+    }
+
+    fn reader_queue(
+        &self,
+        actor: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.records.reader_queue(actor, body)
+    }
+
     fn list_threads(
         &self,
         workspace: &str,

@@ -76,6 +76,8 @@ let recordQueryResult
 let recordEntityResult
 let recordProposeResult
 let recordCommitResult
+let readerDescribeResult
+let readerRunResults
 let localModeStatus
 let runtimeState
 let runtimeListener
@@ -223,6 +225,12 @@ beforeEach(() => {
   recordEntityResult = { entity: { entity: { id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', body_text: 'Northwind renewal: won.', data: { name: 'Northwind renewal', stage: 'won' } }, kind: { name: 'deal', schema: { properties: { name: {}, stage: {} }, stateProperty: 'stage' }, states: ['discovery', 'won'], extension: null }, identities: [{ kind: 'external', value: 'hubspot:deal:1', entity_id: 'deal-1' }], edges: [{ id: 'edge-1', relation: 'concerns', src_id: 'deal-1', dst_id: 'org-1', dst_title: 'Northwind', dst_kind: 'org', src_title: 'Northwind renewal', src_kind: 'deal', valid_from: '2026-09-15T10:00:00.000Z', valid_to: null }], events: [{ id: 'ev-1', seq: 3, at: '2026-09-15T10:00:00.000Z', verb: 'created', actor_id: 'owner-1', on_behalf_of: null }] } }
   recordProposeResult = { proposal: { id: 'proposal-1', warnings: ['Northwind Traders has an open deal closing 2026-09-16'], diff: { op: 'update', before: { data: { name: 'Northwind renewal', stage: 'won' } }, after: { data: { name: 'Northwind renewal FY27', stage: 'won' } } } } }
   recordCommitResult = { result: { event_seq: 4, entity_ids: ['deal-1'] } }
+  readerDescribeResult = { description: { source: 'csv', object: '/exports/customers.csv', label: 'customers.csv', rows: 3, bytes: 120, hash: 'abc', fields: [
+    { name: 'Company', guess: 'string', samples: ['Northwind', 'Contoso'], filled: 3 },
+    { name: 'Website', guess: 'domain', samples: ['northwind.example'], filled: 2 },
+    { name: 'Since', guess: 'date', samples: ['2020-01-15'], filled: 3 },
+  ] } }
+  readerRunResults = [{ run: { mapping: 'map-1', source: 'csv', object: '/exports/customers.csv', label: 'customers.csv', kind: 'org', offset: 0, next_offset: 3, done: true, total: 3, changed: true, created: 2, updated: 0, unchanged: 0, unplaced: 1, queued: 1, queue: [{ row: 3, title: 'No Site', reason: 'the Website cell is empty, so the row has no identity', cells: { Company: 'No Site', Website: '' } }] } }]
   recordCompaniesResult = { companies: [{ id: 'company-1', name: 'Northwind', created_at: '2026-01-01T00:00:00.000Z', owner_principal_id: 'owner-1', current: true }, { id: 'company-2', name: 'Surfoff', created_at: '2026-01-02T00:00:00.000Z', owner_principal_id: 'owner-2', current: false }], current: 'company-1' }
   recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'person', schema: { properties: { full_name: {}, job_title: {} } }, states: null, extension: null }, { name: 'deal', schema: { properties: { name: {}, stage: {} }, stateProperty: 'stage' }, states: ['discovery', 'won'], extension: null }, { name: 'x_vendor', schema: { properties: { x_name: {} } }, states: null, extension: null }] }
   threadSummaryResult = [{ threadId: 'thread-1', title: '', updatedAt: '' }]
@@ -281,6 +289,8 @@ beforeEach(() => {
     if (command === 'record_entity') return recordEntityResult
     if (command === 'record_propose') return recordProposeResult
     if (command === 'record_commit') return recordCommitResult
+    if (command === 'reader_describe') return readerDescribeResult
+    if (command === 'reader_run') return readerRunResults.length > 1 ? readerRunResults.shift() : readerRunResults[0]
     throw new Error(`unexpected command: ${command}`)
   })
 })
@@ -1931,6 +1941,82 @@ describe('record panel', () => {
     await fireEvent.click(within(proposed).getByRole('button', { name: 'Commit' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_commit', { companyId: 'company-1', proposal: 'proposal-2' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_entity', { companyId: 'company-1', entity: 'deal-2' }))
+  })
+
+  it('imports a CSV file onto the open kind through a proposed mapping, runs it and lists the rows it could not place', async () => {
+    recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'org', schema: { properties: { name: { type: 'string' }, domain: { type: 'string' }, industry: { type: 'string' } }, required: ['name'] }, states: null, extension: { properties: { x_since: { type: 'string', format: 'date' } } } }] }
+    recordQueryResult = { page: { kind: 'org', total: 0, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [] } }
+    recordProposeResult = { proposal: { id: 'proposal-5', warnings: [], diff: { op: 'create', after: { id: 'map-1', data: { source: 'csv', object: '/exports/customers.csv', kind: 'org', fields: { Company: 'name', Website: 'domain', Since: 'x_since' }, identity: 'domain:Website', approved: true } } } } }
+    recordCommitResult = { result: { event_seq: 6, entity_ids: ['map-1'] } }
+    dialogResult = '/exports/customers.csv'
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await fireEvent.click(within(kinds).getAllByRole('button')[0])
+    await within(panel).findByText('No org records yet')
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Import' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_describe', { companyId: 'company-1', source: 'csv', object: '/exports/customers.csv' }))
+    const form = await within(panel).findByRole('form', { name: 'Map customers.csv' })
+    expect(form).toHaveTextContent('customers.csv · 3 rows')
+    const columns = within(form).getByRole('table', { name: 'Columns' })
+    expect(within(columns).getAllByRole('rowheader').map((cell) => cell.textContent)).toEqual(['Company', 'Website', 'Since'])
+    expect(within(columns).getByRole('combobox', { name: 'Property for Company' })).toHaveValue('name')
+    expect(within(columns).getByRole('combobox', { name: 'Property for Website' })).toHaveValue('domain')
+    const since = within(columns).getByRole('combobox', { name: 'Property for Since' })
+    expect(since).toHaveValue('x_since')
+    expect(within(since).getByRole('option', { name: 'since (own)' })).toBeInTheDocument()
+    expect(within(since).getByRole('option', { name: 'skip' })).toBeInTheDocument()
+    const identity = within(form).getByRole('combobox', { name: 'Identity' })
+    expect(identity).toHaveValue('domain:Website')
+    expect(within(identity).getAllByRole('option').map((option) => option.textContent)).toEqual(['the title', 'domain in Website', 'id in Company', 'id in Website', 'id in Since'])
+
+    await fireEvent.click(within(form).getByRole('button', { name: 'Propose mapping' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_propose', { companyId: 'company-1', operation: { op: 'create', kind: 'mapping', data: { source: 'csv', object: '/exports/customers.csv', kind: 'org', fields: { Company: 'name', Website: 'domain', Since: 'x_since' }, approved: true, identity: 'domain:Website' } } }))
+    const proposed = await within(form).findByRole('group', { name: 'Proposed mapping' })
+    expect(proposed).toHaveTextContent('kind: org')
+    expect(proposed).toHaveTextContent('identity: domain:Website')
+    await fireEvent.click(within(proposed).getByRole('button', { name: 'Commit and run' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_commit', { companyId: 'company-1', proposal: 'proposal-5' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_run', { companyId: 'company-1', mapping: 'map-1', offset: 0 }))
+    const result = await within(panel).findByRole('group', { name: 'Import result' })
+    expect(result).toHaveTextContent('3 rows in customers.csv')
+    expect(result).toHaveTextContent('2 created, 0 updated, 0 unchanged')
+    expect(result).toHaveTextContent('1 row not placed')
+    const queue = within(result).getByRole('table', { name: 'Rows not placed' })
+    expect(within(queue).getAllByRole('row')[1]).toHaveTextContent('3No Sitethe Website cell is empty, so the row has no identity')
+
+    recordQueryResult = { page: { kind: 'org', total: 2, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [{ id: 'org-1', kind: 'org', title: 'Northwind', state: null, updated_at: '2026-09-16T10:00:00.000Z', data: { name: 'Northwind', domain: 'northwind.example' } }] } }
+    await fireEvent.click(within(result).getByRole('button', { name: 'Done' }))
+    await within(panel).findByRole('table', { name: 'org records' })
+    expect(within(panel).getByText('2 records')).toBeInTheDocument()
+  })
+
+  it('runs a mapping record again from its own view', async () => {
+    recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'mapping', schema: { properties: { source: { type: 'string' }, object: { type: 'string' }, kind: { type: 'string' }, fields: { type: 'object' }, identity: { type: 'string' }, approved: { type: 'boolean' }, cursors: { type: 'object' } }, required: ['source', 'object', 'kind'] }, states: null, extension: null }, { name: 'org', schema: { properties: { name: { type: 'string' } } }, states: null, extension: null }] }
+    recordQueryResult = { page: { kind: 'mapping', total: 1, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [{ id: 'map-1', kind: 'mapping', title: 'csv customers.csv to org', state: null, updated_at: '2026-09-16T10:00:00.000Z', data: { source: 'csv', object: '/exports/customers.csv', kind: 'org', approved: true } }] } }
+    recordEntityResult = { entity: { entity: { id: 'map-1', kind: 'mapping', title: 'csv customers.csv to org', state: null, updated_at: '2026-09-16T10:00:00.000Z', body_text: 'Mapping of csv customers.csv onto org.', data: { source: 'csv', object: '/exports/customers.csv', kind: 'org', fields: { Company: 'name' }, approved: true } }, kind: recordKindsResult.kinds[0], identities: [], edges: [], events: [] } }
+    readerRunResults = [
+      { run: { mapping: 'map-1', label: 'customers.csv', kind: 'org', offset: 0, next_offset: 200, done: false, total: 260, changed: true, created: 200, updated: 0, unchanged: 0, unplaced: 0, queue: [] } },
+      { run: { mapping: 'map-1', label: 'customers.csv', kind: 'org', offset: 200, next_offset: 260, done: true, total: 260, changed: true, created: 0, updated: 0, unchanged: 60, unplaced: 0, queue: [] } },
+    ]
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await fireEvent.click(within(kinds).getAllByRole('button')[0])
+    await within(panel).findByRole('table', { name: 'mapping records' })
+    await fireEvent.click(within(panel).getByRole('button', { name: 'csv customers.csv to org' }))
+    await within(panel).findByRole('article', { name: 'csv customers.csv to org' })
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Run' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_run', { companyId: 'company-1', mapping: 'map-1', offset: 0 }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_run', { companyId: 'company-1', mapping: 'map-1', offset: 200 }))
+    const result = await within(panel).findByRole('group', { name: 'Import result' })
+    expect(result).toHaveTextContent('260 rows in customers.csv')
+    expect(result).toHaveTextContent('200 created, 0 updated, 60 unchanged')
+    expect(within(result).queryByRole('table', { name: 'Rows not placed' })).not.toBeInTheDocument()
+    await fireEvent.click(within(result).getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_entity', { companyId: 'company-1', entity: 'map-1' }))
   })
 
   it('switches a kind with states to the board, moves a card through propose and commit, saves a view and asks about it', async () => {

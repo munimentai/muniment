@@ -161,3 +161,52 @@ pub async fn record_kinds(
     })
     .await
 }
+
+/// One source object's fields and samples, so the panel maps it onto a kind.
+/// `object` is the file path the dialog returned.
+#[tauri::command]
+pub async fn reader_describe(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+    source: String,
+    object: String,
+) -> Result<Value, String> {
+    let body = record_body(
+        company_id,
+        vec![
+            ("source", Value::String(source)),
+            ("object", Value::String(object)),
+        ],
+    );
+    with_desktop_client(app, move |client| client.reader_describe(body)).await
+}
+
+/// Runs one committed mapping from `offset` for one budget. The answer's
+/// `next_offset` and `done` drive the next call.
+#[tauri::command]
+pub async fn reader_run(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+    mapping: String,
+    offset: Option<u64>,
+) -> Result<Value, String> {
+    let body = record_body(
+        company_id,
+        vec![
+            ("mapping", Value::String(mapping)),
+            ("offset", offset.map_or(Value::Null, Value::from)),
+        ],
+    );
+    with_desktop_client(app, move |client| client.reader_run(body)).await
+}
+
+/// The rows a mapping's last run could not place, with their reasons.
+#[tauri::command]
+pub async fn reader_queue(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+    mapping: String,
+) -> Result<Value, String> {
+    let body = record_body(company_id, vec![("mapping", Value::String(mapping))]);
+    with_desktop_client(app, move |client| client.reader_queue(body)).await
+}

@@ -6,6 +6,7 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import RecordBoard from './RecordBoard.svelte'
   import RecordForm from './RecordForm.svelte'
+  import RecordImport from './RecordImport.svelte'
   import RecordTable from './RecordTable.svelte'
   import RecordView from './RecordView.svelte'
   import { currentCompany, kindLabel, kindSummary, orderKinds, recordErrorLine, validCompanyName } from './record-panel-state.js'
@@ -31,6 +32,8 @@
   const hasStates = $derived(Array.isArray(kind?.states) && kind.states.length > 0)
   let detail = $state(null)
   let creating = $state(false)
+  // null, or { mapping } for a run of a committed mapping record.
+  let importing = $state(null)
   let error = $state(null)
   let loading = $state(false)
   let newCompanyName = $state('')
@@ -109,6 +112,7 @@
     selectedKind = name
     detail = null
     creating = false
+    importing = null
     sort = { sort: 'updated_at', descending: true }
     search = ''
     stateFilter = null
@@ -265,9 +269,24 @@
     else await loadPage()
   }
 
+  // The import lands rows on the open kind, so the table reloads when it ends.
+  async function afterImport() {
+    importing = null
+    if (detail) await openEntity(detail.entity.id)
+    else await loadPage()
+  }
+
+  // A mapping record runs again from its own view. The rows land on the
+  // mapping's kind, and the run summary shows in its place.
+  function runMapping() {
+    if (detail?.kind?.name !== 'mapping') return
+    importing = { mapping: detail.entity.id }
+  }
+
   function back() {
     error = null
-    if (creating) creating = false
+    if (importing) importing = null
+    else if (creating) creating = false
     else if (detail) {
       detail = null
       void loadPage()
@@ -280,7 +299,9 @@
   const crumb = $derived.by(() => {
     const parts = []
     if (kind) parts.push(kindLabel(kind.name))
-    if (creating) parts.push('new')
+    if (importing && detail) parts.push(detail.entity?.title ?? '', 'run')
+    else if (importing) parts.push('import')
+    else if (creating) parts.push('new')
     else if (detail) parts.push(detail.entity?.title ?? '')
     return parts
   })
@@ -307,8 +328,11 @@
       <span class="record-crumb-part">{part}</span>
     {/each}
     <span class="record-header-spacer"></span>
-    {#if kind && !creating && !detail}
+    {#if kind && !creating && !detail && !importing}
       <button type="button" class="record-new" onclick={() => { creating = true }}><LucideIcon name="plus" size={14} /><span>New {kindLabel(kind.name)}</span></button>
+    {/if}
+    {#if kind && detail && detail.kind?.name === 'mapping' && !importing}
+      <button type="button" class="record-new" onclick={runMapping}><LucideIcon name="play" size={14} /><span>Run</span></button>
     {/if}
     <button type="button" class="record-maximize" aria-pressed={maximized} aria-label={maximized ? 'Restore the thread beside the record' : 'Maximize the record over the thread'} onclick={ontogglemaximized}>
       <LucideIcon name={maximized ? 'minimize-2' : 'maximize-2'} size={14} />
@@ -325,6 +349,8 @@
       <input class="record-company-name" type="text" aria-label="Company name" placeholder="Company name" maxlength="120" bind:value={newCompanyName}>
       <button type="submit" class="record-create-button" disabled={!validCompanyName(newCompanyName)}>Create company</button>
     </form>
+  {:else if kind && importing}
+    <RecordImport {tauri} companyId={company?.id} kind={importing.mapping && detail?.entity?.data?.kind ? (kinds.find((candidate) => candidate.name === detail.entity.data.kind) ?? kind) : kind} mapping={importing.mapping} {propose} {commit} oncancel={() => { importing = null }} ondone={afterImport} />
   {:else if kind && creating}
     <RecordForm {kind} {propose} {commit} oncancel={() => { creating = false }} oncreated={(id) => { creating = false; void loadPage().then(() => openEntity(id)) }} />
   {:else if kind && detail}
@@ -352,6 +378,7 @@
           </select>
         {/if}
         <span class="record-toolbar-spacer"></span>
+        <button type="button" class="record-tool" onclick={() => { importing = {} }}>Import</button>
         <button type="button" class="record-tool" aria-pressed={savingView} onclick={() => { savingView = !savingView; pendingView = null }}>Save view</button>
         <button type="button" class="record-tool" onclick={ask}>Ask</button>
       </div>
