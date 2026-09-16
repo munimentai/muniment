@@ -465,7 +465,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     let descriptor = stage_pi_stub(&temporary_root);
 
     let run_id = "018f0000-0000-7000-8000-000000000004";
-    let session_root = profile.join("pi-sessions");
+    let session_root = muniment_core::chat_profile::ChatProfile::new(&profile).pi_session_root();
     fs::create_dir_all(&session_root).unwrap();
     fs::write(session_root.join("session.jsonl"), b"{}\n").unwrap();
     let storage = open_profile_storage(&profile).unwrap();
