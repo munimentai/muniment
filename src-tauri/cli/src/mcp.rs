@@ -263,7 +263,7 @@ fn tools() -> Vec<Value> {
                 "properties": {
                     "op": {"type": "string", "enum": ["create", "update", "link", "merge"]},
                     "kind": {"type": "string", "description": "create: the kind, such as person, org or deal."},
-                    "data": {"type": "object", "description": "create and update: the properties. On update a null removes a property."},
+                    "data": {"type": "object", "description": "create and update: the properties, such as {\"name\": \"Northwind\"}. On update a null removes a property."},
                     "identities": {"type": "array", "items": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["email", "domain", "phone", "handle", "external", "name_key"]}, "value": {"type": "string"}}, "required": ["kind", "value"]}, "description": "create and update: identities the entity holds."},
                     "links": {"type": "array", "items": {"type": "object", "properties": {"relation": {"type": "string"}, "target": {"type": "string"}, "props": {"type": "object"}}, "required": ["relation", "target"]}, "description": "create: edges from the new entity."},
                     "entity": {"type": "string", "description": "update: the entity reference."},
@@ -427,6 +427,18 @@ fn tools_call(
                         )))
                     }
                     None => {}
+                }
+            }
+            // A model that writes the properties under `props`, the link
+            // argument's name, meant `data` on a create or an update.
+            let op = arguments
+                .get("op")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if matches!(op.as_str(), "create" | "update") && !arguments.contains_key("data") {
+                if let Some(props) = arguments.remove("props") {
+                    arguments.insert("data".to_owned(), props);
                 }
             }
             body.insert("operation".to_owned(), Value::Object(arguments));
@@ -827,11 +839,17 @@ mod tests {
         assert_eq!(sent["operation"]["op"], "create");
         assert_eq!(sent["client"], "claude-code");
 
+        let props = json!({"name": "propose", "arguments": {"op": "create", "kind": "org", "props": {"name": "Northwind"}}});
+        handle_line(&mut backend, &request(16, "tools/call", props)).unwrap();
+        let sent = &backend.calls[2].1;
+        assert_eq!(sent["operation"]["data"]["name"], "Northwind");
+        assert!(sent["operation"].get("props").is_none());
+
         let mut declined = call.clone();
         declined["inputResponses"] = json!({"stage": {"action": "decline"}});
-        let reply = handle_line(&mut backend, &request(16, "tools/call", declined)).unwrap();
+        let reply = handle_line(&mut backend, &request(17, "tools/call", declined)).unwrap();
         assert_eq!(reply["result"]["isError"], true);
-        assert_eq!(backend.calls.len(), 2);
+        assert_eq!(backend.calls.len(), 3);
     }
 
     #[test]
