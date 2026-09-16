@@ -169,7 +169,11 @@ the row with Commit and Discard, and a warning from propose sits in ochre
 text above them. The board's columns are the kind's states, its cards are
 `surface` on `paper` at `--radius-control`, and a card in flight shows no
 color. A workflow run in progress is the one place the panel shows signal.
-Ask sends the open view's SQL to the composer as a mono reference. The empty
+The kind toolbar is one mono row: the layout switch, Table or Board, is two
+quiet controls with `aria-pressed`, the state filter and the saved-view
+picker are 24px native selects, and Save view and Ask are quiet controls.
+A saved view is a `view` record and Save view proposes it like any change.
+Ask sends the open view's SQL to the composer as a fenced block. The empty
 state of a kind is one line.
 
 Conversation, tool, permission, and receipt state is rebuilt from the

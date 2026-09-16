@@ -17,7 +17,9 @@ export function propertyColumn(key, schema, own = false) {
   return { key, label: own ? key.slice(2).replaceAll('_', ' ') : key.replaceAll('_', ' '), type: format ?? type, mono, own, enum: hasEnum ? schema.enum : null, required: false }
 }
 
-export function tableColumns(kind) {
+// Every property of the kind as a column, core first, then the company's own,
+// without the state property, which the base `state` column shows.
+export function propertyColumns(kind) {
   if (!kind) return []
   const required = new Set(kind.schema?.required ?? [])
   const stateProperty = kind.schema?.stateProperty
@@ -26,8 +28,17 @@ export function tableColumns(kind) {
     .map(([key, schema]) => ({ ...propertyColumn(key, schema), required: required.has(key) }))
   const own = Object.entries(kind.extension?.properties ?? {})
     .map(([key, schema]) => propertyColumn(key, schema, true))
+  return [...properties, ...own]
+}
+
+// A property that shares a base column's name, such as a task's `title`, is
+// the base column: the table shows it once.
+export function tableColumns(kind) {
+  if (!kind) return []
+  const stateProperty = kind.schema?.stateProperty
   const base = stateProperty ? BASE_COLUMNS : BASE_COLUMNS.filter((column) => column.key !== 'state')
-  return [...base, ...properties, ...own]
+  const taken = new Set(base.map((column) => column.key))
+  return [...base, ...propertyColumns(kind).filter((column) => !taken.has(column.key))]
 }
 
 export function cellValue(row, column) {
@@ -89,7 +100,7 @@ export function createOperation(kind, data) {
 // The form shows required properties first, then the rest, and never the state
 // property twice.
 export function formFields(kind) {
-  const columns = tableColumns(kind).filter((column) => !column.base)
+  const columns = propertyColumns(kind)
   const stateProperty = kind?.schema?.stateProperty
   if (stateProperty && kind.schema?.properties?.[stateProperty]) {
     const required = new Set(kind.schema?.required ?? [])
@@ -138,4 +149,73 @@ export function groupEdges(edges, entityId) {
     groups.set(key, entry)
   }
   return [...groups.entries()].map(([relation, items]) => ({ relation, items: items.sort((a, b) => (a.validTo ? 1 : 0) - (b.validTo ? 1 : 0)) }))
+}
+
+// The board: one column per state of the kind, and one for rows that hold none.
+export const NO_STATE_COLUMN = 'no state'
+
+export function boardColumns(kind, rows) {
+  const states = Array.isArray(kind?.states) ? kind.states : []
+  const columns = states.map((state) => ({ state, label: state, rows: [] }))
+  const unset = { state: null, label: NO_STATE_COLUMN, rows: [] }
+  for (const row of rows ?? []) {
+    const column = columns.find((candidate) => candidate.state === row.state)
+    if (column) column.rows.push(row)
+    else unset.rows.push(row)
+  }
+  return unset.rows.length ? [...columns, unset] : columns
+}
+
+// Moving a card is one update of the kind's state property.
+export function moveOperation(row, kind, toState) {
+  const property = kind?.schema?.stateProperty
+  if (!property || !row || row.state === toState) return null
+  const data = {}
+  data[property] = toState
+  return { op: 'update', entity: `entity:${row.id}`, data }
+}
+
+// A saved view is a `view` record: what it shows and how.
+export function viewData(name, kind, { layout = 'table', sort, state, search, columns } = {}) {
+  const data = { name, kind: kind.name, layout }
+  if (sort?.sort) data.sort = [{ column: sort.sort, descending: !!sort.descending }]
+  const filters = []
+  if (state) filters.push({ property: 'state', equals: state })
+  if (search?.trim()) filters.push({ property: 'search', matches: search.trim() })
+  if (filters.length) data.filters = filters
+  if (Array.isArray(columns) && columns.length) data.columns = columns
+  return data
+}
+
+export function viewSettings(row) {
+  const data = row?.data ?? {}
+  const sortEntry = Array.isArray(data.sort) ? data.sort[0] : null
+  const filters = Array.isArray(data.filters) ? data.filters : []
+  return {
+    layout: data.layout === 'board' ? 'board' : 'table',
+    sort: sortEntry?.column ? { sort: sortEntry.column, descending: !!sortEntry.descending } : { sort: 'updated_at', descending: true },
+    state: filters.find((filter) => filter?.property === 'state')?.equals ?? null,
+    search: filters.find((filter) => filter?.property === 'search')?.matches ?? '',
+  }
+}
+
+export function viewsFor(rows, kindName) {
+  return (rows ?? []).filter((row) => row?.kind === 'view' && row?.data?.kind === kindName)
+}
+
+// The SQL the open view stands for, over the kind's generated view, so a
+// question in the thread starts from what the person sees.
+export function askSql(kind, { sort, state, search, limit = 200 } = {}) {
+  if (!kind) return ''
+  const quote = (text) => `'${String(text).replaceAll("'", "''")}'`
+  const identifier = (text) => `"${String(text).replaceAll('"', '""')}"`
+  const columns = tableColumns(kind).map((column) => identifier(column.key))
+  const clauses = []
+  if (state) clauses.push(`state = ${quote(state)}`)
+  if (search?.trim()) {
+    const words = search.trim().split(/\s+/).map((word) => `"${word.replaceAll('"', '""')}"`).join(' ')
+    clauses.push(`id in (select entity_id from entity_search where entity_search match ${quote(words)})`)
+  }
+  const order = sort?.sort ? `${identifier(sort.sort)} ${sort.descending ? 'desc' : 'asc'}` : '"updated_at" desc'
+  return `select ${columns.join(', ')}\nfrom ${identifier(`v_${kind.name}`)}${clauses.length ? `\nwhere ${clauses.join(' and ')}` : ''}\norder by ${order}\nlimit ${limit}`
 }

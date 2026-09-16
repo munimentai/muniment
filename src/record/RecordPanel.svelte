@@ -4,12 +4,14 @@
   // three levels, the kind list, one kind's table, one record, and every
   // level generates from the kind row the runtime answers.
   import LucideIcon from '../lib/LucideIcon.svelte'
+  import RecordBoard from './RecordBoard.svelte'
   import RecordForm from './RecordForm.svelte'
   import RecordTable from './RecordTable.svelte'
   import RecordView from './RecordView.svelte'
   import { currentCompany, kindLabel, kindSummary, orderKinds, recordErrorLine, validCompanyName } from './record-panel-state.js'
+  import { askSql, diffLines, viewData, viewSettings, viewsFor } from './record-table-state.js'
 
-  let { tauri, maximized = false, ontogglemaximized } = $props()
+  let { tauri, maximized = false, ontogglemaximized, onask } = $props()
 
   let companies = $state([])
   let company = $derived(currentCompany(companies))
@@ -19,6 +21,14 @@
   let page = $state(null)
   let sort = $state({ sort: 'updated_at', descending: true })
   let search = $state('')
+  let layout = $state('table')
+  let stateFilter = $state(null)
+  let views = $state([])
+  let selectedView = $state('')
+  let savingView = $state(false)
+  let viewName = $state('')
+  let pendingView = $state(null)
+  const hasStates = $derived(Array.isArray(kind?.states) && kind.states.length > 0)
   let detail = $state(null)
   let creating = $state(false)
   let error = $state(null)
@@ -101,6 +111,71 @@
     creating = false
     sort = { sort: 'updated_at', descending: true }
     search = ''
+    stateFilter = null
+    layout = 'table'
+    selectedView = ''
+    savingView = false
+    pendingView = null
+    await Promise.all([loadPage(), loadViews()])
+  }
+
+  // Saved views are `view` records over this kind.
+  async function loadViews() {
+    if (!tauri || !company || !selectedKind) return
+    try {
+      const answer = await tauri.invoke('record_query', { companyId: company.id, kind: 'view', limit: 200, sort: 'title', descending: false })
+      views = answer?.error ? [] : viewsFor(answer?.page?.rows, selectedKind)
+    } catch {
+      views = []
+    }
+  }
+
+  async function applyView(viewId) {
+    selectedView = viewId
+    const row = views.find((candidate) => candidate.id === viewId)
+    if (!row) return
+    const settings = viewSettings(row)
+    layout = settings.layout
+    sort = settings.sort
+    stateFilter = settings.state
+    search = settings.search
+    await loadPage()
+  }
+
+  async function proposeView(event) {
+    event?.preventDefault?.()
+    const name = viewName.trim()
+    if (!name || !kind) return
+    const answer = await propose({ op: 'create', kind: 'view', data: viewData(name, kind, { layout, sort, state: stateFilter, search }) })
+    if (answer?.error) {
+      pendingView = { error: answer.error.message ?? 'The record refused the view.' }
+      return
+    }
+    pendingView = { proposal: answer.proposal?.id, lines: diffLines(answer.proposal?.diff) }
+  }
+
+  async function commitView() {
+    if (!pendingView?.proposal) return
+    const answer = await commit(pendingView.proposal)
+    if (answer?.error) {
+      pendingView = { error: answer.error.message ?? 'The commit failed.' }
+      return
+    }
+    const id = answer?.result?.entity_ids?.[0]
+    pendingView = null
+    savingView = false
+    viewName = ''
+    await loadViews()
+    if (id) selectedView = id
+  }
+
+  function ask() {
+    if (!kind) return
+    onask?.(askSql(kind, { sort, state: stateFilter, search }))
+  }
+
+  async function changeStateFilter(value) {
+    stateFilter = value || null
     await loadPage()
   }
 
@@ -115,6 +190,7 @@
         kind: selectedKind,
         sort: sort.sort,
         descending: sort.descending,
+        state: stateFilter || null,
         search: search.trim() || null,
         limit: 200,
       })
@@ -254,7 +330,55 @@
   {:else if kind && detail}
     <RecordView {detail} onopen={openEntity} />
   {:else if kind}
-    <RecordTable {kind} {page} {sort} {search} {loading} onsort={changeSort} onsearch={changeSearch} onopen={openEntity} {propose} {commit} oncommitted={afterCommit} />
+    <div class="record-kind-body">
+      <div class="record-toolbar" role="toolbar" aria-label="View">
+        {#if hasStates}
+          <div class="record-layouts">
+            <button type="button" class="record-layout" aria-pressed={layout === 'table'} onclick={() => { layout = 'table' }}>Table</button>
+            <button type="button" class="record-layout" aria-pressed={layout === 'board'} onclick={() => { layout = 'board' }}>Board</button>
+          </div>
+          <label class="record-filter">
+            <span class="visually-hidden">State</span>
+            <select class="record-select" aria-label="State" value={stateFilter ?? ''} onchange={(event) => changeStateFilter(event.currentTarget.value)}>
+              <option value="">every state</option>
+              {#each kind.states as state (state)}<option value={state}>{state}</option>{/each}
+            </select>
+          </label>
+        {/if}
+        {#if views.length}
+          <select class="record-select" aria-label="Saved view" value={selectedView} onchange={(event) => applyView(event.currentTarget.value)}>
+            <option value="">views</option>
+            {#each views as view (view.id)}<option value={view.id}>{view.title}</option>{/each}
+          </select>
+        {/if}
+        <span class="record-toolbar-spacer"></span>
+        <button type="button" class="record-tool" aria-pressed={savingView} onclick={() => { savingView = !savingView; pendingView = null }}>Save view</button>
+        <button type="button" class="record-tool" onclick={ask}>Ask</button>
+      </div>
+      {#if savingView}
+        <form class="record-save-view" aria-label="Save view" onsubmit={proposeView}>
+          {#if pendingView?.error}
+            <p class="record-diff-error" role="alert">{pendingView.error}</p>
+          {:else if pendingView}
+            <div class="record-save-diff" role="group" aria-label="Proposed view">
+              {#each pendingView.lines as line (line)}<p class="record-diff-line">{line}</p>{/each}
+              <div class="record-save-actions">
+                <button type="button" class="record-commit" onclick={commitView}>Commit</button>
+                <button type="button" class="record-discard" onclick={() => { pendingView = null }}>Discard</button>
+              </div>
+            </div>
+          {:else}
+            <input class="record-view-name" type="text" aria-label="View name" placeholder="View name" maxlength="120" bind:value={viewName}>
+            <button type="submit" class="record-commit" disabled={!viewName.trim()}>Propose</button>
+          {/if}
+        </form>
+      {/if}
+      {#if layout === 'board' && hasStates}
+        <RecordBoard {kind} {page} {loading} onopen={openEntity} {propose} {commit} oncommitted={afterCommit} />
+      {:else}
+        <RecordTable {kind} {page} {sort} {search} {loading} onsort={changeSort} onsearch={changeSearch} onopen={openEntity} {propose} {commit} oncommitted={afterCommit} />
+      {/if}
+    </div>
   {:else}
     <nav class="record-kinds" aria-label="Kinds">
       <ul>
@@ -288,6 +412,27 @@
   .record-company-name:focus { outline: none; border-color: var(--muted); }
   .record-create-button { justify-self: start; height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--ink); color: var(--paper); font: var(--text-13) var(--font-body); cursor: pointer; }
   .record-create-button:disabled { background: var(--faint); color: var(--muted); cursor: default; }
+  .record-kind-body { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0; }
+  .record-toolbar { display: flex; align-items: center; gap: 8px; padding-top: 10px; font: var(--text-12) var(--font-mono); }
+  .record-layouts { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); overflow: hidden; }
+  .record-layout { height: 24px; padding: 0 8px; border: 0; background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); cursor: pointer; }
+  .record-layout[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
+  .record-filter { display: inline-flex; }
+  .record-select { height: 24px; max-width: 180px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
+  .record-toolbar-spacer { flex: 1; }
+  .record-tool { height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); cursor: pointer; }
+  .record-tool:hover, .record-tool[aria-pressed="true"] { background: var(--faint); }
+  .record-save-view { display: flex; align-items: center; gap: 8px; padding-top: 8px; }
+  .record-view-name { flex: 1; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-body); }
+  .record-view-name:focus { outline: none; border-color: var(--muted); }
+  .record-save-diff { display: grid; gap: 4px; }
+  .record-save-actions { display: flex; gap: 8px; }
+  .record-diff-line { margin: 0; font: var(--text-12) var(--font-mono); }
+  .record-diff-error { margin: 0; color: var(--oxide); font: var(--text-12) var(--font-mono); }
+  .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-body); cursor: pointer; }
+  .record-commit { background: var(--ink); color: var(--paper); }
+  .record-commit:disabled { background: var(--faint); color: var(--muted); cursor: default; }
+  .record-discard { background: var(--surface); color: var(--ink); }
   .record-kinds { min-height: 0; overflow-y: auto; }
   .record-kinds ul { margin: 0; padding: 0; list-style: none; }
   .record-kinds li + li { border-top: 1px solid var(--border); }
