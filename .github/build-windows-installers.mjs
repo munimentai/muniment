@@ -111,14 +111,17 @@ const signFile = (file) => {
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
 
+// The record server, muniment-cli, ships beside the runtime and is built and signed the same way.
 const runtime = join("src-tauri", "target", "release", "muniment-runtime.exe");
+const cliBinary = join("src-tauri", "target", "release", "muniment-cli.exe");
 const runtimeBuild = spawnSync("cargo", [
-  "build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime",
+  "build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime", "--package", "muniment-cli",
   "--release", "--locked",
 ], { stdio: "inherit" });
 if (runtimeBuild.error) throw runtimeBuild.error;
 if (runtimeBuild.status !== 0) process.exit(runtimeBuild.status ?? 1);
 signFile(runtime);
+signFile(cliBinary);
 
 // Tauri signs bundled DLL resources in place. Keep the pinned, hash-checked
 // inputs so later bundling passes validate and package the same upstream bits.
