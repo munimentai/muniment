@@ -41,14 +41,26 @@ pub struct Description {
     pub rows: usize,
     pub bytes: u64,
     pub hash: String,
+    /// Whether `rows` is the whole object. A source that counts nothing
+    /// answers the rows it read so far.
+    #[serde(default = "counted_default")]
+    pub counted: bool,
 }
 
 /// Where a run stands in an object. The runtime stores it in the mapping.
+/// `offset` counts rows landed, `hash` is the object's change mark, and
+/// `token` is the source's own page token when it has one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(crate = "muniment_core::serde")]
 pub struct Cursor {
     pub offset: usize,
     pub hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+fn counted_default() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +71,8 @@ pub struct Page {
     pub total: usize,
     pub hash: String,
     pub next: Option<Cursor>,
+    #[serde(default = "counted_default")]
+    pub counted: bool,
 }
 
 /// What changed in an object since a cursor.
@@ -79,8 +93,16 @@ pub enum ReaderError {
     UnknownSource(String),
     UnknownObject(String),
     Unreadable(String),
-    TooLarge { bytes: u64, cap: u64 },
+    TooLarge {
+        bytes: u64,
+        cap: u64,
+    },
     Malformed(String),
+    /// A failure the source or its sidecar named, with its own code.
+    Source {
+        code: String,
+        message: String,
+    },
 }
 
 impl fmt::Display for ReaderError {
@@ -94,6 +116,7 @@ impl fmt::Display for ReaderError {
                 "The file holds {bytes} bytes and the reader stops at {cap}."
             ),
             Self::Malformed(reason) => write!(formatter, "The file does not parse: {reason}."),
+            Self::Source { message, .. } => formatter.write_str(message),
         }
     }
 }
@@ -102,13 +125,14 @@ impl std::error::Error for ReaderError {}
 
 impl ReaderError {
     /// The code the panel and the agent read beside the message.
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> &str {
         match self {
             Self::UnknownSource(_) => "unknown_source",
             Self::UnknownObject(_) => "unknown_object",
             Self::Unreadable(_) => "unreadable",
             Self::TooLarge { .. } => "too_large",
             Self::Malformed(_) => "malformed",
+            Self::Source { code, .. } => code,
         }
     }
 }
@@ -131,13 +155,50 @@ pub trait Reader {
 
 /// The one source name a file reader answers to.
 pub const CSV_SOURCE: &str = "csv";
+/// The network sources the Go sidecar reads, each behind its own secret.
+pub const SIDECAR_SOURCES: [&str; 1] = ["stripe"];
 
 /// Opens the reader for a source. `object` is the file path for a file
-/// reader. A network source arrives later behind the same four calls.
+/// reader and the object name for a network source, whose secret comes from
+/// the secret store.
 pub fn open_reader(source: &str, object: &str) -> Result<Box<dyn Reader>, ReaderError> {
-    match source {
-        CSV_SOURCE => Ok(Box::new(crate::reader_csv::CsvReader::new(object))),
-        other => Err(ReaderError::UnknownSource(other.to_owned())),
+    if source == CSV_SOURCE {
+        return Ok(Box::new(crate::reader_csv::CsvReader::new(object)));
+    }
+    if !SIDECAR_SOURCES.contains(&source) {
+        return Err(ReaderError::UnknownSource(source.to_owned()));
+    }
+    let secret = crate::reader_secret::read(source).ok_or_else(|| ReaderError::Source {
+        code: "not_connected".to_owned(),
+        message: format!(
+            "Connect {} with its secret key first.",
+            source_label(source)
+        ),
+    })?;
+    open_sidecar(source, secret)
+}
+
+/// Opens a sidecar reader on a secret the caller holds, before it is stored.
+pub fn open_sidecar(source: &str, secret: String) -> Result<Box<dyn Reader>, ReaderError> {
+    let executable =
+        crate::reader_sidecar::sidecar_executable().ok_or_else(|| ReaderError::Source {
+            code: "reader_missing".to_owned(),
+            message: format!(
+                "The {} reader is not installed beside the runtime.",
+                source_label(source)
+            ),
+        })?;
+    Ok(Box::new(crate::reader_sidecar::SidecarReader::new(
+        source, executable, secret,
+    )))
+}
+
+/// The name a source shows: `Stripe` for `stripe`.
+pub fn source_label(source: &str) -> String {
+    let mut chars = source.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }
 
@@ -229,13 +290,17 @@ fn looks_like_phone(value: &str) -> bool {
 
 /// Serializes one value the way the mapping stores a cursor.
 pub fn cursor_value(cursor: &Cursor, rows: usize, ran_at: &str, complete: bool) -> Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "offset": cursor.offset,
         "hash": cursor.hash,
         "rows": rows,
         "ran_at": ran_at,
         "complete": complete,
-    })
+    });
+    if let Some(token) = &cursor.token {
+        value["token"] = Value::String(token.clone());
+    }
+    value
 }
 
 #[cfg(test)]
@@ -265,13 +330,25 @@ mod tests {
     }
 
     #[test]
-    fn opens_the_csv_reader_and_refuses_an_unknown_source() {
+    fn opens_the_csv_reader_and_names_an_unknown_or_unconnected_source() {
         assert!(open_reader("csv", "/tmp/x.csv").is_ok());
-        let error = match open_reader("stripe", "customers") {
+        let error = match open_reader("quickbooks", "customers") {
             Ok(_) => panic!("an unknown source opened"),
             Err(error) => error,
         };
         assert_eq!(error.code(), "unknown_source");
-        assert_eq!(error.to_string(), "No reader reads stripe.");
+        assert_eq!(error.to_string(), "No reader reads quickbooks.");
+        std::env::set_var("MUNIMENT_READER_SECRET_STRIPE", "");
+        let error = match open_reader("stripe", "customers") {
+            Ok(_) => panic!("an unconnected source opened"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "not_connected");
+        assert_eq!(
+            error.to_string(),
+            "Connect Stripe with its secret key first."
+        );
+        std::env::remove_var("MUNIMENT_READER_SECRET_STRIPE");
+        assert_eq!(source_label("stripe"), "Stripe");
     }
 }

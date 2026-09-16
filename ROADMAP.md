@@ -44,10 +44,11 @@ open view's SQL to the composer.
 ## Readers fill the graph
 
 The JSON file reader joins the CSV reader in the runtime. The Go reader
-sidecar takes Stripe first, then GitHub, Gmail metadata, Slack and the
-helpdesk, behind Objects, Describe, Page and Delta, through the mapping, cursor
-and resolve queue the CSV reader runs on. The agent proposes a mapping from
-the thread, and the resolve queue is a view in the panel with one action per
+sidecar takes GitHub, Gmail metadata, Slack and the helpdesk after Stripe,
+behind Objects, Describe, Page and Delta, through the mapping, cursor and
+resolve queue the CSV and Stripe readers run on. A mapping's `edges` link a
+subscription to its customer's org. The agent proposes a mapping from the
+thread, and the resolve queue is a view in the panel with one action per
 row.
 
 ## The extractor downloads on request

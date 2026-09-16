@@ -186,8 +186,12 @@ open record carries Link, Merge and Delete as quiet controls at the header's
 right, each opening one form in the record's place: a relation and target
 kind as 24px selects, a search field with a list of matches by title, the
 diff, and Commit and Discard. On the kind list, Rename beside the company
-picker turns the picker into one text field with Save. Import opens the file dialog, then fills
-the kind body with one mono table of the file's columns: the column name,
+picker turns the picker into one text field with Save. Import first lists
+the sources as one quiet list, CSV file and Stripe, with a mono note beside
+each. A file opens the file dialog. A network source not yet connected shows
+one sentence and one password field for its secret key, then its objects as
+the same list. The object then fills the kind body with one mono table of its
+columns: the column name,
 what its samples read as with three examples, and a 24px select of the
 property it fills, with `skip` first. One select under it names the column
 that keys each row. Propose mapping shows the mapping record's diff, Commit

@@ -3,11 +3,13 @@ import { describe, expect, it } from 'vitest'
 import {
   accumulateRun,
   identityOptions,
+  externalPrefix,
   importErrorLine,
   mappedCount,
   mappingData,
   mappingLines,
   runSummaryLines,
+  sourceOptions,
   suggestFields,
   suggestIdentity,
   suggestProperty,
@@ -65,6 +67,17 @@ describe('record import state', () => {
     expect(options).toHaveLength(9)
     expect(suggestIdentity(description)).toBe('email:Contact email')
     expect(suggestIdentity({ fields: [{ name: 'A', guess: 'string' }] })).toBe('')
+
+    const stripe = { source: 'stripe', object: 'customers', label: 'Customers', counted: false, fields: [{ name: 'id', guess: 'id', samples: ['cus_1'], filled: 3 }, { name: 'email', guess: 'email', samples: ['a@b.co'], filled: 2 }, { name: 'name', guess: 'string', samples: ['Northwind'], filled: 3 }] }
+    expect(externalPrefix(stripe)).toBe('stripe:customers')
+    expect(externalPrefix(description)).toBe('csv:customers_2026')
+    const stripeOptions = identityOptions(stripe)
+    expect(stripeOptions[1]).toEqual({ value: 'external:stripe:customers:id', label: 'id in id' })
+    expect(stripeOptions[2]).toEqual({ value: 'email:email', label: 'email in email' })
+    expect(stripeOptions.map((option) => option.value)).not.toContain('external:stripe:customers:id:id')
+    expect(suggestIdentity(stripe)).toBe('external:stripe:customers:id')
+    expect(sourceOptions().map((option) => option.value)).toEqual(['csv', 'stripe'])
+    expect(mappingLines(stripe, org, { name: 'name' }, 'external:stripe:customers:id')).toEqual(['name fills name', 'keyed on external in id', 'kind org', 'stripe Customers'])
   })
 
   it('builds the mapping record from the mapped fields alone', () => {

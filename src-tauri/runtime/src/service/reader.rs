@@ -6,7 +6,10 @@
 //! answers the rows the last run could not place.
 
 use super::record::{company_id, error_body, record_failure, text, OpenRecord, RecordRegistry};
-use crate::reader::{cursor_value, open_reader, Cursor, Delta, ReaderError};
+use crate::reader::{
+    cursor_value, open_reader, open_sidecar, source_label, Cursor, Delta, ReaderError,
+    SIDECAR_SOURCES,
+};
 use crate::reader_mapping::{data_differs, row_plan, Mapping, RowPlan};
 use muniment_core::attach::ProtocolError;
 use muniment_core::record::{now_string, Operation, RecordError, Reference};
@@ -135,6 +138,40 @@ fn failure_message(error: RecordError) -> String {
 }
 
 impl RecordRegistry {
+    /// The objects one connected source holds, so the panel offers them.
+    pub fn reader_objects(&self, _actor: &str, body: Value) -> Result<Value, ProtocolError> {
+        let source = text(&body, "source")?;
+        Ok(
+            match open_reader(&source, "").and_then(|reader| reader.objects()) {
+                Ok(objects) => {
+                    json!({"source": source, "label": source_label(&source), "objects": objects})
+                }
+                Err(error) => reader_failure(error),
+            },
+        )
+    }
+
+    /// Stores one source's secret after one read proves it. A key the source
+    /// refuses is not kept.
+    pub fn reader_connect(&self, _actor: &str, body: Value) -> Result<Value, ProtocolError> {
+        let source = text(&body, "source")?;
+        let secret = text(&body, "secret")?;
+        if !SIDECAR_SOURCES.contains(&source.as_str()) {
+            return Ok(reader_failure(ReaderError::UnknownSource(source)));
+        }
+        let objects =
+            match open_sidecar(&source, secret.clone()).and_then(|reader| reader.objects()) {
+                Ok(objects) => objects,
+                Err(error) => return Ok(reader_failure(error)),
+            };
+        if let Err(reason) = crate::reader_secret::write(&source, &secret) {
+            return Ok(error_body("secret_store", reason));
+        }
+        Ok(
+            json!({"connected": {"source": source, "label": source_label(&source), "objects": objects}}),
+        )
+    }
+
     /// One source object's fields and samples, so the panel maps it.
     pub fn reader_describe(&self, _actor: &str, body: Value) -> Result<Value, ProtocolError> {
         let source = text(&body, "source")?;
@@ -227,7 +264,16 @@ impl RecordRegistry {
             let mut cursor = Cursor {
                 offset: start,
                 hash: String::new(),
+                token: if start == 0 {
+                    None
+                } else {
+                    mapping
+                        .cursor
+                        .as_ref()
+                        .and_then(|cursor| cursor.token.clone())
+                },
             };
+            let mut counted;
             let mut total;
             let mut created = 0_usize;
             let mut updated = 0_usize;
@@ -250,6 +296,7 @@ impl RecordRegistry {
                     }
                 }
                 cursor.hash = page.hash.clone();
+                counted = page.counted;
                 total = page.total.min(RUN_ROW_CAP);
                 for (index, row) in page.rows.iter().enumerate() {
                     let number = page.offset + index + 1;
@@ -295,8 +342,10 @@ impl RecordRegistry {
                 match page.next {
                     Some(next) if cursor.offset < RUN_ROW_CAP => {
                         cursor.offset = next.offset;
+                        cursor.token = next.token;
                     }
                     _ => {
+                        cursor.token = None;
                         done = true;
                         break;
                     }
@@ -344,6 +393,7 @@ impl RecordRegistry {
                 "next_offset": cursor.offset,
                 "done": done,
                 "total": total,
+                "counted": counted,
                 "changed": changed,
                 "hash": cursor.hash,
                 "created": created,
@@ -435,11 +485,37 @@ mod tests {
             registry
                 .reader_describe(
                     DESKTOP_ACTOR,
-                    json!({"source": "stripe", "object": "customers"})
+                    json!({"source": "quickbooks", "object": "customers"})
                 )
                 .unwrap()["error"]["code"],
             "unknown_source"
         );
+        std::env::set_var("MUNIMENT_READER_SECRET_STRIPE", "");
+        assert_eq!(
+            registry
+                .reader_describe(
+                    DESKTOP_ACTOR,
+                    json!({"source": "stripe", "object": "customers"})
+                )
+                .unwrap()["error"]["code"],
+            "not_connected"
+        );
+        assert_eq!(
+            registry
+                .reader_objects(DESKTOP_ACTOR, json!({"source": "stripe"}))
+                .unwrap()["error"]["code"],
+            "not_connected"
+        );
+        assert_eq!(
+            registry
+                .reader_connect(
+                    DESKTOP_ACTOR,
+                    json!({"source": "quickbooks", "secret": "x"})
+                )
+                .unwrap()["error"]["code"],
+            "unknown_source"
+        );
+        std::env::remove_var("MUNIMENT_READER_SECRET_STRIPE");
 
         let unapproved = propose_and_commit(
             &registry,

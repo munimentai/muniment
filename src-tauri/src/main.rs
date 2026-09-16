@@ -180,6 +180,8 @@ fn main() {
             record::reader_describe,
             record::reader_run,
             record::reader_queue,
+            record::reader_objects,
+            record::reader_connect,
             restart_muniment,
             launcher::launcher_register,
             launcher::launcher_start_failed,

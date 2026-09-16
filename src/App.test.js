@@ -78,6 +78,8 @@ let recordProposeResult
 let recordCommitResult
 let readerDescribeResult
 let readerRunResults
+let readerObjectsResult
+let readerConnectResult
 let localModeStatus
 let runtimeState
 let runtimeListener
@@ -230,6 +232,8 @@ beforeEach(() => {
     { name: 'Website', guess: 'domain', samples: ['northwind.example'], filled: 2 },
     { name: 'Since', guess: 'date', samples: ['2020-01-15'], filled: 3 },
   ] } }
+  readerObjectsResult = { error: { code: 'not_connected', message: 'Connect Stripe with its secret key first.' } }
+  readerConnectResult = { connected: { source: 'stripe', label: 'Stripe', objects: [{ name: 'customers', label: 'Customers' }, { name: 'subscriptions', label: 'Subscriptions' }, { name: 'invoices', label: 'Invoices' }] } }
   readerRunResults = [{ run: { mapping: 'map-1', source: 'csv', object: '/exports/customers.csv', label: 'customers.csv', kind: 'org', offset: 0, next_offset: 3, done: true, total: 3, changed: true, created: 2, updated: 0, unchanged: 0, unplaced: 1, queued: 1, queue: [{ row: 3, title: 'No Site', reason: 'the Website cell is empty, so the row has no identity', cells: { Company: 'No Site', Website: '' } }] } }]
   recordCompaniesResult = { companies: [{ id: 'company-1', name: 'Northwind', created_at: '2026-01-01T00:00:00.000Z', owner_principal_id: 'owner-1', current: true }, { id: 'company-2', name: 'Surfoff', created_at: '2026-01-02T00:00:00.000Z', owner_principal_id: 'owner-2', current: false }], current: 'company-1' }
   recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'person', schema: { properties: { full_name: {}, job_title: {} } }, states: null, extension: null }, { name: 'deal', schema: { properties: { name: {}, stage: {} }, stateProperty: 'stage' }, states: ['discovery', 'won'], extension: null }, { name: 'x_vendor', schema: { properties: { x_name: {} } }, states: null, extension: null }] }
@@ -294,6 +298,8 @@ beforeEach(() => {
     if (command === 'record_propose') return recordProposeResult
     if (command === 'record_commit') return recordCommitResult
     if (command === 'reader_describe') return readerDescribeResult
+    if (command === 'reader_objects') return readerObjectsResult
+    if (command === 'reader_connect') return readerConnectResult
     if (command === 'reader_run') return readerRunResults.length > 1 ? readerRunResults.shift() : readerRunResults[0]
     throw new Error(`unexpected command: ${command}`)
   })
@@ -1960,6 +1966,9 @@ describe('record panel', () => {
     await fireEvent.click(within(kinds).getAllByRole('button')[0])
     await within(panel).findByText('No org records yet')
     await fireEvent.click(within(panel).getByRole('button', { name: 'Import' }))
+    const sources = within(panel).getByRole('list', { name: 'Sources' })
+    expect(within(sources).getAllByRole('button').map((button) => button.textContent)).toEqual(['CSV filea file on this machine', 'Stripecustomers, subscriptions, invoices'])
+    await fireEvent.click(within(sources).getByRole('button', { name: /CSV file/ }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_describe', { companyId: 'company-1', source: 'csv', object: '/exports/customers.csv' }))
     const form = await within(panel).findByRole('form', { name: 'Map customers.csv' })
     expect(form).toHaveTextContent('customers.csv · 3 rows')
@@ -2102,6 +2111,55 @@ describe('record panel', () => {
     await fireEvent.click(within(proposedDelete).getByRole('button', { name: 'Commit' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_commit', { companyId: 'company-1', proposal: 'proposal-8' }))
     await within(panel).findByText('No org records yet')
+  })
+
+  it('connects Stripe once, picks an object and maps it with the source id as the key', async () => {
+    recordKindsResult = { company_id: 'company-1', kinds: [{ name: 'org', schema: { properties: { name: { type: 'string' }, domain: { type: 'string' } }, required: ['name'] }, states: null, extension: null }] }
+    recordQueryResult = { page: { kind: 'org', total: 0, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [] } }
+    readerDescribeResult = { description: { source: 'stripe', object: 'customers', label: 'Customers', rows: 100, counted: false, bytes: 0, hash: '1700000100', fields: [
+      { name: 'id', guess: 'id', samples: ['cus_1', 'cus_2'], filled: 100 },
+      { name: 'name', guess: 'string', samples: ['Northwind'], filled: 98 },
+      { name: 'email_domain', guess: 'domain', samples: ['northwind.example'], filled: 80 },
+    ] } }
+    recordProposeResult = { proposal: { id: 'proposal-9', warnings: [], diff: { op: 'create', after: { id: 'map-2', data: {} } } } }
+    recordCommitResult = { result: { event_seq: 10, entity_ids: ['map-2'] } }
+    readerRunResults = [{ run: { mapping: 'map-2', source: 'stripe', object: 'customers', label: 'Customers', kind: 'org', offset: 0, next_offset: 100, done: true, total: 100, counted: false, changed: true, created: 100, updated: 0, unchanged: 0, unplaced: 0, queue: [] } }]
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await fireEvent.click(within(kinds).getAllByRole('button')[0])
+    await within(panel).findByText('No org records yet')
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Import' }))
+    await fireEvent.click(within(within(panel).getByRole('list', { name: 'Sources' })).getByRole('button', { name: /Stripe/ }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_objects', { companyId: 'company-1', source: 'stripe' }))
+    const connect = await within(panel).findByRole('form', { name: 'Connect stripe' })
+    expect(connect).toHaveTextContent('The key stays in this machine\'s keychain')
+    const key = within(connect).getByLabelText('Secret key')
+    expect(key).toHaveAttribute('type', 'password')
+    await fireEvent.input(key, { target: { value: 'sk_live_x' } })
+    await fireEvent.click(within(connect).getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_connect', { companyId: 'company-1', source: 'stripe', secret: 'sk_live_x' }))
+    const objects = await within(panel).findByRole('list', { name: 'Objects' })
+    expect(within(objects).getAllByRole('button').map((button) => button.textContent)).toEqual(['Customers', 'Subscriptions', 'Invoices'])
+    await fireEvent.click(within(objects).getByRole('button', { name: 'Customers' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_describe', { companyId: 'company-1', source: 'stripe', object: 'customers' }))
+    const form = await within(panel).findByRole('form', { name: 'Map Customers' })
+    expect(form).toHaveTextContent('Customers · 100 rows read so far')
+    expect(within(form).getByRole('combobox', { name: 'Property for name' })).toHaveValue('name')
+    expect(within(form).getByRole('combobox', { name: 'Property for email_domain' })).toHaveValue('domain')
+    const identity = within(form).getByRole('combobox', { name: 'Identity' })
+    expect(identity).toHaveValue('external:stripe:customers:id')
+    await fireEvent.click(within(form).getByRole('button', { name: 'Propose mapping' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_propose', { companyId: 'company-1', operation: { op: 'create', kind: 'mapping', data: { source: 'stripe', object: 'customers', kind: 'org', fields: { name: 'name', email_domain: 'domain' }, approved: true, identity: 'external:stripe:customers:id' } } }))
+    const proposed = await within(form).findByRole('group', { name: 'Proposed mapping' })
+    expect(proposed).toHaveTextContent('keyed on external in id')
+    expect(proposed).toHaveTextContent('stripe Customers')
+    await fireEvent.click(within(proposed).getByRole('button', { name: 'Commit and run' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_run', { companyId: 'company-1', mapping: 'map-2', offset: 0 }))
+    const result = await within(panel).findByRole('group', { name: 'Import result' })
+    expect(result).toHaveTextContent('100 rows in Customers')
+    expect(result).toHaveTextContent('100 created, 0 updated, 0 unchanged')
   })
 
   it('runs a mapping record again from its own view', async () => {

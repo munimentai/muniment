@@ -500,13 +500,13 @@
 
 <style>
   .record-panel { grid-area: rail; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); padding: 14px 16px 16px; overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
-  .record-header { display: flex; align-items: center; gap: 8px; min-height: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--border); font: var(--text-13) var(--font-mono); }
+  .record-header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--border); font: var(--text-13) var(--font-mono); }
   .record-header h2 { margin: 0; font: 600 var(--text-15)/1.3 var(--font-body); }
   .record-back { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); cursor: pointer; }
   .record-back:hover, .record-new:hover, .record-maximize:hover { background: var(--faint); }
   .record-company-picker { max-width: 200px; height: 24px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; }
   .record-crumb { color: var(--muted); }
-  .record-crumb-part { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+  .record-crumb-part { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
   .record-header-spacer { flex: 1; }
   .record-new, .record-maximize { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
   .record-state { margin: 12px 0 0; color: var(--muted); font: var(--text-13) var(--font-mono); }

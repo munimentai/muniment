@@ -73,6 +73,12 @@ jobs:
                 docs_only=false
                 companion=true
                 ;;
+              src-tauri/reader/*|src-tauri/reader/**)
+                # The Go reader sidecar ships beside the runtime in every bundle.
+                docs_only=false
+                companion=true
+                desktop=true
+                ;;
               protocol-fixtures/code-diff/*|protocol-fixtures/code-diff/**)
                 docs_only=false
                 companion=true
@@ -268,6 +274,23 @@ jobs:
       - name: Runtime dependency boundary
         if: needs.changes.outputs.companion == 'true'
         run: test/runtime-dependency-boundary.sh
+
+      - name: Go toolchain for the reader sidecar
+        if: needs.changes.outputs.companion == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src-tauri/reader/go.mod
+
+      - name: Reader sidecar format, vet and tests
+        if: needs.changes.outputs.companion == 'true'
+        working-directory: src-tauri/reader
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            printf 'gofmt would change:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+          go vet ./... && go test ./...
 
   attach-fixtures-current:
     name: attach-fixtures-current
