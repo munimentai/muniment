@@ -177,10 +177,19 @@ text above them. The board's columns are the kind's states, its cards are
 color. A workflow run in progress is the one place the panel shows signal.
 The kind toolbar is one mono row: the layout switch, Table or Board, is two
 quiet controls with `aria-pressed`, the state filter and the saved-view
-picker are 24px native selects, and Save view and Ask are quiet controls.
-A saved view is a `view` record and Save view proposes it like any change.
-Ask sends the open view's SQL to the composer as a fenced block. The empty
-state of a kind is one line.
+picker are 24px native selects, and Import, Save view and Ask are quiet
+controls. A saved view is a `view` record and Save view proposes it like any
+change. Ask sends the open view's SQL to the composer as a fenced block. The
+empty state of a kind is one line. Import opens the file dialog, then fills
+the kind body with one mono table of the file's columns: the column name,
+what its samples read as with three examples, and a 24px select of the
+property it fills, with `skip` first. One select under it names the column
+that keys each row. Propose mapping shows the mapping record's diff, Commit
+and run applies it, and the run reports `n of total rows` as one mono status
+line. The result is three mono lines, rows, counts and rows not placed, then
+one mono table of row, title and reason for every row the mapping could not
+place, with Done and Run again. A mapping record's view carries Run at the
+header's right, where New sits for a kind.
 
 Conversation, tool, permission, and receipt state is rebuilt from the
 append-only local run journal. Reopen reduces committed events; snapshots are

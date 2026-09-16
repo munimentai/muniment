@@ -2,6 +2,7 @@
 
 mod company;
 pub(crate) mod prompt_storage;
+mod reader;
 mod record;
 mod run;
 mod session;

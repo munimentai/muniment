@@ -13,6 +13,9 @@ mod macos_activation;
 mod macos_attach_loop;
 #[cfg(target_os = "linux")]
 mod migration;
+mod reader;
+mod reader_csv;
+mod reader_mapping;
 #[cfg(any(unix, target_os = "windows"))]
 mod retention_schedule;
 pub mod service;
