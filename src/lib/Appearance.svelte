@@ -82,9 +82,8 @@
       </div>
     {/each}
   </div>
-</section>
 
-<section class="type-section" aria-labelledby="type-heading">
+  <div class="type-section" role="group" aria-labelledby="type-heading">
   <h3 id="type-heading" class="access-label">Type</h3>
   <div class="type-size" role="group" aria-label="Size">
     <button type="button" aria-label="Smaller type" aria-keyshortcuts={typeSizeShortcut('smaller')} disabled={type.step <= SIZE_STEP_MIN} onclick={() => step(-1)}>Smaller <kbd>{typeSizeShortcutLabel('smaller')}</kbd></button>
@@ -96,15 +95,16 @@
     <div class="type-font" role="group" aria-label="{label} font">
       <p class="group-label">{label}</p>
       <input type="search" class="font-search" aria-label="Search {label.toLowerCase()} fonts" placeholder="Search installed fonts" bind:value={query[register]}>
-      <ul class="font-list">
-        <li><button type="button" class="font-pick" aria-pressed={type[register] === null} onclick={() => chooseFont(register, null)}><span class="font-name">{SHIPPED_FONTS[register]}</span><span class="font-note">shipped</span></button></li>
+      <div class="font-list">
+        <button type="button" class="font-pick" aria-pressed={type[register] === null} onclick={() => chooseFont(register, null)}><span class="font-name">{SHIPPED_FONTS[register]}</span><span class="font-note">shipped</span></button>
         {#each filterFonts(fonts, query[register]) as name (name)}
-          <li><button type="button" class="font-pick" aria-pressed={type[register] === name} onclick={() => chooseFont(register, name)}><span class="font-name" style:font-family={`'${name}'`}>{name}</span></button></li>
+          <button type="button" class="font-pick" aria-pressed={type[register] === name} onclick={() => chooseFont(register, name)}><span class="font-name" style:font-family={`'${name}'`}>{name}</span></button>
         {/each}
-      </ul>
+      </div>
       {#if fontsRead && fonts.length === 0}<p class="font-note">No installed fonts were read from this device.</p>{/if}
     </div>
   {/each}
+  </div>
 </section>
 
 <style>
@@ -143,7 +143,7 @@
   .type-font { margin-top: 10px; }
   .font-search { box-sizing: border-box; width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); }
   .font-search:focus { outline: none; border-color: var(--muted); }
-  .font-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+  .font-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin: 6px 0 0; }
   .font-pick { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }
   .font-pick:hover { background: var(--faint); color: var(--ink); }
   .font-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }

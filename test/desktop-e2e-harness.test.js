@@ -582,7 +582,7 @@ cleanup_status=0
 status=0
 first_failed_step=none
 trap 'restore_macos_spec_config; exit "$status"' EXIT
-mkdir -p "$process_root"
+mkdir -p "$process_root" "$HOME"
 source test/e2e/support/cleanup-ledger.sh
 source test/e2e/support/runner-failure.sh
 ${functions}
@@ -3743,8 +3743,8 @@ describe('installed model settings controls', () => {
     const firstRun = fs.readFileSync(path.join(root, 'test/e2e/support/first-run.mjs'), 'utf8')
     expect(firstRun).toContain("panel.$('button=Open model settings')")
     expect(firstRun).toContain('await settings.click()')
-    expect(onboardingSpec).toContain("expect(await (await $('#provider-key')).isDisplayed()).toBe(true)")
-    expect(onboardingSpec).toContain("expect(await (await $('button=Save key')).isDisplayed()).toBe(true)")
+    expect(onboardingSpec).toContain("expect(await (await settings.$('button=Connect provider')).isDisplayed()).toBe(true)")
+    expect(onboardingSpec).toContain("await (await settings.$('button[aria-label=\"Close settings\"]')).click()")
   })
 
   it('includes the model settings panel in the failure diagnostic', () => {
