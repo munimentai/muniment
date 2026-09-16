@@ -178,14 +178,13 @@ impl AttachListenerState {
 
 pub type AttachApprovalState = ApprovalCoordinator;
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(serde::Serialize)]
 pub(super) struct AttachPairingRequest {
     pub(super) challenge: String,
     pub(super) claimed_kind: String,
     pub(super) claimed_version: String,
     pub(super) workspace: String,
-    pub(super) scopes: BTreeSet<String>,
+    pub(super) scopes: std::collections::BTreeSet<String>,
 }
 
 #[tauri::command]

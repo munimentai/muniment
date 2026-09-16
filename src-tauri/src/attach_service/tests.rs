@@ -117,9 +117,9 @@ mod cases {
             .stop_desktop_client_for_test();
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[test]
-    fn windows_frontend_decision_resolves_presented_pipe_request() {
+    fn frontend_decision_resolves_a_presented_request() {
         use muniment_attach::ApprovalDecision;
         use muniment_core::attach::ApprovalPresentRequest;
         use std::sync::mpsc;
@@ -426,9 +426,17 @@ mod cases {
         assert!(state.approval_presenter.lock().unwrap().is_none());
     }
 
+    // The presenter start counters are process-wide, so the tests that start
+    // the desktop client take turns.
+    #[cfg(target_os = "macos")]
+    static DESKTOP_CLIENT_START: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_desktop_client_starts_without_a_managed_companion_state() {
+        let _turn = DESKTOP_CLIENT_START
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let app = tauri::test::mock_app();
         app.manage(AttachApprovalState::default());
 
@@ -441,11 +449,67 @@ mod cases {
         state.stop_desktop_client();
     }
 
+    // The runtime's presenter connection hands a pairing request to the
+    // desktop's coordinator. Without the card registered as its presenter the
+    // request is denied before the shell ever hears of it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_desktop_client_registers_the_pairing_card_as_presenter() {
+        use muniment_attach::ApprovalDecision;
+        use muniment_core::attach::ApprovalPresentRequest;
+        use std::sync::mpsc;
+        use tauri::Listener;
+
+        let _turn = DESKTOP_CLIENT_START
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let app = tauri::test::mock_app();
+        app.manage(AttachApprovalState::default());
+        start_desktop_client(app.handle());
+        let (event_tx, event_rx) = mpsc::channel();
+        app.handle()
+            .listen("attach-pairing-requested", move |event| {
+                event_tx.send(event.payload().to_owned()).unwrap();
+            });
+
+        let approvals = app.state::<AttachApprovalState>().inner().clone();
+        let worker = std::thread::spawn(move || {
+            answer_presented_approval(
+                &approvals,
+                &ApprovalPresentRequest {
+                    challenge: "challenge-card".into(),
+                    claimed_kind: "cli".into(),
+                    claimed_version: "1.0.0".into(),
+                    workspace: "workspace-a".into(),
+                    scopes: vec!["thread.read".into()],
+                    deadline_ms: 1_000,
+                },
+            )
+        });
+
+        let payload = event_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let event: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(event["challenge"], "challenge-card");
+        attach_pairing_decide(
+            app.state::<AttachApprovalState>(),
+            "challenge-card".into(),
+            true,
+        );
+        assert_eq!(worker.join().unwrap(), ApprovalDecision::Approve);
+
+        let state = app.state::<AttachCompanionState>();
+        state.stop_approval_presenter();
+        state.stop_desktop_client();
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_desktop_supervisor_restart_does_not_duplicate_presenter() {
         use std::sync::atomic::Ordering;
 
+        let _turn = DESKTOP_CLIENT_START
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         TEST_PRESENTER_STARTS.store(0, Ordering::SeqCst);
         TEST_PRESENTER_WORKERS.store(0, Ordering::SeqCst);
         let app = tauri::test::mock_app();

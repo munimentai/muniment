@@ -1,6 +1,6 @@
 //! Runtime-owned boundaries for desktop attach reads.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
 #[cfg(any(unix, target_os = "windows"))]
@@ -192,8 +192,11 @@ impl RuntimeAttachBoundaries {
         muniment_core::local_mode::is_local_mode(&self.config_directory)
     }
 
-    /// Returns the approval state shared with the attach listener.
+    /// Returns the approval state shared with the attach listener. Local mode
+    /// has no cloud grant to record a workspace from, so the local workspace
+    /// stands recorded whenever the marker is present.
     pub fn signed_workspace_approval(&self) -> SignedWorkspaceApproval {
+        record_local_workspace_approval(&self.approval, &self.config_directory);
         self.approval.clone()
     }
 
@@ -226,6 +229,18 @@ impl RuntimeAttachBoundaries {
             claimed_version,
             remaining,
         )
+    }
+}
+
+/// Records the local workspace as the owner's approval when local mode is on
+/// and no cloud workspace is recorded, so a companion pairing reaches the
+/// presenter instead of a denial before it.
+pub(crate) fn record_local_workspace_approval(
+    approval: &SignedWorkspaceApproval,
+    config_directory: &Path,
+) {
+    if approval.approval().is_none() && muniment_core::local_mode::is_local_mode(config_directory) {
+        approval.record(ChatGrant::local().workspace);
     }
 }
 
@@ -298,7 +313,9 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         requested_workspace: Option<&str>,
     ) -> Result<ChatGrant, RunStartError> {
         if self.local_mode() {
-            return Ok(ChatGrant::local());
+            let grant = ChatGrant::local();
+            self.approval.record(grant.workspace.clone());
+            return Ok(grant);
         }
         let grant =
             service::configure_run(&tokens.access_token, requested_workspace).map_err(|error| {
@@ -1469,6 +1486,32 @@ mod tests {
         );
 
         assert!(matches!(decision, ApprovalDecision::Approve(_)));
+    }
+
+    #[test]
+    fn local_mode_records_the_local_workspace_approval_once() {
+        let root = std::env::temp_dir().join(format!(
+            "muniment-local-approval-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let approval = SignedWorkspaceApproval::default();
+
+        record_local_workspace_approval(&approval, &root);
+        assert!(approval.approval().is_none());
+
+        std::fs::write(root.join(muniment_core::local_mode::LOCAL_MODE_MARKER), []).unwrap();
+        record_local_workspace_approval(&approval, &root);
+        assert_eq!(approval.approval().unwrap().workspace, "local");
+
+        approval.record("workspace-a".into());
+        record_local_workspace_approval(&approval, &root);
+        assert_eq!(approval.approval().unwrap().workspace, "workspace-a");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
