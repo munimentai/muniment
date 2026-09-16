@@ -76,7 +76,8 @@ describe('record import state', () => {
     expect(stripeOptions[2]).toEqual({ value: 'email:email', label: 'email in email' })
     expect(stripeOptions.map((option) => option.value)).not.toContain('external:stripe:customers:id:id')
     expect(suggestIdentity(stripe)).toBe('external:stripe:customers:id')
-    expect(sourceOptions().map((option) => option.value)).toEqual(['csv', 'stripe'])
+    expect(sourceOptions().map((option) => option.value)).toEqual(['csv', 'stripe', 'hubspot'])
+    expect(sourceOptions().find((option) => option.value === 'hubspot').secret).toBe('private app access token')
     expect(mappingLines(stripe, org, { name: 'name' }, 'external:stripe:customers:id')).toEqual(['name fills name', 'keyed on external in id', 'kind org', 'stripe Customers'])
   })
 

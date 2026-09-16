@@ -15,6 +15,7 @@
   let step = $state(existingMapping ? 'running' : 'source')
   let source = $state('csv')
   let secret = $state('')
+  let secretLabel = $state('secret key')
   let objects = $state([])
   let sourceLabel = $state('')
   let description = $state(null)
@@ -40,6 +41,7 @@
   function chooseSource(name) {
     source = name
     sourceLabel = sources.find((option) => option.value === name)?.label ?? name
+    secretLabel = sources.find((option) => option.value === name)?.secret ?? 'secret key'
     error = null
     if (name === 'csv') step = 'picking'
     else void listObjects()
@@ -209,8 +211,8 @@
     <p class="record-import-state">Choose a CSV file</p>
   {:else if step === 'connecting'}
     <form class="record-import-connect" aria-label="Connect {sourceLabel || source}" onsubmit={connect}>
-      <p class="record-import-state">Connect {sourceLabel || source} with its secret key. The key stays in this machine's keychain, and every read runs here.</p>
-      <input class="record-import-secret" type="password" aria-label="Secret key" placeholder="Secret key" autocomplete="off" bind:value={secret}>
+      <p class="record-import-state">Connect {sourceLabel || source} with its {secretLabel}. It stays in this machine's keychain, and every read runs here.</p>
+      <input class="record-import-secret" type="password" aria-label={secretLabel[0].toUpperCase() + secretLabel.slice(1)} placeholder={secretLabel[0].toUpperCase() + secretLabel.slice(1)} autocomplete="off" bind:value={secret}>
       {#if error}<p class="record-import-error" role="alert">{error}</p>{/if}
       <div class="record-import-actions">
         <button type="submit" class="record-commit" disabled={busy || !secret.trim()}>{busy ? 'Connecting' : 'Connect'}</button>
