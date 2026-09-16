@@ -150,7 +150,7 @@ describe('installed nightly model-ready onboarding', () => {
 
     await expandSidebar()
     const row = await $('header.titlebar')
-    expect((await row.getSize()).height).toBe(36)
+    expect((await row.getSize()).height).toBe(30)
     for (const name of ['Collapse sidebar', 'New thread', 'Rename thread', 'Open artifact rail']) {
       const control = await row.$(`button[aria-label="${name}"]`)
       expect(await control.isDisplayed()).toBe(true)

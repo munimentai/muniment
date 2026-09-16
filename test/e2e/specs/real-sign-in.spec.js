@@ -150,6 +150,10 @@ describe('installed nightly', () => {
       // The cloud sign-in sits in the Settings menu at the foot of the sidebar.
       await expandSidebar()
       await (await $('button=Settings')).click()
+      // Settings opens on Models; the cloud sign-in is the Account section's one action.
+      const sections = await $('nav[aria-label="Settings sections"]')
+      await sections.waitForDisplayed()
+      await (await sections.$('button=Account')).click()
       signIn = await $('button=Sign in for cloud features')
       await signIn.waitForDisplayed()
     }

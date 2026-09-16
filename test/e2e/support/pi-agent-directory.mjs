@@ -3,9 +3,11 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 // This matches normalizePath in Pi v0.85.1 utils/paths.ts with its default options.
-export function piAgentDirectory(configured = process.env.PI_CODING_AGENT_DIR, home = homedir(), windows = process.platform === 'win32') {
+// Without an override the runtime hands Pi the `agent` directory under the one
+// state root, `MUNIMENT_STATE_DIR` or `~/.muniment`, so the default follows it.
+export function piAgentDirectory(configured = process.env.PI_CODING_AGENT_DIR, home = homedir(), windows = process.platform === 'win32', stateDirectory = process.env.MUNIMENT_STATE_DIR) {
   const paths = windows ? path.win32 : path.posix
-  if (!configured) return paths.join(home, '.pi', 'agent')
+  if (!configured) return paths.join(stateDirectory || paths.join(home, '.muniment'), 'agent')
   let value = configured
   if (windows && value.startsWith('/') && !value.startsWith('//') && !value.includes('\\')) {
     const match = value.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i)
