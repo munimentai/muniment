@@ -229,7 +229,7 @@ fn local_mode_run(configured: bool) {
             .signed_workspace_approval()
             .approval()
             .map(|approval| approval.workspace),
-        Some(muniment_core::chat_grant::ChatGrant::local().workspace)
+        Some("local".to_owned())
     );
 
     let storage = open_profile_storage(&profile.profile).unwrap();
