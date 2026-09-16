@@ -232,6 +232,7 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
     };
     #[cfg(target_os = "macos")]
     {
+        register_approval_event_presenter(app);
         state.start_approval_presenter(move |stop| {
             #[cfg(test)]
             TEST_PRESENTER_STARTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -342,7 +343,9 @@ pub(super) fn serve_chat_events_at(
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+// The card in the shell is the presenter of last resort on every platform:
+// the runtime's presenter connection hands each pairing request to this
+// coordinator, and this registration turns it into the `attach-pairing-requested` event.
 pub(super) fn register_approval_event_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let approval_app = app.clone();
     app.state::<AttachApprovalState>()
