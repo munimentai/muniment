@@ -223,7 +223,14 @@ fn local_mode_run(configured: bool) {
         .iter()
         .all(|event| event.run_id == submitted.run_id
             && event.thread_id.as_deref() == Some(submitted.thread_id.as_str())));
-    assert!(state.signed_workspace_approval().approval().is_none());
+    // The run records local mode's own workspace, so a companion pairs without an account.
+    assert_eq!(
+        state
+            .signed_workspace_approval()
+            .approval()
+            .map(|approval| approval.workspace),
+        Some(muniment_core::chat_grant::ChatGrant::local().workspace)
+    );
 
     let storage = open_profile_storage(&profile.profile).unwrap();
     let events = storage
