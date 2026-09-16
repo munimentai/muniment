@@ -1461,7 +1461,7 @@
               <button class="side-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
             </div>
             {#if auth.name === 'signed-in'}
-              <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} escapeBlocked={() => dictationRequested || isDictationActive(dictation)} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+              <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} />
             {:else}
               <button class="side-action" disabled={!!active || localEntryPending} onclick={signIn}><LucideIcon name="log-in" size={18} /><span>Sign in to cloud</span></button>
             {/if}
@@ -1790,7 +1790,7 @@
 </main>
 
   {#if settingsOpen}
-    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next }} />
+    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
   {/if}
 {#if pairingRequests[0]}
   {#key pairingRequests[0]}
