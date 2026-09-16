@@ -1,12 +1,12 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
+  certificateSha1,
   codesignArguments,
   intermediateCertificateImportArguments,
-  intermediateCertificateImportSucceeded,
   keychainSearchListArguments,
   NOTARIZATION_DEADLINE_SECONDS,
   notarize,
@@ -105,38 +105,38 @@ const intermediateCertPath = join(".github", "certs", "DeveloperIDG2CA.cer");
 const keyPath = join(workDir, "AuthKey.p8");
 const keychain = join(workDir, "muniment-signing.keychain-db");
 const keychainPassword = "muniment-ci-signing";
-const cleanup = () => rmSync(workDir, { recursive: true, force: true });
+// trustd builds the signer's chain from the login keychain, not from a keychain the run
+// adds to the search list, so the public Developer ID G2 intermediate sits in the login
+// keychain for the run and leaves with it. The identity never does.
+const loginKeychain = join(homedir(), "Library", "Keychains", "login.keychain-db");
+const intermediateSha1 = certificateSha1(readFileSync(intermediateCertPath));
+let intermediatePlaced = false;
+const cleanup = () => {
+  if (intermediatePlaced) spawnSync("security", ["delete-certificate", "-Z", intermediateSha1, loginKeychain]);
+  rmSync(workDir, { recursive: true, force: true });
+};
 process.on("exit", cleanup);
 
 writeFileSync(certPath, Buffer.from(signingConfig.certificate, "base64"), { mode: 0o600 });
 writeFileSync(keyPath, Buffer.from(signingConfig.apiKey, "base64"), { mode: 0o600 });
 
-// The dedicated keychain holds the Developer ID identities and G2 intermediate.
-// Keep existing keychains and System Roots searchable so codesign can reach the Apple root.
+// The throwaway keychain holds the identities for this run alone. Keep existing keychains
+// and System Roots searchable so codesign can reach the Apple root.
 mustRun("create keychain", "security", ["create-keychain", "-p", keychainPassword, keychain]);
 mustRun("keychain settings", "security", ["set-keychain-settings", keychain]);
 mustRun("unlock keychain", "security", ["unlock-keychain", "-p", keychainPassword, keychain]);
 mustRun("import certificate", "security",
   signingCertificateImportArguments(certPath, keychain, signingConfig.certificatePassword));
-const intermediate = spawnSync("security",
-  ["find-certificate", "-c", "Developer ID Certification Authority", keychain], { encoding: "utf8" });
-if (intermediate.error) throw intermediate.error;
-if (intermediate.status === 0) {
-  console.log("The keychain already holds the Developer ID G2 intermediate. Skip the import.");
+const intermediatePresent = spawnSync("security",
+  ["find-certificate", "-Z", "-c", "Developer ID Certification Authority", loginKeychain], { encoding: "utf8" });
+if (intermediatePresent.error) throw intermediatePresent.error;
+if ((intermediatePresent.stdout || "").includes(intermediateSha1)) {
+  console.log("The login keychain already holds the Developer ID G2 intermediate. Skip the placement.");
 } else {
-  const imported = spawnSync("security",
-    intermediateCertificateImportArguments(intermediateCertPath, keychain), { encoding: "utf8" });
-  if (imported.stdout) process.stdout.write(imported.stdout);
-  if (imported.stderr) process.stderr.write(imported.stderr);
-  if (imported.error) throw imported.error;
-  if (!intermediateCertificateImportSucceeded(imported)) {
-    console.error(`import Developer ID G2 intermediate FAILED (security rc=${imported.status}) — see output above`);
-    process.exit(imported.status ?? 1);
-  }
+  mustRun("place intermediate", "security", intermediateCertificateImportArguments(intermediateCertPath, loginKeychain));
+  intermediatePlaced = true;
+  console.log("placed intermediate: Developer ID Certification Authority, G2");
 }
-mustRun("show Developer ID G2 intermediate", "security",
-  ["find-certificate", "-c", "Developer ID Certification Authority", keychain]);
-console.log("imported intermediate: Developer ID Certification Authority, G2");
 mustRun("authorize signing tools", "security",
   signingKeyPartitionListArguments(keychain, keychainPassword));
 const priorKeychains = spawnSync("security", ["list-keychains", "-d", "user"], { encoding: "utf8" });

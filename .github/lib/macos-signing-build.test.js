@@ -40,7 +40,7 @@ beforeEach(() => {
     const fs = {
       existsSync: () => false,
       mkdtempSync: () => "/tmp/signing work",
-      readFileSync: vi.fn(),
+      readFileSync: vi.fn(() => Buffer.from("intermediate")),
       rmSync: vi.fn(),
       writeFileSync: vi.fn(),
     };
@@ -84,15 +84,16 @@ it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (se
   const preflight = calls.findIndex(([command, args]) => command === "security" && args.includes("codesigning"));
   const signing = calls.flatMap(([command, args], index) => command === "codesign" && args[0] === "--force" ? [index] : []);
   expect(registration).toBeLessThan(preflight);
-  // The dylib leaf, the runtime, the record CLI beside it, then the app.
-  expect(signing).toHaveLength(4);
+  // The dylib leaf, the runtime, the record CLI and the reader beside it, then the app.
+  expect(signing).toHaveLength(5);
   expect(preflight).toBeLessThan(signing[0]);
   expect(calls[signing[0]][1].at(-1)).toMatch(/asr\.dylib$/);
   expect(calls[signing[1]][1].at(-1)).toMatch(/LaunchServices\/muniment-runtime$/);
   expect(calls[signing[2]][1].at(-1)).toMatch(/LaunchServices\/muniment-cli$/);
-  expect(calls[signing[3]][1].at(-1)).toMatch(/muniment\.app$/);
+  expect(calls[signing[3]][1].at(-1)).toMatch(/LaunchServices\/muniment-reader$/);
+  expect(calls[signing[4]][1].at(-1)).toMatch(/muniment\.app$/);
   const submission = calls.findIndex(([command, args]) => command === "xcrun" && args[0] === "notarytool" && args[1] === "submit");
-  expect(submission).toBeGreaterThan(signing[3]);
+  expect(submission).toBeGreaterThan(signing[4]);
   const packaging = calls.slice(submission).filter(([command]) => ["xcrun", "ditto", "productbuild"].includes(command));
   expect(packaging.map(([command, args]) => command === "xcrun" ? args.slice(0, 2).join(" ") : command)).toEqual([
     "notarytool submit", "notarytool info", "stapler staple", "stapler validate",
@@ -135,6 +136,37 @@ it.each(["import", "set-key-partition-list"])("stops before signing when %s fail
   });
   await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
   expect(spawn.mock.calls.some(([command]) => ["codesign", "productbuild", "xcrun"].includes(command))).toBe(false);
+});
+
+it("places the Developer ID G2 intermediate in the login keychain before signing and removes it on exit", async () => {
+  await import("../build-macos-app.mjs");
+  const calls = spawn.mock.calls;
+  const login = "/Library/Keychains/login.keychain-db";
+  const lookup = calls.findIndex(([command, args]) => command === "security" && args[0] === "find-certificate");
+  const placement = calls.findIndex(([command, args]) => command === "security" && args[0] === "import" && args.at(-1).endsWith(login));
+  const signing = calls.findIndex(([command]) => command === "codesign");
+  expect(calls[lookup][1]).toEqual(["find-certificate", "-Z", "-c", "Developer ID Certification Authority", expect.stringMatching(/\/Library\/Keychains\/login\.keychain-db$/)]);
+  expect(calls[placement][1]).toEqual(["import", ".github/certs/DeveloperIDG2CA.cer", "-k", calls[lookup][1].at(-1)]);
+  expect(lookup).toBeLessThan(placement);
+  expect(placement).toBeLessThan(signing);
+  expect(calls.some(([command, args]) => command === "security" && args[0] === "import" && args.at(-1).endsWith(".cer") && !args.at(-1).endsWith(login))).toBe(false);
+  for (const listener of process.listeners("exit")) if (!exitListeners.includes(listener)) listener();
+  const removal = calls.find(([command, args]) => command === "security" && args[0] === "delete-certificate");
+  expect(removal[1]).toEqual(["delete-certificate", "-Z", "CE03A80127FF0AFF9657B1B049FED435174E88B3", calls[lookup][1].at(-1)]);
+});
+
+it("keeps an intermediate the login keychain already holds", async () => {
+  const defaultSpawn = spawn.getMockImplementation();
+  spawn.mockImplementation((command, args, options) => {
+    if (command === "security" && args[0] === "find-certificate") return { status: 0, stdout: "SHA-1 hash: CE03A80127FF0AFF9657B1B049FED435174E88B3\n" };
+    return defaultSpawn(command, args, options);
+  });
+  await import("../build-macos-app.mjs");
+  for (const listener of process.listeners("exit")) if (!exitListeners.includes(listener)) listener();
+  const calls = spawn.mock.calls;
+  expect(calls.some(([command, args]) => command === "security" && args[0] === "import" && args[1].endsWith(".cer"))).toBe(false);
+  expect(calls.some(([command, args]) => command === "security" && args[0] === "delete-certificate")).toBe(false);
+  expect(calls.some(([command]) => command === "codesign")).toBe(true);
 });
 
 it("keeps unsigned packaging free of keychain access", async () => {
