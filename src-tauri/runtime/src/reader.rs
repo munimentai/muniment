@@ -3,8 +3,8 @@
 //! Rust inside the runtime. The runtime holds each cursor and does every
 //! write, so a reader never touches SQLite.
 
+use muniment_core::serde::{Deserialize, Serialize};
 use muniment_core::serde_json::{self, Value};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -14,6 +14,7 @@ pub type Row = BTreeMap<String, String>;
 /// One thing a source holds that a mapping can read: a file, a Stripe
 /// customer list, a mailbox label.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(crate = "muniment_core::serde")]
 pub struct ObjectInfo {
     pub name: String,
     pub label: String,
@@ -22,6 +23,7 @@ pub struct ObjectInfo {
 /// One field of an object: its name, the type the samples suggest, and a few
 /// distinct sample values, so a person maps it without opening the source.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(crate = "muniment_core::serde")]
 pub struct FieldDescription {
     pub name: String,
     pub guess: String,
@@ -30,6 +32,7 @@ pub struct FieldDescription {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(crate = "muniment_core::serde")]
 pub struct Description {
     pub source: String,
     pub object: String,
@@ -42,12 +45,14 @@ pub struct Description {
 
 /// Where a run stands in an object. The runtime stores it in the mapping.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(crate = "muniment_core::serde")]
 pub struct Cursor {
     pub offset: usize,
     pub hash: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(crate = "muniment_core::serde")]
 pub struct Page {
     pub rows: Vec<Row>,
     pub offset: usize,
@@ -58,7 +63,11 @@ pub struct Page {
 
 /// What changed in an object since a cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
+#[serde(
+    crate = "muniment_core::serde",
+    tag = "state",
+    rename_all = "snake_case"
+)]
 pub enum Delta {
     Unchanged,
     Changed { hash: String },
