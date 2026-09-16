@@ -106,7 +106,8 @@ async function checkWindowChrome(browser, baseUrl) {
             }),
           }
         })
-        assert.equal(row.height, 28)
+        // The title row is 30px on the 36px band the workspace grid names.
+        assert.equal(row.height, 30)
         assert.equal(row.top, 0)
         if (platform.startsWith('Mac')) assert.equal(row.clearance, 78)
         else assert.equal(row.padding, '12px')
