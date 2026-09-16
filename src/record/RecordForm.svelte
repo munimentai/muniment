@@ -61,7 +61,8 @@
           {#each field.enum as option (option)}<option value={option}>{option}</option>{/each}
         </select>
       {:else if field.type === 'date'}
-        <input class="record-input mono" type="date" bind:value={values[field.key]} required={field.required}>
+        <!-- The webview's date field edits by segment and settles the value on change, so the change event feeds the form too. -->
+        <input class="record-input mono" type="date" bind:value={values[field.key]} onchange={(event) => { values[field.key] = event.currentTarget.value }} required={field.required}>
       {:else if field.type === 'number' || field.type === 'integer'}
         <input class="record-input mono" type="number" step={field.type === 'integer' ? 1 : 'any'} bind:value={values[field.key]} required={field.required}>
       {:else if field.type === 'boolean'}
