@@ -4,6 +4,7 @@
       "files": {
         "Library/LaunchServices/muniment-runtime": "target/universal-apple-darwin/release/muniment-runtime",
         "Library/LaunchServices/muniment-cli": "target/universal-apple-darwin/release/muniment-cli",
+        "Library/LaunchServices/muniment-reader": "target/universal-apple-darwin/release/muniment-reader",
         "Library/LaunchAgents/ai.muniment.runtime.plist": "packaging/ai.muniment.runtime.plist"
       }
     },

@@ -154,6 +154,7 @@ impl Reader for CsvReader {
             rows: parsed.rows.len(),
             bytes: parsed.bytes,
             hash: parsed.hash,
+            counted: true,
         })
     }
 
@@ -187,8 +188,10 @@ impl Reader for CsvReader {
             next: (end < parsed.rows.len()).then(|| Cursor {
                 offset: end,
                 hash: parsed.hash.clone(),
+                token: None,
             }),
             hash: parsed.hash,
+            counted: true,
         })
     }
 

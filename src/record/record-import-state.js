@@ -78,25 +78,51 @@ export function suggestFields(description, kind) {
   return fields
 }
 
+// The sources an import reads: a CSV file, then every network source the
+// sidecar knows.
+export function sourceOptions() {
+  return [
+    { value: 'csv', label: 'CSV file', note: 'a file on this machine' },
+    { value: 'stripe', label: 'Stripe', note: 'customers, subscriptions, invoices' },
+  ]
+}
+
+// The external id prefix an object's rows key on: `csv:<file stem>` for a
+// file, `<source>:<object>` for a network source, the record's
+// `system:object` shape either way.
+export function externalPrefix(description) {
+  const source = description?.source ?? 'csv'
+  if (source === 'csv') {
+    const stem = String(description?.label ?? 'file').replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9]+/g, '_').toLowerCase() || 'file'
+    return `csv:${stem}`
+  }
+  return `${source}:${String(description?.object ?? 'object').replace(/[^A-Za-z0-9]+/g, '_').toLowerCase()}`
+}
+
 // The identity choices: the title's name key, then every field the samples
 // type as an email, a domain or a phone, then any field as an external id
-// keyed to this file.
+// keyed to this object. A field the source types as an id leads the list.
 export function identityOptions(description) {
-  const stem = String(description?.label ?? 'file').replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9]+/g, '_').toLowerCase() || 'file'
+  const prefix = externalPrefix(description)
   const options = [{ value: '', label: 'the title' }]
+  for (const field of description?.fields ?? []) {
+    if (field.guess === 'id') options.push({ value: `external:${prefix}:${field.name}`, label: `id in ${field.name}` })
+  }
   for (const field of description?.fields ?? []) {
     if (['email', 'domain', 'phone'].includes(field.guess)) options.push({ value: `${field.guess}:${field.name}`, label: `${field.guess} in ${field.name}` })
   }
   for (const field of description?.fields ?? []) {
-    options.push({ value: `external:csv:${stem}:${field.name}`, label: `id in ${field.name}` })
+    if (field.guess !== 'id') options.push({ value: `external:${prefix}:${field.name}`, label: `id in ${field.name}` })
   }
   return options
 }
 
-// The first identity option a description suggests: an email, else a domain,
-// else a phone, else the title.
+// The first identity option a description suggests: the source's own id,
+// else an email, else a domain, else a phone, else the title.
 export function suggestIdentity(description) {
   const options = identityOptions(description)
+  const own = (description?.fields ?? []).find((field) => field.guess === 'id')
+  if (own) return options.find((candidate) => candidate.value.endsWith(`:${own.name}`) && candidate.value.startsWith('external:'))?.value ?? ''
   for (const kind of ['email', 'domain', 'phone']) {
     const option = options.find((candidate) => candidate.value.startsWith(`${kind}:`))
     if (option) return option.value
@@ -118,7 +144,7 @@ export function mappingLines(description, kind, fields, identity) {
   const lines = Object.entries(fields ?? {}).filter(([, property]) => property).map(([column, property]) => `${column} fills ${property}`)
   lines.push(`keyed on ${identity ? identity.replace(/^([a-z_]+):(.*)$/, (_, kindName, rest) => `${kindName} in ${rest.split(':').pop()}`) : 'the title'}`)
   lines.push(`kind ${kind?.name ?? ''}`.trim())
-  lines.push(`file ${description?.label ?? description?.object ?? ''}`.trim())
+  lines.push(`${description?.source && description.source !== 'csv' ? description.source : 'file'} ${description?.label ?? description?.object ?? ''}`.trim())
   return lines
 }
 

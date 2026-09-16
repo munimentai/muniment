@@ -210,3 +210,32 @@ pub async fn reader_queue(
     let body = record_body(company_id, vec![("mapping", Value::String(mapping))]);
     with_desktop_client(app, move |client| client.reader_queue(body)).await
 }
+
+/// The objects a connected source holds, or the failure that names what to do.
+#[tauri::command]
+pub async fn reader_objects(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+    source: String,
+) -> Result<Value, String> {
+    let body = record_body(company_id, vec![("source", Value::String(source))]);
+    with_desktop_client(app, move |client| client.reader_objects(body)).await
+}
+
+/// Stores a source's secret after the runtime proves it with one read.
+#[tauri::command]
+pub async fn reader_connect(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+    source: String,
+    secret: String,
+) -> Result<Value, String> {
+    let body = record_body(
+        company_id,
+        vec![
+            ("source", Value::String(source)),
+            ("secret", Value::String(secret)),
+        ],
+    );
+    with_desktop_client(app, move |client| client.reader_connect(body)).await
+}

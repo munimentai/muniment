@@ -58,14 +58,33 @@ the SQL audit file, because it is a record of what did not land.
 
 The CSV reader is the first reader and the proof of the contract. It parses
 RFC 4180 with a sniffed delimiter, names empty and repeated header cells, and
-reads a file up to 64 MiB. The attach protocol carries the contract as
-`reader.describe`, `reader.run` and `reader.queue`, desktop only.
+reads a file up to 64 MiB.
+
+Network readers are one Go program, `muniment-reader`, beside the runtime,
+with a subcommand per source. The runtime starts it once per call, writes one
+JSON request on its standard input, reads one JSON answer and waits at most a
+minute. The secret travels in the environment, never on the command line, and
+lives in the platform keychain under one service name with the source as the
+account. The sidecar holds no state and no SQLite, so a crash in a source
+costs one call and never the graph. A source that counts nothing answers
+`counted` false and the rows read so far, and its cursor carries the source's
+own page token beside the offset and the change mark. Stripe is the first
+source: customers, subscriptions and invoices over the REST API with the
+secret key as a bearer token, each flattened to text fields, with
+`email_domain` and a folded `state` added so rows land on the `org` and
+`subscription` kinds by the identity and state rules the record already holds.
+
+The attach protocol carries the contract as `reader.objects`,
+`reader.connect`, `reader.describe`, `reader.run` and `reader.queue`, desktop
+only.
 
 ## Consequences
 
 Every later reader, the JSON file reader and each Go sidecar subcommand,
 implements the four calls and reuses the mapping, the run and the queue
-without touching the core. A source that changes its schema breaks one
+without touching the core. A Go toolchain joins the build on every platform,
+and the sidecar builds with CGO off so it signs and ships like the Rust
+binaries. A source that changes its schema breaks one
 mapping, visible in the queue, and never a table. A mapping is data, so a
 company can carry as many as it has exports, and the agent can propose one.
 The panel gains an Import control per kind and a Run control on a mapping

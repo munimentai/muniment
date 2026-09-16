@@ -5,9 +5,15 @@ import { spawnSync } from "node:child_process";
 const targetDir = join("src-tauri", "target");
 const runtime = join(targetDir, "universal-apple-darwin", "release", "muniment-runtime");
 const cli = join(targetDir, "universal-apple-darwin", "release", "muniment-cli");
+const reader = join(targetDir, "universal-apple-darwin", "release", "muniment-reader");
 
 const mustRun = (cmd, args) => {
   const result = spawnSync(cmd, args, { stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status ?? 1);
+};
+const mustRunWithEnv = (cmd, args, options) => {
+  const result = spawnSync(cmd, args, { stdio: "inherit", ...options });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
@@ -20,8 +26,17 @@ for (const target of ["x86_64-apple-darwin", "aarch64-apple-darwin"]) {
   ]);
 }
 
+// The reader sidecar is Go. Each slice builds with CGO off, so the binary
+// carries no dylib and signs like the Rust ones.
+for (const [target, arch] of [["x86_64-apple-darwin", "amd64"], ["aarch64-apple-darwin", "arm64"]]) {
+  mkdirSync(join(targetDir, target, "release"), { recursive: true });
+  mustRunWithEnv("go", ["build", "-trimpath", "-ldflags", "-s -w", "-o", join(targetDir, target, "release", "muniment-reader"), "."], {
+    cwd: join("src-tauri", "reader"), env: { ...process.env, CGO_ENABLED: "0", GOOS: "darwin", GOARCH: arch },
+  });
+}
+
 mkdirSync(join(targetDir, "universal-apple-darwin", "release"), { recursive: true });
-for (const [name, output] of [["muniment-runtime", runtime], ["muniment-cli", cli]]) {
+for (const [name, output] of [["muniment-runtime", runtime], ["muniment-cli", cli], ["muniment-reader", reader]]) {
   mustRun("lipo", [
     "-create",
     join(targetDir, "x86_64-apple-darwin", "release", name),

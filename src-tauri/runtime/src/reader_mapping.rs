@@ -126,7 +126,15 @@ impl Mapping {
         let cursor = data.get("cursors").and_then(|cursors| {
             let offset = cursors.get("offset")?.as_u64()? as usize;
             let hash = cursors.get("hash")?.as_str()?.to_owned();
-            Some(Cursor { offset, hash })
+            let token = cursors
+                .get("token")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            Some(Cursor {
+                offset,
+                hash,
+                token,
+            })
         });
         Ok(Self {
             id: entity.id.clone(),

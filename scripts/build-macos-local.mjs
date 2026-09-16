@@ -36,8 +36,11 @@ const runtimeSource = join(target, "aarch64-apple-darwin", "release", "muniment-
 const runtimeBundled = join(target, "universal-apple-darwin", "release", "muniment-runtime");
 const cliSource = join(target, "aarch64-apple-darwin", "release", "muniment-cli");
 const cliBundled = join(target, "universal-apple-darwin", "release", "muniment-cli");
+const readerSource = join(target, "aarch64-apple-darwin", "release", "muniment-reader");
+const readerBundled = join(target, "universal-apple-darwin", "release", "muniment-reader");
 const app = join(target, "release", "bundle", "macos", "muniment.app");
 const runtime = join(app, "Contents", "Library", "LaunchServices", "muniment-runtime");
+const readerBinary = join(app, "Contents", "Library", "LaunchServices", "muniment-reader");
 const installed = join(home, "Applications", "muniment.app");
 
 const mustRun = (label, cmd, args, options = {}) => {
@@ -64,9 +67,14 @@ process.env.MUNIMENT_PI_CANDIDATE = "1";
 // Build first, so a build failure never touches the credential.
 // The bundle config reads the runtime from the universal path; a local build is arm64 only.
 mustRun("build runtime", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime", "--package", "muniment-cli", "--release", "--locked", "--target", "aarch64-apple-darwin"]);
+// The reader sidecar is Go with CGO off, so it signs like the Rust binaries.
+mustRun("build reader", "go", ["build", "-trimpath", "-ldflags", "-s -w", "-o", join("..", "target", "aarch64-apple-darwin", "release", "muniment-reader"), "."], {
+  cwd: join("src-tauri", "reader"), env: { ...process.env, CGO_ENABLED: "0", GOOS: "darwin", GOARCH: "arm64" },
+});
 mkdirSync(join(target, "universal-apple-darwin", "release"), { recursive: true });
 cpSync(runtimeSource, runtimeBundled);
 cpSync(cliSource, cliBundled);
+cpSync(readerSource, readerBundled);
 mustRun("build app", process.execPath, [join("node_modules", "@tauri-apps", "cli", "tauri.js"), "build", "--bundles", "app", "--no-sign"]);
 
 // Everything secret-bearing lives in a throwaway directory removed on exit.
@@ -158,6 +166,7 @@ const collectDylibs = async (dir) => {
 await collectDylibs(app);
 for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArguments(identity[1], file));
 mustRun("codesign runtime", "codesign", codesignArguments(identity[1], runtime));
+mustRun("codesign reader", "codesign", codesignArguments(identity[1], readerBinary));
 mustRun("codesign app", "codesign", codesignArguments(identity[1], app));
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 

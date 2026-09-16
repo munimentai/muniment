@@ -19,7 +19,8 @@
       "../src/fonts/CommitMono-LICENSE.txt": "third-party-notices/CommitMono-LICENSE.txt",
       "target/release/muniment-acp": "muniment-acp",
       "target/release/muniment-runtime": "muniment-runtime",
-      "target/release/muniment-cli": "muniment-cli"
+      "target/release/muniment-cli": "muniment-cli",
+      "target/release/muniment-reader": "muniment-reader"
     }
   }
 }
