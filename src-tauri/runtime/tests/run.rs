@@ -381,9 +381,18 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     assert!(!runtime_activity.snapshot().active_run);
     assert!(runtime.lock().unwrap().is_some());
 
+    // Each prompt arrives behind the line that says when it was sent.
+    let captured = fs::read_to_string(captured_prompts).unwrap();
+    let is_stamp = |line: &&str| line.starts_with("[sent 20");
+    assert_eq!(captured.lines().filter(is_stamp).count(), 2, "{captured}");
     assert_eq!(
-        fs::read_to_string(captured_prompts).unwrap(),
-        format!("{prompt}\n{second_prompt}\n")
+        captured
+            .lines()
+            .filter(|line| !is_stamp(line))
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+        format!("{prompt}\n{second_prompt}\n"),
+        "{captured}"
     );
     let args = fs::read_to_string(captured_args).unwrap();
     let extension = profile.join("memory").join("memory-search-extension.js");
