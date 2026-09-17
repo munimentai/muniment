@@ -2287,7 +2287,7 @@ describe('record panel', () => {
     expect(within(panel).getByText('people appear more than once across HubSpot and Salesforce, so every owner report and every campaign count reads them twice.')).toBeInTheDocument()
     expect(within(within(panel).getByRole('list', { name: 'Sources' })).getAllByRole('button')).toHaveLength(8)
     const name = within(panel).getByRole('textbox', { name: 'Company name' })
-    const create = within(panel).getByRole('button', { name: 'Create company' })
+    const create = within(panel).getByRole('button', { name: 'Create your company' })
     expect(create).toBeDisabled()
     await fireEvent.input(name, { target: { value: 'Northwind' } })
     expect(create).toBeEnabled()
@@ -2322,7 +2322,7 @@ describe('record panel', () => {
     await fireEvent.click(stripe)
     expect(stripe).toHaveAttribute('aria-pressed', 'true')
     await fireEvent.input(within(panel).getByRole('textbox', { name: 'Company name' }), { target: { value: 'Northwind' } })
-    expect(within(panel).getByRole('button', { name: 'Create company and connect Stripe' })).toBeEnabled()
+    expect(within(panel).getByRole('button', { name: 'Create your company and connect Stripe' })).toBeEnabled()
   })
 
 })
