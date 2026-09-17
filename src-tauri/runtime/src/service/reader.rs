@@ -679,6 +679,9 @@ mod tests {
                 .unwrap()["error"]["code"],
             "mapping"
         );
+        // Windows refuses to unlink a file another handle still holds, so the
+        // registry closes its company connections before the state root goes.
+        drop(registry);
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -724,6 +727,9 @@ mod tests {
             .unwrap();
         assert_eq!(page["page"]["total"], 1);
         assert_eq!(page["page"]["rows"][0]["data"]["industry"], "Logistics");
+        // Windows refuses to unlink a file another handle still holds, so the
+        // registry closes its company connections before the state root goes.
+        drop(registry);
         std::fs::remove_dir_all(state).unwrap();
     }
 }
