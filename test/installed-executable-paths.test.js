@@ -130,10 +130,11 @@ describe('Windows runtime bundle paths', () => {
 })
 
 describe('macOS runtime bundle paths', () => {
-  it('places the runtime, the record server and the LaunchAgent in the bundle Library', () => {
+  it('places the runtime, the record server, the reader and the LaunchAgent in the bundle Library', () => {
     expect(macosConfig.bundle.macOS.files).toEqual({
       'Library/LaunchServices/muniment-runtime': 'target/universal-apple-darwin/release/muniment-runtime',
       'Library/LaunchServices/muniment-cli': 'target/universal-apple-darwin/release/muniment-cli',
+      'Library/LaunchServices/muniment-reader': 'target/universal-apple-darwin/release/muniment-reader',
       'Library/LaunchAgents/ai.muniment.runtime.plist': 'packaging/ai.muniment.runtime.plist',
     })
   })
