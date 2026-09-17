@@ -10,6 +10,17 @@ export function ringPath() {
   return MILLED_RING_PATH
 }
 
+// The ring's own vertices, the points the owner geometry names, first to last
+// with the closing repeat dropped. A surface that draws the mark as a graph
+// rather than as an outline reads its points from here, so the graph and the
+// seal are the same 22-tooth wave.
+export function milledRingPoints(step = 1) {
+  const points = [...MILLED_RING_PATH.matchAll(/[ML]\s*(-?[\d.]+),\s*(-?[\d.]+)/g)]
+    .map((match) => [Number(match[1]), Number(match[2])])
+  const open = points.slice(0, -1)
+  return step > 1 ? open.filter((_, index) => index % step === 0) : open
+}
+
 const CENTER = 24
 const BASE_RADIUS = 20.2
 const MILL_DEPTH = 1.15

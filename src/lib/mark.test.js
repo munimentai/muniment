@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { MILLED_RING_PATH, SEAL_BAND_WIDTH, ringPath, sealBandPath, sealTracePath, solidMilledRingPath } from './mark.js'
+import { MILLED_RING_PATH, SEAL_BAND_WIDTH, milledRingPoints, ringPath, sealBandPath, sealTracePath, solidMilledRingPath } from './mark.js'
 
 describe('ringPath', () => {
   it('returns the canonical vendored geometry', () => {
@@ -88,5 +88,29 @@ describe('sealBandPath', () => {
     expect(trace).toHaveLength(44)
     expect(Math.min(...trace)).toBeCloseTo((20.967 + 17.170) / 2, 2)
     expect(Math.max(...trace)).toBeCloseTo((23.906 + 19.945) / 2, 2)
+  })
+})
+
+describe('milledRingPoints', () => {
+  it('reads the ring\'s own vertices and drops the closing repeat', () => {
+    const points = milledRingPoints()
+    expect(points.length).toBeGreaterThan(200)
+    expect(points[0]).not.toEqual(points.at(-1))
+    expect(MILLED_RING_PATH.startsWith(`M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}`)).toBe(true)
+  })
+
+  it('keeps every point on the 22-tooth wave', () => {
+    for (const [x, y] of milledRingPoints()) {
+      const radius = Math.hypot(x - 24, y - 24)
+      expect(radius).toBeGreaterThan(18.5)
+      expect(radius).toBeLessThan(22)
+    }
+  })
+
+  it('samples every nth point', () => {
+    const every = milledRingPoints()
+    const third = milledRingPoints(3)
+    expect(third).toHaveLength(Math.ceil(every.length / 3))
+    expect(third[1]).toEqual(every[3])
   })
 })
