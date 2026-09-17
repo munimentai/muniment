@@ -1803,7 +1803,7 @@
 </main>
 
   {#if settingsOpen}
-    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
   {/if}
 {#if pairingRequests[0]}
   {#key pairingRequests[0]}
@@ -2031,7 +2031,8 @@
   /* One grid cell: the thread fills it and the composer sits at its end, so the transcript scrolls on under the composer. */
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); transition: margin-left 180ms ease; }
   .workspace.sidebar-resizing .thread-panel { transition: none; }
-  .thread-shell { grid-area: 1 / 1; position: relative; min-height: 0; }
+  /* The shell clips the transcript and its fades to the panel's rounded corners, so the fade never squares them off. */
+  .thread-shell { grid-area: 1 / 1; position: relative; min-height: 0; overflow: hidden; border-radius: var(--radius-panel); }
   /* The transcript fades into the surface at both ends: a short fade under the top edge, and one above the composer that reaches the surface at the composer's midpoint, so text stays readable halfway under it. */
   .thread-shell::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 48px; background: linear-gradient(to bottom, var(--surface), transparent); pointer-events: none; }
   .thread-shell::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--composer-height, 120px) + 72px); background: linear-gradient(to bottom, transparent, var(--surface) calc(var(--composer-height, 120px) / 2 + 48px)); pointer-events: none; }
