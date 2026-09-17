@@ -20,8 +20,14 @@ export function kindProperties(kind) {
   return { core, extension }
 }
 
-// One mono line: `14 properties, 6 states`. A company's own properties count as own.
+// One mono line. A kind the runtime counted reads by its records, `1,240
+// records` or `none yet`. A kind without a count reads by its schema,
+// `14 properties, 6 states`, and a company's own properties count as own.
 export function kindSummary(kind) {
+  if (typeof kind?.count === 'number') {
+    if (kind.count === 0) return 'none yet'
+    return `${kind.count.toLocaleString('en-US')} ${kind.count === 1 ? 'record' : 'records'}`
+  }
   const { core, extension } = kindProperties(kind)
   const count = core.length + extension.length
   const parts = [`${count} ${count === 1 ? 'property' : 'properties'}`]
@@ -44,4 +50,10 @@ export function recordErrorLine(error) {
 export function validCompanyName(name) {
   const trimmed = (name ?? '').trim()
   return trimmed.length > 0 && trimmed.length <= 120 && ![...trimmed].some((c) => c.charCodeAt(0) < 32)
+}
+
+// Whether the company holds no records at all, so the panel opens on the
+// connect screen. A kind list the runtime has not counted is not empty.
+export function companyEmpty(kinds) {
+  return Array.isArray(kinds) && kinds.length > 0 && kinds.every((kind) => typeof kind?.count === 'number') && kinds.every((kind) => kind.count === 0)
 }

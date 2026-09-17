@@ -175,7 +175,11 @@ the row with Commit and Discard, and a warning from propose sits in ochre
 text above them. The board's columns are the kind's states, its cards are
 `surface` on `paper` at `--radius-control`, and a card in flight shows no
 color. A workflow run in progress is the one place the panel shows signal.
-The kind toolbar is one mono row: the layout switch, Table or Board, is two
+A company with no records opens on Connect your data: one paragraph that
+says what the company record is, then the sources as tiles, each under the
+company's own mark with CSV file among them, and a tile opens the import on
+that source with the kind chosen from the object. A kind list row reads the
+kind's record count, or `none yet`. The kind toolbar is one mono row: the layout switch, Table or Board, is two
 quiet controls with `aria-pressed`, the state filter and the saved-view
 picker are 24px native selects, and Import, Save view and Ask are quiet
 controls. A saved view is a `view` record and Save view proposes it like any
@@ -187,9 +191,10 @@ right, each opening one form in the record's place: a relation and target
 kind as 24px selects, a search field with a list of matches by title, the
 diff, and Commit and Discard. On the kind list, Rename beside the company
 picker turns the picker into one text field with Save. Import first lists
-the sources as one quiet list, CSV file, Stripe, HubSpot and Pipedrive, with a
-mono note beside each. A file opens the file dialog. A network source not yet connected
-shows one sentence and one password field for its credential, then its objects as
+the sources as one quiet list, CSV file and every network source the sidecar
+reads, with a mono note beside each. A file opens the file dialog. A network
+source not yet connected shows one sentence and one field per credential it
+asks for, a password field for a secret, then its objects as
 the same list. The object then fills the kind body with one mono table of its
 columns: the column name,
 what its samples read as with three examples, and a 24px select of the

@@ -465,6 +465,7 @@ mod tests {
 
     fn org_kind() -> KindRow {
         KindRow {
+            count: 0,
             name: "org".into(),
             version: 1,
             schema: json!({
