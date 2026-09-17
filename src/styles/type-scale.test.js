@@ -96,3 +96,29 @@ describe('§1.4 type scale', () => {
     expect(invalidTypeSizes(valid)).toEqual([])
   })
 })
+
+// A `font:` shorthand naming a custom property that nothing defines is
+// dropped whole by the browser, so the weight and the size go with the
+// family and the element silently inherits. The guard is the token file: a
+// family token a component names has to exist there.
+const FAMILY_TOKENS = new Set([
+  ...read('src/styles/tokens.css').matchAll(/(--font-[a-z0-9-]+)\s*:/gi),
+].map(([, token]) => token))
+
+const unknownFamilyTokens = (source) => [
+  ...(source.match(styleBlock)?.[1] ?? source)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .matchAll(/var\(\s*(--font-[a-z0-9-]+)/gi),
+].map(([, token]) => token).filter((token) => !FAMILY_TOKENS.has(token))
+
+describe('type families', () => {
+  it.each(COMPONENTS)('%s names only family tokens the token file defines', (file) => {
+    expect([...new Set(unknownFamilyTokens(read(file)))]).toEqual([])
+  })
+
+  it('rejects a family token nothing defines', () => {
+    expect(unknownFamilyTokens('<style>.drift { font: 600 var(--text-15)/1.3 var(--font-body); }</style>'))
+      .toEqual(['--font-body'])
+    expect(unknownFamilyTokens('<style>.kept { font: var(--text-12) var(--font-mono); }</style>')).toEqual([])
+  })
+})

@@ -17,7 +17,7 @@
 
 <style>
   .record-connect { display: grid; align-content: start; gap: 14px; min-height: 0; overflow-y: auto; padding-top: 14px; }
-  .record-connect-title { margin: 0; font: 600 var(--text-15)/1.3 var(--font-body); }
-  .record-connect-lede, .record-connect-foot { margin: 0; max-width: 62ch; color: var(--ink); font: var(--text-13)/1.5 var(--font-body); }
+  .record-connect-title { margin: 0; font: 600 var(--text-15)/1.3 var(--font-human); }
+  .record-connect-lede, .record-connect-foot { margin: 0; max-width: 62ch; color: var(--ink); font: var(--text-13)/1.5 var(--font-human); }
   .record-connect-foot { color: var(--muted); font: var(--text-12)/1.5 var(--font-mono); }
 </style>

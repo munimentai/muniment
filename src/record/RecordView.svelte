@@ -86,19 +86,19 @@
 
 <style>
   .record-view { min-height: 0; overflow-y: auto; padding-top: 12px; }
-  .record-title { margin: 0; font: 600 var(--text-17)/1.3 var(--font-body); }
-  .record-prose { margin: 8px 0 0; font: var(--text-15)/1.55 var(--font-body); }
+  .record-title { margin: 0; font: 600 var(--text-17)/1.3 var(--font-human); }
+  .record-prose { margin: 8px 0 0; font: var(--text-15)/1.55 var(--font-human); }
   .record-meta { margin: 6px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .record-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
   .record-section h4 { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: none; }
   .record-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 0; }
   .record-fields dt { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .record-fields dd { margin: 0; font: var(--text-13) var(--font-body); overflow-wrap: anywhere; }
+  .record-fields dd { margin: 0; font: var(--text-13) var(--font-human); overflow-wrap: anywhere; }
   .record-fields dd.mono, .record-list.mono { font: var(--text-12) var(--font-mono); }
   .record-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
   .record-list li.closed { color: var(--muted); }
   .record-relation { margin: 8px 0 4px; font: var(--text-12) var(--font-mono); color: var(--ink); }
-  .record-link { padding: 0; border: 0; background: transparent; color: var(--ink); font: var(--text-13) var(--font-body); cursor: pointer; text-align: left; }
+  .record-link { padding: 0; border: 0; background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); cursor: pointer; text-align: left; }
   .record-link:hover { text-decoration: underline; }
   .record-edge-meta { margin-left: 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
 </style>

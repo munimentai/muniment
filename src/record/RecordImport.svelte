@@ -349,7 +349,7 @@
   .record-import-form, .record-import-result, .record-import-connect { display: grid; gap: 10px; }
   .record-import-sources { margin: 0; padding: 0; list-style: none; display: grid; }
   .record-import-sources li + li { border-top: 1px solid var(--border); }
-  .record-import-source { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); text-align: left; font: var(--text-13) var(--font-body); cursor: pointer; }
+  .record-import-source { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); text-align: left; font: var(--text-13) var(--font-human); cursor: pointer; }
   .record-import-source:hover { background: var(--faint); }
   .record-import-source:disabled { color: var(--muted); cursor: default; }
   .record-import-source-name { color: var(--ink); }
@@ -361,7 +361,7 @@
   .record-import-fields td, .record-import-queue td, .record-import-fields th[scope="row"] { height: 28px; padding: 0 8px 0 0; border-bottom: 1px solid var(--border); vertical-align: middle; }
   .record-import-column { color: var(--ink); font-weight: 500; white-space: nowrap; }
   .record-import-sample { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
-  .record-import-title { font: var(--text-12) var(--font-body); }
+  .record-import-title { font: var(--text-12) var(--font-human); }
   .record-select { height: 24px; max-width: 200px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
   .record-import-identity { display: flex; align-items: center; gap: 8px; font: var(--text-12) var(--font-mono); color: var(--ink); }
   .record-import-diff { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
@@ -371,7 +371,7 @@
   .record-import-line { margin: 0; font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .record-import-queue td { white-space: normal; overflow-wrap: anywhere; }
   .record-import-actions { display: flex; gap: 8px; }
-  .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-body); cursor: pointer; }
+  .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }
   .record-commit:disabled { background: var(--faint); color: var(--muted); cursor: default; }
   .record-discard { background: var(--surface); color: var(--ink); }

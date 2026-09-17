@@ -152,11 +152,11 @@
 <style>
   .record-table { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
   .record-search { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
-  .record-search-input { flex: 1; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-body); }
+  .record-search-input { flex: 1; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
   .record-search-input:focus { outline: none; border-color: var(--muted); }
   .record-count { color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; }
   .record-scroll { min-height: 0; overflow: auto; }
-  .record-grid { width: 100%; border-collapse: collapse; font: var(--text-13) var(--font-body); }
+  .record-grid { width: 100%; border-collapse: collapse; font: var(--text-13) var(--font-human); }
   .record-grid th { position: sticky; top: 0; z-index: 1; padding: 0; text-align: left; background: var(--surface); border-bottom: 1px solid var(--border); font: var(--text-12) var(--font-mono); color: var(--muted); white-space: nowrap; }
   .record-sort { height: 28px; padding: 0 8px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left; width: 100%; }
   .record-sort:hover { color: var(--ink); background: var(--faint); }
@@ -177,7 +177,7 @@
   .record-diff-warning { color: var(--ochre); }
   .record-diff-error { color: var(--oxide); }
   .record-diff-actions { display: flex; gap: 8px; margin-top: 4px; }
-  .record-commit, .record-discard { height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-body); cursor: pointer; }
+  .record-commit, .record-discard { height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }
   .record-discard { background: var(--surface); color: var(--ink); }
   .record-empty { margin: 12px 0 0; color: var(--muted); font: var(--text-13) var(--font-mono); }
