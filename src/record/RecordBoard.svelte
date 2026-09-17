@@ -151,7 +151,7 @@
   .record-diff-warning { color: var(--ochre); }
   .record-diff-error { color: var(--oxide); }
   .record-board-actions { display: flex; gap: 8px; margin-top: 4px; }
-  .record-commit, .record-discard { height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-body); cursor: pointer; }
+  .record-commit, .record-discard { height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }
   .record-discard { background: var(--surface); color: var(--ink); }
   .record-columns { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); gap: 10px; min-height: 0; overflow: auto; }
@@ -165,7 +165,7 @@
   .record-card.dragging { opacity: .5; }
   .record-board.dragging { user-select: none; cursor: grabbing; }
   .record-board.dragging .record-card-title { pointer-events: none; }
-  .record-card-title { padding: 0; border: 0; background: transparent; color: var(--ink); font: 500 var(--text-13) var(--font-body); text-align: left; cursor: pointer; }
+  .record-card-title { padding: 0; border: 0; background: transparent; color: var(--ink); font: 500 var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
   .record-card-title:hover { text-decoration: underline; }
   .record-card-meta { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .record-empty { margin: 12px 0 0; color: var(--muted); font: var(--text-13) var(--font-mono); }

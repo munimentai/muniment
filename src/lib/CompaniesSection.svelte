@@ -126,7 +126,7 @@
   .company-tools { display: inline-flex; flex: none; gap: 4px; }
   .company-rename, .company-new { display: flex; align-items: center; gap: 6px; width: 100%; max-width: 640px; }
   .company-rename { flex: 1; }
-  input { flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-body); }
+  input { flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
   input:focus { outline: none; border-color: var(--muted); }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 4px 10px; cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }

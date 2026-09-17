@@ -524,7 +524,7 @@
 <style>
   .record-panel { grid-area: rail; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); padding: 14px 16px 16px; overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .record-header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--border); font: var(--text-13) var(--font-mono); }
-  .record-header h2 { margin: 0; font: 600 var(--text-15)/1.3 var(--font-body); }
+  .record-header h2 { margin: 0; font: 600 var(--text-15)/1.3 var(--font-human); }
   .record-back { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); cursor: pointer; }
   .record-back:hover, .record-new:hover, .record-maximize:hover { background: var(--faint); }
   .record-company-picker { max-width: 200px; height: 24px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; }
@@ -533,7 +533,7 @@
   .record-header-spacer { flex: 1; }
   .record-new, .record-maximize { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
   .record-state { margin: 12px 0 0; color: var(--muted); font: var(--text-13) var(--font-mono); }
-  .record-company-name { height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-body); }
+  .record-company-name { height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
   .record-company-name:focus { outline: none; border-color: var(--muted); }
   .record-kind-body { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; }
   .record-more { justify-self: start; height: 26px; margin-top: 8px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); cursor: pointer; }
@@ -552,20 +552,20 @@
   .record-tool { height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); cursor: pointer; }
   .record-tool:hover, .record-tool[aria-pressed="true"] { background: var(--faint); }
   .record-save-view { display: flex; align-items: center; gap: 8px; padding-top: 8px; }
-  .record-view-name { flex: 1; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-body); }
+  .record-view-name { flex: 1; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
   .record-view-name:focus { outline: none; border-color: var(--muted); }
   .record-save-diff { display: grid; gap: 4px; }
   .record-save-actions { display: flex; gap: 8px; }
   .record-diff-line { margin: 0; font: var(--text-12) var(--font-mono); }
   .record-diff-error { margin: 0; color: var(--oxide); font: var(--text-12) var(--font-mono); }
-  .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-body); cursor: pointer; }
+  .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }
   .record-commit:disabled { background: var(--faint); color: var(--muted); cursor: default; }
   .record-discard { background: var(--surface); color: var(--ink); }
   .record-kinds { min-height: 0; overflow-y: auto; }
   .record-kinds ul { margin: 0; padding: 0; list-style: none; }
   .record-kinds li + li { border-top: 1px solid var(--border); }
-  .record-kind { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); text-align: left; font: var(--text-13) var(--font-body); cursor: pointer; }
+  .record-kind { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); text-align: left; font: var(--text-13) var(--font-human); cursor: pointer; }
   .record-kind:hover { background: var(--faint); }
   .record-kind.own .record-kind-name::after { content: " (own)"; color: var(--muted); }
   .record-kind-summary { color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; }

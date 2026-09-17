@@ -94,7 +94,7 @@
   .record-form { display: grid; gap: 10px; align-content: start; min-height: 0; overflow-y: auto; padding-top: 12px; }
   .record-field { display: grid; gap: 4px; }
   .record-field-label { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .record-input { height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-body); }
+  .record-input { height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
   .record-input.mono { font: var(--text-12) var(--font-mono); }
   .record-input:focus { outline: none; border-color: var(--muted); }
   .record-form-error { margin: 0; color: var(--oxide); font: var(--text-12) var(--font-mono); }
@@ -102,7 +102,7 @@
   .record-diff-line { margin: 0; font: var(--text-12) var(--font-mono); }
   .record-diff-warning { margin: 0; color: var(--ochre); font: var(--text-12) var(--font-mono); }
   .record-form-actions { display: flex; gap: 8px; }
-  .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-body); cursor: pointer; }
+  .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }
   .record-commit:disabled { background: var(--faint); color: var(--muted); cursor: default; }
   .record-discard { background: var(--surface); color: var(--ink); }

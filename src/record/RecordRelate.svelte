@@ -165,17 +165,17 @@
 
 <style>
   .record-relate { display: grid; gap: 10px; align-content: start; min-height: 0; overflow-y: auto; padding-top: 12px; }
-  .record-relate-heading { margin: 0; font: 600 var(--text-15)/1.3 var(--font-body); }
+  .record-relate-heading { margin: 0; font: 600 var(--text-15)/1.3 var(--font-human); }
   .record-relate-note { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .record-relate-controls { display: grid; gap: 8px; }
   .record-relate-field { display: flex; align-items: center; gap: 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .record-select { height: 24px; max-width: 220px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
   .record-relate-search { display: flex; gap: 8px; }
-  .record-relate-input { flex: 1; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-body); }
+  .record-relate-input { flex: 1; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
   .record-relate-input:focus { outline: none; border-color: var(--muted); }
   .record-relate-candidates { margin: 0; padding: 0; list-style: none; display: grid; }
   .record-relate-candidates li + li { border-top: 1px solid var(--border); }
-  .record-relate-candidate { width: 100%; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); text-align: left; font: var(--text-13) var(--font-body); cursor: pointer; }
+  .record-relate-candidate { width: 100%; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); text-align: left; font: var(--text-13) var(--font-human); cursor: pointer; }
   .record-relate-candidate:hover, .record-relate-candidate[aria-pressed="true"] { background: var(--faint); }
   .record-relate-meta { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .record-relate-diff { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
@@ -183,7 +183,7 @@
   .record-diff-warning { margin: 0; color: var(--ochre); font: var(--text-12) var(--font-mono); }
   .record-relate-error { margin: 0; color: var(--oxide); font: var(--text-12) var(--font-mono); }
   .record-relate-actions { display: flex; gap: 8px; }
-  .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-body); cursor: pointer; }
+  .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }
   .record-commit:disabled { background: var(--faint); color: var(--muted); cursor: default; }
   .record-discard { background: var(--surface); color: var(--ink); }
