@@ -5,12 +5,13 @@
   // level generates from the kind row the runtime answers.
   import LucideIcon from '../lib/LucideIcon.svelte'
   import RecordBoard from './RecordBoard.svelte'
+  import RecordConnect from './RecordConnect.svelte'
   import RecordForm from './RecordForm.svelte'
   import RecordImport from './RecordImport.svelte'
   import RecordRelate from './RecordRelate.svelte'
   import RecordTable from './RecordTable.svelte'
   import RecordView from './RecordView.svelte'
-  import { currentCompany, kindLabel, kindSummary, orderKinds, recordErrorLine, validCompanyName } from './record-panel-state.js'
+  import { companyEmpty, currentCompany, kindLabel, kindSummary, orderKinds, recordErrorLine, validCompanyName } from './record-panel-state.js'
   import { askSql, diffLines, viewData, viewSettings, viewsFor } from './record-table-state.js'
 
   let { tauri, maximized = false, refresh = 0, ontogglemaximized, onask } = $props()
@@ -42,6 +43,7 @@
   let renameDraft = $state('')
   let loadingMore = $state(false)
   const hasMore = $derived(!!page && page.rows.length < page.total)
+  const empty = $derived(companyEmpty(kinds))
   let error = $state(null)
   let loading = $state(false)
   let newCompanyName = $state('')
@@ -315,10 +317,15 @@
   }
 
   // The import lands rows on the open kind, so the table reloads when it ends.
-  async function afterImport() {
+  // An import that started from the connect screen opens the kind it filled.
+  async function afterImport(_run, filledKind = null) {
     importing = null
     if (detail) await openEntity(detail.entity.id)
-    else await loadPage()
+    else if (selectedKind) await loadPage()
+    else {
+      await loadCompanies(company?.id)
+      if (filledKind && kinds.some((candidate) => candidate.name === filledKind)) await openKind(filledKind)
+    }
   }
 
   // A mapping record runs again from its own view. The rows land on the
@@ -367,7 +374,7 @@
 
 <aside id="record-panel" class="record-panel" aria-labelledby="record-panel-title" data-testid="record-panel">
   <header class="record-header">
-    {#if selectedKind}
+    {#if selectedKind || importing}
       <button type="button" class="record-back" aria-label="Back" onclick={back}><LucideIcon name="chevron-left" size={14} /></button>
     {/if}
     <h2 id="record-panel-title">Record</h2>
@@ -420,8 +427,8 @@
       <input class="record-company-name" type="text" aria-label="Company name" placeholder="Company name" maxlength="120" bind:value={newCompanyName}>
       <button type="submit" class="record-create-button" disabled={!validCompanyName(newCompanyName)}>Create company</button>
     </form>
-  {:else if kind && importing}
-    <RecordImport {tauri} companyId={company?.id} kind={importing.mapping && detail?.entity?.data?.kind ? (kinds.find((candidate) => candidate.name === detail.entity.data.kind) ?? kind) : kind} mapping={importing.mapping} {propose} {commit} oncancel={() => { importing = null }} ondone={afterImport} />
+  {:else if importing}
+    <RecordImport {tauri} companyId={company?.id} kind={importing.mapping && detail?.entity?.data?.kind ? (kinds.find((candidate) => candidate.name === detail.entity.data.kind) ?? kind) : kind} {kinds} source={importing.source ?? null} mapping={importing.mapping} {propose} {commit} oncancel={() => { importing = null }} ondone={afterImport} />
   {:else if kind && creating}
     <RecordForm {kind} {propose} {commit} oncancel={() => { creating = false }} oncreated={(id) => { creating = false; void loadPage().then(() => openEntity(id)) }} />
   {:else if kind && detail && relating}
@@ -482,8 +489,13 @@
         <button type="button" class="record-more" disabled={loadingMore} onclick={() => loadPage(true)}>{loadingMore ? 'Reading more' : `Show ${Math.min(200, page.total - page.rows.length)} more`}</button>
       {/if}
     </div>
+  {:else if empty}
+    <RecordConnect {company} onconnect={(name) => { error = null; importing = { source: name } }} />
   {:else}
     <nav class="record-kinds" aria-label="Kinds">
+      <div class="record-kinds-tools">
+        <button type="button" class="record-tool" onclick={() => { error = null; importing = { source: null } }}>Connect a source</button>
+      </div>
       <ul>
         {#each kinds as entry (entry.name)}
           <li>
@@ -543,6 +555,7 @@
   .record-commit:disabled { background: var(--faint); color: var(--muted); cursor: default; }
   .record-discard { background: var(--surface); color: var(--ink); }
   .record-kinds { min-height: 0; overflow-y: auto; }
+  .record-kinds-tools { display: flex; justify-content: flex-end; padding: 8px 0; font: var(--text-13) var(--font-mono); }
   .record-kinds ul { margin: 0; padding: 0; list-style: none; }
   .record-kinds li + li { border-top: 1px solid var(--border); }
   .record-kind { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); text-align: left; font: var(--text-13) var(--font-body); cursor: pointer; }

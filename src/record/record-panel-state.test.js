@@ -7,8 +7,7 @@ import {
   kindSummary,
   orderKinds,
   recordErrorLine,
-  validCompanyName,
-} from './record-panel-state.js'
+  validCompanyName, companyEmpty } from './record-panel-state.js'
 
 describe('record panel state', () => {
   it('picks the current company and falls back to the oldest', () => {
@@ -35,6 +34,13 @@ describe('record panel state', () => {
     expect(kindProperties(deal)).toEqual({ core: ['name', 'stage', 'amount'], extension: ['x_renewal_risk'] })
     expect(kindSummary(deal)).toBe('4 properties, 2 states, 1 own')
     expect(kindSummary({ name: 'x_note', schema: { properties: { x_text: {} } } })).toBe('1 property')
+    expect(kindSummary({ ...deal, count: 1240 })).toBe('1,240 records')
+    expect(kindSummary({ ...deal, count: 1 })).toBe('1 record')
+    expect(kindSummary({ ...deal, count: 0 })).toBe('none yet')
+    expect(companyEmpty([{ name: 'deal', count: 0 }, { name: 'org', count: 0 }])).toBe(true)
+    expect(companyEmpty([{ name: 'deal', count: 0 }, { name: 'org', count: 3 }])).toBe(false)
+    expect(companyEmpty([{ name: 'deal' }])).toBe(false)
+    expect(companyEmpty([])).toBe(false)
     expect(kindLabel('x_renewal_risk')).toBe('renewal risk')
     expect(kindLabel('fact_source')).toBe('fact source')
   })
