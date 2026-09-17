@@ -406,6 +406,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(unknown["error"]["code"], "unknown_company");
+        // Windows refuses to unlink a file another handle still holds, so the
+        // registry closes its company connections before the state root goes.
+        drop(registry);
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -513,6 +516,9 @@ mod tests {
         assert_eq!(bad["error"]["code"], "invalid_operation");
         let gone = registry.commit("cli", json!({"proposal": "nope"})).unwrap();
         assert_eq!(gone["error"]["code"], "proposal_not_found");
+        // Windows refuses to unlink a file another handle still holds, so the
+        // registry closes its company connections before the state root goes.
+        drop(registry);
         std::fs::remove_dir_all(state).unwrap();
     }
 }

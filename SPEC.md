@@ -50,11 +50,11 @@ transfer, history included, so every commit here is written as public.
 
 **muniment-cloud.** Sign-in gates cloud features only. The signing-in screen
 shows the sign-in link for a browser that did not open. Cloud-backed use passes
-short-lived session tokens and the user's gateway virtual endpoint. The desktop
-sends no classification metadata, the cloud classifies every request at
-ingress, the desktop posts the protocol alone to `/v1/chat/grants`, and the
-receipt request carries the run id alone. The relay is one outbound HTTPS leg
-from the runtime to MUNICLOUD, direct-first with relay fallback, end-to-end
+short-lived session tokens and the user's gateway virtual endpoint.
+The desktop sends no classification metadata. The cloud classifies every
+request at ingress. The desktop posts the protocol alone to `/v1/chat/grants`.
+The receipt request carries the run id alone. The relay is one outbound HTTPS
+leg from the runtime to MUNICLOUD, direct-first with relay fallback, end-to-end
 encrypted, and it needs a free MUNICLOUD account.
 
 **muniment-mobile.** Mobile drives this runtime through the relay and sees the
