@@ -79,14 +79,50 @@ export function suggestFields(description, kind) {
 }
 
 // The sources an import reads: a CSV file, then every network source the
-// sidecar knows, each naming the credential it connects with.
+// sidecar knows, each naming the credentials it connects with. A source with
+// one credential sends it as is. A source with several sends them packed as
+// one JSON object keyed by name, which the sidecar reads back.
 export function sourceOptions() {
+  const token = (label) => [{ name: 'token', label, secret: true }]
   return [
     { value: 'csv', label: 'CSV file', note: 'a file on this machine' },
-    { value: 'stripe', label: 'Stripe', note: 'customers, subscriptions, invoices', secret: 'secret key' },
-    { value: 'hubspot', label: 'HubSpot', note: 'contacts, companies, deals, tickets', secret: 'private app access token' },
-    { value: 'pipedrive', label: 'Pipedrive', note: 'people, organizations, deals', secret: 'API token' },
+    { value: 'stripe', label: 'Stripe', note: 'customers, subscriptions, invoices', secret: 'secret key', credentials: token('Secret key') },
+    { value: 'hubspot', label: 'HubSpot', note: 'contacts, companies, deals, tickets', secret: 'private app access token', credentials: token('Private app access token') },
+    { value: 'pipedrive', label: 'Pipedrive', note: 'people, organizations, deals', secret: 'API token', credentials: token('API token') },
+    { value: 'salesforce', label: 'Salesforce', note: 'accounts, contacts, leads, opportunities, cases', secret: 'connected app', credentials: [
+      { name: 'instance_url', label: 'My Domain URL, https://acme.my.salesforce.com', secret: false },
+      { name: 'client_id', label: 'Consumer key', secret: true },
+      { name: 'client_secret', label: 'Consumer secret', secret: true },
+    ] },
+    { value: 'zendesk', label: 'Zendesk', note: 'tickets, users, organizations', secret: 'API token', credentials: [
+      { name: 'subdomain', label: 'Subdomain, the acme in acme.zendesk.com', secret: false },
+      { name: 'email', label: 'Agent email', secret: false },
+      { name: 'api_token', label: 'API token', secret: true },
+    ] },
+    { value: 'intercom', label: 'Intercom', note: 'contacts, companies, conversations', secret: 'access token', credentials: token('Access token') },
+    { value: 'freshdesk', label: 'Freshdesk', note: 'tickets, contacts, companies', secret: 'API key', credentials: [
+      { name: 'domain', label: 'Domain, the acme in acme.freshdesk.com', secret: false },
+      { name: 'api_key', label: 'API key', secret: true },
+    ] },
   ]
+}
+
+// The credentials a source asks for, one secret key when it names none.
+export function sourceCredentials(source) {
+  return sourceOptions().find((option) => option.value === source)?.credentials ?? [{ name: 'token', label: 'Secret key', secret: true }]
+}
+
+// Whether every credential a source asks for has a value.
+export function credentialsFilled(source, values) {
+  return sourceCredentials(source).every((credential) => String(values?.[credential.name] ?? '').trim() !== '')
+}
+
+// The one secret the runtime stores: the value itself for one credential,
+// a JSON object keyed by name for several.
+export function packSecret(source, values) {
+  const credentials = sourceCredentials(source)
+  if (credentials.length === 1) return String(values?.[credentials[0].name] ?? '').trim()
+  return JSON.stringify(Object.fromEntries(credentials.map((credential) => [credential.name, String(values?.[credential.name] ?? '').trim()])))
 }
 
 // The external id prefix an object's rows key on: `csv:<file stem>` for a
@@ -184,4 +220,18 @@ export function importErrorLine(answer) {
   const message = answer?.error?.message ?? (typeof answer === 'string' ? answer : answer?.message) ?? ''
   const first = String(message).split(/(?<=[.!?])\s/)[0]?.trim() || 'The import did not answer.'
   return first.endsWith('.') ? first : `${first}.`
+}
+
+// The kind a source object fills by default, from the object's name. A CSV
+// file names no kind, and the user picks one.
+export function suggestKind(source, object) {
+  const name = String(object ?? '').toLowerCase()
+  if (source === 'csv') return null
+  if (/contact|person|people|user|lead/.test(name)) return 'person'
+  if (/compan|organi|account|customer/.test(name)) return 'org'
+  if (/deal|opportunit/.test(name)) return 'deal'
+  if (/ticket|case|conversation/.test(name)) return 'ticket'
+  if (/invoice/.test(name)) return 'invoice'
+  if (/subscription/.test(name)) return 'subscription'
+  return null
 }

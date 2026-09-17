@@ -10,6 +10,10 @@ import {
   mappingLines,
   runSummaryLines,
   sourceOptions,
+  sourceCredentials,
+  credentialsFilled,
+  packSecret,
+  suggestKind,
   suggestFields,
   suggestIdentity,
   suggestProperty,
@@ -76,8 +80,19 @@ describe('record import state', () => {
     expect(stripeOptions[2]).toEqual({ value: 'email:email', label: 'email in email' })
     expect(stripeOptions.map((option) => option.value)).not.toContain('external:stripe:customers:id:id')
     expect(suggestIdentity(stripe)).toBe('external:stripe:customers:id')
-    expect(sourceOptions().map((option) => option.value)).toEqual(['csv', 'stripe', 'hubspot', 'pipedrive'])
+    expect(sourceOptions().map((option) => option.value)).toEqual(['csv', 'stripe', 'hubspot', 'pipedrive', 'salesforce', 'zendesk', 'intercom', 'freshdesk'])
     expect(sourceOptions().find((option) => option.value === 'hubspot').secret).toBe('private app access token')
+    expect(sourceCredentials('stripe').map((credential) => credential.name)).toEqual(['token'])
+    expect(sourceCredentials('zendesk').map((credential) => credential.name)).toEqual(['subdomain', 'email', 'api_token'])
+    expect(sourceCredentials('zendesk').map((credential) => credential.secret)).toEqual([false, false, true])
+    expect(credentialsFilled('stripe', { token: ' sk ' })).toBe(true)
+    expect(credentialsFilled('zendesk', { subdomain: 'acme', email: 'a@b.co' })).toBe(false)
+    expect(packSecret('stripe', { token: ' sk_test ' })).toBe('sk_test')
+    expect(['contacts', 'persons', 'users', 'leads'].map((object) => suggestKind('hubspot', object))).toEqual(['person', 'person', 'person', 'person'])
+    expect(['companies', 'organizations', 'accounts', 'customers'].map((object) => suggestKind('salesforce', object))).toEqual(['org', 'org', 'org', 'org'])
+    expect([suggestKind('pipedrive', 'deals'), suggestKind('salesforce', 'opportunities'), suggestKind('zendesk', 'tickets'), suggestKind('stripe', 'invoices'), suggestKind('stripe', 'subscriptions')]).toEqual(['deal', 'deal', 'ticket', 'invoice', 'subscription'])
+    expect(suggestKind('csv', 'contacts.csv')).toBe(null)
+    expect(JSON.parse(packSecret('salesforce', { instance_url: ' https://acme.my.salesforce.com ', client_id: 'k', client_secret: 's' }))).toEqual({ instance_url: 'https://acme.my.salesforce.com', client_id: 'k', client_secret: 's' })
     expect(mappingLines(stripe, org, { name: 'name' }, 'external:stripe:customers:id')).toEqual(['name fills name', 'keyed on external in id', 'kind org', 'stripe Customers'])
   })
 

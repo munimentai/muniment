@@ -10,9 +10,13 @@ import (
 	"os"
 
 	"muniment.ai/reader/contract"
+	"muniment.ai/reader/freshdesk"
 	"muniment.ai/reader/hubspot"
+	"muniment.ai/reader/intercom"
 	"muniment.ai/reader/pipedrive"
+	"muniment.ai/reader/salesforce"
 	"muniment.ai/reader/stripe"
+	"muniment.ai/reader/zendesk"
 )
 
 // secretVariable carries the source's credential from the runtime.
@@ -38,6 +42,30 @@ func openSource(name string) (Source, *contract.Failure) {
 			return nil, fail("not_connected", "Connect Pipedrive with its API token first.")
 		}
 		return pipedrive.New(secret, os.Getenv("MUNIMENT_PIPEDRIVE_BASE_URL")), nil
+	case "salesforce":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Salesforce with its My Domain URL, consumer key and consumer secret first.")
+		}
+		return salesforce.New(secret), nil
+	case "zendesk":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Zendesk with its subdomain, agent email and API token first.")
+		}
+		return zendesk.New(secret, os.Getenv("MUNIMENT_ZENDESK_BASE_URL")), nil
+	case "intercom":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Intercom with its access token first.")
+		}
+		return intercom.New(secret, os.Getenv("MUNIMENT_INTERCOM_BASE_URL")), nil
+	case "freshdesk":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Freshdesk with its domain and API key first.")
+		}
+		return freshdesk.New(secret, os.Getenv("MUNIMENT_FRESHDESK_BASE_URL")), nil
 	default:
 		return nil, fail("unknown_source", "No reader reads %s.", name)
 	}

@@ -79,7 +79,7 @@ func TestRunReadsOneRequestAndNamesAMissingSecret(t *testing.T) {
 		t.Fatalf("missing secret: code %d body %s", code, out.String())
 	}
 	out.Reset()
-	code = run([]string{"salesforce"}, strings.NewReader(`{"call":"objects"}`), &out)
+	code = run([]string{"quickbooks"}, strings.NewReader(`{"call":"objects"}`), &out)
 	if code != 1 || !strings.Contains(out.String(), `"unknown_source"`) {
 		t.Fatalf("unknown source: %d %s", code, out.String())
 	}
