@@ -38,6 +38,6 @@ fetch_tool \
 cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment-acp --release --locked
 cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment-runtime --package muniment-cli --release --locked
 # The reader sidecar is Go, static, and lands beside the Rust binaries.
-(cd "$repo_root/src-tauri/reader" && CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o "$repo_root/src-tauri/target/release/muniment-reader" .)
+bash "$repo_root/.github/build-reader.sh" src-tauri/target/release/muniment-reader
 
 exec npm run tauri build "$@"
