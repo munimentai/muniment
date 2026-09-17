@@ -120,7 +120,14 @@ fn land(entry: &mut OpenRecord, mapping: &Mapping, plan: &RowPlan, principal: &s
         Ok(proposal) => proposal,
         Err(error) => return Landed::Unplaced(failure_message(error)),
     };
-    if creating && !proposal.warnings.is_empty() {
+    // A same-title warning is a duplicate only when the title is the key. A
+    // row keyed on its source's id is its own record, and the repeated title
+    // is the report's finding, not the import's refusal.
+    let keyed_on_title = plan
+        .identity
+        .as_ref()
+        .is_none_or(|identity| identity.kind == "name_key");
+    if creating && keyed_on_title && !proposal.warnings.is_empty() {
         return Landed::Unplaced(proposal.warnings.join(" "));
     }
     match entry.record.commit(&proposal.id, principal) {
@@ -727,6 +734,45 @@ mod tests {
             .unwrap();
         assert_eq!(page["page"]["total"], 1);
         assert_eq!(page["page"]["rows"][0]["data"]["industry"], "Logistics");
+        // Windows refuses to unlink a file another handle still holds, so the
+        // registry closes its company connections before the state root goes.
+        drop(registry);
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn lands_rows_that_share_a_title_under_different_source_ids() {
+        let state = state("shared-title");
+        CompaniesRoot::new(&state).create("Northwind").unwrap();
+        let registry = RecordRegistry::new(&state);
+        let csv = state.join("orgs.csv");
+        std::fs::write(
+            &csv,
+            "Name;Website\nAcme;acme.example\nAcme;acme.co.example\n",
+        )
+        .unwrap();
+        let committed = propose_and_commit(
+            &registry,
+            json!({"op": "create", "kind": "mapping", "data": {
+                "source": "csv", "object": csv.to_string_lossy(), "kind": "org",
+                "fields": {"Name": "name", "Website": "domain"},
+                "identity": "domain:Website", "approved": true
+            }}),
+        );
+        let mapping_id = committed["result"]["entity_ids"][0]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let run = registry
+            .reader_run(DESKTOP_ACTOR, json!({"mapping": mapping_id}))
+            .unwrap()["run"]
+            .clone();
+        assert_eq!(run["created"], 2, "{run}");
+        assert_eq!(run["unplaced"], 0, "{run}");
+        let page = registry
+            .query(DESKTOP_ACTOR, json!({"kind": "org", "search": "Acme"}))
+            .unwrap();
+        assert_eq!(page["page"]["total"], 2);
         // Windows refuses to unlink a file another handle still holds, so the
         // registry closes its company connections before the state root goes.
         drop(registry);

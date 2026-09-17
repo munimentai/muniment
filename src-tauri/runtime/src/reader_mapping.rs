@@ -212,6 +212,21 @@ pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan,
         };
         data.insert(property.clone(), value);
     }
+    // A row with no name still lands under its email: the title property the
+    // kind requires takes the email cell, so an email-only customer is a
+    // record and not a refusal.
+    if let Some(email) = email_cell(row) {
+        for property in title_properties(kind) {
+            if data.contains_key(&property) || !is_required(kind, &property) {
+                continue;
+            }
+            let is_text = property_schema(kind, &property)
+                .is_some_and(|schema| schema.get("type").and_then(Value::as_str) == Some("string"));
+            if is_text {
+                data.insert(property, Value::String(email.clone()));
+            }
+        }
+    }
     if data.is_empty() {
         return Err(refuse(&data, "every mapped cell is empty".to_owned()));
     }
@@ -250,6 +265,40 @@ pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan,
         identity,
         title,
     })
+}
+
+/// The row's email: the `email` column, else the first column that ends in
+/// `email`, when the cell holds an address.
+fn email_cell(row: &Row) -> Option<String> {
+    row.get("email")
+        .or_else(|| {
+            row.iter()
+                .find(|(column, _)| column.to_ascii_lowercase().ends_with("email"))
+                .map(|(_, cell)| cell)
+        })
+        .map(|cell| cell.trim())
+        .filter(|cell| cell.contains('@'))
+        .map(str::to_owned)
+}
+
+/// The properties the kind's title template renders, in order.
+fn title_properties(kind: &KindRow) -> Vec<String> {
+    let mut properties = Vec::new();
+    let mut rest = kind.title_template.as_str();
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else { break };
+        properties.push(after[..end].to_owned());
+        rest = &after[end + 1..];
+    }
+    properties
+}
+
+fn is_required(kind: &KindRow, property: &str) -> bool {
+    kind.schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|list| list.iter().any(|item| item.as_str() == Some(property)))
 }
 
 /// Whether a stored entity's data differs from the plan on any mapped key.
@@ -669,5 +718,43 @@ mod tests {
             json!({"a": 1})
         );
         assert!(coerce("[1]", &json!({"type": "object"})).is_err());
+    }
+
+    #[test]
+    fn titles_a_nameless_row_by_its_email() {
+        let kind = KindRow {
+            schema: json!({
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "domain": {"type": "string"}},
+                "required": ["name"]
+            }),
+            ..org_kind()
+        };
+        let mapping = Mapping::from_entity(&mapping_entity(json!({
+            "source": "stripe", "object": "customers", "kind": "org",
+            "fields": {"name": "name", "email_domain": "domain"},
+            "identity": "domain:email_domain"
+        })))
+        .unwrap();
+        let row: Row = [
+            ("id", "cus_1"),
+            ("name", ""),
+            ("email", "ann@example.com"),
+            ("email_domain", "example.com"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let plan = row_plan(&mapping, &kind, &row).unwrap();
+        assert_eq!(plan.data["name"], "ann@example.com");
+        assert_eq!(plan.title, "ann@example.com");
+
+        let mut no_email = row.clone();
+        no_email.insert("email".into(), "".into());
+        no_email.insert("email_domain".into(), "".into());
+        assert_eq!(
+            row_plan(&mapping, &kind, &no_email).unwrap_err().reason,
+            "every mapped cell is empty"
+        );
     }
 }
