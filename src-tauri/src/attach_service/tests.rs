@@ -1162,7 +1162,11 @@ mod cases {
         app.manage(AttachCompanionState::default());
         app.manage(AttachApprovalState::default());
         app.manage(crate::chat::ChatState::new(RuntimeActivityRegistry::new()));
-        let journal_path = app.path().app_data_dir().unwrap().join("runs.sqlite3");
+        // The listener opens the chat storage under the one state root, so the
+        // interrupted run is seeded there and not in Tauri's data directory.
+        let profile = muniment_runtime::profile_directory().unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        let journal_path = profile.join("runs.sqlite3");
         let run_id = Uuid::now_v7().to_string();
         let mut journal = RunJournal::open(&journal_path).unwrap();
         append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
