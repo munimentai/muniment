@@ -2281,7 +2281,11 @@ describe('record panel', () => {
     const record = await screen.findByRole('button', { name: 'Open record panel' })
     await fireEvent.click(record)
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    await within(panel).findByText('No company yet')
+    await within(panel).findByText('Your company, in one record.')
+    expect(within(panel).getByText('Northwind Traders, a sample company · 8 open findings · 3 fewer than the last run')).toBeInTheDocument()
+    expect(within(panel).getByText('4,182')).toBeInTheDocument()
+    expect(within(panel).getByText('people appear more than once across HubSpot and Salesforce, so every owner report and every campaign count reads them twice.')).toBeInTheDocument()
+    expect(within(within(panel).getByRole('list', { name: 'Sources' })).getAllByRole('button')).toHaveLength(8)
     const name = within(panel).getByRole('textbox', { name: 'Company name' })
     const create = within(panel).getByRole('button', { name: 'Create company' })
     expect(create).toBeDisabled()
@@ -2298,6 +2302,29 @@ describe('record panel', () => {
     await screen.findByRole('alert')
     expect(screen.getByRole('alert')).toHaveTextContent('No company has id x.')
   })
+
+  it('opens the sample company and takes the first source with the company name', async () => {
+    recordCompaniesResult = { companies: [], current: null }
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
+    const panel = screen.getByRole('complementary', { name: 'Record' })
+
+    await fireEvent.click(await within(panel).findByRole('button', { name: 'Open the sample' }))
+    const sample = await within(panel).findByRole('region', { name: 'Northwind Traders sample' })
+    expect(within(sample).getByText('Northwind Traders · 8 open findings · 3 fewer than the last run')).toBeInTheDocument()
+    const review = within(sample).getAllByRole('button', { name: 'Review' })[0]
+    expect(review).toHaveAttribute('aria-expanded', 'false')
+    await fireEvent.click(review)
+    expect(within(sample).getByText('rule lower(email) equal, source ids differ')).toBeInTheDocument()
+    await fireEvent.click(within(sample).getByRole('button', { name: 'Close the sample' }))
+
+    const stripe = await within(panel).findByRole('button', { name: /^Stripe/ })
+    await fireEvent.click(stripe)
+    expect(stripe).toHaveAttribute('aria-pressed', 'true')
+    await fireEvent.input(within(panel).getByRole('textbox', { name: 'Company name' }), { target: { value: 'Northwind' } })
+    expect(within(panel).getByRole('button', { name: 'Create company and connect Stripe' })).toBeEnabled()
+  })
+
 })
 
 describe('artifact rail', () => {

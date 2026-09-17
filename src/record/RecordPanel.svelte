@@ -9,6 +9,8 @@
   import RecordForm from './RecordForm.svelte'
   import RecordImport from './RecordImport.svelte'
   import RecordRelate from './RecordRelate.svelte'
+  import RecordSample from './RecordSample.svelte'
+  import RecordStart from './RecordStart.svelte'
   import RecordTable from './RecordTable.svelte'
   import RecordView from './RecordView.svelte'
   import { companyEmpty, currentCompany, kindLabel, kindSummary, orderKinds, recordErrorLine, validCompanyName } from './record-panel-state.js'
@@ -47,6 +49,10 @@
   let error = $state(null)
   let loading = $state(false)
   let newCompanyName = $state('')
+  // The source the first screen holds until the company it needs exists.
+  let pendingSource = $state(null)
+  // Whether the sample company's report stands in place of the first screen.
+  let sampling = $state(false)
   let loadVersion = 0
 
   $effect(() => {
@@ -123,9 +129,16 @@
     try {
       const created = await tauri.invoke('record_company_create', { name })
       newCompanyName = ''
+      sampling = false
       const id = created?.company?.id
       if (id && companies.length > 0) await tauri.invoke('record_company_select', { companyId: id })
       await loadCompanies(id)
+      // A source picked before the company existed opens its import now.
+      if (pendingSource) {
+        const source = pendingSource
+        pendingSource = null
+        importing = { source }
+      }
     } catch (failure) {
       error = recordErrorLine(failure)
     }
@@ -424,12 +437,10 @@
     <p class="record-state" role="alert">{error}</p>
   {:else if loading && companies.length === 0}
     <p class="record-state">Reading the record</p>
+  {:else if companies.length === 0 && sampling}
+    <RecordSample onclose={() => { sampling = false }} />
   {:else if companies.length === 0}
-    <form class="record-create" onsubmit={createCompany}>
-      <p class="record-state">No company yet</p>
-      <input class="record-company-name" type="text" aria-label="Company name" placeholder="Company name" maxlength="120" bind:value={newCompanyName}>
-      <button type="submit" class="record-create-button" disabled={!validCompanyName(newCompanyName)}>Create company</button>
-    </form>
+    <RecordStart bind:name={newCompanyName} bind:source={pendingSource} oncreate={createCompany} onsample={() => { sampling = true }} />
   {:else if importing}
     <RecordImport {tauri} companyId={company?.id} kind={importing.mapping && detail?.entity?.data?.kind ? (kinds.find((candidate) => candidate.name === detail.entity.data.kind) ?? kind) : kind} {kinds} source={importing.source ?? null} mapping={importing.mapping} {propose} {commit} oncancel={() => { importing = null }} ondone={afterImport} />
   {:else if kind && creating}
@@ -522,11 +533,8 @@
   .record-header-spacer { flex: 1; }
   .record-new, .record-maximize { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
   .record-state { margin: 12px 0 0; color: var(--muted); font: var(--text-13) var(--font-mono); }
-  .record-create { display: grid; gap: 8px; align-content: start; }
   .record-company-name { height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-body); }
   .record-company-name:focus { outline: none; border-color: var(--muted); }
-  .record-create-button { justify-self: start; height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--ink); color: var(--paper); font: var(--text-13) var(--font-body); cursor: pointer; }
-  .record-create-button:disabled { background: var(--faint); color: var(--muted); cursor: default; }
   .record-kind-body { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; }
   .record-more { justify-self: start; height: 26px; margin-top: 8px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); cursor: pointer; }
   .record-more:hover { background: var(--faint); }
