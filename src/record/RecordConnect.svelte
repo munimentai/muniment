@@ -43,7 +43,7 @@
   .record-connect-source { display: grid; grid-template-columns: 24px minmax(0, 1fr); grid-template-rows: auto auto; align-items: center; column-gap: 10px; width: 100%; min-height: 56px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); text-align: left; cursor: pointer; }
   .record-connect-source:hover { background: var(--faint); }
   .record-connect-source:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
-  .record-connect-mark { grid-row: 1 / span 2; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; color: var(--muted); }
+  .record-connect-mark { grid-row: 1 / span 2; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; color: var(--ink); }
   .record-connect-name { font: 500 var(--text-13)/1.3 var(--font-body); }
   .record-connect-note { color: var(--muted); font: var(--text-12)/1.4 var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
