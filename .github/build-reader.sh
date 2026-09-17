@@ -24,12 +24,19 @@ if ! command -v go >/dev/null 2>&1; then
     aarch64 | arm64) host_arch=arm64 ;;
     *) printf 'build-reader: no Go toolchain for %s\n' "$(uname -m)" >&2; exit 1 ;;
   esac
-  tarball=$(mktemp -t go-toolchain-XXXXXX.tar.gz)
-  trap 'rm -f "$tarball"' EXIT
-  curl --proto '=https' --tlsv1.2 -fsSL \
-    "https://go.dev/dl/${go_version}.${host_os}-${host_arch}.tar.gz" -o "$tarball"
-  sudo rm -rf /usr/local/go
-  sudo tar -C /usr/local -xzf "$tarball"
+  # The macOS clone has no passwordless sudo, so the toolchain lands in the
+  # caller's own directory on every platform.
+  root=${XDG_CACHE_HOME:-$HOME/.cache}/muniment-go/$go_version
+  if [ ! -x "$root/go/bin/go" ]; then
+    tarball=$(mktemp -t go-toolchain-XXXXXX.tar.gz)
+    trap 'rm -f "$tarball"' EXIT
+    curl --proto '=https' --tlsv1.2 -fsSL \
+      "https://go.dev/dl/${go_version}.${host_os}-${host_arch}.tar.gz" -o "$tarball"
+    rm -rf "$root"
+    mkdir -p "$root"
+    tar -C "$root" -xzf "$tarball"
+  fi
+  export PATH="$root/go/bin:$PATH"
 fi
 
 go version
