@@ -371,7 +371,9 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'
     needs: changes
     runs-on: self-hosted
-    timeout-minutes: 30
+    # The lane also builds the Go reader sidecar, and a fresh clone installs the
+    # toolchain first, so the Windows tests and that install share the budget.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
