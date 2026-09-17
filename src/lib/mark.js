@@ -78,6 +78,25 @@ export function sealBandPath(ampMul = 1, scale = 1, width = SEAL_BAND_WIDTH) {
   return `M${toothPoints(TOOTH.outer, ampMul, scale, width, 1).join(' L')} Z M${toothPoints(TOOTH.inner, ampMul, scale, width, -1).reverse().join(' L')} Z`
 }
 
+// The seal's outer edge as a graph's nodes: all 110 vertices of the 22
+// teeth, valley first from the first valley axis, with the wave pushed 1.9
+// times about its mean radius and held between 15.5 and 23.6 so the milling
+// reads at a glance. brand/logo/ring-graph-3.svg is this same set joined 7
+// and 17 places on, and the record panel's first screen draws it.
+export function sealGraphPoints(push = 1.9, low = 15.5, high = 23.6) {
+  const raw = []
+  for (let tooth = 0; tooth < TOOTH_COUNT; tooth += 1) {
+    for (const [degrees, radius] of TOOTH.outer) {
+      raw.push([(VALLEY + tooth * TOOTH_STEP + degrees) * Math.PI / 180, radius])
+    }
+  }
+  const mean = raw.reduce((sum, [, radius]) => sum + radius, 0) / raw.length
+  return raw.map(([angle, radius]) => {
+    const pushed = Math.max(low, Math.min(high, mean + (radius - mean) * push))
+    return [CENTER + pushed * Math.cos(angle), CENTER + pushed * Math.sin(angle)]
+  })
+}
+
 // The band's centreline, the path the trace accent runs.
 export function sealTracePath(ampMul = 1, scale = 1) {
   const mid = [[0, (20.967 + 17.170) / 2], [8.18, (23.906 + 19.945) / 2]]

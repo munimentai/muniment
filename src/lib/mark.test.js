@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { MILLED_RING_PATH, SEAL_BAND_WIDTH, milledRingPoints, ringPath, sealBandPath, sealTracePath, solidMilledRingPath } from './mark.js'
+import { MILLED_RING_PATH, SEAL_BAND_WIDTH, milledRingPoints, ringPath, sealBandPath, sealGraphPoints, sealTracePath, solidMilledRingPath } from './mark.js'
 
 describe('ringPath', () => {
   it('returns the canonical vendored geometry', () => {
@@ -112,5 +112,33 @@ describe('milledRingPoints', () => {
     const third = milledRingPoints(3)
     expect(third).toHaveLength(Math.ceil(every.length / 3))
     expect(third[1]).toEqual(every[3])
+  })
+})
+
+describe('sealGraphPoints', () => {
+  const radius = ([x, y]) => Math.hypot(x - 24, y - 24)
+  const bearing = ([x, y]) => Math.atan2(y - 24, x - 24) * 180 / Math.PI
+
+  it('names every vertex of the 22 teeth, valley first from the first valley axis', () => {
+    const points = sealGraphPoints()
+    expect(points).toHaveLength(110)
+    expect(bearing(points[0])).toBeCloseTo(12.27, 1)
+    expect(radius(points[0])).toBeLessThan(radius(points[2]))
+  })
+
+  it('pushes the wave 1.9 times about the mean and holds it between 15.5 and 23.6', () => {
+    const radii = sealGraphPoints().map(radius)
+    expect(Math.min(...radii)).toBeCloseTo(19.34, 1)
+    expect(Math.max(...radii)).toBeCloseTo(23.6, 2)
+    for (const r of radii) {
+      expect(r).toBeGreaterThanOrEqual(15.5)
+      expect(r).toBeLessThanOrEqual(23.6 + 1e-9)
+    }
+  })
+
+  it('is unpushed at 1 and so sits on the seal band', () => {
+    const radii = sealGraphPoints(1, 0, 48).map(radius)
+    expect(Math.min(...radii)).toBeCloseTo(20.967, 2)
+    expect(Math.max(...radii)).toBeCloseTo(23.906, 2)
   })
 })
