@@ -182,7 +182,9 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
     assert!(captured.contains(r#""confirmed":true"#));
     let captured = fs::read_to_string(steer_capture).unwrap();
     assert!(captured.contains(r#""type":"steer""#));
-    assert!(captured.contains(r#""message":"redirect here""#));
+    // The queued text arrives behind the line that says when it was sent.
+    assert!(captured.contains(r#""message":"[sent 20"#), "{captured}");
+    assert!(captured.contains(r#"\nredirect here""#), "{captured}");
 
     drop(storage);
     let storage = open_profile_storage(&profile).unwrap();
