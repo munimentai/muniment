@@ -172,6 +172,7 @@ fn main() {
             record::record_company_create,
             record::record_company_select,
             record::record_company_rename,
+            record::record_company_delete,
             record::record_kinds,
             record::record_query,
             record::record_entity,

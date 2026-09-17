@@ -42,6 +42,17 @@ pub fn select_company(
         .map_err(protocol_error)
 }
 
+/// Deletes one company with its graph. The caller closes the open record
+/// first, so no handle holds the files.
+pub fn delete_company(
+    state_directory: impl AsRef<Path>,
+    company_id: &str,
+) -> Result<CompanySummary, ProtocolError> {
+    CompaniesRoot::new(state_directory)
+        .delete(company_id)
+        .map_err(protocol_error)
+}
+
 /// Renames one company.
 pub fn rename_company(
     state_directory: impl AsRef<Path>,

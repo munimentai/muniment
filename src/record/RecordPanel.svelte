@@ -392,8 +392,11 @@
           {/each}
         </select>
       </label>
-      {#if !selectedKind}
+      {#if !selectedKind && !importing}
         <button type="button" class="record-tool" onclick={() => { renameDraft = company?.name ?? ''; renaming = true }}>Rename</button>
+        {#if !empty}
+          <button type="button" class="record-tool" onclick={() => { error = null; importing = { source: null } }}>Connect a source</button>
+        {/if}
       {/if}
     {/if}
     {#each crumb as part, index (index)}
@@ -493,9 +496,6 @@
     <RecordConnect {company} onconnect={(name) => { error = null; importing = { source: name } }} />
   {:else}
     <nav class="record-kinds" aria-label="Kinds">
-      <div class="record-kinds-tools">
-        <button type="button" class="record-tool" onclick={() => { error = null; importing = { source: null } }}>Connect a source</button>
-      </div>
       <ul>
         {#each kinds as entry (entry.name)}
           <li>
@@ -555,7 +555,6 @@
   .record-commit:disabled { background: var(--faint); color: var(--muted); cursor: default; }
   .record-discard { background: var(--surface); color: var(--ink); }
   .record-kinds { min-height: 0; overflow-y: auto; }
-  .record-kinds-tools { display: flex; justify-content: flex-end; padding: 8px 0; font: var(--text-13) var(--font-mono); }
   .record-kinds ul { margin: 0; padding: 0; list-style: none; }
   .record-kinds li + li { border-top: 1px solid var(--border); }
   .record-kind { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); text-align: left; font: var(--text-13) var(--font-body); cursor: pointer; }

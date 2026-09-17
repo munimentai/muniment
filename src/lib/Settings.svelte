@@ -6,6 +6,7 @@
   import Appearance from './Appearance.svelte'
   import ModelsSection from './ModelsSection.svelte'
   import AccountSettings from './AccountSettings.svelte'
+  import CompaniesSection from './CompaniesSection.svelte'
 
   let {
     tauri,
@@ -20,13 +21,14 @@
     accountStatus = '',
     oninventory,
     inventory = null,
+    oncompanieschange = () => {},
     voiceShortcut = '',
     voiceShortcutChanging = false,
     onVoiceShortcutChange = async () => true,
     defaultVoiceShortcut = '',
   } = $props()
 
-  const sections = [['models', 'Models'], ['appearance', 'Preferences'], ['home', 'Home'], ['account', 'Account']]
+  const sections = [['models', 'Models'], ['appearance', 'Preferences'], ['home', 'Home'], ['companies', 'Companies'], ['account', 'Account']]
   let panel = $state()
   const sectionLabel = $derived(sections.find(([id]) => id === section)?.[1] ?? 'Settings')
 
@@ -90,6 +92,8 @@
             <p class="support">Muniment keeps memory, agents, projects and sessions here.</p>
             <button type="button" onclick={onchangehome}>Change folder…</button>
           </section>
+        {:else if section === 'companies'}
+          <CompaniesSection {tauri} onchanged={oncompanieschange} />
         {:else if section === 'account'}
           <section class="settings-account" aria-labelledby="settings-account-title">
             <h4 id="settings-account-title" class="settings-label">Account</h4>

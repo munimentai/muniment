@@ -1277,7 +1277,7 @@ describe('workspace composer entry', () => {
     expect(document.querySelector('.lockup')).not.toBeInTheDocument()
   })
 
-  it('opens Settings as a popup with Models, Preferences, Home and Account sections', async () => {
+  it('opens Settings as a popup with Models, Preferences, Home, Companies and Account sections', async () => {
     localModeStatus = true
     render(App)
     await screen.findByTestId('local-mode')
@@ -1294,7 +1294,7 @@ describe('workspace composer entry', () => {
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*color-mix\(in srgb, var\(--paper\)/)
     const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models', 'Preferences', 'Home', 'Account'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models', 'Preferences', 'Home', 'Companies', 'Account'])
     expect(within(nav).getByRole('button', { name: 'Models' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).getByRole('button', { name: 'Connect provider' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Preferences' }))
@@ -1967,7 +1967,8 @@ describe('record panel', () => {
     await within(panel).findByText('No org records yet')
     await fireEvent.click(within(panel).getByRole('button', { name: 'Import' }))
     const sources = within(panel).getByRole('list', { name: 'Sources' })
-    expect(within(sources).getAllByRole('button').map((button) => button.textContent)).toEqual(['CSV filea file on this machine', 'Stripecustomers, subscriptions, invoices'])
+    expect(within(sources).getAllByRole('button').map((button) => button.querySelector('.record-import-source-name').textContent)).toEqual(['CSV file', 'Stripe', 'HubSpot', 'Pipedrive', 'Salesforce', 'Zendesk', 'Intercom', 'Freshdesk'])
+    expect(within(sources).getAllByRole('button')[0]).toHaveTextContent('a file on this machine')
     await fireEvent.click(within(sources).getByRole('button', { name: /CSV file/ }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_describe', { companyId: 'company-1', source: 'csv', object: '/exports/customers.csv' }))
     const form = await within(panel).findByRole('form', { name: 'Map customers.csv' })
@@ -2134,7 +2135,7 @@ describe('record panel', () => {
     await fireEvent.click(within(within(panel).getByRole('list', { name: 'Sources' })).getByRole('button', { name: /Stripe/ }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_objects', { companyId: 'company-1', source: 'stripe' }))
     const connect = await within(panel).findByRole('form', { name: 'Connect Stripe' })
-    expect(connect).toHaveTextContent('The key stays in this machine\'s keychain')
+    expect(connect).toHaveTextContent('It stays in this machine\'s keychain')
     const key = within(connect).getByLabelText('Secret key')
     expect(key).toHaveAttribute('type', 'password')
     await fireEvent.input(key, { target: { value: 'sk_live_x' } })

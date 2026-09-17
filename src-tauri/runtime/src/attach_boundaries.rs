@@ -869,6 +869,14 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         service::rename_company(&self.profile_directory, company_id, name)
     }
 
+    fn delete_company(
+        &self,
+        company_id: &str,
+    ) -> Result<muniment_core::record::CompanySummary, ProtocolError> {
+        self.records.close(company_id);
+        service::delete_company(&self.profile_directory, company_id)
+    }
+
     fn record_sql(
         &self,
         actor: &str,
