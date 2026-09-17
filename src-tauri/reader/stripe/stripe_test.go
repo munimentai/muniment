@@ -53,6 +53,9 @@ func fakeStripe(t *testing.T) (*httptest.Server, *[]string) {
 			if r.URL.Query().Get("status") != "all" {
 				t.Errorf("subscriptions listed without status=all: %s", r.URL.RawQuery)
 			}
+			if r.URL.Query().Get("expand[]") != "data.items.data.price.product" {
+				t.Errorf("subscriptions listed without the product expanded: %s", r.URL.RawQuery)
+			}
 			data = subscriptions
 		case "/v1/invoices":
 			data = invoices

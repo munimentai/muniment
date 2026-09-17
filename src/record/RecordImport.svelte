@@ -2,16 +2,18 @@
   // Import: a source object lands on the open kind. A CSV file comes from the
   // file dialog, a network source such as Stripe from the reader sidecar after
   // one connect. The runtime describes the object's fields, this form proposes
-  // a `mapping` record onto the kind's properties with one identity column,
-  // Commit approves it, and the run pages the rows through propose and commit
-  // until it is done. Every row the mapping could not place lists with its
-  // reason.
+  // a `mapping` record onto the kind's properties with one identity column
+  // and the edges its id columns draw, Commit approves it, and the run pages
+  // the rows through propose and commit until it is done. Every row the
+  // mapping could not place lists with its reason.
   import { open } from '@tauri-apps/plugin-dialog'
-  import { accumulateRun, credentialsFilled, identityOptions, importErrorLine, mappedCount, mappingData, mappingLines, packSecret, runSummaryLines, sourceCredentials, sourceOptions, suggestFields, suggestIdentity, suggestKind, targetProperties } from './record-import-state.js'
+  import { accumulateRun, credentialsFilled, identityOptions, importErrorLine, mappedCount, mappingData, mappingLines, packSecret, propertyLabel, runSummaryLines, sourceCredentials, sourceOptions, suggestEdges, suggestFields, suggestIdentity, suggestKind, targetProperties } from './record-import-state.js'
 
   // `kind` is the kind the rows fill. Without one, the import opens on
   // `source` and the kind follows from the object, chosen among `kinds`.
-  let { tauri, companyId, kind = null, kinds = [], source: initialSource = null, mapping: existingMapping = null, propose, commit, oncancel, ondone } = $props()
+  // `relations` is the catalogue's relation list, which names the edge an id
+  // column draws.
+  let { tauri, companyId, kind = null, kinds = [], relations = [], source: initialSource = null, mapping: existingMapping = null, propose, commit, oncancel, ondone } = $props()
 
   // 'source' | 'picking' | 'connecting' | 'objects' | 'mapping' | 'proposed' | 'running' | 'done' | 'failed'
   let step = $state(existingMapping ? 'running' : 'source')
@@ -27,6 +29,7 @@
   let description = $state(null)
   let fields = $state({})
   let identity = $state('')
+  let edges = $state([])
   let pending = $state(null)
   let mappingId = $state(existingMapping)
   let run = $state(null)
@@ -139,6 +142,7 @@
     }
     fields = suggestFields(description, targetKind)
     identity = suggestIdentity(description)
+    edges = suggestEdges(description, targetKind, relations)
     step = 'mapping'
   }
 
@@ -146,12 +150,12 @@
     event?.preventDefault?.()
     if (!description || mapped === 0 || !targetKind) return
     error = null
-    const answer = await propose({ op: 'create', kind: 'mapping', data: mappingData(description, targetKind, fields, identity) })
+    const answer = await propose({ op: 'create', kind: 'mapping', data: mappingData(description, targetKind, fields, identity, edges) })
     if (answer?.error) {
       error = importErrorLine(answer)
       return
     }
-    pending = { proposal: answer.proposal?.id, lines: mappingLines(description, targetKind, fields, identity), warnings: answer.proposal?.warnings ?? [] }
+    pending = { proposal: answer.proposal?.id, lines: mappingLines(description, targetKind, fields, identity, edges), warnings: answer.proposal?.warnings ?? [] }
     step = 'proposed'
   }
 
@@ -203,10 +207,11 @@
     step = 'mapping'
   }
 
-  // A kind picked by hand resuggests every column against it.
+  // A kind picked by hand resuggests every column and edge against it.
   function chooseKind(name) {
     targetKind = kinds.find((candidate) => candidate.name === name) ?? null
     fields = suggestFields(description, targetKind)
+    edges = suggestEdges(description, targetKind, relations)
   }
 
   function keydown(event) {
@@ -286,7 +291,7 @@
               <td>
                 <select class="record-select" aria-label="Property for {field.name}" value={fields[field.name] ?? ''} disabled={step === 'proposed'} onchange={(event) => { fields = { ...fields, [field.name]: event.currentTarget.value } }}>
                   <option value="">skip</option>
-                  {#each properties as property (property)}<option value={property}>{property.startsWith('x_') ? `${property.slice(2)} (own)` : property}</option>{/each}
+                  {#each properties as property (property)}<option value={property}>{propertyLabel(targetKind, property)}</option>{/each}
                 </select>
               </td>
             </tr>
@@ -299,6 +304,9 @@
           {#each identities as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
         </select>
       </label>
+      {#each edges as edge (edge.identity)}
+        <p class="record-import-note">{edge.identity.split(':').pop()} links each row {edge.relation} to the {edge.identity.split(':')[2]} it names.</p>
+      {/each}
       <p class="record-import-note">A second run of the same {source === 'csv' ? 'file' : 'object'} updates the rows it keyed and adds none twice.</p>
       {#if error}<p class="record-import-error" role="alert">{error}</p>{/if}
       {#if step === 'proposed' && pending}

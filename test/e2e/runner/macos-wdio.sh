@@ -297,6 +297,10 @@ run_step image-fixture openssl base64 -d -A -in test/e2e/fixtures/image-token.pn
 export MUNIMENT_E2E_IMAGE_PATH="$state_root/image-token.png"
 
 run_step save-config-directory save_macos_spec_config || exit
+# The desktop under a spec home reads the state root through this override, so
+# its socket path is the login home's short path the runtime binds. A spec
+# home's own path is longer than the 104 bytes a socket path holds on macOS.
+export MUNIMENT_STATE_DIR="$macos_login_state"
 # Bun prints every fetch it makes, so Pi's stderr names the address it dials.
 run_step pi-verbose-fetch set_verbose_fetch || exit
 run_step ollama-forward start_ollama_forward || exit

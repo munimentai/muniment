@@ -2004,7 +2004,9 @@ describe('record panel', () => {
     recordQueryResult = { page: { kind: 'org', total: 2, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [{ id: 'org-1', kind: 'org', title: 'Northwind', state: null, updated_at: '2026-09-16T10:00:00.000Z', data: { name: 'Northwind', domain: 'northwind.example' } }] } }
     await fireEvent.click(within(result).getByRole('button', { name: 'Done' }))
     await within(panel).findByRole('table', { name: 'org records' })
-    expect(within(panel).getByText('2 records')).toBeInTheDocument()
+    expect(await within(panel).findByText('2 records')).toBeInTheDocument()
+    // Done rereads the kind list too, so its counts hold the rows the import landed.
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'record_kinds').length).toBeGreaterThanOrEqual(2))
   })
 
   it('appends the next page with Show more, and rereads the table when a run ends and when the window regains focus', async () => {

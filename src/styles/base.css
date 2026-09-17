@@ -7,14 +7,17 @@
   box-sizing: border-box;
 }
 
+/* The root never scrolls, on any key. Each panel scrolls its own body. */
 html {
   height: 100%;
+  overflow: clip;
   -webkit-text-size-adjust: 100%;
 }
 
 body {
   height: 100%;
   margin: 0;
+  overflow: clip;
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-human);

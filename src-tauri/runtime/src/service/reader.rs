@@ -2,8 +2,9 @@
 //! source object's fields for the panel's import. `reader.run` pages an
 //! approved mapping through propose and commit as the owner's reader
 //! principal, keyed on the identity so a second run updates and never
-//! duplicates, and it writes the cursor into the mapping. `reader.queue`
-//! answers the rows the last run could not place.
+//! duplicates, draws the edges the mapping names to records another object
+//! landed, and writes the cursor into the mapping. `reader.queue` answers
+//! the rows the last run could not place.
 
 use super::record::{company_id, error_body, record_failure, text, OpenRecord, RecordRegistry};
 use crate::reader::{
@@ -12,7 +13,9 @@ use crate::reader::{
 };
 use crate::reader_mapping::{data_differs, row_plan, Mapping, RowPlan};
 use muniment_core::attach::ProtocolError;
-use muniment_core::record::{now_string, Operation, RecordError, Reference};
+use muniment_core::record::{
+    now_string, IdentityInput, LinkInput, Operation, RecordError, Reference,
+};
 use muniment_core::serde_json::{self, json, Map, Value};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -62,8 +65,81 @@ enum Landed {
     Unplaced(String),
 }
 
-/// Lands one planned row on the record as the reader principal.
-fn land(entry: &mut OpenRecord, mapping: &Mapping, plan: &RowPlan, principal: &str) -> Landed {
+/// The identities beside the key that the entity does not carry yet. One that
+/// names another entity is left for the report, never moved.
+fn new_identities(entry: &OpenRecord, plan: &RowPlan) -> Vec<IdentityInput> {
+    plan.identities
+        .iter()
+        .filter(|identity| {
+            let reference = Reference::Identity {
+                kind: identity.kind.clone(),
+                value: identity.value.clone(),
+            };
+            matches!(entry.record.resolve(&reference), Ok(None))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The links whose other end is a record the graph holds. A target no object
+/// landed yet draws nothing, and a later run draws it.
+fn resolved_links(entry: &OpenRecord, plan: &RowPlan) -> Vec<LinkInput> {
+    plan.links
+        .iter()
+        .filter_map(|link| {
+            let reference = Reference::Identity {
+                kind: link.target.kind.clone(),
+                value: link.target.value.clone(),
+            };
+            let target = entry.record.resolve(&reference).ok().flatten()?;
+            Some(LinkInput {
+                relation: link.relation.clone(),
+                target: Reference::Entity(target),
+                props: Map::new(),
+            })
+        })
+        .collect()
+}
+
+/// Draws the row's links from an entity the graph already holds, one commit
+/// per edge that is not there yet. Answers how many it drew.
+fn link_existing(
+    entry: &mut OpenRecord,
+    entity_id: &str,
+    plan: &RowPlan,
+    principal: &str,
+) -> usize {
+    let mut linked = 0;
+    for link in resolved_links(entry, plan) {
+        if link.target == Reference::Entity(entity_id.to_owned()) {
+            continue;
+        }
+        let proposal = entry.record.propose(Operation::Link {
+            src: Reference::Entity(entity_id.to_owned()),
+            relation: link.relation,
+            dst: link.target,
+            props: Map::new(),
+        });
+        if proposal
+            .and_then(|proposal| entry.record.commit(&proposal.id, principal))
+            .is_ok()
+        {
+            linked += 1;
+        }
+    }
+    linked
+}
+
+/// Lands one planned row on the record as the reader principal and draws its
+/// links, counting the edges it drew into `linked`.
+fn land(
+    entry: &mut OpenRecord,
+    mapping: &Mapping,
+    plan: &RowPlan,
+    principal: &str,
+    linked: &mut usize,
+) -> Landed {
+    let mut existing = None;
     let operation = match &plan.identity {
         Some(identity) => {
             let reference = Reference::Identity {
@@ -91,31 +167,40 @@ fn land(entry: &mut OpenRecord, mapping: &Mapping, plan: &RowPlan, principal: &s
                             mapping.kind
                         ));
                     }
-                    if !data_differs(&current.data, &plan.data) {
+                    let identities = new_identities(entry, plan);
+                    if !data_differs(&current.data, &plan.data) && identities.is_empty() {
+                        *linked += link_existing(entry, &entity_id, plan, principal);
                         return Landed::Unchanged;
                     }
+                    existing = Some(entity_id.clone());
                     Operation::Update {
                         entity: Reference::Entity(entity_id),
                         data: plan.data.clone(),
-                        identities: Vec::new(),
+                        identities,
                     }
                 }
                 Ok(None) => Operation::Create {
                     kind: mapping.kind.clone(),
                     data: plan.data.clone(),
-                    identities: vec![identity.clone()],
-                    links: Vec::new(),
+                    identities: std::iter::once(identity.clone())
+                        .chain(plan.identities.iter().cloned())
+                        .collect(),
+                    links: resolved_links(entry, plan),
                 },
             }
         }
         None => Operation::Create {
             kind: mapping.kind.clone(),
             data: plan.data.clone(),
-            identities: Vec::new(),
-            links: Vec::new(),
+            identities: plan.identities.clone(),
+            links: resolved_links(entry, plan),
         },
     };
     let creating = matches!(operation, Operation::Create { .. });
+    let created_links = match &operation {
+        Operation::Create { links, .. } => links.len(),
+        _ => 0,
+    };
     let proposal = match entry.record.propose(operation) {
         Ok(proposal) => proposal,
         Err(error) => return Landed::Unplaced(failure_message(error)),
@@ -131,8 +216,16 @@ fn land(entry: &mut OpenRecord, mapping: &Mapping, plan: &RowPlan, principal: &s
         return Landed::Unplaced(proposal.warnings.join(" "));
     }
     match entry.record.commit(&proposal.id, principal) {
-        Ok(_) if creating => Landed::Created,
-        Ok(_) => Landed::Updated,
+        Ok(_) if creating => {
+            *linked += created_links;
+            Landed::Created
+        }
+        Ok(_) => {
+            if let Some(entity_id) = existing {
+                *linked += link_existing(entry, &entity_id, plan, principal);
+            }
+            Landed::Updated
+        }
         Err(error) => Landed::Unplaced(failure_message(error)),
     }
 }
@@ -285,6 +378,7 @@ impl RecordRegistry {
             let mut created = 0_usize;
             let mut updated = 0_usize;
             let mut unchanged = 0_usize;
+            let mut linked = 0_usize;
             let mut unplaced: Vec<Value> = Vec::new();
             let mut done = false;
             let mut label = String::new();
@@ -311,7 +405,7 @@ impl RecordRegistry {
                         break;
                     }
                     let landed = match row_plan(&mapping, &kind, row) {
-                        Ok(plan) => match land(entry, &mapping, &plan, &principal) {
+                        Ok(plan) => match land(entry, &mapping, &plan, &principal, &mut linked) {
                             Landed::Unplaced(reason) => Err((plan.title, reason)),
                             other => Ok(other),
                         },
@@ -406,6 +500,7 @@ impl RecordRegistry {
                 "created": created,
                 "updated": updated,
                 "unchanged": unchanged,
+                "linked": linked,
                 "unplaced": unplaced.len(),
                 "queued": kept.len(),
                 "ran_at": ran_at,
@@ -688,6 +783,130 @@ mod tests {
         );
         // Windows refuses to unlink a file another handle still holds, so the
         // registry closes its company connections before the state root goes.
+        drop(registry);
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn links_rows_to_records_another_object_landed_and_keeps_an_email_beside_the_key() {
+        let state = state("links");
+        CompaniesRoot::new(&state).create("Northwind").unwrap();
+        let registry = RecordRegistry::new(&state);
+        let customers = state.join("customers.csv");
+        std::fs::write(
+            &customers,
+            "id,name,email\ncus_1,Northwind,ann@northwind.example\ncus_2,Contoso,\n",
+        )
+        .unwrap();
+        let people = state.join("people.csv");
+        std::fs::write(&people, "id,name,email\nper_1,Ann,ann@northwind.example\n").unwrap();
+        let subscriptions = state.join("subscriptions.csv");
+        std::fs::write(
+            &subscriptions,
+            "id,customer,plan,state\nsub_1,cus_1,Team,active\nsub_2,cus_9,Solo,trial\n",
+        )
+        .unwrap();
+        let run = |object: &std::path::Path, data: Value| {
+            let mut data = data;
+            data["source"] = json!("csv");
+            data["object"] = json!(object.to_string_lossy());
+            data["approved"] = json!(true);
+            let committed = propose_and_commit(
+                &registry,
+                json!({"op": "create", "kind": "mapping", "data": data}),
+            );
+            let mapping_id = committed["result"]["entity_ids"][0].as_str().unwrap();
+            registry
+                .reader_run(DESKTOP_ACTOR, json!({"mapping": mapping_id}))
+                .unwrap()["run"]
+                .clone()
+        };
+
+        // The subscriptions land first, so their customers are not there to link.
+        let first = run(
+            &subscriptions,
+            json!({"kind": "subscription", "fields": {"plan": "plan", "state": "state"},
+                   "identity": "external:csv:subscriptions:id",
+                   "edges": [{"relation": "billed_to", "identity": "external:csv:customers:customer"}]}),
+        );
+        assert_eq!(first["created"], 2, "{first}");
+        assert_eq!(first["linked"], 0);
+
+        let orgs = run(
+            &customers,
+            json!({"kind": "org", "fields": {"name": "name"}, "identity": "external:csv:customers:id"}),
+        );
+        assert_eq!(orgs["created"], 2, "{orgs}");
+
+        // A second run over unchanged rows draws the edge the first could not.
+        let second = run(
+            &subscriptions,
+            json!({"kind": "subscription", "fields": {"plan": "plan", "state": "state"},
+                   "identity": "external:csv:subscriptions:id",
+                   "edges": [{"relation": "billed_to", "identity": "external:csv:customers:customer"}]}),
+        );
+        assert_eq!(second["unchanged"], 2, "{second}");
+        assert_eq!(second["linked"], 1);
+        let team = registry
+            .query(
+                DESKTOP_ACTOR,
+                json!({"kind": "subscription", "search": "Team"}),
+            )
+            .unwrap();
+        let team = registry
+            .entity(
+                DESKTOP_ACTOR,
+                json!({"entity": team["page"]["rows"][0]["id"]}),
+            )
+            .unwrap();
+        let edges = team["entity"]["edges"].as_array().unwrap();
+        assert_eq!(edges.len(), 1, "{team}");
+        assert_eq!(edges[0]["relation"], "billed_to");
+        assert_eq!(edges[0]["dst_title"], "Northwind");
+        // The edge is drawn once.
+        let third = run(
+            &subscriptions,
+            json!({"kind": "subscription", "fields": {"plan": "plan", "state": "state"},
+                   "identity": "external:csv:subscriptions:id",
+                   "edges": [{"relation": "billed_to", "identity": "external:csv:customers:customer"}]}),
+        );
+        assert_eq!(third["linked"], 0, "{third}");
+
+        // A person keyed on the source id keeps the email as an identity.
+        let persons = run(
+            &people,
+            json!({"kind": "person", "fields": {"name": "full_name", "email": "email"},
+                   "identity": "external:csv:people:id"}),
+        );
+        assert_eq!(persons["created"], 1, "{persons}");
+        let ann = registry
+            .query(DESKTOP_ACTOR, json!({"kind": "person"}))
+            .unwrap();
+        let ann = registry
+            .entity(
+                DESKTOP_ACTOR,
+                json!({"entity": ann["page"]["rows"][0]["id"]}),
+            )
+            .unwrap();
+        let identities: Vec<(&str, &str)> = ann["entity"]["identities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|identity| {
+                (
+                    identity["kind"].as_str().unwrap(),
+                    identity["value"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert!(
+            identities.contains(&("email", "ann@northwind.example")),
+            "{identities:?}"
+        );
+        assert!(
+            identities.contains(&("external", "csv:people:per_1")),
+            "{identities:?}"
+        );
         drop(registry);
         std::fs::remove_dir_all(state).unwrap();
     }

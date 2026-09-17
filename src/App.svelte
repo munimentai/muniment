@@ -1923,8 +1923,9 @@
   .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
   .workspace.rail-open { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--artifact-rail-width); grid-template-areas: "title title title" "side thread rail"; }
-  /* A maximized record takes the whole frame; the sidebar and the thread stay mounted and hidden. */
-  .workspace.record-maximized { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "rail"; }
+  /* A maximized record takes the whole frame; the sidebar and the thread stay mounted and hidden.
+     The two columns stay, so the title row's subgrid keeps its sidebar part and its thread part in place. */
+  .workspace.record-maximized { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "rail rail"; }
   .workspace.record-maximized .sidebar, .workspace.record-maximized .thread-panel, .workspace.record-maximized .sidebar-divider { display: none; }
   .sidebar, .thread-panel, .artifact-rail { min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }

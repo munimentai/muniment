@@ -386,6 +386,16 @@ export function buildProbeCommandTable(fixtureName) {
       return null
     }
     if (command === 'attach_listener_status') return { started: true, failure: null, connected: false, supervisor_running: false }
+    // The record panel opens on one company whose kind list runs past the
+    // viewport, so the shell's scroll and title row can be checked with it open.
+    if (command === 'record_companies') return { companies: [{ id: 'probe-company', name: 'Northwind', created_at: '2026-01-01T00:00:00.000Z', owner_principal_id: 'probe-owner', current: true }], current: 'probe-company' }
+    if (command === 'record_kinds') return {
+      company_id: 'probe-company',
+      kinds: ['person', 'org', 'deal', 'thread', 'message', 'ticket', 'task', 'project', 'document', 'meeting', 'subscription', 'invoice', 'service', 'incident', 'deploy', 'commitment', 'decision', 'mapping', 'workflow', 'view', 'x_region', 'x_territory', 'x_quota', 'x_plan']
+        .map((name, index) => ({ name, count: index * 7, schema: { properties: { name: { type: 'string' } }, required: ['name'] }, states: null, extension: null })),
+      relations: [],
+    }
+    if (command === 'record_query') return { page: { kind: payload?.kind ?? 'org', total: 0, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [] } }
     if (command === 'attach_companions') return [
       {
         identity: '018f0000-0000-7000-8000-000000000001',
