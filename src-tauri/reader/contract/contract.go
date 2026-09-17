@@ -2,7 +2,13 @@
 // the runtime writes, the cursor it hands back, and the four answers.
 package contract
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+)
 
 // Request is what the runtime writes on stdin.
 type Request struct {
@@ -72,4 +78,105 @@ func (f *Failure) Error() string { return f.Message }
 // Fail builds one typed failure.
 func Fail(code, format string, args ...any) *Failure {
 	return &Failure{Code: code, Message: fmt.Sprintf(format, args...)}
+}
+
+// Credentials reads the secret the runtime holds for a source. A source
+// that connects with one value gets it under `token`. A source that needs
+// several stores them as one JSON object the panel packs, keyed by name.
+func Credentials(secret string) map[string]string {
+	secret = strings.TrimSpace(secret)
+	if strings.HasPrefix(secret, "{") {
+		var packed map[string]string
+		if json.Unmarshal([]byte(secret), &packed) == nil {
+			for key, value := range packed {
+				packed[key] = strings.TrimSpace(value)
+			}
+			return packed
+		}
+	}
+	return map[string]string{"token": secret}
+}
+
+// Column names one text column and how the kind schema should type it.
+type Column struct {
+	Name  string
+	Guess string
+}
+
+// Sample describes columns from the rows read: three distinct samples each
+// and the count of rows that fill it.
+func Sample(columns []Column, rows []Row) []FieldDescription {
+	fields := make([]FieldDescription, 0, len(columns))
+	for _, column := range columns {
+		samples := []string{}
+		seen := map[string]bool{}
+		filled := 0
+		for _, row := range rows {
+			value := row[column.Name]
+			if value == "" {
+				continue
+			}
+			filled++
+			if len(samples) < 3 && !seen[value] {
+				seen[value] = true
+				samples = append(samples, Clip(value, 80))
+			}
+		}
+		fields = append(fields, FieldDescription{Name: column.Name, Guess: column.Guess, Samples: samples, Filled: filled})
+	}
+	return fields
+}
+
+// Scalar reads one JSON value as the text a row carries.
+func Scalar(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case bool:
+		if typed {
+			return "yes"
+		}
+		return "no"
+	case float64:
+		if typed == float64(int64(typed)) {
+			return strconv.FormatInt(int64(typed), 10)
+		}
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		return string(encoded)
+	}
+}
+
+// Joined reads a JSON list as its scalars joined by commas, sorted when
+// asked, so a tag list reads the same whatever order the source used.
+func Joined(value any, sorted bool) string {
+	list, ok := value.([]any)
+	if !ok {
+		return Scalar(value)
+	}
+	parts := []string{}
+	for _, part := range list {
+		if text := Scalar(part); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if sorted {
+		sort.Strings(parts)
+	}
+	return strings.Join(parts, ",")
+}
+
+// Clip cuts text to at most max runes.
+func Clip(text string, max int) string {
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	return string(runes[:max])
 }

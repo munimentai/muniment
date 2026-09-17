@@ -156,7 +156,15 @@ pub trait Reader {
 /// The one source name a file reader answers to.
 pub const CSV_SOURCE: &str = "csv";
 /// The network sources the Go sidecar reads, each behind its own secret.
-pub const SIDECAR_SOURCES: [&str; 3] = ["stripe", "hubspot", "pipedrive"];
+pub const SIDECAR_SOURCES: [&str; 7] = [
+    "stripe",
+    "hubspot",
+    "pipedrive",
+    "salesforce",
+    "zendesk",
+    "intercom",
+    "freshdesk",
+];
 
 /// Opens the reader for a source. `object` is the file path for a file
 /// reader and the object name for a network source, whose secret comes from
@@ -206,12 +214,15 @@ pub fn source_label(source: &str) -> String {
     }
 }
 
-/// What a source calls its credential: HubSpot issues a private app access
-/// token, Pipedrive an API token, every other source a secret key.
+/// What a source calls its credential, as the panel's connect sentence
+/// names it. A source with several credentials names the set.
 pub fn secret_label(source: &str) -> &'static str {
     match source {
         "hubspot" => "private app access token",
-        "pipedrive" => "API token",
+        "pipedrive" | "zendesk" => "API token",
+        "salesforce" => "connected app",
+        "intercom" => "access token",
+        "freshdesk" => "API key",
         _ => "secret key",
     }
 }
@@ -369,5 +380,7 @@ mod tests {
         assert_eq!(secret_label("stripe"), "secret key");
         assert_eq!(secret_label("pipedrive"), "API token");
         assert_eq!(source_label("pipedrive"), "Pipedrive");
+        assert_eq!(secret_label("salesforce"), "connected app");
+        assert!(SIDECAR_SOURCES.contains(&"freshdesk"));
     }
 }

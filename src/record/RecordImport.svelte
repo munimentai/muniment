@@ -7,15 +7,21 @@
   // until it is done. Every row the mapping could not place lists with its
   // reason.
   import { open } from '@tauri-apps/plugin-dialog'
-  import { accumulateRun, identityOptions, importErrorLine, mappedCount, mappingData, mappingLines, runSummaryLines, sourceOptions, suggestFields, suggestIdentity, targetProperties } from './record-import-state.js'
+  import { accumulateRun, credentialsFilled, identityOptions, importErrorLine, mappedCount, mappingData, mappingLines, packSecret, runSummaryLines, sourceCredentials, sourceOptions, suggestFields, suggestIdentity, suggestKind, targetProperties } from './record-import-state.js'
 
-  let { tauri, companyId, kind, mapping: existingMapping = null, propose, commit, oncancel, ondone } = $props()
+  // `kind` is the kind the rows fill. Without one, the import opens on
+  // `source` and the kind follows from the object, chosen among `kinds`.
+  let { tauri, companyId, kind = null, kinds = [], source: initialSource = null, mapping: existingMapping = null, propose, commit, oncancel, ondone } = $props()
 
   // 'source' | 'picking' | 'connecting' | 'objects' | 'mapping' | 'proposed' | 'running' | 'done' | 'failed'
   let step = $state(existingMapping ? 'running' : 'source')
-  let source = $state('csv')
-  let secret = $state('')
+  let source = $state(initialSource ?? 'csv')
+  let targetKind = $state(kind ?? null)
+  const pickingKind = $derived(!kind && kinds.length > 0)
+  let credentials = $state({})
   let secretLabel = $state('secret key')
+  const credentialFields = $derived(sourceCredentials(source))
+  const filled = $derived(credentialsFilled(source, credentials))
   let objects = $state([])
   let sourceLabel = $state('')
   let description = $state(null)
@@ -27,7 +33,7 @@
   let progress = $state(null)
   let error = $state(null)
   let busy = $state(false)
-  const properties = $derived(targetProperties(kind))
+  const properties = $derived(targetProperties(targetKind))
   const identities = $derived(identityOptions(description))
   const mapped = $derived(mappedCount(fields))
   const summary = $derived(runSummaryLines(run))
@@ -38,10 +44,19 @@
     else if (step === 'running' && !run && !progress) void runMapping()
   })
 
+  // An import opened on a source starts there.
+  let started = false
+  $effect(() => {
+    if (started || existingMapping || !initialSource) return
+    started = true
+    chooseSource(initialSource)
+  })
+
   function chooseSource(name) {
     source = name
     sourceLabel = sources.find((option) => option.value === name)?.label ?? name
     secretLabel = sources.find((option) => option.value === name)?.secret ?? 'secret key'
+    credentials = {}
     error = null
     if (name === 'csv') step = 'picking'
     else void listObjects()
@@ -56,7 +71,8 @@
   }
 
   // A network source lists its objects once connected. An unconnected one
-  // asks for its secret first.
+  // asks for its credentials first, packed as the one secret the runtime
+  // stores.
   async function listObjects() {
     busy = true
     const answer = await invoke('reader_objects', { companyId, source })
@@ -77,16 +93,16 @@
 
   async function connect(event) {
     event?.preventDefault?.()
-    if (!secret.trim()) return
+    if (!filled) return
     error = null
     busy = true
-    const answer = await invoke('reader_connect', { companyId, source, secret: secret.trim() })
+    const answer = await invoke('reader_connect', { companyId, source, secret: packSecret(source, credentials) })
     busy = false
     if (answer?.error || !answer?.connected) {
       error = importErrorLine(answer ?? 'The source did not answer')
       return
     }
-    secret = ''
+    credentials = {}
     objects = answer.connected.objects ?? []
     sourceLabel = answer.connected.label ?? source
     step = 'objects'
@@ -117,21 +133,25 @@
       return
     }
     description = answer.description
-    fields = suggestFields(description, kind)
+    if (!kind) {
+      const suggested = suggestKind(source, description.object ?? object)
+      targetKind = kinds.find((candidate) => candidate.name === suggested) ?? (targetKind && kinds.some((candidate) => candidate.name === targetKind.name) ? targetKind : null)
+    }
+    fields = suggestFields(description, targetKind)
     identity = suggestIdentity(description)
     step = 'mapping'
   }
 
   async function proposeMapping(event) {
     event?.preventDefault?.()
-    if (!description || mapped === 0) return
+    if (!description || mapped === 0 || !targetKind) return
     error = null
-    const answer = await propose({ op: 'create', kind: 'mapping', data: mappingData(description, kind, fields, identity) })
+    const answer = await propose({ op: 'create', kind: 'mapping', data: mappingData(description, targetKind, fields, identity) })
     if (answer?.error) {
       error = importErrorLine(answer)
       return
     }
-    pending = { proposal: answer.proposal?.id, lines: mappingLines(description, kind, fields, identity), warnings: answer.proposal?.warnings ?? [] }
+    pending = { proposal: answer.proposal?.id, lines: mappingLines(description, targetKind, fields, identity), warnings: answer.proposal?.warnings ?? [] }
     step = 'proposed'
   }
 
@@ -183,11 +203,17 @@
     step = 'mapping'
   }
 
+  // A kind picked by hand resuggests every column against it.
+  function chooseKind(name) {
+    targetKind = kinds.find((candidate) => candidate.name === name) ?? null
+    fields = suggestFields(description, targetKind)
+  }
+
   function keydown(event) {
     if (event.key === 'Escape') {
       event.preventDefault()
       if (step === 'proposed') discard()
-      else if (step === 'done' || step === 'failed') ondone?.(run)
+      else if (step === 'done' || step === 'failed') ondone?.(run, targetKind?.name ?? null)
       else oncancel?.()
     }
   }
@@ -196,9 +222,9 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<section class="record-import" aria-label="Import {kind?.name ?? ''}" onkeydown={keydown}>
+<section class="record-import" aria-label="Import {targetKind?.name ?? 'records'}" onkeydown={keydown}>
   {#if step === 'source'}
-    <p class="record-import-state">Read {kind?.name ?? 'records'} from</p>
+    <p class="record-import-state">Read {targetKind?.name ?? 'records'} from</p>
     <ul class="record-import-sources" aria-label="Sources">
       {#each sources as option (option.value)}
         <li><button type="button" class="record-import-source" disabled={busy} onclick={() => chooseSource(option.value)}><span class="record-import-source-name">{option.label}</span><span class="record-import-source-note">{option.note}</span></button></li>
@@ -212,15 +238,17 @@
   {:else if step === 'connecting'}
     <form class="record-import-connect" aria-label="Connect {sourceLabel || source}" onsubmit={connect}>
       <p class="record-import-state">Connect {sourceLabel || source} with its {secretLabel}. It stays in this machine's keychain, and every read runs here.</p>
-      <input class="record-import-secret" type="password" aria-label={secretLabel[0].toUpperCase() + secretLabel.slice(1)} placeholder={secretLabel[0].toUpperCase() + secretLabel.slice(1)} autocomplete="off" bind:value={secret}>
+      {#each credentialFields as credential (credential.name)}
+        <input class="record-import-secret" type={credential.secret ? 'password' : 'text'} aria-label={credential.label} placeholder={credential.label} autocomplete="off" spellcheck="false" bind:value={credentials[credential.name]}>
+      {/each}
       {#if error}<p class="record-import-error" role="alert">{error}</p>{/if}
       <div class="record-import-actions">
-        <button type="submit" class="record-commit" disabled={busy || !secret.trim()}>{busy ? 'Connecting' : 'Connect'}</button>
+        <button type="submit" class="record-commit" disabled={busy || !filled}>{busy ? 'Connecting' : 'Connect'}</button>
         <button type="button" class="record-discard" onclick={() => { error = null; step = 'source' }}>Back</button>
       </div>
     </form>
   {:else if step === 'objects'}
-    <p class="record-import-state">Read {kind?.name ?? 'records'} from which {sourceLabel || source} object</p>
+    <p class="record-import-state">Read {targetKind?.name ?? 'records'} from which {sourceLabel || source} object</p>
     <ul class="record-import-sources" aria-label="Objects">
       {#each objects as object (object.name)}
         <li><button type="button" class="record-import-source" disabled={busy} onclick={() => describe(object.name)}><span class="record-import-source-name">{object.label}</span></button></li>
@@ -232,11 +260,20 @@
   {:else if step === 'failed'}
     <p class="record-import-error" role="alert">{error}</p>
     <div class="record-import-actions">
-      <button type="button" class="record-discard" onclick={() => ondone?.(run)}>Close</button>
+      <button type="button" class="record-discard" onclick={() => ondone?.(run, targetKind?.name ?? null)}>Close</button>
     </div>
   {:else if step === 'mapping' || step === 'proposed'}
     <form class="record-import-form" aria-label="Map {description?.label ?? 'the file'}" onsubmit={proposeMapping}>
       <p class="record-import-file">{rowsLine}</p>
+      {#if pickingKind}
+        <label class="record-import-identity">
+          <span>Into</span>
+          <select class="record-select" aria-label="Kind" value={targetKind?.name ?? ''} disabled={step === 'proposed'} onchange={(event) => chooseKind(event.currentTarget.value)}>
+            <option value="">choose a kind</option>
+            {#each kinds as candidate (candidate.name)}<option value={candidate.name}>{candidate.name.startsWith('x_') ? `${candidate.name.slice(2)} (own)` : candidate.name}</option>{/each}
+          </select>
+        </label>
+      {/if}
       <table class="record-import-fields" aria-label="Columns">
         <thead>
           <tr><th scope="col">column</th><th scope="col">reads as</th><th scope="col">fills</th></tr>
@@ -275,7 +312,7 @@
         </div>
       {:else}
         <div class="record-import-actions">
-          <button type="submit" class="record-commit" disabled={mapped === 0}>Propose mapping</button>
+          <button type="submit" class="record-commit" disabled={mapped === 0 || !targetKind}>Propose mapping</button>
           <button type="button" class="record-discard" onclick={() => oncancel?.()}>Cancel</button>
         </div>
       {/if}
@@ -298,7 +335,7 @@
         </table>
       {/if}
       <div class="record-import-actions">
-        <button type="button" class="record-commit" onclick={() => ondone?.(run)}>Done</button>
+        <button type="button" class="record-commit" onclick={() => ondone?.(run, targetKind?.name ?? null)}>Done</button>
         <button type="button" class="record-discard" onclick={() => { run = null; progress = null; step = 'running' }}>Run again</button>
       </div>
     </div>
