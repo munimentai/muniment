@@ -1346,7 +1346,10 @@ fn coordinator_sends_exact_ordered_images_and_preserves_text_only_prompt_shape()
         let prompt: serde_json::Value =
             serde_json::from_str(requests.lines().next().unwrap()).unwrap();
         assert_eq!(prompt["type"], "prompt");
-        assert_eq!(prompt["message"], "original text prompt");
+        // The prompt arrives behind the line that says when it was sent.
+        let message = prompt["message"].as_str().unwrap();
+        assert!(message.starts_with("[sent 20"), "{message}");
+        assert!(message.ends_with("\noriginal text prompt"), "{message}");
         assert!(prompt.get("classification").is_none());
         if with_images {
             assert_eq!(
