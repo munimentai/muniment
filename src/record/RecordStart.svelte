@@ -72,10 +72,11 @@
   .record-start { position: relative; min-height: 0; overflow-x: hidden; overflow-y: auto; padding-top: 14px; }
   /* The seal struck into the panel: the ring's own points joined across it,
      the whole ring in view, lines one neutral step off the surface and the
-     points one more, so it reads as a mark and never as texture. */
+     points in the chrome behind the panels, so each node is a hole punched
+     where chords meet rather than a bead laid on them. */
   .record-start-graph { position: absolute; top: 56%; left: 62%; height: 92%; aspect-ratio: 1; transform: translate(-50%, -50%); pointer-events: none; }
   .record-start-graph line { stroke: var(--border); stroke-width: 1; }
-  .record-start-graph circle { fill: var(--muted); }
+  .record-start-graph circle { fill: var(--paper); }
   .record-start-column { position: relative; display: grid; align-content: start; gap: 22px; max-width: 760px; }
   .record-start-plate { display: grid; gap: 8px; }
   .record-start-headline { margin: 0; font: 600 var(--text-22)/1.3 var(--font-human); }
