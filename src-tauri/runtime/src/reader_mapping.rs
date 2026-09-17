@@ -1,7 +1,9 @@
 //! A mapping is a `mapping` record: which source object lands on which kind,
-//! which column fills which property, and which column is the identity that
-//! keys every row. This module reads one row through a mapping into the data
-//! and the identity a propose takes. It touches no source and no graph.
+//! which column fills which property, which column is the identity that
+//! keys every row, and which columns link the row to a record another object
+//! landed. This module reads one row through a mapping into the data, the
+//! identities and the links a propose takes. It touches no source and no
+//! graph.
 
 use crate::reader::{Cursor, Row};
 use muniment_core::record::{EntityRow, IdentityInput, KindRow};
@@ -65,6 +67,41 @@ impl IdentitySpec {
     }
 }
 
+/// The identity kinds a mapped column fills when the kind has no property of
+/// that name: the column lands as an identity beside the key, so a person
+/// keyed on a source id keeps the email the row carries.
+pub const IDENTITY_PROPERTIES: [&str; 4] = ["email", "phone", "domain", "handle"];
+
+/// One edge a row draws: the relation, and the identity spec whose column
+/// holds the other end, `billed_to` through
+/// `external:stripe:customers:customer` for a subscription's customer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EdgeSpec {
+    pub relation: String,
+    pub identity: IdentitySpec,
+}
+
+impl EdgeSpec {
+    fn parse(value: &Value) -> Result<Self, String> {
+        let relation = value
+            .get("relation")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| "an edge names no relation".to_owned())?;
+        let identity = value
+            .get("identity")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| format!("the {relation} edge names no identity"))?;
+        Ok(Self {
+            relation: relation.to_owned(),
+            identity: IdentitySpec::parse(identity)?,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mapping {
     pub id: String,
@@ -74,6 +111,7 @@ pub struct Mapping {
     /// Source column to kind property, in column order.
     pub fields: BTreeMap<String, String>,
     pub identity: Option<IdentitySpec>,
+    pub edges: Vec<EdgeSpec>,
     pub approved: bool,
     pub cursor: Option<Cursor>,
 }
@@ -123,6 +161,17 @@ impl Mapping {
             .filter(|text| !text.is_empty())
             .map(IdentitySpec::parse)
             .transpose()?;
+        let edges = data
+            .get("edges")
+            .and_then(Value::as_array)
+            .map(|edges| {
+                edges
+                    .iter()
+                    .map(EdgeSpec::parse)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
         let cursor = data.get("cursors").and_then(|cursors| {
             let offset = cursors.get("offset")?.as_u64()? as usize;
             let hash = cursors.get("hash")?.as_str()?.to_owned();
@@ -143,6 +192,7 @@ impl Mapping {
             kind: string("kind")?,
             fields,
             identity,
+            edges,
             approved: data
                 .get("approved")
                 .and_then(Value::as_bool)
@@ -153,12 +203,23 @@ impl Mapping {
 }
 
 /// One row read through the mapping: the data a propose takes, the identity
-/// that keys it, and a short title for the queue.
+/// that keys it, the identities that ride beside the key, the links the row
+/// draws, and a short title for the queue.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowPlan {
     pub data: Map<String, Value>,
     pub identity: Option<IdentityInput>,
+    pub identities: Vec<IdentityInput>,
+    pub links: Vec<RowLink>,
     pub title: String,
+}
+
+/// One link a row draws to a record another object landed, named by the
+/// identity the other record carries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowLink {
+    pub relation: String,
+    pub target: IdentityInput,
 }
 
 /// Why one row cannot land, with the title the queue shows for it.
@@ -169,28 +230,45 @@ pub struct RowRefusal {
 }
 
 /// The title the record would give a row: its kind's title template over the
-/// mapped cells, else the first mapped cell that holds text, else the first
-/// cell there is.
+/// mapped cells, else the row's email, else the cell that keys the row, else
+/// the first mapped cell that holds words rather than a number or a switch.
 fn row_title(kind: &KindRow, data: &Map<String, Value>, row: &Row, mapping: &Mapping) -> String {
     let rendered =
         muniment_core::record::render_template(&kind.title_template, &Value::Object(data.clone()));
     if !rendered.trim().is_empty() {
         return rendered.chars().take(80).collect();
     }
-    mapping
-        .fields
-        .keys()
-        .chain(row.keys())
-        .filter_map(|column| row.get(column))
+    let key = mapping
+        .identity
+        .as_ref()
+        .and_then(|spec| row.get(&spec.column))
         .map(|cell| cell.trim())
-        .find(|cell| !cell.is_empty())
-        .map(|cell| cell.chars().take(80).collect())
+        .filter(|cell| !cell.is_empty());
+    email_cell(row)
+        .or_else(|| key.map(str::to_owned))
+        .or_else(|| {
+            mapping
+                .fields
+                .keys()
+                .filter_map(|column| row.get(column))
+                .map(|cell| cell.trim())
+                .find(|cell| {
+                    !cell.is_empty()
+                        && parse_number(cell).is_none()
+                        && parse_boolean(cell).is_none()
+                })
+                .map(str::to_owned)
+        })
         .unwrap_or_default()
+        .chars()
+        .take(80)
+        .collect()
 }
 
 /// Reads one row into a plan, or the one reason it cannot land.
 pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan, RowRefusal> {
     let mut data = Map::new();
+    let mut identities = Vec::new();
     let refuse = |data: &Map<String, Value>, reason: String| RowRefusal {
         title: row_title(kind, data, row, mapping),
         reason,
@@ -201,6 +279,21 @@ pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan,
             continue;
         }
         let Some(schema) = property_schema(kind, property) else {
+            // A kind without the property still keeps an email, a phone, a
+            // domain or a handle: the column lands as an identity beside the key.
+            if IDENTITY_PROPERTIES.contains(&property.as_str()) {
+                let keyed = mapping
+                    .identity
+                    .as_ref()
+                    .is_some_and(|spec| &spec.kind == property && &spec.column == column);
+                if !keyed {
+                    identities.push(IdentityInput {
+                        kind: property.clone(),
+                        value: cell.to_owned(),
+                    });
+                }
+                continue;
+            }
             return Err(refuse(
                 &data,
                 format!("{property} is not a property of {}", kind.name),
@@ -231,6 +324,28 @@ pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan,
         return Err(refuse(&data, "every mapped cell is empty".to_owned()));
     }
     let title = row_title(kind, &data, row, mapping);
+    // An edge whose cell is empty draws nothing, and the row still lands.
+    let links = mapping
+        .edges
+        .iter()
+        .filter_map(|edge| {
+            let cell = row.get(&edge.identity.column)?.trim();
+            if cell.is_empty() {
+                return None;
+            }
+            let value = match &edge.identity.prefix {
+                Some(prefix) => format!("{prefix}:{cell}"),
+                None => cell.to_owned(),
+            };
+            Some(RowLink {
+                relation: edge.relation.clone(),
+                target: IdentityInput {
+                    kind: edge.identity.kind.clone(),
+                    value,
+                },
+            })
+        })
+        .collect();
     let identity = match &mapping.identity {
         Some(spec) => {
             let cell = row
@@ -263,6 +378,8 @@ pub fn row_plan(mapping: &Mapping, kind: &KindRow, row: &Row) -> Result<RowPlan,
     Ok(RowPlan {
         data,
         identity,
+        identities,
+        links,
         title,
     })
 }
@@ -718,6 +835,172 @@ mod tests {
             json!({"a": 1})
         );
         assert!(coerce("[1]", &json!({"type": "object"})).is_err());
+    }
+
+    #[test]
+    fn keeps_an_identity_column_the_kind_has_no_property_for() {
+        let person = KindRow {
+            name: "person".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {"full_name": {"type": "string"}, "job_title": {"type": "string"}},
+                "required": ["full_name"]
+            }),
+            title_template: "{full_name}".into(),
+            ..org_kind()
+        };
+        let mapping = Mapping::from_entity(&mapping_entity(json!({
+            "source": "stripe", "object": "customers", "kind": "person",
+            "fields": {"name": "full_name", "email": "email", "phone": "phone", "id": "x_missing"},
+            "identity": "external:stripe:customers:id"
+        })))
+        .unwrap();
+        let row: Row = [
+            ("id", "cus_1"),
+            ("name", "Ann"),
+            ("email", "ann@example.com"),
+            ("phone", ""),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let refusal = row_plan(&mapping, &person, &row).unwrap_err();
+        assert_eq!(refusal.reason, "x_missing is not a property of person");
+        assert_eq!(refusal.title, "ann@example.com");
+
+        let mapping = Mapping::from_entity(&mapping_entity(json!({
+            "source": "stripe", "object": "customers", "kind": "person",
+            "fields": {"name": "full_name", "email": "email", "phone": "phone"},
+            "identity": "external:stripe:customers:id"
+        })))
+        .unwrap();
+        let plan = row_plan(&mapping, &person, &row).unwrap();
+        assert_eq!(plan.data["full_name"], "Ann");
+        assert!(!plan.data.contains_key("email"));
+        assert_eq!(
+            plan.identities,
+            vec![IdentityInput {
+                kind: "email".into(),
+                value: "ann@example.com".into()
+            }]
+        );
+        assert_eq!(plan.identity.unwrap().value, "stripe:customers:cus_1");
+
+        // The key column itself is not repeated beside the key.
+        let keyed_on_email = Mapping::from_entity(&mapping_entity(json!({
+            "source": "stripe", "object": "customers", "kind": "person",
+            "fields": {"name": "full_name", "email": "email"},
+            "identity": "email:email"
+        })))
+        .unwrap();
+        let plan = row_plan(&keyed_on_email, &person, &row).unwrap();
+        assert!(plan.identities.is_empty());
+        assert_eq!(plan.identity.unwrap().kind, "email");
+    }
+
+    #[test]
+    fn draws_an_edge_from_a_column_that_names_another_record() {
+        let subscription = KindRow {
+            name: "subscription".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {"plan": {"type": "string"}, "amount": {"type": "number"}},
+                "required": ["plan"]
+            }),
+            title_template: "{plan}".into(),
+            ..org_kind()
+        };
+        let mapping = Mapping::from_entity(&mapping_entity(json!({
+            "source": "stripe", "object": "subscriptions", "kind": "subscription",
+            "fields": {"plan": "plan", "amount": "amount"},
+            "identity": "external:stripe:subscriptions:id",
+            "edges": [{"relation": "billed_to", "identity": "external:stripe:customers:customer"}]
+        })))
+        .unwrap();
+        assert_eq!(mapping.edges.len(), 1);
+        assert_eq!(mapping.edges[0].identity.column, "customer");
+        let row: Row = [
+            ("id", "sub_1"),
+            ("customer", "cus_1"),
+            ("plan", "Team"),
+            ("amount", "49"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let plan = row_plan(&mapping, &subscription, &row).unwrap();
+        assert_eq!(
+            plan.links,
+            vec![RowLink {
+                relation: "billed_to".into(),
+                target: IdentityInput {
+                    kind: "external".into(),
+                    value: "stripe:customers:cus_1".into()
+                }
+            }]
+        );
+        let mut orphan = row.clone();
+        orphan.insert("customer".into(), "".into());
+        assert!(row_plan(&mapping, &subscription, &orphan)
+            .unwrap()
+            .links
+            .is_empty());
+
+        let unnamed = Mapping::from_entity(&mapping_entity(json!({
+            "source": "stripe", "object": "subscriptions", "kind": "subscription",
+            "fields": {"plan": "plan"}, "edges": [{"identity": "external:stripe:customers:customer"}]
+        })));
+        assert_eq!(unnamed.unwrap_err(), "an edge names no relation");
+        let bare = Mapping::from_entity(&mapping_entity(json!({
+            "source": "stripe", "object": "subscriptions", "kind": "subscription",
+            "fields": {"plan": "plan"}, "edges": [{"relation": "billed_to", "identity": "customer"}]
+        })));
+        assert!(bare.unwrap_err().contains("not <kind>:<column>"));
+    }
+
+    #[test]
+    fn titles_a_refused_row_by_its_email_or_its_key_before_a_stray_cell() {
+        let mapping = Mapping::from_entity(&mapping_entity(json!({
+            "source": "stripe", "object": "customers", "kind": "org",
+            "fields": {"balance": "arr", "name": "name", "seats": "seats"},
+            "identity": "external:stripe:customers:id"
+        })))
+        .unwrap();
+        let row: Row = [
+            ("id", "cus_9"),
+            ("name", ""),
+            ("email", "ops@fabrikam.example"),
+            ("balance", "0.00"),
+            ("seats", "many"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let refusal = row_plan(&mapping, &org_kind(), &row).unwrap_err();
+        assert_eq!(refusal.reason, "seats: many is not a whole number");
+        assert_eq!(refusal.title, "ops@fabrikam.example");
+
+        let mut no_email = row.clone();
+        no_email.insert("email".into(), "".into());
+        assert_eq!(
+            row_plan(&mapping, &org_kind(), &no_email)
+                .unwrap_err()
+                .title,
+            "cus_9"
+        );
+
+        let keyed_on_title = Mapping::from_entity(&mapping_entity(json!({
+            "source": "stripe", "object": "customers", "kind": "org",
+            "fields": {"balance": "arr", "seats": "seats", "note": "x_region"}
+        })))
+        .unwrap();
+        no_email.insert("note".into(), "Fabrikam's account".into());
+        assert_eq!(
+            row_plan(&keyed_on_title, &org_kind(), &no_email)
+                .unwrap_err()
+                .title,
+            "Fabrikam's account"
+        );
     }
 
     #[test]

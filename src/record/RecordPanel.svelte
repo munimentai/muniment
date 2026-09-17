@@ -329,12 +329,19 @@
     else await loadPage()
   }
 
-  // The import lands rows on the open kind, so the table reloads when it ends.
-  // An import that started from the connect screen opens the kind it filled.
+  // The import lands rows on the open kind, so the table reloads when it
+  // ends, and the kind list rereads its counts, so a company that was empty
+  // shows its kinds and not the connect screen. An import that started from
+  // the connect screen opens the kind it filled.
   async function afterImport(_run, filledKind = null) {
     importing = null
     if (detail) await openEntity(detail.entity.id)
-    else if (selectedKind) await loadPage()
+    else if (selectedKind) {
+      // The table first, then the counts: one load after the other, because
+      // each carries the newest version and a parallel pair drops the first.
+      await loadPage()
+      await loadCompanies(company?.id)
+    }
     else {
       await loadCompanies(company?.id)
       if (filledKind && kinds.some((candidate) => candidate.name === filledKind)) await openKind(filledKind)
@@ -359,9 +366,11 @@
     } else await openEntity(opens)
   }
 
+  // Back from an import rereads what the import may have landed, the way
+  // Done does, and back from a kind rereads the kind list's counts.
   function back() {
     error = null
-    if (importing) importing = null
+    if (importing) void afterImport(null, null)
     else if (relating) relating = null
     else if (creating) creating = false
     else if (detail) {
@@ -370,6 +379,7 @@
     } else if (selectedKind) {
       selectedKind = null
       page = null
+      void loadCompanies(company?.id)
     }
   }
 
@@ -442,7 +452,7 @@
   {:else if companies.length === 0}
     <RecordStart bind:name={newCompanyName} bind:source={pendingSource} oncreate={createCompany} onsample={() => { sampling = true }} />
   {:else if importing}
-    <RecordImport {tauri} companyId={company?.id} kind={importing.mapping && detail?.entity?.data?.kind ? (kinds.find((candidate) => candidate.name === detail.entity.data.kind) ?? kind) : kind} {kinds} source={importing.source ?? null} mapping={importing.mapping} {propose} {commit} oncancel={() => { importing = null }} ondone={afterImport} />
+    <RecordImport {tauri} companyId={company?.id} kind={importing.mapping && detail?.entity?.data?.kind ? (kinds.find((candidate) => candidate.name === detail.entity.data.kind) ?? kind) : kind} {kinds} {relations} source={importing.source ?? null} mapping={importing.mapping} {propose} {commit} oncancel={() => { importing = null }} ondone={afterImport} />
   {:else if kind && creating}
     <RecordForm {kind} {propose} {commit} oncancel={() => { creating = false }} oncreated={(id) => { creating = false; void loadPage().then(() => openEntity(id)) }} />
   {:else if kind && detail && relating}
@@ -522,7 +532,8 @@
 </aside>
 
 <style>
-  .record-panel { grid-area: rail; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); padding: 14px 16px 16px; overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  /* The panel clips and never scrolls, so the End key scrolls the list or the table under the header, never the header away. */
+  .record-panel { grid-area: rail; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); padding: 14px 16px 16px; overflow: clip; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .record-header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--border); font: var(--text-13) var(--font-mono); }
   .record-header h2 { margin: 0; font: 600 var(--text-15)/1.3 var(--font-human); }
   .record-back { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); cursor: pointer; }

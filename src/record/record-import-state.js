@@ -40,11 +40,26 @@ export function foldName(text) {
   return String(text ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
-// Every property of the kind that an import can fill, core first, then own.
+// The identity kinds a column fills on a kind that has no property of that
+// name. The runtime lands the column as an identity beside the key, so a
+// person keyed on a source id keeps the email the row carries.
+const IDENTITY_TARGETS = { person: ['email', 'phone', 'handle'] }
+
+// Every property of the kind that an import can fill, core first, then own,
+// then the identities the kind takes beside its properties.
 export function targetProperties(kind) {
   const core = Object.keys(kind?.schema?.properties ?? {})
   const own = Object.keys(kind?.extension?.properties ?? {})
-  return [...core, ...own]
+  const identities = (IDENTITY_TARGETS[kind?.name] ?? []).filter((name) => !core.includes(name) && !own.includes(name))
+  return [...core, ...own, ...identities]
+}
+
+// How the form names a target: an own property reads `(own)`, an identity
+// beside the key reads `(identity)`.
+export function propertyLabel(kind, property) {
+  if (property.startsWith('x_')) return `${property.slice(2)} (own)`
+  if (!(property in (kind?.schema?.properties ?? {})) && (IDENTITY_TARGETS[kind?.name] ?? []).includes(property)) return `${property} (identity)`
+  return property
 }
 
 // The property a field most likely fills: an exact name, then a synonym,
@@ -168,19 +183,62 @@ export function suggestIdentity(description) {
   return ''
 }
 
+// The objects a column that holds another record's id points at, by the
+// column's folded name, and the kind those objects land on.
+const EDGE_TARGETS = {
+  customer: { objects: ['customers'], kind: 'org' },
+  customerid: { objects: ['customers'], kind: 'org' },
+  company: { objects: ['companies'], kind: 'org' },
+  companyid: { objects: ['companies'], kind: 'org' },
+  organization: { objects: ['organizations', 'organisations'], kind: 'org' },
+  organizationid: { objects: ['organizations', 'organisations'], kind: 'org' },
+  orgid: { objects: ['organizations', 'organisations'], kind: 'org' },
+  account: { objects: ['accounts'], kind: 'org' },
+  accountid: { objects: ['accounts'], kind: 'org' },
+  contact: { objects: ['contacts'], kind: 'person' },
+  contactid: { objects: ['contacts'], kind: 'person' },
+  person: { objects: ['persons', 'people'], kind: 'person' },
+  personid: { objects: ['persons', 'people'], kind: 'person' },
+}
+
+// The edges a network object's rows draw: each id column that names another
+// object of the same source, through the first relation the catalogue
+// allows from this kind to that object's kind. A subscription's `customer`
+// draws `billed_to` through `external:stripe:customers:customer`. A CSV
+// names no sibling object, so it draws nothing.
+export function suggestEdges(description, kind, relations) {
+  const source = description?.source ?? 'csv'
+  if (source === 'csv' || !kind?.name || !Array.isArray(relations)) return []
+  const edges = []
+  for (const field of description?.fields ?? []) {
+    if (field.guess !== 'id' || foldName(field.name) === 'id') continue
+    const target = EDGE_TARGETS[foldName(field.name)]
+    if (!target || target.kind === kind.name) continue
+    const relation = relations.find((candidate) => (candidate.from.includes(kind.name) || candidate.from.includes('any')) && candidate.to.includes(target.kind))
+    if (!relation) continue
+    edges.push({ relation: relation.name, identity: `external:${source}:${target.objects[0]}:${field.name}` })
+  }
+  return edges
+}
+
 // The mapping record the form proposes. Only mapped fields are kept.
-export function mappingData(description, kind, fields, identity) {
+export function mappingData(description, kind, fields, identity, edges = []) {
   const mapped = Object.fromEntries(Object.entries(fields ?? {}).filter(([, property]) => property))
   const data = { source: description.source ?? 'csv', object: description.object, kind: kind.name, fields: mapped, approved: true }
   if (identity) data.identity = identity
+  if (edges.length) data.edges = edges
   return data
 }
 
-// The proposed mapping as one mono line per column, then the key, the kind
-// and the file, so the diff reads as what the run will do.
-export function mappingLines(description, kind, fields, identity) {
-  const lines = Object.entries(fields ?? {}).filter(([, property]) => property).map(([column, property]) => `${column} fills ${property}`)
+// The proposed mapping as one mono line per column, then the key, each
+// edge, the kind and the file, so the diff reads as what the run will do.
+export function mappingLines(description, kind, fields, identity, edges = []) {
+  const lines = Object.entries(fields ?? {}).filter(([, property]) => property).map(([column, property]) => `${column} fills ${propertyLabel(kind, property)}`)
   lines.push(`keyed on ${identity ? identity.replace(/^([a-z_]+):(.*)$/, (_, kindName, rest) => `${kindName} in ${rest.split(':').pop()}`) : 'the title'}`)
+  for (const edge of edges) {
+    const parts = edge.identity.split(':')
+    lines.push(`${parts[parts.length - 1]} links ${edge.relation} to ${parts.length > 3 ? parts[2] : parts[0]}`)
+  }
   lines.push(`kind ${kind?.name ?? ''}`.trim())
   lines.push(`${description?.source && description.source !== 'csv' ? description.source : 'file'} ${description?.label ?? description?.object ?? ''}`.trim())
   return lines
@@ -196,7 +254,7 @@ export function runSummaryLines(run) {
   const lines = []
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
   lines.push(`${plural(run.total ?? 0, 'row')} in ${run.label || run.object || 'the file'}`)
-  lines.push(`${run.created ?? 0} created, ${run.updated ?? 0} updated, ${run.unchanged ?? 0} unchanged`)
+  lines.push(`${run.created ?? 0} created, ${run.updated ?? 0} updated, ${run.unchanged ?? 0} unchanged${run.linked ? `, ${run.linked} linked` : ''}`)
   if (run.unplaced) lines.push(`${plural(run.unplaced, 'row')} not placed`)
   if (run.changed === false) lines.push('The file is the one the last run read.')
   return lines
@@ -210,6 +268,7 @@ export function accumulateRun(total, run) {
     created: sum('created'),
     updated: sum('updated'),
     unchanged: sum('unchanged'),
+    linked: sum('linked'),
     unplaced: sum('unplaced'),
     queue: [...(total?.queue ?? []), ...(run?.queue ?? [])].slice(0, 100),
   }

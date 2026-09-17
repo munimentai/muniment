@@ -8,7 +8,9 @@ import {
   mappedCount,
   mappingData,
   mappingLines,
+  propertyLabel,
   runSummaryLines,
+  suggestEdges,
   sourceOptions,
   sourceCredentials,
   credentialsFilled,
@@ -96,6 +98,29 @@ describe('record import state', () => {
     expect(mappingLines(stripe, org, { name: 'name' }, 'external:stripe:customers:id')).toEqual(['name fills name', 'keyed on external in id', 'kind org', 'stripe Customers'])
   })
 
+  it('fills an identity beside the key on a kind without the property, and draws an edge from an id column', () => {
+    const person = { name: 'person', schema: { properties: { full_name: {}, job_title: {}, city: {} } } }
+    expect(targetProperties(person)).toEqual(['full_name', 'job_title', 'city', 'email', 'phone', 'handle'])
+    expect(propertyLabel(person, 'email')).toBe('email (identity)')
+    expect(propertyLabel(person, 'full_name')).toBe('full_name')
+    expect(propertyLabel(org, 'x_headcount')).toBe('headcount (own)')
+    const contacts = { source: 'hubspot', object: 'contacts', label: 'Contacts', fields: [{ name: 'id', guess: 'id', samples: ['1'], filled: 1 }, { name: 'name', guess: 'string', samples: ['Ann'], filled: 1 }, { name: 'email', guess: 'email', samples: ['a@b.co'], filled: 1 }, { name: 'company', guess: 'id', samples: ['9'], filled: 1 }] }
+    expect(suggestFields(contacts, person)).toEqual({ id: '', name: 'full_name', email: 'email', company: '' })
+    const relations = [{ name: 'works_at', from: ['person'], to: ['org'] }, { name: 'billed_to', from: ['invoice', 'subscription'], to: ['org'] }, { name: 'concerns', from: ['deal', 'ticket'], to: ['org'] }]
+    expect(suggestEdges(contacts, person, relations)).toEqual([{ relation: 'works_at', identity: 'external:hubspot:companies:company' }])
+    const subscriptions = { source: 'stripe', object: 'subscriptions', fields: [{ name: 'id', guess: 'id' }, { name: 'customer', guess: 'id' }, { name: 'plan', guess: 'string' }] }
+    const subscription = { name: 'subscription', schema: { properties: { plan: {}, state: {} } } }
+    expect(suggestEdges(subscriptions, subscription, relations)).toEqual([{ relation: 'billed_to', identity: 'external:stripe:customers:customer' }])
+    expect(suggestEdges(subscriptions, org, relations)).toEqual([])
+    expect(suggestEdges({ ...subscriptions, source: 'csv' }, subscription, relations)).toEqual([])
+    expect(suggestEdges(subscriptions, subscription, [])).toEqual([])
+    const edges = suggestEdges(subscriptions, subscription, relations)
+    expect(mappingData(subscriptions, subscription, { plan: 'plan' }, 'external:stripe:subscriptions:id', edges).edges).toEqual(edges)
+    expect(mappingData(subscriptions, subscription, { plan: 'plan' }, '', [])).not.toHaveProperty('edges')
+    expect(mappingLines(subscriptions, subscription, { plan: 'plan' }, 'external:stripe:subscriptions:id', edges)).toEqual(['plan fills plan', 'keyed on external in id', 'customer links billed_to to customers', 'kind subscription', 'stripe subscriptions'])
+    expect(mappingLines(contacts, person, { email: 'email' }, 'email:email')).toEqual(['email fills email (identity)', 'keyed on email in email', 'kind person', 'hubspot Contacts'])
+  })
+
   it('builds the mapping record from the mapped fields alone', () => {
     const data = mappingData(description, org, { Company: 'name', Website: 'domain', Notes: '' }, 'domain:Website')
     expect(data).toEqual({
@@ -115,6 +140,8 @@ describe('record import state', () => {
   it('reads a run as mono lines and tallies the calls of one run', () => {
     const run = { total: 3, label: 'customers.csv', created: 2, updated: 0, unchanged: 0, unplaced: 1, changed: true, queue: [{ row: 3, title: 'Gmail Co', reason: 'gmail.com names a mail provider' }] }
     expect(runSummaryLines(run)).toEqual(['3 rows in customers.csv', '2 created, 0 updated, 0 unchanged', '1 row not placed'])
+    expect(runSummaryLines({ ...run, linked: 2 })[1]).toBe('2 created, 0 updated, 0 unchanged, 2 linked')
+    expect(accumulateRun(accumulateRun(null, { linked: 1 }), { linked: 2 }).linked).toBe(3)
     expect(runSummaryLines({ total: 1, object: '/a.csv', changed: false })).toEqual(['1 row in /a.csv', '0 created, 0 updated, 0 unchanged', 'The file is the one the last run read.'])
     expect(runSummaryLines(null)).toEqual([])
     const total = accumulateRun(accumulateRun(null, run), { ...run, created: 1, unplaced: 0, queue: [] })

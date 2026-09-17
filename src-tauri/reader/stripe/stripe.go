@@ -104,7 +104,9 @@ var objects = []object{
 		name:  "subscriptions",
 		label: "Subscriptions",
 		path:  "/v1/subscriptions",
-		query: url.Values{"status": {"all"}},
+		// The product rides along expanded, so the plan reads as the product's
+		// name and never as its id.
+		query: url.Values{"status": {"all"}, "expand[]": {"data.items.data.price.product"}},
 		fields: []field{
 			{"id", "id", text("id")},
 			{"customer", "id", customerID},
