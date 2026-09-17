@@ -29,7 +29,7 @@ describe('installed record panel', () => {
     await panel.waitForDisplayed({ timeout: 30000 })
     expect(await record.getAttribute('aria-expanded')).toBe('true')
 
-    const createButton = await panel.$('button=Create company')
+    const createButton = await panel.$('button=Create your company')
     if (await createButton.isExisting()) {
       await (await panel.$('input[aria-label="Company name"]')).setValue(`E2E ${Date.now()}`)
       await createButton.click()
