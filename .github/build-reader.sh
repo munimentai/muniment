@@ -14,15 +14,20 @@ go_version=go1.24.13
 export PATH="$PATH:/usr/local/go/bin:$HOME/go/bin"
 
 if ! command -v go >/dev/null 2>&1; then
+  case "$(uname -s)" in
+    Linux) host_os=linux ;;
+    Darwin) host_os=darwin ;;
+    *) printf 'build-reader: no Go toolchain for %s\n' "$(uname -s)" >&2; exit 1 ;;
+  esac
   case "$(uname -m)" in
-    x86_64) arch=amd64 ;;
-    aarch64 | arm64) arch=arm64 ;;
+    x86_64) host_arch=amd64 ;;
+    aarch64 | arm64) host_arch=arm64 ;;
     *) printf 'build-reader: no Go toolchain for %s\n' "$(uname -m)" >&2; exit 1 ;;
   esac
   tarball=$(mktemp -t go-toolchain-XXXXXX.tar.gz)
   trap 'rm -f "$tarball"' EXIT
   curl --proto '=https' --tlsv1.2 -fsSL \
-    "https://go.dev/dl/${go_version}.linux-${arch}.tar.gz" -o "$tarball"
+    "https://go.dev/dl/${go_version}.${host_os}-${host_arch}.tar.gz" -o "$tarball"
   sudo rm -rf /usr/local/go
   sudo tar -C /usr/local -xzf "$tarball"
 fi

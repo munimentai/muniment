@@ -68,8 +68,8 @@ process.env.MUNIMENT_PI_CANDIDATE = "1";
 // The bundle config reads the runtime from the universal path; a local build is arm64 only.
 mustRun("build runtime", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime", "--package", "muniment-cli", "--release", "--locked", "--target", "aarch64-apple-darwin"]);
 // The reader sidecar is Go with CGO off, so it signs like the Rust binaries.
-mustRun("build reader", "go", ["build", "-trimpath", "-ldflags", "-s -w", "-o", join("..", "target", "aarch64-apple-darwin", "release", "muniment-reader"), "."], {
-  cwd: join("src-tauri", "reader"), env: { ...process.env, CGO_ENABLED: "0", GOOS: "darwin", GOARCH: "arm64" },
+mustRun("build reader", "bash", [join(".github", "build-reader.sh"), readerSource], {
+  env: { ...process.env, GOOS: "darwin", GOARCH: "arm64" },
 });
 mkdirSync(join(target, "universal-apple-darwin", "release"), { recursive: true });
 cpSync(runtimeSource, runtimeBundled);

@@ -30,8 +30,8 @@ for (const target of ["x86_64-apple-darwin", "aarch64-apple-darwin"]) {
 // carries no dylib and signs like the Rust ones.
 for (const [target, arch] of [["x86_64-apple-darwin", "amd64"], ["aarch64-apple-darwin", "arm64"]]) {
   mkdirSync(join(targetDir, target, "release"), { recursive: true });
-  mustRunWithEnv("go", ["build", "-trimpath", "-ldflags", "-s -w", "-o", join(targetDir, target, "release", "muniment-reader"), "."], {
-    cwd: join("src-tauri", "reader"), env: { ...process.env, CGO_ENABLED: "0", GOOS: "darwin", GOARCH: arch },
+  mustRunWithEnv("bash", [join(".github", "build-reader.sh"), join(targetDir, target, "release", "muniment-reader")], {
+    env: { ...process.env, GOOS: "darwin", GOARCH: arch },
   });
 }
 

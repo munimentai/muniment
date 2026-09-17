@@ -123,9 +123,9 @@ if (runtimeBuild.status !== 0) process.exit(runtimeBuild.status ?? 1);
 signFile(runtime);
 // The reader sidecar is Go with CGO off, a resource beside the runtime.
 const reader = join("src-tauri", "target", "release", "muniment-reader.exe");
-const readerBuild = spawnSync("go", ["build", "-trimpath", "-ldflags", "-s -w", "-o", join("..", "target", "release", "muniment-reader.exe"), "."], {
-  stdio: "inherit", cwd: join("src-tauri", "reader"), env: { ...process.env, CGO_ENABLED: "0", GOOS: "windows", GOARCH: "amd64" },
-});
+const readerBuild = spawnSync("powershell.exe", [
+  "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(".github", "build-reader.ps1"), reader,
+], { stdio: "inherit", env: { ...process.env, GOOS: "windows", GOARCH: "amd64" } });
 if (readerBuild.error) throw readerBuild.error;
 if (readerBuild.status !== 0) process.exit(readerBuild.status ?? 1);
 signFile(reader);
