@@ -9,7 +9,7 @@ mod session;
 mod threads;
 mod workspace;
 
-pub use company::{create_company, list_companies, rename_company, select_company};
+pub use company::{create_company, delete_company, list_companies, rename_company, select_company};
 pub use record::RecordRegistry;
 pub use run::{
     accept_prompt, answer_permission, cancel_run, configure_run, drive_prompt, queue_run_message,

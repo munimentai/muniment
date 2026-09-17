@@ -131,7 +131,9 @@ Settings is a popup over the workspace with a
 section list on its left, Models, Appearance, Home, Companies and Account, and the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
-open it, and Escape or its close control returns focus to the opener. Models
+open it, and Escape or its close control returns focus to the opener.
+Companies lists every company on the machine with Open, Rename and Delete,
+Delete asks once and names the company, and New company sits under the list. Models
 lists connected providers with their real marks, a source tag, their models
 with a show switch and Disconnect, then the popular providers not yet
 connected as rows; Connect provider searches the rest, and a provider opens

@@ -71,6 +71,14 @@ pub async fn record_company_rename(
     with_desktop_client(app, move |client| client.rename_company(&company_id, &name)).await
 }
 
+#[tauri::command]
+pub async fn record_company_delete(
+    app: tauri::AppHandle,
+    company_id: String,
+) -> Result<Value, String> {
+    with_desktop_client(app, move |client| client.delete_company(&company_id)).await
+}
+
 fn record_body(company_id: Option<String>, fields: Vec<(&str, Value)>) -> Value {
     let mut body = serde_json::Map::new();
     if let Some(company_id) = company_id {

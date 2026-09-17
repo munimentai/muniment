@@ -200,6 +200,14 @@ impl RecordRegistry {
         work(entry).map(Ok)
     }
 
+    /// Drops one company's open record and SQL tool, so every file handle
+    /// closes before the company's directory goes.
+    pub fn close(&self, company_id: &str) {
+        if let Ok(mut open) = self.open.lock() {
+            open.remove(company_id);
+        }
+    }
+
     /// The kind catalogue of one company, with the company id it belongs to.
     pub fn kinds(&self, _actor: &str, body: Value) -> Result<Value, ProtocolError> {
         let named = company_id(&body)?;
