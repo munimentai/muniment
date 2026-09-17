@@ -7,19 +7,26 @@
 param([Parameter(Mandatory = $true)][string]$Output)
 
 $ErrorActionPreference = "Stop"
+# The progress bar makes Invoke-WebRequest spend minutes on a large file.
+$ProgressPreference = "SilentlyContinue"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $goVersion = "go1.24.13"
 
 $env:PATH = "$env:PATH;C:\Program Files\Go\bin;$env:LOCALAPPDATA\Go\bin"
 
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
-  $archive = Join-Path $env:TEMP "$goVersion.windows-amd64.zip"
-  Invoke-WebRequest -UseBasicParsing `
-    -Uri "https://go.dev/dl/$goVersion.windows-amd64.zip" -OutFile $archive
   $root = Join-Path $env:LOCALAPPDATA "go-toolchain"
-  if (Test-Path $root) { Remove-Item -Recurse -Force $root }
-  Expand-Archive -Path $archive -DestinationPath $root -Force
-  Remove-Item -Force $archive
+  $installed = Join-Path $root "go\bin\go.exe"
+  if (-not (Test-Path $installed)) {
+    $archive = Join-Path $env:TEMP "$goVersion.windows-amd64.zip"
+    Invoke-WebRequest -UseBasicParsing `
+      -Uri "https://go.dev/dl/$goVersion.windows-amd64.zip" -OutFile $archive
+    if (Test-Path $root) { Remove-Item -Recurse -Force $root }
+    # Expand-Archive takes minutes on the toolchain, and this takes seconds.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $root)
+    Remove-Item -Force $archive
+  }
   $env:PATH = "$env:PATH;$(Join-Path $root 'go\bin')"
 }
 
