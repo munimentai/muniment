@@ -1,11 +1,14 @@
 <script>
-  // Settings → Models: the connected providers with their models, the
-  // connector that adds one, and the sign-in flows behind each method.
+  // Settings → Models, one screen: every connection is a named account under
+  // its provider, key or subscription, with its allowance and usage on the
+  // card, the provider's models once, the connector that adds a provider, and
+  // Routing at the foot.
   import { onDestroy } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
+  import ModelAccounts from './ModelAccounts.svelte'
   import ModelRouterSection from './ModelRouterSection.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
-  import { catalogProvider, connectableProviders, methodLabel, modelKey, providerName, searchProviders, sourceTag } from './provider-catalog.js'
+  import { catalogProvider, connectableProviders, familyName, familyProvider, methodLabel, modelKey, providerFamily, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
@@ -17,8 +20,9 @@
   let status = $state('')
   let query = $state('')
   let view = $state('list')
-  // `providers` is the connected list, `router` the pools behind one provider.
-  let screen = $state('providers')
+  // The router's settings: the accounts in every pool, the models in the
+  // running and the classifier. One read feeds every card and the Routing foot.
+  let router = $state(null)
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
   let providerId = $state('')
@@ -42,13 +46,42 @@
   const shownProviders = $derived.by(() => {
     if (!inventory) return []
     const needle = query.trim().toLowerCase()
-    return inventory.providers.map((entry) => ({
-      ...entry,
-      models: needle ? entry.models.filter((model) => model.id.toLowerCase().includes(needle)) : entry.models,
-    })).filter((entry) => !needle || entry.models.length > 0 || entry.name.toLowerCase().includes(needle))
+    return inventory.providers
+      .filter((entry) => entry.source !== 'router')
+      .map((entry) => ({
+        ...entry,
+        family: providerFamily(entry.id),
+        models: needle ? entry.models.filter((model) => model.id.toLowerCase().includes(needle)) : entry.models,
+      })).filter((entry) => !needle || entry.models.length > 0 || entry.name.toLowerCase().includes(needle))
+  })
+  // A family whose accounts sit in a pool with no provider of its own connected
+  // shows as a provider too, so every account has a provider over it.
+  const poolOnlyFamilies = $derived.by(() => {
+    if (!router) return []
+    const covered = new Set(shownProviders.map((entry) => entry.family).filter(Boolean))
+    const needle = query.trim().toLowerCase()
+    return [...new Set(router.accounts.map((account) => account.family))]
+      .filter((family) => !covered.has(family))
+      .filter((family) => !needle || familyName(family).toLowerCase().includes(needle))
   })
 
   $effect(() => { void load() })
+  $effect(() => { void loadRouter() })
+
+  async function loadRouter() {
+    try {
+      router = await tauri.invoke('model_router_settings')
+    } catch (_) {
+      router = null
+    }
+  }
+
+  // Every router command answers with the whole settings, so one reply
+  // redraws every card, and the inventory rereads so the picker follows.
+  function onRouterSettings(next) {
+    router = next
+    void load()
+  }
   onDestroy(() => { stopListening() })
 
   async function load() {
@@ -307,18 +340,11 @@
 </script>
 
 <div class="models">
-  <nav class="screens" aria-label="Models">
-    {#each [['providers', 'Providers'], ['router', 'Router']] as [id, name]}
-      <button type="button" class="quiet screen" aria-current={screen === id ? 'true' : undefined} onclick={() => { screen = id }}>{name}</button>
-    {/each}
-  </nav>
-  {#if screen === 'router'}
-    <ModelRouterSection {tauri} {listen} />
-  {:else if view === 'list'}
+  {#if view === 'list'}
     <header class="models-head">
       <div>
-        <h4 class="models-label">Connected providers</h4>
-        <p class="support">Connect providers and pick which models the selector shows.</p>
+        <h4 class="models-label">Providers</h4>
+        <p class="support">Every connection is an account under its provider, a key or a subscription. Pick which models the selector shows.</p>
       </div>
       <button type="button" class="connect" onclick={openConnector}><LucideIcon name="plus" variant="action" size={14} />Connect provider</button>
     </header>
@@ -336,10 +362,19 @@
         <header>
           <ProviderLogo provider={entry.id} size={18} />
           <h5>{entry.name}</h5>
-          <span class="tag">{sourceTag(entry.source)}</span>
-          {#if entry.base_url}<span class="record">{entry.base_url}</span>{/if}
           <button type="button" class="quiet disconnect" onclick={() => disconnect(entry)}>Disconnect</button>
         </header>
+        <ul class="account-list">
+          <li class="account-row">
+            <span class="account-name">{sourceTag(entry.source) === 'Account' ? 'Signed-in account' : `${sourceTag(entry.source)} connection`}</span>
+            <span class="tag">{sourceTag(entry.source)}</span>
+            {#if entry.base_url}<span class="record">{entry.base_url}</span>{/if}
+            <span class="record">direct</span>
+          </li>
+        </ul>
+        {#if entry.family && router}
+          <ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />
+        {/if}
         {#if entry.models.length === 0}
           <p class="support">{entry.source === 'claude-code' ? 'Models appear after the next message installs the bridge.' : 'No models answer yet.'}</p>
         {:else}
@@ -361,6 +396,16 @@
         {/if}
       </section>
     {/each}
+    {#each poolOnlyFamilies as family (family)}
+      <section class="provider-group" aria-label={familyName(family)}>
+        <header>
+          <ProviderLogo provider={familyProvider(family)} size={18} />
+          <h5>{familyName(family)}</h5>
+          <span class="tag">Pool</span>
+        </header>
+        <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} />
+      </section>
+    {/each}
     {#if inventory && connectable.length}
       <section class="provider-group connectable" aria-label="Connect">
         <h5 class="group-label">Connect</h5>
@@ -371,6 +416,7 @@
         </ul>
       </section>
     {/if}
+    <ModelRouterSection {tauri} settings={router} onsettings={onRouterSettings} />
   {:else}
     <header class="connect-head">
       <button type="button" class="quiet back" aria-label="Back" onclick={back}><LucideIcon name="arrow-left" variant="action" size={16} /></button>
@@ -487,9 +533,9 @@
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
   .models { display: grid; gap: 12px; align-content: start; }
-  .screens { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
-  .screen { min-height: 28px; padding: 4px 10px; border-radius: 0; }
-  .screen[aria-current="true"] { color: var(--ink); box-shadow: inset 0 -1px 0 var(--signal); }
+  .account-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+  .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 28px; padding: 3px 4px; }
+  .account-name { font-size: var(--text-13); }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
   .connect-head h4, .models-head h4 { margin: 0; }

@@ -98,58 +98,102 @@ export function modelKey(provider, model) {
   return `${provider}/${model}`
 }
 
-// The label a router row shows. `auto` is the classifier's row, named by the
-// model that picks, `jev-latest picks`, and picking it hands the turn to
-// classification. Every other row keeps its model id.
-export function pickerLabel(model, group) {
-  if (group.source === 'router' && model.id === 'auto' && group.classifier) return `${group.classifier} picks`
-  return model.id
+// The router's families under the catalog provider each one is, and the name
+// a family group takes when no provider of its own is connected.
+const FAMILY_CATALOG = { openai: 'openai', anthropic: 'anthropic', google: 'google', xai: 'xai', kimi: 'kimi-coding', devin: 'devin' }
+const FAMILY_NAMES = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', xai: 'xAI', kimi: 'Kimi', devin: 'Devin' }
+
+// The router family a connected provider pools into, none for a provider the
+// router does not pool, and the catalog provider a family shows as.
+export function providerFamily(id) {
+  const catalogId = connectedCatalogId(id)
+  return Object.entries(FAMILY_CATALOG).find(([, candidate]) => candidate === catalogId)?.[0] ?? null
 }
 
-// The picker's rows: every model of every connected provider that is not hidden,
-// grouped by provider in inventory order, narrowed by a query over the model id.
-// A router running a classifier picks the model per turn, so its group leads
-// and the classifier's row is the first row of the picker. A router model that
-// two or more accounts serve carries that count, so the row marks it: picking
-// it balances across them with no other step.
+export function familyProvider(family) {
+  return FAMILY_CATALOG[family] ?? family
+}
+
+export function familyName(family) {
+  return FAMILY_NAMES[family] ?? family
+}
+
+// The picker's rows: every model of every connected provider that is not
+// hidden, grouped by provider in inventory order, narrowed by a query over the
+// model id. Each row names the provider and the choice a pick saves, so a row
+// the router serves saves the router's own id.
+//
+// The router's models sit under their provider, each model once: a model the
+// provider also serves directly is one row, and it takes the router's route
+// when two or more accounts stand behind it, so picking it balances across
+// them with no other step. A family with no provider of its own becomes a
+// group of its own. A running classifier is the first row of the picker,
+// named by the model that picks, and choosing it hands the turn to
+// classification, which is the router's auto.
 export function pickerGroups(inventory, query = '') {
   if (!inventory || !Array.isArray(inventory.providers)) return []
   const hidden = new Set(inventory.hidden ?? [])
   const needle = query.trim().toLowerCase()
-  const behind = inventory.router_accounts ?? {}
+  const router = inventory.providers.find((provider) => provider.source === 'router') ?? null
   const groups = inventory.providers
-    .map((provider) => {
-      const group = {
-        id: provider.id,
-        name: provider.name,
-        source: provider.source,
-        classifier: provider.source === 'router' ? (inventory.router_classifier ?? '') : '',
-        models: [],
-      }
-      group.models = (provider.models ?? [])
+    .filter((provider) => provider.source !== 'router')
+    .map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      source: provider.source,
+      classifier: '',
+      models: (provider.models ?? [])
         .filter((model) => !hidden.has(modelKey(provider.id, model.id)))
-        .map((model) => ({ ...model, label: pickerLabel(model, group), accounts: provider.source === 'router' ? (behind[model.id] ?? 0) : 0 }))
-        .filter((model) => !needle || model.id.toLowerCase().includes(needle) || model.label.toLowerCase().includes(needle) || provider.name.toLowerCase().includes(needle))
-      // The classifier's row is the router's first row, and no classifier leaves no auto row to lead with.
-      if (group.source === 'router' && !group.classifier) group.models = group.models.filter((model) => model.id !== 'auto')
-      return group
-    })
+        .map((model) => ({ ...model, label: model.id, provider: provider.id, choice: model.id, accounts: 0 })),
+    }))
+  if (router) {
+    for (const entry of inventory.router_models ?? []) {
+      if (hidden.has(modelKey(router.id, entry.id))) continue
+      const catalogId = FAMILY_CATALOG[entry.family] ?? entry.family
+      let group = groups.find((candidate) => connectedCatalogId(candidate.id) === catalogId)
+      if (!group) {
+        group = { id: `router:${entry.family}`, name: FAMILY_NAMES[entry.family] ?? entry.family, source: 'router', classifier: '', models: [] }
+        groups.push(group)
+      }
+      const existing = group.models.find((model) => model.id === entry.model)
+      if (existing) {
+        existing.accounts = entry.accounts
+        if (entry.accounts > 1) {
+          existing.provider = router.id
+          existing.choice = entry.id
+        }
+      } else {
+        group.models.push({ id: entry.model, context: '', label: entry.model, provider: router.id, choice: entry.id, accounts: entry.accounts })
+      }
+    }
+    if (inventory.router_classifier) {
+      groups.unshift({
+        id: router.id,
+        name: router.name,
+        source: 'router',
+        classifier: inventory.router_classifier,
+        models: [{ id: 'auto', context: '', label: `${inventory.router_classifier} picks`, provider: router.id, choice: 'auto', accounts: 0 }],
+      })
+    }
+  }
+  return groups
+    .map((group) => ({
+      ...group,
+      models: group.models.filter((model) => !needle || model.id.toLowerCase().includes(needle) || model.label.toLowerCase().includes(needle) || group.name.toLowerCase().includes(needle)),
+    }))
     .filter((group) => group.models.length > 0)
-  if (!inventory.router_classifier) return groups
-  return [...groups.filter((group) => group.classifier), ...groups.filter((group) => !group.classifier)]
 }
 
-// The default Pi will use: the saved default when it is still shown, else the
-// first shown model, else nothing.
+// The row in use: the saved default when a row still saves it, else the first
+// row, else nothing. The answer names the provider and the choice the row saves.
 export function currentModel(inventory) {
   if (!inventory) return null
-  const groups = pickerGroups(inventory)
+  const rows = pickerGroups(inventory).flatMap((group) => group.models)
   const saved = inventory.default_provider && inventory.default_model
-    ? groups.find((group) => group.id === inventory.default_provider)?.models.find((model) => model.id === inventory.default_model)
+    ? rows.find((row) => row.provider === inventory.default_provider && row.choice === inventory.default_model)
     : null
-  if (saved) return { provider: inventory.default_provider, model: saved.id }
-  const first = groups[0]
-  return first ? { provider: first.id, model: first.models[0].id } : null
+  const row = saved ?? rows[0]
+  return row ? { provider: row.provider, model: row.choice, label: row.label } : null
 }
 
 // The composer chip: the model id in use beside the provider's mark, `Connect a
@@ -157,7 +201,5 @@ export function currentModel(inventory) {
 export function modelChipLabel(inventory) {
   const current = currentModel(inventory)
   if (!current) return 'Connect a model'
-  const group = pickerGroups(inventory).find((candidate) => candidate.id === current.provider)
-  const model = group?.models.find((candidate) => candidate.id === current.model)
-  return model?.label ?? current.model
+  return current.label
 }

@@ -111,7 +111,10 @@ the saved default when it is shown, else the first shown model. When no
 provider answers it reads `Connect a model`, and the first Send opens Settings
 → Models. There is no free hosted model without an account.
 
-**Settings → Models.** A key added here goes into Pi's `auth.json`, an
+**Settings → Models is one screen.** Every connection is a named account
+under its provider, a key or a subscription, with its allowance and usage on
+the card. The provider's models list once, never per account, and Routing
+sits at the foot. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the desktop owns
 and lands in the same file, and a local or custom endpoint goes into Pi's
 `models.json`, so Pi uses each at once and nothing leaves the machine except
@@ -131,21 +134,29 @@ first-class provider beside the hosted ones, never a fallback. The custom
 endpoint form takes a name, a base URL, an optional key and a model list. The
 chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
 
-**Settings → Models → Router.** Pi's `auth.json` holds one credential per
+**Routing, at the foot of Settings → Models.** Pi's `auth.json` holds one credential per
 provider id, so a second account of one provider cannot live there. The router
 holds those pools itself in `muniment-router.json` beside it at the same
 `0600`, answers the OpenAI chat wire on `127.0.0.1` behind a random token, and
 registers as the one Pi provider `muniment-router`. It is off by default, and
 off removes that entry and nothing else. The families it pools are OpenAI,
-Anthropic, Google, xAI and Kimi, each reached on its OpenAI-compatible route,
-and an account may name a base URL of its own for a gateway or a region.
+Anthropic, Google, xAI, Kimi and Devin. A key reaches its family on the
+OpenAI-compatible route, an account may name a base URL of its own for a
+gateway or a region, and Devin is a subscription alone.
 
 **A subscription joins the pool through Pi's own sign-in.** The sign-in runs
 Pi in a directory of its own, so the credential never lands in Pi's one slot
 for the provider, and the router lifts it from there as one more account of
-the family, named by its email. The router asks the upstream what the account
-has left: Codex at `chatgpt.com/backend-api/wham/usage`, Anthropic at
-`api.anthropic.com/api/oauth/usage`. A window is known by its length in
+the family, named by its email. Kimi, Antigravity and Devin have no Pi
+sign-in, so the router runs its own: Kimi by device code at `auth.kimi.com`,
+Antigravity and Devin through the browser, each landing on a loopback page in
+muniment's mark. Antigravity is a Google account and pools into Google. A
+Kimi or Google token refreshes before it dies. The router asks the upstream
+what the account has left: Codex at `chatgpt.com/backend-api/wham/usage`,
+Anthropic at `api.anthropic.com/api/oauth/usage`, Kimi at
+`api.kimi.com/coding/v1/usages`, Antigravity at
+`cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`, and Devin
+at its seat service's `GetUserStatus`. A window is known by its length in
 seconds, never by its slot, because a Pro plan's primary window is the weekly
 one. The card shows what is left, not what is used, with the reset, the plan,
 and Codex's banked resets. The store in `muniment-router-quota.json` carries
@@ -193,8 +204,11 @@ write-only: nothing reads one back.
 typed choice with a probability over every route. A small model on an account
 the pools already hold answers the same choice as one JSON object, and it
 spends that account, which the ledger counts. Any endpoint that answers the
-same question shape stands beside them. A running classifier puts the router
-first in the model chip's picker, named by the model that picks.
+same question shape stands beside them. A running classifier is the first row
+of the model chip's picker, named by the model that picks, `jev-latest picks`,
+and choosing it hands the turn to classification. The picker lists each model
+once under its provider. A model two or more accounts serve carries the
+balancer mark, and picking it balances across them with no other step.
 
 
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one control

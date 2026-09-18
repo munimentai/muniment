@@ -31,6 +31,15 @@ const ALLOWED = {
     '.switch[aria-checked="true"]': '§1.2 the track of an enabled model\'s show switch',
     '.switch[aria-checked="true"] span': '§1.2 the knob of an enabled model\'s show switch',
   },
+  // The same switch turns an account in a pool on, and turns routing on.
+  'src/lib/ModelAccounts.svelte': {
+    '.switch[aria-checked="true"]': '§1.2 the track of an enabled account\'s switch',
+    '.switch[aria-checked="true"] span': '§1.2 the knob of an enabled account\'s switch',
+  },
+  'src/lib/ModelRouterSection.svelte': {
+    '.switch[aria-checked="true"]': '§1.2 the track of the routing switch when routing is on',
+    '.switch[aria-checked="true"] span': '§1.2 the knob of the routing switch when routing is on',
+  },
 }
 
 // Repo root: `npm test` runs vitest with `--root .`, as test/desktop-e2e-harness.test.js assumes.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PROVIDERS, catalogProvider, connectableProviders, currentModel, methodLabel, modelChipLabel, pickerGroups, pickerLabel, providerName, searchProviders, sourceTag } from './provider-catalog.js'
+import { PROVIDERS, catalogProvider, connectableProviders, currentModel, methodLabel, modelChipLabel, pickerGroups, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
 const inventory = {
   providers: [
@@ -65,10 +65,10 @@ describe('provider catalog', () => {
   })
 
   it('reads the saved default when it is shown, else the first shown model, and labels the chip', () => {
-    expect(currentModel(inventory)).toEqual({ provider: 'ollama', model: 'llama3.2:3b' })
+    expect(currentModel(inventory)).toMatchObject({ provider: 'ollama', model: 'llama3.2:3b' })
     expect(modelChipLabel(inventory)).toBe('llama3.2:3b')
     const hiddenDefault = { ...inventory, hidden: ['ollama/llama3.2:3b'] }
-    expect(currentModel(hiddenDefault)).toEqual({ provider: 'openai-codex', model: 'gpt-5.5' })
+    expect(currentModel(hiddenDefault)).toMatchObject({ provider: 'openai-codex', model: 'gpt-5.5' })
     expect(modelChipLabel({ providers: [], hidden: [] })).toBe('Connect a model')
     expect(modelChipLabel(null)).toBe('Connect a model')
   })
@@ -78,47 +78,55 @@ describe('the model router in the picker', () => {
   const routed = {
     providers: [
       { id: 'openai-codex', name: 'OpenAI', source: 'account', base_url: null, models: [{ id: 'gpt-5.5', context: '400K' }] },
-      { id: 'muniment-router', name: 'Model router', source: 'router', base_url: 'http://127.0.0.1:8421/v1', models: [{ id: 'auto', context: '' }, { id: 'fast', context: '' }] },
+      { id: 'muniment-router', name: 'Model router', source: 'router', base_url: 'http://127.0.0.1:8421/v1', models: [{ id: 'auto', context: '' }, { id: 'fast', context: '' }, { id: 'kimi/kimi-k3', context: '' }] },
     ],
     default_provider: 'openai-codex',
     default_model: 'gpt-5.5',
     hidden: [],
     router_classifier: 'jev-latest',
+    router_models: [
+      { id: 'fast', family: 'openai', model: 'gpt-5.5', accounts: 2 },
+      { id: 'kimi/kimi-k3', family: 'kimi', model: 'kimi-k3', accounts: 1 },
+    ],
   }
 
-  it('leads the picker with the router while a classifier picks the model per turn', () => {
+  it('leads the picker with the classifier row, named by the model that picks', () => {
     const groups = pickerGroups(routed)
-    expect(groups.map((group) => group.id)).toEqual(['muniment-router', 'openai-codex'])
+    expect(groups.map((group) => group.id)).toEqual(['muniment-router', 'openai-codex', 'router:kimi'])
     expect(groups[0].classifier).toBe('jev-latest')
+    expect(groups[0].models).toEqual([{ id: 'auto', context: '', label: 'jev-latest picks', provider: 'muniment-router', choice: 'auto', accounts: 0 }])
     expect(groups[1].classifier).toBe('')
     expect(sourceTag('router')).toBe('Router')
-  })
-
-  it('names the classifier row by the model that picks and puts it first', () => {
-    const groups = pickerGroups(routed)
-    expect(groups[0].models[0]).toMatchObject({ id: 'auto', label: 'jev-latest picks' })
-    expect(pickerLabel({ id: 'fast' }, groups[0])).toBe('fast')
     expect(modelChipLabel({ ...routed, default_provider: 'muniment-router', default_model: 'auto' })).toBe('jev-latest picks')
   })
 
-  it('marks a router model that more than one account serves', () => {
-    const pooled = { ...routed, router_accounts: { auto: 0, fast: 2 } }
-    const router = pickerGroups(pooled).find((group) => group.id === 'muniment-router')
-    expect(router.models.map((model) => [model.id, model.accounts])).toEqual([['auto', 0], ['fast', 2]])
-    expect(pickerGroups(routed).find((group) => group.id === 'openai-codex').models.every((model) => model.accounts === 0)).toBe(true)
+  it('lists a model once under its provider and routes it through the router when two accounts serve it', () => {
+    const openai = pickerGroups(routed).find((group) => group.id === 'openai-codex')
+    expect(openai.models).toEqual([{ id: 'gpt-5.5', context: '400K', label: 'gpt-5.5', provider: 'muniment-router', choice: 'fast', accounts: 2 }])
+    // One account behind a model keeps the provider's own route.
+    const single = { ...routed, router_models: [{ id: 'fast', family: 'openai', model: 'gpt-5.5', accounts: 1 }] }
+    expect(pickerGroups(single).find((group) => group.id === 'openai-codex').models[0]).toMatchObject({ provider: 'openai-codex', choice: 'gpt-5.5', accounts: 1 })
   })
 
-  it('leaves the order alone and drops the auto row when the router runs no classifier', () => {
+  it('gives a family with no provider of its own a group of its own', () => {
+    const kimi = pickerGroups(routed).find((group) => group.id === 'router:kimi')
+    expect(kimi.name).toBe('Kimi')
+    expect(kimi.source).toBe('router')
+    expect(kimi.models).toEqual([{ id: 'kimi-k3', context: '', label: 'kimi-k3', provider: 'muniment-router', choice: 'kimi/kimi-k3', accounts: 1 }])
+    expect(pickerGroups({ ...routed, hidden: ['muniment-router/kimi/kimi-k3'] }).map((group) => group.id)).toEqual(['muniment-router', 'openai-codex'])
+  })
+
+  it('drops the classifier row when the router runs no classifier', () => {
     const balanced = { ...routed, router_classifier: null }
-    expect(pickerGroups(balanced).map((group) => group.id)).toEqual(['openai-codex', 'muniment-router'])
-    expect(pickerGroups(balanced).find((group) => group.id === 'muniment-router').models.map((model) => model.id)).toEqual(['fast'])
-    expect(pickerGroups(balanced)[1].classifier).toBe('')
+    expect(pickerGroups(balanced).map((group) => group.id)).toEqual(['openai-codex', 'router:kimi'])
+    expect(pickerGroups(balanced)[0].classifier).toBe('')
   })
 
-  it('keeps the saved default when the router leads the list', () => {
-    expect(currentModel(routed)).toEqual({ provider: 'openai-codex', model: 'gpt-5.5' })
-    expect(modelChipLabel(routed)).toBe('gpt-5.5')
-    const unset = { ...routed, default_provider: null, default_model: null }
-    expect(currentModel(unset)).toEqual({ provider: 'muniment-router', model: 'auto' })
+  it('keeps the saved default when a row still saves it, and names the row in use', () => {
+    expect(currentModel({ ...routed, default_provider: 'muniment-router', default_model: 'fast' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'gpt-5.5' })
+    // The saved direct route is gone from the rows once the router balances the model, so the first row leads.
+    expect(currentModel(routed)).toEqual({ provider: 'muniment-router', model: 'auto', label: 'jev-latest picks' })
+    expect(modelChipLabel(routed)).toBe('jev-latest picks')
+    expect(currentModel({ ...routed, router_classifier: null, default_provider: 'openai', default_model: 'gone' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'gpt-5.5' })
   })
 })

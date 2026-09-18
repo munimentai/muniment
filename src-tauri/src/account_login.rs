@@ -94,7 +94,7 @@ fn provider_display_name(provider: &str) -> &str {
 
 /// The page the browser lands on after the provider redirects: muniment's mark
 /// and voice, on the app's paper.
-fn callback_page(connected: Option<&str>) -> String {
+pub(crate) fn callback_page(connected: Option<&str>) -> String {
     let (heading, body) = match connected {
         Some(provider) => (
             "Signed in".to_owned(),
@@ -156,7 +156,7 @@ fn callback_redirect(request_line: &str) -> Option<String> {
     Some(format!("http://localhost:{CALLBACK_PORT}{target}"))
 }
 
-fn write_response(stream: &mut TcpStream, status: &str, body: &str) {
+pub(crate) fn write_response(stream: &mut TcpStream, status: &str, body: &str) {
     let _ = write!(
         stream,
         "HTTP/1.1 {status}
@@ -247,7 +247,7 @@ fn is_paste_prompt(title: &str) -> bool {
     title.contains("authorization code") || title.contains("redirect url")
 }
 
-fn present_main_window(app: &AppHandle) {
+pub(crate) fn present_main_window(app: &AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.unminimize();
         let _ = main.show();
@@ -365,6 +365,11 @@ pub(crate) fn start(app: &AppHandle, provider: &str) -> Result<(), String> {
 pub(crate) fn start_into_pool(app: &AppHandle, provider: &str) -> Result<(), String> {
     if muniment_core::model_router::family::family_for_pi_provider(provider).is_none() {
         return Err("This provider has no subscription the router can pool.".into());
+    }
+    // Kimi, Antigravity and Devin have no Pi sign-in. The router runs its own.
+    if muniment_core::model_router::family::native_sign_in(provider) {
+        app.state::<AccountLoginState>().stop();
+        return crate::pool_login::start(app, provider);
     }
     start_with(app, provider, Target::Pool)
 }
@@ -558,6 +563,7 @@ pub(crate) fn answer(
 pub(crate) fn cancel(app: &AppHandle) {
     let state = app.state::<AccountLoginState>();
     state.stop();
+    crate::pool_login::stop();
     emit(app, json!({ "stage": "cancelled" }));
 }
 

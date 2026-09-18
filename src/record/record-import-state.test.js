@@ -82,7 +82,7 @@ describe('record import state', () => {
     expect(stripeOptions[2]).toEqual({ value: 'email:email', label: 'email in email' })
     expect(stripeOptions.map((option) => option.value)).not.toContain('external:stripe:customers:id:id')
     expect(suggestIdentity(stripe)).toBe('external:stripe:customers:id')
-    expect(sourceOptions().map((option) => option.value)).toEqual(['csv', 'stripe', 'hubspot', 'pipedrive', 'salesforce', 'zendesk', 'intercom', 'freshdesk', 'zoho', 'outreach', 'salesloft', 'notion', 'airtable', 'sheets', 'square', 'shopify', 'paypal', 'freshbooks', 'quickbooks', 'wave'])
+    expect(sourceOptions().map((option) => option.value)).toEqual(['csv', 'stripe', 'hubspot', 'pipedrive', 'salesforce', 'zendesk', 'intercom', 'freshdesk', 'zoho', 'outreach', 'salesloft', 'notion', 'airtable', 'sheets', 'square', 'shopify', 'paypal', 'freshbooks', 'quickbooks', 'wave', 'apollo', 'gong', 'zoominfo', 'calendly', 'mailchimp', 'kit', 'xero', 'dynamics', 'marketo'])
     expect(sourceOptions().find((option) => option.value === 'hubspot').secret).toBe('private app access token')
     expect(sourceCredentials('stripe').map((credential) => credential.name)).toEqual(['token'])
     expect(sourceCredentials('zendesk').map((credential) => credential.name)).toEqual(['subdomain', 'email', 'api_token'])

@@ -26,6 +26,7 @@ mod model_router;
 mod onboarding_diagnostics;
 mod onboarding_import;
 mod onboarding_scan;
+mod pool_login;
 mod record;
 mod runtime_owner;
 #[cfg(test)]
