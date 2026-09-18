@@ -9,6 +9,7 @@ use tauri::Manager;
 use uuid::Uuid;
 
 use muniment_core::local_mode::LOCAL_MODE_MARKER;
+use muniment_core::model_router::config::ROUTER_PROVIDER;
 use muniment_core::pi_settings::merge_pi_settings;
 use muniment_core::sidecar::pi_install::PI_SELECTED_ARTIFACT;
 use muniment_core::state_root::agent_directory;
@@ -109,6 +110,9 @@ pub(crate) struct ProviderInventory {
     default_provider: Option<String>,
     default_model: Option<String>,
     hidden: Vec<String>,
+    /// The classifier model that picks a route per turn, when the router runs
+    /// one. The composer's picker puts the router first and names it.
+    router_classifier: Option<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -527,6 +531,9 @@ fn provider_display_name(
     if provider == CLAUDE_BRIDGE_PROVIDER {
         return "Anthropic".into();
     }
+    if provider == ROUTER_PROVIDER {
+        return "Model router".into();
+    }
     key_provider_name(provider)
         .or_else(|| {
             ACCOUNT_PROVIDERS
@@ -685,7 +692,9 @@ fn provider_inventory(
             if providers.iter().any(|known| known.id == *provider) {
                 continue;
             }
-            let source = if provider == OLLAMA_PROVIDER || provider == LM_STUDIO_PROVIDER {
+            let source = if provider == ROUTER_PROVIDER {
+                "router"
+            } else if provider == OLLAMA_PROVIDER || provider == LM_STUDIO_PROVIDER {
                 "local"
             } else {
                 "custom"
@@ -731,7 +740,19 @@ fn provider_inventory(
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
         hidden: record_strings(&record, "hidden"),
+        router_classifier: router_classifier(agent),
     })
+}
+
+/// The classifier the router picks routes with, when it is on and ready. A
+/// router with no classifier still balances its pools, so it names none.
+fn router_classifier(agent: &Path) -> Option<String> {
+    let config = muniment_core::model_router::config::load(agent).ok()?;
+    if !config.enabled || !config.classifies() {
+        return None;
+    }
+    let model = config.classifier.model();
+    (!model.is_empty()).then(|| model.to_owned())
 }
 
 fn valid_identifier(value: &str, limit: usize) -> bool {

@@ -22,6 +22,7 @@ mod macos_runtime_notice_probe;
 mod macos_runtime_service;
 mod memory;
 mod model_install;
+mod model_router;
 mod onboarding_diagnostics;
 mod onboarding_import;
 mod onboarding_scan;
@@ -121,6 +122,9 @@ fn main() {
                 parakeet_root.clone(),
             )?);
             app.manage(dictation::DictationState::new(parakeet_root));
+            // The router serves Pi, so it comes up with the shell that owns Pi.
+            app.manage(model_router::RouterState::new());
+            model_router::restore(app.handle());
             Ok(())
         })
         .on_window_event(launcher::window_event)
@@ -145,6 +149,14 @@ fn main() {
             local_mode::local_mode_store_endpoint,
             local_mode::local_mode_claude_code_status,
             local_mode::local_mode_connect_claude_code,
+            model_router::model_router_settings,
+            model_router::model_router_set_enabled,
+            model_router::model_router_add_account,
+            model_router::model_router_update_account,
+            model_router::model_router_remove_account,
+            model_router::model_router_save_routes,
+            model_router::model_router_set_classifier,
+            model_router::model_router_test_classifier,
             account_login::local_mode_account_login_start,
             account_login::local_mode_account_login_answer,
             account_login::local_mode_account_login_cancel,

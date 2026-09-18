@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest'
+import { DEDICATED, POOLED, catalog, matchSaved, pooledReady, priceLabel } from './classifier-catalog.js'
+
+describe('classifier catalog', () => {
+  it('lists a model built to classify before the models on your own accounts', () => {
+    const rows = catalog([])
+    expect(rows[0].id).toBe('typesafe/jev-latest')
+    expect(rows[0].group).toBe('Built to classify')
+    expect(rows.slice(1).every((row) => row.group === 'On your accounts')).toBe(true)
+    expect(rows.length).toBe(DEDICATED.length + POOLED.length)
+  })
+
+  it('offers a pooled classifier only while its provider holds an enabled account', () => {
+    const accounts = [{ family: 'openai', enabled: true }, { family: 'xai', enabled: false }]
+    expect(pooledReady(POOLED[0], accounts)).toBe(true)
+    expect(pooledReady(POOLED.find((entry) => entry.family === 'xai'), accounts)).toBe(false)
+    expect(pooledReady(POOLED[0], [])).toBe(false)
+    const rows = catalog(accounts)
+    expect(rows.find((row) => row.id === 'openai/gpt-5.6-nano').ready).toBe(true)
+    expect(rows.find((row) => row.id === 'kimi/kimi-k3').ready).toBe(false)
+    expect(rows[0].ready).toBe(true)
+  })
+
+  it('reads a price per million input tokens and calls a free one free', () => {
+    expect(priceLabel(0.042)).toBe('$0.042/M in')
+    expect(priceLabel(0.05)).toBe('$0.05/M in')
+    expect(priceLabel(1)).toBe('$1/M in')
+    expect(priceLabel(0)).toBe('free')
+    expect(priceLabel(undefined)).toBe('free')
+  })
+
+  it('marks the row a saved classifier came from', () => {
+    expect(matchSaved({ kind: 'typesafe' })).toBe('typesafe/jev-latest')
+    expect(matchSaved({ kind: 'pooled', family: 'openai', model: 'gpt-5.6-nano' })).toBe('openai/gpt-5.6-nano')
+    expect(matchSaved({ kind: 'pooled', family: 'openai', model: 'gpt-5.6' })).toBe('openai/gpt-5.6')
+    expect(matchSaved({ kind: 'endpoint' })).toBe('endpoint')
+    expect(matchSaved({ kind: 'none' })).toBe('')
+    expect(matchSaved(null)).toBe('')
+  })
+})

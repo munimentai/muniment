@@ -3,6 +3,7 @@
   // connector that adds one, and the sign-in flows behind each method.
   import { onDestroy } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
+  import ModelRouterSection from './ModelRouterSection.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import { catalogProvider, connectableProviders, methodLabel, modelKey, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
@@ -16,6 +17,8 @@
   let status = $state('')
   let query = $state('')
   let view = $state('list')
+  // `providers` is the connected list, `router` the pools behind one provider.
+  let screen = $state('providers')
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
   let providerId = $state('')
@@ -304,7 +307,14 @@
 </script>
 
 <div class="models">
-  {#if view === 'list'}
+  <nav class="screens" aria-label="Models">
+    {#each [['providers', 'Providers'], ['router', 'Router']] as [id, name]}
+      <button type="button" class="quiet screen" aria-current={screen === id ? 'true' : undefined} onclick={() => { screen = id }}>{name}</button>
+    {/each}
+  </nav>
+  {#if screen === 'router'}
+    <ModelRouterSection {tauri} />
+  {:else if view === 'list'}
     <header class="models-head">
       <div>
         <h4 class="models-label">Connected providers</h4>
@@ -477,6 +487,9 @@
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
   .models { display: grid; gap: 12px; align-content: start; }
+  .screens { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+  .screen { min-height: 28px; padding: 4px 10px; border-radius: 0; }
+  .screen[aria-current="true"] { color: var(--ink); box-shadow: inset 0 -1px 0 var(--signal); }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
   .connect-head h4, .models-head h4 { margin: 0; }
