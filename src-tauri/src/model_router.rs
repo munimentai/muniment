@@ -84,6 +84,8 @@ pub(crate) struct AccountView {
     banked_resets: Option<u32>,
     /// Unix milliseconds of the last quota probe, none when never probed.
     quota_observed_ms: Option<i64>,
+    /// Whether the router has a usage route for this account's provider.
+    allowance_readable: bool,
     /// The last 30 days as `[day, requests, input, output, errors]` rows,
     /// oldest first, for the usage bar.
     days: Vec<(String, u64, u64, u64, u64)>,
@@ -235,6 +237,10 @@ fn account_view(
             .unwrap_or_default(),
         banked_resets: quota.and_then(|quota| quota.banked_resets),
         quota_observed_ms: quota.map(|quota| quota.observed_at_ms),
+        allowance_readable: match &account.credential {
+            Credential::ApiKey { .. } => false,
+            Credential::Subscription { provider, .. } => quota::has_reader(provider),
+        },
         days: usage
             .map(|entry| {
                 entry
@@ -771,6 +777,9 @@ pub(crate) fn import_credential<R: tauri::Runtime>(
         .ok_or_else(|| "This provider has no subscription the router can pool.".to_string())?;
     let agent = agent()?;
     let mut config = load(&agent)?;
+    // A pooled subscription serves through the router alone, so the account
+    // that joins turns the router on.
+    config.enabled = true;
     let count = config.pool(family.id).len() + 1;
     let id = uuid::Uuid::now_v7().to_string();
     config.accounts.push(Account {
@@ -920,6 +929,7 @@ mod tests {
         assert_eq!(view.days.len(), 1);
         assert_eq!(view.days[0].0, "2026-09-17");
         assert_eq!(view.active, 2);
+        assert!(!view.allowance_readable);
     }
 
     #[test]
