@@ -49,10 +49,7 @@ export function matchSaved(classifier) {
   if (classifier.kind === 'typesafe') {
     return DEDICATED.find((entry) => entry.kind === 'typesafe')?.id ?? ''
   }
-  if (classifier.kind === 'pooled') {
-    const id = `${classifier.family}/${classifier.model}`
-    return POOLED.some((entry) => entry.id === id) ? id : id
-  }
+  if (classifier.kind === 'pooled') return `${classifier.family}/${classifier.model}`
   return 'endpoint'
 }
 

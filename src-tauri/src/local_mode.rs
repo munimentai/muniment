@@ -26,7 +26,7 @@ const SAVE_SETTINGS_ERROR: &str =
 const SETTINGS_DIRECTORY_ERROR: &str =
     "The settings folder is invalid. Check its location, then retry.";
 
-struct PiAuthLock(PathBuf);
+pub(crate) struct PiAuthLock(PathBuf);
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ProviderStatus {
@@ -134,7 +134,7 @@ fn pi_auth_lock_path(auth_file: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-fn lock_pi_auth_file(auth_file: &Path) -> Result<PiAuthLock, String> {
+pub(crate) fn lock_pi_auth_file(auth_file: &Path) -> Result<PiAuthLock, String> {
     let lock_path = pi_auth_lock_path(auth_file);
     let deadline = Instant::now() + AUTH_LOCK_TIMEOUT;
     loop {
@@ -195,7 +195,7 @@ fn pi_auth_file(agent: &Path) -> PathBuf {
     agent.join("auth.json")
 }
 
-fn pi_models_file(agent: &Path) -> PathBuf {
+pub(crate) fn pi_models_file(agent: &Path) -> PathBuf {
     agent.join("models.json")
 }
 
@@ -389,7 +389,9 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
     write_json_for_update(models_file, &models)
 }
 
-fn read_json_for_update(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+pub(crate) fn read_json_for_update(
+    path: &Path,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| SAVE_SETTINGS_ERROR.to_string()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
@@ -397,7 +399,7 @@ fn read_json_for_update(path: &Path) -> Result<serde_json::Map<String, serde_jso
     }
 }
 
-fn write_json_for_update(
+pub(crate) fn write_json_for_update(
     path: &Path,
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), String> {
@@ -747,8 +749,9 @@ fn provider_inventory(
 /// The classifier the router picks routes with, when it is on and ready. A
 /// router with no classifier still balances its pools, so it names none.
 fn router_classifier(agent: &Path) -> Option<String> {
+    use muniment_core::model_router::{classifies, options};
     let config = muniment_core::model_router::config::load(agent).ok()?;
-    if !config.enabled || !config.classifies() {
+    if !config.enabled || !classifies(&config, &options(&config)) {
         return None;
     }
     let model = config.classifier.model();
