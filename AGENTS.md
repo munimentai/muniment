@@ -33,6 +33,6 @@ record: present tense, stating what is. No dates, ticket ids, commit shas, or
 pull request numbers. No history phrases: "decided", "superseded", "previously", "no longer".
 No ledger file under any name: no open-items,
 build-history, decision-log, handoff, journal, notes, or todo file. A finished
-roadmap phase is deleted, not marked done. Caps: `SPEC.md` 400 lines,
+roadmap phase is deleted, not marked done. Caps: `SPEC.md` 600 lines,
 `DESIGN.md` 250, `ROADMAP.md` 150, `AGENTS.md` 120. State lives in Plane and
 history lives in git.
