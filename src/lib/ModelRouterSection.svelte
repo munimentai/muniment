@@ -97,6 +97,9 @@
     classifierKind = row.kind
     classifierModel = row.model
     classifierFamily = row.family ?? ''
+    // A catalog row reaches its own service. A URL typed for another
+    // endpoint must not ride along as this row's base URL.
+    classifierUrl = ''
     classifierStatus = ''
   }
 

@@ -20,7 +20,10 @@ use muniment_core::model_router::model_catalog;
 use muniment_core::model_router::usage::{self, AccountUsage};
 use muniment_core::model_router::{classify, options, pi_provider, served_models, server};
 
-use crate::local_mode::harness_agent_directory;
+use crate::local_mode::{
+    harness_agent_directory, lock_pi_auth_file, pi_models_file, read_json_for_update,
+    write_json_for_update,
+};
 
 const READ_ERROR: &str =
     "Muniment cannot read the router settings. Check folder access, then retry.";
@@ -303,18 +306,17 @@ fn apply(agent: &Path, state: &RouterState, config: &RouterConfig) -> Result<(),
     write_models(agent, Some(&endpoint), config)
 }
 
-/// Adds or removes the router's entry in Pi's `models.json`.
+/// Adds or removes the router's entry in Pi's `models.json`, under the same
+/// lock every other writer of that file takes.
 fn write_models(
     agent: &Path,
     endpoint: Option<&server::Endpoint>,
     config: &RouterConfig,
 ) -> Result<(), String> {
-    let path = agent.join("models.json");
-    let mut models: serde_json::Map<String, Value> = match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| SAVE_ERROR.to_string())?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
-        Err(_) => return Err(SAVE_ERROR.into()),
-    };
+    let path = pi_models_file(agent);
+    std::fs::create_dir_all(agent).map_err(|_| SAVE_ERROR.to_string())?;
+    let _lock = lock_pi_auth_file(&path).map_err(|_| SAVE_ERROR.to_string())?;
+    let mut models = read_json_for_update(&path).map_err(|_| SAVE_ERROR.to_string())?;
     match endpoint {
         Some(endpoint) => pi_provider::register(&mut models, endpoint, config),
         None => {
@@ -323,12 +325,7 @@ fn write_models(
             }
         }
     }
-    std::fs::create_dir_all(agent).map_err(|_| SAVE_ERROR.to_string())?;
-    config::write_private(
-        &path,
-        &serde_json::to_vec_pretty(&models).map_err(|_| SAVE_ERROR.to_string())?,
-    )
-    .map_err(|_| SAVE_ERROR.to_string())
+    write_json_for_update(&path, &models).map_err(|_| SAVE_ERROR.to_string())
 }
 
 /// Starts the router on launch when its record says it is on.
@@ -520,9 +517,20 @@ pub(crate) fn model_router_save_routes(
     }
     config.routes = routes;
     config.fallback = fallback;
+    // One name is one model: the classifier answers with a name, and `auto`
+    // is the name that asks it to pick.
+    let running = options(&config);
+    let mut keys: Vec<&str> = running.iter().map(|option| option.key.as_str()).collect();
+    keys.sort_unstable();
+    if keys.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("Two models share a name. Give each its own.".into());
+    }
+    if keys.contains(&config::AUTO_MODEL) {
+        return Err("The name auto asks the classifier to pick. Choose another.".into());
+    }
     // The fallback names a model in the running, or none and the cheapest takes it.
-    if let Some(named) = config.fallback.clone() {
-        if !options(&config).iter().any(|option| option.key == named) {
+    if let Some(named) = &config.fallback {
+        if !running.iter().any(|option| &option.key == named) {
             return Err("The fallback must be a model in the running.".into());
         }
     }
@@ -602,6 +610,18 @@ pub(crate) fn model_router_set_classifier(
             if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
                 return Err("Enter a valid classifier URL.".into());
             }
+            // A blank key keeps the one saved, as the TypeSafe form does.
+            let key = if key.is_empty() {
+                match &config.classifier {
+                    Classifier::Endpoint {
+                        api_key: Some(saved),
+                        ..
+                    } => saved.clone(),
+                    _ => String::new(),
+                }
+            } else {
+                key
+            };
             Classifier::Endpoint {
                 base_url: url,
                 api_key: Some(key).filter(|key| !key.is_empty()),
