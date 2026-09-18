@@ -313,7 +313,7 @@
     {/each}
   </nav>
   {#if screen === 'router'}
-    <ModelRouterSection {tauri} />
+    <ModelRouterSection {tauri} {listen} />
   {:else if view === 'list'}
     <header class="models-head">
       <div>

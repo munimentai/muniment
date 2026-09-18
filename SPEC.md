@@ -140,6 +140,18 @@ off removes that entry and nothing else. The families it pools are OpenAI,
 Anthropic, Google, xAI and Kimi, each reached on its OpenAI-compatible route,
 and an account may name a base URL of its own for a gateway or a region.
 
+**A subscription joins the pool through Pi's own sign-in.** The sign-in runs
+Pi in a directory of its own, so the credential never lands in Pi's one slot
+for the provider, and the router lifts it from there as one more account of
+the family, named by its email. The router asks the upstream what the account
+has left: Codex at `chatgpt.com/backend-api/wham/usage`, Anthropic at
+`api.anthropic.com/api/oauth/usage`. A window is known by its length in
+seconds, never by its slot, because a Pro plan's primary window is the weekly
+one. The card shows what is left, not what is used, with the reset, the plan,
+and Codex's banked resets. The store in `muniment-router-quota.json` carries
+no token and no prompt. A subscription is shown and probed, and no turn lands
+on it until the router speaks its wire.
+
 **The router balances, and a refusal moves the turn.** Among the accounts of a
 family that serve the model and are not cooling, the one whose served share
 sits furthest below its weight takes the next turn. A `401`, `402`, `403`,

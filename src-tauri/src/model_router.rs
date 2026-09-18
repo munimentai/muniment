@@ -16,7 +16,9 @@ use muniment_core::model_router::config::{
     self, Account, Classifier, Credential, Route, RouterConfig,
 };
 use muniment_core::model_router::family::FAMILIES;
+use muniment_core::model_router::family::{family_for_pi_provider, SUBSCRIPTION_PROVIDERS};
 use muniment_core::model_router::model_catalog;
+use muniment_core::model_router::quota;
 use muniment_core::model_router::usage::{self, AccountUsage};
 use muniment_core::model_router::{classify, options, pi_provider, served_models, server};
 
@@ -72,9 +74,37 @@ pub(crate) struct AccountView {
     cooldown_until_ms: Option<i64>,
     /// Turns this account has in flight right now.
     active: u32,
+    /// Pi's provider id behind a subscription, empty for a key.
+    pi_provider: String,
+    email: Option<String>,
+    plan: Option<String>,
+    renews_at_ms: Option<i64>,
+    /// What the subscription has left, one entry per metered window.
+    windows: Vec<WindowView>,
+    banked_resets: Option<u32>,
+    /// Unix milliseconds of the last quota probe, none when never probed.
+    quota_observed_ms: Option<i64>,
     /// The last 30 days as `[day, requests, input, output, errors]` rows,
     /// oldest first, for the usage bar.
     days: Vec<(String, u64, u64, u64, u64)>,
+}
+
+/// One metered window of a subscription, as the card shows it.
+#[derive(Debug, Serialize)]
+pub(crate) struct WindowView {
+    label: String,
+    scope: String,
+    remaining_percent: f64,
+    resets_at_ms: Option<i64>,
+    limit_reached: bool,
+}
+
+/// One sign-in the pool can take.
+#[derive(Debug, Serialize)]
+pub(crate) struct SubscriptionView {
+    provider: &'static str,
+    family: &'static str,
+    label: &'static str,
 }
 
 /// One model in the running: what the classifier chooses between.
@@ -119,6 +149,8 @@ pub(crate) struct RouterSettings {
     /// Whether Pi sends its turns to the router.
     is_default: bool,
     families: Vec<FamilyView>,
+    /// The sign-ins the pool can take, one per Pi provider.
+    subscriptions: Vec<SubscriptionView>,
     accounts: Vec<AccountView>,
     /// Every model an enabled account serves, in the order the classifier sees.
     options: Vec<OptionView>,
@@ -141,7 +173,30 @@ fn save(agent: &Path, config: &RouterConfig) -> Result<(), String> {
     config::save(agent, config).map_err(|_| SAVE_ERROR.to_string())
 }
 
-fn account_view(account: &Account, usage: Option<&AccountUsage>, active: u32) -> AccountView {
+fn account_view(
+    account: &Account,
+    usage: Option<&AccountUsage>,
+    active: u32,
+    quota: Option<&quota::Quota>,
+) -> AccountView {
+    let (pi_provider, email, plan, renews_at_ms) = match &account.credential {
+        Credential::Subscription {
+            provider,
+            email,
+            plan,
+            renews_at_ms,
+            ..
+        } => (
+            provider.clone(),
+            email
+                .clone()
+                .or_else(|| quota.and_then(|quota| quota.email.clone())),
+            plan.clone()
+                .or_else(|| quota.and_then(|quota| quota.plan.clone())),
+            *renews_at_ms,
+        ),
+        Credential::ApiKey { .. } => (String::new(), None, None, None),
+    };
     AccountView {
         id: account.id.clone(),
         family: account.family.clone(),
@@ -159,6 +214,27 @@ fn account_view(account: &Account, usage: Option<&AccountUsage>, active: u32) ->
         last_error: usage.and_then(|entry| entry.last_error.clone()),
         cooldown_until_ms: usage.and_then(|entry| entry.cooldown_until_ms),
         active,
+        pi_provider,
+        email,
+        plan,
+        renews_at_ms,
+        windows: quota
+            .map(|quota| {
+                quota
+                    .windows
+                    .iter()
+                    .map(|window| WindowView {
+                        label: window.kind.label().to_owned(),
+                        scope: window.scope.clone(),
+                        remaining_percent: window.remaining_percent(),
+                        resets_at_ms: window.resets_at_ms,
+                        limit_reached: window.limit_reached,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        banked_resets: quota.and_then(|quota| quota.banked_resets),
+        quota_observed_ms: quota.map(|quota| quota.observed_at_ms),
         days: usage
             .map(|entry| {
                 entry
@@ -202,6 +278,7 @@ fn settings(
 ) -> Result<RouterSettings, String> {
     let config = load(agent)?;
     let ledger = usage::load(agent);
+    let quotas = quota::load(agent);
     let settings_file = agent.join("settings.json");
     let is_default = std::fs::read(&settings_file)
         .ok()
@@ -220,6 +297,14 @@ fn settings(
                 base_url: family.base_url,
             })
             .collect(),
+        subscriptions: SUBSCRIPTION_PROVIDERS
+            .iter()
+            .map(|(provider, family, label)| SubscriptionView {
+                provider,
+                family,
+                label,
+            })
+            .collect(),
         accounts: config
             .accounts
             .iter()
@@ -228,6 +313,7 @@ fn settings(
                     account,
                     ledger.account(&account.id),
                     active.get(&account.id).copied().unwrap_or(0),
+                    quotas.accounts.get(&account.id),
                 )
             })
             .collect(),
@@ -650,6 +736,127 @@ pub(crate) async fn model_router_test_classifier() -> Result<(), String> {
     .map_err(|_| "The test did not finish. Try again.".to_string())?
 }
 
+/// Lifts the credential a pool sign-in left in its scratch directory into the
+/// router as one more account, and answers with the account id. The probe
+/// that names the account by its email runs after, off the sign-in thread.
+pub(crate) fn import_pi_sign_in<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    scratch: &Path,
+    provider: &str,
+) -> Result<String, String> {
+    let family = family_for_pi_provider(provider)
+        .ok_or_else(|| "This provider has no subscription the router can pool.".to_string())?;
+    let auth: serde_json::Map<String, Value> = std::fs::read(scratch.join("auth.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or_else(|| "The sign-in finished without a credential. Try again.".to_string())?;
+    let entry = auth
+        .get(provider)
+        .ok_or_else(|| "The sign-in finished without a credential. Try again.".to_string())?;
+    let credential = Credential::from_pi_auth(provider, entry)
+        .ok_or_else(|| "The sign-in left a credential the router cannot hold.".to_string())?;
+    let agent = agent()?;
+    let mut config = load(&agent)?;
+    let count = config.pool(family.id).len() + 1;
+    let id = uuid::Uuid::now_v7().to_string();
+    config.accounts.push(Account {
+        id: id.clone(),
+        family: family.id.to_owned(),
+        label: credential
+            .clone()
+            .into_email()
+            .unwrap_or_else(|| format!("{} account {count}", family.name)),
+        credential,
+        base_url: None,
+        models: Vec::new(),
+        enabled: true,
+        weight: 1,
+    });
+    save(&agent, &config)?;
+    let state = app.state::<RouterState>();
+    apply(&agent, &state, &config)?;
+    // The probe names the account and fills its windows. It is a network call,
+    // so it runs off the sign-in thread and the screen catches up on reload.
+    let probe_id = id.clone();
+    std::thread::spawn(move || {
+        let _ = refresh_quota(&agent, &probe_id);
+    });
+    Ok(id)
+}
+
+/// Asks the account's upstream what it has left, stores the answer, and names
+/// the account by its email when the sign-in did not. Answers whether the
+/// upstream said anything.
+pub(crate) fn refresh_quota(agent: &Path, id: &str) -> Result<bool, String> {
+    let mut config = load(agent)?;
+    let Some(account) = config.accounts.iter_mut().find(|account| account.id == id) else {
+        return Err("That account is gone.".into());
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    let Some(probed) = quota::probe(account, now, quota::TIMEOUT) else {
+        return Ok(false);
+    };
+    // What the upstream said about the account itself outlives the probe: the
+    // email names an account the sign-in left unnamed, and the plan is shown.
+    let placeholder = account.label.contains(" account ");
+    if let Credential::Subscription { email, plan, .. } = &mut account.credential {
+        if email.is_none() && probed.email.is_some() {
+            *email = probed.email.clone();
+        }
+        if probed.plan.is_some() {
+            *plan = probed.plan.clone();
+        }
+    }
+    if placeholder {
+        if let Some(email) = account.email().map(str::to_owned) {
+            account.label = email;
+        }
+    }
+    save(agent, &config)?;
+    let mut store = quota::load(agent);
+    store.accounts.insert(id.to_owned(), probed);
+    quota::save(agent, &store).map_err(|_| SAVE_ERROR.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub(crate) fn model_router_subscription_start(
+    app: tauri::AppHandle,
+    provider: String,
+) -> Result<(), String> {
+    crate::account_login::start_into_pool(&app, &provider)
+}
+
+#[tauri::command]
+pub(crate) async fn model_router_refresh_quota(
+    state: tauri::State<'_, RouterState>,
+    id: Option<String>,
+) -> Result<RouterSettings, String> {
+    let agent = agent()?;
+    let ids: Vec<String> = match id {
+        Some(id) => vec![id],
+        None => load(&agent)?
+            .accounts
+            .iter()
+            .filter(|account| account.credential.pi_provider().is_some())
+            .map(|account| account.id.clone())
+            .collect(),
+    };
+    let probe_agent = agent.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        for id in ids {
+            let _ = refresh_quota(&probe_agent, &id);
+        }
+    })
+    .await
+    .map_err(|_| "The refresh did not finish. Try again.".to_string())?;
+    settings(
+        &agent,
+        running_endpoint(&state).as_ref(),
+        &running_active(&state),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,7 +882,7 @@ mod tests {
         let mut ledger = Ledger::default();
         ledger.record_success("a1", "2026-09-17", 1_000, 300, 40);
         ledger.record_error("a1", "2026-09-17", 2_000, "429 slow down", true);
-        let view = account_view(&account("a1"), ledger.account("a1"), 2);
+        let view = account_view(&account("a1"), ledger.account("a1"), 2, None);
         let json = serde_json::to_string(&view).unwrap();
         assert!(!json.contains("sk-secret"), "{json}");
         assert_eq!(view.source, "key");
@@ -691,7 +898,7 @@ mod tests {
 
     #[test]
     fn an_account_that_has_served_nothing_reads_as_zero() {
-        let view = account_view(&account("a1"), None, 0);
+        let view = account_view(&account("a1"), None, 0, None);
         assert_eq!(view.requests, 0);
         assert_eq!(view.last_used_ms, None);
         assert!(view.days.is_empty());

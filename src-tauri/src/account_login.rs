@@ -346,13 +346,46 @@ fn write_extension(agent: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Where a sign-in lands. Pi's own slot holds one account per provider; the
+/// router's pool holds many, so a pool sign-in runs Pi in a directory of its
+/// own and the credential is lifted from there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Target {
+    /// Pi's `auth.json`, as one provider's single account.
+    Pi,
+    /// The router's pool, as one more account of the provider's family.
+    Pool,
+}
+
 pub(crate) fn start(app: &AppHandle, provider: &str) -> Result<(), String> {
+    start_with(app, provider, Target::Pi)
+}
+
+/// A sign-in whose credential joins the router's pool.
+pub(crate) fn start_into_pool(app: &AppHandle, provider: &str) -> Result<(), String> {
+    if muniment_core::model_router::family::family_for_pi_provider(provider).is_none() {
+        return Err("This provider has no subscription the router can pool.".into());
+    }
+    start_with(app, provider, Target::Pool)
+}
+
+fn start_with(app: &AppHandle, provider: &str, target: Target) -> Result<(), String> {
     if !ACCOUNT_PROVIDERS.contains(&provider) {
         return Err("This provider has no account sign-in.".into());
     }
     let state = app.state::<AccountLoginState>();
     state.stop();
-    let agent = crate::local_mode::harness_agent_directory(START_ERROR)?;
+    let home = crate::local_mode::harness_agent_directory(START_ERROR)?;
+    // A pool sign-in runs Pi in a directory of its own, so the credential
+    // never lands in Pi's one slot for the provider.
+    let agent = match target {
+        Target::Pi => home,
+        Target::Pool => {
+            let scratch = home.join(format!("pool-login-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir_all(&scratch).map_err(|_| START_ERROR.to_string())?;
+            scratch
+        }
+    };
     let executable = crate::local_mode::pi_executable().ok_or_else(|| START_ERROR.to_string())?;
     let extension = write_extension(&agent)?;
     // The port is held before Pi starts, so Pi's own callback server yields and
@@ -422,7 +455,29 @@ pub(crate) fn start(app: &AppHandle, provider: &str) -> Result<(), String> {
                     continue;
                 }
                 if stage == "done" {
-                    let _ = crate::local_mode::adopt_provider_default(&agent, &provider, true);
+                    match target {
+                        Target::Pi => {
+                            let _ =
+                                crate::local_mode::adopt_provider_default(&agent, &provider, true);
+                        }
+                        Target::Pool => {
+                            match crate::model_router::import_pi_sign_in(
+                                &reader_app,
+                                &agent,
+                                &provider,
+                            ) {
+                                Ok(account) => {
+                                    if let Some(object) = event.as_object_mut() {
+                                        object.insert("pool".into(), true.into());
+                                        object.insert("account".into(), account.into());
+                                    }
+                                }
+                                Err(message) => {
+                                    event = json!({ "stage": "failed", "message": message, "pool": true });
+                                }
+                            }
+                        }
+                    }
                     present_main_window(&reader_app);
                 }
                 if let Some(object) = event.as_object_mut() {
@@ -452,6 +507,11 @@ pub(crate) fn start(app: &AppHandle, provider: &str) -> Result<(), String> {
                 &reader_app,
                 json!({ "stage": "exit", "provider": provider, "answered": answered }),
             );
+        }
+        if target == Target::Pool {
+            // The scratch directory held one credential for one sign-in, and
+            // the pool holds it now.
+            let _ = std::fs::remove_dir_all(&agent);
         }
     });
     let watchdog_app = app.clone();
