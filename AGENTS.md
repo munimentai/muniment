@@ -14,7 +14,8 @@ Run these commands in order from the repository root before every push:
 1. `cargo fmt --manifest-path src-tauri/core/Cargo.toml --check`
 2. `cargo clippy --manifest-path src-tauri/core/Cargo.toml --all-targets --locked -- -D warnings`
 3. `cargo test --manifest-path src-tauri/core/Cargo.toml --locked --features network-tests`
-4. `scripts/check-steering.sh .`
+4. `npm run lint:copy`, which reads every string in `src` and `src-tauri` as UI copy
+5. `scripts/check-steering.sh .`
 
 The format check fails CI when formatting would create any diff. For other Rust crates, use `src-tauri/Cargo.toml` and each changed package name.
 
