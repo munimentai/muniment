@@ -157,6 +157,8 @@ fn main() {
             model_router::model_router_save_routes,
             model_router::model_router_set_classifier,
             model_router::model_router_test_classifier,
+            model_router::model_router_subscription_start,
+            model_router::model_router_refresh_quota,
             account_login::local_mode_account_login_start,
             account_login::local_mode_account_login_answer,
             account_login::local_mode_account_login_cancel,

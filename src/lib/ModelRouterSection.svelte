@@ -5,7 +5,8 @@
   import ProviderLogo from './ProviderLogo.svelte'
   import { catalog, matchSaved, priceLabel } from './classifier-catalog.js'
 
-  let { tauri } = $props()
+  import { onDestroy } from 'svelte'
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args) } = $props()
 
   let settings = $state(null)
   let loadError = $state('')
@@ -15,6 +16,12 @@
   let view = $state('accounts')
   // The provider filter over the account cards: `all` or one family id.
   let pool = $state('all')
+
+  // A subscription sign-in in flight: Pi's own flow, landing in the pool.
+  let signIn = $state(null)
+  let signInAnswer = $state('')
+  let unlisten = null
+  onDestroy(() => stopListening())
 
   // The add-account form.
   let family = $state('openai')
@@ -127,6 +134,112 @@
     } finally {
       pending = false
     }
+  }
+
+  function stopListening() {
+    if (unlisten) {
+      const stop = unlisten
+      unlisten = null
+      void Promise.resolve(stop).then((fn) => fn?.())
+    }
+  }
+
+  // The sign-in runs Pi's own flow into a directory of its own, and the
+  // credential joins the pool as one more account of the provider's family.
+  async function startSignIn(entry) {
+    if (pending) return
+    pending = true
+    formError = ''
+    signInAnswer = ''
+    signIn = { provider: entry.provider, label: entry.label, stage: 'start', message: 'Starting the sign-in…', url: '', code: '', prompt: null }
+    stopListening()
+    unlisten = listen('local-mode-login', ({ payload }) => onSignInEvent(payload))
+    try {
+      await tauri.invoke('model_router_subscription_start', { provider: entry.provider })
+    } catch (error) {
+      signIn = { ...signIn, stage: 'failed', message: String(error?.message ?? error) }
+      stopListening()
+    } finally {
+      pending = false
+    }
+  }
+
+  function onSignInEvent(payload) {
+    if (!signIn || (payload.provider && payload.provider !== signIn.provider && payload.stage !== 'cancelled')) return
+    switch (payload.stage) {
+      case 'event': {
+        const event = payload.event ?? {}
+        if (event.type === 'auth_url') {
+          signIn = { ...signIn, stage: 'browser', url: event.url, message: event.instructions ?? 'Continue in your browser.' }
+          void tauri.invoke('local_mode_open_url', { url: event.url }).catch(() => {})
+        } else if (event.type === 'device_code') {
+          signIn = { ...signIn, stage: 'code', url: event.verificationUri ?? event.verificationUriComplete ?? '', code: event.userCode ?? '', message: 'Enter this code on the sign-in page.' }
+        } else if (event.message) {
+          signIn = { ...signIn, message: event.message }
+        }
+        break
+      }
+      case 'prompt':
+        signIn = { ...signIn, prompt: payload }
+        break
+      case 'done': {
+        stopListening()
+        const label = signIn?.label ?? 'The'
+        signIn = null
+        status = `${label} account is in the pool. Its allowance appears after the first probe.`
+        void load()
+        // The probe that names the account runs after the sign-in, so read again.
+        setTimeout(() => { void load() }, 4000)
+        break
+      }
+      case 'failed':
+        stopListening()
+        signIn = { ...signIn, stage: 'failed', message: payload.message || 'The sign-in did not finish. Try again.', prompt: null }
+        break
+      case 'cancelled':
+        stopListening()
+        signIn = { ...signIn, stage: 'cancelled', message: 'The sign-in was cancelled.', prompt: null }
+        break
+      case 'exit':
+        if (signIn && signIn.stage !== 'failed' && signIn.stage !== 'cancelled') {
+          stopListening()
+          signIn = { ...signIn, stage: 'failed', message: 'The sign-in stopped before it finished. Try again.', prompt: null }
+        }
+        break
+      default:
+        if (payload.message) signIn = { ...signIn, message: payload.message }
+    }
+  }
+
+  async function answerSignIn(value) {
+    const prompt = signIn?.prompt
+    if (!prompt) return
+    try {
+      await tauri.invoke('local_mode_account_login_answer', { id: prompt.id, value, confirmed: null })
+      signIn = { ...signIn, prompt: null }
+      signInAnswer = ''
+    } catch (error) {
+      formError = String(error?.message ?? error)
+    }
+  }
+
+  async function cancelSignIn() {
+    try { await tauri.invoke('local_mode_account_login_cancel') } catch (_) {}
+  }
+
+  function refreshQuota(account) {
+    void run('model_router_refresh_quota', { id: account?.id ?? null }, account ? `${account.label} refreshed.` : 'Every subscription refreshed.')
+  }
+
+  function until(ms) {
+    if (!ms) return ''
+    const seconds = Math.round((ms - Date.now()) / 1000)
+    if (seconds <= 0) return 'now'
+    if (seconds < 3600) return `in ${Math.max(1, Math.round(seconds / 60))}m`
+    if (seconds < 86400) return `in ${Math.round(seconds / 3600)}h`
+    const days = Math.floor(seconds / 86400)
+    const hours = Math.round((seconds % 86400) / 3600)
+    return `in ${days}d ${hours}h`
   }
 
   function toggleRouter() {
@@ -277,9 +390,25 @@
               <li class="card" class:cooling={cooling(account)}>
                 <header>
                   <span class="card-label">{account.label}</span>
+                  {#if account.source !== 'key'}<span class="tag">not yet served</span>{/if}
                   <ProviderLogo provider={account.family} size={16} />
                 </header>
-                <p class="record tier">{account.source === 'key' ? 'API key' : 'Account'}{#if account.models.length} · {account.models.join(' · ')}{/if}</p>
+                <p class="record tier">{account.source === 'key' ? 'API key' : `Subscription${account.plan ? ` · ${account.plan}` : ''}`}{#if account.email && account.email !== account.label} · {account.email}{/if}{#if account.models.length} · {account.models.join(' · ')}{/if}</p>
+                {#if account.source !== 'key'}
+                  {#if account.windows.length === 0}
+                    <p class="record">{account.quota_observed_ms ? 'No window reported.' : 'Allowance not read yet.'}</p>
+                  {/if}
+                  {#each account.windows as window (window.label + window.scope)}
+                    <div class="window" class:reached={window.limit_reached}>
+                      <div class="window-head">
+                        <span class="record">{window.label}{#if window.scope} · {window.scope}{/if}</span>
+                        <span class="record"><strong>{Math.round(window.remaining_percent)}%</strong> left{#if window.resets_at_ms} · resets {until(window.resets_at_ms)}{/if}</span>
+                      </div>
+                      <div class="window-bar"><span style={`width: ${Math.round(window.remaining_percent)}%`}></span></div>
+                    </div>
+                  {/each}
+                  {#if account.banked_resets}<p class="record">{account.banked_resets} banked {account.banked_resets === 1 ? 'reset' : 'resets'}</p>{/if}
+                {/if}
                 {#if cooling(account)}<p class="tag warn">Rate limited · back in {Math.max(1, Math.round((account.cooldown_until_ms - Date.now()) / 1000))}s</p>{/if}
                 <div class="bars" aria-label={`${account.label} turns per day`}>
                   {#each account.days as [day, requests] (day)}
@@ -298,6 +427,7 @@
                 {#if account.last_error}<p class="record error">{account.last_error}</p>{/if}
                 <footer>
                   <button type="button" class="quiet remove" onclick={() => removeAccount(account)}>Remove</button>
+                  {#if account.source !== 'key'}<button type="button" class="quiet remove" onclick={() => refreshQuota(account)}>Refresh allowance</button>{/if}
                   <button type="button" role="switch" class="switch" aria-checked={account.enabled} aria-label={`Use ${account.label}`} onclick={() => setEnabled(account, !account.enabled)}><span></span></button>
                 </footer>
               </li>
@@ -306,8 +436,45 @@
         </ul>
       {/if}
 
-      <section class="pool add" aria-label="Add an account">
-        <h5 class="group-label">Add an account</h5>
+      <section class="pool add" aria-label="Add a subscription">
+        <h5 class="group-label">Add a subscription</h5>
+        <p class="support">Sign in with a plan you already pay for. The browser opens, the token stays on this device, and the account joins the pool under its email.</p>
+        {#if !signIn}
+          <div class="sign-ins">
+            {#each settings.subscriptions as entry (entry.provider)}
+              <button type="button" class="sign-in" disabled={pending} onclick={() => startSignIn(entry)}><ProviderLogo provider={entry.family} size={16} />{entry.label}</button>
+            {/each}
+            {#if settings.accounts.some((account) => account.source !== 'key')}<button type="button" class="quiet" disabled={pending} onclick={() => refreshQuota(null)}>Refresh every allowance</button>{/if}
+          </div>
+        {:else}
+          <div class="login" aria-live="polite">
+            <p class="support">{signIn.message}</p>
+            {#if signIn.code}<p class="login-code">{signIn.code}</p>{/if}
+            {#if signIn.url}
+              <button type="button" onclick={() => tauri.invoke('local_mode_open_url', { url: signIn.url }).catch(() => {})}>Open the sign-in page</button>
+              <p class="record login-url">{signIn.url}</p>
+            {/if}
+            {#if signIn.prompt?.kind === 'select'}
+              <p class="support">{signIn.prompt.title}</p>
+              <div class="login-options">
+                {#each signIn.prompt.options as option}<button type="button" onclick={() => answerSignIn(option)}>{option}</button>{/each}
+              </div>
+            {:else if signIn.prompt?.kind === 'input'}
+              <label for="pool-sign-in-answer">{signIn.prompt.title}</label>
+              <input id="pool-sign-in-answer" type="text" placeholder={signIn.prompt.placeholder ?? ''} bind:value={signInAnswer}>
+              <button type="button" disabled={!signInAnswer.trim()} onclick={() => answerSignIn(signInAnswer.trim())}>Continue</button>
+            {/if}
+            {#if signIn.stage === 'failed' || signIn.stage === 'cancelled'}
+              <button type="button" onclick={() => { signIn = null }}>Back</button>
+            {:else}
+              <button type="button" class="quiet" onclick={cancelSignIn}>Cancel</button>
+            {/if}
+          </div>
+        {/if}
+      </section>
+
+      <section class="pool add" aria-label="Add an API key">
+        <h5 class="group-label">Add an API key</h5>
         <label for="router-family">Provider</label>
         <select id="router-family" bind:value={family} disabled={pending}>
           {#each families as entry (entry.id)}<option value={entry.id}>{entry.name}</option>{/each}
@@ -321,7 +488,7 @@
         <label for="router-models">Models this account serves, one per line (optional)</label>
         <textarea id="router-models" rows="2" bind:value={accountModels} disabled={pending}></textarea>
         <p class="support">Leave the model list empty and the account serves every model of its provider.</p>
-        <button type="button" disabled={pending || !label.trim() || !key.trim()} onclick={addAccount}>Add account</button>
+        <button type="button" disabled={pending || !label.trim() || !key.trim()} onclick={addAccount}>Add key</button>
       </section>
 
     {:else if view === 'routes'}
@@ -458,6 +625,20 @@
   .card header { display: flex; align-items: center; gap: 8px; }
   .card-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-13); }
   .tier { margin: 0; }
+  /* One bar per metered window: the filled part is what is left, so a full
+     bar is a fresh window and an empty one is a spent one. */
+  .window { display: grid; gap: 3px; }
+  .window-head { display: flex; justify-content: space-between; gap: 8px; }
+  .window-head strong { color: var(--ink); font-weight: 600; }
+  .window-bar { height: 4px; border-radius: 2px; background: var(--faint); }
+  .window-bar span { display: block; height: 100%; border-radius: 2px; background: var(--signal); }
+  .window.reached .window-bar span { background: var(--muted); }
+  .sign-ins { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sign-in { display: inline-flex; align-items: center; gap: 8px; min-height: 30px; padding: 5px 12px; }
+  .login { display: grid; gap: 8px; justify-items: start; }
+  .login-code { margin: 0; font: var(--text-22) var(--font-mono); letter-spacing: .08em; }
+  .login-url { max-width: 100%; overflow-wrap: anywhere; }
+  .login-options { display: flex; flex-wrap: wrap; gap: 6px; }
   .card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 2px; }
   .figures { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin: 0; }
   .figures div { display: grid; gap: 1px; }
