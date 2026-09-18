@@ -4,6 +4,7 @@
   import LucideIcon from './LucideIcon.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import { catalog, matchSaved, priceLabel } from './classifier-catalog.js'
+  import { connectedFamilies, familyModels, routeReady, suggestRoutes, suggestedFallback } from './route-catalog.js'
 
   let { tauri } = $props()
 
@@ -63,6 +64,7 @@
   const shown = $derived(pool === 'all' ? pools : pools.filter((entry) => entry.id === pool))
   const busiestPool = $derived(Math.max(1, ...pools.map((entry) => entry.requests)))
   const rows = $derived(catalog(settings?.accounts ?? []))
+  const connected = $derived(connectedFamilies(settings?.accounts ?? []))
   const busiest = $derived(Math.max(1, ...(settings?.accounts ?? []).flatMap((account) => account.days.map((day) => day[1]))))
 
   $effect(() => { void load() })
@@ -150,7 +152,27 @@
   }
 
   function addRoute() {
-    routes = [...routes, { key: '', description: '', family: families[0]?.id ?? 'openai', model: '' }]
+    const first = connected[0] ?? families[0]?.id ?? 'openai'
+    routes = [...routes, { key: '', description: '', family: first, model: familyModels(first)[0]?.model ?? '' }]
+  }
+
+  // The routes the pools as they stand can serve. It replaces the table, and
+  // saving is still its own step, so nothing is lost without a click.
+  function suggest() {
+    const next = suggestRoutes(settings?.accounts ?? [])
+    if (next.length === 0) return
+    routes = next
+    fallback = suggestedFallback(next)
+    status = 'Routes suggested from your pools. Save them to keep them.'
+  }
+
+  // Changing a route's provider moves its model to that provider's own.
+  function setRouteFamily(route, family) {
+    route.family = family
+    if (!familyModels(family).some((entry) => entry.model === route.model)) {
+      route.model = familyModels(family)[0]?.model ?? ''
+    }
+    routes = [...routes]
   }
 
   function removeRoute(index) {
@@ -312,21 +334,33 @@
       </section>
 
     {:else if view === 'routes'}
-      <p class="support">A route is a model with a description. The classifier reads the descriptions and picks one per turn. With no classifier every turn takes the fallback.</p>
+      <p class="support">A route is a model with a description. The classifier reads the descriptions and picks one per turn, so it only ever picks a model your pools already serve. With no classifier every turn takes the fallback.</p>
+      {#if connected.length === 0}
+        <p class="support empty">No provider is connected, so there is nothing to route between. Add an account first.</p>
+      {/if}
       <ul class="route-list">
         {#each routes as route, index (index)}
-          <li class="route">
+          {@const ready = routeReady(route, settings?.accounts ?? [])}
+          {@const known = familyModels(route.family)}
+          <li class="route" class:unserved={!ready}>
             <input type="text" class="route-key" placeholder="fast" aria-label="Route name" bind:value={route.key}>
-            <select aria-label="Route provider" bind:value={route.family}>
-              {#each families as entry (entry.id)}<option value={entry.id}>{entry.name}</option>{/each}
+            <select aria-label="Route provider" value={route.family} onchange={(event) => setRouteFamily(route, event.currentTarget.value)}>
+              {#each families as entry (entry.id)}<option value={entry.id}>{entry.name}{connected.includes(entry.id) ? '' : ' — no account'}</option>{/each}
             </select>
-            <input type="text" class="route-model" placeholder="gpt-5.6-mini" aria-label="Route model" bind:value={route.model}>
-            <input type="text" class="route-why" placeholder="A short question" aria-label="What this route is for" bind:value={route.description}>
+            <input type="text" class="route-model" list={`models-${route.family}`} placeholder="gpt-6-astra" aria-label="Route model" bind:value={route.model}>
+            <datalist id={`models-${route.family}`}>
+              {#each known as entry (entry.model)}<option value={entry.model}>{entry.name} · {priceLabel(entry.price)} · {entry.context}</option>{/each}
+            </datalist>
+            <input type="text" class="route-why" placeholder="A short question: a lookup, a one-line edit" aria-label="What this route is for" bind:value={route.description}>
+            {#if !ready}<span class="tag warn">no account</span>{/if}
             <button type="button" class="quiet remove" aria-label={`Remove ${route.key || 'route'}`} onclick={() => removeRoute(index)}><LucideIcon name="x" variant="action" size={14} /></button>
           </li>
         {/each}
       </ul>
-      <button type="button" class="quiet add-route" onclick={addRoute}><LucideIcon name="plus" variant="action" size={14} />Add route</button>
+      <div class="route-actions">
+        <button type="button" class="quiet add-route" onclick={addRoute}><LucideIcon name="plus" variant="action" size={14} />Add route</button>
+        <button type="button" class="quiet add-route" disabled={connected.length === 0} onclick={suggest}>Suggest from your pools</button>
+      </div>
       <label for="router-fallback">Fallback route</label>
       <select id="router-fallback" bind:value={fallback}>
         <option value="">The first route</option>
@@ -443,7 +477,9 @@
   .route-key { width: 96px; }
   .route-model { width: 168px; }
   .route-why { flex: 1; min-width: 160px; }
-  .add-route { display: inline-flex; align-items: center; gap: 6px; justify-self: start; min-height: 28px; padding: 4px 10px; }
+  .route.unserved .route-key { color: var(--muted); }
+  .route-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .add-route { display: inline-flex; align-items: center; gap: 6px; justify-self: start; min-height: 28px; padding: 4px 10px; border: 1px solid var(--border); }
   .catalog { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .catalog-row { display: flex; width: 100%; align-items: center; gap: 10px; min-height: 34px; padding: 6px 8px; text-align: left; font-size: var(--text-13); }
   .catalog-row[aria-pressed="true"] { background: var(--faint); box-shadow: inset 2px 0 0 var(--signal); }

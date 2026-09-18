@@ -131,6 +131,45 @@ first-class provider beside the hosted ones, never a fallback. The custom
 endpoint form takes a name, a base URL, an optional key and a model list. The
 chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
 
+**Settings → Models → Router.** Pi's `auth.json` holds one credential per
+provider id, so a second account of one provider cannot live there. The router
+holds those pools itself in `muniment-router.json` beside it at the same
+`0600`, answers the OpenAI chat wire on `127.0.0.1` behind a random token, and
+registers as the one Pi provider `muniment-router`. It is off by default, and
+off removes that entry and nothing else. The families it pools are OpenAI,
+Anthropic, Google, xAI and Kimi, each reached on its OpenAI-compatible route,
+and an account may name a base URL of its own for a gateway or a region.
+
+**The router balances, and a refusal moves the turn.** Among the accounts of a
+family that serve the model and are not cooling, the one whose served share
+sits furthest below its weight takes the next turn. A `401`, `402`, `403`,
+`429` or `5xx` is the account refused, not the request: it cools from fifteen
+seconds doubling to fifteen minutes and the next account takes the turn, three
+accounts at most. Every other status is the request, and it comes straight back
+without spending a second account. The ledger in `muniment-router-usage.json`
+counts turns, tokens and failures per account for thirty days, names the last
+refusal, and carries no prompt and no reply. Settings shows a summary per
+provider, the turns each account has in flight, and that thirty-day bar.
+
+**Routing is optional and the classifier is the user's own.** The router serves
+`auto`, each route by name, and each `family/model` pair, so the model chip
+pins a route or hands the turn to the classifier. A route is a model with a
+description in the user's words, and its family must hold an account. With no
+classifier every turn takes the fallback route and the pool is still balanced.
+With one, the turn's last user message goes out as one choice question over the
+route descriptions, and the answer names the route. A confidence under the
+floor takes the fallback, so a guess never picks the expensive model. The
+floor is `0.6`. A classifier is a network call to a service the user names, the
+screen says so, and its key is write-only: nothing reads one back.
+
+**The classifier catalog is models that classify.** TypeSafe's jev answers a
+typed choice with a probability over every route. A small model on an account
+the pools already hold answers the same choice as one JSON object, and it
+spends that account, which the ledger counts. Any endpoint that answers the
+same question shape stands beside them. A running classifier puts the router
+first in the model chip's picker, named by the model that picks.
+
+
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one control
 to change it. A configured Home keeps its path. The four folders are created on
 the first Send. When one Obsidian vault holds most of the files the scan found,

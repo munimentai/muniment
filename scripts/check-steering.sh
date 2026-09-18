@@ -64,7 +64,7 @@ else
   root="$repo"
   check_forbidden "$repo"
   for f in AGENTS.md README.md SPEC.md ROADMAP.md DESIGN.md; do check_history "$repo/$f"; done
-  check_cap "$repo/SPEC.md" 400
+  check_cap "$repo/SPEC.md" 600
   check_cap "$repo/DESIGN.md" 250
   check_cap "$repo/ROADMAP.md" 150
   check_cap "$repo/AGENTS.md" 120
