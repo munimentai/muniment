@@ -10,11 +10,18 @@ import (
 	"os"
 
 	"muniment.ai/reader/airtable"
+	"muniment.ai/reader/apollo"
+	"muniment.ai/reader/calendly"
 	"muniment.ai/reader/contract"
+	"muniment.ai/reader/dynamics"
 	"muniment.ai/reader/freshbooks"
 	"muniment.ai/reader/freshdesk"
+	"muniment.ai/reader/gong"
 	"muniment.ai/reader/hubspot"
 	"muniment.ai/reader/intercom"
+	"muniment.ai/reader/kit"
+	"muniment.ai/reader/mailchimp"
+	"muniment.ai/reader/marketo"
 	"muniment.ai/reader/notion"
 	"muniment.ai/reader/outreach"
 	"muniment.ai/reader/paypal"
@@ -27,8 +34,10 @@ import (
 	"muniment.ai/reader/square"
 	"muniment.ai/reader/stripe"
 	"muniment.ai/reader/wave"
+	"muniment.ai/reader/xero"
 	"muniment.ai/reader/zendesk"
 	"muniment.ai/reader/zoho"
+	"muniment.ai/reader/zoominfo"
 )
 
 // secretVariable carries the source's credential from the runtime.
@@ -150,6 +159,60 @@ func openSource(name string) (Source, *contract.Failure) {
 			return nil, fail("not_connected", "Connect Wave with its full access token and business id first.")
 		}
 		return wave.New(secret, os.Getenv("MUNIMENT_WAVE_BASE_URL")), nil
+	case "apollo":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Apollo with its API key first.")
+		}
+		return apollo.New(secret, os.Getenv("MUNIMENT_APOLLO_BASE_URL")), nil
+	case "gong":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Gong with its access key, access key secret and API domain first.")
+		}
+		return gong.New(secret, os.Getenv("MUNIMENT_GONG_BASE_URL")), nil
+	case "zoominfo":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect ZoomInfo with its username and password first.")
+		}
+		return zoominfo.New(secret, os.Getenv("MUNIMENT_ZOOMINFO_BASE_URL")), nil
+	case "calendly":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Calendly with its personal access token first.")
+		}
+		return calendly.New(secret, os.Getenv("MUNIMENT_CALENDLY_BASE_URL")), nil
+	case "mailchimp":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Mailchimp with its API key first.")
+		}
+		return mailchimp.New(secret, os.Getenv("MUNIMENT_MAILCHIMP_BASE_URL")), nil
+	case "kit":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Kit with its API key first.")
+		}
+		return kit.New(secret, os.Getenv("MUNIMENT_KIT_BASE_URL")), nil
+	case "xero":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Xero with its client id, client secret, refresh token and tenant id first.")
+		}
+		return xero.New(secret, os.Getenv("MUNIMENT_XERO_BASE_URL")), nil
+	case "dynamics":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Dynamics 365 with its tenant id, client id, client secret and environment URL first.")
+		}
+		return dynamics.New(secret, os.Getenv("MUNIMENT_DYNAMICS_BASE_URL")), nil
+	case "marketo":
+		secret := os.Getenv(secretVariable)
+		if secret == "" {
+			return nil, fail("not_connected", "Connect Marketo with its client id, client secret and Munchkin id first.")
+		}
+		return marketo.New(secret, os.Getenv("MUNIMENT_MARKETO_BASE_URL")), nil
 	default:
 		return nil, fail("unknown_source", "No reader reads %s.", name)
 	}

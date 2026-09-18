@@ -755,6 +755,20 @@ pub(crate) fn import_pi_sign_in<R: tauri::Runtime>(
         .ok_or_else(|| "The sign-in finished without a credential. Try again.".to_string())?;
     let credential = Credential::from_pi_auth(provider, entry)
         .ok_or_else(|| "The sign-in left a credential the router cannot hold.".to_string())?;
+    import_credential(app, provider, credential, None)
+}
+
+/// Adds one subscription credential to its family's pool, named by its email
+/// or the name the sign-in learned, else by its place in the pool, and probes
+/// what it has left. Answers with the account id.
+pub(crate) fn import_credential<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    provider: &str,
+    credential: Credential,
+    name: Option<String>,
+) -> Result<String, String> {
+    let family = family_for_pi_provider(provider)
+        .ok_or_else(|| "This provider has no subscription the router can pool.".to_string())?;
     let agent = agent()?;
     let mut config = load(&agent)?;
     let count = config.pool(family.id).len() + 1;
@@ -765,6 +779,7 @@ pub(crate) fn import_pi_sign_in<R: tauri::Runtime>(
         label: credential
             .clone()
             .into_email()
+            .or(name)
             .unwrap_or_else(|| format!("{} account {count}", family.name)),
         credential,
         base_url: None,
@@ -793,7 +808,18 @@ pub(crate) fn refresh_quota(agent: &Path, id: &str) -> Result<bool, String> {
         return Err("That account is gone.".into());
     };
     let now = chrono::Utc::now().timestamp_millis();
+    // A token inside a minute of dying is refreshed first, so the probe and
+    // the turns that follow run on a live one.
+    if let Some(refreshed) = muniment_core::model_router::native_auth::refresh_if_expiring(
+        &account.credential,
+        now,
+        quota::TIMEOUT,
+    ) {
+        account.credential = refreshed?;
+    }
     let Some(probed) = quota::probe(account, now, quota::TIMEOUT) else {
+        // The refresh alone is worth keeping.
+        save(agent, &config)?;
         return Ok(false);
     };
     // What the upstream said about the account itself outlives the probe: the

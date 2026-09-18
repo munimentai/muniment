@@ -113,10 +113,21 @@ pub(crate) struct ProviderInventory {
     /// The classifier model that picks a route per turn, when the router runs
     /// one. The composer's picker puts the router first and names it.
     router_classifier: Option<String>,
-    /// How many accounts stand behind each router model, keyed by the model
-    /// id the router serves. The picker marks a model two or more accounts
-    /// serve, because picking it balances across them.
-    router_accounts: std::collections::BTreeMap<String, u32>,
+    /// Every model the router serves, with the family and model it stands for
+    /// and how many accounts stand behind it. The picker lists each under its
+    /// provider once and marks the ones two or more accounts serve, because
+    /// picking one of those balances across them.
+    router_models: Vec<RouterModel>,
+}
+
+/// One model the router serves, as the picker places it under its provider.
+#[derive(Debug, Serialize, PartialEq)]
+pub(crate) struct RouterModel {
+    /// The id the router serves it as: `family/model`, or the user's name.
+    id: String,
+    family: String,
+    model: String,
+    accounts: u32,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -747,36 +758,43 @@ fn provider_inventory(
             .map(str::to_owned),
         hidden: record_strings(&record, "hidden"),
         router_classifier: router_classifier(agent),
-        router_accounts: router_accounts(agent),
+        router_models: router_models(agent),
     })
 }
 
-/// The accounts behind each model the router serves: every enabled account of
-/// the model's family that can take a turn on it. Empty while the router is off.
-fn router_accounts(agent: &Path) -> std::collections::BTreeMap<String, u32> {
+/// The models the router serves and the accounts behind each: every enabled
+/// account of the model's family that can take a turn on it. Empty while the
+/// router is off.
+fn router_models(agent: &Path) -> Vec<RouterModel> {
     use muniment_core::model_router::options;
-    let mut counts = std::collections::BTreeMap::new();
     let Ok(config) = muniment_core::model_router::config::load(agent) else {
-        return counts;
+        return Vec::new();
     };
     if !config.enabled {
-        return counts;
+        return Vec::new();
     }
-    for option in options(&config) {
-        let behind = config
-            .accounts
-            .iter()
-            .filter(|account| {
-                account.enabled
-                    && account.weight > 0
-                    && account.credential.servable()
-                    && account.family == option.family
-                    && account.serves(&option.model)
-            })
-            .count() as u32;
-        counts.insert(option.key, behind);
-    }
-    counts
+    options(&config)
+        .into_iter()
+        .map(|option| {
+            let accounts = config
+                .accounts
+                .iter()
+                .filter(|account| {
+                    account.enabled
+                        && account.weight > 0
+                        && account.credential.servable()
+                        && account.family == option.family
+                        && account.serves(&option.model)
+                })
+                .count() as u32;
+            RouterModel {
+                id: option.key,
+                family: option.family,
+                model: option.model,
+                accounts,
+            }
+        })
+        .collect()
 }
 
 /// The classifier the router picks routes with, when it is on and ready. A

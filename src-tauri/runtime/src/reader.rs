@@ -156,7 +156,7 @@ pub trait Reader {
 /// The one source name a file reader answers to.
 pub const CSV_SOURCE: &str = "csv";
 /// The network sources the Go sidecar reads, each behind its own secret.
-pub const SIDECAR_SOURCES: [&str; 19] = [
+pub const SIDECAR_SOURCES: [&str; 28] = [
     "stripe",
     "hubspot",
     "pipedrive",
@@ -176,6 +176,15 @@ pub const SIDECAR_SOURCES: [&str; 19] = [
     "freshbooks",
     "quickbooks",
     "wave",
+    "apollo",
+    "gong",
+    "zoominfo",
+    "calendly",
+    "mailchimp",
+    "kit",
+    "xero",
+    "dynamics",
+    "marketo",
 ];
 
 /// Opens the reader for a source. `object` is the file path for a file
@@ -223,6 +232,8 @@ pub fn source_label(source: &str) -> String {
         "paypal" => return "PayPal".to_owned(),
         "quickbooks" => return "QuickBooks".to_owned(),
         "freshbooks" => return "FreshBooks".to_owned(),
+        "zoominfo" => return "ZoomInfo".to_owned(),
+        "dynamics" => return "Dynamics 365".to_owned(),
         _ => {}
     }
     let mut chars = source.chars();
@@ -240,11 +251,15 @@ pub fn secret_label(source: &str) -> &'static str {
         "pipedrive" | "zendesk" => "API token",
         "salesforce" => "connected app",
         "intercom" | "square" => "access token",
-        "freshdesk" | "salesloft" => "API key",
+        "freshdesk" | "salesloft" | "apollo" | "mailchimp" | "kit" => "API key",
+        "gong" => "access key",
+        "zoominfo" => "username and password",
         "zoho" => "self client",
-        "outreach" | "paypal" | "freshbooks" | "quickbooks" => "app credentials",
+        "outreach" | "paypal" | "freshbooks" | "quickbooks" | "xero" => "app credentials",
+        "dynamics" => "app registration",
+        "marketo" => "custom service credentials",
         "notion" => "internal integration token",
-        "airtable" => "personal access token",
+        "airtable" | "calendly" => "personal access token",
         "sheets" => "service account key",
         "shopify" => "Admin API access token",
         "wave" => "full access token",

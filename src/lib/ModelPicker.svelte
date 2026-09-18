@@ -36,9 +36,9 @@
         <h4>{group.name} <span class="tag">{sourceTag(group.source)}</span></h4>
         <ul>
           {#each group.models as model (model.id)}
-            {@const inUse = current?.provider === group.id && current?.model === model.id}
+            {@const inUse = current?.provider === model.provider && current?.model === model.choice}
             <li>
-              <button type="button" class="quiet picker-row" aria-pressed={inUse} onclick={() => onchoose(group.id, model.id)}>
+              <button type="button" class="quiet picker-row" aria-pressed={inUse} onclick={() => onchoose(model.provider, model.choice)}>
                 <span class="model-id" class:classifier={model.id === 'auto' && group.classifier}>{model.label ?? model.id}</span>
                 {#if model.accounts > 1}<span class="balanced" aria-label={`Balanced across ${model.accounts} accounts`}><LucideIcon name="refresh-ccw-dot" variant="action" size={14} /><span class="tag">{model.accounts}</span></span>{/if}
                 {#if inUse}<LucideIcon name="check" variant="action" size={14} />{/if}
@@ -63,7 +63,7 @@
   .picker-list { flex: 1; min-height: 0; padding: 6px; overflow-y: auto; }
   .picker-group h4 { display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .tag { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .classifier { color: var(--signal); }
+  .classifier { color: var(--ink); font-weight: 600; }
   .balanced { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--muted); }
   .picker-group ul { margin: 0; padding: 0; list-style: none; }
   .picker-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 5px 8px; text-align: left; font-size: var(--text-13); }

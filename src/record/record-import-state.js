@@ -165,6 +165,36 @@ export function sourceOptions() {
       { name: 'access_token', label: 'Full access token', secret: true },
       { name: 'business_id', label: 'Business id', secret: false },
     ] },
+    { value: 'apollo', label: 'Apollo', note: 'contacts, accounts', secret: 'API key', credentials: token('API key') },
+    { value: 'gong', label: 'Gong', note: 'users, calls', secret: 'access key', credentials: [
+      { name: 'access_key', label: 'Access key', secret: false },
+      { name: 'access_key_secret', label: 'Access key secret', secret: true },
+      { name: 'api_domain', label: 'API domain, https://us-12345.api.gong.io', secret: false },
+    ] },
+    { value: 'zoominfo', label: 'ZoomInfo', note: 'contacts, companies', secret: 'username and password', credentials: [
+      { name: 'username', label: 'Username', secret: false },
+      { name: 'password', label: 'Password', secret: true },
+    ] },
+    { value: 'calendly', label: 'Calendly', note: 'event types, scheduled events, invitees', secret: 'personal access token', credentials: token('Personal access token') },
+    { value: 'mailchimp', label: 'Mailchimp', note: 'each audience, campaigns', secret: 'API key', credentials: token('API key') },
+    { value: 'kit', label: 'Kit', note: 'subscribers, tags, forms, sequences', secret: 'API key', credentials: token('API key') },
+    { value: 'xero', label: 'Xero', note: 'contacts, invoices, payments', secret: 'app credentials', credentials: [
+      { name: 'client_id', label: 'Client id', secret: true },
+      { name: 'client_secret', label: 'Client secret', secret: true },
+      { name: 'refresh_token', label: 'Refresh token', secret: true },
+      { name: 'tenant_id', label: 'Tenant id, the connection id of the organisation', secret: false },
+    ] },
+    { value: 'dynamics', label: 'Dynamics 365', note: 'accounts, contacts, leads, opportunities', secret: 'app registration', credentials: [
+      { name: 'tenant_id', label: 'Tenant id, the directory id', secret: false },
+      { name: 'client_id', label: 'Client id, the application id', secret: true },
+      { name: 'client_secret', label: 'Client secret', secret: true },
+      { name: 'org_url', label: 'Environment URL, https://acme.crm.dynamics.com', secret: false },
+    ] },
+    { value: 'marketo', label: 'Marketo', note: 'leads, companies, programs', secret: 'custom service credentials', credentials: [
+      { name: 'client_id', label: 'Client id', secret: true },
+      { name: 'client_secret', label: 'Client secret', secret: true },
+      { name: 'munchkin_id', label: 'Munchkin id, the 123-ABC-456 in 123-ABC-456.mktorest.com', secret: false },
+    ] },
   ]
 }
 
@@ -335,6 +365,7 @@ export function suggestKind(source, object) {
   if (/contact|person|people|user|lead|prospect|subscriber|invitee/.test(name)) return 'person'
   if (/compan|organi|account|customer|client/.test(name)) return 'org'
   if (/deal|opportunit/.test(name)) return 'deal'
+  if (/program|campaign|sequence|cadence/.test(name)) return null
   if (/ticket|case|conversation/.test(name)) return 'ticket'
   if (/invoice/.test(name)) return 'invoice'
   if (/subscription/.test(name)) return 'subscription'
