@@ -116,8 +116,8 @@ under its provider, a key or a subscription, with its allowance and usage on
 the card. The provider's models list once, never per account, and Routing
 sits at the foot. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the desktop owns
-and lands in the same file, and a local or custom endpoint goes into Pi's
-`models.json`, so Pi uses each at once and nothing leaves the machine except
+and lands in the same file, or in the router's pool when the router pools
+its family, and a local or custom endpoint goes into Pi's `models.json`, so Pi uses each at once and nothing leaves the machine except
 to that provider. The catalog is Pi's built-in provider table. The section
 lists connected providers, each with its source tag, `Key`, `Account`,
 `Local`, `Custom` or `Claude Code`, its models from `pi --list-models` with a
@@ -127,7 +127,9 @@ Connect provider searches the rest. A provider opens on one view with its first
 method, an account where Pi signs in, Claude Code for Anthropic through
 `pi-claude-bridge`, an API key, or a server URL, with its other methods one
 switch away. The OpenAI redirect lands on the desktop's own page on port
-1455, in muniment's mark and voice, and the desktop hands Pi the code. A
+1455, held on both loopback addresses, in muniment's mark and voice, and the
+desktop hands Pi the code. A port another program holds stops the sign-in
+with its number. A
 connect adopts the provider's largest-context model that answers a probe as
 the default, and an account sign-in brings the app to the front. A local server is a
 first-class provider beside the hosted ones, never a fallback. The custom
@@ -138,8 +140,9 @@ chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
 provider id, so a second account of one provider cannot live there. The router
 holds those pools itself in `muniment-router.json` beside it at the same
 `0600`, answers the OpenAI chat wire on `127.0.0.1` behind a random token, and
-registers as the one Pi provider `muniment-router`. It is off by default, and
-off removes that entry and nothing else. The families it pools are OpenAI,
+registers as the one Pi provider `muniment-router`. It is off by default, a
+subscription that joins a pool turns it on, and off removes that entry and
+nothing else. The families it pools are OpenAI,
 Anthropic, Google, xAI, Kimi and Devin. A key reaches its family on the
 OpenAI-compatible route, an account may name a base URL of its own for a
 gateway or a region, and Devin is a subscription alone.
@@ -151,12 +154,14 @@ the family, named by its email. Kimi, Antigravity and Devin have no Pi
 sign-in, so the router runs its own: Kimi by device code at `auth.kimi.com`,
 Antigravity and Devin through the browser, each landing on a loopback page in
 muniment's mark. Antigravity is a Google account and pools into Google. A
-Kimi or Google token refreshes before it dies. The router asks the upstream
+Kimi, Google or xAI token refreshes before it dies, ahead of the turn that
+would find it dead. The router asks the upstream
 what the account has left: Codex at `chatgpt.com/backend-api/wham/usage`,
 Anthropic at `api.anthropic.com/api/oauth/usage`, Kimi at
 `api.kimi.com/coding/v1/usages`, Antigravity at
 `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`, and Devin
-at its seat service's `GetUserStatus`. A window is known by its length in
+at its seat service's `GetUserStatus`. xAI has no such route, and its card
+says what the router cannot read. A window is known by its length in
 seconds, never by its slot, because a Pro plan's primary window is the weekly
 one. The card shows what is left, not what is used, with the reset, the plan,
 and Codex's banked resets. The store in `muniment-router-quota.json` carries

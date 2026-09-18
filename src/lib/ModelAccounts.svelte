@@ -192,7 +192,9 @@
           </header>
           <p class="record tier">{account.source === 'key' ? (account.base_url ?? familyRow?.base_url ?? '') : `${account.plan ?? 'plan not read yet'}`}{#if account.email && account.email !== account.label} · {account.email}{/if}{#if account.models.length} · {account.models.join(' · ')}{/if}</p>
           {#if account.source !== 'key'}
-            {#if account.windows.length === 0}
+            {#if !account.allowance_readable}
+              <p class="record">Muniment cannot read what this account has left.</p>
+            {:else if account.windows.length === 0}
               <p class="record">{account.quota_observed_ms ? 'No window reported.' : 'Allowance not read yet.'}</p>
             {/if}
             {#each account.windows as window (window.label + window.scope)}
@@ -224,7 +226,7 @@
           {#if account.last_error}<p class="record error">{account.last_error}</p>{/if}
           <footer>
             <button type="button" class="quiet small" onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is removed.`)}>Remove</button>
-            {#if account.source !== 'key'}<button type="button" class="quiet small" onclick={() => refreshQuota(account)}>Refresh allowance</button>{/if}
+            {#if account.source !== 'key' && account.allowance_readable}<button type="button" class="quiet small" onclick={() => refreshQuota(account)}>Refresh allowance</button>{/if}
             <button type="button" role="switch" class="switch" aria-checked={account.enabled} aria-label={`Use ${account.label}`} onclick={() => run('model_router_update_account', { id: account.id, enabled: !account.enabled })}><span></span></button>
           </footer>
         </li>

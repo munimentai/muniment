@@ -297,6 +297,12 @@
         break
       case 'done':
         stopListening()
+        if (payload.pool) {
+          // The account joined the router's pool. The probe that names it runs
+          // after the sign-in, so the cards read now and once more after it.
+          void loadRouter()
+          setTimeout(() => { void loadRouter() }, 4000)
+        }
         void finishConnect(`${provider?.name ?? 'The provider'} account is connected.`)
         break
       case 'failed':

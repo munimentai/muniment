@@ -3,11 +3,12 @@
 //! and every step reaches the shell as a `local-mode-login` event.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -38,6 +39,8 @@ struct ActiveLogin {
     stdin: ChildStdin,
     generation: u64,
     callback: Option<Arc<Callback>>,
+    /// The callback servers, one per loopback address the port is held on.
+    servers: Vec<JoinHandle<()>>,
 }
 
 /// The redirect the desktop's callback page received and the paste prompt Pi
@@ -263,14 +266,54 @@ pub(crate) struct AccountLoginState {
 
 impl AccountLoginState {
     fn stop(&self) {
-        if let Some(mut login) = self.active.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            if let Some(callback) = &login.callback {
-                callback.stop.store(true, Ordering::SeqCst);
-            }
-            let _ = login.child.kill();
-            let _ = login.child.wait();
+        let login = self.active.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(login) = login {
+            close(login);
         }
     }
+}
+
+/// Ends one sign-in: the callback servers stop, Pi exits, and the listeners
+/// close with their threads, so the next sign-in binds the port at once. It
+/// runs outside the state lock, because a server mid-redirect takes that lock.
+fn close(mut login: ActiveLogin) {
+    if let Some(callback) = &login.callback {
+        callback.stop.store(true, Ordering::SeqCst);
+    }
+    let _ = login.child.kill();
+    let _ = login.child.wait();
+    for server in login.servers.drain(..) {
+        let _ = server.join();
+    }
+}
+
+/// Holds the callback port on both loopback addresses, so the browser's
+/// `localhost` redirect lands here whichever one it resolves first. A wildcard
+/// listener of another program yields to the specific bind, a program on the
+/// loopback itself is named, and a host without an IPv6 loopback keeps the
+/// IPv4 one alone.
+fn bind_callback(port: u16) -> Result<Vec<TcpListener>, String> {
+    let mut listeners = Vec::new();
+    for address in [
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+    ] {
+        match TcpListener::bind((address, port)) {
+            Ok(listener) => listeners.push(listener),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                return Err(port_error(port));
+            }
+            Err(_) => {}
+        }
+    }
+    if listeners.is_empty() {
+        return Err(port_error(port));
+    }
+    Ok(listeners)
+}
+
+fn port_error(port: u16) -> String {
+    format!("Port {port} is in use by another program. Stop it and try again, or use an API key.")
 }
 
 fn emit(app: &AppHandle, payload: Value) {
@@ -358,7 +401,18 @@ pub(crate) enum Target {
 }
 
 pub(crate) fn start(app: &AppHandle, provider: &str) -> Result<(), String> {
-    start_with(app, provider, Target::Pi)
+    start_with(app, provider, target_for(provider))
+}
+
+/// Where the Connect list's sign-in lands: the pool for a family the router
+/// pools, so the account gets its card with what it has served, and Pi's own
+/// slot for a provider the router does not pool.
+fn target_for(provider: &str) -> Target {
+    if muniment_core::model_router::family::family_for_pi_provider(provider).is_some() {
+        Target::Pool
+    } else {
+        Target::Pi
+    }
 }
 
 /// A sign-in whose credential joins the router's pool.
@@ -394,11 +448,15 @@ fn start_with(app: &AppHandle, provider: &str, target: Target) -> Result<(), Str
     let executable = crate::local_mode::pi_executable().ok_or_else(|| START_ERROR.to_string())?;
     let extension = write_extension(&agent)?;
     // The port is held before Pi starts, so Pi's own callback server yields and
-    // its paste prompt carries the redirect the desktop's page received.
-    let listener = (provider == CALLBACK_PROVIDER)
-        .then(|| TcpListener::bind(("127.0.0.1", CALLBACK_PORT)).ok())
-        .flatten();
-    let callback = listener.as_ref().map(|_| Arc::new(Callback::default()));
+    // its paste prompt carries the redirect the desktop's page received. A
+    // port another program holds stops the sign-in here with its number, never
+    // with a wait on a redirect that lands elsewhere.
+    let listeners = if provider == CALLBACK_PROVIDER {
+        bind_callback(CALLBACK_PORT)?
+    } else {
+        Vec::new()
+    };
+    let callback = (!listeners.is_empty()).then(|| Arc::new(Callback::default()));
     // The sign-in needs the login extension alone. Discovery stays off, so a
     // package that fails to load cannot stop the sign-in.
     let mut child = Command::new(executable)
@@ -426,13 +484,27 @@ fn start_with(app: &AppHandle, provider: &str, target: Target) -> Result<(), Str
         stdin,
         generation,
         callback: callback.clone(),
+        servers: Vec::new(),
     });
-    if let (Some(listener), Some(callback)) = (listener, callback.clone()) {
-        let server_app = app.clone();
-        let server_provider = provider.to_owned();
-        std::thread::spawn(move || {
-            serve_callback(listener, callback, server_app, server_provider, generation)
-        });
+    if let Some(callback) = callback.clone() {
+        let servers: Vec<JoinHandle<()>> = listeners
+            .into_iter()
+            .map(|listener| {
+                let callback = Arc::clone(&callback);
+                let server_app = app.clone();
+                let server_provider = provider.to_owned();
+                std::thread::spawn(move || {
+                    serve_callback(listener, callback, server_app, server_provider, generation)
+                })
+            })
+            .collect();
+        let mut active = state.active.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(login) = active
+            .as_mut()
+            .filter(|login| login.generation == generation)
+        {
+            login.servers = servers;
+        }
     }
     let provider = provider.to_owned();
     let reader_app = app.clone();
@@ -496,18 +568,19 @@ fn start_with(app: &AppHandle, provider: &str, target: Target) -> Result<(), Str
             }
         }
         let state = reader_app.state::<AccountLoginState>();
-        let mut active = state.active.lock().unwrap_or_else(|e| e.into_inner());
-        if active
-            .as_ref()
-            .is_some_and(|login| login.generation == generation)
-        {
-            if let Some(mut login) = active.take() {
-                if let Some(callback) = &login.callback {
-                    callback.stop.store(true, Ordering::SeqCst);
-                }
-                let _ = login.child.kill();
-                let _ = login.child.wait();
+        let finished = {
+            let mut active = state.active.lock().unwrap_or_else(|e| e.into_inner());
+            if active
+                .as_ref()
+                .is_some_and(|login| login.generation == generation)
+            {
+                active.take()
+            } else {
+                None
             }
+        };
+        if let Some(login) = finished {
+            close(login);
             emit(
                 &reader_app,
                 json!({ "stage": "exit", "provider": provider, "answered": answered }),
@@ -523,17 +596,19 @@ fn start_with(app: &AppHandle, provider: &str, target: Target) -> Result<(), Str
     std::thread::spawn(move || {
         std::thread::sleep(LOGIN_TIMEOUT);
         let state = watchdog_app.state::<AccountLoginState>();
-        let mut active = state.active.lock().unwrap_or_else(|e| e.into_inner());
-        if active
-            .as_ref()
-            .is_some_and(|login| login.generation == generation)
-        {
-            if let Some(mut login) = active.take() {
-                if let Some(callback) = &login.callback {
-                    callback.stop.store(true, Ordering::SeqCst);
-                }
-                let _ = login.child.kill();
+        let expired = {
+            let mut active = state.active.lock().unwrap_or_else(|e| e.into_inner());
+            if active
+                .as_ref()
+                .is_some_and(|login| login.generation == generation)
+            {
+                active.take()
+            } else {
+                None
             }
+        };
+        if let Some(login) = expired {
+            close(login);
         }
     });
     Ok(())
@@ -714,6 +789,38 @@ mod tests {
             "Complete login in your browser, or paste the authorization code / redirect URL here:"
         ));
         assert!(!is_paste_prompt("Paste your API key"));
+    }
+
+    #[test]
+    fn the_callback_port_is_held_on_both_loopbacks_and_a_holder_is_named() {
+        let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let listeners = bind_callback(port).unwrap();
+        let addresses: Vec<IpAddr> = listeners
+            .iter()
+            .map(|listener| listener.local_addr().unwrap().ip())
+            .collect();
+        assert_eq!(addresses[0], IpAddr::V4(Ipv4Addr::LOCALHOST));
+        if let Some(second) = addresses.get(1) {
+            assert_eq!(*second, IpAddr::V6(Ipv6Addr::LOCALHOST));
+        }
+        assert!(listeners
+            .iter()
+            .all(|listener| listener.local_addr().unwrap().port() == port));
+        drop(listeners);
+        let holder = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let error = bind_callback(port).unwrap_err();
+        assert!(error.contains(&port.to_string()), "{error}");
+        drop(holder);
+    }
+
+    #[test]
+    fn a_pooled_family_signs_in_to_the_pool_and_the_rest_to_the_one_slot() {
+        assert_eq!(target_for("xai"), Target::Pool);
+        assert_eq!(target_for("openai-codex"), Target::Pool);
+        assert_eq!(target_for("openrouter"), Target::Pi);
+        assert_eq!(target_for("github-copilot"), Target::Pi);
     }
 
     #[test]
