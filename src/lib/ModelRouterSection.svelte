@@ -1,10 +1,9 @@
 <script>
   // Settings → Models → Router: the account pools behind one provider, what
-  // each account has served, the routes, and the classifier that picks one.
+  // each account has served, the models in the running, and the classifier.
   import LucideIcon from './LucideIcon.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import { catalog, matchSaved, priceLabel } from './classifier-catalog.js'
-  import { connectedFamilies, familyModels, routeReady, suggestRoutes, suggestedFallback } from './route-catalog.js'
 
   let { tauri } = $props()
 
@@ -35,10 +34,11 @@
   // the empty string for no classifier at all.
   let chosen = $state('')
 
-  // The routes table, edited as a whole and saved in one call.
-  let routes = $state([])
+  // One draft per model in the running: its name and the statement the
+  // classifier reads. Saving sends only the ones a user changed.
+  let drafts = $state([])
   let fallback = $state('')
-  let confidence = $state(0.55)
+  let confidence = $state(0.6)
 
   const families = $derived(settings?.families ?? [])
   // One summary per provider that holds an account: what its pool has served,
@@ -64,7 +64,6 @@
   const shown = $derived(pool === 'all' ? pools : pools.filter((entry) => entry.id === pool))
   const busiestPool = $derived(Math.max(1, ...pools.map((entry) => entry.requests)))
   const rows = $derived(catalog(settings?.accounts ?? []))
-  const connected = $derived(connectedFamilies(settings?.accounts ?? []))
   const busiest = $derived(Math.max(1, ...(settings?.accounts ?? []).flatMap((account) => account.days.map((day) => day[1]))))
 
   $effect(() => { void load() })
@@ -81,7 +80,7 @@
   // Every command answers with the whole settings, so one reply redraws the page.
   function apply(next) {
     settings = next
-    routes = next.routes.map((route) => ({ ...route }))
+    drafts = next.options.map((option) => ({ ...option, draftKey: option.key, draftDescription: option.description }))
     fallback = next.fallback ?? ''
     confidence = next.min_confidence
     classifierKind = next.classifier.kind
@@ -151,37 +150,26 @@
     void run('model_router_remove_account', { id: account.id }, `${account.label} is removed.`)
   }
 
-  function addRoute() {
-    const first = connected[0] ?? families[0]?.id ?? 'openai'
-    routes = [...routes, { key: '', description: '', family: first, model: familyModels(first)[0]?.model ?? '' }]
+  // A statement the user changed, or one they changed before, travels as a
+  // route. An untouched model keeps the catalog's words, which the app updates.
+  function edited(draft) {
+    return draft.named || draft.draftKey !== draft.key || draft.draftDescription !== draft.description
   }
 
-  // The routes the pools as they stand can serve. It replaces the table, and
-  // saving is still its own step, so nothing is lost without a click.
-  function suggest() {
-    const next = suggestRoutes(settings?.accounts ?? [])
-    if (next.length === 0) return
-    routes = next
-    fallback = suggestedFallback(next)
-    status = 'Routes suggested from your pools. Save them to keep them.'
-  }
-
-  // Changing a route's provider moves its model to that provider's own.
-  function setRouteFamily(route, family) {
-    route.family = family
-    if (!familyModels(family).some((entry) => entry.model === route.model)) {
-      route.model = familyModels(family)[0]?.model ?? ''
-    }
-    routes = [...routes]
-  }
-
-  function removeRoute(index) {
-    routes = routes.filter((_, at) => at !== index)
-    if (!routes.some((route) => route.key === fallback)) fallback = routes[0]?.key ?? ''
+  function resetDraft(draft) {
+    draft.draftKey = `${draft.family}/${draft.model}`
+    draft.draftDescription = ''
+    drafts = [...drafts]
   }
 
   function saveRoutes() {
-    void run('model_router_save_routes', { routes: routes.map((route) => ({ ...route })), fallback: fallback || null, minConfidence: Number(confidence) }, 'The routes are saved.')
+    const routes = drafts.filter(edited).map((draft) => ({
+      key: draft.draftKey.trim() || `${draft.family}/${draft.model}`,
+      description: draft.draftDescription.trim(),
+      family: draft.family,
+      model: draft.model,
+    }))
+    void run('model_router_save_routes', { routes, fallback: fallback || null, minConfidence: Number(confidence) }, 'The statements are saved.')
   }
 
   function saveClassifier() {
@@ -246,7 +234,7 @@
     </p>
 
     <nav class="tabs" aria-label="Router settings">
-      {#each [['accounts', 'Accounts'], ['routes', 'Routes'], ['classifier', 'Classifier']] as [id, name]}
+      {#each [['accounts', 'Accounts'], ['routes', 'In the running'], ['classifier', 'Classifier']] as [id, name]}
         <button type="button" class="quiet tab" aria-current={view === id ? 'true' : undefined} onclick={() => { view = id }}>{name}</button>
       {/each}
     </nav>
@@ -334,42 +322,40 @@
       </section>
 
     {:else if view === 'routes'}
-      <p class="support">A route is a model with a description. The classifier reads the descriptions and picks one per turn, so it only ever picks a model your pools already serve. With no classifier every turn takes the fallback.</p>
-      {#if connected.length === 0}
-        <p class="support empty">No provider is connected, so there is nothing to route between. Add an account first.</p>
+      <p class="support">Every model an account serves is in the running, and the classifier picks between them each turn. It reads these statements, not the model names, so a statement says what work the model wins and what should send a query elsewhere.</p>
+      {#if drafts.length === 0}
+        <p class="support empty">Nothing is in the running. Add an account, and its models enter at once.</p>
       {/if}
-      <ul class="route-list">
-        {#each routes as route, index (index)}
-          {@const ready = routeReady(route, settings?.accounts ?? [])}
-          {@const known = familyModels(route.family)}
-          <li class="route" class:unserved={!ready}>
-            <input type="text" class="route-key" placeholder="fast" aria-label="Route name" bind:value={route.key}>
-            <select aria-label="Route provider" value={route.family} onchange={(event) => setRouteFamily(route, event.currentTarget.value)}>
-              {#each families as entry (entry.id)}<option value={entry.id}>{entry.name}{connected.includes(entry.id) ? '' : ' — no account'}</option>{/each}
-            </select>
-            <input type="text" class="route-model" list={`models-${route.family}`} placeholder="gpt-6-astra" aria-label="Route model" bind:value={route.model}>
-            <datalist id={`models-${route.family}`}>
-              {#each known as entry (entry.model)}<option value={entry.model}>{entry.name} · {priceLabel(entry.price)} · {entry.context}</option>{/each}
-            </datalist>
-            <input type="text" class="route-why" placeholder="A short question: a lookup, a one-line edit" aria-label="What this route is for" bind:value={route.description}>
-            {#if !ready}<span class="tag warn">no account</span>{/if}
-            <button type="button" class="quiet remove" aria-label={`Remove ${route.key || 'route'}`} onclick={() => removeRoute(index)}><LucideIcon name="x" variant="action" size={14} /></button>
+      <ul class="running">
+        {#each drafts as draft (draft.family + '/' + draft.model)}
+          <li class="option">
+            <header>
+              <ProviderLogo provider={draft.family} size={16} />
+              <span class="option-name">{draft.name || draft.model}</span>
+              <span class="record">{draft.model}</span>
+              {#if draft.tier}<span class="tag">{draft.tier}</span>{/if}
+              {#if draft.price}<span class="tag">${draft.price}/${draft.output} per M</span>{/if}
+              {#if draft.context}<span class="tag">{draft.context}</span>{/if}
+            </header>
+            <label for={`key-${draft.family}-${draft.model}`}>Name the classifier answers with</label>
+            <input id={`key-${draft.family}-${draft.model}`} type="text" class="option-key" bind:value={draft.draftKey}>
+            <label for={`why-${draft.family}-${draft.model}`}>Statement</label>
+            <textarea id={`why-${draft.family}-${draft.model}`} rows="3" bind:value={draft.draftDescription}></textarea>
+            {#if edited(draft)}
+              <p class="record"><button type="button" class="quiet reset" onclick={() => resetDraft(draft)}>Use the built-in statement</button></p>
+            {/if}
           </li>
         {/each}
       </ul>
-      <div class="route-actions">
-        <button type="button" class="quiet add-route" onclick={addRoute}><LucideIcon name="plus" variant="action" size={14} />Add route</button>
-        <button type="button" class="quiet add-route" disabled={connected.length === 0} onclick={suggest}>Suggest from your pools</button>
-      </div>
-      <label for="router-fallback">Fallback route</label>
+      <label for="router-fallback">Fallback</label>
       <select id="router-fallback" bind:value={fallback}>
-        <option value="">The first route</option>
-        {#each routes.filter((route) => route.key) as route (route.key)}<option value={route.key}>{route.key}</option>{/each}
+        <option value="">The cheapest model in the running</option>
+        {#each drafts as draft (draft.family + '/' + draft.model)}<option value={draft.draftKey}>{draft.draftKey}</option>{/each}
       </select>
       <label for="router-confidence">Confidence floor · {Number(confidence).toFixed(2)}</label>
       <input id="router-confidence" type="range" min="0" max="1" step="0.05" bind:value={confidence}>
       <p class="support">A classification under the floor takes the fallback instead.</p>
-      <button type="button" disabled={pending} onclick={saveRoutes}>Save routes</button>
+      <button type="button" disabled={pending} onclick={saveRoutes}>Save statements</button>
 
     {:else}
       <p class="support">The classifier reads each turn and picks a route. It is optional. It sends the turn's last message to the service you pick, and a model on your own accounts spends that account.</p>
@@ -439,7 +425,13 @@
   .pool { display: grid; gap: 6px; padding: 10px 0 6px; border-top: 1px solid var(--border); }
   .pool header { display: flex; align-items: center; gap: 8px; min-height: 28px; }
   .pool h5 { margin: 0; font-size: var(--text-13); font-weight: 600; }
-  .route-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .running { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .option { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .option header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .option-name { font-size: var(--text-13); }
+  .option-key { width: min(280px, 100%); }
+  .option textarea { width: 100%; }
+  .reset { padding: 0; font-size: var(--text-12); color: var(--muted); text-decoration: underline; }
   .remove { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
   /* The three provider summaries: what each pool has served, and how much of
      it is moving right now. One card per provider that holds an account. */
@@ -473,13 +465,6 @@
   .bars { display: flex; align-items: flex-end; gap: 2px; min-height: 26px; }
   .bar { width: 5px; border-radius: 1px; background: var(--signal); opacity: .75; }
   .group-label { margin: 6px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
-  .route { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .route-key { width: 96px; }
-  .route-model { width: 168px; }
-  .route-why { flex: 1; min-width: 160px; }
-  .route.unserved .route-key { color: var(--muted); }
-  .route-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-  .add-route { display: inline-flex; align-items: center; gap: 6px; justify-self: start; min-height: 28px; padding: 4px 10px; border: 1px solid var(--border); }
   .catalog { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .catalog-row { display: flex; width: 100%; align-items: center; gap: 10px; min-height: 34px; padding: 6px 8px; text-align: left; font-size: var(--text-13); }
   .catalog-row[aria-pressed="true"] { background: var(--faint); box-shadow: inset 2px 0 0 var(--signal); }

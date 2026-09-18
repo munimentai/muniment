@@ -16,8 +16,9 @@ use muniment_core::model_router::config::{
     self, Account, Classifier, Credential, Route, RouterConfig,
 };
 use muniment_core::model_router::family::FAMILIES;
+use muniment_core::model_router::model_catalog;
 use muniment_core::model_router::usage::{self, AccountUsage};
-use muniment_core::model_router::{classify, pi_provider, served_models, server};
+use muniment_core::model_router::{classify, options, pi_provider, served_models, server};
 
 use crate::local_mode::harness_agent_directory;
 
@@ -73,6 +74,27 @@ pub(crate) struct AccountView {
     days: Vec<(String, u64, u64, u64, u64)>,
 }
 
+/// One model in the running: what the classifier chooses between.
+#[derive(Debug, Serialize)]
+pub(crate) struct OptionView {
+    /// The name the classifier answers with, `family/model` unless renamed.
+    key: String,
+    /// The statement the classifier reads.
+    description: String,
+    family: String,
+    model: String,
+    /// The catalog's name for the model, empty when it describes none.
+    name: String,
+    /// `deep`, `balanced` or `fast`, empty outside the catalog.
+    tier: String,
+    /// US dollars per million tokens, zero outside the catalog.
+    price: f64,
+    output: f64,
+    context: String,
+    /// Whether the user's own words replaced the catalog statement.
+    named: bool,
+}
+
 /// What the classifier is, with no key in it.
 #[derive(Debug, Serialize)]
 pub(crate) struct ClassifierView {
@@ -95,6 +117,8 @@ pub(crate) struct RouterSettings {
     is_default: bool,
     families: Vec<FamilyView>,
     accounts: Vec<AccountView>,
+    /// Every model an enabled account serves, in the order the classifier sees.
+    options: Vec<OptionView>,
     routes: Vec<Route>,
     fallback: Option<String>,
     min_confidence: f64,
@@ -202,6 +226,31 @@ fn settings(
                     ledger.account(&account.id),
                     active.get(&account.id).copied().unwrap_or(0),
                 )
+            })
+            .collect(),
+        options: options(&config)
+            .into_iter()
+            .map(|option| {
+                let entry = model_catalog::entry(&option.family, &option.model);
+                let named = config.routes.iter().any(|route| {
+                    route.family == option.family
+                        && route.model == option.model
+                        && !route.description.trim().is_empty()
+                });
+                OptionView {
+                    key: option.key,
+                    description: option.description,
+                    family: option.family,
+                    model: option.model,
+                    name: entry.map(|entry| entry.name.to_owned()).unwrap_or_default(),
+                    tier: entry.map(|entry| entry.tier.to_owned()).unwrap_or_default(),
+                    price: entry.map(|entry| entry.price).unwrap_or(0.0),
+                    output: entry.map(|entry| entry.output).unwrap_or(0.0),
+                    context: entry
+                        .map(|entry| entry.context.to_owned())
+                        .unwrap_or_default(),
+                    named,
+                }
             })
             .collect(),
         routes: config.routes.clone(),
@@ -457,22 +506,26 @@ pub(crate) fn model_router_save_routes(
     let mut config = load(&agent)?;
     for route in &routes {
         if route.key.trim().is_empty() || route.key.len() > 60 {
-            return Err("Give every route a short name.".into());
+            return Err("Give every model a short name.".into());
         }
         if route.model.trim().is_empty() {
-            return Err("Give every route a model.".into());
+            return Err("Name the model this describes.".into());
         }
         if muniment_core::model_router::family::family(&route.family).is_none() {
-            return Err("Give every route a provider the router serves.".into());
+            return Err("Name a provider the router serves.".into());
         }
-    }
-    if let Some(fallback) = &fallback {
-        if !routes.iter().any(|route| &route.key == fallback) {
-            return Err("The fallback must be one of the routes.".into());
+        if route.description.len() > 2_000 {
+            return Err("Keep a model's statement under two thousand characters.".into());
         }
     }
     config.routes = routes;
     config.fallback = fallback;
+    // The fallback names a model in the running, or none and the cheapest takes it.
+    if let Some(named) = config.fallback.clone() {
+        if !options(&config).iter().any(|option| option.key == named) {
+            return Err("The fallback must be a model in the running.".into());
+        }
+    }
     if let Some(confidence) = min_confidence {
         config.min_confidence = confidence.clamp(0.0, 1.0);
     }

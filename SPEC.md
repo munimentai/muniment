@@ -151,16 +151,31 @@ counts turns, tokens and failures per account for thirty days, names the last
 refusal, and carries no prompt and no reply. Settings shows a summary per
 provider, the turns each account has in flight, and that thirty-day bar.
 
-**Routing is optional and the classifier is the user's own.** The router serves
-`auto`, each route by name, and each `family/model` pair, so the model chip
-pins a route or hands the turn to the classifier. A route is a model with a
-description in the user's words, and its family must hold an account. With no
-classifier every turn takes the fallback route and the pool is still balanced.
-With one, the turn's last user message goes out as one choice question over the
-route descriptions, and the answer names the route. A confidence under the
-floor takes the fallback, so a guess never picks the expensive model. The
-floor is `0.6`. A classifier is a network call to a service the user names, the
-screen says so, and its key is write-only: nothing reads one back.
+**Every active model is in the running.** The options the classifier chooses
+between are the pool itself: each model an enabled account serves, keyed
+`family/model`. An account that names no model serves every model the catalog
+describes for its family, and an account that names models serves those. The
+router serves `auto` and every option by name and nothing else, so a model it
+does not list is not found rather than found and then unservable. Connect an
+account and its models enter the running with no other step.
+
+**A model is chosen by its statement, not its name.** The catalog carries one
+statement per model: the work it wins, then the cost or weakness that should
+send a query elsewhere. That statement is what the classifier reads, so it
+names query shapes and never a benchmark. A user replaces any statement and
+renames any option, and an untouched model keeps the catalog's words, which an
+application update refreshes. A model outside the catalog runs with its id
+alone until a user writes its statement.
+
+**Routing is optional and the classifier is the user's own.** With no
+classifier every turn takes the fallback and the pool is still balanced. With
+one, the turn's last user message goes out as one choice question over the
+statements, and the answer names the option. A confidence under the floor takes
+the fallback, so a guess never picks the expensive model. The floor is `0.6`.
+The fallback is the option the user names, else the cheapest model in the
+running, and a model with no known price is never the cheapest. A classifier is
+a network call to a service the user names, the screen says so, and its key is
+write-only: nothing reads one back.
 
 **The classifier catalog is models that classify.** TypeSafe's jev answers a
 typed choice with a probability over every route. A small model on an account

@@ -16,14 +16,14 @@ describe('classifier catalog', () => {
     expect(pooledReady(POOLED.find((entry) => entry.family === 'xai'), accounts)).toBe(false)
     expect(pooledReady(POOLED[0], [])).toBe(false)
     const rows = catalog(accounts)
-    expect(rows.find((row) => row.id === 'openai/gpt-5.6-nano').ready).toBe(true)
+    expect(rows.find((row) => row.id === 'openai/gpt-5.6-luna').ready).toBe(true)
     expect(rows.find((row) => row.id === 'kimi/kimi-k3').ready).toBe(false)
     expect(rows[0].ready).toBe(true)
   })
 
   it('reads a price per million input tokens and calls a free one free', () => {
     expect(priceLabel(0.042)).toBe('$0.042/M in')
-    expect(priceLabel(0.05)).toBe('$0.05/M in')
+    expect(priceLabel(0.2)).toBe('$0.2/M in')
     expect(priceLabel(1)).toBe('$1/M in')
     expect(priceLabel(0)).toBe('free')
     expect(priceLabel(undefined)).toBe('free')
@@ -31,7 +31,7 @@ describe('classifier catalog', () => {
 
   it('marks the row a saved classifier came from', () => {
     expect(matchSaved({ kind: 'typesafe' })).toBe('typesafe/jev-latest')
-    expect(matchSaved({ kind: 'pooled', family: 'openai', model: 'gpt-5.6-nano' })).toBe('openai/gpt-5.6-nano')
+    expect(matchSaved({ kind: 'pooled', family: 'openai', model: 'gpt-5.6-luna' })).toBe('openai/gpt-5.6-luna')
     expect(matchSaved({ kind: 'pooled', family: 'openai', model: 'gpt-5.6' })).toBe('openai/gpt-5.6')
     expect(matchSaved({ kind: 'endpoint' })).toBe('endpoint')
     expect(matchSaved({ kind: 'none' })).toBe('')
