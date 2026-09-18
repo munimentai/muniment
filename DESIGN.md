@@ -81,7 +81,7 @@ panel slide. `prefers-reduced-motion` removes all of it.
    apologize. Empty states are one line and no illustration. The one
    exception is the record panel's first screen on a machine that holds no
    company: it carries a headline, one sentence, a proof line in mono, the
-   create form, the eight sources and the sample company, and it still
+   create form, the sources and the sample company, and it still
    carries no illustration. No em dash in user-facing text. The shell never
    names its harness. A state line, an empty state and a composer hint are one
    line each and under twelve words.

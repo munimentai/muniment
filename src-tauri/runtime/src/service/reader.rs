@@ -21,6 +21,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Rows the run reads from the source per page.
+/// How many rows a describe answers beside the fields, for the card the panel
+/// shows before the mapping runs.
+const DESCRIBE_ROWS: usize = 12;
 const RUN_PAGE: usize = 200;
 /// How long one `reader.run` call works before it answers with its offset,
 /// under the desktop client's request timeout.
@@ -272,16 +275,26 @@ impl RecordRegistry {
         )
     }
 
-    /// One source object's fields and samples, so the panel maps it.
+    /// One source object's fields and samples, so the panel maps it, and its
+    /// first rows, so the panel shows the first record as a card and pages
+    /// through the rest before anything lands.
     pub fn reader_describe(&self, _actor: &str, body: Value) -> Result<Value, ProtocolError> {
         let source = text(&body, "source")?;
         let object = text(&body, "object")?;
-        Ok(
-            match open_reader(&source, &object).and_then(|reader| reader.describe(&object)) {
-                Ok(description) => json!({"description": description}),
-                Err(error) => reader_failure(error),
-            },
-        )
+        let reader = match open_reader(&source, &object) {
+            Ok(reader) => reader,
+            Err(error) => return Ok(reader_failure(error)),
+        };
+        Ok(match reader.describe(&object) {
+            Ok(description) => {
+                let rows = reader
+                    .page(&object, None, DESCRIBE_ROWS)
+                    .map(|page| page.rows)
+                    .unwrap_or_default();
+                json!({"description": description, "rows": rows})
+            }
+            Err(error) => reader_failure(error),
+        })
     }
 
     /// Runs one approved mapping from `offset` for the run budget, lands each
@@ -587,7 +600,7 @@ mod tests {
             registry
                 .reader_describe(
                     DESKTOP_ACTOR,
-                    json!({"source": "quickbooks", "object": "customers"})
+                    json!({"source": "abacus", "object": "customers"})
                 )
                 .unwrap()["error"]["code"],
             "unknown_source"
@@ -610,10 +623,7 @@ mod tests {
         );
         assert_eq!(
             registry
-                .reader_connect(
-                    DESKTOP_ACTOR,
-                    json!({"source": "quickbooks", "secret": "x"})
-                )
+                .reader_connect(DESKTOP_ACTOR, json!({"source": "abacus", "secret": "x"}))
                 .unwrap()["error"]["code"],
             "unknown_source"
         );

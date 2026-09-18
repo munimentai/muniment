@@ -1,6 +1,6 @@
 <script>
-  // The eight sources that read into the record, each under its own mark, in
-  // two columns of four. The first screen and the connect screen draw the
+  // Every source that reads into the record, each under its own mark, in
+  // two columns. The first screen and the connect screen draw the
   // same grid, so a source is added in one place.
   import LucideIcon from '../lib/LucideIcon.svelte'
   import ProviderLogo from '../lib/ProviderLogo.svelte'

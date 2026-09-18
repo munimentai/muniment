@@ -7,6 +7,7 @@
   // the rows through propose and commit until it is done. Every row the
   // mapping could not place lists with its reason.
   import { open } from '@tauri-apps/plugin-dialog'
+  import LucideIcon from '../lib/LucideIcon.svelte'
   import { accumulateRun, credentialsFilled, identityOptions, importErrorLine, mappedCount, mappingData, mappingLines, packSecret, propertyLabel, runSummaryLines, sourceCredentials, sourceOptions, suggestEdges, suggestFields, suggestIdentity, suggestKind, targetProperties } from './record-import-state.js'
 
   // `kind` is the kind the rows fill. Without one, the import opens on
@@ -27,6 +28,9 @@
   let objects = $state([])
   let sourceLabel = $state('')
   let description = $state(null)
+  // The first rows the source answered, and which of them the card shows.
+  let rows = $state([])
+  let card = $state(0)
   let fields = $state({})
   let identity = $state('')
   let edges = $state([])
@@ -136,6 +140,8 @@
       return
     }
     description = answer.description
+    rows = Array.isArray(answer.rows) ? answer.rows : []
+    card = 0
     if (!kind) {
       const suggested = suggestKind(source, description.object ?? object)
       targetKind = kinds.find((candidate) => candidate.name === suggested) ?? (targetKind && kinds.some((candidate) => candidate.name === targetKind.name) ? targetKind : null)
@@ -215,6 +221,11 @@
   }
 
   function keydown(event) {
+    if ((step === 'mapping' || step === 'proposed') && rows.length > 1 && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') && !['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target?.tagName)) {
+      event.preventDefault()
+      card = event.key === 'ArrowLeft' ? Math.max(0, card - 1) : Math.min(rows.length - 1, card + 1)
+      return
+    }
     if (event.key === 'Escape') {
       event.preventDefault()
       if (step === 'proposed') discard()
@@ -223,6 +234,17 @@
     }
   }
 
+  // The card reads like a profile page: the row's title first, then each
+  // field the row holds beside the property it fills. A field the mapping
+  // skips still shows, in the muted ink, so nothing the source carries hides.
+  const cardRow = $derived(rows[card] ?? null)
+  const cardTitle = $derived.by(() => {
+    if (!cardRow) return ''
+    const titled = Object.entries(fields).find(([column, property]) => ['name', 'full_name', 'title', 'subject'].includes(property) && String(cardRow[column] ?? '').trim())
+    if (titled) return String(cardRow[titled[0]])
+    const first = (description?.fields ?? []).find((field) => String(cardRow[field.name] ?? '').trim())
+    return first ? String(cardRow[first.name]) : `Row ${card + 1}`
+  })
   const rowsLine = $derived(description ? `${description.label} · ${description.rows} ${description.rows === 1 ? 'row' : 'rows'}${description.counted === false ? ' read so far' : ''}` : '')
 </script>
 
@@ -279,25 +301,52 @@
           </select>
         </label>
       {/if}
-      <table class="record-import-fields" aria-label="Columns">
-        <thead>
-          <tr><th scope="col">column</th><th scope="col">reads as</th><th scope="col">fills</th></tr>
-        </thead>
-        <tbody>
-          {#each description.fields as field (field.name)}
-            <tr>
-              <th scope="row" class="record-import-column">{field.name}</th>
-              <td class="record-import-sample">{field.guess}{field.samples.length ? ` · ${field.samples.join(', ')}` : ''}</td>
-              <td>
-                <select class="record-select" aria-label="Property for {field.name}" value={fields[field.name] ?? ''} disabled={step === 'proposed'} onchange={(event) => { fields = { ...fields, [field.name]: event.currentTarget.value } }}>
-                  <option value="">skip</option>
-                  {#each properties as property (property)}<option value={property}>{propertyLabel(targetKind, property)}</option>{/each}
-                </select>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+      {#if cardRow}
+        <article class="record-import-card" aria-label="Record {card + 1} of {rows.length}">
+          <header class="record-import-card-head">
+            <h3 class="record-import-card-title">{cardTitle}</h3>
+            <span class="record-import-card-count">{card + 1} of {rows.length}{description?.counted === false || (description?.rows ?? 0) > rows.length ? ` shown` : ''}</span>
+            <span class="record-import-card-nav">
+              <button type="button" class="record-import-page" aria-label="Previous record" disabled={card === 0} onclick={() => { card = Math.max(0, card - 1) }}><LucideIcon name="chevron-left" size={14} /></button>
+              <button type="button" class="record-import-page" aria-label="Next record" disabled={card >= rows.length - 1} onclick={() => { card = Math.min(rows.length - 1, card + 1) }}><LucideIcon name="chevron-right" size={14} /></button>
+            </span>
+          </header>
+          <dl class="record-import-card-fields">
+            {#each description.fields as field (field.name)}
+              <div class="record-import-card-field" class:skipped={!fields[field.name]}>
+                <dt>
+                  <select class="record-select record-import-card-select" aria-label="Property for {field.name}" value={fields[field.name] ?? ''} disabled={step === 'proposed'} onchange={(event) => { fields = { ...fields, [field.name]: event.currentTarget.value } }}>
+                    <option value="">skip {field.name}</option>
+                    {#each properties as property (property)}<option value={property}>{propertyLabel(targetKind, property)}</option>{/each}
+                  </select>
+                  <span class="record-import-card-column">{field.name} · {field.guess}</span>
+                </dt>
+                <dd>{String(cardRow[field.name] ?? '').trim() || 'empty'}</dd>
+              </div>
+            {/each}
+          </dl>
+        </article>
+      {:else}
+        <table class="record-import-fields" aria-label="Columns">
+          <thead>
+            <tr><th scope="col">column</th><th scope="col">reads as</th><th scope="col">fills</th></tr>
+          </thead>
+          <tbody>
+            {#each description.fields as field (field.name)}
+              <tr>
+                <th scope="row" class="record-import-column">{field.name}</th>
+                <td class="record-import-sample">{field.guess}{field.samples.length ? ` · ${field.samples.join(', ')}` : ''}</td>
+                <td>
+                  <select class="record-select" aria-label="Property for {field.name}" value={fields[field.name] ?? ''} disabled={step === 'proposed'} onchange={(event) => { fields = { ...fields, [field.name]: event.currentTarget.value } }}>
+                    <option value="">skip</option>
+                    {#each properties as property (property)}<option value={property}>{propertyLabel(targetKind, property)}</option>{/each}
+                  </select>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
       <label class="record-import-identity">
         <span>Key each row on</span>
         <select class="record-select" aria-label="Identity" value={identity} disabled={step === 'proposed'} onchange={(event) => { identity = event.currentTarget.value }}>
@@ -379,6 +428,22 @@
   .record-import-line { margin: 0; font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .record-import-queue td { white-space: normal; overflow-wrap: anywhere; }
   .record-import-actions { display: flex; gap: 8px; }
+  /* The first record as a profile page: the title in the body face, each field a labeled row, the property it fills chosen on the label. */
+  .record-import-card { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+  .record-import-card-head { display: flex; align-items: center; gap: 10px; }
+  .record-import-card-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 var(--text-17)/1.3 var(--font-human); }
+  .record-import-card-count { color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; }
+  .record-import-card-nav { display: inline-flex; gap: 4px; }
+  .record-import-page { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); cursor: pointer; }
+  .record-import-page:hover:not(:disabled) { background: var(--faint); }
+  .record-import-page:disabled { color: var(--muted); cursor: default; }
+  .record-import-card-fields { display: grid; gap: 6px; margin: 0; }
+  .record-import-card-field { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); align-items: center; gap: 12px; padding: 4px 0; border-top: 1px solid var(--border); }
+  .record-import-card-field dt { display: grid; gap: 2px; }
+  .record-import-card-field dd { margin: 0; font: var(--text-13)/1.4 var(--font-human); overflow-wrap: anywhere; }
+  .record-import-card-field.skipped dd { color: var(--muted); }
+  .record-import-card-select { max-width: 100%; }
+  .record-import-card-column { color: var(--muted); font: var(--text-12) var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }
   .record-commit:disabled { background: var(--faint); color: var(--muted); cursor: default; }

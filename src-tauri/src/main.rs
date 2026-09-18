@@ -188,6 +188,7 @@ fn main() {
             record::record_company_rename,
             record::record_company_delete,
             record::record_kinds,
+            record::record_report,
             record::record_query,
             record::record_entity,
             record::record_propose,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PROVIDERS, catalogProvider, connectableProviders, currentModel, methodLabel, modelChipLabel, pickerGroups, providerName, searchProviders, sourceTag } from './provider-catalog.js'
+import { PROVIDERS, catalogProvider, connectableProviders, currentModel, methodLabel, modelChipLabel, pickerGroups, pickerLabel, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
 const inventory = {
   providers: [
@@ -94,9 +94,24 @@ describe('the model router in the picker', () => {
     expect(sourceTag('router')).toBe('Router')
   })
 
-  it('leaves the order alone when the router runs no classifier', () => {
+  it('names the classifier row by the model that picks and puts it first', () => {
+    const groups = pickerGroups(routed)
+    expect(groups[0].models[0]).toMatchObject({ id: 'auto', label: 'jev-latest picks' })
+    expect(pickerLabel({ id: 'fast' }, groups[0])).toBe('fast')
+    expect(modelChipLabel({ ...routed, default_provider: 'muniment-router', default_model: 'auto' })).toBe('jev-latest picks')
+  })
+
+  it('marks a router model that more than one account serves', () => {
+    const pooled = { ...routed, router_accounts: { auto: 0, fast: 2 } }
+    const router = pickerGroups(pooled).find((group) => group.id === 'muniment-router')
+    expect(router.models.map((model) => [model.id, model.accounts])).toEqual([['auto', 0], ['fast', 2]])
+    expect(pickerGroups(routed).find((group) => group.id === 'openai-codex').models.every((model) => model.accounts === 0)).toBe(true)
+  })
+
+  it('leaves the order alone and drops the auto row when the router runs no classifier', () => {
     const balanced = { ...routed, router_classifier: null }
     expect(pickerGroups(balanced).map((group) => group.id)).toEqual(['openai-codex', 'muniment-router'])
+    expect(pickerGroups(balanced).find((group) => group.id === 'muniment-router').models.map((model) => model.id)).toEqual(['fast'])
     expect(pickerGroups(balanced)[1].classifier).toBe('')
   })
 

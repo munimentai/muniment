@@ -412,7 +412,7 @@
                 {#if cooling(account)}<p class="tag warn">Rate limited · back in {Math.max(1, Math.round((account.cooldown_until_ms - Date.now()) / 1000))}s</p>{/if}
                 <div class="bars" aria-label={`${account.label} turns per day`}>
                   {#each account.days as [day, requests] (day)}
-                    <span class="bar" style={`height: ${Math.max(2, Math.round((requests / busiest) * 22))}px`} title={`${day}: ${requests} turns`}></span>
+                    <span class="bar" style={`height: ${Math.max(2, Math.round((requests / busiest) * 22))}px`} aria-label={`${day}: ${requests} turns`}></span>
                   {/each}
                   {#if account.days.length === 0}<span class="record">No turn yet.</span>{/if}
                 </div>

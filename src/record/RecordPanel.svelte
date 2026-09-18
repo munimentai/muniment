@@ -9,6 +9,7 @@
   import RecordForm from './RecordForm.svelte'
   import RecordImport from './RecordImport.svelte'
   import RecordRelate from './RecordRelate.svelte'
+  import RecordReport from './RecordReport.svelte'
   import RecordSample from './RecordSample.svelte'
   import RecordStart from './RecordStart.svelte'
   import RecordTable from './RecordTable.svelte'
@@ -53,6 +54,8 @@
   let pendingSource = $state(null)
   // Whether the sample company's report stands in place of the first screen.
   let sampling = $state(false)
+  // A company with records opens on its report. The kind list is one step away.
+  let listing = $state(false)
   let loadVersion = 0
 
   $effect(() => {
@@ -161,6 +164,7 @@
 
   async function openKind(name) {
     selectedKind = name
+    listing = false
     detail = null
     creating = false
     importing = null
@@ -377,15 +381,20 @@
       detail = null
       void loadPage()
     } else if (selectedKind) {
+      // Back from a kind lands on the kind list, and one more Back on the report.
       selectedKind = null
       page = null
+      listing = true
       void loadCompanies(company?.id)
+    } else if (listing) {
+      listing = false
     }
   }
 
   const crumb = $derived.by(() => {
     const parts = []
     if (kind) parts.push(kindLabel(kind.name))
+    else if (listing && !importing) parts.push('kinds')
     if (importing && detail) parts.push(detail.entity?.title ?? '', 'run')
     else if (importing) parts.push('import')
     else if (creating) parts.push('new')
@@ -397,7 +406,7 @@
 
 <aside id="record-panel" class="record-panel" aria-labelledby="record-panel-title" data-testid="record-panel">
   <header class="record-header">
-    {#if selectedKind || importing}
+    {#if selectedKind || importing || listing}
       <button type="button" class="record-back" aria-label="Back" onclick={back}><LucideIcon name="chevron-left" size={14} /></button>
     {/if}
     <h2 id="record-panel-title">Record</h2>
@@ -419,6 +428,9 @@
         <button type="button" class="record-tool" onclick={() => { renameDraft = company?.name ?? ''; renaming = true }}>Rename</button>
         {#if !empty}
           <button type="button" class="record-tool" onclick={() => { error = null; importing = { source: null } }}>Connect a source</button>
+          {#if !listing}
+            <button type="button" class="record-tool" onclick={() => { error = null; listing = true }}>Kinds</button>
+          {/if}
         {/if}
       {/if}
     {/if}
@@ -515,6 +527,8 @@
     </div>
   {:else if empty}
     <RecordConnect {company} onconnect={(name) => { error = null; importing = { source: name } }} />
+  {:else if !listing}
+    <RecordReport {tauri} {company} {refresh} onopenkind={openKind} />
   {:else}
     <nav class="record-kinds" aria-label="Kinds">
       <ul>
