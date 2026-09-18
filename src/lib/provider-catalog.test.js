@@ -73,3 +73,37 @@ describe('provider catalog', () => {
     expect(modelChipLabel(null)).toBe('Connect a model')
   })
 })
+
+describe('the model router in the picker', () => {
+  const routed = {
+    providers: [
+      { id: 'openai-codex', name: 'OpenAI', source: 'account', base_url: null, models: [{ id: 'gpt-5.5', context: '400K' }] },
+      { id: 'muniment-router', name: 'Model router', source: 'router', base_url: 'http://127.0.0.1:8421/v1', models: [{ id: 'auto', context: '' }, { id: 'fast', context: '' }] },
+    ],
+    default_provider: 'openai-codex',
+    default_model: 'gpt-5.5',
+    hidden: [],
+    router_classifier: 'jev-latest',
+  }
+
+  it('leads the picker with the router while a classifier picks the model per turn', () => {
+    const groups = pickerGroups(routed)
+    expect(groups.map((group) => group.id)).toEqual(['muniment-router', 'openai-codex'])
+    expect(groups[0].classifier).toBe('jev-latest')
+    expect(groups[1].classifier).toBe('')
+    expect(sourceTag('router')).toBe('Router')
+  })
+
+  it('leaves the order alone when the router runs no classifier', () => {
+    const balanced = { ...routed, router_classifier: null }
+    expect(pickerGroups(balanced).map((group) => group.id)).toEqual(['openai-codex', 'muniment-router'])
+    expect(pickerGroups(balanced)[1].classifier).toBe('')
+  })
+
+  it('keeps the saved default when the router leads the list', () => {
+    expect(currentModel(routed)).toEqual({ provider: 'openai-codex', model: 'gpt-5.5' })
+    expect(modelChipLabel(routed)).toBe('gpt-5.5')
+    const unset = { ...routed, default_provider: null, default_model: null }
+    expect(currentModel(unset)).toEqual({ provider: 'muniment-router', model: 'auto' })
+  })
+})

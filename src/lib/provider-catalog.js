@@ -88,7 +88,7 @@ export function connectableProviders(inventory) {
   return PROVIDERS.filter((provider) => provider.popular && !connected.has(provider.id))
 }
 
-export const SOURCE_TAGS = { key: 'Key', account: 'Account', local: 'Local', custom: 'Custom', 'claude-code': 'Claude Code' }
+export const SOURCE_TAGS = { key: 'Key', account: 'Account', local: 'Local', custom: 'Custom', 'claude-code': 'Claude Code', router: 'Router' }
 
 export function sourceTag(source) {
   return SOURCE_TAGS[source] ?? source
@@ -100,19 +100,23 @@ export function modelKey(provider, model) {
 
 // The picker's rows: every model of every connected provider that is not hidden,
 // grouped by provider in inventory order, narrowed by a query over the model id.
+// A router running a classifier picks the model per turn, so its group leads.
 export function pickerGroups(inventory, query = '') {
   if (!inventory || !Array.isArray(inventory.providers)) return []
   const hidden = new Set(inventory.hidden ?? [])
   const needle = query.trim().toLowerCase()
-  return inventory.providers
+  const groups = inventory.providers
     .map((provider) => ({
       id: provider.id,
       name: provider.name,
       source: provider.source,
+      classifier: provider.source === 'router' ? (inventory.router_classifier ?? '') : '',
       models: (provider.models ?? []).filter((model) => !hidden.has(modelKey(provider.id, model.id))
         && (!needle || model.id.toLowerCase().includes(needle) || provider.name.toLowerCase().includes(needle))),
     }))
     .filter((group) => group.models.length > 0)
+  if (!inventory.router_classifier) return groups
+  return [...groups.filter((group) => group.classifier), ...groups.filter((group) => !group.classifier)]
 }
 
 // The default Pi will use: the saved default when it is still shown, else the
