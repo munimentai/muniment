@@ -29,6 +29,8 @@
     <path d="M16 17H8" />
   {:else if name === 'chevron-left'}
     <path d="m15 18-6-6 6-6" />
+  {:else if name === 'chevron-right'}
+    <path d="m9 18 6-6-6-6" />
   {:else if name === 'maximize-2'}
     <path d="M15 3h6v6" />
     <path d="M9 21H3v-6" />
@@ -75,6 +77,12 @@
   {:else if name === 'search'}
     <circle cx="11" cy="11" r="8" />
     <path d="m21 21-4.3-4.3" />
+  {:else if name === 'refresh-ccw-dot'}
+    <path d="M3 2v6h6" />
+    <path d="M21 12A9 9 0 0 0 6 5.3L3 8" />
+    <path d="M21 22v-6h-6" />
+    <path d="M3 12a9 9 0 0 0 15 6.7l3-2.7" />
+    <circle cx="12" cy="12" r="1" />
   {:else if name === 'chevron-down'}
     <path d="m6 9 6 6 6-6" />
   {/if}

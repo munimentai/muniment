@@ -94,7 +94,7 @@ export function suggestFields(description, kind) {
 }
 
 // The sources an import reads: a CSV file, then every network source the
-// sidecar knows, each naming the credentials it connects with. A source with
+// sidecar knows, in the order the panel shows them, each naming the credentials it connects with. A source with
 // one credential sends it as is. A source with several sends them packed as
 // one JSON object keyed by name, which the sidecar reads back.
 export function sourceOptions() {
@@ -118,6 +118,52 @@ export function sourceOptions() {
     { value: 'freshdesk', label: 'Freshdesk', note: 'tickets, contacts, companies', secret: 'API key', credentials: [
       { name: 'domain', label: 'Domain, the acme in acme.freshdesk.com', secret: false },
       { name: 'api_key', label: 'API key', secret: true },
+    ] },
+    { value: 'zoho', label: 'Zoho CRM', note: 'leads, contacts, accounts, deals', secret: 'self client', credentials: [
+      { name: 'accounts_domain', label: 'Accounts domain, accounts.zoho.com or its region host', secret: false },
+      { name: 'client_id', label: 'Client id', secret: true },
+      { name: 'client_secret', label: 'Client secret', secret: true },
+      { name: 'refresh_token', label: 'Refresh token', secret: true },
+    ] },
+    { value: 'outreach', label: 'Outreach', note: 'prospects, accounts, sequences, mailboxes', secret: 'app credentials', credentials: [
+      { name: 'client_id', label: 'Client id', secret: true },
+      { name: 'client_secret', label: 'Client secret', secret: true },
+      { name: 'refresh_token', label: 'Refresh token', secret: true },
+    ] },
+    { value: 'salesloft', label: 'Salesloft', note: 'people, accounts, cadences', secret: 'API key', credentials: token('API key') },
+    { value: 'notion', label: 'Notion', note: 'the databases the integration shares', secret: 'internal integration token', credentials: token('Internal integration token') },
+    { value: 'airtable', label: 'Airtable', note: 'the tables of one base', secret: 'personal access token', credentials: [
+      { name: 'token', label: 'Personal access token', secret: true },
+      { name: 'base_id', label: 'Base id, the app part of the base URL', secret: false },
+    ] },
+    { value: 'sheets', label: 'Google Sheets', note: 'the tabs of one spreadsheet', secret: 'service account key', credentials: [
+      { name: 'key', label: 'Service account key, the text of the JSON file', secret: true },
+      { name: 'spreadsheet_id', label: 'Spreadsheet id, from the spreadsheet URL', secret: false },
+    ] },
+    { value: 'square', label: 'Square', note: 'customers, orders, payments, invoices', secret: 'access token', credentials: token('Access token') },
+    { value: 'shopify', label: 'Shopify', note: 'customers, orders, products', secret: 'Admin API access token', credentials: [
+      { name: 'shop', label: 'Store, the acme in acme.myshopify.com', secret: false },
+      { name: 'access_token', label: 'Admin API access token', secret: true },
+    ] },
+    { value: 'paypal', label: 'PayPal', note: 'transactions, invoices', secret: 'app credentials', credentials: [
+      { name: 'client_id', label: 'Client id', secret: true },
+      { name: 'client_secret', label: 'Client secret', secret: true },
+    ] },
+    { value: 'freshbooks', label: 'FreshBooks', note: 'clients, invoices, payments', secret: 'app credentials', credentials: [
+      { name: 'client_id', label: 'Client id', secret: true },
+      { name: 'client_secret', label: 'Client secret', secret: true },
+      { name: 'refresh_token', label: 'Refresh token', secret: true },
+      { name: 'account_id', label: 'Account id', secret: false },
+    ] },
+    { value: 'quickbooks', label: 'QuickBooks', note: 'customers, invoices, payments', secret: 'app credentials', credentials: [
+      { name: 'client_id', label: 'Client id', secret: true },
+      { name: 'client_secret', label: 'Client secret', secret: true },
+      { name: 'refresh_token', label: 'Refresh token', secret: true },
+      { name: 'realm_id', label: 'Realm id, the company id', secret: false },
+    ] },
+    { value: 'wave', label: 'Wave', note: 'customers, invoices', secret: 'full access token', credentials: [
+      { name: 'access_token', label: 'Full access token', secret: true },
+      { name: 'business_id', label: 'Business id', secret: false },
     ] },
   ]
 }
@@ -286,8 +332,8 @@ export function importErrorLine(answer) {
 export function suggestKind(source, object) {
   const name = String(object ?? '').toLowerCase()
   if (source === 'csv') return null
-  if (/contact|person|people|user|lead/.test(name)) return 'person'
-  if (/compan|organi|account|customer/.test(name)) return 'org'
+  if (/contact|person|people|user|lead|prospect|subscriber|invitee/.test(name)) return 'person'
+  if (/compan|organi|account|customer|client/.test(name)) return 'org'
   if (/deal|opportunit/.test(name)) return 'deal'
   if (/ticket|case|conversation/.test(name)) return 'ticket'
   if (/invoice/.test(name)) return 'invoice'

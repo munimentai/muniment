@@ -113,6 +113,10 @@ pub(crate) struct ProviderInventory {
     /// The classifier model that picks a route per turn, when the router runs
     /// one. The composer's picker puts the router first and names it.
     router_classifier: Option<String>,
+    /// How many accounts stand behind each router model, keyed by the model
+    /// id the router serves. The picker marks a model two or more accounts
+    /// serve, because picking it balances across them.
+    router_accounts: std::collections::BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -743,7 +747,36 @@ fn provider_inventory(
             .map(str::to_owned),
         hidden: record_strings(&record, "hidden"),
         router_classifier: router_classifier(agent),
+        router_accounts: router_accounts(agent),
     })
+}
+
+/// The accounts behind each model the router serves: every enabled account of
+/// the model's family that can take a turn on it. Empty while the router is off.
+fn router_accounts(agent: &Path) -> std::collections::BTreeMap<String, u32> {
+    use muniment_core::model_router::options;
+    let mut counts = std::collections::BTreeMap::new();
+    let Ok(config) = muniment_core::model_router::config::load(agent) else {
+        return counts;
+    };
+    if !config.enabled {
+        return counts;
+    }
+    for option in options(&config) {
+        let behind = config
+            .accounts
+            .iter()
+            .filter(|account| {
+                account.enabled
+                    && account.weight > 0
+                    && account.credential.servable()
+                    && account.family == option.family
+                    && account.serves(&option.model)
+            })
+            .count() as u32;
+        counts.insert(option.key, behind);
+    }
+    counts
 }
 
 /// The classifier the router picks routes with, when it is on and ready. A

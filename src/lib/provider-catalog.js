@@ -98,22 +98,42 @@ export function modelKey(provider, model) {
   return `${provider}/${model}`
 }
 
+// The label a router row shows. `auto` is the classifier's row, named by the
+// model that picks, `jev-latest picks`, and picking it hands the turn to
+// classification. Every other row keeps its model id.
+export function pickerLabel(model, group) {
+  if (group.source === 'router' && model.id === 'auto' && group.classifier) return `${group.classifier} picks`
+  return model.id
+}
+
 // The picker's rows: every model of every connected provider that is not hidden,
 // grouped by provider in inventory order, narrowed by a query over the model id.
-// A router running a classifier picks the model per turn, so its group leads.
+// A router running a classifier picks the model per turn, so its group leads
+// and the classifier's row is the first row of the picker. A router model that
+// two or more accounts serve carries that count, so the row marks it: picking
+// it balances across them with no other step.
 export function pickerGroups(inventory, query = '') {
   if (!inventory || !Array.isArray(inventory.providers)) return []
   const hidden = new Set(inventory.hidden ?? [])
   const needle = query.trim().toLowerCase()
+  const behind = inventory.router_accounts ?? {}
   const groups = inventory.providers
-    .map((provider) => ({
-      id: provider.id,
-      name: provider.name,
-      source: provider.source,
-      classifier: provider.source === 'router' ? (inventory.router_classifier ?? '') : '',
-      models: (provider.models ?? []).filter((model) => !hidden.has(modelKey(provider.id, model.id))
-        && (!needle || model.id.toLowerCase().includes(needle) || provider.name.toLowerCase().includes(needle))),
-    }))
+    .map((provider) => {
+      const group = {
+        id: provider.id,
+        name: provider.name,
+        source: provider.source,
+        classifier: provider.source === 'router' ? (inventory.router_classifier ?? '') : '',
+        models: [],
+      }
+      group.models = (provider.models ?? [])
+        .filter((model) => !hidden.has(modelKey(provider.id, model.id)))
+        .map((model) => ({ ...model, label: pickerLabel(model, group), accounts: provider.source === 'router' ? (behind[model.id] ?? 0) : 0 }))
+        .filter((model) => !needle || model.id.toLowerCase().includes(needle) || model.label.toLowerCase().includes(needle) || provider.name.toLowerCase().includes(needle))
+      // The classifier's row is the router's first row, and no classifier leaves no auto row to lead with.
+      if (group.source === 'router' && !group.classifier) group.models = group.models.filter((model) => model.id !== 'auto')
+      return group
+    })
     .filter((group) => group.models.length > 0)
   if (!inventory.router_classifier) return groups
   return [...groups.filter((group) => group.classifier), ...groups.filter((group) => !group.classifier)]
@@ -137,5 +157,7 @@ export function currentModel(inventory) {
 export function modelChipLabel(inventory) {
   const current = currentModel(inventory)
   if (!current) return 'Connect a model'
-  return current.model
+  const group = pickerGroups(inventory).find((candidate) => candidate.id === current.provider)
+  const model = group?.models.find((candidate) => candidate.id === current.model)
+  return model?.label ?? current.model
 }

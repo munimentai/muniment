@@ -261,6 +261,42 @@ impl RecordRegistry {
         Ok(outcome.unwrap_or_else(|body| body))
     }
 
+    /// The report over one company's live graph, with how its open count
+    /// moved since the last read. The count from the last read sits in
+    /// `report.json` beside the graph, so the trend needs no history table.
+    pub fn report(&self, _actor: &str, body: Value) -> Result<Value, ProtocolError> {
+        let named = company_id(&body)?;
+        let resolved = match self.resolve_company_id(named.as_deref())? {
+            Ok(id) => id,
+            Err(body) => return Ok(body),
+        };
+        let marker = self.root.company_directory(&resolved).join("report.json");
+        let outcome = self.with_record(Some(&resolved), |entry| {
+            Ok(match entry.record.report() {
+                Ok(report) => {
+                    let last = std::fs::read(&marker)
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                        .and_then(|value| value.get("open").and_then(Value::as_i64));
+                    let moved = last.map(|last| report.open as i64 - last);
+                    let _ = std::fs::write(
+                        &marker,
+                        serde_json::to_vec(&json!({"open": report.open})).unwrap_or_default(),
+                    );
+                    let mut body = json!({"report": report});
+                    body["report"]["moved"] = match moved {
+                        Some(moved) => json!(moved),
+                        None => Value::Null,
+                    };
+                    body["report"]["company_id"] = json!(resolved);
+                    body
+                }
+                Err(error) => record_failure(error),
+            })
+        })?;
+        Ok(outcome.unwrap_or_else(|body| body))
+    }
+
     /// Runs one read-only query as the actor named.
     pub fn sql(&self, actor: &str, body: Value) -> Result<Value, ProtocolError> {
         let request = parse_sql(&body)?;

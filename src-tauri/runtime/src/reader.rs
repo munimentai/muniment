@@ -156,7 +156,7 @@ pub trait Reader {
 /// The one source name a file reader answers to.
 pub const CSV_SOURCE: &str = "csv";
 /// The network sources the Go sidecar reads, each behind its own secret.
-pub const SIDECAR_SOURCES: [&str; 7] = [
+pub const SIDECAR_SOURCES: [&str; 19] = [
     "stripe",
     "hubspot",
     "pipedrive",
@@ -164,6 +164,18 @@ pub const SIDECAR_SOURCES: [&str; 7] = [
     "zendesk",
     "intercom",
     "freshdesk",
+    "zoho",
+    "outreach",
+    "salesloft",
+    "notion",
+    "airtable",
+    "sheets",
+    "square",
+    "shopify",
+    "paypal",
+    "freshbooks",
+    "quickbooks",
+    "wave",
 ];
 
 /// Opens the reader for a source. `object` is the file path for a file
@@ -204,8 +216,14 @@ pub fn open_sidecar(source: &str, secret: String) -> Result<Box<dyn Reader>, Rea
 
 /// The name a source shows: `Stripe` for `stripe`, `HubSpot` for `hubspot`.
 pub fn source_label(source: &str) -> String {
-    if source == "hubspot" {
-        return "HubSpot".to_owned();
+    match source {
+        "hubspot" => return "HubSpot".to_owned(),
+        "zoho" => return "Zoho CRM".to_owned(),
+        "sheets" => return "Google Sheets".to_owned(),
+        "paypal" => return "PayPal".to_owned(),
+        "quickbooks" => return "QuickBooks".to_owned(),
+        "freshbooks" => return "FreshBooks".to_owned(),
+        _ => {}
     }
     let mut chars = source.chars();
     match chars.next() {
@@ -221,8 +239,15 @@ pub fn secret_label(source: &str) -> &'static str {
         "hubspot" => "private app access token",
         "pipedrive" | "zendesk" => "API token",
         "salesforce" => "connected app",
-        "intercom" => "access token",
-        "freshdesk" => "API key",
+        "intercom" | "square" => "access token",
+        "freshdesk" | "salesloft" => "API key",
+        "zoho" => "self client",
+        "outreach" | "paypal" | "freshbooks" | "quickbooks" => "app credentials",
+        "notion" => "internal integration token",
+        "airtable" => "personal access token",
+        "sheets" => "service account key",
+        "shopify" => "Admin API access token",
+        "wave" => "full access token",
         _ => "secret key",
     }
 }
@@ -357,12 +382,12 @@ mod tests {
     #[test]
     fn opens_the_csv_reader_and_names_an_unknown_or_unconnected_source() {
         assert!(open_reader("csv", "/tmp/x.csv").is_ok());
-        let error = match open_reader("quickbooks", "customers") {
+        let error = match open_reader("abacus", "customers") {
             Ok(_) => panic!("an unknown source opened"),
             Err(error) => error,
         };
         assert_eq!(error.code(), "unknown_source");
-        assert_eq!(error.to_string(), "No reader reads quickbooks.");
+        assert_eq!(error.to_string(), "No reader reads abacus.");
         std::env::set_var("MUNIMENT_READER_SECRET_STRIPE", "");
         let error = match open_reader("stripe", "customers") {
             Ok(_) => panic!("an unconnected source opened"),
@@ -382,5 +407,10 @@ mod tests {
         assert_eq!(source_label("pipedrive"), "Pipedrive");
         assert_eq!(secret_label("salesforce"), "connected app");
         assert!(SIDECAR_SOURCES.contains(&"freshdesk"));
+        assert!(SIDECAR_SOURCES.contains(&"quickbooks"));
+        assert_eq!(source_label("zoho"), "Zoho CRM");
+        assert_eq!(source_label("sheets"), "Google Sheets");
+        assert_eq!(secret_label("shopify"), "Admin API access token");
+        assert_eq!(secret_label("square"), "access token");
     }
 }

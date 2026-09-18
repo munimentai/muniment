@@ -154,6 +154,17 @@ pub async fn record_commit(
     with_desktop_client(app, move |client| client.record_commit(body)).await
 }
 
+/// The local report over the named company, or over the current one: every
+/// finding with its magnitude and evidence, and the kind holdings under it.
+#[tauri::command]
+pub async fn record_report(
+    app: tauri::AppHandle,
+    company_id: Option<String>,
+) -> Result<Value, String> {
+    let body = record_body(company_id, vec![]);
+    with_desktop_client(app, move |client| client.record_report(body)).await
+}
+
 /// The kind catalogue of the named company, or of the current one.
 #[tauri::command]
 pub async fn record_kinds(

@@ -284,6 +284,7 @@ beforeEach(() => {
     if (command === 'record_companies') return recordCompaniesResult
     if (command === 'installed_fonts') return ['Avenir Next', 'Inter', 'Iosevka']
     if (command === 'record_kinds') return recordKindsResult
+    if (command === 'record_report') return { report: { company_id: 'company-1', open: 0, moved: null, findings: [], kinds: [] } }
     if (command === 'record_company_create') {
       recordCompaniesResult = { companies: [{ id: 'company-1', name: payload.name, created_at: '2026-01-01T00:00:00.000Z', owner_principal_id: 'owner-1', current: true }], current: 'company-1' }
       return { company: recordCompaniesResult.companies[0] }
@@ -1833,8 +1834,14 @@ describe('workspace composer entry', () => {
 
 })
 
+// A company with records opens on its report. The kind list is one step away, behind Kinds.
+async function openKinds(panel) {
+  await fireEvent.click(await within(panel).findByRole('button', { name: 'Kinds' }))
+  return within(panel).findByRole('navigation', { name: 'Kinds' })
+}
+
 describe('record panel', () => {
-  it('sits flush right of Artifacts with its shortcut, opens on the kind list, and closes Artifacts', async () => {
+  it('sits flush right of Artifacts with its shortcut, opens on the report with the kind list behind Kinds, and closes Artifacts', async () => {
     render(App)
     const record = await screen.findByRole('button', { name: 'Open record panel' })
     const artifacts = screen.getByRole('button', { name: 'Open artifact rail' })
@@ -1861,7 +1868,9 @@ describe('record panel', () => {
     const picker = await within(panel).findByRole('combobox', { name: 'Company' })
     expect(picker).toHaveValue('company-1')
     expect(within(picker).getAllByRole('option').map((option) => option.textContent)).toEqual(['Northwind', 'Surfoff'])
-    const kinds = within(panel).getByRole('navigation', { name: 'Kinds' })
+    await within(panel).findByRole('region', { name: 'Report' })
+    expect(invoke).toHaveBeenCalledWith('record_report', { companyId: 'company-1' })
+    const kinds = await openKinds(panel)
     const names = within(kinds).getAllByRole('button').map((button) => button.querySelector('.record-kind-name').textContent)
     expect(names).toEqual(['person', 'deal', 'vendor'])
     expect(within(kinds).getAllByRole('button')[1]).toHaveTextContent('2 properties, 2 states')
@@ -1878,7 +1887,7 @@ describe('record panel', () => {
     const record = await screen.findByRole('button', { name: 'Open record panel' })
     await fireEvent.click(record)
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    const kinds = await openKinds(panel)
     await fireEvent.click(within(kinds).getAllByRole('button')[1])
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_query', expect.objectContaining({ kind: 'deal', sort: 'updated_at', descending: true })))
     const table = await within(panel).findByRole('table', { name: 'deal records' })
@@ -1931,7 +1940,7 @@ describe('record panel', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    const kinds = await openKinds(panel)
     await fireEvent.click(within(kinds).getAllByRole('button')[0])
     await within(panel).findByRole('table', { name: 'deal records' })
     await fireEvent.click(within(panel).getByRole('button', { name: 'New deal' }))
@@ -1962,12 +1971,12 @@ describe('record panel', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    const kinds = await openKinds(panel)
     await fireEvent.click(within(kinds).getAllByRole('button')[0])
     await within(panel).findByText('No org records yet')
     await fireEvent.click(within(panel).getByRole('button', { name: 'Import' }))
     const sources = within(panel).getByRole('list', { name: 'Sources' })
-    expect(within(sources).getAllByRole('button').map((button) => button.querySelector('.record-import-source-name').textContent)).toEqual(['CSV file', 'Stripe', 'HubSpot', 'Pipedrive', 'Salesforce', 'Zendesk', 'Intercom', 'Freshdesk'])
+    expect(within(sources).getAllByRole('button').map((button) => button.querySelector('.record-import-source-name').textContent)).toEqual(['CSV file', 'Stripe', 'HubSpot', 'Pipedrive', 'Salesforce', 'Zendesk', 'Intercom', 'Freshdesk', 'Zoho CRM', 'Outreach', 'Salesloft', 'Notion', 'Airtable', 'Google Sheets', 'Square', 'Shopify', 'PayPal', 'FreshBooks', 'QuickBooks', 'Wave'])
     expect(within(sources).getAllByRole('button')[0]).toHaveTextContent('a file on this machine')
     await fireEvent.click(within(sources).getByRole('button', { name: /CSV file/ }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('reader_describe', { companyId: 'company-1', source: 'csv', object: '/exports/customers.csv' }))
@@ -2015,7 +2024,7 @@ describe('record panel', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    const kinds = await openKinds(panel)
     await fireEvent.click(within(kinds).getAllByRole('button')[1])
     await within(panel).findByRole('table', { name: 'deal records' })
     expect(within(panel).getByText('260 records')).toBeInTheDocument()
@@ -2035,7 +2044,7 @@ describe('record panel', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    await within(panel).findByRole('navigation', { name: 'Kinds' })
+    await openKinds(panel)
     await fireEvent.click(within(panel).getByRole('button', { name: 'Rename' }))
     const name = within(panel).getByRole('textbox', { name: 'Company name' })
     expect(name).toHaveValue('Northwind')
@@ -2056,7 +2065,7 @@ describe('record panel', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    const kinds = await openKinds(panel)
     await fireEvent.click(within(kinds).getAllByRole('button')[0])
     await within(panel).findByRole('table', { name: 'org records' })
     await fireEvent.click(within(panel).getByRole('button', { name: 'Northwind Inc' }))
@@ -2130,7 +2139,7 @@ describe('record panel', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    const kinds = await openKinds(panel)
     await fireEvent.click(within(kinds).getAllByRole('button')[0])
     await within(panel).findByText('No org records yet')
     await fireEvent.click(within(panel).getByRole('button', { name: 'Import' }))
@@ -2176,7 +2185,7 @@ describe('record panel', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    const kinds = await openKinds(panel)
     await fireEvent.click(within(kinds).getAllByRole('button')[0])
     await within(panel).findByRole('table', { name: 'mapping records' })
     await fireEvent.click(within(panel).getByRole('button', { name: 'csv customers.csv to org' }))
@@ -2201,7 +2210,7 @@ describe('record panel', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Open record panel' }))
     const panel = screen.getByRole('complementary', { name: 'Record' })
-    const kinds = await within(panel).findByRole('navigation', { name: 'Kinds' })
+    const kinds = await openKinds(panel)
     await fireEvent.click(within(kinds).getAllByRole('button')[1])
     await within(panel).findByRole('table', { name: 'deal records' })
     const toolbar = within(panel).getByRole('toolbar', { name: 'View' })
@@ -2287,7 +2296,7 @@ describe('record panel', () => {
     expect(within(panel).getByText('Northwind Traders, a sample company · 8 open findings · 3 fewer than the last run')).toBeInTheDocument()
     expect(within(panel).getByText('4,182')).toBeInTheDocument()
     expect(within(panel).getByText('people appear more than once across HubSpot and Salesforce, so every owner report and every campaign count reads them twice.')).toBeInTheDocument()
-    expect(within(within(panel).getByRole('list', { name: 'Sources' })).getAllByRole('button')).toHaveLength(8)
+    expect(within(within(panel).getByRole('list', { name: 'Sources' })).getAllByRole('button')).toHaveLength(20)
     const name = within(panel).getByRole('textbox', { name: 'Company name' })
     const create = within(panel).getByRole('button', { name: 'Create your company' })
     expect(create).toBeDisabled()
@@ -2296,7 +2305,7 @@ describe('record panel', () => {
     await fireEvent.click(create)
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_company_create', { name: 'Northwind' }))
     await within(panel).findByRole('combobox', { name: 'Company' })
-    expect(within(panel).getByRole('navigation', { name: 'Kinds' })).toBeInTheDocument()
+    await openKinds(panel)
 
     recordKindsResult = { error: { code: 'unknown_company', message: 'No company has id x. Pick another one.' } }
     await fireEvent.click(record)
