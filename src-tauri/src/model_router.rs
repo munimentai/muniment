@@ -764,7 +764,7 @@ pub(crate) fn import_pi_sign_in<R: tauri::Runtime>(
     import_credential(app, provider, credential, None)
 }
 
-/// Adds one subscription credential to its family's pool, named by its email
+/// Imports a subscription credential into its family's pool, named by its email
 /// or the name the sign-in learned, else by its place in the pool, and probes
 /// what it has left. Answers with the account id.
 pub(crate) fn import_credential<R: tauri::Runtime>(
@@ -776,14 +776,14 @@ pub(crate) fn import_credential<R: tauri::Runtime>(
     let family = family_for_pi_provider(provider)
         .ok_or_else(|| "This provider has no subscription the router can pool.".to_string())?;
     let agent = agent()?;
+    let lock = lock_pi_auth_file(&config::config_path(&agent))?;
     let mut config = load(&agent)?;
     // A pooled subscription serves through the router alone, so the account
     // that joins turns the router on.
     config.enabled = true;
     let count = config.pool(family.id).len() + 1;
-    let id = uuid::Uuid::now_v7().to_string();
-    config.accounts.push(Account {
-        id: id.clone(),
+    let id = config.import_account(Account {
+        id: uuid::Uuid::now_v7().to_string(),
         family: family.id.to_owned(),
         label: credential
             .clone()
@@ -797,6 +797,7 @@ pub(crate) fn import_credential<R: tauri::Runtime>(
         weight: 1,
     });
     save(&agent, &config)?;
+    drop(lock);
     let state = app.state::<RouterState>();
     apply(&agent, &state, &config)?;
     // The probe names the account and fills its windows. It is a network call,
@@ -816,6 +817,7 @@ pub(crate) fn refresh_quota(agent: &Path, id: &str) -> Result<bool, String> {
     let Some(account) = config.accounts.iter_mut().find(|account| account.id == id) else {
         return Err("That account is gone.".into());
     };
+    let original = account.credential.clone();
     let now = chrono::Utc::now().timestamp_millis();
     // A token inside a minute of dying is refreshed first, so the probe and
     // the turns that follow run on a live one.
@@ -826,7 +828,29 @@ pub(crate) fn refresh_quota(agent: &Path, id: &str) -> Result<bool, String> {
     ) {
         account.credential = refreshed?;
     }
-    let Some(probed) = quota::probe(account, now, quota::TIMEOUT) else {
+    let probed = quota::probe(account, now, quota::TIMEOUT);
+    save_probe(agent, id, &original, account.credential.clone(), probed)
+}
+
+/// A probe can outlast a sign-in or another pool edit. Apply its answer to
+/// the current account only if it still holds the credential we probed.
+fn save_probe(
+    agent: &Path,
+    id: &str,
+    original: &Credential,
+    refreshed: Credential,
+    probed: Option<quota::Quota>,
+) -> Result<bool, String> {
+    let _lock = lock_pi_auth_file(&config::config_path(agent))?;
+    let mut config = load(agent)?;
+    let Some(account) = config.accounts.iter_mut().find(|account| account.id == id) else {
+        return Ok(false);
+    };
+    if &account.credential != original {
+        return Ok(false);
+    }
+    account.credential = refreshed;
+    let Some(probed) = probed else {
         // The refresh alone is worth keeping.
         save(agent, &config)?;
         return Ok(false);
@@ -910,6 +934,70 @@ mod tests {
             enabled: true,
             weight: 2,
         }
+    }
+
+    #[test]
+    fn a_delayed_probe_keeps_new_sign_ins_and_unrelated_pool_edits() {
+        let agent = std::env::temp_dir().join(format!("muniment-probe-{}", uuid::Uuid::now_v7()));
+        let original = account("first");
+        let refreshed = Credential::ApiKey {
+            key: "refreshed".into(),
+        };
+        let other = account("other");
+        let mut config = RouterConfig {
+            accounts: vec![original.clone(), other.clone()],
+            ..RouterConfig::default()
+        };
+        config::save(&agent, &config).unwrap();
+        let probe = quota::Quota {
+            plan: Some("pro".into()),
+            ..quota::Quota::default()
+        };
+        assert!(save_probe(
+            &agent,
+            "first",
+            &original.credential,
+            refreshed.clone(),
+            Some(probe.clone())
+        )
+        .unwrap());
+        config.accounts[0].credential = refreshed;
+        assert_eq!(config::load(&agent).unwrap(), config);
+        assert_eq!(quota::load(&agent).accounts["first"], probe);
+
+        // A browser sign-in completes while the next probe waits upstream.
+        let current = Credential::ApiKey {
+            key: "new-sign-in".into(),
+        };
+        config.accounts[0].credential = current;
+        config::save(&agent, &config).unwrap();
+        let quota_before = std::fs::read(quota::quota_path(&agent)).unwrap();
+        assert!(!save_probe(
+            &agent,
+            "first",
+            &original.credential,
+            original.credential.clone(),
+            Some(quota::Quota::default())
+        )
+        .unwrap());
+        assert_eq!(config::load(&agent).unwrap(), config);
+        assert_eq!(
+            std::fs::read(quota::quota_path(&agent)).unwrap(),
+            quota_before
+        );
+
+        config.accounts.remove(0);
+        config::save(&agent, &config).unwrap();
+        assert!(!save_probe(
+            &agent,
+            "first",
+            &original.credential,
+            original.credential.clone(),
+            None
+        )
+        .unwrap());
+        assert_eq!(config::load(&agent).unwrap(), config);
+        std::fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]
