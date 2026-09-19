@@ -1625,7 +1625,7 @@
                   {/if}
                 </div>
                 <div class="user-message-meta message-actions">
-                  {#if messageLocalTime(message.sentAt)}<time datetime={message.sentAt}>{messageLocalTime(message.sentAt)}</time>{/if}
+                  {#if messageLocalTime(message.sentAt)}<time class="message-time" datetime={message.sentAt}>{messageLocalTime(message.sentAt)}</time>{/if}
                   <button type="button" aria-label={copyConfirmed(copy, userCopyId) ? 'Copied message' : 'Copy message'} data-tooltip={copyConfirmed(copy, userCopyId) ? 'Copied' : 'Copy message'} onclick={() => copyResponse({ id: userCopyId, text: message.text })}><LucideIcon name={copyConfirmed(copy, userCopyId) ? 'check' : 'copy'} variant="action" size={14} /></button>
                 </div>
                 {#if copyFailure(copy, userCopyId, modifierLabel)}<p class="copy-failure">{copyFailure(copy, userCopyId, modifierLabel)}</p>{/if}
@@ -1732,7 +1732,7 @@
                     <p class="provenance">Receipt unavailable</p>
                   {/if}
                   <div class="response-meta">
-                    {#if summary.time !== null}<span class="receipt-time"><LucideIcon name="clock" variant="action" size={12} />{summary.time}</span>{/if}
+                    {#if summary.time !== null}<span class="receipt-time message-time"><LucideIcon name="clock" variant="action" size={12} />{summary.time}</span>{/if}
                   <div class="message-actions">
                     <button type="button" aria-label={copyLabel(copy, message.run.id)} data-tooltip={copyConfirmed(copy, message.run.id) ? 'Copied' : 'Copy message'} onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<LucideIcon name="check" variant="action" size={14} />{:else}<LucideIcon name="copy" variant="action" size={14} />{/if}</button>
                   </div>
@@ -2251,6 +2251,7 @@
   .provenance { gap: 9px; }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
+  .message-time { font-family: var(--font-mono); font-size: var(--text-provenance); font-weight: 400; line-height: 1.45; font-variant-numeric: tabular-nums; }
   .receipt-time { display: inline-flex; align-items: center; gap: 4px; }
   /* The expanded receipt sits plain under the provenance line: no box. */
   .receipt-usage { max-width: 100%; overflow-x: auto; margin-top: 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
