@@ -136,7 +136,12 @@ const DIAGNOSTICS = new Map([
   ['chat_coordinate.rs', ['new runs prepare a Pi prompt', 'timed out waiting for Pi stream']],
   ['chat_profile.rs', ['could not create the Pi session root']],
   ['journal/reducer.rs', ['run cannot acquire Pi', 'Pi acquisition has not started', 'Pi session may only be bound once', 'Pi session binding payload is invalid']],
-  ['pi_packages.rs', ['Pi package acquisition failed.', 'Pi package acquisition timed out.', 'Pi package acquisition did not install the pinned versions.']],
+  ['pi_packages.rs', [
+    'Pi package acquisition failed.', 'Pi package acquisition timed out.', 'Pi package acquisition did not install the pinned versions.',
+    // Exact source literals used to migrate the pinned extension's private paths.
+    "'.pi'", "parts[0] === '.pi'", "['.pi', '.muniment'].includes(parts[0])",
+    "join(ctx.cwd, '.pi', 'tasks', runId); join('.pi', 'tasks', runId);", 'Output is written to .pi/tasks',
+  ]],
   ['pi_settings.rs', ['The Pi directory URL is invalid.', 'Cannot locate the Pi home directory.', 'Pi settings lock changed owners.']],
   ['sidecar/io.rs', ['timed out writing Pi RPC stdin', 'Pi stderr {index}', 'Pi stderr 5']],
   ['sidecar/pi.rs', [

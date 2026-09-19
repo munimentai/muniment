@@ -12,7 +12,7 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
+function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null } = {}) {
   let messages = []
   let active = null
   let announced = null
@@ -44,6 +44,8 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [] } = {}) {
     readDraft: () => draft,
     readFiles: () => files,
     readThreadId: () => openThreadId,
+    readProject: () => projectId,
+    readAgent: () => agentId,
     readThreadSummaries: () => threadSummaries,
     onMessages,
     onActive,
@@ -283,6 +285,14 @@ describe('chat delivery recovery', () => {
 })
 
 describe('launcher submission', () => {
+  it('leaves launcher threads unassigned when the main chat has a project or agent', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_submit' ? { runId: 'launcher-run' } : undefined)
+    const ui = setup(invoke, { projectId: 'project-1', agentId: 'agent-1' })
+    await expect(ui.controller.sendNewThread('A separate thread')).resolves.toBe(true)
+    expect(invoke).toHaveBeenCalledWith('chat_new_thread')
+    ui.controller.cleanup()
+  })
+
   it('starts a fresh thread without consuming the main draft or attachments', async () => {
     const invoke = vi.fn(async (command) => command === 'chat_submit' ? { runId: 'launcher-run' } : undefined)
     const ui = setup(invoke)

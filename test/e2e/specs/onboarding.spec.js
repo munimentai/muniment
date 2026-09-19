@@ -151,7 +151,11 @@ describe('installed nightly model-ready onboarding', () => {
     await expandSidebar()
     const row = await $('header.titlebar')
     expect((await row.getSize()).height).toBe(30)
-    for (const name of ['Collapse sidebar', 'New thread', 'Rename thread', 'Open artifact rail']) {
+    const newThread = await $('#sidebar .side-top > button:first-child')
+    expect(await newThread.getAttribute('aria-label')).toBe('New thread')
+    expect(await newThread.isDisplayed()).toBe(true)
+    expect((await newThread.getSize()).height).toBeGreaterThanOrEqual(24)
+    for (const name of ['Collapse sidebar', 'Rename thread', 'Open artifact rail']) {
       const control = await row.$(`button[aria-label="${name}"]`)
       expect(await control.isDisplayed()).toBe(true)
       const size = await control.getSize()

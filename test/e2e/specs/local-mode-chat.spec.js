@@ -72,7 +72,7 @@ describe('installed local-mode chat', () => {
     await composer.waitForDisplayed({ timeout: 120000 })
     expect(await composer.getValue()).toBe('Help me organize my notes.')
     // The first Send opens Settings → Models; the composer chip's picker reopens it through Manage models.
-    const settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
+    let settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
     if (await settings.isDisplayed()) {
       await (await settings.$('button[aria-label="Close settings"]')).click()
       await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
@@ -87,6 +87,7 @@ describe('installed local-mode chat', () => {
       await modelChip.waitForDisplayed()
       await modelChip.click()
       await (await $('button=Models & routing')).click()
+      settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
       await settings.waitForDisplayed()
     }
     await (await settings.$('button=Connect account')).click()
