@@ -14,7 +14,7 @@
   })
 </script>
 
-<span class="receipt-time message-time" aria-label={`Execution time: ${elapsed}`}><LucideIcon name="clock" variant="action" size={12} />{elapsed}</span>
+<span class="receipt-time" aria-label={`Execution time: ${elapsed}`}><LucideIcon name="clock" variant="action" size={12} />{elapsed}</span>
 
 <style>
   .receipt-time { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; }
