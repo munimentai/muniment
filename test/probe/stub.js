@@ -240,6 +240,7 @@ export function buildProbeCommandTable(fixtureName) {
   const fixtureHistory = historyFixtures[fixtureName]
   if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
   const history = structuredClone(fixtureHistory)
+  if (fixtureName === 'applied-diff') history[0].toolActivity = [{ effectId: 'preview-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: 'src/welcome.js' }) }]
   const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'scan'
   const scanFixture = fixtureName === 'scan'
   const accessFixture = fixtureName === 'access'
@@ -289,6 +290,7 @@ export function buildProbeCommandTable(fixtureName) {
     if (['local_mode_store_provider_key', 'local_mode_set_default_model', 'local_mode_set_model_hidden', 'local_mode_disconnect_provider', 'local_mode_connect_claude_code', 'local_mode_account_login_start', 'local_mode_account_login_answer', 'local_mode_account_login_cancel', 'local_mode_open_url'].includes(command)) return null
     if (command === 'local_mode_store_endpoint') return 'custom-endpoint'
     if (command === 'local_mode_claude_code_status') return { installed: true, logged_in: true, path: '/usr/local/bin/claude' }
+    if (command === 'chat_file_content') return 'export function welcome(name) {\n  // The current file from the workspace.\n  return `Welcome, ${name}`\n}\n'
     if (command === 'home_status') {
       if (onboardingFixture) return { configured: false, homePath: onboardingHomePath }
       return { configured: true, homePath: '/Documents/Muniment' }

@@ -7029,3 +7029,27 @@ describe('signed-in access popover', () => {
     expect(companionCalls).toBe(2)
   })
 })
+
+
+describe('account display names', () => {
+  it('saves a trimmed name inline and cancels without saving', async () => {
+    const { default: ModelAccounts } = await import('./lib/ModelAccounts.svelte')
+    const account = { id: 'name-test', family: 'xai', label: 'user@example.test', source: 'subscription', enabled: true, weight: 1, models: [], days: [], windows: [], requests: 0, input_tokens: 0, output_tokens: 0, errors: 0 }
+    const settings = { accounts: [account], families: [], subscriptions: [] }
+    const tauri = { invoke: vi.fn(async () => settings) }
+    const view = render(ModelAccounts, { tauri, settings, family: 'xai' })
+    await fireEvent.click(view.getByRole('button', { name: 'Rename user@example.test' }))
+    await fireEvent.input(view.getByLabelText('Account name'), { target: { value: '  Work Grok  ' } })
+    await fireEvent.submit(view.getByLabelText('Account name').closest('form'))
+    await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_update_account', { id: 'name-test', label: 'Work Grok' }))
+    await waitFor(() => expect(view.queryByLabelText('Account name')).toBeNull())
+    await fireEvent.click(view.getByRole('button', { name: 'Rename user@example.test' }))
+    await fireEvent.keyDown(view.getByLabelText('Account name'), { key: 'Escape' })
+    expect(tauri.invoke).toHaveBeenCalledTimes(1)
+    tauri.invoke.mockRejectedValue(new Error('Save failed'))
+    await fireEvent.click(view.getByRole('button', { name: 'Rename user@example.test' }))
+    await fireEvent.submit(view.getByLabelText('Account name').closest('form'))
+    expect(await view.findByRole('alert')).toHaveTextContent('Save failed')
+    expect(view.getByLabelText('Account name')).toBeInTheDocument()
+  })
+})

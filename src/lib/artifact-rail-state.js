@@ -12,6 +12,7 @@ export const ARTIFACT_RAIL_KEYBOARD_STEP = 20
 
 export const RAIL_OCCUPANTS = Object.freeze({
   artifacts: Object.freeze({ min: ARTIFACT_RAIL_MIN_WIDTH, max: ARTIFACT_RAIL_MAX_WIDTH, share: 0.34 }),
+  files: Object.freeze({ min: RECORD_PANEL_MIN_WIDTH, max: RECORD_PANEL_MAX_WIDTH, share: 0.5 }),
   record: Object.freeze({ min: RECORD_PANEL_MIN_WIDTH, max: RECORD_PANEL_MAX_WIDTH, share: 0.5 }),
 })
 
@@ -141,7 +142,7 @@ export function createRailController({
   }
 
   function toggleMaximized() {
-    if (readOccupant() !== 'record') return
+    if (!['record', 'files'].includes(readOccupant())) return
     onMaximized(!readMaximized())
   }
 

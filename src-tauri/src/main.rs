@@ -166,6 +166,7 @@ fn main() {
             account_login::local_mode_open_url,
             chat::chat_submit,
             chat::chat_file_metadata,
+            chat::chat_file_content,
             chat::chat_resume,
             chat::chat_cancel,
             chat::chat_answer_permission,

@@ -9,7 +9,7 @@ render the same graph, and nothing in the shell is decoration.
 
 ## Tokens
 
-`src/styles/tokens.css` is the token source. Light and dark are both
+`src/styles/tokens.css` is the token source. Code has theme-aware syntax tokens. Light and dark are both
 first-class, the OS picks the default, and a user override persists per device.
 Every theme carries the same ten color tokens in one `:root[data-theme]`
 block. The house sets are Paper, Vellum, Ledger and Foolscap in light and
@@ -239,3 +239,8 @@ Remote control: [docs/design-reference/remote-control-ux.md](docs/design-referen
 records the desktop session UX reference that mobile drives.
 Components: [docs/design-reference/components.md](docs/design-reference/components.md)
 lists every control and surface, its states, and the token each state reads.
+
+The file panel shares the record panel rail, resize and maximize behavior.
+The changed-files chip sits above the composer and opens its list on hover or click.
+File links open current text. Only actions with more details use disclosure arrows.
+The account name shows a pencil on hover or focus and edits inline.

@@ -2,7 +2,7 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { actionGroups, actionDuration } from './action-feedback.js'
 
-  let { activities = [], live = false } = $props()
+  let { activities = [], live = false, onopenfile } = $props()
   const groups = $derived(actionGroups(activities, live))
   let now = $state(Date.now())
   $effect(() => {
@@ -23,6 +23,14 @@
         </summary>
         <div class="action-list">
           {#each group.actions as action (action.effectId)}
+            {#if action.path && onopenfile}
+              <button type="button" class="file-action" onclick={() => onopenfile({ path: action.path })}>
+                <LucideIcon name={action.icon} /><span class="action-label" class:active-sheen={action.running}>{action.label}</span>
+                {#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}
+              </button>
+            {:else if !action.hasDetails}
+              <div class="plain-action"><LucideIcon name={action.icon} /><span class="action-label" class:active-sheen={action.running}>{action.label}</span>{#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}</div>
+            {:else}
             <details >
               <summary>
                 <LucideIcon name={action.icon} />
@@ -37,6 +45,7 @@
                 {:else}<p>{action.running ? 'Waiting for output.' : 'No output was saved.'}</p>{/if}
               </div>
             </details>
+            {/if}
           {/each}
         </div>
       </details>
@@ -49,6 +58,10 @@
   summary { display: flex; align-items: center; gap: 8px; min-height: 32px; cursor: pointer; list-style: none; }
   summary::-webkit-details-marker { display: none; }
   summary:hover, summary:focus-visible { color: var(--ink); }
+  .file-action, .plain-action { display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0; max-width: 100%; }
+  .file-action { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+  .file-action .action-label { text-decoration: underline dotted; text-underline-offset: 3px; }
+  .file-action:hover { color: var(--ink); }
   .action-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .chevron { opacity: 0; flex: none; }
   summary:hover .chevron, summary:focus-visible .chevron, details[open] > summary > .chevron { opacity: 1; }

@@ -1,6 +1,8 @@
 const categories = {
   read: { icon: 'book-open', done: 'Read files', active: 'Reading files', verb: 'Read', present: 'Reading' },
   search: { icon: 'search', done: 'Searched files', active: 'Searching files', verb: 'Searched', present: 'Searching' },
+  list: { icon: 'folder', done: 'Listed files', active: 'Listing files', verb: 'Listed files in', present: 'Listing files in' },
+  web: { icon: 'globe', done: 'Searched the web', active: 'Searching the web', verb: 'Searched the web for', present: 'Searching the web for' },
   command: { icon: 'square-terminal', done: 'Ran commands', active: 'Running commands', verb: 'Ran', present: 'Running' },
   edit: { icon: 'file-text', done: 'Changed files', active: 'Changing files', verb: 'Changed', present: 'Changing' },
   other: { icon: 'play', done: 'Actions', active: 'Working', verb: '', present: '' },
@@ -11,7 +13,9 @@ export function actionGroups(activities = [], live = false) {
   for (const activity of activities) {
     const name = (activity.displayName || 'Action').replace(/[_-]+/g, ' ')
     const kind = /^(read|read file|read files)$/i.test(name) ? 'read'
-      : /^(grep|find|ls|search|search files)$/i.test(name) ? 'search'
+      : /^(ls|list|list files)$/i.test(name) ? 'list'
+      : /^(web|web search|websearch|search web)$/i.test(name) ? 'web'
+      : /^(grep|find|search|search files)$/i.test(name) ? 'search'
         : /^(bash|powershell|shell|exec|exec command|run command)$/i.test(name) ? 'command'
           : /^(edit|write|apply patch)$/i.test(name) ? 'edit' : 'other'
     const category = categories[kind]
@@ -22,12 +26,12 @@ export function actionGroups(activities = [], live = false) {
       : activity.status === 'failed' ? 'Failed' : 'Completed'
     const path = args.path || args.file_path || args.filePath
     const target = kind === 'command' ? args.description || args.command
-      : kind === 'search' ? args.pattern || args.query || path
+      : ['search', 'web', 'list'].includes(kind) ? args.pattern || args.query || path
         : path && String(path).split(/[\\/]/).pop()
     const verb = running ? category.present : category.verb
     const label = kind === 'command' && args.description ? String(args.description) : target ? `${verb} ${target}`.trim()
       : kind === 'other' ? name.charAt(0).toUpperCase() + name.slice(1) : `${verb} ${kind === 'command' ? 'command' : 'files'}`
-    const action = { ...activity, detailInput: actionInput(activity.input), label, state, running, icon: category.icon }
+    const action = { ...activity, path: ['read', 'edit'].includes(kind) && typeof path === 'string' ? path : null, hasDetails: !!activity.output || (kind === 'command' && !!activity.input) || (kind === 'other' && !!activity.input), detailInput: actionInput(activity.input), label, state, running, icon: category.icon }
     let group = groups.at(-1)
     if (!group || group.kind !== kind) {
       group = { kind, id: activity.effectId, ...category, actions: [] }
