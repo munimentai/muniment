@@ -33,7 +33,7 @@
     {/if}
     {#each groups as group (group.id)}
       <section class="picker-group" aria-label={group.name}>
-        <h4>{group.name} <span class="tag">{sourceTag(group.source)}</span></h4>
+        <h4>{group.name}{#if !group.classifier} <span class="tag">{sourceTag(group.source)}</span>{/if}</h4>
         <ul>
           {#each group.models as model (model.id)}
             {@const inUse = current?.provider === model.provider && current?.model === model.choice}
