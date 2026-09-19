@@ -724,7 +724,23 @@ fn provider_inventory(
                     .get("baseUrl")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
-                models: Vec::new(),
+                // Endpoint discovery is available before the first chat installs Pi.
+                // Keep its model names available while the CLI catalog is absent.
+                models: entry
+                    .get("models")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|model| model.get("id").and_then(serde_json::Value::as_str))
+                    .filter(|id| !id.trim().is_empty())
+                    .map(|id| InventoryModel {
+                        id: id.to_owned(),
+                        context: String::new(),
+                        max_out: String::new(),
+                        thinking: false,
+                        images: false,
+                    })
+                    .collect(),
             });
         }
     }
@@ -743,7 +759,11 @@ fn provider_inventory(
     }
     for (provider, model) in models {
         if let Some(known) = providers.iter_mut().find(|known| known.id == provider) {
-            known.models.push(model);
+            if let Some(existing) = known.models.iter_mut().find(|entry| entry.id == model.id) {
+                *existing = model;
+            } else {
+                known.models.push(model);
+            }
         }
     }
     Ok(ProviderInventory {
@@ -1418,6 +1438,31 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         .unwrap();
         adopt_shown_default(&agent, &mut again);
         assert_eq!(again.default_model.as_deref(), Some("gpt-5.6-luna"));
+    }
+
+    #[test]
+    fn endpoint_models_are_selectable_before_the_first_chat_installs_pi() {
+        let agent = temporary_directory();
+        fs::write(agent.join("models.json"), serde_json::json!({
+            "providers": {"ollama": {"baseUrl": "http://localhost:11434/v1", "models": [{"id": "local-model"}]}}
+        }).to_string()).unwrap();
+        let mut inventory = provider_inventory(&agent, Vec::new()).unwrap();
+        adopt_shown_default(&agent, &mut inventory);
+        assert_eq!(inventory.default_provider.as_deref(), Some("ollama"));
+        assert_eq!(inventory.default_model.as_deref(), Some("local-model"));
+        assert_eq!(inventory.providers[0].models[0].id, "local-model");
+
+        let detailed = InventoryModel {
+            id: "local-model".into(),
+            context: "128K".into(),
+            max_out: "8K".into(),
+            thinking: true,
+            images: true,
+        };
+        let inventory = provider_inventory(&agent, vec![("ollama".into(), detailed)]).unwrap();
+        assert_eq!(inventory.providers[0].models.len(), 1);
+        assert_eq!(inventory.providers[0].models[0].context, "128K");
+        assert!(inventory.providers[0].models[0].images);
     }
 
     #[test]
