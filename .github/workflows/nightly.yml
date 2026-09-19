@@ -12,7 +12,6 @@ on:
         options: [all, linux, windows, macos]
 
 permissions:
-  actions: write
   contents: write
 
 concurrency:
@@ -327,57 +326,13 @@ jobs:
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
-      - name: Upload successful diagnostics
-        if: always() && steps.e2e.outputs.status == '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-e2e-${{ needs.prepare.outputs.source_sha }}-success
-          path: ${{ runner.temp }}/muniment-e2e-artifacts
-          retention-days: 7
-          if-no-files-found: error
-
-      - name: Delete older Linux e2e failure artifacts
-        if: always() && steps.e2e.outputs.status != '0'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -o pipefail
-          artifact_ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
-            --jq '.artifacts[] | select(.name | startswith("linux-e2e-") and endswith("-failure")) | [.created_at, .id] | @tsv' \
-            | sort -r | tail -n +4 | cut -f2) || {
-              echo "::warning::GitHub refused to list older Linux e2e failure artifacts."
-              exit 0
-            }
-          for artifact_id in $artifact_ids; do
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" || {
-              echo "::warning::GitHub refused to delete Linux e2e failure artifact ${artifact_id}."
-              exit 0
-            }
-          done
-
-      - name: Upload failure diagnostics
-        if: always() && steps.e2e.outputs.status != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-e2e-${{ needs.prepare.outputs.source_sha }}-failure
-          path: ${{ runner.temp }}/muniment-e2e-artifacts
-          retention-days: 2
-          if-no-files-found: error
-
-      - name: Publish the linux-e2e-report to the CI artifact store
+      - name: Publish diagnostics and JUnit to MinIO
         if: always()
-        continue-on-error: true
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
           AWS_DEFAULT_REGION: us-east-1
-        run: |
-          set -euo pipefail
-          for f in "$RUNNER_TEMP"/muniment-e2e-artifacts/junit-*.xml; do
-            [ -f "$f" ] || continue
-            aws --endpoint-url http://10.1.10.101:9000 s3 cp "$f" \
-              "s3://factory-ci-artifacts/muniment-desktop/${{ github.run_id }}/linux-e2e-report/$(basename "$f")"
-          done
+        run: bash .github/publish-ci-artifacts.sh linux "$RUNNER_TEMP/muniment-e2e-artifacts"
 
       - name: Preserve E2E result
         if: always()
@@ -450,51 +405,13 @@ jobs:
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
-      - name: Upload successful diagnostics
-        if: always() && steps.e2e.outputs.status == '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-e2e-${{ needs.prepare.outputs.source_sha }}-success
-          path: ${{ runner.temp }}/muniment-windows-e2e-artifacts
-          retention-days: 7
-          if-no-files-found: error
-
-      - name: Delete older Windows e2e failure artifacts
-        if: always() && steps.e2e.outputs.status != '0'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -o pipefail
-          artifact_ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
-            --jq '.artifacts[] | select(.name | startswith("windows-e2e-") and endswith("-failure")) | [.created_at, .id] | @tsv' \
-            | sort -r | tail -n +4 | cut -f2) || {
-              echo "::warning::GitHub refused to list older Windows e2e failure artifacts."
-              exit 0
-            }
-          for artifact_id in $artifact_ids; do
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" || {
-              echo "::warning::GitHub refused to delete Windows e2e failure artifact ${artifact_id}."
-              exit 0
-            }
-          done
-
-      - name: Upload failure diagnostics
-        if: always() && steps.e2e.outputs.status != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-e2e-${{ needs.prepare.outputs.source_sha }}-failure
-          path: ${{ runner.temp }}/muniment-windows-e2e-artifacts
-          retention-days: 2
-          if-no-files-found: error
-
-      - name: Upload stable JUnit report
+      - name: Publish diagnostics and JUnit to MinIO
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-e2e-report
-          path: ${{ runner.temp }}/muniment-windows-e2e-artifacts/junit-*.xml
-          retention-days: 30
-          if-no-files-found: error
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: bash .github/publish-ci-artifacts.sh windows "$RUNNER_TEMP/muniment-windows-e2e-artifacts"
 
       - name: Preserve E2E result
         if: always()
@@ -567,51 +484,13 @@ jobs:
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
-      - name: Upload successful diagnostics
-        if: always() && steps.e2e.outputs.status == '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-e2e-${{ needs.prepare.outputs.source_sha }}-success
-          path: ${{ runner.temp }}/muniment-macos-e2e-artifacts
-          retention-days: 7
-          if-no-files-found: error
-
-      - name: Delete older macOS e2e failure artifacts
-        if: always() && steps.e2e.outputs.status != '0'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -o pipefail
-          artifact_ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
-            --jq '.artifacts[] | select(.name | startswith("macos-e2e-") and endswith("-failure")) | [.created_at, .id] | @tsv' \
-            | sort -r | tail -n +4 | cut -f2) || {
-              echo "::warning::GitHub refused to list older macOS e2e failure artifacts."
-              exit 0
-            }
-          for artifact_id in $artifact_ids; do
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" || {
-              echo "::warning::GitHub refused to delete macOS e2e failure artifact ${artifact_id}."
-              exit 0
-            }
-          done
-
-      - name: Upload failure diagnostics
-        if: always() && steps.e2e.outputs.status != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-e2e-${{ needs.prepare.outputs.source_sha }}-failure
-          path: ${{ runner.temp }}/muniment-macos-e2e-artifacts
-          retention-days: 2
-          if-no-files-found: error
-
-      - name: Upload stable JUnit report
+      - name: Publish diagnostics and JUnit to MinIO
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-e2e-report
-          path: ${{ runner.temp }}/muniment-macos-e2e-artifacts/junit-*.xml
-          retention-days: 30
-          if-no-files-found: error
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: bash .github/publish-ci-artifacts.sh macos "$RUNNER_TEMP/muniment-macos-e2e-artifacts"
 
       - name: Preserve E2E result
         if: always()
