@@ -81,6 +81,13 @@ export function receiptRows(receipt = {}, recalls = []) {
     if (Number(tokens.reasoning) > 0) parts.push(`${count(tokens.reasoning)} reasoning`)
     rows.push({ label: 'Tokens', value: parts.join(', '), route: false })
   }
+  for (const classifier of receipt?.classifiers ?? []) {
+    rows.push({ label: 'Classifier', value: classifier.model, route: false })
+    const cost = classifier.cost
+    rows.push({ label: 'Classifier cost', value: Number.isFinite(cost) ? `$${cost.toFixed(6)} est.` : 'Unavailable', route: false })
+    const usage = classifier.tokens
+    rows.push({ label: 'Classifier tokens', value: usage ? `${count(usage.input)} in, ${count(usage.output)} out` : 'Unavailable', route: false })
+  }
   if (recorded(receipt?.turns)) rows.push({ label: 'Turns', value: count(receipt.turns), route: false })
   const tools = (receipt?.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls))
   if (tools.length) {
