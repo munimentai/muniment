@@ -435,3 +435,11 @@ it('keeps a saved partial reply and calls a generic start failure an interruptio
   expect(runFailureMessage(run)).toBe('The reply stopped before it finished.')
   expect(run.text).toBe('The first part of the reply.')
 })
+
+ it('keeps classifier cost and tokens separate from the reply model', () => {
+  const rows = receiptRows({ cost: '$0.018 est.', classifiers: [{ model: 'typesafe/jev-latest', cost: 0.000042, tokens: { input: 1000, output: 12 } }] })
+  expect(rows).toContainEqual({ label: 'Classifier cost', value: '$0.000042 est.', route: false })
+  expect(rows).toContainEqual({ label: 'Classifier tokens', value: '1,000 in, 12 out', route: false })
+  expect(rows[0]).toEqual({ label: 'Cost', value: '$0.018 est.', route: false })
+  expect(receiptRows({ classifiers: [{ model: 'private', cost: null, tokens: null }] })).toContainEqual({ label: 'Classifier cost', value: 'Unavailable', route: false })
+ })
