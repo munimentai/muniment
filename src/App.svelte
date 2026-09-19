@@ -2251,7 +2251,7 @@
      that order exactly as `display: none` does, which would make focus unreachable
      and the :focus-within reveal below unreachable with it. */
   .message-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 120ms ease; }
-  .response:hover .message-actions, .response:focus-within .message-actions { opacity: 1; }
+  .response .message-actions { opacity: 1; }
   .message-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-color: transparent; background: transparent; color: var(--muted); font-size: var(--text-12); }
   .message-actions button:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
   /* §1.2: focus rings are ink, never signal. */
