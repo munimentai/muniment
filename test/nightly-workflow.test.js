@@ -111,21 +111,21 @@ describe('nightly Linux E2E workflow', () => {
     expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', prepare: 'failure' })).toBe(false)
   })
 
-  it('publishes only generated JUnit XML to the CI artifact store', () => {
-    const reportStep = linuxE2e.slice(linuxE2e.indexOf('      - name: Publish the linux-e2e-report to the CI artifact store'), linuxE2e.indexOf('      - name: Preserve E2E result'))
-    expect(linuxE2e).toContain('ensure-junit-report.sh')
-    expect(reportStep).toContain('if: always()')
-    expect(reportStep).toContain('continue-on-error: true')
-    expect(reportStep).toContain('AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}')
-    expect(reportStep).toContain('AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}')
-    expect(reportStep).toContain('for f in "$RUNNER_TEMP"/muniment-e2e-artifacts/junit-*.xml; do')
-    expect(reportStep).toContain('aws --endpoint-url http://10.1.10.101:9000 s3 cp "$f"')
-    expect(reportStep).toContain('s3://factory-ci-artifacts/muniment-desktop/${{ github.run_id }}/linux-e2e-report/$(basename "$f")')
-    expect(reportStep).not.toContain('actions/upload-artifact')
+  it('requires verified MinIO evidence for every platform without GitHub artifact storage', () => {
+    expect(workflow).not.toMatch(/actions\/(?:upload|download)-artifact|actions\/artifacts/)
+    for (const platform of ['linux', 'windows', 'macos']) {
+      const lane = job(`${platform}-e2e`, platform === 'linux' ? 'windows-e2e' : platform === 'windows' ? 'macos-e2e' : 'verify-requested-e2e')
+      const step = lane.slice(lane.indexOf('      - name: Publish diagnostics and JUnit to MinIO'), lane.indexOf('      - name: Preserve E2E result'))
+      expect(step).toContain('if: always()')
+      expect(step).not.toContain('continue-on-error')
+      expect(step).toContain('AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}')
+      expect(step).toContain('AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}')
+      expect(step).toContain(`bash .github/publish-ci-artifacts.sh ${platform}`)
+    }
   })
 
   it('requests the desktop-ci artifact collector for the guest-published report', () => {
-    const runStep = linuxE2e.slice(linuxE2e.indexOf('      - name: Run installed Linux sign-in via desktop-ci'), linuxE2e.indexOf('      - name: Upload successful diagnostics'))
+    const runStep = linuxE2e.slice(linuxE2e.indexOf('      - name: Run installed Linux sign-in via desktop-ci'), linuxE2e.indexOf('      - name: Publish diagnostics and JUnit to MinIO'))
     expect(runStep).toContain('sudo desktop-ci linux')
     expect(runStep).toContain('--collect-artifacts')
     expect(runStep).toContain('extract-artifacts.sh')
@@ -160,14 +160,6 @@ describe('nightly Linux E2E workflow', () => {
 describe('nightly Windows E2E workflow', () => {
   const start = workflow.indexOf('  windows-e2e:')
   const windowsE2e = workflow.slice(start, workflow.indexOf('  macos-e2e:', start))
-
-  it('uploads only generated JUnit XML under the stable report name', () => {
-    const reportStep = windowsE2e.slice(windowsE2e.indexOf('      - name: Upload stable JUnit report'), windowsE2e.indexOf('      - name: Preserve E2E result'))
-    expect(reportStep).toContain('if: always()')
-    expect(reportStep).toContain('name: windows-e2e-report')
-    expect(reportStep).toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts/junit-*.xml')
-    expect(reportStep).not.toContain('path: ${{ runner.temp }}/muniment-windows-e2e-artifacts\n')
-  })
 
   it.skipIf(process.platform === 'win32')('publishes a parseable infrastructure failure when an extracted failure has no JUnit', () => {
     const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
@@ -210,14 +202,7 @@ describe('nightly macOS E2E workflow', () => {
     expect(macosE2e).toContain('MUNIMENT_E2E_PASSWORD')
   })
 
-  it('publishes diagnostics and a stable JUnit report with the required retention', () => {
-    expect(macosE2e).toContain('name: macos-e2e-${{ needs.prepare.outputs.source_sha }}-success')
-    expect(macosE2e).toMatch(/name: macos-e2e-\$\{\{ needs\.prepare\.outputs\.source_sha \}\}-success[\s\S]*?retention-days: 7/)
-    expect(macosE2e).toMatch(/name: macos-e2e-\$\{\{ needs\.prepare\.outputs\.source_sha \}\}-failure[\s\S]*?retention-days: 30/)
-    expect(macosE2e).toContain('ensure-junit-report.sh')
-    expect(macosE2e).toContain('name: macos-e2e-report')
-    expect(macosE2e).toContain('path: ${{ runner.temp }}/muniment-macos-e2e-artifacts/junit-*.xml')
-  })
+
 })
 
 describe('nightly targeted E2E dispatch', () => {

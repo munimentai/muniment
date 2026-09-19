@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ALLOWED = {
+  'test/ci-artifacts.test.js:27:27': "it.skipIf(process.platform === 'win32') on the artifact publisher test",
   'test/macos-local-mode-config.test.js:18:29': "The fixture shell runs only through it.skipIf(process.platform === 'win32').",
   'test/linux-sign-in-state.test.js:19:20': "describe.skipIf(process.platform === 'win32')('Linux sign-in state cleanup')",
   'test/desktop-e2e-harness.test.js:354:20': "it.skipIf(process.platform === 'win32')('Keeps distinct captures after two failed spec runs.')",
