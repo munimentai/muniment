@@ -30,11 +30,12 @@ export function actionGroups(activities = [], live = false) {
     const target = kind === 'command' ? args.description || args.command
       : ['search', 'web', 'list'].includes(kind) ? args.pattern || args.query || path
         : path && String(path).split(/[\\/]/).pop()
+    const queries = kind === 'web' ? (Array.isArray(args.queries) ? args.queries.filter((q) => typeof q === 'string') : typeof args.query === 'string' ? [args.query] : []) : []
     const verb = running ? category.present : category.verb
-    const label = kind === 'compact' ? (running ? 'Compacting context' : activity.status === 'failed' ? 'Context compaction did not finish' : args.reason === 'manual' ? 'Context compacted' : 'Context automatically compacted')
+    const label = kind === 'web' ? (running ? 'Searching the web' : 'Searched the web') : kind === 'compact' ? (running ? 'Compacting context' : activity.status === 'failed' ? 'Context compaction did not finish' : args.reason === 'manual' ? 'Context compacted' : 'Context automatically compacted')
       : kind === 'command' && args.description ? String(args.description) : target ? `${verb} ${target}`.trim()
       : kind === 'other' ? name.charAt(0).toUpperCase() + name.slice(1) : `${verb} ${kind === 'command' ? 'command' : 'files'}`
-    const action = { ...activity, path: ['read', 'edit'].includes(kind) && typeof path === 'string' ? path : null, hasDetails: !!activity.output || (kind === 'command' && !!activity.input) || (kind === 'other' && !!activity.input), detailInput: actionInput(activity.input), label, state, running, icon: category.icon }
+    const action = { ...activity, queries, path: ['read', 'edit'].includes(kind) && typeof path === 'string' ? path : null, hasDetails: queries.length > 0 || !!activity.output || (kind === 'command' && !!activity.input) || (kind === 'other' && !!activity.input), detailInput: actionInput(activity.input), label, state, running, icon: category.icon }
     let group = groups.at(-1)
     if (!group || group.kind !== kind) {
       group = { kind, id: activity.effectId, ...category, actions: [] }
@@ -63,4 +64,22 @@ export function actionInput(input) {
       return `${name.charAt(0).toUpperCase() + name.slice(1)}: ${typeof item === 'string' ? item : JSON.stringify(item, null, 2)}`
     }).join('\n')
   } catch { return input }
+}
+
+// Offsets count UTF-16 units, as JavaScript strings do. The journal derives them
+// at tool start, so replay and streaming share the same order.
+export function responseParts(run) {
+  const text = run.text ?? ''
+  const parts = []
+  let cursor = 0
+  for (const activity of run.toolActivity ?? []) {
+    const offset = Math.max(cursor, Math.min(text.length, activity.textOffset ?? 0))
+    if (offset > cursor) parts.push({ type: 'text', text: text.slice(cursor, offset) })
+    if (parts.at(-1)?.type === 'actions') parts.at(-1).activities.push(activity)
+    else parts.push({ type: 'actions', activities: [activity] })
+    cursor = offset
+  }
+  if (!parts.length && !text && run.phase === 'streaming') parts.push({ type: 'text', text: '' })
+  if (cursor < text.length) parts.push({ type: 'text', text: text.slice(cursor) })
+  return parts
 }

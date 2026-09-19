@@ -32,3 +32,13 @@ it('leaves rows without details static and opens read files in the panel', async
   await fireEvent.click(view.getByRole('button', { name: 'Read main.rs', hidden: true }))
   expect(opened).toEqual([{ path: 'src/main.rs' }])
 })
+
+it('shows only the queries for web search details', () => {
+  const view = render(ActionFeedback, { activities: [{ effectId: 'web', displayName: 'web_search', status: 'completed', input: JSON.stringify({ queries: ['First query', 'Second query'], numResults: 6 }), output: 'Long provider output' }] })
+  expect(view.getAllByText('Searched the web')).toHaveLength(2)
+  expect(view.getByText('Queries:')).toBeInTheDocument()
+  expect(view.getByText('First query')).toBeInTheDocument()
+  expect(view.queryByText('Long provider output')).not.toBeInTheDocument()
+  expect(view.container.textContent).not.toContain('Num Results')
+  expect(view.container.textContent).not.toContain('Completed')
+})

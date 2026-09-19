@@ -129,3 +129,7 @@ Preferences includes automatic context compaction and token limits.
 Compaction keeps the conversation history and records its outcome in the action feed.
 The web search default returns sources in the conversation without opening a browser.
 An explicit web search workflow in the user configuration remains in effect.
+
+Actions appear where they occur between assistant text blocks, including restored history.
+Web search details list the queries without provider output or search parameters.
+A lost reply acknowledgment keeps the reply in recovery until the journal read completes.

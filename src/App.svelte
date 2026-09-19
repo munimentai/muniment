@@ -2,6 +2,7 @@
   import ComposerReferences from './composer/ComposerReferences.svelte'
   import FileMentions from './composer/FileMentions.svelte'
   import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
+  import { responseParts } from './activity/action-feedback.js'
   import ActionFeedback from './activity/ActionFeedback.svelte'
   import { onMount, tick, untrack } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -1635,10 +1636,15 @@
               {#if message.run.phase === 'thinking' || message.run.phase === 'streaming'}<RunMark stage={message.run.stage} />{/if}
               {#if message.run.phase === 'acquiring-pi'}
                 <p class="thinking">{runAnnouncement(message.run)}</p>
-              {:else if message.run.phase === 'thinking'}
-              {:else if message.run.phase === 'streaming'}<div class="streaming" use:streamingUnderline={message.run.text}><AssistantMarkdown text={message.run.text} caret /><span class="streaming-rule" aria-hidden="true"></span></div>
-              {:else}<AssistantMarkdown text={message.run.text} />{/if}
-              <ActionFeedback onopenfile={openFile} activities={message.run.toolActivity ?? []} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
+              {/if}
+              {#each responseParts(message.run) as part, index}
+                {#if part.type === 'actions'}
+                  <ActionFeedback onopenfile={openFile} activities={part.activities} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
+                {:else if message.run.phase === 'streaming'}
+                  <div class="streaming" use:streamingUnderline={part.text}><AssistantMarkdown text={part.text} caret={index === responseParts(message.run).length - 1} /><span class="streaming-rule" aria-hidden="true"></span></div>
+                {:else}<AssistantMarkdown text={part.text} />{/if}
+              {/each}
+              {#if message.run.phase === 'recovering'}<p class="thinking">Restoring reply…</p>{/if}
               {#each message.run.appliedDiffs ?? [] as appliedDiff}
                 <div class="applied-diff tool-card">
                   <strong>Applied file changes</strong>
