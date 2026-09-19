@@ -79,7 +79,12 @@ export const historyFixtures = {
       phase: 'streaming',
       text: 'Northwind renews for one year unless either party gives 60 days notice. Ridgeway carries the same window, and Halden',
       receipt: null,
-      toolActivity: [{ effectId: 'probe-compare', displayName: 'Read ridgeway.pdf', status: 'running' }],
+      toolActivity: [
+        { effectId: 'probe-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: '/leases/northwind.md' }), output: 'Renewal notice: 60 days.', startedAt: '2026-09-18T19:00:00Z', finishedAt: '2026-09-18T19:00:02Z' },
+        { effectId: 'probe-compare', displayName: 'read', status: 'running', input: JSON.stringify({ path: '/leases/ridgeway.md' }), startedAt: new Date().toISOString() },
+        { effectId: 'probe-search', displayName: 'grep', status: 'completed', input: JSON.stringify({ pattern: 'renewal', path: '/leases' }), output: '3 matching files' },
+        { effectId: 'probe-command', displayName: 'bash', status: 'completed', input: JSON.stringify({ command: 'wc -l /leases/*.md', description: 'Count lease lines' }), output: '147 total' },
+      ],
       resumable: false,
     },
   ],
@@ -119,7 +124,7 @@ export const historyFixtures = {
         gateId: 'probe-gate',
         kind: 'confirm',
         title: 'Delete a file',
-        message: '/Documents/Muniment/exports/old.csv',
+        message: '/Documents/muniment/exports/old.csv',
       },
       resumable: false,
     },
@@ -235,11 +240,12 @@ export function buildProbeCommandTable(fixtureName) {
   const fixtureHistory = historyFixtures[fixtureName]
   if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
   const history = structuredClone(fixtureHistory)
+  if (fixtureName === 'applied-diff') history[0].toolActivity = [{ effectId: 'preview-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: 'src/welcome.js' }) }]
   const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'scan'
   const scanFixture = fixtureName === 'scan'
   const accessFixture = fixtureName === 'access'
   const signedOutFixture = fixtureName === 'signed-out'
-  const onboardingHomePath = '/Users/alice/Documents/Muniment'
+  const onboardingHomePath = '/Users/alice/Documents/muniment'
   const threadSummaries = history.length
     ? [
         { threadId: 'probe-thread', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z' },
@@ -250,6 +256,13 @@ export function buildProbeCommandTable(fixtureName) {
   const olderThreadSummaries = history.length
     ? [{ threadId: 'probe-older', title: 'Older correspondence', updatedAt: '2026-07-20T12:00:00Z' }]
     : []
+  let profileMemory = '# Profile\n\n## Preferred name\n\nAlex\n\n## Instructions\n\nUse clear, concise answers.\n'
+  let savedFacts = []
+  let deletedFacts = []
+  const agentData = { agents: [], state: { runs: {}, threads: {}, primaryThreads: {}, history: {} } }
+  const agentMemory = {}
+  const projects = { 'project-lease': 'Lease renewal', 'project-research': 'Research' }
+  const projectThreads = { 'probe-thread': 'project-lease', 'probe-archive': 'project-lease', 'probe-notes': 'project-research' }
   const eventListeners = []
   const invokedCommands = []
   const unknownCommands = []
@@ -284,9 +297,14 @@ export function buildProbeCommandTable(fixtureName) {
     if (['local_mode_store_provider_key', 'local_mode_set_default_model', 'local_mode_set_model_hidden', 'local_mode_disconnect_provider', 'local_mode_connect_claude_code', 'local_mode_account_login_start', 'local_mode_account_login_answer', 'local_mode_account_login_cancel', 'local_mode_open_url'].includes(command)) return null
     if (command === 'local_mode_store_endpoint') return 'custom-endpoint'
     if (command === 'local_mode_claude_code_status') return { installed: true, logged_in: true, path: '/usr/local/bin/claude' }
+    if (command === 'context_settings') return { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 }
+    if (command === 'context_settings_save') return payload
+    if (command === 'chat_search_files') return [{ path: '/Documents/muniment/ISSUES.md', relativePath: 'ISSUES.md', displayName: 'ISSUES.md' }].filter((file) => file.relativePath.toLowerCase().includes(payload.query.toLowerCase()))
+    if (command === 'chat_file_metadata') return { displayName: 'ISSUES.md', byteLength: 128, mediaType: 'text/markdown' }
+    if (command === 'chat_file_content') return 'export function welcome(name) {\n  // The current file from the workspace.\n  return `Welcome, ${name}`\n}\n'
     if (command === 'home_status') {
       if (onboardingFixture) return { configured: false, homePath: onboardingHomePath }
-      return { configured: true, homePath: '/Documents/Muniment' }
+      return { configured: true, homePath: '/Documents/muniment' }
     }
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
     if (command === 'onboarding_scan') return {
@@ -305,12 +323,68 @@ export function buildProbeCommandTable(fixtureName) {
       return { summaries: structuredClone(threadSummaries), nextCursor: history.length ? 'older' : null }
     }
     if (command === 'chat_current_thread') return currentThreadId
-    if (command === 'chat_new_thread') {
-      currentThreadId = null
+    if (command === 'chat_select_thread') {
+      if (![...threadSummaries, ...olderThreadSummaries].some(({ threadId }) => threadId === payload.threadId)) {
+        throw new Error('The preview thread does not exist.')
+      }
+      currentThreadId = payload.threadId
       return null
     }
+    if (command === 'model_router_settings' || command === 'model_router_refresh_quota') return {
+      enabled: false, running: false, is_default: false, base_url: null,
+      accounts: [], subscriptions: [], families: [], options: [], routes: [],
+      fallback: null, min_confidence: 0.6, served_models: [],
+      classifier: { kind: 'none', configured: false, model: '' },
+    }
+    if (command === 'memory_profile_read') return profileMemory
+    if (command === 'memory_profile_save') { profileMemory = payload.content; return null }
+    if (command === 'memory_facts') return structuredClone(savedFacts)
+    if (command === 'memory_fact_save') {
+      const fact = { ...payload.fact, id: payload.fact.id || crypto.randomUUID() }
+      savedFacts = [...savedFacts.filter(f => f.id !== fact.id), fact]; return fact
+    }
+    if (command === 'memory_fact_delete') { deletedFacts.push(...savedFacts.filter(f => f.id === payload.id)); savedFacts = savedFacts.filter(f => f.id !== payload.id); return null }
+    if (command === 'memory_deleted_facts') return structuredClone(deletedFacts)
+    if (command === 'memory_fact_restore') { savedFacts.push(...deletedFacts.filter(f => f.id === payload.id)); deletedFacts = deletedFacts.filter(f => f.id !== payload.id); return null }
+    if (command === 'record_report') return { report: { open: 0, findings: [], counts: {} } }
+    if (command === 'agent_memory') {
+      const data = agentMemory[payload.id] ||= { facts: [], deleted: [] }
+      if (payload.action === 'memory_facts') return structuredClone(data.facts)
+      if (payload.action === 'memory_deleted_facts') return structuredClone(data.deleted)
+      if (payload.action === 'memory_fact_save') { const fact = JSON.parse(JSON.stringify({ ...payload.fact, id: payload.fact.id || crypto.randomUUID() })); data.facts = [...data.facts.filter(item => item.id !== fact.id), fact]; return fact }
+      if (payload.action === 'memory_fact_delete') { data.deleted.push(...data.facts.filter(item => item.id === payload.factId)); data.facts = data.facts.filter(item => item.id !== payload.factId); return null }
+      if (payload.action === 'memory_fact_restore') { data.facts.push(...data.deleted.filter(item => item.id === payload.factId)); data.deleted = data.deleted.filter(item => item.id !== payload.factId); return null }
+    }
+    if (command === 'agent_import_link') return { url: payload.url, html: await (await fetch('./fixtures/grok-template.html')).text() }
+    if (command === 'agent_export_template') return true
+    if (command === 'agent_list') return structuredClone(agentData)
+    if (command === 'agent_save') {
+      const agent = JSON.parse(JSON.stringify({ ...payload.agent, id: payload.agent.id || crypto.randomUUID() }))
+      agentData.agents = [...agentData.agents.filter(a => a.id !== agent.id), agent]
+      agentData.state.runs[agent.id] ||= { status: 'Ready' }
+      return structuredClone(agent)
+    }
+    if (command === 'agent_delete') { agentData.agents = agentData.agents.filter(a => a.id !== payload.id); delete agentData.state.runs[payload.id]; return null }
+    if (command === 'agent_open') return null
+    if (command === 'agent_run') { agentData.state.runs[payload.id] = { status: 'queued' }; return null }
+    if (command === 'project_list') return { projects: { ...projects }, threads: { ...projectThreads } }
+    if (command === 'project_create') {
+      if (Object.values(projects).includes(payload.name)) throw new Error('A project with that name already exists.')
+      const id = crypto.randomUUID(); projects[id] = payload.name; return id
+    }
+    if (command === 'project_rename') { projects[payload.projectId] = payload.name; return null }
+    if (command === 'project_open') return null
+    if (command === 'chat_new_thread') {
+      if (payload?.agentId && agentData.state.primaryThreads[payload.agentId]) { currentThreadId = agentData.state.primaryThreads[payload.agentId]; return currentThreadId }
+      currentThreadId = crypto.randomUUID()
+      const projectId = payload?.projectId || agentData.agents.find(a => a.id === payload?.agentId)?.projectId
+      if (projectId) projectThreads[currentThreadId] = projectId
+      if (payload?.agentId) { agentData.state.threads[currentThreadId] = payload.agentId; agentData.state.primaryThreads[payload.agentId] = currentThreadId }
+      threadSummaries.unshift({ threadId: currentThreadId, title: 'New thread', updatedAt: new Date().toISOString() })
+      return currentThreadId
+    }
     if (command === 'chat_rename_thread') {
-      const summary = threadSummaries.find(({ threadId }) => threadId === payload.threadId)
+      const summary = [...threadSummaries, ...olderThreadSummaries].find(({ threadId }) => threadId === payload.threadId)
       if (summary) summary.title = payload.title
       return null
     }
@@ -593,7 +667,7 @@ window.__TAURI_INTERNALS__ = {
   },
   async invoke(command, payload) {
     recordInvoke('internal', command, payload)
-    if (onboardingFixture && command.includes('open')) return '/Users/alice/Documents/Muniment'
+    if (onboardingFixture && command.includes('open')) return '/Users/alice/Documents/muniment'
     return null
   },
   transformCallback(callback, once = false) {

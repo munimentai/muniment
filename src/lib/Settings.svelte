@@ -4,6 +4,7 @@
   import { onMount, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import Appearance from './Appearance.svelte'
+  import MemorySection from './MemorySection.svelte'
   import ModelsSection from './ModelsSection.svelte'
   import AccountSettings from './AccountSettings.svelte'
   import CompaniesSection from './CompaniesSection.svelte'
@@ -28,9 +29,9 @@
     defaultVoiceShortcut = '',
   } = $props()
 
-  const sections = [['models', 'Models'], ['appearance', 'Preferences'], ['home', 'Home'], ['companies', 'Companies'], ['account', 'Account']]
+  const sections = [['models', 'Models & routing'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Home'], ['companies', 'Companies'], ['account', 'Account']]
   let panel = $state()
-  const sectionLabel = $derived(sections.find(([id]) => id === section)?.[1] ?? 'Settings')
+  const sectionLabel = $derived(section === 'routing' ? 'Models & routing' : sections.find(([id]) => id === section)?.[1] ?? 'Settings')
 
   onMount(() => {
     void tick().then(() => panel?.querySelector('[aria-current="true"]')?.focus())
@@ -42,7 +43,7 @@
         return
       }
       if (event.key !== 'Tab' || !panel) return
-      const controls = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [href]')]
+      const controls = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [href]')]
       if (controls.length === 0) return
       const first = controls[0]
       const last = controls.at(-1)
@@ -81,10 +82,14 @@
         <button type="button" class="quiet close" aria-label="Close settings" onclick={onclose}><LucideIcon name="x" variant="action" size={16} /></button>
       </header>
       <div class="settings-content">
-        {#if section === 'models'}
-          <ModelsSection {tauri} {listen} {oninventory} {inventory} />
+        {#if section === 'models' || section === 'routing'}
+          {#key section}
+            <ModelsSection {tauri} {listen} {oninventory} {inventory}  />
+          {/key}
         {:else if section === 'appearance'}
           <Appearance {tauri} />
+        {:else if section === 'memory'}
+          <MemorySection {tauri} />
         {:else if section === 'home'}
           <section class="settings-home" aria-labelledby="settings-home-title">
             <h4 id="settings-home-title" class="settings-label">Home</h4>

@@ -130,6 +130,10 @@ describe('chat delivery recovery', () => {
     if (acknowledgment === 'received') submit.resolve({ runId: 'run-1' })
     else submit.reject(new Error('The request socket closed.'))
     await sending
+    if (acknowledgment === 'lost') {
+      expect(context.messages()[1].run.phase).toBe('recovering')
+      expect(context.onMessages.mock.calls.flatMap(([items]) => items).some((item) => item.run?.phase === 'failed')).toBe(false)
+    }
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'thread-1', limit: 100 }))
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
       'chat_submit', 'chat_thread_summaries', 'chat_current_thread', 'chat_thread_open',
@@ -330,6 +334,16 @@ describe('launcher submission', () => {
 describe('chat controller', () => {
   it('returns refreshThreads', () => {
     expect(setup().controller.refreshThreads).toEqual(expect.any(Function))
+  })
+
+  it('keeps the restored thread selected when the backend has no explicit selection', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_current_thread'
+      ? null
+      : { summaries: [{ threadId: 'thread-1', title: 'Saved title' }], nextCursor: null })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await context.controller.refreshThreads()
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-1')
+    expect(context.onFreshThread).toHaveBeenLastCalledWith(false)
   })
 
   it('reports a rejected listener registration and retries it with history', async () => {

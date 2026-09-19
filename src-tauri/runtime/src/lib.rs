@@ -1,5 +1,7 @@
 #[cfg(target_os = "linux")]
 mod activation;
+#[cfg(any(unix, target_os = "windows"))]
+mod agent_schedule;
 mod attach_boundaries;
 #[cfg(target_os = "linux")]
 mod attach_listener;

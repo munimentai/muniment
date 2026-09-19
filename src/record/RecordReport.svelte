@@ -3,16 +3,47 @@
   // graph. Every row is one sentence with a magnitude, a claim and a
   // consequence, Review opens the evidence behind it, and a row about one
   // kind opens that kind's table. It reads the runtime and writes nothing.
+  import RecordView from './RecordView.svelte'
   import { findingSentence } from './record-sample.js'
   import { reportErrorLine, reportGroups, reportKindLine, reportLine } from './record-report.js'
 
-  let { tauri, company = null, refresh = 0, onopenkind } = $props()
+  let { tauri, company = null, refresh = 0, onopenkind, onmerge } = $props()
 
   let report = $state(null)
   let error = $state(null)
   let loading = $state(false)
   let open = $state(null)
   let loadVersion = 0
+  let reviewVersion = 0
+  let comparisons = $state([])
+  let reviewError = $state(null)
+  let reviewing = $state(false)
+
+  async function review(finding) {
+    const version = ++reviewVersion
+    if (open === finding.id) { open = null; return }
+    open = finding.id
+    comparisons = []
+    reviewError = null
+    reviewing = true
+    try {
+      const groups = []
+      for (const ids of finding.record_groups ?? []) {
+        const records = await Promise.all(ids.map(async (id) => {
+          const answer = await tauri.invoke('record_entity', { companyId: company.id, entity: id })
+          if (answer?.error) throw new Error(answer.error.message)
+          if (!answer?.entity?.entity) throw new Error('The record is unavailable. Reopen the report.')
+          return answer.entity
+        }))
+        groups.push(records)
+      }
+      if (version === reviewVersion) comparisons = groups
+    } catch (failure) {
+      if (version === reviewVersion) reviewError = reportErrorLine(failure)
+    } finally {
+      if (version === reviewVersion) reviewing = false
+    }
+  }
 
   const groups = $derived(reportGroups(report))
   const headline = $derived(reportLine(company?.name, report))
@@ -43,6 +74,9 @@
   $effect(() => {
     void company?.id
     void refresh
+    reviewVersion += 1
+    open = null
+    comparisons = []
     void load()
   })
 </script>
@@ -66,13 +100,29 @@
               <li class="record-report-row">
                 <p class="record-report-claim">{findingSentence(finding)}</p>
                 <span class="record-report-controls">
-                  {#if finding.kind}
+                  {#if finding.kind && !finding.record_groups?.length}
                     <button type="button" class="record-report-tool" onclick={() => onopenkind?.(finding.kind)}>Open {finding.kind}</button>
                   {/if}
-                  <button type="button" class="record-report-tool" aria-expanded={open === finding.id} onclick={() => { open = open === finding.id ? null : finding.id }}>Review</button>
+                  <button type="button" class="record-report-tool" aria-expanded={open === finding.id} onclick={() => review(finding)}>Review</button>
                 </span>
                 {#if open === finding.id}
                   <div class="record-report-evidence" aria-label="Evidence">
+                    {#if reviewing}<p>Reading affected records</p>{/if}
+                    {#if reviewError}<p role="alert">{reviewError}</p>{/if}
+                    {#each comparisons as records}
+                      <section class="record-comparison" aria-label="Compare possible duplicates">
+                        <p>Compare these records before choosing which one to keep.</p>
+                        <div class="record-comparison-grid">
+                          {#each records as detail (detail.entity.id)}
+                            <div><RecordView {detail} />
+                              {#each records.filter((other) => other.entity.id !== detail.entity.id) as other (other.entity.id)}
+                                <button type="button" class="record-report-tool" onclick={() => onmerge?.(other, detail.entity)}>Merge {other.entity.title} into this record</button>
+                              {/each}
+                            </div>
+                          {/each}
+                        </div>
+                      </section>
+                    {/each}
                     {#each finding.evidence as line (line)}<p class="record-report-evidence-line">{line}</p>{/each}
                   </div>
                 {/if}
@@ -87,6 +137,8 @@
 </section>
 
 <style>
+  .record-comparison-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; }
+  .record-comparison { min-width: 0; }
   .record-report { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 10px; min-height: 0; padding-top: 12px; }
   .record-report-line, .record-report-empty { margin: 0; color: var(--ink); font: var(--text-13) var(--font-mono); }
   .record-report-empty { color: var(--muted); font: var(--text-13)/1.5 var(--font-human); }

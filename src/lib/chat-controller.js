@@ -34,6 +34,8 @@ export function createChatController({
   onHistoryStart = () => {},
   onThreadSummaries = () => {},
   onMoreThreads = () => {},
+  readProject = () => null,
+  readAgent = () => null,
   onThreadSelected = () => {},
   onThreadSwitch = () => {},
   onFreshThread = () => {},
@@ -125,8 +127,9 @@ export function createChatController({
       const retainedSummaries = readThreadSummaries().filter((summary) => !refreshedThreadIds.has(summary.threadId))
       const summaries = [...firstPage.summaries, ...retainedSummaries]
       onThreadSummaries(summaries)
-      onThreadSelected(currentThreadId)
-      if (currentThreadId && summaries.some((summary) => summary.threadId === currentThreadId)) {
+      const shownThreadId = currentThreadId ?? (freshThread ? null : readThreadId())
+      onThreadSelected(shownThreadId)
+      if (shownThreadId && summaries.some((summary) => summary.threadId === shownThreadId)) {
         publishFreshThread(false)
       }
       return true
@@ -223,6 +226,7 @@ export function createChatController({
       signalRun(payload.runId, payload.threadId)
       return
     }
+    if (payload.turnStarted && !current.turnStarted) void refreshThreads()
     const projected = applyChatEvent(current, payload)
     if (projected) publishMessages(messages().map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message))
     if (projected && (!settledPhases.has(current.phase) || readAnnounced()?.id === payload.runId)) onAnnounce(projected)
@@ -558,11 +562,14 @@ export function createChatController({
     switchingThread = true
     onThreadSwitch(true)
     try {
-      await invoke('chat_new_thread')
+      const projectId = readProject()
+      const agentId = readAgent()
+      const context = { ...(projectId ? { projectId } : {}), ...(agentId ? { agentId } : {}) }
+      const createdThread = await invoke('chat_new_thread', ...(Object.keys(context).length ? [context] : []))
       if (destroyed) return false
       onHistoryStart()
       onAnnounce(null)
-      onThreadSelected(null)
+      onThreadSelected(typeof createdThread === 'string' && createdThread ? createdThread : null)
       publishFreshThread(true)
       publishMessages([])
       onHistoryLoaded()
@@ -664,7 +671,7 @@ export function createChatController({
     onSend()
     onSubmitError('')
     const submissionId = ++submissionSequence
-    const userMessage = { role: 'user', text: prompt, attachments: [], submissionId }
+    const userMessage = { role: 'user', sentAt: new Date().toISOString(), text: prompt, attachments: [], submissionId }
     const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt, submissionId }
     publishMessages([...messages(), userMessage, { role: 'assistant', run: pending }])
     onActive(pending)
@@ -693,6 +700,15 @@ export function createChatController({
       return true
     } catch (error) {
       if (destroyed) return
+      if (deliveryFailureReason || recoveryPending || [...buffered.values()].some((events) => events.some((event) => event.threadId && (!readThreadId() || event.threadId === readThreadId())))) {
+        // A lost acknowledgment does not prove that the runtime rejected the run.
+        const restoring = { ...pending, id: `recovering-${submissionId}`, phase: 'recovering' }
+        publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: restoring } : message))
+        onActive(restoring)
+        onAnnounce(restoring)
+        recoveryPending = true
+        return false
+      }
       const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed', failureReason: typeof error === 'string' ? error : 'The message could not be sent.' }
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: failed } : message))
       if (submissionId !== submissionSequence) return

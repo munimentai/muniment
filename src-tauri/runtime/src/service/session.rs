@@ -4,7 +4,7 @@ pub use muniment_core::attach::EntitlementSnapshotResult;
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{
     api_base_url, ensure_native_session as ensure_core_native_session, list_native_devices,
-    native_status, run_native_sign_in, sign_out_native_session, AuthStatus, BrowserOpener,
+    native_status, run_native_sign_in_while, sign_out_native_session, AuthStatus, BrowserOpener,
     EntitlementSnapshotTracker, FreshNativeSession, FreshNativeSessionError,
     KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError, NativeSignInError,
     NativeTokenError, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
@@ -48,13 +48,14 @@ impl std::error::Error for SignOutError {}
 
 /// Runs the native browser sign-in flow and stores the resulting session.
 pub fn sign_in(
+    active: &dyn Fn() -> bool,
     browser: &dyn BrowserOpener,
     tracker: &EntitlementSnapshotTracker,
     runtime_activity: &RuntimeActivityRegistry,
 ) -> Result<AuthStatus, NativeSignInError> {
     let _activity = runtime_activity.mark_authentication_operation();
     let network_timeout = Duration::from_secs(30);
-    let status = run_native_sign_in(
+    let status = run_native_sign_in_while(
         &KeyringNativeCredentialStore::new(),
         &UreqRegistrationTransport::new(network_timeout),
         &UreqAuthorizationTransport::new(network_timeout),
@@ -63,7 +64,16 @@ pub fn sign_in(
         &api_base_url(),
         &unix_time,
         Duration::from_secs(300),
-        &std::thread::sleep,
+        &|delay| {
+            let deadline = std::time::Instant::now() + delay;
+            while active() && std::time::Instant::now() < deadline {
+                std::thread::sleep(
+                    Duration::from_millis(25)
+                        .min(deadline.saturating_duration_since(std::time::Instant::now())),
+                );
+            }
+        },
+        active,
     )?;
     tracker.clear();
     Ok(status)

@@ -832,6 +832,38 @@ fn set_default_model(agent: &Path, provider: &str, model: &str) -> Result<(), St
     write_json_for_update(&settings_file, &settings)
 }
 
+/// Native Pi compaction settings apply when the next message starts.
+#[tauri::command]
+pub(crate) fn context_settings() -> Result<serde_json::Value, String> {
+    let agent = harness_agent_directory(READ_SETTINGS_ERROR)?;
+    let settings = read_json_store(&agent.join("settings.json"))?.unwrap_or_default();
+    let compact = settings.get("compaction");
+    Ok(serde_json::json!({
+        "enabled": compact.and_then(|c| c.get("enabled")).and_then(serde_json::Value::as_bool).unwrap_or(true),
+        "reserveTokens": compact.and_then(|c| c.get("reserveTokens")).and_then(serde_json::Value::as_u64).unwrap_or(16384),
+        "keepRecentTokens": compact.and_then(|c| c.get("keepRecentTokens")).and_then(serde_json::Value::as_u64).unwrap_or(20000)
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn context_settings_save(enabled: bool, reserve_tokens: u64, keep_recent_tokens: u64) -> Result<serde_json::Value, String> {
+    if !(4096..=131072).contains(&reserve_tokens) || !(4096..=131072).contains(&keep_recent_tokens) {
+        return Err("Choose token counts between 4,096 and 131,072.".into());
+    }
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    let path = agent.join("settings.json");
+    let lock = muniment_core::pi_settings::lock_settings(&path).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let mut settings = read_json_for_update(&path)?;
+    let compact = settings.entry("compaction").or_insert_with(|| serde_json::json!({}));
+    let object = compact.as_object_mut().ok_or("The compaction settings are invalid.")?;
+    object.insert("enabled".into(), enabled.into());
+    object.insert("reserveTokens".into(), reserve_tokens.into());
+    object.insert("keepRecentTokens".into(), keep_recent_tokens.into());
+    lock.check().map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    write_json_for_update(&path, &settings)?;
+    context_settings()
+}
+
 /// Whether Pi's settings name no default model yet.
 fn default_model_unset(agent: &Path) -> bool {
     read_json_store(&pi_settings_file(&pi_models_file(agent)))
