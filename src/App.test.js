@@ -2402,9 +2402,9 @@ describe('artifact rail', () => {
     expect(toggle).toHaveAccessibleName('Close artifact rail')
     const rail = screen.getByRole('complementary', { name: 'Artifacts' })
     const empty = rail.querySelector('.artifact-empty')
-    expect(empty).toHaveTextContent(/^No artifacts yet$/)
+    expect(empty).toHaveTextContent('Ask in chat to create a document, table, or other file.')
     expect(empty.children).toHaveLength(1)
-    expect(within(empty).getByText('No artifacts yet').tagName).toBe('P')
+    expect(within(empty).getByText('Ask in chat to create a document, table, or other file.').tagName).toBe('P')
 
     await fireEvent.click(toggle)
     expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
@@ -2640,12 +2640,38 @@ describe('history alerts', () => {
   it('shows no history alert for an empty journal in local mode', async () => {
     localModeStatus = true
     threadSummaryResult = []
+    const base = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'local_mode_provider_inventory' ? Promise.resolve({ providers: [], hidden: [] }) : base(command, payload))
     render(App)
 
-    await screen.findByText('Your model answers here. Ask anything.')
+    await screen.findByText('Connect a model in the composer to start chatting.')
 
     expect(document.querySelector('.history-error')).not.toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+  })
+
+  it('explains an empty router account pool instead of advertising the selected classifier', async () => {
+    localModeStatus = true
+    threadSummaryResult = []
+    const base = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'local_mode_provider_inventory' ? Promise.resolve({
+      providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }],
+      default_provider: 'muniment-router', default_model: 'auto', router_classifier: 'classifier',
+      router_models: [{ id: 'openai/model-a', family: 'openai', model: 'model-a', accounts: 0 }],
+    }) : base(command, payload))
+    render(App)
+    await screen.findByText('No enabled account serves this model. Connect an account or choose another model in the composer.')
+    expect(document.querySelector('.empty')).not.toHaveTextContent('is selected')
+  })
+
+  it('shows an inventory read error instead of a model readiness claim', async () => {
+    localModeStatus = true
+    threadSummaryResult = []
+    const base = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'local_mode_provider_inventory' ? Promise.reject(new Error('unavailable')) : base(command, payload))
+    render(App)
+    await screen.findByText('Muniment cannot read provider settings. Restart the app to retry.')
+    expect(document.querySelector('.empty')).not.toHaveTextContent('is selected')
   })
 
   it.each(['Restore history', 'New thread'])('clears the reader cause after %s succeeds', async (action) => {
@@ -5937,6 +5963,30 @@ describe('thread announcements', () => {
     prompt: 'Old question', receipt: {}, toolActivity: [],
   }]
 
+
+it('prepares another-model retry without sending until the model choice is saved', async () => {
+  localModeStatus = true
+  signedIn([{ runId: 'old', phase: 'complete', text: 'Earlier answer', prompt: 'Check the file', receipt: { model: 'ollama/first', tools: [{ name: 'write', calls: 1 }] } }], { runId: 'new', attachments: [] })
+  const base = invoke.getMockImplementation()
+  const saved = deferred()
+  invoke.mockImplementation((command, payload) => {
+    if (command === 'local_mode_provider_inventory') return Promise.resolve({ default_provider: 'ollama', default_model: 'first', hidden: [], providers: [{ id: 'ollama', source: 'local', models: [{ id: 'first' }, { id: 'second' }] }] })
+    if (command === 'local_mode_set_default_model') return saved.promise
+    return base(command, payload)
+  })
+  await screen.findByText('Earlier answer')
+  await fireEvent.click(screen.getByRole('button', { name: 'Retry with another model' }))
+  expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+  expect(screen.getByRole('region', { name: 'Review retry' })).toHaveTextContent('including earlier replies and tool results')
+  await fireEvent.click(within(screen.getByRole('dialog', { name: 'Model', exact: true })).getByRole('button', { name: 'second' }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+  saved.resolve()
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled', 'true'))
+  await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Check the file', files: [] })
+})
+
   function signedIn(history, submit) {
     invoke.mockImplementation(async (command) => {
       if (command === 'project_list') return { projects: {}, threads: {} }
@@ -6129,6 +6179,9 @@ describe('thread announcements', () => {
     expect(screen.getByPlaceholderText('Ask anything')).toHaveAccessibleDescription('Routing is automatic. Every reply carries its receipt.')
     const retry = within(error).getByRole('button', { name: 'Try again' })
     await fireEvent.click(retry)
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(screen.getByRole('region', { name: 'Review retry' })).toHaveTextContent('Sending may run tools again.')
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'A question', files: [] })
     expect(retry).toBeDisabled()
   })
@@ -6424,6 +6477,7 @@ describe('thread announcements', () => {
     expect(document.querySelectorAll('.thread-shell [aria-live]')).toHaveLength(1)
 
     await fireEvent.click(within(record).getByRole('button', { name: 'Try again' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(invoke).toHaveBeenLastCalledWith('chat_submit', { prompt: 'Explain the record', files: [] })
   })
 
@@ -6988,6 +7042,7 @@ describe('composer auto-grow', () => {
     // then send() clears it once the submission lands.
     await fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(composer.style.height).toBe(`${4 * row}px`))
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     submitted.resolve({ runId: 'run-11', attachments: [] })
     await waitFor(() => expect(composer.style.height).toBe(resting))
@@ -7109,11 +7164,11 @@ describe('signed-in access popover', () => {
 
     expect(within(dialog).getByText('Checking your current access…')).toBeInTheDocument()
     expect(profile).toHaveTextContent('Acme · owner')
-    expect(screen.getByText(/Ask anything/)).toBeInTheDocument()
+    expect(screen.getByText(/Ask a question or request a file/)).toBeInTheDocument()
 
     rejectOpen(new Error('offline'))
     const retry = await within(dialog).findByRole('button', { name: 'Try again' })
-    expect(screen.getByText(/Ask anything/)).toBeInTheDocument()
+    expect(screen.getByText(/Ask a question or request a file/)).toBeInTheDocument()
     await fireEvent.click(retry)
     expect(accessCalls).toBe(3)
 

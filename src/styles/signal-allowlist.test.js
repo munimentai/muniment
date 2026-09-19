@@ -7,6 +7,10 @@ import path from 'node:path'
 // components on the allowed list". Every entry names the clause that permits it;
 // adding one is a spec decision, not a styling one.
 const ALLOWED = {
+  'src/lib/Toggle.svelte': {
+    'input:checked + .track': 'The signature track for every enabled checkbox.',
+    'input:checked + .track .knob': 'The signature knob for every enabled checkbox.',
+  },
   'src/App.svelte': {
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
@@ -32,6 +36,8 @@ const ALLOWED = {
   },
   // The same switch turns an account in a pool on, and turns routing on.
   'src/lib/ModelAccounts.svelte': {
+    '.window-bar span': 'Allowance meters use the toggle background opacity.',
+    '.window-bar[data-level="plenty"] span': 'Green marks plentiful remaining allowance.',
     '.switch[aria-checked="true"]': '§1.2 the track of an enabled account\'s switch',
     '.switch[aria-checked="true"] span': '§1.2 the knob of an enabled account\'s switch',
   },

@@ -90,6 +90,15 @@ function usageTokens(tokens) {
 // The rows under the line: everything the line does not show, in record order.
 export function receiptRows(receipt = {}, recalls = []) {
   const rows = []
+  for (const evidence of receipt?.routing ?? []) {
+    if (recorded(evidence.account)) rows.push({ label: 'Account', value: evidence.account, route: false })
+    if (recorded(evidence.selected_model)) rows.push({ label: 'Selected model', value: evidence.selected_model, route: false })
+    if (recorded(evidence.decision)) rows.push({ label: 'Routing decision', value: evidence.decision, route: false })
+    if (Number.isFinite(evidence.confidence)) rows.push({ label: 'Routing confidence', value: `${Math.round(evidence.confidence * 100)}% · Model selection, not answer quality`, route: false })
+    if (Number.isFinite(evidence.classification_ms)) rows.push({ label: 'Classification time', value: `${evidence.classification_ms} ms`, route: false })
+    for (const reason of evidence.exclusions ?? []) rows.push({ label: 'Excluded model', value: reason, route: false })
+    for (const reason of evidence.fallback_causes ?? []) rows.push({ label: 'Fallback cause', value: reason, route: false })
+  }
   if (!receipt?.classifiers?.length && recorded(receipt?.cost)) rows.push({ label: 'Cost', value: receipt.cost, route: false })
   const tokens = receipt?.tokens
   if (!receipt?.classifiers?.length && tokens && recorded(tokens.input) && recorded(tokens.output)) {
@@ -142,7 +151,7 @@ export function toolVerb(name = '') {
   return 'Working'
 }
 
-const stageWords = { routing: 'Routing', thinking: 'Thinking', writing: 'Writing' }
+const stageWords = { 'choosing-model': 'Choosing model', 'waiting-for-account': 'Waiting for account', fallback: 'Trying another route', routing: 'Routing', thinking: 'Thinking', writing: 'Writing' }
 
 export function stageWord(stage = 'routing') {
   if (typeof stage === 'string' && stage.startsWith('tool:')) return toolVerb(stage.slice(5))
@@ -155,11 +164,12 @@ export function stageWord(stage = 'routing') {
 export function runStage(previous, next) {
   const running = [...(next.toolActivity ?? [])].reverse().find((tool) => tool.status === 'running')
   if (running) return `tool:${running.displayName ?? ''}`
+  if (next.routingStage && ['choosing-model', 'waiting-for-account', 'fallback', 'thinking'].includes(next.routingStage)) return next.routingStage
   // A restored run has no earlier projection: its phase names the word.
   if (!previous) return next.phase === 'streaming' ? 'writing' : next.turnStarted || next.text ? 'thinking' : 'routing'
   if ((next.text ?? '').length > (previous.text ?? '').length) return 'writing'
   if ((previous.toolActivity ?? []).some((tool) => tool.status === 'running')) return 'thinking'
-  if (previous.stage && previous.stage !== 'routing') return previous.stage
+  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage)) return previous.stage
   return next.turnStarted ? 'thinking' : 'routing'
 }
 

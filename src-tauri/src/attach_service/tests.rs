@@ -1855,7 +1855,7 @@ mod cases {
             resolve_attach_home(&config, None, Some(root.clone()))
                 .resolve()
                 .unwrap(),
-            root.join("Muniment")
+            root.join("muniment")
         );
 
         std::fs::remove_dir_all(root).unwrap();

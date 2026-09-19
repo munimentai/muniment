@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PROVIDERS, catalogProvider, connectableProviders, currentModel, methodLabel, modelChipLabel, pickerGroups, providerName, searchProviders, sourceTag } from './provider-catalog.js'
+import { PROVIDERS, catalogProvider, connectableProviders, currentModel, currentModelAvailable, methodLabel, modelChipLabel, pickerGroups, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
 const inventory = {
   providers: [
@@ -146,4 +146,27 @@ it('groups several pooled models under one provider without a direct connection'
   const groups = pickerGroups(inventory)
   expect(groups.map((group) => group.id)).toEqual(['muniment-router', 'router:openai'])
   expect(groups[1].models.map((model) => model.id)).toEqual(['a', 'b'])
+})
+
+describe('current model availability', () => {
+  const routed = {
+    providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }],
+    default_provider: 'muniment-router', default_model: 'auto', router_classifier: 'classifier',
+    router_models: [{ id: 'openai/model-a', family: 'openai', model: 'model-a', accounts: 0 }],
+  }
+  it('does not mistake the automatic picker for an enabled account', () => {
+    expect(currentModel(routed)?.model).toBe('auto')
+    expect(currentModelAvailable(routed)).toBe(false)
+    expect(currentModelAvailable({ ...routed, router_models: [{ ...routed.router_models[0], accounts: 1 }] })).toBe(true)
+  })
+  it('requires an account for the selected model, even when another model has one', () => {
+    const mixed = { ...routed, default_model: 'openai/model-a', router_models: [...routed.router_models, { id: 'xai/model-b', family: 'xai', model: 'model-b', accounts: 1 }] }
+    expect(currentModelAvailable(mixed)).toBe(false)
+    expect(currentModelAvailable({ ...mixed, default_model: 'xai/model-b' })).toBe(true)
+  })
+  it('accepts a configured direct provider and rejects an empty inventory', () => {
+    expect(currentModelAvailable(inventory)).toBe(true)
+    expect(currentModelAvailable(null)).toBe(false)
+    expect(currentModelAvailable({ providers: [] })).toBe(false)
+  })
 })

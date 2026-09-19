@@ -1,4 +1,5 @@
 <script>
+  import Toggle from './Toggle.svelte'
   import { tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import AgentAvatar from './AgentAvatar.svelte'
@@ -73,7 +74,7 @@
             {:else if field === 'instructions'}<textarea aria-label="Description" rows="8" bind:value required disabled={busy}></textarea>
             {:else if field === 'projectId'}<select aria-label="Project" bind:value disabled={busy}><option value="">No project</option>{#each projects as [id, name]}<option value={id}>{name}</option>{/each}</select><small>New work uses this project. Existing files stay in their current folder.</small>
             {:else}
-              <label class="check"><input type="checkbox" bind:checked={schedule.enabled} disabled={busy} />Run on a schedule</label>
+              <label class="check"><Toggle bind:checked={schedule.enabled} disabled={busy} />Run on a schedule</label>
               {#if schedule.enabled}
                 <label>Repeat<select bind:value={schedule.cadence} disabled={busy}><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="weekly">Every week</option></select></label>
                 {#if schedule.cadence === 'weekly'}<label>Day<select bind:value={schedule.weekday} disabled={busy}>{#each days as day, i}<option value={i}>{day}</option>{/each}</select></label>{/if}
@@ -126,7 +127,6 @@
   input, textarea, select { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; }
   textarea { resize: vertical; line-height: 1.5; }
   .check { display: flex; align-items: center; }
-  .check input { width: auto; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .secondary { margin-top: 16px; }
   button { font: inherit; font-size: var(--text-12); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 8px; background: transparent; cursor: pointer; }

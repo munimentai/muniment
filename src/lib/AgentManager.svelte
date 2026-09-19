@@ -1,4 +1,5 @@
 <script>
+  import Toggle from './Toggle.svelte'
   import { onMount, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import AgentAvatar from './AgentAvatar.svelte'
@@ -133,7 +134,7 @@
           <label>Project<select bind:value={draft.projectId} disabled={busy}><option value={null}>No project · session files</option>{#each projects as [id, name]}<option value={id}>{name}</option>{/each}</select></label>
           <fieldset disabled={busy}>
             <legend>Schedule</legend>
-            <label class="check"><input type="checkbox" bind:checked={draft.schedule.enabled} />Run on a schedule</label>
+            <label class="check"><Toggle bind:checked={draft.schedule.enabled} />Run on a schedule</label>
             {#if draft.schedule.enabled}
               <div class="schedule">
                 <label>Repeat<select bind:value={draft.schedule.cadence}><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="weekly">Every week</option></select></label>
@@ -206,7 +207,6 @@
   fieldset { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 12px; display: grid; gap: 12px; }
   legend { font-size: var(--text-13); padding: 0 4px; }
   .check { display: flex; align-items: center; gap: 8px; }
-  .check input { width: auto; }
   .schedule, .actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .schedule label { flex: 1; }
   .secondary { border-top: 1px solid var(--border); padding-top: 16px; }

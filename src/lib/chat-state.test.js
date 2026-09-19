@@ -446,3 +446,25 @@ it('compares model and classifier usage in separate columns', () => {
   expect(receiptUsageColumns({ classifiers: [{ model: 'private', cost: null, tokens: null }] })[1]).toEqual({ model: 'private', cost: 'Unavailable', tokens: 'Unavailable' })
   expect(receiptUsageColumns(null)).toEqual([])
 })
+
+it('shows restored routing evidence without treating model confidence as answer quality', () => {
+  const receipt = JSON.parse(JSON.stringify({ routing: [{ account: 'Work', selected_model: 'openai/model', decision: 'Classifier selected the model', confidence: 0.8, classification_ms: 42, exclusions: ['anthropic/model: Account is turned off.'], fallback_causes: ['Personal answered 429.'] }] }))
+  const rows = receiptRows(receipt)
+  expect(rows).toContainEqual({ label: 'Account', value: 'Work', route: false })
+  expect(rows).toContainEqual({ label: 'Routing confidence', value: '80% · Model selection, not answer quality', route: false })
+  expect(rows).toContainEqual({ label: 'Classification time', value: '42 ms', route: false })
+  expect(rows).toContainEqual({ label: 'Excluded model', value: 'anthropic/model: Account is turned off.', route: false })
+  expect(rows).toContainEqual({ label: 'Fallback cause', value: 'Personal answered 429.', route: false })
+  expect(receiptRows({})).toEqual([])
+})
+
+it('uses runtime routing stages and clears them when reply text arrives', () => {
+  let previous = { phase: 'thinking', text: '', stage: 'thinking', turnStarted: true }
+  for (const [routingStage, label] of [['choosing-model', 'Choosing model'], ['waiting-for-account', 'Waiting for account'], ['fallback', 'Trying another route']]) {
+    const next = { ...previous, routingStage }
+    expect(stageWord(runStage(previous, next))).toBe(label)
+    previous = { ...next, stage: runStage(previous, next) }
+  }
+  expect(runStage(previous, { ...previous, routingStage: undefined, text: 'Answer' })).toBe('writing')
+  expect(runStage(previous, { ...previous, routingStage: undefined })).toBe('thinking')
+})

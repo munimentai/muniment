@@ -46,7 +46,8 @@
   --muted: #5C6461;
   --border: #E2E5E3;
   --signal: #2A7264;
-  --signal-soft: rgba(42, 114, 100, .10);
+  --signal-opacity: .10;
+  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
   --oxide: #B4483E;
   --ochre: #B98A2F;
 
@@ -94,7 +95,8 @@
     --muted: #9AA29E;
     --border: #262B28;
     --signal: #58B39F;
-    --signal-soft: rgba(88, 179, 159, .12);
+    --signal-opacity: .12;
+    --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
     --oxide: #C96A61;
     --ochre: #CBA14E;
     --shadow-window: 0 1px 2px rgba(0,0,0,.05), 0 12px 40px rgba(0,0,0,.08);
@@ -116,7 +118,8 @@
   --muted: #5C6461;
   --border: #E2E5E3;
   --signal: #2A7264;
-  --signal-soft: rgba(42, 114, 100, .10);
+  --signal-opacity: .10;
+  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
   --oxide: #B4483E;
   --ochre: #B98A2F;
   color-scheme: light;
@@ -131,7 +134,8 @@
   --muted: #6B6257;
   --border: #E5DFD2;
   --signal: #2A7264;
-  --signal-soft: rgba(42, 114, 100, .10);
+  --signal-opacity: .10;
+  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
   --oxide: #B4483E;
   --ochre: #B98A2F;
   color-scheme: light;
@@ -146,7 +150,8 @@
   --muted: #5A6470;
   --border: #DCE2E9;
   --signal: #2A7264;
-  --signal-soft: rgba(42, 114, 100, .10);
+  --signal-opacity: .10;
+  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
   --oxide: #B4483E;
   --ochre: #B98A2F;
   color-scheme: light;
@@ -161,7 +166,8 @@
   --muted: #4E5552;
   --border: #E4E6E4;
   --signal: #2A7264;
-  --signal-soft: rgba(42, 114, 100, .10);
+  --signal-opacity: .10;
+  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
   --oxide: #B4483E;
   --ochre: #B98A2F;
   color-scheme: light;
@@ -176,7 +182,8 @@
   --muted: #8A928E;
   --border: #2A2F2C;
   --signal: #58B39F;
-  --signal-soft: rgba(88, 179, 159, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
   --oxide: #C96A61;
   --ochre: #CBA14E;
   color-scheme: dark;
@@ -191,7 +198,8 @@
   --muted: #9AA29E;
   --border: #262B28;
   --signal: #58B39F;
-  --signal-soft: rgba(88, 179, 159, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
   --oxide: #C96A61;
   --ochre: #CBA14E;
   color-scheme: dark;
@@ -206,7 +214,8 @@
   --muted: #8E8E8E;
   --border: #2B2B2B;
   --signal: #58B39F;
-  --signal-soft: rgba(88, 179, 159, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
   --oxide: #C96A61;
   --ochre: #CBA14E;
   color-scheme: dark;
@@ -221,7 +230,8 @@
   --muted: #8C95A3;
   --border: #2A3039;
   --signal: #58B39F;
-  --signal-soft: rgba(88, 179, 159, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
   --oxide: #C96A61;
   --ochre: #CBA14E;
   color-scheme: dark;
@@ -236,7 +246,8 @@
   --muted: #4F6670;
   --border: #E0D8C0;
   --signal: #2A7264;
-  --signal-soft: rgba(42, 114, 100, .10);
+  --signal-opacity: .10;
+  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
   --oxide: #B5281F;
   --ochre: #B58900;
   color-scheme: light;
@@ -251,7 +262,8 @@
   --muted: #5F574D;
   --border: #D5C4A1;
   --signal: #2A6A5A;
-  --signal-soft: rgba(42, 106, 90, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(42, 106, 90, var(--signal-opacity));
   --oxide: #9D0006;
   --ochre: #B57614;
   color-scheme: light;
@@ -266,7 +278,8 @@
   --muted: #5F6278;
   --border: #CCD0DA;
   --signal: #2A7264;
-  --signal-soft: rgba(42, 114, 100, .10);
+  --signal-opacity: .10;
+  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
   --oxide: #D20F39;
   --ochre: #DF8E1D;
   color-scheme: light;
@@ -281,7 +294,8 @@
   --muted: #2B2B2B;
   --border: #6E6E6E;
   --signal: #0F5A4B;
-  --signal-soft: rgba(15, 90, 75, .14);
+  --signal-opacity: .14;
+  --signal-soft: rgba(15, 90, 75, var(--signal-opacity));
   --oxide: #A80000;
   --ochre: #6F4A00;
   color-scheme: light;
@@ -296,7 +310,8 @@
   --muted: #9DABAB;
   --border: #1B5563;
   --signal: #58B39F;
-  --signal-soft: rgba(88, 179, 159, .14);
+  --signal-opacity: .14;
+  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
   --oxide: #E0645C;
   --ochre: #D2A21C;
   color-scheme: dark;
@@ -311,7 +326,8 @@
   --muted: #BDAE93;
   --border: #504945;
   --signal: #58B39F;
-  --signal-soft: rgba(88, 179, 159, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
   --oxide: #FB4934;
   --ochre: #FABD2F;
   color-scheme: dark;
@@ -326,7 +342,8 @@
   --muted: #A6B0C3;
   --border: #4C566A;
   --signal: #8FBCBB;
-  --signal-soft: rgba(143, 188, 187, .14);
+  --signal-opacity: .14;
+  --signal-soft: rgba(143, 188, 187, var(--signal-opacity));
   --oxide: #BF616A;
   --ochre: #EBCB8B;
   color-scheme: dark;
@@ -341,7 +358,8 @@
   --muted: #A6ADC8;
   --border: #45475A;
   --signal: #58B39F;
-  --signal-soft: rgba(88, 179, 159, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
   --oxide: #F38BA8;
   --ochre: #F9E2AF;
   color-scheme: dark;
@@ -356,7 +374,8 @@
   --muted: #A9B1D6;
   --border: #3B4261;
   --signal: #58B39F;
-  --signal-soft: rgba(88, 179, 159, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
   --oxide: #F7768E;
   --ochre: #E0AF68;
   color-scheme: dark;
@@ -371,7 +390,8 @@
   --muted: #B6BBD1;
   --border: #4F5268;
   --signal: #7FD6C2;
-  --signal-soft: rgba(127, 214, 194, .14);
+  --signal-opacity: .14;
+  --signal-soft: rgba(127, 214, 194, var(--signal-opacity));
   --oxide: #FF5555;
   --ochre: #F1FA8C;
   color-scheme: dark;
@@ -386,7 +406,8 @@
   --muted: #B3AF98;
   --border: #49483E;
   --signal: #66BFAB;
-  --signal-soft: rgba(102, 191, 171, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(102, 191, 171, var(--signal-opacity));
   --oxide: #F92672;
   --ochre: #E6DB74;
   color-scheme: dark;
@@ -401,7 +422,8 @@
   --muted: #ABB2BF;
   --border: #3E4451;
   --signal: #66BFAB;
-  --signal-soft: rgba(102, 191, 171, .12);
+  --signal-opacity: .12;
+  --signal-soft: rgba(102, 191, 171, var(--signal-opacity));
   --oxide: #E06C75;
   --ochre: #E5C07B;
   color-scheme: dark;
@@ -416,7 +438,8 @@
   --muted: #D6D6D6;
   --border: #9A9A9A;
   --signal: #7FE0C8;
-  --signal-soft: rgba(127, 224, 200, .16);
+  --signal-opacity: .16;
+  --signal-soft: rgba(127, 224, 200, var(--signal-opacity));
   --oxide: #FF7B72;
   --ochre: #FFD166;
   color-scheme: dark;
