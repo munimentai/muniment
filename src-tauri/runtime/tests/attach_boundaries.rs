@@ -667,6 +667,33 @@ fn runtime_boundaries_answer_all_attach_reads() {
         .create_thread("workspace-a", provenance())
         .unwrap();
     create_server.join().unwrap();
+    // A connection admitted before sign-in has no workspace yet.
+    let (base_url, initial_server) = spawn_server(200, session_body.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
+    let initial_thread = boundaries.create_thread("", provenance()).unwrap();
+    initial_server.join().unwrap();
+    let initial_events = storage
+        .lock()
+        .unwrap()
+        .journal
+        .thread_events(&initial_thread)
+        .unwrap();
+    let initial_event = serde_json::to_value(&initial_events[0]).unwrap();
+    assert_eq!(initial_event["payload_json"]["workspace"], "local");
+    assert_eq!(initial_event["provenance"]["attach_profile"], "profile-a");
+    prepare_new_run_in_thread_after_validation(
+        &storage,
+        "01900000-0000-7000-8000-000000000018",
+        "local",
+        Some("user"),
+        Vec::new(),
+        Some(provenance()),
+        &initial_thread,
+        "test",
+        "1",
+        || Ok(()),
+    )
+    .unwrap();
     let created_events = storage
         .lock()
         .unwrap()

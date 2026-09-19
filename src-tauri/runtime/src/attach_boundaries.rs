@@ -1050,6 +1050,14 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         let mut storage = self.storage.lock().map_err(|error| {
             persistence_error("lock", error.to_string()).desktop_protocol_error()
         })?;
+        // The desktop can connect before its first grant records a workspace.
+        // Cloud and local chat grants both start in the local workspace.
+        let default_workspace = ChatGrant::local().workspace;
+        let workspace = if workspace.is_empty() {
+            &default_workspace
+        } else {
+            workspace
+        };
         create_thread_now(&mut storage.journal, workspace, provenance)
             .map_err(|error| persistence_error("journal", error).desktop_protocol_error())
     }
@@ -1230,7 +1238,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 text: String::new(),
                 prompt_accepted: false,
                 turn_started: false,
-        routing_stage: None,
+                routing_stage: None,
                 prompt_storage_notice: None,
                 failure_reason: Some(cause.to_owned()),
                 receipt: None,
