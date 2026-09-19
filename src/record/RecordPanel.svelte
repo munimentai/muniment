@@ -15,7 +15,7 @@
   import RecordTable from './RecordTable.svelte'
   import RecordView from './RecordView.svelte'
   import { companyEmpty, currentCompany, kindLabel, kindSummary, orderKinds, recordErrorLine, validCompanyName } from './record-panel-state.js'
-  import { askSql, diffLines, viewData, viewSettings, viewsFor } from './record-table-state.js'
+  import { askSql, diffLines, stateLabel, viewData, viewSettings, viewsFor } from './record-table-state.js'
 
   let { tauri, maximized = false, refresh = 0, ontogglemaximized, onask } = $props()
 
@@ -42,6 +42,14 @@
   let importing = $state(null)
   // null, or 'link', 'merge' or 'delete' over the open record.
   let relating = $state(null)
+  let mergeTarget = $state(null)
+
+  function reviewMerge(record, target) {
+    selectedKind = record.entity.kind
+    detail = record
+    mergeTarget = target
+    relating = 'merge'
+  }
   let renaming = $state(false)
   let renameDraft = $state('')
   let loadingMore = $state(false)
@@ -447,12 +455,11 @@
     {/if}
     {#if kind && detail && !importing && !relating}
       <button type="button" class="record-tool" onclick={() => { relating = 'link' }}>Link</button>
-      <button type="button" class="record-tool" onclick={() => { relating = 'merge' }}>Merge</button>
+      <button type="button" class="record-tool" onclick={() => { mergeTarget = null; relating = 'merge' }}>Merge</button>
       <button type="button" class="record-tool" onclick={() => { relating = 'delete' }}>Delete</button>
     {/if}
     <button type="button" class="record-maximize" aria-pressed={maximized} aria-label={maximized ? 'Restore the thread beside the record' : 'Maximize the record over the thread'} onclick={ontogglemaximized}>
       <LucideIcon name={maximized ? 'minimize-2' : 'maximize-2'} size={14} />
-      <span>{maximized ? 'Restore' : 'Maximize'}</span>
     </button>
   </header>
   {#if error}
@@ -468,7 +475,7 @@
   {:else if kind && creating}
     <RecordForm {kind} {propose} {commit} oncancel={() => { creating = false }} oncreated={(id) => { creating = false; void loadPage().then(() => openEntity(id)) }} />
   {:else if kind && detail && relating}
-    <RecordRelate mode={relating} {detail} {kinds} {relations} {tauri} companyId={company?.id} {propose} {commit} oncancel={() => { relating = null }} oncommitted={afterRelate} />
+    <RecordRelate initialTarget={relating === 'merge' ? mergeTarget : null} mode={relating} {detail} {kinds} {relations} {tauri} companyId={company?.id} {propose} {commit} oncancel={() => { relating = null }} oncommitted={afterRelate} />
   {:else if kind && detail}
     <RecordView {detail} onopen={openEntity} />
   {:else if kind}
@@ -483,7 +490,7 @@
             <span class="visually-hidden">State</span>
             <select class="record-select" aria-label="State" value={stateFilter ?? ''} onchange={(event) => changeStateFilter(event.currentTarget.value)}>
               <option value="">every state</option>
-              {#each kind.states as state (state)}<option value={state}>{state}</option>{/each}
+              {#each kind.states as state (state)}<option value={state}>{stateLabel(state)}</option>{/each}
             </select>
           </label>
         {/if}
@@ -528,7 +535,7 @@
   {:else if empty}
     <RecordConnect {company} onconnect={(name) => { error = null; importing = { source: name } }} />
   {:else if !listing}
-    <RecordReport {tauri} {company} {refresh} onopenkind={openKind} />
+    <RecordReport {tauri} {company} {refresh} onopenkind={openKind} onmerge={reviewMerge} />
   {:else}
     <nav class="record-kinds" aria-label="Kinds">
       <ul>

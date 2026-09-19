@@ -129,7 +129,7 @@ fn sign_in_returns_status_stores_credentials_and_marks_activity() {
         Ok(())
     };
 
-    let status = sign_in(&browser, &tracker, &activity).unwrap();
+    let status = sign_in(&|| true, &browser, &tracker, &activity).unwrap();
 
     assert!(status.signed_in);
     assert_eq!(

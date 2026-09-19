@@ -69,17 +69,31 @@ export function receiptLabel(receipt = {}) {
   return [relation, time].filter(recorded).join(', ')
 }
 
+export function receiptUsageColumns(receipt = {}) {
+  if (!receipt?.classifiers?.length) return []
+  const columns = [{ model: modelLabel(receipt.model) ?? 'LLM', cost: receipt.cost ?? 'Unavailable', tokens: receipt.tokens }]
+  for (const classifier of receipt.classifiers) {
+    columns.push({ model: modelLabel(classifier.model) ?? 'Classifier', cost: Number.isFinite(classifier.cost) ? `$${classifier.cost.toFixed(6)} est.` : 'Unavailable', tokens: classifier.tokens })
+  }
+  return columns.map((column) => ({ ...column, tokens: usageTokens(column.tokens) }))
+}
+
+function usageTokens(tokens) {
+  if (!tokens || !recorded(tokens.input) || !recorded(tokens.output)) return 'Unavailable'
+  const parts = [`${count(tokens.input)} in`, `${count(tokens.output)} out`]
+  if (Number(tokens.cacheRead) > 0) parts.push(`${count(tokens.cacheRead)} cached`)
+  if (Number(tokens.cacheWrite) > 0) parts.push(`${count(tokens.cacheWrite)} written to cache`)
+  if (Number(tokens.reasoning) > 0) parts.push(`${count(tokens.reasoning)} reasoning`)
+  return parts.join(', ')
+}
+
 // The rows under the line: everything the line does not show, in record order.
 export function receiptRows(receipt = {}, recalls = []) {
   const rows = []
-  if (recorded(receipt?.cost)) rows.push({ label: 'Cost', value: receipt.cost, route: false })
+  if (!receipt?.classifiers?.length && recorded(receipt?.cost)) rows.push({ label: 'Cost', value: receipt.cost, route: false })
   const tokens = receipt?.tokens
-  if (tokens && recorded(tokens.input) && recorded(tokens.output)) {
-    const parts = [`${count(tokens.input)} in`, `${count(tokens.output)} out`]
-    if (Number(tokens.cacheRead) > 0) parts.push(`${count(tokens.cacheRead)} cached`)
-    if (Number(tokens.cacheWrite) > 0) parts.push(`${count(tokens.cacheWrite)} written to cache`)
-    if (Number(tokens.reasoning) > 0) parts.push(`${count(tokens.reasoning)} reasoning`)
-    rows.push({ label: 'Tokens', value: parts.join(', '), route: false })
+  if (!receipt?.classifiers?.length && tokens && recorded(tokens.input) && recorded(tokens.output)) {
+    rows.push({ label: 'Tokens', value: usageTokens(tokens), route: false })
   }
   if (recorded(receipt?.turns)) rows.push({ label: 'Turns', value: count(receipt.turns), route: false })
   const tools = (receipt?.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls))
@@ -156,6 +170,7 @@ const runPhaseAnnouncements = {
   thinking: generating,
   streaming: generating,
   'pending-permission': 'Waiting for your decision.',
+  recovering: 'Restoring the reply.',
   resuming: 'Resuming the interrupted reply.',
   cancelled: 'Reply stopped.',
   interrupted: 'Reply interrupted.',
@@ -177,6 +192,7 @@ export function runFailureMessage(run) {
   const reason = typeof run?.failureReason === 'string'
     ? run.failureReason.trim().replace(/\s+/g, ' ').replace(retryGuidance, '').trim()
     : ''
+  if (run?.text?.trim() && (!reason || /reply (could not be started|did not start)/i.test(reason))) return 'The reply stopped before it finished.'
   if (!reason) return 'Reply failed.'
   return /[.!?]$/.test(reason) ? reason : `${reason}.`
 }
@@ -220,7 +236,7 @@ export function applyBufferedChatEvents(run, events) {
 
 export function historyMessages(history) {
   return history.flatMap((entry) => [
-    ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
+    ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', id: entry.runId, sentAt: entry.sentAt ?? null, text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
     { role: 'assistant', run: { id: entry.runId, promptStorageNotice: entry.promptStorageNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
@@ -238,4 +254,11 @@ export function unsettledRun(messages = []) {
     if (run && !settledPhases.has(run.phase)) return run
   }
   return null
+}
+
+export function messageLocalTime(timestamp) {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return ''
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }

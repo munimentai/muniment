@@ -61,6 +61,7 @@ pub(crate) struct AccountView {
     label: String,
     /// `key` or `account`.
     source: &'static str,
+    servable: bool,
     base_url: Option<String>,
     models: Vec<String>,
     enabled: bool,
@@ -84,6 +85,8 @@ pub(crate) struct AccountView {
     banked_resets: Option<u32>,
     /// Unix milliseconds of the last quota probe, none when never probed.
     quota_observed_ms: Option<i64>,
+    /// Whether the router has a usage route for this account's provider.
+    allowance_readable: bool,
     /// The last 30 days as `[day, requests, input, output, errors]` rows,
     /// oldest first, for the usage bar.
     days: Vec<(String, u64, u64, u64, u64)>,
@@ -202,6 +205,7 @@ fn account_view(
         family: account.family.clone(),
         label: account.label.clone(),
         source: account.credential.source(),
+        servable: account.credential.servable(),
         base_url: account.base_url.clone(),
         models: account.models.clone(),
         enabled: account.enabled,
@@ -235,6 +239,10 @@ fn account_view(
             .unwrap_or_default(),
         banked_resets: quota.and_then(|quota| quota.banked_resets),
         quota_observed_ms: quota.map(|quota| quota.observed_at_ms),
+        allowance_readable: match &account.credential {
+            Credential::ApiKey { .. } => false,
+            Credential::Subscription { provider, .. } => quota::has_reader(provider),
+        },
         days: usage
             .map(|entry| {
                 entry
@@ -736,6 +744,16 @@ pub(crate) async fn model_router_test_classifier() -> Result<(), String> {
     .map_err(|_| "The test did not finish. Try again.".to_string())?
 }
 
+#[tauri::command]
+pub(crate) async fn model_router_test_route(app: tauri::AppHandle, sample: String) -> Result<server::RouteTest, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<RouterState>();
+        let held = state.0.lock().map_err(|_| "Cannot reach the router.")?;
+        let handle = held.as_ref().ok_or("Turn on account balancing before testing routing.")?;
+        handle.test_route(&sample)
+    }).await.map_err(|_| "The routing test did not finish.".to_string())?
+}
+
 /// Lifts the credential a pool sign-in left in its scratch directory into the
 /// router as one more account, and answers with the account id. The probe
 /// that names the account by its email runs after, off the sign-in thread.
@@ -758,7 +776,7 @@ pub(crate) fn import_pi_sign_in<R: tauri::Runtime>(
     import_credential(app, provider, credential, None)
 }
 
-/// Adds one subscription credential to its family's pool, named by its email
+/// Imports a subscription credential into its family's pool, named by its email
 /// or the name the sign-in learned, else by its place in the pool, and probes
 /// what it has left. Answers with the account id.
 pub(crate) fn import_credential<R: tauri::Runtime>(
@@ -770,11 +788,14 @@ pub(crate) fn import_credential<R: tauri::Runtime>(
     let family = family_for_pi_provider(provider)
         .ok_or_else(|| "This provider has no subscription the router can pool.".to_string())?;
     let agent = agent()?;
+    let lock = lock_pi_auth_file(&config::config_path(&agent))?;
     let mut config = load(&agent)?;
+    // A pooled subscription serves through the router alone, so the account
+    // that joins turns the router on.
+    config.enabled = true;
     let count = config.pool(family.id).len() + 1;
-    let id = uuid::Uuid::now_v7().to_string();
-    config.accounts.push(Account {
-        id: id.clone(),
+    let id = config.import_account(Account {
+        id: uuid::Uuid::now_v7().to_string(),
         family: family.id.to_owned(),
         label: credential
             .clone()
@@ -788,6 +809,7 @@ pub(crate) fn import_credential<R: tauri::Runtime>(
         weight: 1,
     });
     save(&agent, &config)?;
+    drop(lock);
     let state = app.state::<RouterState>();
     apply(&agent, &state, &config)?;
     // The probe names the account and fills its windows. It is a network call,
@@ -803,28 +825,41 @@ pub(crate) fn import_credential<R: tauri::Runtime>(
 /// the account by its email when the sign-in did not. Answers whether the
 /// upstream said anything.
 pub(crate) fn refresh_quota(agent: &Path, id: &str) -> Result<bool, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let account = muniment_core::model_router::native_auth::refresh_account(agent, id, now, quota::TIMEOUT)?;
+    let original = account.credential.clone();
+    let probed = quota::probe(&account, now, quota::TIMEOUT);
+    save_probe(agent, id, &original, account.credential.clone(), probed)
+}
+
+/// A probe can outlast a sign-in or another pool edit. Apply its answer to
+/// the current account only if it still holds the credential we probed.
+fn save_probe(
+    agent: &Path,
+    id: &str,
+    original: &Credential,
+    refreshed: Credential,
+    probed: Option<quota::Quota>,
+) -> Result<bool, String> {
+    let _lock = lock_pi_auth_file(&config::config_path(agent))?;
     let mut config = load(agent)?;
     let Some(account) = config.accounts.iter_mut().find(|account| account.id == id) else {
-        return Err("That account is gone.".into());
+        return Ok(false);
     };
-    let now = chrono::Utc::now().timestamp_millis();
-    // A token inside a minute of dying is refreshed first, so the probe and
-    // the turns that follow run on a live one.
-    if let Some(refreshed) = muniment_core::model_router::native_auth::refresh_if_expiring(
-        &account.credential,
-        now,
-        quota::TIMEOUT,
-    ) {
-        account.credential = refreshed?;
+    if &account.credential != original {
+        return Ok(false);
     }
-    let Some(probed) = quota::probe(account, now, quota::TIMEOUT) else {
+    account.credential = refreshed;
+    let Some(probed) = probed else {
         // The refresh alone is worth keeping.
         save(agent, &config)?;
         return Ok(false);
     };
     // What the upstream said about the account itself outlives the probe: the
     // email names an account the sign-in left unnamed, and the plan is shown.
-    let placeholder = account.label.contains(" account ");
+    let placeholder = account.label.rsplit_once(" account ").is_some_and(|(prefix, suffix)| {
+        suffix.parse::<usize>().is_ok() && muniment_core::model_router::family::family(&account.family).is_some_and(|f| f.name == prefix)
+    });
     if let Credential::Subscription { email, plan, .. } = &mut account.credential {
         if email.is_none() && probed.email.is_some() {
             *email = probed.email.clone();
@@ -904,6 +939,70 @@ mod tests {
     }
 
     #[test]
+    fn a_delayed_probe_keeps_new_sign_ins_and_unrelated_pool_edits() {
+        let agent = std::env::temp_dir().join(format!("muniment-probe-{}", uuid::Uuid::now_v7()));
+        let original = account("first");
+        let refreshed = Credential::ApiKey {
+            key: "refreshed".into(),
+        };
+        let other = account("other");
+        let mut config = RouterConfig {
+            accounts: vec![original.clone(), other.clone()],
+            ..RouterConfig::default()
+        };
+        config::save(&agent, &config).unwrap();
+        let probe = quota::Quota {
+            plan: Some("pro".into()),
+            ..quota::Quota::default()
+        };
+        assert!(save_probe(
+            &agent,
+            "first",
+            &original.credential,
+            refreshed.clone(),
+            Some(probe.clone())
+        )
+        .unwrap());
+        config.accounts[0].credential = refreshed;
+        assert_eq!(config::load(&agent).unwrap(), config);
+        assert_eq!(quota::load(&agent).accounts["first"], probe);
+
+        // A browser sign-in completes while the next probe waits upstream.
+        let current = Credential::ApiKey {
+            key: "new-sign-in".into(),
+        };
+        config.accounts[0].credential = current;
+        config::save(&agent, &config).unwrap();
+        let quota_before = std::fs::read(quota::quota_path(&agent)).unwrap();
+        assert!(!save_probe(
+            &agent,
+            "first",
+            &original.credential,
+            original.credential.clone(),
+            Some(quota::Quota::default())
+        )
+        .unwrap());
+        assert_eq!(config::load(&agent).unwrap(), config);
+        assert_eq!(
+            std::fs::read(quota::quota_path(&agent)).unwrap(),
+            quota_before
+        );
+
+        config.accounts.remove(0);
+        config::save(&agent, &config).unwrap();
+        assert!(!save_probe(
+            &agent,
+            "first",
+            &original.credential,
+            original.credential.clone(),
+            None
+        )
+        .unwrap());
+        assert_eq!(config::load(&agent).unwrap(), config);
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
     fn an_account_view_carries_its_counters_and_never_its_key() {
         let mut ledger = Ledger::default();
         ledger.record_success("a1", "2026-09-17", 1_000, 300, 40);
@@ -920,6 +1019,7 @@ mod tests {
         assert_eq!(view.days.len(), 1);
         assert_eq!(view.days[0].0, "2026-09-17");
         assert_eq!(view.active, 2);
+        assert!(!view.allowance_readable);
     }
 
     #[test]

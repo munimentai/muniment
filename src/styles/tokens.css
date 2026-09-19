@@ -421,3 +421,8 @@
   --ochre: #FFD166;
   color-scheme: dark;
 }
+
+/* Code colors follow every named palette and the system theme. */
+:root { --code-added: light-dark(#276349, #8DC7A5); --code-name: light-dark(#62518E, #C1B0E2); }
+
+:root { --reference: light-dark(#285C9E, #86B8F4); }

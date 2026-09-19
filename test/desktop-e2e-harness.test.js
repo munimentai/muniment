@@ -2605,7 +2605,7 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     })
     const entries = fs.readFileSync(ledger, 'utf8').trim().split('\n')
     const statuses = Object.fromEntries(fs.readFileSync(statusLedger, 'utf8').trim().split('\n').map((entry) => entry.split('\t')))
-    return { result, entries, statuses, invoked: entries.map((entry) => entry.split('\t')[0]) }
+    return { result, entries, statuses, artifacts, invoked: entries.map((entry) => entry.split('\t')[0]) }
   }
   const commands = (entries) => Object.fromEntries(entries.map((entry) => entry.split('\t', 2)))
   const envelopeMarkers = (stdout) => [
@@ -2701,7 +2701,7 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     expect(result.stdout).not.toContain('=== DESKTOP-CI ARTIFACTS')
   })
   it('clears stale automation before reaching recovery, then tears down the app', () => {
-    const { result, entries, invoked } = runFinalizer()
+    const { result, entries, invoked, artifacts } = runFinalizer()
     const command = commands(entries)
     expect(result.status).toBe(0)
     expect(invoked.slice(0, 5)).toEqual(['stop-wdio', 'revoke-session', 'stop-app', 'remove-package', 'remove-state'])
@@ -2730,7 +2730,7 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     expect(command['redact-artifacts']).toMatch(new RegExp(`^node test/e2e/support/redact\\.mjs ${raw} ${safe} /tmp/muniment-e2e-redaction\\.[^ ]+\\.log $`))
     expect(command['stage-cleanup-log']).toMatch(new RegExp(`^cp /tmp/muniment-e2e-cleanup\\.[^ ]+\\.log ${raw}/cleanup\\.log $`))
     const cleanupLog = command['stage-cleanup-log'].split(' ')[1]
-    expect(command['replace-artifacts']).toMatch(/^rm -rf -- \/tmp\/muniment-e2e-test-[^/]+\/artifacts $/)
+    expect(command['replace-artifacts']).toBe(`rm -rf -- ${artifacts} `)
     expect(command['publish-artifacts']).toBe(`mv -- ${safe} ${command['replace-artifacts'].slice('rm -rf -- '.length)}`)
     expect(command['remove-cleanup-log']).toBe(`rm -f -- ${cleanupLog}`)
   })

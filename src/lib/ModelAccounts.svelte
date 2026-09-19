@@ -3,11 +3,27 @@
   // the subscription has left and what the account has served, the sign-ins
   // the pool can take for this provider, and a key form. Every command
   // answers with the whole router settings, and the parent redraws from them.
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
+  import LucideIcon from './LucideIcon.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings } = $props()
 
+  let editingId = $state(null)
+  let nameDraft = $state('')
+  let nameInput = $state()
+  async function editName(account) {
+    editingId = account.id
+    nameDraft = account.label
+    await tick()
+    nameInput?.focus()
+    nameInput?.select()
+  }
+  async function saveName(account) {
+    if (!nameDraft.trim() || pending) return
+    await run('model_router_update_account', { id: account.id, label: nameDraft.trim() })
+    if (!formError) editingId = null
+  }
   let status = $state('')
   let formError = $state('')
   let pending = $state(false)
@@ -30,7 +46,8 @@
     pending = true
     formError = ''
     try {
-      onsettings?.(await tauri.invoke(command, payload))
+      const updated = await tauri.invoke(command, payload)
+      onsettings?.(updated)
       status = done
     } catch (error) {
       formError = String(error?.message ?? error)
@@ -186,13 +203,23 @@
       {#each accounts as account (account.id)}
         <li class="card" class:cooling={cooling(account)}>
           <header>
-            <span class="card-label">{account.label}</span>
-            <span class="tag">{account.source === 'key' ? 'Key' : 'Subscription'}</span>
-            {#if account.source !== 'key'}<span class="tag">not yet served</span>{/if}
+            {#if editingId === account.id}
+              <form class="name-edit" onsubmit={(event) => { event.preventDefault(); void saveName(account) }}>
+                <input bind:this={nameInput} bind:value={nameDraft} aria-label="Account name" maxlength="120" disabled={pending} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); editingId = null } }} />
+                <button disabled={pending || !nameDraft.trim()}>Save</button>
+                <button type="button" disabled={pending} onclick={() => editingId = null}>Cancel</button>
+              </form>
+            {:else}
+              <span class="card-label">{account.label}<button type="button" class="rename quiet" aria-label={`Rename ${account.label}`} disabled={pending} onclick={() => editName(account)}><LucideIcon name="pencil" /></button></span>
+            {/if}
+            <span class="tag">{account.source === 'key' ? 'API key' : 'Subscription'}</span>
           </header>
+          <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Not available for routed turns yet.' : cooling(account) ? 'Waiting for the rate limit to reset.' : account.weight === 0 ? 'Weight is zero. This account receives no turns.' : 'Available for routed turns.'}</p>
           <p class="record tier">{account.source === 'key' ? (account.base_url ?? familyRow?.base_url ?? '') : `${account.plan ?? 'plan not read yet'}`}{#if account.email && account.email !== account.label} · {account.email}{/if}{#if account.models.length} · {account.models.join(' · ')}{/if}</p>
           {#if account.source !== 'key'}
-            {#if account.windows.length === 0}
+            {#if !account.allowance_readable}
+              <p class="record">Muniment cannot read what this account has left.</p>
+            {:else if account.windows.length === 0}
               <p class="record">{account.quota_observed_ms ? 'No window reported.' : 'Allowance not read yet.'}</p>
             {/if}
             {#each account.windows as window (window.label + window.scope)}
@@ -204,9 +231,11 @@
                 <div class="window-bar"><span style={`width: ${Math.round(window.remaining_percent)}%`}></span></div>
               </div>
             {/each}
+            {#if account.quota_observed_ms}<p class="support">Allowance updated {when(account.quota_observed_ms)}.</p>{/if}
             {#if account.banked_resets}<p class="record">{account.banked_resets} banked {account.banked_resets === 1 ? 'reset' : 'resets'}</p>{/if}
           {/if}
           {#if cooling(account)}<p class="tag warn">Rate limited · back in {Math.max(1, Math.round((account.cooldown_until_ms - Date.now()) / 1000))}s</p>{/if}
+          <details class="account-details"><summary>Usage and settings</summary>
           <div class="bars" aria-label={`${account.label} turns per day`}>
             {#each account.days as [day, requests] (day)}
               <span class="bar" style={`height: ${Math.max(2, Math.round((requests / busiest) * 22))}px`} aria-label={`${day}: ${requests} turns`}></span>
@@ -224,9 +253,10 @@
           {#if account.last_error}<p class="record error">{account.last_error}</p>{/if}
           <footer>
             <button type="button" class="quiet small" onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is removed.`)}>Remove</button>
-            {#if account.source !== 'key'}<button type="button" class="quiet small" onclick={() => refreshQuota(account)}>Refresh allowance</button>{/if}
+            {#if account.source !== 'key' && account.allowance_readable}<button type="button" class="quiet small" onclick={() => refreshQuota(account)}>Refresh allowance</button>{/if}
             <button type="button" role="switch" class="switch" aria-checked={account.enabled} aria-label={`Use ${account.label}`} onclick={() => run('model_router_update_account', { id: account.id, enabled: !account.enabled })}><span></span></button>
           </footer>
+          </details>
         </li>
       {/each}
     </ul>
@@ -290,32 +320,41 @@
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
   .small { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
-  .accounts { display: grid; gap: 8px; }
-  .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
+  .accounts { display: grid; gap: 8px; min-width: 0; }
+  .support { margin: 0; color: var(--muted); font-size: var(--text-13); overflow-wrap: anywhere; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .warn { color: var(--ink); }
   .error { overflow-wrap: anywhere; }
   /* One card per account: its allowance as bars of what is left, then what it has served. */
-  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
-  .card { display: grid; gap: 6px; align-content: start; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .card { display: grid; min-width: 0; gap: 8px; align-content: start; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); overflow-wrap: anywhere; }
+  .account-details { border-top: 1px solid var(--border); padding-top: 8px; }
+  .account-details summary { cursor: pointer; min-height: 24px; font-size: var(--text-13); }
+  .account-details[open] { display: grid; gap: 10px; }
   .card.cooling { border-color: var(--muted); }
-  .card header { display: flex; align-items: center; gap: 8px; }
-  .card-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-13); }
+  .card header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; }
+  .card-label { flex: 1 1 160px; min-width: 0; font-size: var(--text-13); font-weight: 600; }
+  .card-label { display: flex; align-items: center; gap: 4px; }
+  .rename { opacity: 0; padding: 4px; }
+  .card header:hover .rename, .rename:focus-visible { opacity: 1; }
+  .name-edit { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+  @media (hover: none) { .rename { opacity: 1; } }
   .tier { margin: 0; overflow-wrap: anywhere; }
-  .window { display: grid; gap: 3px; }
-  .window-head { display: flex; justify-content: space-between; gap: 8px; }
+  .window { display: grid; min-width: 0; gap: 4px; }
+  .window-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px; }
   .window-head strong { color: var(--ink); font-weight: 600; }
   .window-bar { height: 4px; border-radius: var(--radius-chip); background: var(--faint); }
   .window-bar span { display: block; height: 100%; border-radius: var(--radius-chip); background: var(--ink); }
   .window.reached .window-bar span { background: var(--muted); }
-  .bars { display: flex; align-items: flex-end; gap: 2px; min-height: 26px; }
+  .bars { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 2px; min-height: 26px; }
   .bar { width: 5px; background: var(--muted); }
-  .figures { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin: 0; }
-  .figures div { display: grid; gap: 1px; }
+  .figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin: 0; }
+  .figures div { display: grid; min-width: 0; gap: 1px; }
   .figures dt { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .figures dd { margin: 0; font: var(--text-12) var(--font-mono); }
   .figures input { width: 52px; }
-  .card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 2px; }
+  .card footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 2px; }
+  .card footer .switch { margin-left: auto; }
   .sign-ins { display: flex; flex-wrap: wrap; gap: 6px; }
   .sign-in { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
   .login { display: grid; gap: 8px; justify-items: start; }

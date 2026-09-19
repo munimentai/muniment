@@ -23,11 +23,11 @@ export function copyLabel(copy, runId) {
 // §1.7 error voice: what happened, then the next step, and no apology.
 export function copyFailure(copy, runId, modifier = '⌘') {
   return copy?.status === 'failed' && copy.runId === runId
-    ? `Clipboard unavailable. Select the reply and press ${modifier}C to copy it.`
+    ? `Clipboard unavailable. Select the ${String(runId).startsWith('user:') ? 'message' : 'reply'} and press ${modifier}C to copy it.`
     : ''
 }
 
 export function copyAnnouncement(copy, modifier = '⌘') {
-  if (copy?.status === 'copied') return 'Reply copied to the clipboard.'
+  if (copy?.status === 'copied') return String(copy.runId).startsWith('user:') ? 'Message copied to the clipboard.' : 'Reply copied to the clipboard.'
   return copyFailure(copy, copy?.runId, modifier)
 }

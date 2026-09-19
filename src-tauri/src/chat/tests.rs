@@ -166,6 +166,8 @@ fn command_test_state() -> (PathBuf, ChatState) {
         active: Arc::new(Mutex::new(None)),
         runtime: Arc::new(Mutex::new(None)),
         session_thread: SessionThread::default(),
+        pending_project: Mutex::new(None),
+        pending_agent: Mutex::new(None),
         runtime_activity: RuntimeActivityRegistry::new(),
         retention_trigger: RetentionTrigger::default(),
     };
@@ -2221,4 +2223,32 @@ fn the_retention_schedule_checks_again_when_a_save_triggers_it() {
 
     drop(trigger);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn file_panel_reads_text_and_rejects_binary_large_missing_and_directory() {
+    let temp = std::env::temp_dir().join(format!("muniment-file-panel-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&temp).unwrap();
+    let path = temp.as_path().join("preview.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    assert_eq!(tauri::async_runtime::block_on(chat_file_content(path.clone(), None)).unwrap(), "fn main() {}\n");
+    std::fs::write(&path, [0, 1, 2]).unwrap();
+    assert!(tauri::async_runtime::block_on(chat_file_content(path.clone(), None)).unwrap_err().contains("binary"));
+    std::fs::write(&path, vec![b'a'; 512 * 1024 + 1]).unwrap();
+    assert!(tauri::async_runtime::block_on(chat_file_content(path, None)).unwrap_err().contains("too large"));
+    assert!(tauri::async_runtime::block_on(chat_file_content(temp.as_path().to_owned(), None)).is_err());
+    assert!(tauri::async_runtime::block_on(chat_file_content(temp.as_path().join("missing"), None)).is_err());
+    std::fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn composer_file_search_stays_in_home_and_skips_generated_and_hidden_files() {
+    let root = std::env::temp_dir().join(format!("muniment-mention-{}", Uuid::now_v7()));
+    for directory in ["src", ".private", "node_modules"] { std::fs::create_dir_all(root.join(directory)).unwrap(); }
+    for file in ["src/ISSUES.md", ".private/ISSUES.md", "node_modules/ISSUES.md"] { std::fs::write(root.join(file), "content").unwrap(); }
+    let files = super::run_preparation::search_home_files(&root, "issues");
+    assert_eq!(files.len(), 1);
+    let value = serde_json::to_value(&files).unwrap();
+    assert_eq!(value[0]["displayName"], "ISSUES.md");
+    std::fs::remove_dir_all(root).unwrap();
 }

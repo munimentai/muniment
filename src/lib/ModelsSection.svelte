@@ -2,13 +2,15 @@
   // Settings → Models, one screen: every connection is a named account under
   // its provider, key or subscription, with its allowance and usage on the
   // card, the provider's models once, the connector that adds a provider, and
-  // Routing at the foot.
-  import { onDestroy } from 'svelte'
+  // routing controls and one shared model catalog.
+  import { onDestroy, onMount } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
   import ModelRouterSection from './ModelRouterSection.svelte'
+  import ModelCatalog from './ModelCatalog.svelte'
+  import RoutingTest from './RoutingTest.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
-  import { catalogProvider, connectableProviders, familyName, familyProvider, methodLabel, modelKey, providerFamily, providerName, searchProviders, sourceTag } from './provider-catalog.js'
+  import { catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
@@ -23,6 +25,7 @@
   // The router's settings: the accounts in every pool, the models in the
   // running and the classifier. One read feeds every card and the Routing foot.
   let router = $state(null)
+  let routerError = $state('')
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
   let providerId = $state('')
@@ -41,8 +44,6 @@
 
   const provider = $derived(catalogProvider(providerId))
   const catalog = $derived(searchProviders(providerQuery))
-  const connectable = $derived(connectableProviders(inventory))
-  const hidden = $derived(new Set(inventory?.hidden ?? []))
   const shownProviders = $derived.by(() => {
     if (!inventory) return []
     const needle = query.trim().toLowerCase()
@@ -66,13 +67,35 @@
   })
 
   $effect(() => { void load() })
-  $effect(() => { void loadRouter() })
+  let refreshingAccounts = $state(false)
+  let refreshError = $state('')
+  let closed = false
+  async function refreshAccounts() {
+    if (closed || refreshingAccounts || document.hidden || !router?.accounts?.some((account) => account.allowance_readable)) return
+    refreshingAccounts = true
+    try {
+      const fresh = await tauri.invoke('model_router_refresh_quota', { id: null })
+      if (!closed && router) { router = { ...router, accounts: fresh.accounts }; refreshError = '' }
+    } catch (_) {
+      if (!closed) refreshError = 'Account allowances could not refresh. The last values remain visible.'
+    } finally { refreshingAccounts = false }
+  }
+  onMount(() => {
+    closed = false
+    void loadRouter().then(refreshAccounts)
+    const timer = setInterval(() => { void refreshAccounts() }, 120_000)
+    const resume = () => { if (!document.hidden) void refreshAccounts() }
+    document.addEventListener('visibilitychange', resume)
+    return () => { closed = true; clearInterval(timer); document.removeEventListener('visibilitychange', resume) }
+  })
 
   async function loadRouter() {
     try {
       router = await tauri.invoke('model_router_settings')
+      routerError = ''
     } catch (_) {
       router = null
+      routerError = 'Muniment could not read routing settings. Try again.'
     }
   }
 
@@ -91,40 +114,6 @@
       oninventory?.(inventory)
     } catch (_) {
       loadError = 'Muniment cannot read provider settings. Restart the app to retry.'
-    }
-  }
-
-  function isDefault(entry, model) {
-    return inventory?.default_provider === entry.id && inventory?.default_model === model.id
-  }
-
-  // A pick shows at once. The save follows, and a failed save puts the list back.
-  async function setDefault(entry, model) {
-    const before = inventory
-    inventory = { ...inventory, default_provider: entry.id, default_model: model.id }
-    oninventory?.(inventory)
-    status = `${model.id} is the default model.`
-    try {
-      await tauri.invoke('local_mode_set_default_model', { provider: entry.id, model: model.id })
-    } catch (error) {
-      inventory = before
-      oninventory?.(inventory)
-      status = String(error?.message ?? error)
-    }
-  }
-
-  async function toggleHidden(entry, model) {
-    const key = modelKey(entry.id, model.id)
-    const before = inventory
-    const shown = !hidden.has(key)
-    inventory = { ...inventory, hidden: shown ? [...(inventory.hidden ?? []), key] : (inventory.hidden ?? []).filter((entry) => entry !== key) }
-    oninventory?.(inventory)
-    try {
-      await tauri.invoke('local_mode_set_model_hidden', { provider: entry.id, model: model.id, hidden: shown })
-    } catch (error) {
-      inventory = before
-      oninventory?.(inventory)
-      status = String(error?.message ?? error)
     }
   }
 
@@ -297,6 +286,12 @@
         break
       case 'done':
         stopListening()
+        if (payload.pool) {
+          // The account joined the router's pool. The probe that names it runs
+          // after the sign-in, so the cards read now and once more after it.
+          void loadRouter()
+          setTimeout(() => { void loadRouter() }, 4000)
+        }
         void finishConnect(`${provider?.name ?? 'The provider'} account is connected.`)
         break
       case 'failed':
@@ -341,22 +336,22 @@
 
 <div class="models">
   {#if view === 'list'}
-    <header class="models-head">
-      <div>
-        <h4 class="models-label">Providers</h4>
-        <p class="support">Every connection is an account under its provider, a key or a subscription. Pick which models the selector shows.</p>
-      </div>
-      <button type="button" class="connect" onclick={openConnector}><LucideIcon name="plus" variant="action" size={14} />Connect provider</button>
-    </header>
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
-    <div class="search">
-      <LucideIcon name="search" variant="action" size={14} />
-      <input type="search" aria-label="Search models" placeholder="Search models" bind:value={query}>
-    </div>
-    {#if inventory && inventory.providers.length === 0}
-      <p class="support empty">No provider is connected. Pick one below to connect it.</p>
-    {/if}
+    {#if routerError}
+      <p class="support" role="alert">{routerError}</p>
+      <button type="button" onclick={loadRouter}>Retry routing settings</button>
+    {:else if router}
+      <ModelRouterSection {tauri} settings={router} {inventory} onsettings={onRouterSettings} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
+    {:else}<p class="support" role="status">Reading routing settings…</p>{/if}
+    <section class="accounts-section" aria-label="Accounts">
+    {#if refreshingAccounts}<p class="support" role="status">Refreshing allowances…</p>{/if}
+    {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
+    <header class="models-head">
+      <div><h4 class="models-label">Accounts</h4><p class="support">Allowances refresh on page load and every 2 minutes.</p></div>
+      <button type="button" class="connect" onclick={openConnector}><LucideIcon name="plus" variant="action" size={14} />Connect account</button>
+    </header>
+    {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
     {#each shownProviders as entry (entry.id)}
       <section class="provider-group" aria-label={entry.name}>
         <header>
@@ -375,25 +370,6 @@
         {#if entry.family && router}
           <ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />
         {/if}
-        {#if entry.models.length === 0}
-          <p class="support">{entry.source === 'claude-code' ? 'Models appear after the next message installs the bridge.' : 'No models answer yet.'}</p>
-        {:else}
-          <ul class="model-list">
-            {#each entry.models as model (model.id)}
-              {@const shown = !hidden.has(modelKey(entry.id, model.id))}
-              <li class="model-row">
-                <span class="model-id">{model.id}</span>
-                <span class="record">{model.context}</span>
-                {#if isDefault(entry, model)}
-                  <span class="tag default">Default</span>
-                {:else}
-                  <button type="button" class="quiet use" disabled={!shown} onclick={() => setDefault(entry, model)}>Use</button>
-                {/if}
-                <button type="button" role="switch" class="switch" aria-checked={shown} aria-label={`Show ${model.id} in the selector`} onclick={() => toggleHidden(entry, model)}><span></span></button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
       </section>
     {/each}
     {#each poolOnlyFamilies as family (family)}
@@ -406,22 +382,14 @@
         <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} />
       </section>
     {/each}
-    {#if inventory && connectable.length}
-      <section class="provider-group connectable" aria-label="Connect">
-        <h5 class="group-label">Connect</h5>
-        <ul class="provider-list">
-          {#each connectable as entry (entry.id)}
-            <li><button type="button" class="quiet provider-row" onclick={() => chooseProvider(entry.id)}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span><span class="tag">{entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
-    <ModelRouterSection {tauri} settings={router} onsettings={onRouterSettings} />
+    </section>
+    <ModelCatalog {tauri} {inventory} settings={router} onsettings={onRouterSettings} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
+    <RoutingTest {tauri} settings={router} />
   {:else}
     <header class="connect-head">
       <button type="button" class="quiet back" aria-label="Back" onclick={back}><LucideIcon name="arrow-left" variant="action" size={16} /></button>
       {#if view === 'connect'}
-        <h4>Connect provider</h4>
+        <h4>Connect account</h4>
       {:else}
         <ProviderLogo provider={providerId} size={18} />
         <h4>Connect {provider?.name}</h4>
@@ -532,14 +500,15 @@
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
-  .models { display: grid; gap: 12px; align-content: start; }
+  .models { display: grid; gap: 28px; align-content: start; }
   .account-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 28px; padding: 3px 4px; }
   .account-name { font-size: var(--text-13); }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
   .connect-head h4, .models-head h4 { margin: 0; }
-  .models-label { color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
+  .models-label { color: var(--ink); font-size: var(--text-17); font-weight: 600; }
+  .accounts-section { display: grid; gap: 12px; border-top: 1px solid var(--border); padding-top: 22px; }
   .connect-head h4 { font-size: var(--text-15); font-weight: 600; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .support code { font: var(--text-12) var(--font-mono); }
@@ -556,10 +525,7 @@
   .record { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .disconnect { margin-left: auto; min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
   .model-list, .provider-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
-  .model-row { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 3px 4px; }
-  .model-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--text-12) var(--font-mono); }
   .use { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
-  .default { color: var(--ink); }
   /* The show switch: a hairline track and a muted knob when the model is hidden, a signal track and knob at the right when it shows. §1.2 lists the switch. */
   .switch { position: relative; flex: none; width: 30px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
   .switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: var(--radius-chip); background: var(--muted); transition: transform 120ms ease, background 120ms ease; }

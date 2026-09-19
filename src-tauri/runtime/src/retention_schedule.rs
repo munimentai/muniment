@@ -20,10 +20,26 @@ pub(crate) fn start_retention_schedule(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         apply_recorded_retention(&state, checked.as_ref());
-        while let Ok(RetentionScheduleCommand::Recheck) | Err(mpsc::RecvTimeoutError::Timeout) =
-            commands.recv_timeout(interval)
-        {
-            apply_recorded_retention(&state, checked.as_ref());
+        let mut retention_checked_at = std::time::Instant::now();
+        loop {
+            if let Err(error) = state.check_agent_schedules() {
+                eprintln!("agent_schedule: {error}");
+            }
+            match commands.recv_timeout(interval.min(Duration::from_secs(15))) {
+                Ok(RetentionScheduleCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break
+                }
+                Ok(RetentionScheduleCommand::Recheck) => {
+                    apply_recorded_retention(&state, checked.as_ref());
+                    retention_checked_at = std::time::Instant::now();
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if retention_checked_at.elapsed() >= interval {
+                        apply_recorded_retention(&state, checked.as_ref());
+                        retention_checked_at = std::time::Instant::now();
+                    }
+                }
+            }
         }
     })
 }

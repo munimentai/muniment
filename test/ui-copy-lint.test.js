@@ -164,6 +164,8 @@ describe('UI copy lint', () => {
 
   it('does not reject a word that only contains the same letters', () => {
     expect(forbiddenUiCopy('<p>Mail is available.</p>')).toEqual([])
+    expect(forbiddenUiCopy('https://x.ai/bot/example')).toEqual([])
+    expect(forbiddenUiCopy('AI from x.ai')).toHaveLength(1)
   })
 
   it.each([

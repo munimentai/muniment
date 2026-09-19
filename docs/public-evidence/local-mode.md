@@ -104,3 +104,41 @@ Run the local TLS handshake test from the repository root:
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml -p muniment-runtime --locked --test native_https
 ```
+
+The first message requests a one to three word thread name from the model.
+A failed name request keeps a short prompt fallback. A manual rename wins.
+Read, search, command and edit actions appear in expandable groups.
+Open a group to see its actions. Only actions with details expand.
+Select a read or edited file to open its current contents in the file panel.
+The file panel resizes and maximizes like the record panel. Syntax colors follow the theme.
+The changed-files chip above the composer opens a file list on hover or click.
+Line totals describe recorded applied changes. Missing or partial counts stay unnumbered.
+Active actions show a text sheen unless reduced motion is enabled.
+Details are bounded and credential-filtered before the local journal saves them.
+An interrupted reply keeps its text. **Try again** sends the same message again.
+During browser sign-in, **Cancel sign-in** or **Escape** restores local mode.
+
+Subscription accounts use the sign-in email when the provider supplies it.
+Hover over an account name and select the pencil to edit it inline.
+Enter saves the name. Escape cancels the edit. A failed save keeps the edit open.
+Grok subscriptions show their reported credits window, remaining percentage and reset time.
+
+Type `@` in the composer to find a file in Home. Select a result to attach it.
+URLs and file references use the theme reference color and show icon links.
+Preferences includes automatic context compaction and token limits.
+Compaction keeps the conversation history and records its outcome in the action feed.
+The web search default returns sources in the conversation without opening a browser.
+An explicit web search workflow in the user configuration remains in effect.
+
+Actions appear where they occur between assistant text blocks, including restored history.
+Web search details list the queries without provider output or search parameters.
+A lost reply acknowledgment keeps the reply in recovery until the journal read completes.
+
+Hover over a user message to see its local send time and copy control.
+The reply places execution time and an icon-only copy control at the right.
+
+A single action opens its details directly. Multiple actions share a group dropdown.
+
+Routed replies estimate cost per turn using the selected model’s catalog input and output rates. Cached input uses the standard input rate. Subscription allowances and provider discounts do not change this estimate. An unknown model price leaves cost unavailable. Saved receipts retain their recorded values.
+
+Reply receipts list classifier tokens and estimated cost separately from the answering model. Each classifier total includes all calls in the run, including calls that select a fallback. Missing usage stays unavailable.

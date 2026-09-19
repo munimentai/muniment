@@ -4,6 +4,7 @@
 
 The built desktop bundle carries the following code with no embedded license comment. This document provides the notice for that code.
 
+- `highlight.js` 11.11.1 — BSD-3-Clause
 - `marked` 18.0.7 — MIT
 - `dompurify` 3.4.12 — MPL-2.0 OR Apache-2.0
 - `diff2html` 3.4.56 — MIT

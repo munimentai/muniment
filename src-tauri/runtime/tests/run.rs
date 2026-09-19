@@ -502,7 +502,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
         run_id,
         &mut sequence,
         Some("user"),
-        || {
+        |_| {
             let (locator, _) = validate_pi_session(&session_root, "session.jsonl")
                 .map_err(|_| muniment_core::pi_execution::PreparedPromptError::SessionRoot)?;
             Ok(((), locator, Vec::new()))
