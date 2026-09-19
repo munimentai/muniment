@@ -20,7 +20,7 @@
   import ChatComposer from './composer/ChatComposer.svelte'
   import ModelPicker from './lib/ModelPicker.svelte'
   import Capacity from './lib/Capacity.svelte'
-  import { currentModel, modelChipLabel } from './lib/provider-catalog.js'
+  import { currentModel, currentModelAvailable, modelChipLabel } from './lib/provider-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
   import RowControl from './lib/RowControl.svelte'
@@ -85,6 +85,7 @@
   let accountStatus = $state('')
   // The connected providers and their models, as Settings → Models and the picker read them.
   let inventory = $state(null)
+  let inventoryError = $state('')
   let inventoryRequestVersion = 0
   let pickerOpen = $state(false)
   let modelChoicePending = $state(false)
@@ -1315,11 +1316,16 @@
     const version = ++inventoryRequestVersion
     try {
       const next = await tauri.invoke('local_mode_provider_inventory')
-      if (version === inventoryRequestVersion) inventory = next
+      if (version === inventoryRequestVersion) {
+        inventory = next
+        if (accountStatus === inventoryError) accountStatus = ''
+        inventoryError = ''
+      }
       return true
     } catch (_) {
       if (version === inventoryRequestVersion) {
-        accountStatus = 'Muniment cannot read provider settings. Restart the app to retry.'
+        inventoryError = 'Muniment cannot read provider settings. Restart the app to retry.'
+        accountStatus = inventoryError
       }
       return false
     }
@@ -1907,7 +1913,7 @@
         <div class="thread-shell">
         <div class="thread" class:scrolling={threadScrolling} role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={onThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
-          {#if messages.length === 0}<p class="empty">{auth.name === 'local' && !inventory ? accountStatus || 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : profileAgent ? `Chat with ${profileAgent.name} using ${modelSourceLabel}.` : auth.name === 'local' ? `${modelSourceLabel} is selected. Ask a question or request a file.` : "Ask a question or request a file. Your org selects the model."}</p>{/if}
+          {#if messages.length === 0}<p class="empty">{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'No enabled account serves this model. Connect an account or choose another model in the composer.' : profileAgent ? `Chat with ${profileAgent.name} using ${modelSourceLabel}.` : auth.name === 'local' ? `${modelSourceLabel} is selected. Ask a question or request a file.` : "Ask a question or request a file. Your org selects the model."}</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
@@ -2280,7 +2286,7 @@
 </main>
 
   {#if settingsOpen}
-    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
   {/if}
 {#if pairingRequests[0]}
   {#key pairingRequests[0]}

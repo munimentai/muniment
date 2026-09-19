@@ -2650,6 +2650,30 @@ describe('history alerts', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
   })
 
+  it('explains an empty router account pool instead of advertising the selected classifier', async () => {
+    localModeStatus = true
+    threadSummaryResult = []
+    const base = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'local_mode_provider_inventory' ? Promise.resolve({
+      providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }],
+      default_provider: 'muniment-router', default_model: 'auto', router_classifier: 'classifier',
+      router_models: [{ id: 'openai/model-a', family: 'openai', model: 'model-a', accounts: 0 }],
+    }) : base(command, payload))
+    render(App)
+    await screen.findByText('No enabled account serves this model. Connect an account or choose another model in the composer.')
+    expect(document.querySelector('.empty')).not.toHaveTextContent('is selected')
+  })
+
+  it('shows an inventory read error instead of a model readiness claim', async () => {
+    localModeStatus = true
+    threadSummaryResult = []
+    const base = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'local_mode_provider_inventory' ? Promise.reject(new Error('unavailable')) : base(command, payload))
+    render(App)
+    await screen.findByText('Muniment cannot read provider settings. Restart the app to retry.')
+    expect(document.querySelector('.empty')).not.toHaveTextContent('is selected')
+  })
+
   it.each(['Restore history', 'New thread'])('clears the reader cause after %s succeeds', async (action) => {
     let failing = true
     const defaultInvoke = invoke.getMockImplementation()

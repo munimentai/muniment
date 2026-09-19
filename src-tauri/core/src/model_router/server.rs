@@ -831,12 +831,12 @@ fn complete(stream: &mut TcpStream, state: &State, request: &Value, progress: Op
                         let _ = usage::save(&state.agent, &ledger);
                     }
                     last_failure = (status, detail);
+                    refusals.push(format!("{} answered {status}.", account.label));
                     if !cools {
                         // Another model may accept the request, but repeating it on
                         // the same model's other accounts does not help.
                         break;
                     }
-                    refusals.push(format!("{} answered {status}.", account.label));
                 }
                 Err(ureq::Error::Transport(error)) => {
                     state.record_error(&account.id, &error.to_string(), true);
@@ -1523,6 +1523,11 @@ mod tests {
             &handle.endpoint().token,
         );
         assert_eq!(status, 200, "{body}");
+        let response: Value = serde_json::from_str(&body).unwrap();
+        let routing = wire::response_routing(response["id"].as_str().unwrap()).unwrap();
+        assert_eq!(routing.fallback_causes, ["a answered 404."]);
+        assert_eq!(routing.account, "a");
+        assert_eq!(routing.selected_model, "openai/gpt-5.6-mini");
         let models: Vec<_> = seen
             .try_iter()
             .map(|r| r["model"].as_str().unwrap().to_owned())
