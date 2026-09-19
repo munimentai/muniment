@@ -2238,3 +2238,15 @@ fn file_panel_reads_text_and_rejects_binary_large_missing_and_directory() {
     assert!(tauri::async_runtime::block_on(chat_file_content(temp.as_path().join("missing"))).is_err());
     std::fs::remove_dir_all(temp).unwrap();
 }
+
+#[test]
+fn composer_file_search_stays_in_home_and_skips_generated_and_hidden_files() {
+    let root = std::env::temp_dir().join(format!("muniment-mention-{}", Uuid::now_v7()));
+    for directory in ["src", ".private", "node_modules"] { std::fs::create_dir_all(root.join(directory)).unwrap(); }
+    for file in ["src/ISSUES.md", ".private/ISSUES.md", "node_modules/ISSUES.md"] { std::fs::write(root.join(file), "content").unwrap(); }
+    let files = super::run_preparation::search_home_files(&root, "issues");
+    assert_eq!(files.len(), 1);
+    let value = serde_json::to_value(&files).unwrap();
+    assert_eq!(value[0]["displayName"], "ISSUES.md");
+    std::fs::remove_dir_all(root).unwrap();
+}

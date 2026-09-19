@@ -89,6 +89,8 @@
     <path d="M21 22v-6h-6" />
     <path d="M3 12a9 9 0 0 0 15 6.7l3-2.7" />
     <circle cx="12" cy="12" r="1" />
+  {:else if name === 'list-collapse'}
+    <path d="M10 5h11M10 12h11M10 19h11m-18-9 3-3-3-3m0 16 3-3-3-3" />
   {:else if name === 'folder'}
     <path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z" />
   {:else if name === 'globe'}

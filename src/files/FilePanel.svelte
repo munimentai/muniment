@@ -20,8 +20,8 @@
 <aside id="file-panel" class="file-panel" aria-labelledby="file-panel-title">
   <header>
     <h2 id="file-panel-title">{file?.name ?? 'File'}</h2>
-    <button type="button" aria-label="Reload file" onclick={() => reload += 1}><LucideIcon name="refresh-ccw-dot" /></button>
-    <button type="button" onclick={ontogglemaximized}>{maximized ? 'Restore' : 'Maximize'}</button>
+    <button type="button" aria-label="Reload file" title="Reload file from disk" onclick={() => reload += 1}><LucideIcon name="refresh-ccw-dot" /></button>
+    <button type="button" aria-label={maximized ? 'Restore' : 'Maximize'} title={maximized ? 'Restore' : 'Maximize'} onclick={ontogglemaximized}><LucideIcon name={maximized ? 'minimize-2' : 'maximize-2'} /></button>
     <button type="button" aria-label="Close file panel" onclick={onclose}><LucideIcon name="x" /></button>
   </header>
   <p class="path">{file?.path}</p>

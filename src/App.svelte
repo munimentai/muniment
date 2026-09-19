@@ -1,4 +1,7 @@
 <script>
+  import ComposerReferences from './composer/ComposerReferences.svelte'
+  import FileMentions from './composer/FileMentions.svelte'
+  import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
   import ActionFeedback from './activity/ActionFeedback.svelte'
   import { onMount, tick, untrack } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -866,8 +869,58 @@
     return voiceShortcutManager.change(next)
   }
 
+  let mention = $state(null)
+  let mentionFiles = $state([])
+  let mentionSelected = $state(0)
+  let mentionLoading = $state(false)
+  let mentionError = $state('')
+  let mentionVersion = 0
+  let mentionTimer
+  let composerScrollTop = $state(0)
+  let composerScrollLeft = $state(0)
+  let composerTextWidth = $state(0)
+  const draftLinks = $derived([...new Set(composerParts(draft).filter((part) => part.type === 'link').map((part) => part.text))])
+  function closeMentions() {
+    clearTimeout(mentionTimer); mentionVersion += 1; mention = null; mentionFiles = []; mentionLoading = false
+  }
+  function updateMention() {
+    clearTimeout(mentionTimer)
+    const version = ++mentionVersion
+    mention = !active && composer ? mentionQuery(composer.value, composer.selectionStart) : null
+    mentionSelected = 0; mentionError = ''; mentionFiles = []
+    if (!mention) { mentionLoading = false; return }
+    mentionLoading = true
+    const query = mention.query
+    mentionTimer = setTimeout(async () => {
+      try {
+        const files = await tauri.invoke('chat_search_files', { query })
+        if (version === mentionVersion) mentionFiles = files
+      } catch (error) { if (version === mentionVersion) mentionError = String(error?.message ?? error) }
+      finally { if (version === mentionVersion) mentionLoading = false }
+    }, 120)
+  }
+  async function chooseMention(file) {
+    const current = mention
+    const before = draft
+    closeMentions()
+    await addFiles([file.path])
+    if (!current || draft !== before || !selectedFiles.some((f) => f.path === file.path)) return
+    selectedFiles = selectedFiles.map((item) => item.path === file.path ? { ...item, referenceName: file.relativePath } : item)
+    const inserted = insertMention(draft, current, file.relativePath)
+    draft = inserted.text
+    await tick()
+    composer?.focus(); composer?.setSelectionRange(inserted.cursor, inserted.cursor)
+  }
+  function syncComposerScroll() {
+    composerScrollTop = composer?.scrollTop ?? 0
+    composerScrollLeft = composer?.scrollLeft ?? 0
+    composerTextWidth = composer?.clientWidth ?? 0
+  }
+  $effect(() => { if (!draft || active) untrack(closeMentions) })
+
   function composerInput(event) {
     composerInputDraft = event.currentTarget.value
+    updateMention()
   }
 
   function focusComposerOnMount(node) {
@@ -886,6 +939,7 @@
   // view, but a mere relayout must leave the reader wherever they were.
   function syncComposerHeight(reveal = false) {
     if (!composer) return
+    syncComposerScroll()
     const styles = getComputedStyle(composer)
     const threadScrollTop = thread?.scrollTop
     composer.style.height = 'auto'
@@ -905,6 +959,7 @@
       // Typed input needs no help: the browser keeps the caret in view.
       if (reveal && capped) composer.scrollTop = composer.scrollHeight
     }
+    syncComposerScroll()
     if (thread) {
       const restored = pinned ? thread.scrollHeight - thread.clientHeight : threadScrollTop
       if (thread.scrollTop !== restored) thread.scrollTop = restored
@@ -1281,6 +1336,7 @@
         console.error('File drop listener registration failed.')
       })
     return () => {
+      closeMentions()
       destroyed = true
       speechInstallEpoch += 1
       stopSpeechInstallPolling()
@@ -1364,6 +1420,20 @@
   }
 
   function keydown(event) {
+    if (mention && !event.isComposing) {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMentions(); return }
+      if (['ArrowDown', 'ArrowUp'].includes(event.key) && mentionFiles.length) {
+        event.preventDefault()
+        mentionSelected = (mentionSelected + (event.key === 'ArrowDown' ? 1 : -1) + mentionFiles.length) % mentionFiles.length
+        void tick().then(() => document.getElementById(`file-mention-${mentionSelected}`)?.scrollIntoView({ block: 'nearest' }))
+        return
+      }
+      if (event.key === 'Enter' || (event.key === 'Tab' && mentionFiles.length)) {
+        event.preventDefault()
+        if (mentionFiles[mentionSelected]) void chooseMention(mentionFiles[mentionSelected])
+        return
+      }
+    }
     const action = composerAction(event, draft, active)
     if (action) {
       event.preventDefault()
@@ -1721,14 +1791,17 @@
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
-                <li><span>{file.displayName}</span><span>{formatByteSize(file.byteLength)}</span><button type="button" aria-label={`Remove ${file.displayName}`} onclick={() => { selectedFiles = selectedFiles.filter(({ path }) => path !== file.path) }}>Remove</button></li>
+                <li><button type="button" class="file-reference" onclick={() => openFile({ path: file.path })}><LucideIcon name="file-text" /><span>{file.displayName}</span></button><span>{formatByteSize(file.byteLength)}</span><button type="button" aria-label={`Remove ${file.displayName}`} onclick={() => { selectedFiles = selectedFiles.filter(({ path }) => path !== file.path) }}>Remove</button></li>
               {/each}
             </ul>
           {/if}
           <div class="composer-input">
+            {#if mention}<FileMentions files={mentionFiles} loading={mentionLoading} error={mentionError} selected={mentionSelected} onchoose={chooseMention} />{/if}
+            <ComposerReferences text={draft} references={selectedFiles.map((file) => file.referenceName)} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
             <label class="visually-hidden" for="composer-message">Message</label>
-            <textarea id="composer-message" aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
+            <textarea id="composer-message" class="reference-input" aria-autocomplete="list" aria-controls={mention ? 'file-mentions' : undefined} aria-activedescendant={mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
           </div>
+          {#if draftLinks.length}<div class="composer-links" aria-label="Links in message">{#each draftLinks as url (url)}<button type="button" onclick={() => openUrl(url).catch(() => { submitError = 'This link could not be opened.' })}><LucideIcon name="globe" /><span>{url}</span></button>{/each}</div>{/if}
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
@@ -2178,6 +2251,12 @@
   .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: var(--text-12); }
+  .composer-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .composer-links button, .attachments .file-reference { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; color: var(--reference); border: 0; background: transparent; padding: 2px 0; font: inherit; cursor: pointer; }
+  .composer-links button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  textarea.reference-input { position: relative; color: transparent; caret-color: var(--ink); }
+  textarea.reference-input::placeholder { color: var(--muted); }
+  @media (forced-colors: active) { textarea.reference-input { caret-color: CanvasText; } }
   .composer-input { position: relative; }
   /* No padding and no border: the composer supplies both, so the measured
      scrollHeight is pure text and the overlay lands on the same grid. */

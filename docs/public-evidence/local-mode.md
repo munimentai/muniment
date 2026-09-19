@@ -122,3 +122,10 @@ Subscription accounts use the sign-in email when the provider supplies it.
 Hover over an account name and select the pencil to edit it inline.
 Enter saves the name. Escape cancels the edit. A failed save keeps the edit open.
 Grok subscriptions show their reported credits window, remaining percentage and reset time.
+
+Type `@` in the composer to find a file in Home. Select a result to attach it.
+URLs and file references use the theme reference color and show icon links.
+Preferences includes automatic context compaction and token limits.
+Compaction keeps the conversation history and records its outcome in the action feed.
+The web search default returns sources in the conversation without opening a browser.
+An explicit web search workflow in the user configuration remains in effect.
