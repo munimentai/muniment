@@ -411,7 +411,7 @@
         {/if}
       {/each}
     {:else if method === 'key'}
-      <p class="support">Enter your {provider.name} API key. It goes into the harness credential store on this device.</p>
+      <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
       <label for="provider-key">{provider.name} API key</label>
       <input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}

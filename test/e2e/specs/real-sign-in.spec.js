@@ -1,3 +1,4 @@
+import { revokeFixtureSession } from '../support/session-cleanup.mjs'
 import path from 'node:path'
 import { access, appendFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
@@ -104,13 +105,7 @@ async function activateHosted(driver, selector) {
 
 describe('installed nightly', () => {
   afterEach(async () => {
-    const profile = await $('.profile-button')
-    if (await profile.isExisting()) {
-      await profile.click()
-      await (await $('button=Sign out')).click()
-      // A sign-out lands in local mode.
-      await (await $('[data-testid="local-mode"]')).waitForDisplayed({ timeout: 30000 })
-    }
+    await revokeFixtureSession(browser)
   })
 
   it('signs in through the production UI', withAuthDiagnostics(async function () {

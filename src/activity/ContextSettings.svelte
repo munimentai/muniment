@@ -1,4 +1,5 @@
 <script>
+  import Toggle from '../lib/Toggle.svelte'
   import { onMount } from 'svelte'
   let { tauri } = $props()
   let enabled = $state(true)
@@ -29,7 +30,7 @@
   <p>Compaction summarizes older messages so long conversations can continue. The full conversation stays in your history.</p>
   {#if ready}
     <form onsubmit={(event) => { event.preventDefault(); void save() }}>
-      <label class="toggle"><input type="checkbox" bind:checked={enabled} disabled={saving} /> Compact automatically</label>
+      <label class="toggle"><Toggle bind:checked={enabled} disabled={saving} /> Compact automatically</label>
       <p>Compaction starts before the model runs out of room. If disabled, a full context can stop a reply.</p>
       <details><summary>Context limits</summary>
         <label>Room for the next reply (tokens)<input type="number" min="4096" max="131072" step="1" bind:value={reserveTokens} required disabled={saving} /></label>

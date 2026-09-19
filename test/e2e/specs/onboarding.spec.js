@@ -143,7 +143,7 @@ describe('installed nightly model-ready onboarding', () => {
     }
     const settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
     await settings.waitForDisplayed()
-    expect(await (await settings.$('button=Connect provider')).isDisplayed()).toBe(true)
+    expect(await (await settings.$('button=Connect account')).isDisplayed()).toBe(true)
     await (await settings.$('button[aria-label="Close settings"]')).click()
     await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
     expect(await (await $('[aria-label="First-run settings"]')).isExisting()).toBe(false)

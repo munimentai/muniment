@@ -201,6 +201,17 @@ export function currentModel(inventory) {
   return row ? { provider: row.provider, model: row.choice, label: row.label } : null
 }
 
+// Router catalog entries remain visible when their account pool is empty.
+// A direct provider has already supplied its configured models in inventory.
+export function currentModelAvailable(inventory) {
+  const current = currentModel(inventory)
+  if (!current) return false
+  const provider = inventory.providers.find((entry) => entry.id === current.provider)
+  if (provider?.source !== 'router') return true
+  return (inventory.router_models ?? []).some((entry) => entry.accounts > 0
+    && (current.model === 'auto' || entry.id === current.model))
+}
+
 // The composer chip: the model id in use beside the provider's mark, `Connect a
 // model` when none answers.
 export function modelChipLabel(inventory) {

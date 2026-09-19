@@ -153,7 +153,7 @@ async function checkArtifactEmpty(page) {
   if (await rail.count() === 0) return
   const empty = rail.locator('.artifact-empty')
   assert.equal(await empty.count(), 1)
-  assert.equal(await empty.innerText(), 'No artifacts yet')
+  assert.equal(await empty.innerText(), 'Ask in chat to create a document, table, or other file.')
   assert.equal(await empty.locator(':scope > *').count(), 1)
   const layout = await empty.locator('p').evaluate((line) => {
     const range = document.createRange()
@@ -168,7 +168,7 @@ async function checkArtifactEmpty(page) {
     }
   })
   assert.equal(layout.children, 0)
-  assert.equal(layout.lines, 1)
+  assert.ok(layout.lines > 0) // File creation guidance can wrap within the rail.
   assert.equal(layout.inside, true)
   assert.match(layout.font, /Schibsted Grotesk/)
 }

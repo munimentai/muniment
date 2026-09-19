@@ -25,6 +25,7 @@ fn event() -> ChatEvent {
         text: "hello".into(),
         prompt_accepted: false,
         turn_started: false,
+        routing_stage: None,
         prompt_storage_notice: None,
         failure_reason: None,
         receipt: None,
