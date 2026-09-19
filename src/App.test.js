@@ -2734,6 +2734,27 @@ describe('thread name', () => {
     expect(screen.queryByRole('button', { name: 'Older threads' })).not.toBeInTheDocument()
   })
 
+  it('expands project threads separately from unassigned threads without creating a chat', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Project notes', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Unassigned notes', updatedAt: '' },
+    ]
+    const baseInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => command === 'project_list'
+      ? { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
+      : baseInvoke(command, payload))
+    render(App)
+    const project = await screen.findByRole('button', { name: 'Project Research' })
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Threads' })).queryByText('Project notes')).not.toBeInTheDocument())
+    expect(within(screen.getByRole('list', { name: 'Threads' })).getByText('Unassigned notes')).toBeInTheDocument()
+    await fireEvent.click(project)
+    expect(project).toHaveAttribute('aria-expanded', 'true')
+    expect(within(screen.getByRole('list', { name: 'Research threads' })).getByText('Project notes')).toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(0)
+    await fireEvent.click(project)
+    expect(screen.queryByRole('list', { name: 'Research threads' })).not.toBeInTheDocument()
+  })
+
   it('creates and renames a project through folder commands and scopes new threads', async () => {
     const catalog = { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
     const baseInvoke = invoke.getMockImplementation()
@@ -2742,7 +2763,7 @@ describe('thread name', () => {
       if (command === 'project_create') { catalog.projects.created = payload.name; return 'created' }
       if (command === 'project_rename') { catalog.projects[payload.projectId] = payload.name; return }
       if (command === 'project_open') return
-      if (command === 'chat_new_thread') { catalog.threads['thread-created'] = payload.projectId; return 'thread-created' }
+      if (command === 'chat_new_thread') { catalog.threads['thread-created'] = payload?.projectId; return 'thread-created' }
       return baseInvoke(command, payload)
     })
     render(App)
@@ -2750,16 +2771,25 @@ describe('thread name', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Contracts' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-expanded', 'true'))
+    expect(invoke).not.toHaveBeenCalledWith('chat_new_thread', expect.anything())
+    await fireEvent.click(screen.getByRole('button', { name: 'New thread in Contracts' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', { projectId: 'created' }))
-    expect(await screen.findByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-pressed', 'true')
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename project Contracts' })).toBeEnabled())
-    await fireEvent.click(screen.getByRole('button', { name: 'Rename project Contracts' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Actions for project Contracts' })).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for project Contracts' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename', exact: true }))
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Agreements' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByRole('button', { name: 'Project Agreements' })
     expect(invoke).toHaveBeenCalledWith('project_rename', { projectId: 'created', name: 'Agreements' })
-    await fireEvent.click(screen.getByRole('button', { name: 'Open Agreements folder' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for project Agreements' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Open folder' }))
     expect(invoke).toHaveBeenCalledWith('project_open', { projectId: 'created' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Project Agreements' }))
+    expect(screen.getByRole('button', { name: 'Project Agreements' })).toHaveAttribute('aria-expanded', 'false')
+    await fireEvent.click(screen.getByRole('button', { name: 'New thread', exact: true }))
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread').at(-1)).toEqual(['chat_new_thread']))
+    expect(within(screen.getByRole('list', { name: 'Threads' })).getByText('New thread')).toBeInTheDocument()
   })
 
   it('places New thread first and keeps pin and archive choices across remounts', async () => {
