@@ -562,8 +562,8 @@ export function createChatController({
     switchingThread = true
     onThreadSwitch(true)
     try {
-      const projectId = readProject()
-      const agentId = readAgent()
+      const projectId = fromLauncher ? null : readProject()
+      const agentId = fromLauncher ? null : readAgent()
       const context = { ...(projectId ? { projectId } : {}), ...(agentId ? { agentId } : {}) }
       const createdThread = await invoke('chat_new_thread', ...(Object.keys(context).length ? [context] : []))
       if (destroyed) return false
