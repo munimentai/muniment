@@ -16,6 +16,23 @@
     <rect width="18" height="18" x="3" y="3" rx="2" />
     <path d="M9 3v18" />
     <path d="m16 15-3-3 3-3" />
+  {:else if name === 'bot'}
+    <rect x="4" y="7" width="16" height="14" rx="3" /><path d="M12 7V3H9M1 12v5M23 12v5M8 16h.01M16 16h.01" />
+  {:else if name === 'folder'}
+    <path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2Z" />
+  {:else if name === 'folder-open'}
+    <path d="m6 14 2-4h14l-3 10H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h9v4" />
+  {:else if name === 'square-pen'}
+    <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+    <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
+  {:else if name === 'refresh-cw'}
+    <path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16M8 16H3v5" />
+  {:else if name === 'pencil'}
+    <path d="m16 3 5 5M3 21l1-6L16 3a2 2 0 0 1 5 5L9 20Z" />
+  {:else if name === 'ellipsis'}
+    <circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" />
+  {:else if name === 'archive'}
+    <rect x="3" y="3" width="18" height="4" rx="1" /><path d="M5 7v13h14V7M10 11h4" />
   {:else if name === 'plus'}
     <path d="M5 12h14" />
     <path d="M12 5v14" />
@@ -91,12 +108,8 @@
     <circle cx="12" cy="12" r="1" />
   {:else if name === 'list-collapse'}
     <path d="M10 5h11M10 12h11M10 19h11m-18-9 3-3-3-3m0 16 3-3-3-3" />
-  {:else if name === 'folder'}
-    <path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z" />
   {:else if name === 'globe'}
     <circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20" />
-  {:else if name === 'pencil'}
-    <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4" />
   {:else if name === 'chevron-down'}
     <path d="m6 9 6 6 6-6" />
   {/if}

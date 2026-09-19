@@ -1,4 +1,5 @@
 <script>
+  import { THREAD_ORGANIZATION_KEY, readThreadOrganization, organizeThreads } from './lib/thread-organization.js'
   import ComposerReferences from './composer/ComposerReferences.svelte'
   import FileMentions from './composer/FileMentions.svelte'
   import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
@@ -13,6 +14,10 @@
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import Settings from './lib/Settings.svelte'
+  import AgentManager from './lib/AgentManager.svelte'
+  import AgentAvatar from './lib/AgentAvatar.svelte'
+  import AgentProfile from './lib/AgentProfile.svelte'
+  import ChatComposer from './composer/ChatComposer.svelte'
   import ModelPicker from './lib/ModelPicker.svelte'
   import { currentModel, modelChipLabel } from './lib/provider-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
@@ -45,7 +50,6 @@
   import { relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
-  import { createStreamingUnderlineAction } from './lib/streaming-underline.js'
   import RunMark from './lib/RunMark.svelte'
   import { threadTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
@@ -94,6 +98,46 @@
   const chipModel = $derived(currentModel(inventory))
 
   let settingsOpen = $state(false)
+  let agentsOpen = $state(false)
+  let agentsRequest = $state(0)
+  let agentPanelId = $state(null)
+  let agentCreateNew = $state(false)
+  function showAgents(id = null, create = false) { agentPanelId = id; agentCreateNew = create; agentsRequest += 1; agentsOpen = true; agentProfileOpen = false; closeRail() }
+  let agentProfileOpen = $state(false)
+  let agentOpening = $state(false)
+  let selectedAgent = $state(null)
+  const profileAgent = $derived(agentListing.agents.find(agent => agent.id === selectedAgent))
+  let agentListing = $state({ agents: [], state: { threads: {}, runs: {} } })
+  async function refreshAgents() {
+    try { const value = await tauri.invoke('agent_list'); if (value?.agents) { agentListing = value; selectedAgent = value.state.threads[currentThreadId] ?? null } }
+    catch (_) { /* The manager presents errors and retry state. */ }
+  }
+  async function openAgent(agent) {
+    if (active || threadSwitching || agentOpening) return
+    agentOpening = true
+    try {
+      const mapping = agentListing.state.threads
+      const threadId = agentListing.state.primaryThreads?.[agent.id] ?? (mapping[currentThreadId] === agent.id ? currentThreadId
+        : threadSummaries.find(thread => mapping[thread.threadId] === agent.id && !threadOrganization[thread.threadId]?.archived)?.threadId
+          ?? Object.keys(mapping).find(id => mapping[id] === agent.id && !threadOrganization[id]?.archived))
+      if (threadId) {
+        if (threadId !== currentThreadId && !await chatController.openThread(threadId, true)) return
+      } else await startAgentThread(agent)
+      selectedAgent = agent.id
+      agentsOpen = false
+      closeRail()
+      agentProfileOpen = true
+    } finally { agentOpening = false }
+  }
+  async function startAgentThread(agent) {
+    selectedAgent = agent.id
+    selectedProject = agent.projectId || null
+    if (!await chatController.newThread()) { selectedAgent = agentListing.state.threads[currentThreadId] ?? null; throw new Error('The agent thread could not be started.') }
+    threadSearch = ''
+    archivedThreads = false
+    filterThreads()
+    await refreshAgents()
+  }
   let settingsSection = $state('models')
   let settingsButton = $state()
   // The control that opened Settings takes focus back when it closes.
@@ -175,10 +219,31 @@
   let historyError = $state('')
   let historyErrorAction = $state(null)
   let threadSummaries = $state([])
+  let projectCatalog = $state({ projects: {}, threads: {} })
+  let selectedProject = $state(null)
+  let projectForm = $state(null)
+  let projectName = $state('')
+  let projectBusy = $state(false)
+  let projectError = $state('')
+  const projectRows = $derived(Object.entries(projectCatalog.projects).sort((a, b) => a[1].localeCompare(b[1])))
+  const regularThreads = $derived(threadSummaries.filter(thread => !agentListing.state.threads[thread.threadId]))
+  const projectThreads = $derived(selectedProject ? regularThreads.filter((thread) => projectCatalog.threads[thread.threadId] === selectedProject || threadOrganization[thread.threadId]?.pinned) : regularThreads)
+  let threadOrganization = $state(readThreadOrganization())
+  let threadSearch = $state('')
+  let archivedThreads = $state(false)
+  let threadIndexFailed = $state(false)
+  let rowRename = $state(null)
+  let rowRenameInput = $state()
+  let rowRenamePending = $state(false)
+  const threadGroups = $derived(organizeThreads(projectThreads, threadOrganization, threadSearch, archivedThreads))
+  const visibleThreads = $derived(threadGroups.flatMap(({ threads }) => threads))
+  const showFreshThread = $derived(freshThread && !selectedAgent && !archivedThreads && !threadSearch.trim())
+  const pinnedThreadCount = $derived(threadGroups.find((group) => group.name === 'Pinned')?.threads.length || 0)
+  const shortcutThreads = $derived([...visibleThreads.slice(0, pinnedThreadCount), ...(showFreshThread ? [{ threadId: null }] : []), ...visibleThreads.slice(pinnedThreadCount)])
   let moreThreads = $state(false)
   let loadingOlderThreads = $state(false)
   let currentThreadId = $state(null)
-  let currentThreadTitle = $derived(threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages))
+  let currentThreadTitle = $derived(profileAgent?.name || threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages))
   let freshThread = $state(false)
   let threadSwitching = $state(false)
   let editingThreadTitle = $state(false)
@@ -188,6 +253,8 @@
   let threadTitleBeforeEdit = ''
   let deletingThreadId = $state(null)
   let deletePending = $state(false)
+  let deleteFromTitle = $state(false)
+  let titleActionsButton = $state()
   // The rows a confirm covers, and the rows a Shift or Command click gathered.
   let deletingThreadIds = $state([])
   let selectedThreadIds = $state(new Set())
@@ -297,7 +364,6 @@
   const modifierLabel = shortcutDisplayLabel(sidebarKeyShortcut).slice(0, -1)
   // The newest copy attempt in the thread, or null once its confirmation lapses.
   let copy = $state(null)
-  const streamingUnderline = createStreamingUnderlineAction(tick)
   const windowTitle = createWindowTitle(window.__TAURI__?.window?.getCurrentWindow?.())
 
   const transcriptController = createChatTranscriptController({
@@ -329,7 +395,7 @@
 
   const railController = createRailController({
     readOccupant: () => railOccupant,
-    onOccupant: (next) => { railOccupant = next },
+    onOccupant: (next) => { railOccupant = next; if (next) agentProfileOpen = false },
     readWidth: () => artifactRailWidth,
     onWidth: (next) => { artifactRailWidth = next },
     readMaximum: () => artifactRailMaximum,
@@ -343,8 +409,8 @@
     onMaximized: (next) => { recordMaximized = next },
   })
   const { fit: fitArtifactRail, pointerDown: artifactRailPointerDown, pointerMove: artifactRailPointerMove, pointerEnd: artifactRailPointerEnd, keydown: artifactRailKeydown } = railController
-  const toggleArtifactRail = () => railController.toggle('artifacts')
-  const toggleRecordPanel = () => railController.toggle('record')
+  const toggleArtifactRail = () => { agentsOpen = false; agentProfileOpen = false; railController.toggle('artifacts') }
+  const toggleRecordPanel = () => { agentsOpen = false; agentProfileOpen = false; railController.toggle('record') }
   const closeRail = () => railController.close()
   // Ask puts the open view's SQL into the composer as a fenced block, so the reply starts from what the person sees.
   function askAboutView(sql) {
@@ -389,7 +455,9 @@
     onHistoryError: (next, action) => { historyError = next; historyErrorAction = action },
     onThreadSummaries: (next) => { threadSummaries = next },
     onMoreThreads: (next) => { moreThreads = next },
-    onThreadSelected: (next) => { currentThreadId = next },
+    readProject: () => selectedProject,
+    readAgent: () => selectedAgent,
+    onThreadSelected: (next) => { currentThreadId = next; selectedAgent = agentListing.state.threads[next] ?? null; if (!selectedAgent) agentProfileOpen = false; void refreshProjects(next); void refreshAgents() },
     onThreadSwitch: (next) => { threadSwitching = next },
     onFreshThread: (next) => { freshThread = next },
     onHistoryStart: () => { expandedReceipts = new Set(); parallelTools = new Map() },
@@ -407,6 +475,126 @@
     if (!firstThreadId) return
     await tick()
     document.querySelector(`[data-thread-id="${CSS.escape(firstThreadId)}"]`)?.focus()
+  }
+
+  $effect(() => {
+    const needsIndex = selectedProject || threadSearch.trim() || archivedThreads || Object.entries(threadOrganization)
+      .some(([id, state]) => state.pinned && !state.archived && !threadSummaries.some((thread) => thread.threadId === id))
+    if (needsIndex && moreThreads && !loadingOlderThreads && !threadIndexFailed && !projectBusy) {
+      void untrack(indexOlderThreads)
+    }
+  })
+
+  async function indexOlderThreads() {
+    loadingOlderThreads = true
+    const first = await chatController.loadOlderThreads()
+    threadIndexFailed = !first && moreThreads
+    loadingOlderThreads = false
+  }
+
+  async function refreshProjects(threadId) {
+    try {
+      const catalog = await tauri.invoke('project_list')
+      if (!catalog?.projects || !catalog?.threads) return
+      projectCatalog = catalog
+      if (threadId && threadId === currentThreadId) selectedProject = catalog.threads[threadId] || null
+      projectError = ''
+    } catch (_) { projectError = 'Projects could not be loaded.' }
+  }
+
+  async function selectProject(projectId) {
+    if (active || threadSwitching || projectBusy || loadingOlderThreads) return
+    agentsOpen = false
+    projectBusy = true
+    selectedProject = projectId
+    selectedAgent = null
+    threadSearch = ''
+    archivedThreads = false
+    filterThreads()
+    while (moreThreads && !threadIndexFailed && !loadingOlderThreads) await indexOlderThreads()
+    const first = regularThreads.find((thread) => projectCatalog.threads[thread.threadId] === projectId && !threadOrganization[thread.threadId]?.archived)
+    if (first) await chatController.openThread(first.threadId)
+    else await chatController.newThread()
+    projectBusy = false
+  }
+
+  async function saveProject() {
+    if (projectBusy || !projectName.trim()) return
+    projectBusy = true
+    try {
+      const creating = projectForm === 'new'
+      const id = creating ? await tauri.invoke('project_create', { name: projectName.trim() }) : projectForm
+      if (projectForm !== 'new') await tauri.invoke('project_rename', { projectId: id, name: projectName.trim() })
+      await refreshProjects()
+      projectForm = null
+      projectName = ''
+      projectError = ''
+      projectBusy = false
+      if (creating) await selectProject(id)
+    } catch (error) { projectError = String(error); projectBusy = false }
+  }
+
+  async function openProjectFolder(projectId) {
+    try { await tauri.invoke('project_open', { projectId }); projectError = '' }
+    catch (_) { projectError = 'The project folder could not be opened.' }
+  }
+
+  async function newSidebarThread() {
+    agentsOpen = false
+    agentProfileOpen = false
+    selectedAgent = null
+    if (!await chatController.newThread()) return
+    threadSearch = ''
+    archivedThreads = false
+    filterThreads()
+  }
+
+  function filterThreads() {
+    threadIndexFailed = false
+    clearThreadSelection()
+    closeThreadMenu()
+  }
+
+  function setThreadOrganization(threadId, field) {
+    const fromTitle = threadMenu?.fromTitle
+    const previous = threadOrganization[threadId] || {}
+    const next = { ...threadOrganization, [threadId]: { ...previous, [field]: !previous[field] } }
+    try {
+      localStorage.setItem(THREAD_ORGANIZATION_KEY, JSON.stringify(next))
+      threadOrganization = next
+      clearThreadSelection()
+      closeThreadMenu()
+      if (fromTitle) void tick().then(() => titleActionsButton?.focus())
+      else if (field === 'archived') void tick().then(() => document.querySelector('.archive-toggle')?.focus())
+      else focusThreadRow(threadId)
+    } catch (_) {
+      historyError = 'The thread choice could not be saved. Try again.'
+    }
+  }
+
+  function renameSidebarThread(summary) {
+    closeThreadMenu()
+    rowRename = { threadId: summary.threadId, title: summary.title || 'New thread', previous: summary.title || 'New thread' }
+    void tick().then(() => rowRenameInput?.select())
+  }
+
+  async function saveSidebarName() {
+    if (!rowRename || rowRenamePending || !rowRename.title.trim()) return
+    const edit = { ...rowRename }
+    rowRenamePending = true
+    const saved = edit.title.trim() === edit.previous || await chatController.renameThread(edit.title, edit.previous, edit.threadId)
+    rowRenamePending = false
+    if (saved) { rowRename = null; focusThreadRow(edit.threadId) }
+  }
+
+  function sidebarNameKeydown(event) {
+    if (event.key === 'Enter') { event.preventDefault(); void saveSidebarName() }
+    if (event.key === 'Escape' && !rowRenamePending) {
+      event.preventDefault()
+      const id = rowRename.threadId
+      rowRename = null
+      focusThreadRow(id)
+    }
   }
 
   const entitlementToast = createEntitlementToast({
@@ -490,6 +678,7 @@
       selectThread(threadId, event.shiftKey)
       return
     }
+    agentsOpen = false
     clearThreadSelection()
     void chatController.openThread(threadId)
   }
@@ -503,7 +692,7 @@
 
   function selectThread(threadId, range) {
     const next = new Set(selectedThreadIds)
-    const ids = threadSummaries.map((summary) => summary.threadId)
+    const ids = visibleThreads.map((summary) => summary.threadId)
     if (range && selectionAnchor && ids.includes(selectionAnchor)) {
       const [from, to] = [ids.indexOf(selectionAnchor), ids.indexOf(threadId)].sort((a, b) => a - b)
       for (const id of ids.slice(from, to + 1)) next.add(id)
@@ -533,9 +722,11 @@
   }
 
   function askToDeleteThread(threadId) {
+    deleteFromTitle = !!threadMenu?.fromTitle
     closeThreadMenu()
     deletingThreadIds = deletionTargets(threadId)
     deletingThreadId = threadId
+    if (deleteFromTitle) void tick().then(() => document.querySelector('.title-delete-confirm button')?.focus())
   }
 
   function threadRowKeydown(event, threadId) {
@@ -560,18 +751,20 @@
     const threadId = deletingThreadId
     deletingThreadId = null
     deletingThreadIds = []
-    focusThreadRow(threadId)
+    if (deleteFromTitle) void tick().then(() => titleActionsButton?.focus())
+    else focusThreadRow(threadId)
+    deleteFromTitle = false
   }
 
   // The row's actions live in a menu on right-click, Control-click or the
   // keyboard's context menu key, placed at the pointer like the native one.
-  function openThreadMenu(event, threadId) {
+  function openThreadMenu(event, threadId, fromTitle = false) {
     if (deletingThreadId === threadId) return
     event.preventDefault()
-    if (selectedThreadIds.size && !selectedThreadIds.has(threadId)) clearThreadSelection()
+    if (fromTitle || (selectedThreadIds.size && !selectedThreadIds.has(threadId))) clearThreadSelection()
     const row = event.currentTarget.getBoundingClientRect()
     const fromKeyboard = !event.clientX && !event.clientY
-    threadMenu = { threadId, x: fromKeyboard ? row.left : event.clientX, y: fromKeyboard ? row.bottom : event.clientY }
+    threadMenu = { threadId, fromTitle, x: fromTitle || fromKeyboard ? row.left : event.clientX, y: fromTitle || fromKeyboard ? row.bottom : event.clientY }
     document.addEventListener('pointerdown', closeThreadMenuOutside, true)
   }
 
@@ -586,14 +779,27 @@
   }
 
   function threadMenuKeydown(event) {
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault()
+      const items = [...event.currentTarget.querySelectorAll('button:not(:disabled)')]
+      const index = items.indexOf(document.activeElement)
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+      items[next]?.focus()
+      return
+    }
     if (event.key !== 'Escape' && event.key !== 'Tab') return
     event.preventDefault()
     const threadId = threadMenu?.threadId
+    const fromTitle = threadMenu?.fromTitle
     closeThreadMenu()
-    focusThreadRow(threadId)
+    if (fromTitle) void tick().then(() => titleActionsButton?.focus())
+    else focusThreadRow(threadId)
   }
 
   function focusMenuOnMount(element) {
+    const bounds = element.getBoundingClientRect()
+    element.style.left = `${Math.max(8, Math.min(threadMenu.x, window.innerWidth - bounds.width - 8))}px`
+    element.style.top = `${Math.max(8, Math.min(threadMenu.y, window.innerHeight - bounds.height - 8))}px`
     element.querySelector('button')?.focus()
   }
 
@@ -616,6 +822,7 @@
       if (!(await chatController.deleteThread(id))) break
     }
     deletePending = false
+    deleteFromTitle = false
     deletingThreadId = null
     deletingThreadIds = []
     clearThreadSelection()
@@ -894,7 +1101,7 @@
     const query = mention.query
     mentionTimer = setTimeout(async () => {
       try {
-        const files = await tauri.invoke('chat_search_files', { query })
+        const files = await tauri.invoke('chat_search_files', { query, ...(currentThreadId ? { threadId: currentThreadId } : {}) })
         if (version === mentionVersion) mentionFiles = files
       } catch (error) { if (version === mentionVersion) mentionError = String(error?.message ?? error) }
       finally { if (version === mentionVersion) mentionLoading = false }
@@ -1165,6 +1372,11 @@
   }
 
   onMount(() => {
+    const agentTimer = setInterval(() => { if (auth.name === 'local' || auth.name === 'signed-in') void refreshAgents() }, 15000)
+    return () => clearInterval(agentTimer)
+  })
+
+  onMount(() => {
     let pairingUnlisten
     let registrationRetryUnlisten
     let desktopClientUnlisten
@@ -1270,14 +1482,14 @@
       if (workspaceMode() && onboarding.name === 'complete' && rowPosition !== null) {
         event.preventDefault()
         if (sidebarCollapsed || active || threadSwitching) return
-        const threadId = freshThread ? threadSummaries[rowPosition - 2]?.threadId : threadSummaries[rowPosition - 1]?.threadId
+        const threadId = shortcutThreads[rowPosition - 1]?.threadId
         if (!threadId || threadId === currentThreadId) return
         void chatController.openThread(threadId)
         return
       }
       if (workspaceMode() && onboarding.name === 'complete' && isNewThreadShortcut(event)) {
         event.preventDefault()
-        void chatController.newThread()
+        void newSidebarThread()
         return
       }
       if (workspaceMode() && onboarding.name === 'complete' && isArtifactRailShortcut(event)) {
@@ -1464,6 +1676,52 @@
   }
 </script>
 
+{#snippet projectThreadList()}
+            <ul class="thread-list" aria-label="Threads">
+              {#if showFreshThread}
+                <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(pinnedThreadCount + 1)}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
+              {/if}
+            {#each threadGroups.filter((group) => group.name !== 'Pinned') as group (group.name)}
+                {#if group.name !== 'Threads'}<li class="side-group" role="presentation"><h3>{group.name}</h3></li>{/if}
+              {#each group.threads as summary (summary.threadId)}
+                {@render sidebarThread(summary)}
+              {/each}
+              {/each}
+            </ul>
+{/snippet}
+
+{#snippet sidebarThread(summary)}
+                {@const title = summary.title || 'New thread'}
+                {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
+                {@const rowTitle = current ? summary.title || currentThreadTitle : title}
+                {@const rowPosition = shortcutThreads.findIndex((item) => item.threadId === summary.threadId) + 1}
+                {@const selected = selectedThreadIds.has(summary.threadId)}
+                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                <li class="thread-record" class:selected oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
+                  {#if rowRename?.threadId === summary.threadId}
+                    <form class="row-rename" onsubmit={(event) => { event.preventDefault(); void saveSidebarName() }}>
+                      <input aria-label="Thread name" maxlength="80" bind:this={rowRenameInput} bind:value={rowRename.title} onkeydown={sidebarNameKeydown} disabled={rowRenamePending} />
+                      <button type="submit" disabled={rowRenamePending || !rowRename.title.trim()}>Save</button>
+                      <button type="button" disabled={rowRenamePending} onclick={() => { rowRename = null; focusThreadRow(summary.threadId) }}>Cancel</button>
+                    </form>
+                  {:else if current}
+                    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+                    <div class="thread-row active-thread" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
+                  {:else}
+                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
+                  {/if}
+                  {#if deletingThreadId !== summary.threadId && rowRename?.threadId !== summary.threadId}
+                    <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId)}><LucideIcon name="ellipsis" variant="action" size={14} /></button>
+                  {/if}
+                  {#if deletingThreadId === summary.threadId && !deleteFromTitle}
+                    <div class="thread-delete-confirm" role="group" aria-label={deleteLabel(summary.threadId, rowTitle, 'question')}>
+                      <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>{deletingThreadIds.length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
+                      <button type="button" disabled={deletePending} onclick={cancelDeleteThread} onkeydown={deleteConfirmKeydown}>Cancel</button>
+                    </div>
+                  {/if}
+                </li>
+{/snippet}
+
 <main class:onboarding-active={tauri && onboarding.name !== 'complete'}>
   {#if !workspaceMode() || onboarding.name !== 'complete'}
     <div class="lockup">
@@ -1502,22 +1760,28 @@
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
-      <section class="workspace" inert={auth.name === 'signing-in'} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" inert={auth.name === 'signing-in'} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
               <LucideIcon name={sidebarCollapsed ? 'panel-left-open' : 'panel-left-close'} />
             </button>
-            <RowControl kind="new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => chatController.newThread()}>
-              <LucideIcon name="plus" />
-              <span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
-            </RowControl>
           </div>
           <div class="titlebar-thread" data-tauri-drag-region>
+            {#if profileAgent}<button class="quiet agent-chat-title" aria-label={`Open profile for ${profileAgent.name}`} onclick={() => { agentsOpen = false; closeRail(); agentProfileOpen = true }}><AgentAvatar agent={profileAgent} size={20} /><span>{profileAgent.name}</span></button>{/if}
+            {#if !profileAgent}
             {#if editingThreadTitle}
               <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
             {:else}
-              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" disabled={!currentThreadId} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
+              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" disabled={!currentThreadId || freshThread} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
+            {/if}
+            <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} disabled={!currentThreadId || freshThread || threadSwitching} bind:this={titleActionsButton} onclick={(event) => openThreadMenu(event, currentThreadId, true)}><LucideIcon name="ellipsis" variant="action" size={14} /></button>
+            {/if}
+            {#if deleteFromTitle && deletingThreadId}
+              <div class="title-delete-confirm" role="group" aria-label={`Delete ${currentThreadTitle}?`}>
+                <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(deletingThreadId)} onkeydown={deleteConfirmKeydown}>Delete</button>
+                <button type="button" disabled={deletePending} onclick={cancelDeleteThread} onkeydown={deleteConfirmKeydown}>Cancel</button>
+              </div>
             {/if}
             <span class="title-spacer" data-tauri-drag-region></span>
             <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
@@ -1525,51 +1789,68 @@
             <RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>
           </div>
         </header>
-        <aside id="sidebar" class="sidebar">
-          {#if !sidebarCollapsed}
-            <h2 id="thread-list-title" class="side-label">Threads</h2>
-            <div class="side-scroll">
-            <h3 class="side-group">Untitled</h3>
-            <ul class="thread-list" aria-labelledby="thread-list-title">
-              {#if freshThread}
-                <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(1)}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
-              {/if}
-              {#each threadSummaries as summary, index (summary.threadId)}
-                {@const title = summary.title || 'New thread'}
-                {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
-                {@const rowTitle = current ? summary.title || currentThreadTitle : title}
-                {@const rowPosition = index + 1 + (freshThread ? 1 : 0)}
-                {@const selected = selectedThreadIds.has(summary.threadId)}
-                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-                <li class="thread-record" class:selected oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
-                  {#if current}
-                    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-                    <div class="thread-row active-thread" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
-                  {:else}
-                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
-                  {/if}
-                  {#if deletingThreadId !== summary.threadId}
-                    <button type="button" class="quiet thread-delete" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}><LucideIcon name="trash-2" variant="action" size={14} /></button>
-                  {/if}
-                  {#if deletingThreadId === summary.threadId}
-                    <div class="thread-delete-confirm" role="group" aria-label={deleteLabel(summary.threadId, rowTitle, 'question')}>
-                      <button type="button" disabled={deletePending} onclick={() => confirmDeleteThread(summary.threadId)} onkeydown={deleteConfirmKeydown}>{deletingThreadIds.length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
-                      <button type="button" disabled={deletePending} onclick={cancelDeleteThread} onkeydown={deleteConfirmKeydown}>Cancel</button>
-                    </div>
-                  {/if}
-                  {#if threadMenu?.threadId === summary.threadId}
+                  {#if threadMenu}
+                    {@const summary = threadSummaries.find((item) => item.threadId === threadMenu.threadId) || { threadId: threadMenu.threadId, title: currentThreadTitle }}
+                    {@const rowTitle = summary.title || 'New thread'}
                     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-                    <div class="thread-menu" role="menu" aria-label={`${rowTitle} actions`} style:left={`${threadMenu.x}px`} style:top={`${threadMenu.y}px`} onkeydown={threadMenuKeydown} onfocusout={menuFocusOut} use:focusMenuOnMount>
+                    <div class="thread-menu" role="menu" tabindex="-1" aria-label={`${rowTitle} actions`} style:left={`${threadMenu.x}px`} style:top={`${threadMenu.y}px`} onkeydown={threadMenuKeydown} onfocusout={menuFocusOut} use:focusMenuOnMount>
+                      <button type="button" role="menuitem" onclick={() => { if (threadMenu.fromTitle) { closeThreadMenu(); editThreadTitle(currentThreadTitle) } else renameSidebarThread(summary) }}>Rename</button>
+                      <button type="button" role="menuitem" onclick={() => setThreadOrganization(summary.threadId, 'pinned')}>{threadOrganization[summary.threadId]?.pinned ? 'Unpin' : 'Pin'}</button>
+                      <button type="button" role="menuitem" onclick={() => setThreadOrganization(summary.threadId, 'archived')}>{threadOrganization[summary.threadId]?.archived ? 'Restore' : 'Archive'}</button>
                       <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
                     </div>
                   {/if}
-                </li>
+        <aside id="sidebar" class="sidebar">
+          {#if !sidebarCollapsed}
+            <div class="side-top">
+              <button class="side-action new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={newSidebarThread}>
+                <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
+              </button>
+              <div class="agents-side-row"><button class="side-action" aria-expanded={agentsOpen} onclick={() => showAgents()}><LucideIcon name="bot" /><span>Agents</span></button><button class="agent-add quiet" aria-label="New agent" onclick={() => showAgents(null, true)}><LucideIcon name="plus" /></button></div>
+              <input class="thread-search" type="search" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} />
+            </div>
+            <div class="side-scroll">
+            {#if agentListing.agents.length}
+              <div class="agent-roster" aria-label="Saved agents">
+                {#each agentListing.agents as agent (agent.id)}
+                  <button class="side-action" aria-current={selectedAgent === agent.id ? "true" : undefined} disabled={!!active || threadSwitching} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} size={20} /><span>{agent.name}</span></button>
+                {/each}
+              </div>
+            {/if}
+            {#each threadGroups.filter((group) => group.name === 'Pinned') as group}
+              <h3 class="side-group">Pinned</h3>
+              <ul class="thread-list" aria-label="Pinned threads">{#each group.threads as summary (summary.threadId)}{@render sidebarThread(summary)}{/each}</ul>
+            {/each}
+            <section class="project-section" aria-label="Projects">
+              <div class="project-heading"><h3>Projects</h3><button class="quiet" aria-label="New project" disabled={!!active || threadSwitching || projectBusy} onclick={() => { projectForm = 'new'; projectName = '' }}><LucideIcon name="plus" /></button></div>
+              {#if projectForm}
+                <form class="row-rename" onsubmit={(event) => { event.preventDefault(); void saveProject() }}>
+                  <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={projectName} disabled={projectBusy} />
+                  <button type="submit" disabled={projectBusy || !projectName.trim()}>{projectForm === 'new' ? 'Create' : 'Save'}</button>
+                  <button type="button" disabled={projectBusy} onclick={() => { projectForm = null }}>Cancel</button>
+                </form>
+              {/if}
+              {#each projectRows as [projectId, name] (projectId)}
+                <div class="project-row">
+                  <button class="side-action" aria-label={`Project ${name}`} aria-pressed={selectedProject === projectId} disabled={!!active || threadSwitching || projectBusy || loadingOlderThreads} onclick={() => selectProject(projectId)}><LucideIcon name="folder" /><span>{name}</span></button>
+                  <button class="quiet project-control" aria-label={`Open ${name} folder`} onclick={() => openProjectFolder(projectId)}><LucideIcon name="folder-open" size={14} /></button>
+                  <button class="quiet project-control" aria-label={`Rename project ${name}`} disabled={!!active || threadSwitching || projectBusy} onclick={() => { projectForm = projectId; projectName = name }}><LucideIcon name="pencil" size={14} /></button>
+                </div>
+                {#if selectedProject === projectId}<div class="project-threads">{@render projectThreadList()}</div>{/if}
               {/each}
-            </ul>
+              {#if !projectRows.length && !projectError}<p class="side-empty">Create a project for your files.</p>{/if}
+              {#if selectedProject}<button class="older-threads" onclick={() => { selectedProject = null; filterThreads() }}>All threads</button>{/if}
+              {#if projectError}<p class="side-empty" role="status">{projectError} <button class="quiet" onclick={() => refreshProjects()}>Retry</button></p>{/if}
+            </section>
+            {#if !selectedProject}{@render projectThreadList()}{/if}
+            {#if !visibleThreads.length && !showFreshThread}
+              <p class="side-empty">{loadingOlderThreads ? 'Searching threads…' : threadSearch.trim() ? 'No matching threads.' : archivedThreads ? 'No archived threads.' : 'No threads yet.'}</p>
+            {/if}
             {#if moreThreads}
               <button type="button" class="older-threads" disabled={loadingOlderThreads} onclick={loadOlderThreads}>Older threads</button>
             {/if}
             </div>
+            <div class="side-bottom"><button class="side-action archive-toggle" aria-pressed={archivedThreads} onclick={() => { archivedThreads = !archivedThreads; filterThreads() }}><LucideIcon name="archive" /><span>{archivedThreads ? 'Back to threads' : 'Archived threads'}</span></button></div>
           {/if}
           {#if !sidebarCollapsed}
           <div class="side-foot">
@@ -1589,7 +1870,7 @@
           <div
             class="sidebar-divider"
             role="separator"
-            aria-labelledby="thread-list-title"
+            aria-label="Threads"
             aria-controls="sidebar"
             aria-orientation="vertical"
             aria-valuemin={SIDEBAR_MIN_WIDTH}
@@ -1608,7 +1889,7 @@
         <div class="thread-shell">
         <div class="thread" class:scrolling={threadScrolling} role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={onThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
-          {#if messages.length === 0}<p class="empty">{auth.name === 'local' ? 'Your model answers here. Ask anything.' : "Ask anything. Your org's routing decides which model answers."}</p>{/if}
+          {#if messages.length === 0}<p class="empty">{profileAgent ? `Chat with ${profileAgent.name}.` : auth.name === 'local' ? 'Your model answers here. Ask anything.' : "Ask anything. Your org's routing decides which model answers."}</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
@@ -1647,7 +1928,7 @@
                 {#if part.type === 'actions'}
                   <ActionFeedback onopenfile={openFile} activities={part.activities} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
                 {:else if message.run.phase === 'streaming'}
-                  <div class="streaming" use:streamingUnderline={part.text}><AssistantMarkdown text={part.text} caret={index === responseParts(message.run).length - 1} /><span class="streaming-rule" aria-hidden="true"></span></div>
+                  <div class="streaming"><AssistantMarkdown text={part.text} caret={index === responseParts(message.run).length - 1} /></div>
                 {:else}<AssistantMarkdown text={part.text} />{/if}
               {/each}
               {#if message.run.phase === 'recovering'}<p class="thinking">Restoring reply…</p>{/if}
@@ -1766,7 +2047,7 @@
              run phase is read as one sentence, and never re-read per streamed chunk. -->
         <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
         </div>
-        <div class="composer" bind:this={composerBox}>
+        <ChatComposer bind:element={composerBox}>
         {#if pickerOpen}
           <ModelPicker {inventory} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onclose={closePicker} />
         {/if}
@@ -1868,7 +2149,7 @@
           {#if speechInstallNotice}<p class="speech-install-notice" role="status">{speechInstallNotice}</p>
           {:else if dictationError && dictation.state !== 'modelNotInstalled'}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
           {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
-        </div>
+        </ChatComposer>
         </div>
         {#if entitlementToastVisible}
           <div class="entitlement-toast" role="status">Your access changed. Some models or connections may differ.</div>
@@ -1942,8 +2223,17 @@
               onkeydown={artifactRailKeydown}
             ></div>
           {/if}
-          <FilePanel file={viewedFile} {tauri} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onclose={closeRail} />
+          <FilePanel file={viewedFile} {tauri} threadId={currentThreadId} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onclose={closeRail} />
         {/if}
+    {#if agentProfileOpen && profileAgent && !agentsOpen}
+      {#key profileAgent.id}<AgentProfile earlierConversations={Object.entries(agentListing.state.threads).filter(([thread, agent]) => agent === selectedAgent && thread !== agentListing.state.primaryThreads?.[selectedAgent]).map(([threadId]) => ({ threadId, title: threadSummaries.find(item => item.threadId === threadId)?.title || "Earlier conversation" }))} history={agentListing.state.history?.[selectedAgent] || []} agent={profileAgent} {tauri} projects={projectRows} run={agentListing.state.runs[profileAgent.id]}
+        onclose={() => { agentProfileOpen = false }} onchange={refreshAgents}
+        ondelete={() => { agentProfileOpen = false; selectedAgent = null; void refreshAgents() }}
+        onopen={(id) => chatController.openThread(id, true)} />{/key}
+    {/if}
+  {#if agentsOpen}{#key agentsRequest}
+    <AgentManager {tauri} initialId={agentPanelId} createNew={agentCreateNew} projects={projectRows} onclose={() => { agentsOpen = false }} onstart={openAgent} onselect={openAgent} onopen={(id) => chatController.openThread(id)} onchange={(next) => { agentListing = next }} />
+  {/key}{/if}
         <!-- Message actions get their own region, outside the thread shell: writing a
              copy confirmation into the run-phase region above would overwrite whatever
              a run is currently saying there, and be overwritten by the next phase. -->
@@ -2080,11 +2370,20 @@
   .workspace { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
   .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
+  .agent-chat-title { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 180px; }
+  .agent-chat-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .workspace.agent-profile-open { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) 220px; grid-template-areas: "title title title" "side thread rail"; }
   .workspace.rail-open { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--artifact-rail-width); grid-template-areas: "title title title" "side thread rail"; }
   /* A maximized record takes the whole frame; the sidebar and the thread stay mounted and hidden.
      The two columns stay, so the title row's subgrid keeps its sidebar part and its thread part in place. */
-  .workspace.record-maximized { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "rail rail"; }
-  .workspace.record-maximized .sidebar, .workspace.record-maximized .thread-panel, .workspace.record-maximized .sidebar-divider { display: none; }
+  .workspace.record-maximized { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side rail"; }
+  .workspace.record-maximized .thread-panel { display: none; }
+  .workspace.agents-open .thread-panel { display: none; }
+  .agents-side-row { position: relative; display: flex; align-items: center; }
+  .agents-side-row .side-action { flex: 1; }
+  .agent-add { position: absolute; right: 8px; opacity: 0; padding: 4px; line-height: 0; }
+  .agents-side-row:hover .agent-add, .agents-side-row:focus-within .agent-add { opacity: 1; }
+  @media (hover: none) { .agent-add { opacity: 1; } }
   .sidebar, .thread-panel, .artifact-rail { min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
@@ -2098,10 +2397,8 @@
      Measured on macOS 26: the three 14pt lights sit at x = 9, 32 and 55 and
      AppKit tops them at 9pt, so tauri.conf.json tops them at 11pt and they
      center at 18pt too. The row starts one 9pt gap after the
-     last light ends at 69pt. New thread ends
-     at 251px in the installed app and at 252px in the probe's Chromium, and the
-     thread title starts one gap and a rounding pixel later. */
-  .workspace.macos { --titlebar-height: 30px; --titlebar-inset: 78px; --titlebar-controls-end: 272px; transition: --sidebar-column 180ms ease; }
+     last light ends at 69pt. The sidebar toggle follows the lights. */
+  .workspace.macos { --titlebar-height: 30px; --titlebar-inset: 78px; --titlebar-controls-end: 110px; transition: --sidebar-column 180ms ease; }
   .workspace.macos.artifact-resizing, .workspace.macos.sidebar-resizing { transition: none; }
   .workspace:not(.macos) .titlebar-sidebar, .workspace:not(.macos) .titlebar-thread { display: contents; }
   /* The title row is a subgrid with no margin and no padding of its own: padding
@@ -2109,7 +2406,7 @@
      artifact control off the window. The native clearance is the sidebar
      part's padding, so both parts track their panel columns in every engine. */
   .workspace.macos .titlebar { display: grid; grid-template-columns: subgrid; margin: 0; padding: 0; }
-  /* The sidebar part is at least as wide as its controls, so a narrow sidebar column never hides New thread. */
+  /* The sidebar part is at least as wide as its controls, so a narrow sidebar column never hides the toggle. */
   .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; box-sizing: content-box; display: flex; align-items: end; gap: 8px; min-width: calc(var(--titlebar-controls-end) - var(--titlebar-inset)); padding-left: calc(var(--titlebar-inset) - var(--frame-width)); }
   /* Artifacts sits flush right: 4px inside the 8px frame matches the 12px row padding elsewhere. */
   .workspace.macos .titlebar-thread { grid-column: 2 / -1; display: flex; align-items: end; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: 4px; }
@@ -2130,9 +2427,29 @@
   .title-spacer { flex: 1; align-self: stretch; min-width: 24px; }
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 0; }
   .side-scroll { flex: 1; min-height: 0; padding: 4px 6px 8px; overflow-y: auto; }
-  .side-group { margin: 6px 8px 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .project-heading { display: flex; align-items: center; justify-content: space-between; margin: 8px 8px 2px; }
+  .project-heading h3 { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .project-heading button { padding: 2px; }
+  .project-threads { padding-left: 12px; }
+  .project-row { display: flex; align-items: center; }
+  .project-row .side-action { flex: 1; min-width: 0; }
+  .project-row .side-action span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .project-control { flex: none; padding: 2px; opacity: 0; }
+  .project-row:hover .project-control, .project-row:focus-within .project-control { opacity: 1; }
+  .side-group { margin: 10px 8px 4px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .side-group h3 { margin: 0; font: var(--text-12) var(--font-mono); }
+  .side-top { padding: 8px 6px 0; }
+  .side-top kbd { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .thread-search { width: 100%; min-width: 0; box-sizing: border-box; margin-top: 4px; padding: 6px 8px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font: var(--text-13) var(--font-human); }
+  .side-empty { padding: 4px 8px; color: var(--muted); font-size: var(--text-12); }
+  .side-bottom { flex: none; padding: 0 6px; }
+  .side-action :global(.lucide) { flex: 0 0 18px; width: 18px; height: 18px; }
+  .side-action:hover, .side-action[aria-pressed="true"], .side-action[aria-current="true"] { background: var(--faint); }
+  .row-rename { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
+  .row-rename input { width: 100%; min-width: 0; font: inherit; }
+  .row-rename button { padding: 2px 6px; font-size: var(--text-12); }
   /* Clip labels during the panel slide without clipping the profile popover. */
-  .side-label, .older-threads, .side-action span { overflow: hidden; }
+  .older-threads, .side-action span { overflow: hidden; }
   .side-toggle { line-height: 0; }
   .side-toggle:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   .side-toggle:hover:not(:disabled) :global(.side-icon) { color: var(--ink); }
@@ -2145,17 +2462,19 @@
   /* A selected row reads darker than the open thread's faint row, so a selection and the open thread never look alike. */
   .thread-row.selected { background: color-mix(in srgb, var(--ink) 14%, var(--surface)); }
   /* The row's delete control shows while the pointer or focus rests on the row, in the time's place. */
-  .thread-delete { position: absolute; top: 50%; right: 4px; min-width: 22px; min-height: 22px; padding: 0 4px; transform: translateY(-50%); color: var(--muted); opacity: 0; pointer-events: none; }
-  .thread-record:hover .thread-delete, .thread-record:focus-within .thread-delete { opacity: 1; pointer-events: auto; }
+  .thread-actions { position: absolute; top: 50%; right: 4px; min-width: 22px; min-height: 22px; padding: 0 4px; transform: translateY(-50%); color: var(--muted); opacity: 0; pointer-events: none; }
+  .thread-record:hover .thread-actions, .thread-record:focus-within .thread-actions { opacity: 1; pointer-events: auto; }
   .thread-record:hover .thread-row time, .thread-record:focus-within .thread-row time { visibility: hidden; }
-  .thread-delete:hover:not(:disabled) { color: var(--ink); background: var(--faint); }
+  .thread-actions:hover:not(:disabled) { color: var(--ink); background: var(--faint); }
   button.thread-row[aria-disabled="true"] { opacity: .55; }
   /* The time always shows: the title takes the rest of the row and fades at its end. */
   .thread-row time { flex: none; margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); white-space: nowrap; }
   .thread-row > span { flex: 0 0 5px; }
   .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
-  .thread-menu { position: fixed; z-index: 4; min-width: 120px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
-  .thread-menu button { width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
+  .thread-menu { position: fixed; z-index: 4; min-width: 88px; width: max-content; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
+  .title-thread-actions { flex: none; }
+  .title-delete-confirm { display: flex; flex: none; gap: 4px; }
+  .thread-menu button { display: block; width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
   .thread-menu button:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   .thread-delete-confirm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; padding: 5px 7px; border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); }
   .thread-delete-confirm button { flex: none; min-width: 24px; min-height: 24px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: inherit; }
@@ -2165,15 +2484,14 @@
   .side-action span { flex: 1; min-width: 0; }
   /* The foot of the sidebar: Settings above the account row, under one edge-to-edge hairline. */
   .side-foot { margin-top: auto; padding: 4px 6px 6px; border-top: 1px solid var(--border); }
-  /* Settings is its own group: one hairline under it, above the sign-in button or the account panel. */
-  .settings-block { padding: 0 0 4px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+  /* Settings and the account share one footer without an internal divider. */
+  .settings-block { padding: 0; }
   .side-foot :global(.profile-block) { margin-top: 0; padding-top: 0; border-top: 0; }
   .side-foot :global(.profile-button) { min-height: 28px; padding: 4px 8px; }
   /* The panel is one popup over the thread, never a second settings surface. */
   /* Collapsed means gone: the column is zero wide, the empty panel drops its hairline and padding for the slide, and the thread panel takes the gap. */
   .workspace.sidebar-collapsed .sidebar { padding: 0; border-width: 0; overflow: hidden; }
   .workspace.sidebar-collapsed .thread-panel { margin-left: calc(-1 * var(--frame-width)); }
-  .side-label { flex: none; margin: 0; padding: 10px 14px 8px; border-bottom: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .active-thread { background: var(--faint); }
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
@@ -2220,7 +2538,6 @@
   .attachment-delivery-rule { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .response { margin: 0 0 34px; }
   .streaming { position: relative; }
-  .streaming-rule { position: absolute; height: 2px; background: var(--signal); pointer-events: none; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-13) var(--font-mono); }
   .permission-card { color: var(--ink); }
@@ -2287,8 +2604,6 @@
   .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
   .update-notice .support { font-size: var(--text-12); }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
-  .composer { grid-area: 1 / 1; align-self: end; z-index: 1; position: relative; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
-  .composer:focus-within { border-color: var(--muted); }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 -12px 8px; padding: 0 12px 8px; border-bottom: 1px solid var(--border); list-style: none; }
   .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

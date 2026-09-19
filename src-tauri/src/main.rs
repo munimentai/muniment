@@ -10,6 +10,7 @@ mod dictation;
 mod e2e_folder_dialog;
 mod fonts;
 mod home;
+mod projects;
 mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_runtime_service;
@@ -21,6 +22,8 @@ mod macos_runtime_notice_probe;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos_runtime_service;
 mod memory;
+mod personal_memory;
+mod agents;
 mod model_install;
 mod model_router;
 mod onboarding_diagnostics;
@@ -158,6 +161,7 @@ fn main() {
             model_router::model_router_save_routes,
             model_router::model_router_set_classifier,
             model_router::model_router_test_classifier,
+            model_router::model_router_test_route,
             model_router::model_router_subscription_start,
             model_router::model_router_refresh_quota,
             account_login::local_mode_account_login_start,
@@ -210,6 +214,25 @@ fn main() {
             launcher::launcher_close,
             launcher::launcher_is_visible,
             launcher::launcher_present_main,
+            agents::agent_list,
+            agents::agent_memory,
+            agents::agent_export_template,
+            agents::agent_import_link,
+            agents::agent_save,
+            agents::agent_delete,
+            agents::agent_open,
+            agents::agent_run,
+            personal_memory::memory_profile_read,
+            personal_memory::memory_profile_save,
+            personal_memory::memory_facts,
+            personal_memory::memory_fact_save,
+            personal_memory::memory_fact_delete,
+            personal_memory::memory_deleted_facts,
+            personal_memory::memory_fact_restore,
+            projects::project_list,
+            projects::project_create,
+            projects::project_rename,
+            projects::project_open,
             home::home_status,
             home::home_confirm,
             home::home_confirm_import,

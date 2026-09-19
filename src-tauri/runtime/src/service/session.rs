@@ -67,7 +67,10 @@ pub fn sign_in(
         &|delay| {
             let deadline = std::time::Instant::now() + delay;
             while active() && std::time::Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(25).min(deadline.saturating_duration_since(std::time::Instant::now())));
+                std::thread::sleep(
+                    Duration::from_millis(25)
+                        .min(deadline.saturating_duration_since(std::time::Instant::now())),
+                );
             }
         },
         active,

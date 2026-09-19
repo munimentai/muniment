@@ -16,6 +16,7 @@ use muniment_core::thread_history::{
 use muniment_core::thread_ownership::{subject_owns_first_run, ThreadOwnershipError};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use tauri::Manager;
 
 #[cfg(any(unix, target_os = "windows"))]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};
@@ -571,29 +572,71 @@ pub async fn chat_new_thread(
     app_handle: tauri::AppHandle,
     auth_state: tauri::State<'_, auth::AuthState>,
     state: tauri::State<'_, ChatState>,
-    attach_state: tauri::State<'_, AttachCompanionState>,
-) -> Result<(), String> {
-    let session = attach_state.desktop_client_session();
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    if !matches!(&session, DesktopClientSession::Connected(_)) {
-        return Err(auth::background_service_error());
-    }
+    project_id: Option<String>,
+    agent_id: Option<String>,
+) -> Result<String, String> {
     let subject = chat_subject(&app_handle, &auth_state)?;
-    match session {
-        DesktopClientSession::Connected(_) => {
-            state.session_thread.fresh(subject.as_deref());
-            Ok(())
-        }
-        DesktopClientSession::NoSupervisor => {
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            return Err(auth::background_service_error());
-            #[cfg(target_os = "linux")]
-            {
-                fresh_session_thread(state.storage()?, &state.session_thread, subject.as_deref())
+    let profile = muniment_runtime::profile_directory().map_err(|_| "Agents are unavailable.")?;
+    let agent = agent_id
+        .as_deref()
+        .map(|id| muniment_core::agents::get(&profile, id))
+        .transpose()?;
+    let project = project_id.or_else(|| agent.as_ref().and_then(|a| a.project_id.clone()));
+    let thread = if let Some(agent) = &agent {
+        muniment_core::agents::with_state(&profile, |catalog| {
+            if let Some(thread) = muniment_core::agents::ensure_primary(catalog, &agent.id) {
+                let attach = app_handle.state::<AttachCompanionState>();
+                select_thread_command(
+                    attach.desktop_client_session().into(),
+                    state.storage().ok(),
+                    &state.session_thread,
+                    subject.as_deref(),
+                    &thread,
+                )?;
+                state
+                    .session_thread
+                    .select(thread.clone(), subject.as_deref());
+                return Ok(thread);
             }
+            let thread = crate::projects::prepare_thread(
+                &app_handle,
+                &state,
+                subject.as_deref(),
+                project.as_deref(),
+                true,
+            )?;
+            if !thread.is_empty() {
+                catalog
+                    .primary_threads
+                    .insert(agent.id.clone(), thread.clone());
+                catalog.threads.insert(thread.clone(), agent.id.clone());
+            }
+            Ok(thread)
+        })?
+    } else {
+        crate::projects::prepare_thread(
+            &app_handle,
+            &state,
+            subject.as_deref(),
+            project.as_deref(),
+            true,
+        )?
+    };
+    *state
+        .pending_agent
+        .lock()
+        .map_err(|_| "The agent choice is unavailable.")? = None;
+    if let Some(agent) = agent {
+        if thread.is_empty() {
+            *state
+                .pending_agent
+                .lock()
+                .map_err(|_| "The agent choice is unavailable.")? = Some(agent.id);
+        } else {
+            muniment_core::agents::assign(&profile, &thread, &agent.id)?;
         }
-        DesktopClientSession::Disconnected => Err(auth::background_service_error()),
     }
+    Ok(thread)
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -646,6 +689,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    use tauri::Manager;
     use uuid::Uuid;
 
     #[cfg(any(unix, target_os = "windows"))]

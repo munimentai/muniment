@@ -1,12 +1,13 @@
 <script>
-  // Routing, the foot of Settings → Models: the router switch, the classifier
+  // Routing settings: the router switch, the classifier
   // that picks a model per turn, and the statements it reads for every model
   // in the running. The accounts themselves sit under their providers above.
   import LucideIcon from './LucideIcon.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
+  import { pickerGroups, currentModel } from './provider-catalog.js'
   import { catalog, matchSaved, priceLabel } from './classifier-catalog.js'
 
-  let { tauri, settings = null, onsettings } = $props()
+  let { tauri, settings = null, onsettings, inventory, oninventory } = $props()
 
   let status = $state('')
   let formError = $state('')
@@ -30,12 +31,29 @@
   let confidence = $state(0.6)
   let seen = null
 
+  const modelRows = $derived([...new Map(pickerGroups(inventory).flatMap((group) => group.models).filter((model) => model.id !== 'auto').map((model) => [`${model.provider}/${model.choice}`, model])).values()])
+  const selected = $derived(currentModel(inventory))
+  const automatic = $derived(selected?.model === 'auto' && selected?.provider === 'muniment-router')
+
+  async function selectModel(provider, model) {
+    pending = true
+    formError = ''
+    try {
+      if (provider === 'muniment-router' && !settings.enabled) onsettings?.(await tauri.invoke('model_router_set_enabled', { enabled: true }))
+      await tauri.invoke('local_mode_set_default_model', { provider, model })
+      oninventory?.(await tauri.invoke('local_mode_provider_inventory'))
+    } catch (error) { formError = String(error?.message ?? error) }
+    finally { pending = false }
+  }
+
   const rows = $derived(catalog(settings?.accounts ?? []))
 
   // Every command answers with the whole settings, so one reply redraws the page.
   $effect(() => {
-    if (!settings || settings === seen) return
-    seen = settings
+    if (!settings) return
+    const signature = JSON.stringify([settings.options, settings.routes, settings.fallback, settings.min_confidence, settings.classifier])
+    if (signature === seen) return
+    seen = signature
     drafts = settings.options.map((option) => ({ ...option, draftKey: option.key, draftDescription: option.description }))
     fallback = settings.fallback ?? ''
     confidence = settings.min_confidence
@@ -85,26 +103,9 @@
     classifierFamily = ''
   }
 
-  // A statement the user changed, or one they changed before, travels as a
-  // route. An untouched model keeps the catalog's words, which the app updates.
-  function edited(draft) {
-    return draft.named || draft.draftKey !== draft.key || draft.draftDescription !== draft.description
-  }
-
-  function resetDraft(draft) {
-    draft.draftKey = `${draft.family}/${draft.model}`
-    draft.draftDescription = ''
-    drafts = [...drafts]
-  }
-
   function saveRoutes() {
-    const routes = drafts.filter(edited).map((draft) => ({
-      key: draft.draftKey.trim() || `${draft.family}/${draft.model}`,
-      description: draft.draftDescription.trim(),
-      family: draft.family,
-      model: draft.model,
-    }))
-    void run('model_router_save_routes', { routes, fallback: fallback || null, minConfidence: Number(confidence) }, 'The statements are saved.')
+    const routes = settings.routes ?? []
+    void run('model_router_save_routes', { routes, fallback: fallback || null, minConfidence: Number(confidence) }, 'The routing rules are saved.')
   }
 
   function saveClassifier() {
@@ -129,26 +130,29 @@
 </script>
 
 <section class="routing" aria-labelledby="routing-title">
-  <header class="routing-head">
-    <div>
-      <h4 id="routing-title" class="routing-label">Routing</h4>
-      <p class="support">Balance each turn across the accounts of a provider, and let a classifier pick the model. Off leaves every turn on the model you picked.</p>
-    </div>
-    {#if settings}
-      <button type="button" role="switch" class="switch" aria-checked={settings.enabled} aria-label="Turn routing on" onclick={toggleRouter} disabled={pending}><span></span></button>
-    {/if}
-  </header>
+  <header class="routing-head"><div><h4 id="routing-title">Routing</h4><p class="support">Choose who picks the model for your next message.</p></div></header>
   {#if status}<p class="support" role="status">{status}</p>{/if}
   {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-
-  {#if settings?.enabled}
-    <p class="record endpoint">
-      {settings.base_url ?? 'starting…'}
-      {#if !settings.is_default}<span class="tag warn">Pick a routed model in the model chip to send turns here.</span>{/if}
-    </p>
-
-    <h5 class="group-label">Classifier</h5>
-    <p class="support">The classifier reads each turn and picks a model. It is optional. It sends the turn's last message to the service you pick, and a model on your own accounts spends that account.</p>
+  <div class="selection" role="group" aria-label="Model selection">
+    <button type="button" aria-pressed={automatic} disabled={pending || !settings.options.length} onclick={() => selectModel('muniment-router', 'auto')}><strong>Choose automatically</strong><span>{settings.classifier.kind === 'none' ? 'Use the fallback until you choose a classifier.' : 'Let the classifier select from eligible models.'}</span></button>
+    <button type="button" aria-pressed={!automatic} disabled={pending || !modelRows.length} onclick={() => { if (automatic && modelRows[0]) void selectModel(modelRows[0].provider, modelRows[0].choice) }}><strong>Use a specific model</strong><span>Keep model choice in your hands.</span></button>
+  </div>
+  {#if !automatic && modelRows.length}
+    <label for="selected-model">Selected model</label>
+    <select id="selected-model" value={JSON.stringify([selected?.provider, selected?.model])} disabled={pending} onchange={(event) => { const [provider, model] = JSON.parse(event.currentTarget.value); void selectModel(provider, model) }}>
+      {#each modelRows as model (model.provider + '/' + model.choice)}<option value={JSON.stringify([model.provider, model.choice])}>{model.label}</option>{/each}
+    </select>
+  {/if}
+  <dl class="routing-summary" aria-label="Saved routing settings">
+    <div><dt>Classifier</dt><dd>{settings.classifier.kind === 'none' ? 'No classifier' : settings.classifier.configured ? settings.classifier.model : 'Connection required'}</dd></div>
+    <div><dt>Eligible models</dt><dd>{settings.options.length}</dd></div>
+    <div><dt>Fallback</dt><dd>{settings.options.length ? settings.fallback || 'Lowest known price' : 'No eligible model'}</dd></div>
+  </dl>
+  {#if !settings.options.length}<p class="support">Connect an eligible account below to use automatic selection.</p>{/if}
+  <details class="configure">
+    <summary>Classifier and fallback</summary>
+    <div class="disclosure-body">
+    <p class="support">The classifier receives your last message. It selects a model without generating your reply.</p>
     {#each ['Built to classify', 'On your accounts'] as group}
       <h6 class="catalog-label">{group}</h6>
       <ul class="catalog">
@@ -192,32 +196,6 @@
     </div>
     {#if classifierStatus}<p class="support" role="status">{classifierStatus}</p>{/if}
 
-    <h5 class="group-label">In the running</h5>
-    <p class="support">Every model an account serves is in the running, and the classifier picks between them each turn. It reads these statements, not the model names, so a statement says what work the model wins and what should send a query elsewhere.</p>
-    {#if drafts.length === 0}
-      <p class="support empty">Nothing is in the running. Add an account under a provider, and its models enter at once.</p>
-    {/if}
-    <ul class="running">
-      {#each drafts as draft (draft.family + '/' + draft.model)}
-        <li class="option">
-          <header>
-            <ProviderLogo provider={draft.family} size={16} />
-            <span class="option-name">{draft.name || draft.model}</span>
-            <span class="record">{draft.model}</span>
-            {#if draft.tier}<span class="tag">{draft.tier}</span>{/if}
-            {#if draft.price}<span class="tag">${draft.price}/${draft.output} per M</span>{/if}
-            {#if draft.context}<span class="tag">{draft.context}</span>{/if}
-          </header>
-          <label for={`key-${draft.family}-${draft.model}`}>Name the classifier answers with</label>
-          <input id={`key-${draft.family}-${draft.model}`} type="text" class="option-key" bind:value={draft.draftKey}>
-          <label for={`why-${draft.family}-${draft.model}`}>Statement</label>
-          <textarea id={`why-${draft.family}-${draft.model}`} rows="3" bind:value={draft.draftDescription}></textarea>
-          {#if edited(draft)}
-            <p class="record"><button type="button" class="quiet reset" onclick={() => resetDraft(draft)}>Use the built-in statement</button></p>
-          {/if}
-        </li>
-      {/each}
-    </ul>
     {#if drafts.length}
       <label for="router-fallback">Fallback</label>
       <select id="router-fallback" bind:value={fallback}>
@@ -227,9 +205,18 @@
       <label for="router-confidence">Confidence floor · {Number(confidence).toFixed(2)}</label>
       <input id="router-confidence" type="range" min="0" max="1" step="0.05" bind:value={confidence}>
       <p class="support">A classification under the floor takes the fallback instead.</p>
-      <button type="button" class="save" disabled={pending} onclick={saveRoutes}>Save statements</button>
+      <button type="button" class="save" disabled={pending} onclick={saveRoutes}>Save routing rules</button>
     {/if}
-  {/if}
+    </div>
+  </details>
+  <details class="configure">
+    <summary>Account balancing</summary>
+    <div class="disclosure-body">
+      <p class="support">Routed models distribute turns across available accounts by weight. Limited accounts wait while another takes the turn.</p>
+      <div class="routing-head"><span>Use account balancing</span><button type="button" role="switch" class="switch" aria-checked={settings.enabled} aria-label="Use account balancing" onclick={toggleRouter} disabled={pending}><span></span></button></div>
+      <p class="support">{settings.enabled ? 'Choose a pooled model below to use balancing.' : 'Balancing is off. Direct provider connections remain available.'}</p>
+    </div>
+  </details>
 </section>
 
 <style>
@@ -237,9 +224,23 @@
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
-  .routing { display: grid; gap: 10px; align-content: start; padding-top: 12px; border-top: 1px solid var(--border); }
+  .routing { display: grid; min-width: 0; gap: 10px; align-content: start; overflow-wrap: anywhere; }
+  .routing-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; margin: 4px 0; padding: 12px; background: var(--faint); border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .routing-summary div { min-width: 0; }
+  .routing-summary dt { color: var(--muted); font-size: var(--text-13); }
+  .routing-summary dd { margin: 4px 0 0; font: var(--text-12) var(--font-mono); }
   .routing-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-  .routing-head h4 { margin: 0; }
+  .routing-head h4 { margin: 0 0 4px; font-size: var(--text-17); font-weight: 600; }
+  .selection { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .selection button { display: grid; gap: 5px; padding: 14px; text-align: left; }
+  .selection button[aria-pressed="true"] { border-color: var(--muted); background: var(--faint); }
+  .selection strong { font-weight: 600; }
+  .selection span { color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
+  .configure { border-top: 1px solid var(--border); padding-top: 10px; }
+  summary { cursor: pointer; font-size: var(--text-13); min-height: 24px; }
+  .disclosure-body { display: grid; gap: 10px; padding: 12px 0; }
+  select { max-width: 100%; }
+  @media (max-width: 700px) { .selection { grid-template-columns: 1fr; } }
   .routing-label { color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .empty { padding: 6px 0; }
@@ -249,7 +250,7 @@
   .group-label { margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
   .catalog-label { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .catalog { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
-  .catalog-row { display: flex; width: 100%; align-items: center; gap: 10px; min-height: 34px; padding: 6px 8px; text-align: left; font-size: var(--text-13); }
+  .catalog-row { display: flex; flex-wrap: wrap; width: 100%; align-items: center; gap: 6px 10px; min-height: 34px; padding: 6px 8px; text-align: left; font-size: var(--text-13); }
   .catalog-row[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
   .catalog-row:disabled .catalog-name { color: var(--muted); }
   .catalog-name { min-width: 140px; }
@@ -257,20 +258,12 @@
   .catalog-row .tag + .tag, .catalog-row .tag + :global(svg) { margin-left: 0; }
   .note { padding: 0 8px 6px; }
   .actions { display: flex; gap: 6px; }
-  .running { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-  .option { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-control); }
-  .option header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .option-name { font-size: var(--text-13); }
-  .option-key { width: min(280px, 100%); }
-  .option textarea { width: 100%; }
-  .reset { padding: 0; font-size: var(--text-12); color: var(--muted); text-decoration: underline; }
   .save { justify-self: start; min-height: 28px; padding: 4px 10px; }
   label { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  input[type="password"], input[type="url"], input[type="text"], select, textarea { box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); color: var(--ink); font: inherit; font-size: var(--text-13); }
-  input[type="password"], input[type="url"], select, textarea { width: min(420px, 100%); }
-  input:focus, select:focus, textarea:focus { border-color: var(--muted); outline: 0; }
+  input[type="password"], input[type="url"], input[type="text"], select { box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); color: var(--ink); font: inherit; font-size: var(--text-13); }
+  input[type="password"], input[type="url"], select { width: min(420px, 100%); }
+  input:focus, select:focus { border-color: var(--muted); outline: 0; }
   input[type="range"] { width: min(300px, 100%); accent-color: var(--ink); }
-  textarea { resize: vertical; font-family: var(--font-mono); font-size: var(--text-12); }
   .switch { position: relative; flex: none; width: 30px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
   .switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: var(--radius-chip); background: var(--muted); transition: transform 120ms ease, background 120ms ease; }
   .switch[aria-checked="true"] { border-color: var(--signal); background: var(--signal-soft); }

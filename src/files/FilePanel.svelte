@@ -1,7 +1,7 @@
 <script>
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { highlightFile } from './file-highlight.js'
-  let { file, tauri, maximized = false, ontogglemaximized, onclose } = $props()
+  let { file, tauri, threadId = null, maximized = false, ontogglemaximized, onclose } = $props()
   let content = $state('')
   let error = $state('')
   let loading = $state(false)
@@ -12,7 +12,7 @@
     void reload
     let current = true
     content = ''; error = ''; loading = !!path
-    if (path) tauri.invoke('chat_file_content', { path }).then((text) => { if (current) content = text }).catch((failure) => { if (current) error = String(failure?.message ?? failure) }).finally(() => { if (current) loading = false })
+    if (path) tauri.invoke('chat_file_content', { path, ...(threadId ? { threadId } : {}) }).then((text) => { if (current) content = text }).catch((failure) => { if (current) error = String(failure?.message ?? failure) }).finally(() => { if (current) loading = false })
     return () => { current = false }
   })
 </script>

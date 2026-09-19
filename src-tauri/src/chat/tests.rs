@@ -2229,13 +2229,13 @@ fn file_panel_reads_text_and_rejects_binary_large_missing_and_directory() {
     std::fs::create_dir_all(&temp).unwrap();
     let path = temp.as_path().join("preview.rs");
     std::fs::write(&path, "fn main() {}\n").unwrap();
-    assert_eq!(tauri::async_runtime::block_on(chat_file_content(path.clone())).unwrap(), "fn main() {}\n");
+    assert_eq!(tauri::async_runtime::block_on(chat_file_content(path.clone(), None)).unwrap(), "fn main() {}\n");
     std::fs::write(&path, [0, 1, 2]).unwrap();
-    assert!(tauri::async_runtime::block_on(chat_file_content(path.clone())).unwrap_err().contains("binary"));
+    assert!(tauri::async_runtime::block_on(chat_file_content(path.clone(), None)).unwrap_err().contains("binary"));
     std::fs::write(&path, vec![b'a'; 512 * 1024 + 1]).unwrap();
-    assert!(tauri::async_runtime::block_on(chat_file_content(path)).unwrap_err().contains("too large"));
-    assert!(tauri::async_runtime::block_on(chat_file_content(temp.as_path().to_owned())).is_err());
-    assert!(tauri::async_runtime::block_on(chat_file_content(temp.as_path().join("missing"))).is_err());
+    assert!(tauri::async_runtime::block_on(chat_file_content(path, None)).unwrap_err().contains("too large"));
+    assert!(tauri::async_runtime::block_on(chat_file_content(temp.as_path().to_owned(), None)).is_err());
+    assert!(tauri::async_runtime::block_on(chat_file_content(temp.as_path().join("missing"), None)).is_err());
     std::fs::remove_dir_all(temp).unwrap();
 }
 

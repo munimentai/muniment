@@ -4,7 +4,7 @@
 // first, then the runtime, then the app, with the nightly's codesign arguments
 // from .github/build-macos-app.mjs, and the keychain is deleted on exit.
 // Nothing here stores the certificate, and no hand codesign follows.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, renameSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
@@ -170,17 +170,27 @@ mustRun("codesign reader", "codesign", codesignArguments(identity[1], readerBina
 mustRun("codesign app", "codesign", codesignArguments(identity[1], app));
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
-// Stop the old build and clear what it left, so the proof is clean.
-mustRun("stop app", "pkill", ["-x", "muniment-desktop"], { allowFailure: true });
-mustRun("stop runtime", "pkill", ["-f", "LaunchServices/muniment-runtime"], { allowFailure: true });
-for (const path of [
-  join(home, "Library", "Caches", "ai.muniment.desktop"),
-  join(home, "Library", "WebKit", "ai.muniment.desktop"),
-  join(home, "Library", "Preferences", "ai.muniment.desktop.plist"),
-  join(home, "Library", "Saved Application State", "ai.muniment.desktop.savedState"),
-  installed,
-]) rmSync(path, { recursive: true, force: true });
-if (!existsSync(join(home, "Applications"))) mkdirSync(join(home, "Applications"));
-mustRun("install app", "cp", ["-R", app, installed]);
-mustRun("verify installed signature", "codesign", ["--verify", "--deep", "--strict", installed]);
-console.log(`installed ${installed} signed as ${identity[2]}`);
+// A running service holds the old executable after a bundle replacement.
+// Restart it after the swap so launchd reads the installed bundle.
+if (!process.argv.includes("--build-only")) {
+  mustRun("stop app", "pkill", ["-x", "muniment-desktop"], { allowFailure: true });
+  mkdirSync(join(home, "Applications"), { recursive: true });
+  const stage = mkdtempSync(join(home, "Applications", ".muniment-update-"));
+  const stagedApp = join(stage, "muniment.app");
+  mustRun("stage app", "ditto", [app, stagedApp]);
+  mustRun("verify staged signature", "codesign", ["--verify", "--deep", "--strict", stagedApp]);
+  const backup = mkdtempSync(join(tmpdir(), "muniment-app-backup-"));
+  const hadApp = existsSync(installed);
+  if (hadApp) renameSync(installed, join(backup, "muniment.app"));
+  try { renameSync(stagedApp, installed); }
+  catch (error) {
+    if (hadApp) renameSync(join(backup, "muniment.app"), installed);
+    throw error;
+  }
+  rmSync(stage, { recursive: true, force: true });
+  mustRun("restart runtime", "pkill", ["-f", "LaunchServices/muniment-runtime"], { allowFailure: true });
+  mustRun("verify installed signature", "codesign", ["--verify", "--deep", "--strict", installed]);
+  console.log(`installed ${installed} signed as ${identity[2]}`);
+} else {
+  console.log(`signed build ready: ${app}`);
+}

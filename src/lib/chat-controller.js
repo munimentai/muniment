@@ -34,6 +34,8 @@ export function createChatController({
   onHistoryStart = () => {},
   onThreadSummaries = () => {},
   onMoreThreads = () => {},
+  readProject = () => null,
+  readAgent = () => null,
   onThreadSelected = () => {},
   onThreadSwitch = () => {},
   onFreshThread = () => {},
@@ -125,8 +127,9 @@ export function createChatController({
       const retainedSummaries = readThreadSummaries().filter((summary) => !refreshedThreadIds.has(summary.threadId))
       const summaries = [...firstPage.summaries, ...retainedSummaries]
       onThreadSummaries(summaries)
-      onThreadSelected(currentThreadId)
-      if (currentThreadId && summaries.some((summary) => summary.threadId === currentThreadId)) {
+      const shownThreadId = currentThreadId ?? (freshThread ? null : readThreadId())
+      onThreadSelected(shownThreadId)
+      if (shownThreadId && summaries.some((summary) => summary.threadId === shownThreadId)) {
         publishFreshThread(false)
       }
       return true
@@ -559,11 +562,14 @@ export function createChatController({
     switchingThread = true
     onThreadSwitch(true)
     try {
-      await invoke('chat_new_thread')
+      const projectId = readProject()
+      const agentId = readAgent()
+      const context = { ...(projectId ? { projectId } : {}), ...(agentId ? { agentId } : {}) }
+      const createdThread = await invoke('chat_new_thread', ...(Object.keys(context).length ? [context] : []))
       if (destroyed) return false
       onHistoryStart()
       onAnnounce(null)
-      onThreadSelected(null)
+      onThreadSelected(typeof createdThread === 'string' && createdThread ? createdThread : null)
       publishFreshThread(true)
       publishMessages([])
       onHistoryLoaded()

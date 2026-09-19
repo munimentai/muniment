@@ -103,9 +103,14 @@ describe('the model router in the picker', () => {
   it('lists a model once under its provider and routes it through the router when two accounts serve it', () => {
     const openai = pickerGroups(routed).find((group) => group.id === 'openai-codex')
     expect(openai.models).toEqual([{ id: 'gpt-5.5', context: '400K', label: 'gpt-5.5', provider: 'muniment-router', choice: 'fast', accounts: 2 }])
-    // One account behind a model keeps the provider's own route.
+    // One pooled account still needs the native router transport.
     const single = { ...routed, router_models: [{ id: 'fast', family: 'openai', model: 'gpt-5.5', accounts: 1 }] }
-    expect(pickerGroups(single).find((group) => group.id === 'openai-codex').models[0]).toMatchObject({ provider: 'openai-codex', choice: 'gpt-5.5', accounts: 1 })
+    expect(pickerGroups(single).find((group) => group.id === 'openai-codex').models[0]).toMatchObject({ provider: 'muniment-router', choice: 'fast', accounts: 1 })
+  })
+
+  it('hides the pooled model without restoring its direct duplicate', () => {
+    const groups = pickerGroups({ ...routed, hidden: ['muniment-router/fast'] })
+    expect(groups.flatMap((group) => group.models).some((model) => model.id === 'gpt-5.5')).toBe(false)
   })
 
   it('gives a family with no provider of its own a group of its own', () => {
@@ -116,17 +121,29 @@ describe('the model router in the picker', () => {
     expect(pickerGroups({ ...routed, hidden: ['muniment-router/kimi/kimi-k3'] }).map((group) => group.id)).toEqual(['muniment-router', 'openai-codex'])
   })
 
-  it('drops the classifier row when the router runs no classifier', () => {
+  it('keeps automatic fallback selection when no classifier is configured', () => {
     const balanced = { ...routed, router_classifier: null }
-    expect(pickerGroups(balanced).map((group) => group.id)).toEqual(['openai-codex', 'router:kimi'])
-    expect(pickerGroups(balanced)[0].classifier).toBe('')
+    expect(pickerGroups(balanced).map((group) => group.id)).toEqual(['muniment-router', 'openai-codex', 'router:kimi'])
+    expect(pickerGroups(balanced)[0].models[0].label).toBe('Automatic')
   })
 
   it('keeps the saved default when a row still saves it, and names the row in use', () => {
     expect(currentModel({ ...routed, default_provider: 'muniment-router', default_model: 'fast' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'gpt-5.5' })
-    // The saved direct route is gone from the rows once the router balances the model, so the first row leads.
-    expect(currentModel(routed)).toEqual({ provider: 'muniment-router', model: 'auto', label: 'jev-latest picks' })
-    expect(modelChipLabel(routed)).toBe('jev-latest picks')
-    expect(currentModel({ ...routed, router_classifier: null, default_provider: 'openai', default_model: 'gone' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'gpt-5.5' })
+    // Preserve a saved specific model when its pool becomes available.
+    expect(currentModel(routed)).toEqual({ provider: 'muniment-router', model: 'fast', label: 'gpt-5.5' })
+    expect(modelChipLabel(routed)).toBe('gpt-5.5')
+    expect(currentModel({ ...routed, router_classifier: null, default_provider: 'openai', default_model: 'gone' })).toEqual({ provider: 'muniment-router', model: 'auto', label: 'Automatic' })
   })
+})
+
+it('deduplicates repeated model rows returned by discovery', () => {
+  const inventory = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', models: [{ id: 'gpt' }, { id: 'gpt' }] }], hidden: [] }
+  expect(pickerGroups(inventory)[0].models).toHaveLength(1)
+})
+
+it('groups several pooled models under one provider without a direct connection', () => {
+  const inventory = { providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }], hidden: [], router_models: [{ id: 'openai/a', family: 'openai', model: 'a', accounts: 2 }, { id: 'openai/b', family: 'openai', model: 'b', accounts: 2 }] }
+  const groups = pickerGroups(inventory)
+  expect(groups.map((group) => group.id)).toEqual(['muniment-router', 'router:openai'])
+  expect(groups[1].models.map((model) => model.id)).toEqual(['a', 'b'])
 })

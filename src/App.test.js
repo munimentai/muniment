@@ -271,6 +271,7 @@ beforeEach(() => {
   })
   unregisterGlobalShortcut = vi.fn(async (shortcut) => { registeredShortcuts.delete(shortcut) })
   invoke = vi.fn(async (command, payload) => {
+    if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'onboarding_scan') return
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
@@ -357,7 +358,8 @@ describe('entitlement change toast', () => {
 
   it('clears a visible toast when the user signs out', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -442,7 +444,8 @@ describe('pairing decisions', () => {
 
   it('handles a rejected pairing decision without exposing its details', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -595,7 +598,8 @@ describe('workspace composer entry', () => {
     runtimeState = { revision: 1, lastEvent: activation, visible: activation !== 'connected', busy: false }
     vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue('Macintosh')
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') return { connected: true, supervisor_running: true }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -731,7 +735,8 @@ describe('workspace composer entry', () => {
   it('shows the owner notice and repeats the start after a connection closes', async () => {
     runtimeState = { revision: 1, lastEvent: 'disconnected', visible: true }
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') return { connected: false, supervisor_running: true }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -757,7 +762,8 @@ describe('workspace composer entry', () => {
   it('shows the background service notice while the chat-event connection is down', async () => {
     runtimeState = { revision: 1, lastEvent: 'disconnected', visible: true }
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') {
         return { connected: true, chat_events_connected: false, supervisor_running: true }
       }
@@ -795,7 +801,8 @@ describe('workspace composer entry', () => {
 
   function mockChatEventsStatus(chatEventsConnected) {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') return chatEventsStatus(chatEventsConnected)
       if (command === 'chat_thread_open') return []
       if (command === 'chat_current_thread') return 'thread-1'
@@ -968,7 +975,8 @@ describe('workspace composer entry', () => {
     let connected = true
     desktopClientListen = vi.fn(() => new Promise((resolve) => { finishRegistration = resolve }))
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') return { connected, supervisor_running: true }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -1038,7 +1046,8 @@ describe('workspace composer entry', () => {
 
   function mockRuntimeUpgrade({ pending, thread = [] } = {}) {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'attach_listener_status') return upgradeStatus(pending)
       if (command === 'chat_thread_open') return thread
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -1295,9 +1304,9 @@ describe('workspace composer entry', () => {
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*color-mix\(in srgb, var\(--paper\)/)
     const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models', 'Preferences', 'Home', 'Companies', 'Account'])
-    expect(within(nav).getByRole('button', { name: 'Models' })).toHaveAttribute('aria-current', 'true')
-    expect(within(dialog).getByRole('button', { name: 'Connect provider' })).toBeInTheDocument()
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & routing', 'Preferences', 'Profile & Memory', 'Home', 'Companies', 'Account'])
+    expect(within(nav).getByRole('button', { name: 'Models & routing' })).toHaveAttribute('aria-current', 'true')
+    expect(within(dialog).getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Preferences' }))
     expect(within(dialog).getByRole('group', { name: 'Mode' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Home' }))
@@ -1413,7 +1422,7 @@ describe('workspace composer entry', () => {
     localModeStatus = true
     render(App)
     const dialog = await openSettings()
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect provider' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect account' }))
     expect(within(dialog).getByRole('heading', { name: 'Popular' })).toBeInTheDocument()
     expect(within(dialog).getByRole('heading', { name: 'Other' })).toBeInTheDocument()
     // The featured eight lead, in the SPEC order.
@@ -1445,7 +1454,7 @@ describe('workspace composer entry', () => {
     expect(within(dialog).getByRole('button', { name: 'Use an API key instead' })).toBeInTheDocument()
   })
 
-  it('offers the popular providers inline and opens one with a single click', async () => {
+  it('opens provider sign-in from the account connector', async () => {
     localModeStatus = true
     const defaultInvoke = invoke.getMockImplementation()
     invoke.mockImplementation((command, ...args) => {
@@ -1463,12 +1472,12 @@ describe('workspace composer entry', () => {
     render(App)
     const dialog = await openSettings()
     await within(dialog).findByRole('region', { name: 'Ollama' })
-    const connect = within(dialog).getByRole('region', { name: 'Connect' })
-    expect([...connect.querySelectorAll('button')].map((button) => button.querySelector('span:not(.logo)').textContent)).toEqual(['Anthropic', 'OpenAI', 'xAI', 'OpenRouter', 'LM Studio', 'Custom OpenAI-compatible endpoint'])
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect account' }))
+    const connect = dialog
     await fireEvent.click(within(connect).getByRole('button', { name: /^OpenAI/ }))
     expect(within(dialog).getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
-    expect(within(dialog).getByRole('region', { name: 'Connect' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /^OpenAI/ })).toBeInTheDocument()
   })
 
   it('draws the models the shell holds before the fresh inventory read answers', async () => {
@@ -1504,7 +1513,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
     const dialog = await openSettings()
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect provider' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect account' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Ollama/ }))
     const url = within(dialog).getByLabelText('Ollama server URL')
     await fireEvent.input(url, { target: { value: 'http://localhost:11434/v1' } })
@@ -1519,7 +1528,7 @@ describe('workspace composer entry', () => {
       await waitFor(() => expect(url).toBeEnabled())
     } else {
       expect(await within(dialog).findByText('Muniment saved the Ollama server.')).toBeInTheDocument()
-      expect(within(dialog).getByRole('button', { name: 'Connect provider' })).toBeInTheDocument()
+      expect(within(dialog).getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     }
   })
 
@@ -1824,7 +1833,8 @@ describe('workspace composer entry', () => {
   it('waits to focus on workspace re-entry until a resuming composer becomes enabled', async () => {
     let resolveResume
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{
         runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
         prompt: 'Original prompt', receipt: null, toolActivity: [], resumable: true,
@@ -2539,7 +2549,8 @@ describe('artifact rail', () => {
 
   it('closes with Escape while active dictation is also cancelled', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -2668,11 +2679,11 @@ describe('thread name', () => {
     render(App)
 
     const heading = await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })
-    const listHeading = screen.getByRole('heading', { level: 2, name: 'Threads' })
+    const listHeading = screen.queryByRole('heading', { name: 'Threads' })
     const list = screen.getByRole('list', { name: 'Threads' })
 
     expect(heading).toContainElement(screen.getByRole('button', { name: 'Rename thread' }))
-    expect(listHeading).toBeInTheDocument()
+    expect(listHeading).not.toBeInTheDocument()
     expect(within(list).getAllByRole('listitem')).toHaveLength(2)
     expect(screen.getByRole('region', { name: 'Transcript: Lease renewal' })).toBeInTheDocument()
   })
@@ -2697,6 +2708,79 @@ describe('thread name', () => {
     expect(screen.queryByRole('button', { name: 'Older threads' })).not.toBeInTheDocument()
   })
 
+  it('creates and renames a project through folder commands and scopes new threads', async () => {
+    const catalog = { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
+    const baseInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'project_list') return structuredClone(catalog)
+      if (command === 'project_create') { catalog.projects.created = payload.name; return 'created' }
+      if (command === 'project_rename') { catalog.projects[payload.projectId] = payload.name; return }
+      if (command === 'project_open') return
+      if (command === 'chat_new_thread') { catalog.threads['thread-created'] = payload.projectId; return 'thread-created' }
+      return baseInvoke(command, payload)
+    })
+    render(App)
+    await screen.findByRole('button', { name: 'Project Research' })
+    await fireEvent.click(screen.getByRole('button', { name: 'New project' }))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Contracts' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', { projectId: 'created' }))
+    expect(await screen.findByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-pressed', 'true')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename project Contracts' })).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'Rename project Contracts' }))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Agreements' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByRole('button', { name: 'Project Agreements' })
+    expect(invoke).toHaveBeenCalledWith('project_rename', { projectId: 'created', name: 'Agreements' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Open Agreements folder' }))
+    expect(invoke).toHaveBeenCalledWith('project_open', { projectId: 'created' })
+  })
+
+  it('places New thread first and keeps pin and archive choices across remounts', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' },
+    ]
+    const app = render(App)
+    await screen.findByRole('button', { name: 'Vendor audit' })
+    expect(document.querySelector('#sidebar button')).toHaveAccessibleName('New thread')
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for Vendor audit' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
+    expect(screen.getByRole('heading', { name: 'Pinned' })).toBeInTheDocument()
+    expect(document.querySelector('.thread-row-title')).toHaveTextContent('Vendor audit')
+    app.unmount()
+    render(App)
+    await screen.findByRole('heading', { name: 'Pinned' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for Vendor audit' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Archive' }))
+    expect(screen.queryByRole('heading', { name: 'Pinned' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Vendor audit' })).not.toBeInTheDocument()
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'vendor' } })
+    expect(screen.getByRole('heading', { name: 'Archived' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for Vendor audit' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Restore' }))
+    expect(screen.getByRole('heading', { name: 'Pinned' })).toBeInTheDocument()
+  })
+
+  it('searches older titles and renames a thread without opening it', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    olderThreadSummaryResult = [{ threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' }]
+    const baseInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'chat_rename_thread' ? Promise.resolve() : baseInvoke(command, payload))
+    render(App)
+    await screen.findByText('Lease renewal', { selector: '.thread-row-title' })
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'vendor' } })
+    await screen.findByRole('button', { name: 'Vendor audit' })
+    expect(screen.getByRole('searchbox')).toHaveValue('vendor')
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for Vendor audit' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Thread name' }), { target: { value: 'Vendor terms' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_rename_thread', { threadId: 'thread-2', title: 'Vendor terms' }))
+    expect(await screen.findByRole('button', { name: 'Vendor terms' })).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_select', { threadId: 'thread-2' })
+  })
+
   it('opens a menu on right-click with the delete action and cancels its inline confirmation', async () => {
     threadSummaryResult = [
       { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
@@ -2706,17 +2790,18 @@ describe('thread name', () => {
     const row = await screen.findByRole('button', { name: 'Vendor audit' })
 
     // The row carries a delete control that shows on hover and focus, and the right-click menu is the second path.
-    const hoverDelete = screen.getByRole('button', { name: 'Delete Vendor audit' })
-    expect(appStyles).toMatch(/\.thread-record:hover \.thread-delete/)
+    const hoverDelete = screen.getByRole('button', { name: 'Actions for Vendor audit' })
+    expect(appStyles).toMatch(/\.thread-record:hover \.thread-actions/)
     await waitFor(() => expect(hoverDelete).toBeEnabled())
     await fireEvent.click(hoverDelete)
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Vendor audit' }))
     expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete', 'Cancel'])
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
     const menu = screen.getByRole('menu', { name: 'Vendor audit actions' })
     expect(menu).toHaveStyle({ left: '120px', top: '80px' })
     const remove = within(menu).getByRole('menuitem', { name: 'Delete Vendor audit' })
-    expect(remove).toHaveFocus()
+    expect(within(menu).getByRole('menuitem', { name: 'Rename' })).toHaveFocus()
 
     await fireEvent.keyDown(menu, { key: 'Escape' })
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
@@ -2724,7 +2809,7 @@ describe('thread name', () => {
 
     // The keyboard's context menu key opens it under the row.
     await fireEvent.contextMenu(row)
-    expect(screen.getByRole('menu', { name: 'Vendor audit actions' })).toHaveStyle({ left: '0px', top: '0px' })
+    expect(screen.getByRole('menu', { name: 'Vendor audit actions' })).toHaveStyle({ left: '8px', top: '8px' })
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Vendor audit' }))
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
     expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete', 'Cancel'])
@@ -2751,7 +2836,8 @@ describe('thread name', () => {
       { threadId: 'thread-4', title: 'Budget notes', updatedAt: '' },
     ]
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'chat_delete_thread') return undefined
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -2789,7 +2875,8 @@ describe('thread name', () => {
       { threadId: 'thread-3', title: 'Archive review', updatedAt: '' },
     ]
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }]
       if (command === 'chat_delete_thread') return undefined
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -2835,7 +2922,8 @@ describe('thread name', () => {
   it('deletes the open thread and focuses the fresh composer', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }]
       if (command === 'chat_delete_thread') return undefined
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -2859,7 +2947,8 @@ describe('thread name', () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
     let deleteAttempts = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'chat_delete_thread' && deleteAttempts++ === 0) throw new Error('offline')
       if (command === 'chat_delete_thread') return undefined
@@ -2886,7 +2975,8 @@ describe('thread name', () => {
   it('uses the stored title and renames it from the keyboard', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Stored name', updatedAt: '' }]
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{
         runId: 'run-1', phase: 'complete', prompt: 'Derived name', text: 'Answer', toolActivity: [],
       }]
@@ -2974,7 +3064,8 @@ describe('thread name', () => {
       { threadId: 'thread-3', title: 'Client notes', updatedAt: '2026-07-25T12:00:00Z' },
     ]
     invoke.mockImplementation(async (command, payload) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_select_thread') return undefined
       if (command === 'chat_thread_open') return payload.threadId === 'thread-2'
         ? [{ runId: 'run-2', phase: 'complete', prompt: 'Archive review', text: 'Archived.', toolActivity: [] }]
@@ -3017,7 +3108,8 @@ describe('thread name', () => {
 
   it('shows the first restored prompt in the titlebar and current thread record', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{
         runId: 'run-1',
         phase: 'complete',
@@ -3070,7 +3162,7 @@ describe('window chrome', () => {
       expect(row).toHaveAttribute('data-tauri-drag-region')
       expect(row.closest('.workspace').classList.contains('macos')).toBe(platform.startsWith('Mac'))
       expect([...row.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
-        'Collapse sidebar', 'New thread', 'Rename thread', 'Open artifact rail', 'Open record panel',
+        'Collapse sidebar', 'Rename thread', 'Thread actions', 'Open artifact rail', 'Open record panel',
       ])
       expect(row.querySelector('.title-spacer')).toHaveAttribute('data-tauri-drag-region')
       expect(row.querySelector('.update-slot')).toBeEmptyDOMElement()
@@ -3081,13 +3173,40 @@ describe('window chrome', () => {
       }
       await fireEvent.click(collapse)
       expect(row).toContainElement(screen.getByRole('button', { name: 'Expand sidebar' }))
-      expect(row).toContainElement(screen.getByRole('button', { name: 'New thread' }))
+      expect(screen.queryByRole('button', { name: 'New thread' })).not.toBeInTheDocument()
       await fireEvent.click(screen.getByRole('button', { name: 'Open artifact rail' }))
       expect(row).toContainElement(screen.getByRole('button', { name: 'Close artifact rail' }))
     } finally {
       cleanup()
       platformMock.mockRestore()
     }
+  })
+
+  it('uses the title actions with a collapsed sidebar and keeps delete confirmation visible', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    render(App)
+    const actions = await screen.findByRole('button', { name: 'Thread actions' })
+    await waitFor(() => expect(actions).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    await fireEvent.click(actions)
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Rename', 'Pin', 'Archive', 'Delete'])
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
+    await fireEvent.click(actions)
+    expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Archive' }))
+    await fireEvent.click(actions)
+    expect(screen.getByRole('menuitem', { name: 'Restore' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByRole('textbox', { name: 'Thread name' })
+    expect(input).toHaveValue('Lease renewal')
+    await fireEvent.keyDown(input, { key: 'Escape' })
+    await fireEvent.click(actions)
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Lease renewal' }))
+    const confirmation = screen.getByRole('group', { name: 'Delete Lease renewal?' })
+    expect(document.querySelector('.titlebar')).toContainElement(confirmation)
+    await fireEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(actions).toHaveFocus())
+    expect(screen.queryByRole('group', { name: 'Delete Lease renewal?' })).not.toBeInTheDocument()
   })
 
   it('shows no tooltip on any element of the shell', () => {
@@ -3141,6 +3260,76 @@ describe('window chrome', () => {
 })
 
 describe('sidebar collapse', () => {
+  it('keeps saved agents outside project thread lists', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'agent_list'
+      ? { agents: [{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }], state: { runs: {}, threads: {} } }
+      : original(command, args))
+    render(App)
+    const manager = await screen.findByRole('button', { name: 'Agents', exact: true })
+    await fireEvent.click(manager)
+    const dialog = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await within(dialog).findByRole('button', { name: /Scout/ })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Close agents' }))
+    const scout = screen.getByRole('button', { name: 'Scout', exact: true })
+    expect(scout.closest('.agent-roster')).not.toBeNull()
+    expect(scout.closest('.project-section')).toBeNull()
+    expect(scout.closest('.thread-list')).toBeNull()
+  })
+
+  it('opens the existing agent chat with one shared composer and restores a regular chat', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'agent_list'
+      ? { agents: [{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }], state: { runs: {}, threads: { 'agent-thread': 'agent-1' } } }
+      : command === 'chat_thread_summaries' ? { summaries: [{ threadId: 'agent-thread', title: 'Hidden agent transcript', updatedAt: '2026-01-01T00:00:00Z' }, { threadId: 'ordinary-thread', title: 'Ordinary chat', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    const agents = await screen.findByRole('button', { name: 'Agents', exact: true })
+    await fireEvent.click(agents)
+    const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(await within(catalog).findByRole('button', { name: /Scout/ }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(document.querySelector('.sidebar')?.textContent || document.querySelector('#sidebar').textContent).not.toContain('Hidden agent transcript')
+    expect(screen.queryByRole('button', { name: 'Rename thread' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Thread actions' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scout', exact: true })).toHaveAttribute('aria-current', 'true')
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
+    expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 })
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
+    expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Add files' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Voice' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Close agent profile' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Scout', exact: true }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
+    await fireEvent.click(document.querySelector('.new-thread'))
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument())
+    expect(invoke).toHaveBeenCalledWith('chat_new_thread')
+    expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
+  })
+
+  it('creates the first agent chat once and keeps its project assignment', async () => {
+    const original = invoke.getMockImplementation()
+    const listing = { agents: [{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: 'project-1', schedule: null }], state: { runs: {}, threads: {} } }
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'agent_list') return listing
+      if (command === 'chat_new_thread') { listing.state.threads['agent-thread'] = 'agent-1'; return 'agent-thread' }
+      if (command === 'project_list') return { projects: { 'project-1': 'Research' }, threads: { 'agent-thread': 'project-1' } }
+      return original(command, args)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Scout', exact: true }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(invoke).toHaveBeenCalledWith('chat_new_thread', { agentId: 'agent-1', projectId: 'project-1' })
+    expect(document.querySelector('[data-fresh-thread]')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Close agent profile' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Scout', exact: true }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(1)
+    expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
+  })
+
   const sidebarShortcut = () => navigator.platform.startsWith('Mac')
     ? { key: '\\', metaKey: true }
     : { key: '\\', ctrlKey: true }
@@ -3151,7 +3340,7 @@ describe('sidebar collapse', () => {
     expect(collapse).toHaveAttribute('aria-expanded', 'true')
     expect(collapse).toHaveAttribute('aria-controls', 'sidebar')
     expect(collapse).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+\\' : 'Control+\\')
-    expect(screen.getByText('Threads')).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Threads' })).toBeInTheDocument()
     const newThread = document.querySelector('.new-thread')
     expect(newThread).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+N' : 'Control+N')
     expect(newThread.querySelector('kbd')).toHaveTextContent(navigator.platform.startsWith('Mac') ? '⌘ N' : 'Ctrl N')
@@ -3161,10 +3350,10 @@ describe('sidebar collapse', () => {
     expect(currentThread).not.toHaveAttribute('tabindex')
     expect(currentThread.tabIndex).toBe(-1)
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action')).toHaveLength(2)
+    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action')).toHaveLength(4)
     expect(screen.getByRole('button', { name: 'Settings' })).toHaveTextContent('Settings')
-    expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(1)
-    expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(0)
+    expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(0)
+    expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(1)
 
     collapse.focus()
     await fireEvent.click(collapse)
@@ -3175,7 +3364,7 @@ describe('sidebar collapse', () => {
     expect(document.activeElement).toBe(expand)
     expect(expand).toHaveAttribute('aria-expanded', 'false')
     expect(expand).not.toHaveAttribute('title')
-    expect(screen.getByRole('button', { name: 'New thread' })).not.toHaveAttribute('title')
+    expect(screen.queryByRole('button', { name: 'New thread' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
     // Collapsed means gone: no rail, and Settings hides with the sidebar.
     expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument()
@@ -3187,7 +3376,7 @@ describe('sidebar collapse', () => {
     await fireEvent.click(expand)
 
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('Threads')).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Threads' })).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: /Alice/i })).toBeInTheDocument()
   })
 
@@ -3326,7 +3515,8 @@ describe('new thread', () => {
 
   it('clears the transcript, shows a fresh row, and focuses the composer', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{
         runId: 'run-1', phase: 'complete', text: 'Current answer',
         prompt: 'Current question', receipt: null, toolActivity: [],
@@ -3355,7 +3545,8 @@ describe('new thread', () => {
 
   it('starts from the focused composer with the platform chord', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'chat_new_thread') return null
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -3375,7 +3566,8 @@ describe('new thread', () => {
 
   it('keeps the transcript and current row when the command fails', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{
         runId: 'run-1', phase: 'complete', text: 'Current answer',
         prompt: 'Current question', receipt: null, toolActivity: [],
@@ -3397,7 +3589,8 @@ describe('new thread', () => {
 
   it('keeps the fresh row current until the submitted thread appears', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'chat_new_thread') return null
       if (command === 'chat_submit') return { runId: 'run-new', attachments: [] }
@@ -3949,7 +4142,8 @@ describe('voice dictation', () => {
   it('routes one global press and matching release through the existing dictation lifecycle', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -3975,7 +4169,8 @@ describe('voice dictation', () => {
   it('stops a long global hold immediately on release', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -3998,7 +4193,8 @@ describe('voice dictation', () => {
   it('does not treat a tap after a long hold as a rapid double activation', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4027,7 +4223,8 @@ describe('voice dictation', () => {
   it('keeps one global capture running after a rapid double activation and stops on the next activation', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4059,7 +4256,8 @@ describe('voice dictation', () => {
   it('routes rapid click-only activations to hands-free and stops on the next click', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4088,7 +4286,8 @@ describe('voice dictation', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     let startCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4336,7 +4535,8 @@ describe('voice dictation', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     let resolveStop
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4374,7 +4574,8 @@ describe('voice dictation', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     let resolveStart
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4412,7 +4613,8 @@ describe('voice dictation', () => {
   it('cancels a primary pointer capture, restores the snapshot, and focuses the composer', async () => {
     let stopping = false
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4448,7 +4650,8 @@ describe('voice dictation', () => {
     let stops = 0
     let statusCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4499,7 +4702,8 @@ describe('voice dictation', () => {
 
   it.each([' ', 'Enter'])('supports a %s key hold without synthesized-click duplicates', async (key) => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4523,7 +4727,8 @@ describe('voice dictation', () => {
     let resolveStart
     let starts = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4561,7 +4766,8 @@ describe('voice dictation', () => {
 
   it('starts, appends transcript to an editable draft, and stops', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4592,7 +4798,8 @@ describe('voice dictation', () => {
 
   it('keeps an active capture stoppable and prevents starting a chat', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4621,7 +4828,8 @@ describe('voice dictation', () => {
   it('renders a terminal failed message and becomes retryable', async () => {
     const message = 'Microphone capture failed.'
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4644,7 +4852,8 @@ describe('voice dictation', () => {
   it('shows install facts and installs a missing speech model', async () => {
     let installStatusCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4699,7 +4908,8 @@ describe('voice dictation', () => {
     ['Escape', async (card) => { await fireEvent.keyDown(card, { key: 'Escape' }) }],
   ])('closes the speech model install card with %s and reopens it from Voice', async (_, close) => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4729,7 +4939,8 @@ describe('voice dictation', () => {
     ['failed', 'Failed.'],
   ])('states a %s install and returns the Install control', async (installState, words) => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4757,7 +4968,8 @@ describe('voice dictation', () => {
     const staleStatus = new Promise((resolve) => { resolveStatus = resolve })
     let statusCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4798,7 +5010,8 @@ describe('voice dictation', () => {
     const cancelledStatus = new Promise((resolve) => { resolveStatus = resolve })
     let statusCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4834,7 +5047,8 @@ describe('voice dictation', () => {
     const resumedStatus = new Promise((resolve) => { resolveStatus = resolve })
     let statusCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4870,7 +5084,8 @@ describe('voice dictation', () => {
   it('keeps capture active and stoppable when status IPC rejects', async () => {
     let statusCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4899,7 +5114,8 @@ describe('voice dictation', () => {
   it('keeps capture active and allows Stop to be retried when stop IPC rejects', async () => {
     let stopCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -4929,7 +5145,8 @@ describe('voice dictation', () => {
   it('disables voice during an active chat and cleans up its listener and timer', async () => {
     let resolveSubmit
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -5088,7 +5305,8 @@ describe('local file selection', () => {
 
   it('retains draft and selection when local ingestion fails', async () => {
     invoke.mockImplementation(async (command, payload) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'chat_file_metadata') return { displayName: 'evidence.pdf', byteLength: 2048 }
       if (command === 'auth_entitlement_snapshot') return snapshot()
@@ -5117,7 +5335,8 @@ describe('local file selection', () => {
   it('submits selected paths and clears the draft and selection only after success', async () => {
     let resolveSubmit
     invoke.mockImplementation(async (command, payload) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'chat_file_metadata') {
         return { displayName: payload.path.split('/').pop(), byteLength: 1024 }
@@ -5164,6 +5383,7 @@ describe('local file selection', () => {
 
 it('hydrates safe durable attachment chips without paths or hashes', async () => {
   invoke.mockImplementation(async (command) => {
+    if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_thread_open') return [{
       runId: 'restored', prompt: 'Review it', phase: 'complete', text: 'Done', receipt: {},
@@ -5186,6 +5406,7 @@ it('hydrates safe durable attachment chips without paths or hashes', async () =>
 
 it('hydrates durable attachment chips when the prompt is unavailable', async () => {
   invoke.mockImplementation(async (command) => {
+    if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'chat_thread_open') return [{
       runId: 'restored-without-prompt', prompt: null, phase: 'complete', text: 'Done', receipt: {},
@@ -5234,7 +5455,8 @@ describe('history hydration', () => {
 
   it('renders each applied diff and the unavailable sentence', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{
         runId: 'run-1', phase: 'complete', text: 'Done', receipt: null, toolActivity: [],
         appliedDiffs: [
@@ -5264,7 +5486,8 @@ describe('interrupted reply resume', () => {
   it('resumes the same run once and keeps its partial response visible', async () => {
     let resolveResume
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return interrupted()
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -5290,7 +5513,8 @@ describe('interrupted reply resume', () => {
   it('does not regress live completion when resume invocation resolves later', async () => {
     let resolveResume
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return interrupted()
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -5313,7 +5537,8 @@ describe('interrupted reply resume', () => {
 
   it('offers a new-run fallback only when interruption is not resumable', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return interrupted(false)
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -5326,7 +5551,8 @@ describe('interrupted reply resume', () => {
 
   it('keeps a rejected resume interrupted with a retryable error', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return interrupted()
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -5354,7 +5580,8 @@ describe('chat submission settlement', () => {
   it('replaces only the matching pending run after a successful submission', async () => {
     let resolveSubmit
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [existingRun]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -5384,7 +5611,8 @@ describe('chat submission settlement', () => {
     'chat_not_entitled: No chat model is currently available for this account.',
   ])('replaces only the matching pending run after a failed submission: %s', async (reason) => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [existingRun]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -5413,7 +5641,8 @@ describe('chat submission settlement', () => {
 describe('permission gates', () => {
   function restoreGate(gate, phase = 'pending-permission', answer = vi.fn().mockResolvedValue(undefined)) {
     invoke.mockImplementation(async (command, payload) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') {
         return [{
           runId: 'run-gated',
@@ -5710,7 +5939,8 @@ describe('thread announcements', () => {
 
   function signedIn(history, submit) {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return history
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -5738,7 +5968,7 @@ describe('thread announcements', () => {
     ['complete', 0],
     ['failed', 0],
     ['interrupted', 0],
-  ])('renders the active-line rule only in the %s phase', async (phase, ruleCount) => {
+  ])('renders the underscore caret only in the %s phase', async (phase, ruleCount) => {
     const { container } = signedIn([{
       runId: `run-${phase}`,
       phase,
@@ -5752,7 +5982,7 @@ describe('thread announcements', () => {
     // A restored run in thought with text already written reads Thinking.
     if (phase === 'thinking') await screen.findByLabelText('Thinking')
     else await screen.findByText('A response long enough to represent prose.')
-    expect(container.querySelectorAll('.streaming-rule')).toHaveLength(ruleCount)
+    expect(container.querySelectorAll('.caret')).toHaveLength(ruleCount)
   })
 
   it('renders Markdown from the first streamed token with the caret in its last block, then settles it', async () => {
@@ -5769,7 +5999,8 @@ describe('thread announcements', () => {
     const caret = container.querySelector('.caret')
     expect(caret.parentElement).toHaveProperty('tagName', 'P')
     expect(caret.parentElement).toHaveTextContent('A first line')
-    expect(streaming.querySelector('.streaming-rule')).toBeInTheDocument()
+    expect(caret).toHaveTextContent('_')
+    expect(streaming.querySelector('.streaming-rule')).not.toBeInTheDocument()
     expect(screen.queryByText('## Draft')).not.toBeInTheDocument()
 
     chatListener({ payload: {
@@ -6213,7 +6444,8 @@ describe('thread announcements', () => {
 describe('tool activity', () => {
   it('draws no card for tool activity: the receipt tallies the calls instead', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{
         runId: 'run-tools', phase: 'complete', text: 'I used tools.', prompt: 'Do work',
         receipt: { model: 'glm-5.2', time: '6.2s', tools: [{ name: 'bash', calls: 1, failed: 0 }, { name: 'grep', calls: 4, failed: 1 }] },
@@ -6245,7 +6477,8 @@ describe('message action row', () => {
 
   function restore(history = [reply()]) {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return history
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -6414,7 +6647,8 @@ describe('message action row', () => {
 describe('provenance line', () => {
   function restore(receipt, recalls = []) {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{ runId: 'run-receipt', phase: 'complete', text: 'A routed answer', prompt: 'A question', receipt, recalls, toolActivity: [] }]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -6530,7 +6764,8 @@ describe('provenance line', () => {
 describe('active run composer queue', () => {
   beforeEach(() => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -6588,7 +6823,8 @@ describe('active run composer queue', () => {
 
   it('shows a queue rejection and preserves the draft', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -6652,7 +6888,8 @@ describe('composer auto-grow', () => {
 
   it('shrinks as text is deleted and rests at two rows once the draft clears', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -6674,7 +6911,8 @@ describe('composer auto-grow', () => {
 
   it('resizes for programmatic draft changes, not only typed input', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -6699,7 +6937,8 @@ describe('composer auto-grow', () => {
 
   it('reveals streamed transcript chunks past the cap while the composer is focused', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -6730,7 +6969,8 @@ describe('composer auto-grow', () => {
   it('returns to the resting height through the Try again retry', async () => {
     const submitted = deferred()
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{
         runId: 'run-interrupted', phase: 'interrupted', text: 'Partial answer',
         prompt: lines(4), receipt: null, toolActivity: [], resumable: false,
@@ -6845,7 +7085,8 @@ describe('signed-in access popover', () => {
     const pendingOpen = new Promise((_, reject) => { rejectOpen = reject })
     let accessCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') {
         accessCalls += 1
@@ -6891,7 +7132,8 @@ describe('signed-in access popover', () => {
 
   it('renders mixed device states in deterministic order without disturbing grants', async () => {
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot([grant()])
       if (command === 'auth_devices') return [
@@ -6990,7 +7232,8 @@ describe('signed-in access popover', () => {
   it('retries only a failed device request and keeps entitlement grants rendered', async () => {
     let deviceCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot([grant()])
       if (command === 'auth_devices') {
@@ -7018,7 +7261,8 @@ describe('signed-in access popover', () => {
     const longKind = 'command-line-program-with-a-name-that-does-not-fit'
     const longVersion = '2026.08.04-preview-with-a-version-that-does-not-fit'
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -7048,7 +7292,8 @@ describe('signed-in access popover', () => {
   it('retries only a failed connected program request', async () => {
     let companionCalls = 0
     invoke.mockImplementation(async (command) => {
-      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'project_list') return { projects: {}, threads: {} }
+    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []

@@ -40,6 +40,7 @@
     if (!caretElement) {
       caretElement = document.createElement('span')
       caretElement.className = 'caret'
+      caretElement.textContent = '_'
       caretElement.setAttribute('aria-hidden', 'true')
     }
     caretHost(container).appendChild(caretElement)
@@ -95,7 +96,7 @@
   .assistant-markdown :global(h2:first-child), .assistant-markdown :global(h3:first-child), .assistant-markdown :global(h4:first-child), .assistant-markdown :global(h5:first-child) { margin-top: 0; }
   /* Two-digit list markers sit inside this padding, so a scrolling thread never clips them. */
   .assistant-markdown :global(ul), .assistant-markdown :global(ol) { margin: 0 0 12px; padding-left: 28px; }
-  .assistant-markdown :global(.caret) { display: inline-block; height: 1em; border-right: 2px solid var(--signal); margin-left: 2px; vertical-align: -2px; animation: blink 800ms step-end infinite; }
+  .assistant-markdown :global(.caret) { display: inline-block; color: var(--signal); font-family: var(--font-mono); margin-left: 2px; animation: blink 800ms step-end infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   .assistant-markdown :global(li > p) { margin-bottom: 4px; }
   .assistant-markdown :global(blockquote) { margin: 0 0 12px; padding-left: 12px; border-left: 1px solid var(--border); color: var(--muted); }

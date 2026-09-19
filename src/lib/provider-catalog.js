@@ -142,23 +142,26 @@ export function pickerGroups(inventory, query = '') {
       name: provider.name,
       source: provider.source,
       classifier: '',
-      models: (provider.models ?? [])
+      models: [...new Map((provider.models ?? []).map((model) => [model.id, model])).values()]
         .filter((model) => !hidden.has(modelKey(provider.id, model.id)))
         .map((model) => ({ ...model, label: model.id, provider: provider.id, choice: model.id, accounts: 0 })),
     }))
   if (router) {
     for (const entry of inventory.router_models ?? []) {
-      if (hidden.has(modelKey(router.id, entry.id))) continue
       const catalogId = FAMILY_CATALOG[entry.family] ?? entry.family
-      let group = groups.find((candidate) => connectedCatalogId(candidate.id) === catalogId)
+      let group = groups.find((candidate) => candidate.id === `router:${entry.family}` || connectedCatalogId(candidate.id) === catalogId)
       if (!group) {
         group = { id: `router:${entry.family}`, name: FAMILY_NAMES[entry.family] ?? entry.family, source: 'router', classifier: '', models: [] }
         groups.push(group)
       }
+      if (hidden.has(modelKey(router.id, entry.id)) || hidden.has(modelKey(group.id, entry.model))) {
+        group.models = group.models.filter((model) => model.id !== entry.model)
+        continue
+      }
       const existing = group.models.find((model) => model.id === entry.model)
       if (existing) {
         existing.accounts = entry.accounts
-        if (entry.accounts > 1) {
+        if (entry.accounts > 0) {
           existing.provider = router.id
           existing.choice = entry.id
         }
@@ -166,13 +169,13 @@ export function pickerGroups(inventory, query = '') {
         group.models.push({ id: entry.model, context: '', label: entry.model, provider: router.id, choice: entry.id, accounts: entry.accounts })
       }
     }
-    if (inventory.router_classifier) {
+    if (inventory.router_classifier || inventory.router_models?.length) {
       groups.unshift({
         id: router.id,
         name: router.name,
         source: 'router',
-        classifier: inventory.router_classifier,
-        models: [{ id: 'auto', context: '', label: `${inventory.router_classifier} picks`, provider: router.id, choice: 'auto', accounts: 0 }],
+        classifier: inventory.router_classifier || 'Automatic',
+        models: [{ id: 'auto', context: '', label: inventory.router_classifier ? `${inventory.router_classifier} picks` : 'Automatic', provider: router.id, choice: 'auto', accounts: 0 }],
       })
     }
   }
@@ -192,7 +195,9 @@ export function currentModel(inventory) {
   const saved = inventory.default_provider && inventory.default_model
     ? rows.find((row) => row.provider === inventory.default_provider && row.choice === inventory.default_model)
     : null
-  const row = saved ?? rows[0]
+  const sourceGroup = pickerGroups(inventory).find((group) => group.id === inventory.default_provider)
+  const equivalent = sourceGroup?.models.find((row) => row.id === inventory.default_model)
+  const row = saved ?? equivalent ?? rows[0]
   return row ? { provider: row.provider, model: row.choice, label: row.label } : null
 }
 

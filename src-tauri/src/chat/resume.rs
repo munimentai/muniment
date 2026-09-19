@@ -89,6 +89,7 @@ pub async fn chat_submit(
         } else {
             None
         };
+        crate::projects::prepare_thread(&app, &state, subject.as_deref(), None, false)?;
         let selected_files = files.unwrap_or_default();
         #[cfg(target_os = "linux")]
         let local_prompt = prompt.clone();
@@ -248,7 +249,7 @@ pub(super) async fn local_chat_resume(
             .inner(),
     );
     let launch = ResumeLaunch {
-        sink: TauriChatEventSink::new(app, Arc::clone(&memory_runtime)),
+        sink: TauriChatEventSink::new(app, Arc::clone(&memory_runtime), run_id.clone()),
         storage: Arc::clone(state.storage()?),
         runtime: Arc::clone(&state.runtime),
         runtime_activity,

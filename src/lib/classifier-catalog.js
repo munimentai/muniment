@@ -40,7 +40,7 @@ export function priceLabel(price) {
 
 // Whether a pooled classifier can run: its family needs an account in the pool.
 export function pooledReady(entry, accounts = []) {
-  return accounts.some((account) => account.family === entry.family && account.enabled)
+  return accounts.some((account) => account.family === entry.family && account.enabled && account.servable !== false && account.weight !== 0 && (!account.models?.length || account.models.includes(entry.model)))
 }
 
 // The catalog row a saved classifier matches, so the screen marks it.

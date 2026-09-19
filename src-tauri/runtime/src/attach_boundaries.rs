@@ -1041,6 +1041,10 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         workspace: &str,
         mut provenance: Provenance,
     ) -> Result<String, ProtocolError> {
+        provenance.actor_id = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .subject;
         provenance.source = "muniment-runtime".into();
         provenance.source_version = env!("CARGO_PKG_VERSION").into();
         let mut storage = self.storage.lock().map_err(|error| {

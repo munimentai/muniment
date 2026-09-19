@@ -46,7 +46,7 @@ fn grant() -> ChatGrant {
 
 fn memory_runtime(profile: &TemporaryProfile) -> Arc<ApplicationMemoryRuntime> {
     Arc::new(ApplicationMemoryRuntime::new(
-        profile.profile.clone(),
+        profile.config.clone(),
         profile.profile.join("memory"),
     ))
 }
@@ -201,7 +201,7 @@ fn drops_a_subscriber_when_its_bounded_queue_is_full() {
 
 #[test]
 fn drives_pi_launch_config_over_the_profile_directory() {
-    let profile = TemporaryProfile::new("sink-launch-config", false);
+    let profile = TemporaryProfile::new("sink-launch-config", true);
     let _storage = open_profile_storage(&profile.profile).unwrap();
     let pi_install = profile.profile.join("pi-install");
     fs::create_dir(&pi_install).unwrap();
@@ -230,10 +230,17 @@ fn drives_pi_launch_config_over_the_profile_directory() {
     );
     assert_eq!(sink.memory_agent_extension_path(), Some(extension.clone()));
     let config = pi_launch_config_for_executable(&sink, "pi".into(), &grant(), None).unwrap();
+    assert_eq!(
+        config.working_directory,
+        Some(profile.root.join("home/sessions/thread-1"))
+    );
     assert!(config.args.windows(2).any(|args| {
         args == [
             "--session-dir",
-            profile.profile.join("sessions").to_string_lossy().as_ref(),
+            fs::canonicalize(profile.profile.join("sessions"))
+                .unwrap()
+                .to_string_lossy()
+                .as_ref(),
         ]
     }));
     assert!(config
