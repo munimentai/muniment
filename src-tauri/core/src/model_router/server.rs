@@ -665,11 +665,12 @@ fn complete(stream: &mut TcpStream, state: &State, request: &Value, progress: Op
                 )
             {
                 state.progress.stage(progress, "fallback", (state.now_ms)());
+            } else {
+                state
+                    .progress
+                    .stage(progress, "waiting-for-account", (state.now_ms)());
             }
             attempted = true;
-            state
-                .progress
-                .stage(progress, "waiting-for-account", (state.now_ms)());
             // Try each account at most once for this model, even if cooldown expires.
             if let Some(candidate) = candidates.accounts.iter_mut().find(|a| a.id == account.id) {
                 candidate.enabled = false;
@@ -1269,7 +1270,6 @@ mod tests {
                 "choosing-model",
                 "waiting-for-account",
                 "fallback",
-                "waiting-for-account",
                 "thinking"
             ])
         );

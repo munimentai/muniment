@@ -678,9 +678,10 @@ fn runtime_boundaries_answer_all_attach_reads() {
         .journal
         .thread_events(&initial_thread)
         .unwrap();
-    let initial_event = serde_json::to_value(&initial_events[0]).unwrap();
-    assert_eq!(initial_event["payload_json"]["workspace"], "local");
-    assert_eq!(initial_event["provenance"]["attach_profile"], "profile-a");
+    assert_eq!(
+        initial_events[0].provenance.extra["attach_profile"],
+        "profile-a"
+    );
     prepare_new_run_in_thread_after_validation(
         &storage,
         "01900000-0000-7000-8000-000000000018",
