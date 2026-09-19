@@ -1,4 +1,5 @@
 <script>
+  import ContextSettings from '../activity/ContextSettings.svelte'
   import { onMount } from 'svelte'
   import { DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
   import { SHIPPED_FONTS, SIZE_STEP_MAX, SIZE_STEP_MIN, TYPE_EVENT, bodySize, commitType, filterFonts, readStoredType, stepType, typeSizeShortcut, typeSizeShortcutLabel } from './type-state.js'
@@ -106,6 +107,8 @@
   {/each}
   </div>
 </section>
+
+<ContextSettings {tauri} />
 
 <style>
   .access-label { margin: 0 0 6px; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; }

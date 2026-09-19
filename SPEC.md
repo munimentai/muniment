@@ -354,6 +354,13 @@ file list. Unknown counts stay unnumbered. Only actions with details expand.
 Subscription names default to the supplied sign-in email and remain editable
 through a hover pencil and inline form. Grok allowance uses its credits window.
 
+The composer highlights URLs and attached file references. Typing `@` searches
+file names under Home; selecting a result attaches it. Search excludes hidden
+files, generated folders and symbolic links. Preferences controls automatic
+context compaction and its token limits. Compaction preserves the conversation
+and reports start, completion, cancellation or failure in the action feed.
+Web search returns sources without opening a browser unless configured to do so.
+
 **Readers.** Every source implements Objects, Describe, Page and Delta, and
 nothing else about it reaches the graph. File readers run in Rust inside the
 runtime, one CSV file as one object. Network readers are Go: one bundled

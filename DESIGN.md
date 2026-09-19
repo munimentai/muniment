@@ -244,3 +244,6 @@ The file panel shares the record panel rail, resize and maximize behavior.
 The changed-files chip sits above the composer and opens its list on hover or click.
 File links open current text. Only actions with more details use disclosure arrows.
 The account name shows a pencil on hover or focus and edits inline.
+
+Composer URLs and file references use the theme-aware reference color.
+The `@` file list supports arrows, Enter, Tab and Escape.

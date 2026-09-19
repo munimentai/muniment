@@ -112,6 +112,12 @@
     display: block;
   }
 
+  /* Alignment rows belong to the two-column view, not stacked panels. */
+  .code-diff .d2h-file-side-diff + .d2h-file-side-diff tr:has(.d2h-info),
+  .code-diff tr:has(.d2h-emptyplaceholder) {
+    display: none;
+  }
+
   .code-diff .d2h-file-side-diff {
     display: block;
     width: 100%;

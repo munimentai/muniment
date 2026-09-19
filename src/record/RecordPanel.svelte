@@ -458,9 +458,8 @@
       <button type="button" class="record-tool" onclick={() => { mergeTarget = null; relating = 'merge' }}>Merge</button>
       <button type="button" class="record-tool" onclick={() => { relating = 'delete' }}>Delete</button>
     {/if}
-    <button type="button" class="record-maximize" aria-pressed={maximized} aria-label={maximized ? 'Restore the thread beside the record' : 'Maximize the record over the thread'} onclick={ontogglemaximized}>
+    <button type="button" class="record-maximize" title={maximized ? 'Restore' : 'Maximize'} aria-pressed={maximized} aria-label={maximized ? 'Restore the thread beside the record' : 'Maximize the record over the thread'} onclick={ontogglemaximized}>
       <LucideIcon name={maximized ? 'minimize-2' : 'maximize-2'} size={14} />
-      <span>{maximized ? 'Restore' : 'Maximize'}</span>
     </button>
   </header>
   {#if error}

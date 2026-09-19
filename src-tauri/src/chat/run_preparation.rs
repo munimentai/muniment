@@ -65,6 +65,54 @@ pub async fn chat_file_content(path: PathBuf) -> Result<String, String> {
     .map_err(str::to_owned)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposerFile {
+    path: String,
+    display_name: String,
+    relative_path: String,
+}
+
+/// Searches names only. Hidden folders, build output and symlinks are excluded.
+#[tauri::command]
+pub async fn chat_search_files(query: String) -> Result<Vec<ComposerFile>, String> {
+    if query.chars().count() > 256 { return Ok(Vec::new()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        let profile = muniment_runtime::profile_directory().map_err(|_| "The Home folder is unavailable.")?;
+        let root = muniment_core::launch_facts::working_directory(&profile).ok_or("The Home folder is unavailable.")?;
+        Ok(search_home_files(&root, &query))
+    }).await.map_err(|_| "File search could not finish.".to_owned())?
+}
+
+pub(super) fn search_home_files(root: &std::path::Path, query: &str) -> Vec<ComposerFile> {
+    let query = query.trim().to_lowercase();
+    let mut stack = vec![(root.to_owned(), 0)];
+    let mut results = Vec::new();
+    let mut visited = 0;
+    let started = std::time::Instant::now();
+    while let Some((directory, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(directory) else { continue; };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > 20000 || started.elapsed() > std::time::Duration::from_millis(200) { return results; }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || matches!(name.as_str(), "node_modules" | "target" | "dist" | "vendor") { continue; }
+            let Ok(kind) = entry.file_type() else { continue; };
+            let path = entry.path();
+            if kind.is_dir() && depth < 8 { stack.push((path, depth + 1)); }
+            else if kind.is_file() {
+                let relative = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
+                if relative.to_lowercase().contains(&query) {
+                    results.push(ComposerFile { path: path.to_string_lossy().into_owned(), display_name: name, relative_path: relative });
+                    if results.len() == 50 { return results; }
+                }
+            }
+        }
+    }
+    results.sort_by(|a,b| a.relative_path.cmp(&b.relative_path));
+    results
+}
+
 pub(super) fn open_selected_files(
     files: Vec<SelectedFile>,
 ) -> Result<Vec<OpenSelectedFile>, String> {

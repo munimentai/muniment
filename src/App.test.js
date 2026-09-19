@@ -5014,6 +5014,31 @@ describe('local file selection', () => {
     expect(dragDropUnlisten).toHaveBeenCalledOnce()
   })
 
+  it('selects an @ file with Enter without sending and closes suggestions with Escape', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'chat_search_files') return [{ path: '/home/ISSUES.md', displayName: 'ISSUES.md', relativePath: 'ISSUES.md' }]
+      return original(command, payload)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: /New thread/ }))
+    const composer = await findWorkspaceComposer()
+    await screen.findByRole('button', { name: 'Add files' })
+    await tick()
+    await fireEvent.input(composer, { target: { value: 'Read @iss' } })
+    composer.setSelectionRange(9, 9)
+    await fireEvent.click(composer)
+    await screen.findByRole('option', { name: 'ISSUES.md' })
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(composer).toHaveValue('Read @ISSUES.md '))
+    expect(screen.getByRole('button', { name: 'Remove ISSUES.md' })).toBeInTheDocument()
+    expect(invoke.mock.calls.some(([command]) => command === 'chat_submit')).toBe(false)
+    await fireEvent.input(composer, { target: { value: '@iss', selectionStart: 4 } })
+    await screen.findByRole('option', { name: 'ISSUES.md' })
+    await fireEvent.keyDown(composer, { key: 'Escape' })
+    expect(screen.queryByRole('listbox', { name: 'File suggestions' })).not.toBeInTheDocument()
+  })
+
   it('treats picker cancel as a no-op and removes a selected file', async () => {
     render(App)
     const add = await screen.findByRole('button', { name: 'Add files' })
