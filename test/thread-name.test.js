@@ -32,3 +32,30 @@ it('uses the current model registry completion boundary without reading credenti
   expect(complete).toHaveBeenCalledOnce()
   expect(JSON.parse(editor.mock.calls[1][1]).title).toBe('Lease comparison')
 })
+
+it('bounds naming even when the provider ignores cancellation and discards its late result', async () => {
+  vi.useFakeTimers()
+  try {
+    let finish
+    const complete = vi.fn(() => new Promise((resolve) => { finish = resolve }))
+    const editor = vi.fn().mockResolvedValue('{"prompt":"First request"}')
+    const pending = nameFirstThread({ model: {}, ui: { editor }, modelRegistry: { complete } })
+    await vi.advanceTimersByTimeAsync(8000)
+    await pending
+    expect(complete.mock.calls[0][2].signal.aborted).toBe(true)
+    finish({ content: [{ type: 'text', text: 'Late title' }] })
+    await Promise.resolve()
+    expect(editor).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
+})
+
+it('bounds credential lookup before naming starts', async () => {
+  vi.useFakeTimers()
+  try {
+    const complete = vi.fn()
+    const pending = nameFirstThread({ model: {}, ui: { editor: async () => '{"prompt":"First request"}' }, modelRegistry: { getApiKeyAndHeaders: () => new Promise(() => {}) } }, complete)
+    await vi.advanceTimersByTimeAsync(8000)
+    await pending
+    expect(complete).not.toHaveBeenCalled()
+  } finally { vi.useRealTimers() }
+})

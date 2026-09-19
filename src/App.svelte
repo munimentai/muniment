@@ -19,6 +19,7 @@
   import AgentProfile from './lib/AgentProfile.svelte'
   import ChatComposer from './composer/ChatComposer.svelte'
   import ModelPicker from './lib/ModelPicker.svelte'
+  import Capacity from './lib/Capacity.svelte'
   import { currentModel, modelChipLabel } from './lib/provider-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
@@ -86,6 +87,8 @@
   let inventory = $state(null)
   let inventoryRequestVersion = 0
   let pickerOpen = $state(false)
+  let modelChoicePending = $state(false)
+  let retryReview = $state(null)
   let modelChip = $state()
 
   const composerHint = $derived(
@@ -189,16 +192,31 @@
   }
 
   async function chooseModel(provider, model) {
+    if (modelChoicePending) return
+    modelChoicePending = true
     const before = inventory
     if (inventory) inventory = { ...inventory, default_provider: provider, default_model: model }
     closePicker()
     try {
       await tauri.invoke('local_mode_set_default_model', { provider, model })
+      if (retryReview) retryReview = { ...retryReview, chooseModel: retryReview.chooseModel && retryReview.previousProvider === provider && retryReview.previousModel === model }
     } catch (_) {
       if (inventory && before) inventory = { ...inventory, default_provider: before.default_provider, default_model: before.default_model }
       accountStatus = 'Muniment could not save the model choice. Try again.'
-    }
+    } finally { modelChoicePending = false }
   }
+
+  function prepareRetry(run, chooseModel = false) {
+    if (active || (draft.trim() && draft !== run.prompt) || selectedFiles.length || !run.prompt?.trim()) return
+    draft = run.prompt
+    retryReview = { threadId: currentThreadId, chooseModel, previousProvider: chipModel?.provider, previousModel: chipModel?.model }
+    if (chooseModel) pickerOpen = true
+    void tick().then(() => composer?.focus())
+  }
+
+  $effect(() => {
+    if (retryReview && retryReview.threadId !== currentThreadId) retryReview = null
+  })
 
   function openModelSettings() {
     pickerOpen = false
@@ -443,7 +461,7 @@
     readFiles: () => selectedFiles,
     readThreadId: () => currentThreadId,
     readThreadSummaries: () => threadSummaries,
-    blocked: () => dictationBusy() || runtimeUpgradePending(),
+    blocked: () => dictationBusy() || runtimeUpgradePending() || modelChoicePending || !!retryReview?.chooseModel,
     onMessages: (next) => { messages = next },
     onActive: (next) => { active = next },
     onAnnounce: (next) => { announcedRun = next },
@@ -464,7 +482,7 @@
     onHistoryLoaded: () => { pinned = true },
     onFollow: followNewContent,
     onFocus: () => tick().then(() => composer?.focus()),
-    onSend: () => {},
+    onSend: () => { retryReview = null },
     onSignInLink: (link) => { if (auth.name === 'signing-in') auth = { ...auth, link } },
   })
 
@@ -1667,7 +1685,7 @@
   // The band's one action control: an up arrow that sends while the draft has
   // text, and a stop square while a reply is in flight. Enter steers in flight.
   function composerActionInactive() {
-    return active ? active.id === 'pending' || active.phase === 'resuming' : sendDisabled()
+    return active ? active.id === 'pending' || active.phase === 'resuming' : sendDisabled() || modelChoicePending || !!retryReview?.chooseModel
   }
 
   function composerActionClick() {
@@ -1889,7 +1907,7 @@
         <div class="thread-shell">
         <div class="thread" class:scrolling={threadScrolling} role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={onThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
-          {#if messages.length === 0}<p class="empty">{profileAgent ? `Chat with ${profileAgent.name}.` : auth.name === 'local' ? 'Your model answers here. Ask anything.' : "Ask anything. Your org's routing decides which model answers."}</p>{/if}
+          {#if messages.length === 0}<p class="empty">{auth.name === 'local' && !inventory ? accountStatus || 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : profileAgent ? `Chat with ${profileAgent.name} using ${modelSourceLabel}.` : auth.name === 'local' ? `${modelSourceLabel} is selected. Ask a question or request a file.` : "Ask a question or request a file. Your org selects the model."}</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
@@ -1939,9 +1957,9 @@
                   {:else}<p>The changes were applied, but their record is no longer stored.</p>{/if}
                 </div>
               {/each}
-              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <span>Retry sends the same message again.</span> <button disabled={!message.run.prompt?.trim() || !!active || dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
-              {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
-              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <span>Retry prepares the message for review.</span> <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button></div>{/if}
+              {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'pending-permission' && message.run.pendingPermission}
                 {@const gate = message.run.pendingPermission}
                 {@const answerState = permissionState(message.run)}
@@ -2039,6 +2057,9 @@
                 {/if}
                 {#if failure}<div class="run-error copy-failure">{failure}</div>{/if}
               {/if}
+              {#if auth.name === 'local' && ['complete', 'failed', 'cancelled', 'interrupted'].includes(message.run.phase) && message.run.prompt}
+                <button type="button" class="quiet" disabled={!!active || !!draft.trim() || !!selectedFiles.length} onclick={() => prepareRetry(message.run, true)}>Retry with another model</button>
+              {/if}
             </div>{/if}
           {/each}
         </div>
@@ -2048,6 +2069,14 @@
         <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
         </div>
         <ChatComposer bind:element={composerBox}>
+        {#if retryReview}
+          <section aria-label="Review retry" class="retry-review">
+            <p>This is a new attempt in the current conversation, including earlier replies and tool results.</p>
+            <p>Earlier actions are not undone. Sending may run tools again. Review the message and reattach files if needed before sending.</p>
+            {#if retryReview.chooseModel}<button type="button" onclick={() => { pickerOpen = true }}>Choose a different model for this retry</button>{/if}
+            <button type="button" onclick={() => { retryReview = null; draft = ''; pickerOpen = false }}>Cancel retry</button>
+          </section>
+        {/if}
         {#if pickerOpen}
           <ModelPicker {inventory} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onclose={closePicker} />
         {/if}
@@ -2125,6 +2154,7 @@
             {#if !active}<button type="button" class="quiet composer-icon" aria-label="Add files" onclick={chooseFiles}><LucideIcon name="plus" variant="action" size={16} /></button>{/if}
             {#if auth.name === 'local'}
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name="chevron-down" variant="action" size={12} /></button>
+              <Capacity {tauri} onmanage={openModelSettings} />
             {/if}
             {#if threadSwitching}
               <span id="composer-hint" role="status">Send waits for the thread. Your draft stays here.</span>
@@ -2177,7 +2207,7 @@
               <h2 id="artifact-rail-title">Artifacts</h2>
             </header>
             <div class="artifact-empty">
-              <p>No artifacts yet</p>
+              <p>Ask in chat to create a document, table, or other file.</p>
             </div>
           </aside>
         {/if}
@@ -2441,6 +2471,7 @@
   .side-top { padding: 8px 6px 0; }
   .side-top kbd { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .thread-search { width: 100%; min-width: 0; box-sizing: border-box; margin-top: 4px; padding: 6px 8px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font: var(--text-13) var(--font-human); }
+  .retry-review { font-size: var(--text-12); color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--border); }
   .side-empty { padding: 4px 8px; color: var(--muted); font-size: var(--text-12); }
   .side-bottom { flex: none; padding: 0 6px; }
   .side-action :global(.lucide) { flex: 0 0 18px; width: 18px; height: 18px; }

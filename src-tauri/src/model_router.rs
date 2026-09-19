@@ -62,6 +62,7 @@ pub(crate) struct AccountView {
     /// `key` or `account`.
     source: &'static str,
     servable: bool,
+    exclusion_reason: Option<&'static str>,
     base_url: Option<String>,
     models: Vec<String>,
     enabled: bool,
@@ -206,6 +207,17 @@ fn account_view(
         label: account.label.clone(),
         source: account.credential.source(),
         servable: account.credential.servable(),
+        exclusion_reason: if !account.enabled {
+            Some("Account is turned off.")
+        } else if account.weight == 0 {
+            Some("Account weight is zero.")
+        } else if !account.credential.servable() {
+            Some("This subscription transport is not supported.")
+        } else if usage.is_some_and(|usage| !usage.available(chrono::Utc::now().timestamp_millis())) {
+            Some("Account is temporarily unavailable.")
+        } else {
+            None
+        },
         base_url: account.base_url.clone(),
         models: account.models.clone(),
         enabled: account.enabled,

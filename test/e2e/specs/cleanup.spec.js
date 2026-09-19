@@ -1,4 +1,7 @@
+import { revokeFixtureSession } from '../support/session-cleanup.mjs'
+
 describe('fixture cleanup', () => {
+  afterEach(async () => { await revokeFixtureSession(browser) })
   it('best-effort revokes the persisted fixture session', async () => {
     const profile = await $('.profile-button')
     const signIn = await $('button=Sign in')

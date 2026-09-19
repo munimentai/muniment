@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest'
 import Settings from './Settings.svelte'
 import ModelAccounts from './ModelAccounts.svelte'
+import RoutingTest from './RoutingTest.svelte'
 
 const inventory = { providers: [], hidden: [] }
 const routing = () => ({
@@ -69,7 +70,7 @@ it('does not present connected subscriptions or zero-weight keys as ready', () =
     ...routing(), accounts: [{ ...account, id: 'subscription', servable: false }, { ...account, id: 'key', label: 'API account', source: 'key', weight: 0 }],
   } })
   expect(screen.getByText('Not available for routed turns yet.')).toBeInTheDocument()
-  expect(screen.getByText('Weight is zero. This account receives no turns.')).toBeInTheDocument()
+  expect(screen.getByText('Excluded from routed turns.')).toBeInTheDocument()
   expect(screen.queryByText('Available for routed turns.')).not.toBeInTheDocument()
 })
 
@@ -100,4 +101,16 @@ it('shows allowances and manual refresh for routable subscriptions', async () =>
   expect(screen.getByText('Available for routed turns.')).toBeInTheDocument()
   await fireEvent.click(screen.getByText('Usage and settings'))
   expect(screen.getByRole('button', { name: 'Refresh allowance' })).toBeInTheDocument()
+})
+
+it('shows runtime routing eligibility and fallback evidence without starting a chat', async () => {
+  const tauri = { invoke: vi.fn(async () => ({ model: 'openai/ready', reason: 'Fallback used because the classifier failed', confidence: null, elapsed_ms: 35, eligible_models: ['openai/ready'], exclusions: [{ model: 'anthropic/cooling', reason: 'Every account for this provider is temporarily unavailable.' }], fallback_reason: 'The classifier did not return a valid choice.' })) }
+  render(RoutingTest, { tauri, settings: { enabled: true, options: [{ key: 'openai/ready' }] } })
+  await fireEvent.input(screen.getByLabelText('Sample request'), { target: { value: 'Summarize my file' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Test routing' }))
+  await screen.findByText('The classifier did not return a valid choice.')
+  expect(screen.getByText('anthropic/cooling')).toBeInTheDocument()
+  expect(screen.getByText('Every account for this provider is temporarily unavailable.')).toBeInTheDocument()
+  expect(screen.getByText('35 ms')).toBeInTheDocument()
+  expect(tauri.invoke.mock.calls).toEqual([['model_router_test_route', { sample: 'Summarize my file' }]])
 })

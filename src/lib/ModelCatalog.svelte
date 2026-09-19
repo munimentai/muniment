@@ -1,4 +1,5 @@
 <script>
+  import Toggle from './Toggle.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import { pickerGroups, modelKey, currentModel } from './provider-catalog.js'
   let { tauri, inventory, settings, onsettings, oninventory } = $props()
@@ -45,7 +46,7 @@
           <div class="model-row">
             <div class="identity"><span class="model-id">{model.label}</span><span class="meta">{route ? `${model.accounts || 1} eligible ${model.accounts > 1 ? 'accounts' : 'account'}` : 'Direct connection'}{#if model.context} · {model.context} context{/if}</span></div>
             {#if current?.provider === provider && current?.model === choice}<span class="meta">Selected</span>{:else}<button disabled={pending || !shown} onclick={() => run('local_mode_set_default_model', { provider, model: choice })}>Use</button>{/if}
-            <label class="show"><input type="checkbox" checked={shown} disabled={pending} aria-label={`Show ${model.id} in the selector`} onchange={() => run('local_mode_set_model_hidden', { provider: model.provider, model: model.choice, hidden: shown })}>Show</label>
+            <label class="show"><Toggle checked={shown} disabled={pending} aria-label={`Show ${model.id} in the selector`} onchange={() => run('local_mode_set_model_hidden', { provider: model.provider, model: model.choice, hidden: shown })} />Show</label>
           </div>
           {#if route}
             <details><summary>Routing statement</summary><p class="statement">{route.description}</p>
@@ -74,7 +75,7 @@
   button { color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; font-size: var(--text-13); padding: 5px 10px; cursor: pointer; }
   button:hover { background: var(--faint); } button:disabled { color: var(--muted); cursor: default; }
   input[type="search"], textarea { width: 100%; box-sizing: border-box; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 10px; font: inherit; font-size: var(--text-13); }
-  input { accent-color: var(--ink); } textarea { resize: vertical; }
+  textarea { resize: vertical; }
   details { margin-top: 8px; font-size: var(--text-13); } summary { cursor: pointer; min-height: 24px; color: var(--muted); }
   .statement { padding: 6px 0 10px; } .actions { display: flex; gap: 8px; margin-top: 8px; }
 </style>

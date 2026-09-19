@@ -212,9 +212,9 @@
             {:else}
               <span class="card-label">{account.label}<button type="button" class="rename quiet" aria-label={`Rename ${account.label}`} disabled={pending} onclick={() => editName(account)}><LucideIcon name="pencil" /></button></span>
             {/if}
-            <span class="tag">{account.source === 'key' ? 'API key' : 'Subscription'}</span>
+            <span class="tag">{account.source === 'key' ? 'Paid API key' : 'Subscription'}</span>
           </header>
-          <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Not available for routed turns yet.' : cooling(account) ? 'Waiting for the rate limit to reset.' : account.weight === 0 ? 'Weight is zero. This account receives no turns.' : 'Available for routed turns.'}</p>
+          <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Not available for routed turns yet.' : cooling(account) ? 'Waiting for the rate limit to reset.' : account.weight === 0 ? 'Excluded from routed turns.' : 'Available for routed turns.'}</p>
           <p class="record tier">{account.source === 'key' ? (account.base_url ?? familyRow?.base_url ?? '') : `${account.plan ?? 'plan not read yet'}`}{#if account.email && account.email !== account.label} · {account.email}{/if}{#if account.models.length} · {account.models.join(' · ')}{/if}</p>
           {#if account.source !== 'key'}
             {#if !account.allowance_readable}
@@ -288,6 +288,7 @@
     </div>
   {:else if adding}
     <form class="add" aria-label={`Add a ${familyRow?.name ?? family} key`} onsubmit={(event) => { event.preventDefault(); addAccount() }}>
+      <p class="support">API usage has separate billing from a chat subscription.</p>
       <label for={`router-label-${family}`}>Name</label>
       <input id={`router-label-${family}`} type="text" placeholder="work" bind:value={label} disabled={pending}>
       <label for={`router-key-${family}`}>API key</label>

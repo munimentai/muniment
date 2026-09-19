@@ -90,6 +90,15 @@ function usageTokens(tokens) {
 // The rows under the line: everything the line does not show, in record order.
 export function receiptRows(receipt = {}, recalls = []) {
   const rows = []
+  for (const evidence of receipt?.routing ?? []) {
+    if (recorded(evidence.account)) rows.push({ label: 'Account', value: evidence.account, route: false })
+    if (recorded(evidence.selected_model)) rows.push({ label: 'Selected model', value: evidence.selected_model, route: false })
+    if (recorded(evidence.decision)) rows.push({ label: 'Routing decision', value: evidence.decision, route: false })
+    if (Number.isFinite(evidence.confidence)) rows.push({ label: 'Routing confidence', value: `${Math.round(evidence.confidence * 100)}% · Model selection, not answer quality`, route: false })
+    if (Number.isFinite(evidence.classification_ms)) rows.push({ label: 'Classification time', value: `${evidence.classification_ms} ms`, route: false })
+    for (const reason of evidence.exclusions ?? []) rows.push({ label: 'Excluded model', value: reason, route: false })
+    for (const reason of evidence.fallback_causes ?? []) rows.push({ label: 'Fallback cause', value: reason, route: false })
+  }
   if (!receipt?.classifiers?.length && recorded(receipt?.cost)) rows.push({ label: 'Cost', value: receipt.cost, route: false })
   const tokens = receipt?.tokens
   if (!receipt?.classifiers?.length && tokens && recorded(tokens.input) && recorded(tokens.output)) {

@@ -7,6 +7,10 @@ import path from 'node:path'
 // components on the allowed list". Every entry names the clause that permits it;
 // adding one is a spec decision, not a styling one.
 const ALLOWED = {
+  'src/lib/Toggle.svelte': {
+    'input:checked + .track': 'The signature track for every enabled checkbox.',
+    'input:checked + .track .knob': 'The signature knob for every enabled checkbox.',
+  },
   'src/App.svelte': {
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',

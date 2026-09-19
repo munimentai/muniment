@@ -77,10 +77,10 @@ describe('installed local-mode chat', () => {
       const modelChip = await localMode.$('.model-chip')
       await modelChip.waitForDisplayed()
       await modelChip.click()
-      await (await $('button=Manage models')).click()
+      await (await $('button=Models & routing')).click()
       await settings.waitForDisplayed()
     }
-    await (await settings.$('button=Connect provider')).click()
+    await (await settings.$('button=Connect account')).click()
     await (await settings.$('button*=Ollama')).click()
     const baseUrlInput = await $('#provider-base-url')
     await baseUrlInput.waitForDisplayed()

@@ -151,6 +151,49 @@ pub struct RouteTest {
     pub reason: &'static str,
     pub confidence: Option<f64>,
     pub elapsed_ms: u128,
+    pub eligible_models: Vec<String>,
+    pub exclusions: Vec<RouteExclusion>,
+    pub fallback_reason: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RouteExclusion {
+    pub model: String,
+    pub reason: String,
+}
+
+fn route_availability(
+    config: &RouterConfig,
+    ledger: &Ledger,
+    now_ms: i64,
+) -> (Vec<String>, Vec<RouteExclusion>) {
+    let mut models = std::collections::BTreeSet::new();
+    for account in &config.accounts {
+        let names = if account.models.is_empty() {
+            super::model_catalog::family_models(&account.family)
+                .iter()
+                .map(|entry| entry.model.to_owned())
+                .collect()
+        } else {
+            account.models.clone()
+        };
+        for model in names {
+            models.insert((account.family.clone(), model));
+        }
+    }
+    let mut eligible = Vec::new();
+    let mut excluded = Vec::new();
+    for (family, model) in models {
+        let name = format!("{family}/{model}");
+        match balance::pick(config, ledger, &family, &model, now_ms) {
+            Ok(_) => eligible.push(name),
+            Err(error) => excluded.push(RouteExclusion {
+                model: name,
+                reason: error.message(),
+            }),
+        }
+    }
+    (eligible, excluded)
 }
 
 impl State {
@@ -191,7 +234,23 @@ impl State {
         if let Some(account) = &decision.spent_on {
             self.record_success(account, decision.spent);
         }
+        let (eligible_models, exclusions) =
+            route_availability(&config, &self.ledger(), (self.now_ms)());
         Ok(RouteTest {
+            eligible_models,
+            exclusions,
+            fallback_reason: match decision.reason {
+                super::classify::Reason::Classified => None,
+                super::classify::Reason::NotClassified => {
+                    Some("Classification is not active for this request.")
+                }
+                super::classify::Reason::LowConfidence => {
+                    Some("Classifier confidence is below the configured minimum.")
+                }
+                super::classify::Reason::Failed => {
+                    Some("The classifier did not return a valid choice.")
+                }
+            },
             model: format!("{}/{}", decision.route.family, decision.route.model),
             reason: match decision.reason {
                 super::classify::Reason::Classified => "Classifier selected the model",
@@ -515,6 +574,7 @@ fn complete(stream: &mut TcpStream, state: &State, request: &Value) {
     let requested = wire::requested_model(request).unwrap_or(config::AUTO_MODEL);
     let text = wire::classifier_state(request);
     // Reuse the decision across attempts so failure never spends the classifier twice.
+    let classification_started = std::time::Instant::now();
     let plan = match plan(&config, &state.ledger(), requested, &text, (state.now_ms)()) {
         Ok(plan) => plan,
         Err(error) => {
@@ -534,6 +594,11 @@ fn complete(stream: &mut TcpStream, state: &State, request: &Value) {
     if let Some(spent_on) = &plan.classifier_spent_on {
         state.record_success(spent_on, plan.classifier_spent);
     }
+    let classification_ms = classification_started
+        .elapsed()
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    let (_, exclusions) = route_availability(&config, &state.ledger(), (state.now_ms)());
     let mut refusals: Vec<String> = Vec::new();
     let mut routes = super::options(&config);
     // Prefer the configured fallback, then another provider, then remaining models.
@@ -560,7 +625,15 @@ fn complete(stream: &mut TcpStream, state: &State, request: &Value) {
             let (account, _in_flight) =
                 match state.reserve(&candidates, &route.family, &route.model) {
                     Ok(account) => account,
-                    Err(_) => break,
+                    Err(error) => {
+                        refusals.push(format!(
+                            "{}/{}: {}",
+                            route.family,
+                            route.model,
+                            error.message()
+                        ));
+                        break;
+                    }
                 };
             // Try each account at most once for this model, even if cooldown expires.
             if let Some(candidate) = candidates.accounts.iter_mut().find(|a| a.id == account.id) {
@@ -602,10 +675,46 @@ fn complete(stream: &mut TcpStream, state: &State, request: &Value) {
             let call = call.send_json(&prepared.body);
             match call {
                 Ok(response) => {
-                    let response_id = wire::classified_response_id(
+                    let response_id = wire::evidenced_response_id(
                         &route.family,
                         &route.model,
                         plan.classifier.as_ref(),
+                        wire::RoutingEvidence {
+                            account: account.label.clone(),
+                            selected_model: format!("{}/{}", plan.family, plan.model),
+                            decision: match plan.reason {
+                                super::classify::Reason::Classified => {
+                                    "Classifier selected the model"
+                                }
+                                super::classify::Reason::NotClassified
+                                    if requested != config::AUTO_MODEL =>
+                                {
+                                    "User selected the model"
+                                }
+                                super::classify::Reason::NotClassified => {
+                                    "Fallback used without classification"
+                                }
+                                super::classify::Reason::LowConfidence => {
+                                    "Fallback used because classifier confidence was low"
+                                }
+                                super::classify::Reason::Failed => {
+                                    "Fallback used because the classifier failed"
+                                }
+                            }
+                            .into(),
+                            confidence: matches!(
+                                plan.reason,
+                                super::classify::Reason::Classified
+                                    | super::classify::Reason::LowConfidence
+                            )
+                            .then_some(plan.confidence),
+                            classification_ms,
+                            exclusions: exclusions
+                                .iter()
+                                .map(|item| format!("{}: {}", item.model, item.reason))
+                                .collect(),
+                            fallback_causes: refusals.clone(),
+                        },
                     );
                     if prepared.protocol != transport::Protocol::Chat {
                         let result = relay_native(
@@ -964,6 +1073,32 @@ mod tests {
             fallback: Some("fast".into()),
             ..RouterConfig::default()
         }
+    }
+
+    #[test]
+    fn route_test_availability_uses_runtime_pool_readiness() {
+        let ready = account("ready", "http://localhost");
+        let mut disabled = account("disabled", "http://localhost");
+        disabled.models = vec!["disabled-model".into()];
+        disabled.enabled = false;
+        let mut cooling = account("cooling", "http://localhost");
+        cooling.models = vec!["cooling-model".into()];
+        let config = config(vec![ready, disabled, cooling]);
+        let mut ledger = Ledger::default();
+        ledger
+            .accounts
+            .entry("cooling".into())
+            .or_default()
+            .cooldown_until_ms = Some(fixed_clock() + 1000);
+        let (eligible, excluded) = route_availability(&config, &ledger, fixed_clock());
+        assert_eq!(eligible, vec!["openai/gpt-5.6-mini"]);
+        assert_eq!(excluded.len(), 2);
+        assert_eq!(excluded[0].model, "openai/cooling-model");
+        assert!(excluded[0].reason.contains("temporarily unavailable"));
+        assert_eq!(excluded[1].model, "openai/disabled-model");
+        assert!(excluded[1].reason.contains("serves this model"));
+        let (eligible, _) = route_availability(&config, &ledger, fixed_clock() + 1000);
+        assert!(eligible.contains(&"openai/cooling-model".to_owned()));
     }
 
     /// One request to the running router, answered whole.
