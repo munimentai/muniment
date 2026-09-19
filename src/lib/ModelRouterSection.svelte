@@ -155,7 +155,7 @@
         {#each rows.filter((row) => row.group === group) as row (row.id)}
           <li>
             <button type="button" class="quiet catalog-row" aria-pressed={chosen === row.id} disabled={!row.ready} onclick={() => choose(row)}>
-              {#if row.family}<ProviderLogo provider={row.family} size={16} />{/if}
+              {#if row.family || row.kind === 'typesafe'}<ProviderLogo provider={row.family || 'typesafe'} size={16} />{/if}
               <span class="catalog-name">{row.name}</span>
               <span class="record">{row.model}</span>
               <span class="tag">{priceLabel(row.price)}</span>
@@ -163,6 +163,12 @@
               {#if chosen === row.id}<LucideIcon name="check" variant="action" size={14} />{/if}
             </button>
             {#if row.note && chosen === row.id}<p class="support note">{row.note}</p>{/if}
+            {#if row.kind === 'typesafe' && chosen === row.id}
+              <label for="classifier-key">TypeSafe API key</label>
+              <input id="classifier-key" type="password" autocomplete="off" placeholder={settings.classifier.kind === 'typesafe' && settings.classifier.configured ? 'Saved. Type a new key to replace it.' : ''} bind:value={classifierKey} disabled={pending}>
+              <label for="classifier-model">Model</label>
+              <input id="classifier-model" type="text" bind:value={classifierModel} disabled={pending}>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -176,13 +182,9 @@
       <label for="classifier-url">Classifier URL</label>
       <input id="classifier-url" type="url" placeholder="https://host/v1/systemone" bind:value={classifierUrl} disabled={pending}>
     {/if}
-    {#if classifierKind === 'typesafe' || classifierKind === 'endpoint'}
-      <label for="classifier-key">{classifierKind === 'typesafe' ? 'TypeSafe API key' : 'API key (optional)'}</label>
+    {#if classifierKind === 'endpoint'}
+      <label for="classifier-key">API key (optional)</label>
       <input id="classifier-key" type="password" autocomplete="off" placeholder={settings.classifier.configured ? 'Saved. Type a new key to replace it.' : ''} bind:value={classifierKey} disabled={pending}>
-    {/if}
-    {#if classifierKind !== 'none'}
-      <label for="classifier-model">Model</label>
-      <input id="classifier-model" type="text" bind:value={classifierModel} disabled={pending}>
     {/if}
     <div class="actions">
       <button type="button" disabled={pending} onclick={saveClassifier}>Save classifier</button>
