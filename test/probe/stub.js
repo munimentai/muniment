@@ -330,6 +330,12 @@ export function buildProbeCommandTable(fixtureName) {
       currentThreadId = payload.threadId
       return null
     }
+    if (command === 'model_router_settings' || command === 'model_router_refresh_quota') return {
+      enabled: false, running: false, is_default: false, base_url: null,
+      accounts: [], subscriptions: [], families: [], options: [], routes: [],
+      fallback: null, min_confidence: 0.6, served_models: [],
+      classifier: { kind: 'none', configured: false, model: '' },
+    }
     if (command === 'memory_profile_read') return profileMemory
     if (command === 'memory_profile_save') { profileMemory = payload.content; return null }
     if (command === 'memory_facts') return structuredClone(savedFacts)

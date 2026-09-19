@@ -166,6 +166,8 @@ fn command_test_state() -> (PathBuf, ChatState) {
         active: Arc::new(Mutex::new(None)),
         runtime: Arc::new(Mutex::new(None)),
         session_thread: SessionThread::default(),
+        pending_project: Mutex::new(None),
+        pending_agent: Mutex::new(None),
         runtime_activity: RuntimeActivityRegistry::new(),
         retention_trigger: RetentionTrigger::default(),
     };
