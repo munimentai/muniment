@@ -457,3 +457,14 @@ it('shows restored routing evidence without treating model confidence as answer 
   expect(rows).toContainEqual({ label: 'Fallback cause', value: 'Personal answered 429.', route: false })
   expect(receiptRows({})).toEqual([])
 })
+
+it('uses runtime routing stages and clears them when reply text arrives', () => {
+  let previous = { phase: 'thinking', text: '', stage: 'thinking', turnStarted: true }
+  for (const [routingStage, label] of [['choosing-model', 'Choosing model'], ['waiting-for-account', 'Waiting for account'], ['fallback', 'Trying another route']]) {
+    const next = { ...previous, routingStage }
+    expect(stageWord(runStage(previous, next))).toBe(label)
+    previous = { ...next, stage: runStage(previous, next) }
+  }
+  expect(runStage(previous, { ...previous, routingStage: undefined, text: 'Answer' })).toBe('writing')
+  expect(runStage(previous, { ...previous, routingStage: undefined })).toBe('thinking')
+})

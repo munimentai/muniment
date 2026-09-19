@@ -36,6 +36,8 @@ const ALLOWED = {
   },
   // The same switch turns an account in a pool on, and turns routing on.
   'src/lib/ModelAccounts.svelte': {
+    '.window-bar span': 'Allowance meters use the toggle background opacity.',
+    '.window-bar[data-level="plenty"] span': 'Green marks plentiful remaining allowance.',
     '.switch[aria-checked="true"]': '§1.2 the track of an enabled account\'s switch',
     '.switch[aria-checked="true"] span': '§1.2 the knob of an enabled account\'s switch',
   },

@@ -151,7 +151,7 @@ export function toolVerb(name = '') {
   return 'Working'
 }
 
-const stageWords = { routing: 'Routing', thinking: 'Thinking', writing: 'Writing' }
+const stageWords = { 'choosing-model': 'Choosing model', 'waiting-for-account': 'Waiting for account', fallback: 'Trying another route', routing: 'Routing', thinking: 'Thinking', writing: 'Writing' }
 
 export function stageWord(stage = 'routing') {
   if (typeof stage === 'string' && stage.startsWith('tool:')) return toolVerb(stage.slice(5))
@@ -164,11 +164,12 @@ export function stageWord(stage = 'routing') {
 export function runStage(previous, next) {
   const running = [...(next.toolActivity ?? [])].reverse().find((tool) => tool.status === 'running')
   if (running) return `tool:${running.displayName ?? ''}`
+  if (next.routingStage && ['choosing-model', 'waiting-for-account', 'fallback', 'thinking'].includes(next.routingStage)) return next.routingStage
   // A restored run has no earlier projection: its phase names the word.
   if (!previous) return next.phase === 'streaming' ? 'writing' : next.turnStarted || next.text ? 'thinking' : 'routing'
   if ((next.text ?? '').length > (previous.text ?? '').length) return 'writing'
   if ((previous.toolActivity ?? []).some((tool) => tool.status === 'running')) return 'thinking'
-  if (previous.stage && previous.stage !== 'routing') return previous.stage
+  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage)) return previous.stage
   return next.turnStarted ? 'thinking' : 'routing'
 }
 

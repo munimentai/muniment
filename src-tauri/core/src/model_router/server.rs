@@ -117,6 +117,7 @@ impl Drop for Handle {
 /// What the router keeps between turns: where its files are, and the counters
 /// it has not yet written down.
 struct State {
+    progress: super::progress::Progress,
     agent: PathBuf,
     ledger: Mutex<Ledger>,
     /// The turns in flight, counted up while an upstream call is open.
@@ -369,6 +370,7 @@ fn start_with_clock(agent: PathBuf, clock: fn() -> i64) -> io::Result<Handle> {
     write_endpoint(&agent, &endpoint)?;
     let active: Active = Arc::new(Mutex::new(BTreeMap::new()));
     let state = Arc::new(State {
+        progress: Default::default(),
         ledger: Mutex::new(usage::load(&agent)),
         agent,
         active: Arc::clone(&active),
@@ -519,6 +521,19 @@ fn serve(stream: TcpStream, state: &State, token: &str) {
         return;
     }
     match (head.method.as_str(), head.path()) {
+        ("GET", path) if path.starts_with("/v1/routing-progress/") => {
+            let id = path.trim_start_matches("/v1/routing-progress/");
+            if let Some(snapshot) = state.progress.get(id, (state.now_ms)()) {
+                respond(
+                    &mut stream,
+                    200,
+                    "OK",
+                    &serde_json::to_value(snapshot).unwrap(),
+                );
+            } else {
+                respond(&mut stream, 404, "Not Found", &serde_json::json!({}));
+            }
+        }
         ("GET", "/v1/models") | ("GET", "/models") => {
             let models = served_models(&state.config());
             respond(&mut stream, 200, "OK", &wire::model_list(&models));
@@ -545,7 +560,11 @@ fn serve(stream: TcpStream, state: &State, token: &str) {
                 );
                 return;
             };
-            complete(&mut stream, state, &request);
+            let progress = state
+                .progress
+                .start(head.header("x-muniment-routing-id"), (state.now_ms)());
+            complete(&mut stream, state, &request, progress.as_deref());
+            state.progress.finish(progress.as_deref());
         }
         _ => respond(
             &mut stream,
@@ -569,7 +588,10 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 
 /// Classify once, try the selected pool, then eligible fallback models.
 /// Once response output starts, never replay the request on another model.
-fn complete(stream: &mut TcpStream, state: &State, request: &Value) {
+fn complete(stream: &mut TcpStream, state: &State, request: &Value, progress: Option<&str>) {
+    state
+        .progress
+        .stage(progress, "choosing-model", (state.now_ms)());
     let config = state.classifier_config();
     let requested = wire::requested_model(request).unwrap_or(config::AUTO_MODEL);
     let text = wire::classifier_state(request);
@@ -619,6 +641,7 @@ fn complete(stream: &mut TcpStream, state: &State, request: &Value) {
         },
     );
     let mut last_failure = (503, "No eligible model served this turn.".to_owned());
+    let mut attempted = false;
     for route in routes {
         let mut candidates = config.clone();
         loop {
@@ -635,6 +658,18 @@ fn complete(stream: &mut TcpStream, state: &State, request: &Value) {
                         break;
                     }
                 };
+            if attempted
+                || matches!(
+                    plan.reason,
+                    super::classify::Reason::Failed | super::classify::Reason::LowConfidence
+                )
+            {
+                state.progress.stage(progress, "fallback", (state.now_ms)());
+            }
+            attempted = true;
+            state
+                .progress
+                .stage(progress, "waiting-for-account", (state.now_ms)());
             // Try each account at most once for this model, even if cooldown expires.
             if let Some(candidate) = candidates.accounts.iter_mut().find(|a| a.id == account.id) {
                 candidate.enabled = false;
@@ -675,6 +710,7 @@ fn complete(stream: &mut TcpStream, state: &State, request: &Value) {
             let call = call.send_json(&prepared.body);
             match call {
                 Ok(response) => {
+                    state.progress.stage(progress, "thinking", (state.now_ms)());
                     let response_id = wire::evidenced_response_id(
                         &route.family,
                         &route.model,
@@ -1201,6 +1237,57 @@ mod tests {
     }
 
     #[test]
+    fn progress_endpoint_reports_real_fallback_and_requires_authentication() {
+        let agent = agent_dir();
+        let (url, _) = upstream(vec![
+            (429, "limited".into(), false),
+            (200, answer("hello", 1, 1), false),
+        ]);
+        config::save(
+            &agent,
+            &config(vec![account("a", &url), account("b", &url)]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent, fixed_clock).unwrap();
+        let endpoint = handle.endpoint();
+        let id = uuid::Uuid::new_v4().to_string();
+        ureq::post(&format!("{}/chat/completions", endpoint.base_url()))
+            .set("authorization", &format!("Bearer {}", endpoint.token))
+            .set("x-muniment-routing-id", &id)
+            .send_json(turn("auto", false))
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let path = format!("/v1/routing-progress/{id}");
+        assert_eq!(call(endpoint, "GET", &path, None, "wrong").0, 401);
+        let (status, body) = call(endpoint, "GET", &path, None, &endpoint.token);
+        assert_eq!(status, 200);
+        let snapshot: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            snapshot["stages"],
+            json!([
+                "choosing-model",
+                "waiting-for-account",
+                "fallback",
+                "waiting-for-account",
+                "thinking"
+            ])
+        );
+        assert_eq!(snapshot["done"], true);
+        assert_eq!(
+            call(
+                endpoint,
+                "GET",
+                &format!("/v1/routing-progress/{}", uuid::Uuid::new_v4()),
+                None,
+                &endpoint.token
+            )
+            .0,
+            404
+        );
+    }
+
+    #[test]
     fn native_subscription_streams_fail_over_and_count_only_complete_answers() {
         let agent = agent_dir();
         let payload = [
@@ -1294,6 +1381,7 @@ mod tests {
     fn reservations_distribute_concurrent_turns_and_release_on_drop() {
         let agent = agent_dir();
         let state = State {
+            progress: Default::default(),
             agent,
             ledger: Mutex::new(Ledger::default()),
             active: Arc::new(Mutex::new(BTreeMap::new())),

@@ -159,6 +159,7 @@ pub enum PiChatEvent {
     PromptAccepted,
     /// Pi's agent loop started on the accepted prompt: the model is thinking.
     TurnStarted,
+    RoutingStage(String),
     /// An assistant message ended: one turn, with the provider and model that
     /// wrote it, its token usage, and the cost Pi's catalog puts on that usage.
     ModelReported {
@@ -441,6 +442,20 @@ fn parse_extension_ui_request(frame: &Value) -> Result<PiChatEvent, &'static str
     let Some(method) = frame.get("method").and_then(Value::as_str) else {
         return Ok(PiChatEvent::Interleaved);
     };
+    if method == "notify" {
+        if let Some(stage) = frame
+            .get("message")
+            .and_then(Value::as_str)
+            .and_then(|text| text.strip_prefix("muniment:routing:"))
+        {
+            if matches!(
+                stage,
+                "choosing-model" | "waiting-for-account" | "fallback" | "thinking"
+            ) {
+                return Ok(PiChatEvent::RoutingStage(stage.into()));
+            }
+        }
+    }
     if !matches!(method, "select" | "confirm" | "input" | "editor") {
         return Ok(PiChatEvent::Interleaved);
     }

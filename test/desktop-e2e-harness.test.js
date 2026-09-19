@@ -3743,7 +3743,7 @@ describe('installed model settings controls', () => {
     const firstRun = fs.readFileSync(path.join(root, 'test/e2e/support/first-run.mjs'), 'utf8')
     expect(firstRun).toContain("panel.$('button=Open model settings')")
     expect(firstRun).toContain('await settings.click()')
-    expect(onboardingSpec).toContain("expect(await (await settings.$('button=Connect provider')).isDisplayed()).toBe(true)")
+    expect(onboardingSpec).toContain("expect(await (await settings.$('button=Connect account')).isDisplayed()).toBe(true)")
     expect(onboardingSpec).toContain("await (await settings.$('button[aria-label=\"Close settings\"]')).click()")
   })
 

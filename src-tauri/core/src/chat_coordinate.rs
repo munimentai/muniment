@@ -1194,6 +1194,22 @@ pub fn coordinate(
                 }
             }
             Ok(PiChatEvent::ModelReported { .. }) => {}
+            Ok(PiChatEvent::RoutingStage(stage)) => {
+                if append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "model.routing.stage",
+                    json!({"stage": stage}),
+                    subject.as_deref(),
+                )
+                .is_err()
+                {
+                    break;
+                }
+            }
             Ok(PiChatEvent::TurnStarted) => {
                 if append_emit(
                     &app,
