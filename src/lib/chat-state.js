@@ -69,24 +69,31 @@ export function receiptLabel(receipt = {}) {
   return [relation, time].filter(recorded).join(', ')
 }
 
+export function receiptUsageColumns(receipt = {}) {
+  if (!receipt?.classifiers?.length) return []
+  const columns = [{ model: modelLabel(receipt.model) ?? 'LLM', cost: receipt.cost ?? 'Unavailable', tokens: receipt.tokens }]
+  for (const classifier of receipt.classifiers) {
+    columns.push({ model: modelLabel(classifier.model) ?? 'Classifier', cost: Number.isFinite(classifier.cost) ? `$${classifier.cost.toFixed(6)} est.` : 'Unavailable', tokens: classifier.tokens })
+  }
+  return columns.map((column) => ({ ...column, tokens: usageTokens(column.tokens) }))
+}
+
+function usageTokens(tokens) {
+  if (!tokens || !recorded(tokens.input) || !recorded(tokens.output)) return 'Unavailable'
+  const parts = [`${count(tokens.input)} in`, `${count(tokens.output)} out`]
+  if (Number(tokens.cacheRead) > 0) parts.push(`${count(tokens.cacheRead)} cached`)
+  if (Number(tokens.cacheWrite) > 0) parts.push(`${count(tokens.cacheWrite)} written to cache`)
+  if (Number(tokens.reasoning) > 0) parts.push(`${count(tokens.reasoning)} reasoning`)
+  return parts.join(', ')
+}
+
 // The rows under the line: everything the line does not show, in record order.
 export function receiptRows(receipt = {}, recalls = []) {
   const rows = []
-  if (recorded(receipt?.cost)) rows.push({ label: 'Cost', value: receipt.cost, route: false })
+  if (!receipt?.classifiers?.length && recorded(receipt?.cost)) rows.push({ label: 'Cost', value: receipt.cost, route: false })
   const tokens = receipt?.tokens
-  if (tokens && recorded(tokens.input) && recorded(tokens.output)) {
-    const parts = [`${count(tokens.input)} in`, `${count(tokens.output)} out`]
-    if (Number(tokens.cacheRead) > 0) parts.push(`${count(tokens.cacheRead)} cached`)
-    if (Number(tokens.cacheWrite) > 0) parts.push(`${count(tokens.cacheWrite)} written to cache`)
-    if (Number(tokens.reasoning) > 0) parts.push(`${count(tokens.reasoning)} reasoning`)
-    rows.push({ label: 'Tokens', value: parts.join(', '), route: false })
-  }
-  for (const classifier of receipt?.classifiers ?? []) {
-    rows.push({ label: 'Classifier', value: classifier.model, route: false })
-    const cost = classifier.cost
-    rows.push({ label: 'Classifier cost', value: Number.isFinite(cost) ? `$${cost.toFixed(6)} est.` : 'Unavailable', route: false })
-    const usage = classifier.tokens
-    rows.push({ label: 'Classifier tokens', value: usage ? `${count(usage.input)} in, ${count(usage.output)} out` : 'Unavailable', route: false })
+  if (!receipt?.classifiers?.length && tokens && recorded(tokens.input) && recorded(tokens.output)) {
+    rows.push({ label: 'Tokens', value: usageTokens(tokens), route: false })
   }
   if (recorded(receipt?.turns)) rows.push({ label: 'Turns', value: count(receipt.turns), route: false })
   const tools = (receipt?.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls))

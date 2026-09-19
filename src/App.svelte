@@ -31,7 +31,7 @@
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import { solidMilledRingPath } from './lib/mark.js'
-  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
   import { listenForLauncher } from './lib/launcher-bridge.js'
   import { composerHeight } from './lib/composer-size.js'
@@ -1714,13 +1714,15 @@
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
                 {@const rows = receiptRows(message.run.receipt, message.run.recalls)}
-                {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || rows.length > 0}
-                {@const expanded = rows.length > 0 && expandedReceipts.has(message.run.id)}
+                {@const columns = receiptUsageColumns(message.run.receipt)}
+                {@const hasDetails = rows.length > 0 || columns.length > 0}
+                {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || hasDetails}
+                {@const expanded = hasDetails && expandedReceipts.has(message.run.id)}
                 {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
                 <!-- One line: the receipt, then §3.2's action row at its right, copy only in this slice. -->
                 <div class="receipt-line">
                   {#if recorded}
-                    {#if rows.length > 0}
+                    {#if hasDetails}
                       <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}</button>
                     {:else}
                       <!-- One row adds nothing beyond the line: a clock stands where the chevron would, and nothing expands. -->
@@ -1737,6 +1739,17 @@
                   </div>
                 </div>
                 {#if expanded}
+                  {#if columns.length}
+                    <div class="receipt-usage" role="region" aria-label="Model usage" tabindex="0">
+                      <table>
+                        <thead><tr><td></td>{#each columns as column}<th scope="col">{column.model}</th>{/each}</tr></thead>
+                        <tbody>
+                          <tr><th scope="row">Cost</th>{#each columns as column}<td>{column.cost}</td>{/each}</tr>
+                          <tr><th scope="row">Tokens</th>{#each columns as column}<td>{column.tokens}</td>{/each}</tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  {/if}
                   <dl class="receipt-record">
                     {#each rows as row}
                       <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}{#each row.files ?? [] as file}<span class="recall-file">{file}</span>{/each}</dd></div>
@@ -2189,12 +2202,12 @@
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-turn { margin: 0 0 28px auto; }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
-  .user-message-meta.message-actions { justify-content: flex-end; align-items: center; gap: 12px; margin-top: 5px; min-height: 28px; color: var(--muted); font-size: var(--text-12); }
+  .user-message-meta.message-actions { justify-content: flex-end; align-items: center; gap: 12px; margin-top: 5px; min-height: 28px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); }
   .user-turn:hover .message-actions, .user-turn:focus-within .message-actions { opacity: 1; }
   .response-meta { display: flex; align-items: center; gap: 12px; margin-left: auto; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); flex-shrink: 0; }
   .message-actions button[data-tooltip] { position: relative; }
-  .message-actions button[data-tooltip]::after { content: attr(data-tooltip); position: absolute; right: 0; bottom: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); white-space: nowrap; pointer-events: none; opacity: 0; }
-  .message-actions button[data-tooltip]:hover::after, .message-actions button[data-tooltip]:focus-visible::after { opacity: 1; }
+  .message-actions button[data-tooltip]::after { content: attr(data-tooltip); position: absolute; right: 0; bottom: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
+  .message-actions button[data-tooltip]:hover::after, .message-actions button[data-tooltip]:focus-visible::after { opacity: 1; transition-delay: 350ms; }
   .user-message > p { margin: 0; white-space: pre-wrap; }
   .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .prompt-storage-notice { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -2240,6 +2253,12 @@
   .provenance .route-segment { color: var(--signal); }
   .receipt-time { display: inline-flex; align-items: center; gap: 4px; }
   /* The expanded receipt sits plain under the provenance line: no box. */
+  .receipt-usage { max-width: 100%; overflow-x: auto; margin-top: 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .receipt-usage table { border-collapse: collapse; width: auto; font: inherit; }
+  .receipt-usage th, .receipt-usage td { border: 0; background: transparent; padding: 3px 24px 3px 0; text-align: left; vertical-align: top; font-weight: normal; font-variant-numeric: tabular-nums; }
+  .receipt-usage th[scope="row"], .receipt-usage thead td { min-width: 100px; box-sizing: border-box; }
+  .receipt-usage th[scope="col"] { white-space: nowrap; }
+  .receipt-usage td { min-width: 180px; }
   .receipt-record { display: grid; row-gap: 6px; box-sizing: border-box; width: min(100%, 560px); margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

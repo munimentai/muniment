@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage, runStage, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage, runStage, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -436,10 +436,13 @@ it('keeps a saved partial reply and calls a generic start failure an interruptio
   expect(run.text).toBe('The first part of the reply.')
 })
 
- it('keeps classifier cost and tokens separate from the reply model', () => {
-  const rows = receiptRows({ cost: '$0.018 est.', classifiers: [{ model: 'typesafe/jev-latest', cost: 0.000042, tokens: { input: 1000, output: 12 } }] })
-  expect(rows).toContainEqual({ label: 'Classifier cost', value: '$0.000042 est.', route: false })
-  expect(rows).toContainEqual({ label: 'Classifier tokens', value: '1,000 in, 12 out', route: false })
-  expect(rows[0]).toEqual({ label: 'Cost', value: '$0.018 est.', route: false })
-  expect(receiptRows({ classifiers: [{ model: 'private', cost: null, tokens: null }] })).toContainEqual({ label: 'Classifier cost', value: 'Unavailable', route: false })
- })
+it('compares model and classifier usage in separate columns', () => {
+  const receipt = { model: 'openai/gpt-5.6-luna', cost: '$0.002 est.', tokens: { input: 11736, output: 5 }, turns: 1, classifiers: [{ model: 'typesafe/jev-latest', cost: 0.000040, tokens: { input: 942, output: 151 } }] }
+  expect(receiptUsageColumns(receipt)).toEqual([
+    { model: 'openai/gpt 5.6 luna', cost: '$0.002 est.', tokens: '11,736 in, 5 out' },
+    { model: 'typesafe/jev latest', cost: '$0.000040 est.', tokens: '942 in, 151 out' },
+  ])
+  expect(receiptRows(receipt)).toEqual([{ label: 'Turns', value: '1', route: false }])
+  expect(receiptUsageColumns({ classifiers: [{ model: 'private', cost: null, tokens: null }] })[1]).toEqual({ model: 'private', cost: 'Unavailable', tokens: 'Unavailable' })
+  expect(receiptUsageColumns(null)).toEqual([])
+})
