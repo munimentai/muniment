@@ -52,6 +52,7 @@
   import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
   import RunMark from './lib/RunMark.svelte'
+  import ExecutionTime from './lib/ExecutionTime.svelte'
   import { threadTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
@@ -1943,8 +1944,6 @@
                   <p>{message.run.promptStorageNotice}</p>
                 </details>
               {/if}
-              <!-- One mark for the whole run in flight, in its own block so its exit holds nothing else back. -->
-              {#if message.run.phase === 'thinking' || message.run.phase === 'streaming'}<RunMark stage={message.run.stage} />{/if}
               {#if message.run.phase === 'acquiring-pi'}
                 <p class="thinking">{runAnnouncement(message.run)}</p>
               {/if}
@@ -2014,6 +2013,15 @@
                     </div>
                   </div>
                   {#if answerState?.error}<div class="run-error" role="alert">{answerState.error}</div>{/if}
+                </div>
+              {/if}
+              {#if ['thinking', 'streaming', 'acquiring-pi', 'pending-permission', 'recovering', 'resuming'].includes(message.run.phase)}
+                <div class="receipt-line live-receipt">
+                  <RunMark stage={message.run.stage} />
+                  <div class="response-meta">
+                    <ExecutionTime startedAt={message.run.startedAt} />
+                    <span class="copy-slot" aria-hidden="true"></span>
+                  </div>
                 </div>
               {/if}
               {#if message.run.phase === 'complete'}
@@ -2593,6 +2601,8 @@
   .permission-card .run-error { margin-top: 6px; }
   /* One line under the reply: the receipt, then Copy at its right. */
   .receipt-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .live-receipt { min-height: 28px; }
+  .copy-slot { width: 32px; height: 28px; flex: none; }
   .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
      font-variant-numeric, so tabular-nums follows it. */
@@ -2606,7 +2616,7 @@
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
   .message-time { font-family: var(--font-mono); font-size: var(--text-provenance); font-weight: 400; line-height: 1.45; font-variant-numeric: tabular-nums; }
-  .receipt-time { display: inline-flex; align-items: center; gap: 4px; }
+  .receipt-time { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   /* The expanded receipt sits plain under the provenance line: no box. */
   .receipt-usage { max-width: 100%; overflow-x: auto; margin-top: 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-usage table { border-collapse: collapse; width: auto; font: inherit; }

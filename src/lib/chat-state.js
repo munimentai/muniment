@@ -1,4 +1,5 @@
 import { shortcutDisplayLabel } from './artifact-rail-state.js'
+import { receiptTime } from './execution-time.js'
 
 export function composerAction(event, text, active) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || !text.trim()) return null
@@ -54,7 +55,7 @@ export function modelLabel(model) {
 export function receiptSummary(receipt = {}) {
   const route = recorded(receipt?.route) ? receipt.route : null
   const model = modelLabel(receipt?.model)
-  const time = recorded(receipt?.time) ? receipt.time : null
+  const time = recorded(receipt?.time) ? receiptTime(receipt.time) : null
   return { route, model, time }
 }
 
@@ -230,6 +231,7 @@ export function formatByteSize(bytes) {
 
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
+  if (event.sentAt) run = { ...run, startedAt: event.sentAt }
   const pendingPermission = event.pendingPermission ?? null
   if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
@@ -247,7 +249,7 @@ export function applyBufferedChatEvents(run, events) {
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', id: entry.runId, sentAt: entry.sentAt ?? null, text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, promptStorageNotice: entry.promptStorageNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
 

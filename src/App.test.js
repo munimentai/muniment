@@ -6094,6 +6094,10 @@ it('prepares another-model retry without sending until the model choice is saved
 
     expect(chip).toBeInTheDocument()
     expect(await screen.findByText('First token')).toBeInTheDocument()
+    const footer = chip.closest('.live-receipt')
+    expect(footer).toBeInTheDocument()
+    expect(footer.parentElement.lastElementChild).toBe(footer)
+    expect(footer.querySelector('[aria-label^="Execution time"]')).toBeInTheDocument()
     await waitFor(() => expect(chip).toHaveTextContent('Writing'), { timeout: 1500 })
     expect(screen.getByLabelText('Writing')).toBeInTheDocument()
 
@@ -6714,7 +6718,7 @@ describe('provenance line', () => {
   it('renders route → model and the clock time with signal on the route segment', async () => {
     restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
-    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model glm 5.2, 6.2s' })
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model glm 5.2, 6s' })
     expect(line.textContent).toBe('analysis/high → glm 5.2')
     expect(line.closest('.receipt-line').querySelector('.response-meta .receipt-time [data-icon="clock"]')).toBeInTheDocument()
     expect(within(line).getByText('analysis/high')).toHaveClass('route-segment')
@@ -6724,7 +6728,7 @@ describe('provenance line', () => {
   it('paints nothing green when the receipt records no route', async () => {
     restore({ model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
-    const line = await screen.findByRole('button', { name: 'Expand receipt: Model glm 5.2, 6.2s' })
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Model glm 5.2, 6s' })
     expect(line.textContent).toBe('glm 5.2')
     expect(line.querySelector('.route-segment')).toBeNull()
   })
@@ -6732,8 +6736,8 @@ describe('provenance line', () => {
   it('renders elapsed time alone for a local receipt as a plain line with a clock and no expand control', async () => {
     restore({ time: '6.2s' })
 
-    const line = await screen.findByLabelText('Receipt: 6.2s', { selector: 'p.provenance' })
-    expect(line.closest('.receipt-line').querySelector('.response-meta')).toHaveTextContent('6.2s')
+    const line = await screen.findByLabelText('Receipt: 6s', { selector: 'p.provenance' })
+    expect(line.closest('.receipt-line').querySelector('.response-meta')).toHaveTextContent('6s')
     expect(line.closest('.receipt-line').querySelector('.response-meta [data-icon="clock"]')).toBeInTheDocument()
     expect(line.querySelector('.receipt-marker')).toBeNull()
     expect(line.querySelector('.route-segment')).toBeNull()
@@ -6769,7 +6773,7 @@ describe('provenance line', () => {
     // The rows carry what the line does not: nothing appears twice.
     expect(record.textContent).toBe('Cost$0.0089Capabilitysearch@2')
     expect(record.querySelectorAll('.route-value')).toHaveLength(0)
-    expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model glm 5.2, 6.2s' })).toBe(line)
+    expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model glm 5.2, 6s' })).toBe(line)
     expect(marker).toHaveClass('expanded')
 
     await fireEvent.click(line)
