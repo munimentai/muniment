@@ -104,3 +104,12 @@ Run the local TLS handshake test from the repository root:
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml -p muniment-runtime --locked --test native_https
 ```
+
+The first message requests a one to three word thread name from the model.
+A failed name request keeps a short prompt fallback. A manual rename wins.
+Read, search, command and edit actions appear in expandable groups.
+Open a group, then an action, to read its input, output, state and duration.
+Active actions show a text sheen unless reduced motion is enabled.
+Details are bounded and credential-filtered before the local journal saves them.
+An interrupted reply keeps its text. **Try again** sends the same message again.
+During browser sign-in, **Cancel sign-in** or **Escape** restores local mode.

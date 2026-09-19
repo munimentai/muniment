@@ -1,4 +1,5 @@
 <script>
+  import ActionFeedback from './activity/ActionFeedback.svelte'
   import { onMount, tick, untrack } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { getCurrentWindow, UserAttentionType } from '@tauri-apps/api/window'
@@ -245,6 +246,25 @@
   let runtimeNotice = $state(null)
   let backgroundServiceNoticeVisible = $derived(runtimeNotice?.visible === true)
   let authRequestVersion = 0
+  let signInCancelControl = $state()
+  let signInPending = null
+  let signInFromLocal = $state(false)
+  $effect(() => { if (auth.name === 'signing-in' && signInFromLocal) signInCancelControl?.focus() })
+
+  async function cancelSignIn() {
+    if (auth.name !== 'signing-in' || localEntryPending) return
+    authRequestVersion += 1
+    localEntryPending = true
+    try {
+      await tauri.invoke('local_mode_enter')
+      markerStartupLocalMode = true
+      await signInPending
+      auth = { name: 'local', subject: null }
+      await refreshInventory()
+      await chatController.loadHistory()
+    } catch { localEntryError = 'Local mode could not start. Try again.' }
+    finally { localEntryPending = false }
+  }
   let localEntryPending = $state(false)
   let markerStartupLocalMode = null
   let markerStartupReady = Promise.resolve(false)
@@ -946,7 +966,7 @@
   })
 
   function workspaceMode() {
-    return auth.name === 'signed-in' || auth.name === 'local'
+    return auth.name === 'signed-in' || auth.name === 'local' || (auth.name === 'signing-in' && signInFromLocal)
   }
 
   // A window outside a workspace drives no run, so the desktop drops the active one.
@@ -1049,6 +1069,7 @@
   async function signIn() {
     if (localEntryPending || (auth.name !== 'signed-out' && auth.name !== 'local')) return
     settingsOpen = false
+    signInFromLocal = auth.name === 'local'
     if (auth.name === 'local') {
       try {
         await tauri.invoke('local_mode_leave')
@@ -1058,7 +1079,7 @@
         return
       }
     }
-    void run('sign-in')
+    signInPending = run('sign-in')
   }
 
   function startWorkspace() {
@@ -1174,6 +1195,8 @@
       voiceShortcutManager.start()
     }
     const shortcuts = (event) => {
+      if (auth.name === 'signing-in' && event.key === 'Escape') { event.preventDefault(); void cancelSignIn(); return }
+      if (auth.name === 'signing-in') return
       const sizeStep = typeSizeShortcutStep(event)
       if (sizeStep !== null) {
         event.preventDefault()
@@ -1387,19 +1410,21 @@
       </section>
     {:else if onboarding.name === 'complete'}
       {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
-      <section class="auth-state">
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <section role="region" aria-label="Sign in" class="auth-state" class:sign-in-overlay={auth.name === 'signing-in' && signInFromLocal} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); void cancelSignIn() } }}>
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in for cloud features, or use local mode.'}</p>
         {#if auth.name === 'signing-in' && auth.link}
           <a class="sign-in-link" data-testid="sign-in-link" href={auth.link} target="_blank" rel="noopener noreferrer" onclick={openSignInLink}>Open the sign-in page</a>
         {/if}
         <div class="auth-actions">
           <button class="primary" class:inactive={auth.name === 'signing-in' || localEntryPending} disabled={localEntryPending} aria-disabled={auth.name === 'signing-in' || localEntryPending ? 'true' : undefined} onclick={signIn}>Sign in</button>
-          <button disabled={localEntryPending} aria-disabled={auth.name === 'signing-in' || localEntryPending ? 'true' : undefined} onclick={enterLocalMode}>Use local mode</button>
+          <button bind:this={signInCancelControl} disabled={localEntryPending} onclick={auth.name === 'signing-in' ? cancelSignIn : enterLocalMode}>{auth.name === 'signing-in' ? 'Cancel sign-in' : 'Use local mode'}</button>
         </div>
         {#if localEntryError}<p class="record error-record" role="alert">{localEntryError}</p>{/if}
       </section>
-    {:else if workspaceMode() && desktopClientStatus}
-      <section class="workspace" data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:record-maximized={recordPanelOpen && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+    {/if}
+    {#if workspaceMode() && desktopClientStatus}
+      <section class="workspace" inert={auth.name === 'signing-in'} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:record-maximized={recordPanelOpen && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
@@ -1536,6 +1561,7 @@
               {:else if message.run.phase === 'thinking'}
               {:else if message.run.phase === 'streaming'}<div class="streaming" use:streamingUnderline={message.run.text}><AssistantMarkdown text={message.run.text} caret /><span class="streaming-rule" aria-hidden="true"></span></div>
               {:else}<AssistantMarkdown text={message.run.text} />{/if}
+              <ActionFeedback activities={message.run.toolActivity ?? []} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
               {#each message.run.appliedDiffs ?? [] as appliedDiff}
                 <div class="applied-diff tool-card">
                   <strong>Applied file changes</strong>
@@ -1543,7 +1569,7 @@
                   {:else}<p>The changes were applied, but their record is no longer stored.</p>{/if}
                 </div>
               {/each}
-              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <button disabled={!message.run.prompt?.trim() || !!active || dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <span>Retry sends the same message again.</span> <button disabled={!message.run.prompt?.trim() || !!active || dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button></div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={dictationBusy() || runtimeUpgradePending()} onclick={() => { draft = message.run.prompt; chatController.send() }}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'pending-permission' && message.run.pendingPermission}
@@ -1814,6 +1840,7 @@
 {/if}
 
 <style>
+  .sign-in-overlay { position: fixed; z-index: 100; top: 72px; left: 50%; transform: translateX(-50%); width: min(480px, calc(100% - 48px)); padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--paper); box-shadow: var(--shadow-overlay); }
   main {
     min-height: 100vh;
     display: grid;

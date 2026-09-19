@@ -21,6 +21,12 @@
     <path d="M12 5v14" />
   {:else if name === 'play'}
     <path d="M6 3l14 9-14 9V3z" />
+  {:else if name === 'book-open'}
+    <path d="M12 5v16" />
+    <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" />
+  {:else if name === 'square-terminal'}
+    <path d="m7 11 2-2-2-2" /><path d="M11 13h4" />
+    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
   {:else if name === 'file-text'}
     <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
     <path d="M14 2v4a2 2 0 0 0 2 2h4" />

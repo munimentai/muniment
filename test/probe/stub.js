@@ -79,7 +79,12 @@ export const historyFixtures = {
       phase: 'streaming',
       text: 'Northwind renews for one year unless either party gives 60 days notice. Ridgeway carries the same window, and Halden',
       receipt: null,
-      toolActivity: [{ effectId: 'probe-compare', displayName: 'Read ridgeway.pdf', status: 'running' }],
+      toolActivity: [
+        { effectId: 'probe-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: '/leases/northwind.md' }), output: 'Renewal notice: 60 days.', startedAt: '2026-09-18T19:00:00Z', finishedAt: '2026-09-18T19:00:02Z' },
+        { effectId: 'probe-compare', displayName: 'read', status: 'running', input: JSON.stringify({ path: '/leases/ridgeway.md' }), startedAt: new Date().toISOString() },
+        { effectId: 'probe-search', displayName: 'grep', status: 'completed', input: JSON.stringify({ pattern: 'renewal', path: '/leases' }), output: '3 matching files' },
+        { effectId: 'probe-command', displayName: 'bash', status: 'completed', input: JSON.stringify({ command: 'wc -l /leases/*.md', description: 'Count lease lines' }), output: '147 total' },
+      ],
       resumable: false,
     },
   ],

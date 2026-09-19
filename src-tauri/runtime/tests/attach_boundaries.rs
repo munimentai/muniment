@@ -492,22 +492,22 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
 }
 
 #[test]
-fn sign_in_names_a_local_mode_marker_removal_failure() {
+fn sign_in_cannot_override_a_return_to_local_mode() {
     let profile = TemporaryProfile::new("sign-in-marker", false);
     let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
     let marker = profile
         .config
         .join(muniment_core::local_mode::LOCAL_MODE_MARKER);
-    fs::create_dir(&marker).unwrap();
+    fs::write(&marker, "1").unwrap();
     let error = state
         .boundaries()
         .with_browser_opener(Arc::new(|_: &str| panic!("The browser must not open.")))
         .sign_in(provenance())
         .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::PersistenceFailed);
+    assert_eq!(error.code(), ErrorCode::AuthorizationFailed);
     let diagnostic = error.to_string();
-    assert!(diagnostic.contains("could not remove the local mode marker"));
-    assert!(diagnostic.contains("os_code=Some("));
+    assert!(diagnostic.contains("Cancelled"));
+    assert!(marker.exists());
     assert!(!diagnostic.contains(profile.config.to_str().unwrap()));
 }
 

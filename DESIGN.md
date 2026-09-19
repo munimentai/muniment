@@ -53,7 +53,7 @@ device beside the theme and the shipped pair stays the default.
 Shape: radius `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
 Nothing pill-shaped. Hairline borders do the work, and `--shadow-window` and
 `--shadow-overlay` are the only two depth tokens. Motion is purposeful and
-rare: the mark's thinking state, the streaming underline, the
+rare: the mark's thinking state, the active action's text sheen, the streaming underline, the
 panel slide. `prefers-reduced-motion` removes all of it.
 
 ## Laws
@@ -68,7 +68,7 @@ panel slide. `prefers-reduced-motion` removes all of it.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
    entries, costs, model names, file paths and keyboard chips render in Commit
    Mono. Conversation renders in Schibsted Grotesk.
-3. **Anti-patterns are hard fails.** No gradients, no violet, no glassmorphism
+3. **Anti-patterns are hard fails.** No surface gradients, no violet, no glassmorphism
    or backdrop blur on a surface, no orbs or ambient animation, no assistant
    avatar, no typing dots, no sparkles or wand iconography, no emoji in UI
    copy, no pill radius, no "AI", "magic", "supercharge" or "unlock" in copy.
@@ -110,9 +110,11 @@ messages sit right in `faint` bubbles at radius 10. Responses sit plain on
 36px gutter, and render as Markdown from the first token. The composer keeps
 its 760px column, and the transcript scrolls on under it and fades into the
 surface above it. Streaming is a 2px signal underline and a signal caret,
-never dots. Tool activity draws no card: the mark in flight
-names the running tool's verb, and the receipt's Tools row tallies the calls
-when the reply lands. The provenance line sits under every response in mono at
+never dots. Tool activity groups file reads, searches, commands and edits.
+Hover or keyboard focus reveals a chevron. Each group opens its action list,
+and each action opens its input, output, state and duration. A neutral text
+sheen marks active actions and stops with reduced motion. Lucide icons name
+the action type. The receipt's Tools row tallies the calls when the reply lands. The provenance line sits under every response in mono at
 `--text-provenance`, with the route in signal. Composer focus shifts the
 border to `muted`, never signal.
 Platform chrome follows the OS and brand tokens stay identical across platforms.

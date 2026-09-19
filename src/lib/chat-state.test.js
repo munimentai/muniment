@@ -429,3 +429,9 @@ describe('chat composer and projection', () => {
     expect(run).toMatchObject({ phase: 'complete', text: 'fast reply', receipt: { route: 'fast' } })
   })
 })
+
+it('keeps a saved partial reply and calls a generic start failure an interruption', () => {
+  const run = { phase: 'failed', text: 'The first part of the reply.', failureReason: 'The reply could not be started.' }
+  expect(runFailureMessage(run)).toBe('The reply stopped before it finished.')
+  expect(run.text).toBe('The first part of the reply.')
+})

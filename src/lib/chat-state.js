@@ -177,6 +177,7 @@ export function runFailureMessage(run) {
   const reason = typeof run?.failureReason === 'string'
     ? run.failureReason.trim().replace(/\s+/g, ' ').replace(retryGuidance, '').trim()
     : ''
+  if (run?.text?.trim() && (!reason || /reply (could not be started|did not start)/i.test(reason))) return 'The reply stopped before it finished.'
   if (!reason) return 'Reply failed.'
   return /[.!?]$/.test(reason) ? reason : `${reason}.`
 }

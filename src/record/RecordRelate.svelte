@@ -5,7 +5,7 @@
   // takes it out of every live read while its history stays.
   import { deleteOperation, diffLines, linkOperation, mergeOperation, relationsFrom } from './record-table-state.js'
 
-  let { mode, detail, kinds = [], relations = [], tauri, companyId, propose, commit, oncancel, oncommitted } = $props()
+  let { mode, initialTarget = null, detail, kinds = [], relations = [], tauri, companyId, propose, commit, oncancel, oncommitted } = $props()
 
   const entity = $derived(detail?.entity)
   const choices = $derived(relationsFrom(relations, entity?.kind, kinds))
@@ -14,6 +14,7 @@
   let search = $state('')
   let candidates = $state([])
   let target = $state(null)
+  $effect(() => { target = initialTarget; if (initialTarget) candidates = [initialTarget] })
   let pending = $state(null)
   let error = $state(null)
   let searchVersion = 0
@@ -142,7 +143,7 @@
         {/each}
       </ul>
     {:else if targetKind}
-      <p class="record-relate-note">Find the {mode === 'merge' ? 'survivor' : 'record'} by its title.</p>
+      <p class="record-relate-note">{mode === 'merge' ? 'Find the record to keep by its title.' : 'Find the record by its title.'}</p>
     {/if}
   {/if}
   {#if error}<p class="record-relate-error" role="alert">{error}</p>{/if}
