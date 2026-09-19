@@ -162,7 +162,7 @@ text, and a muted stop square while a reply is in flight. Enter sends. A
 message sent while a reply is in flight steers it: the reply picks it up at its
 next check, and the stop control ends the reply. The band shows no hint in
 flight and names no delivery mode. The provenance line stays under each reply with
-Copy at its right on the same line, the time takes no hover, and an expanded
+the execution time and icon-only Copy at the far right. User messages show local send time and Copy on hover or focus. Copy controls show a hover label. An expanded
 receipt sits plain under it in mono, with no box. A receipt whose
 record holds one row is the plain line with a clock glyph in place of the
 chevron, and it does not expand.

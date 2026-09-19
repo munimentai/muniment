@@ -222,7 +222,7 @@ export function applyBufferedChatEvents(run, events) {
 
 export function historyMessages(history) {
   return history.flatMap((entry) => [
-    ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
+    ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', id: entry.runId, sentAt: entry.sentAt ?? null, text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
     { role: 'assistant', run: { id: entry.runId, promptStorageNotice: entry.promptStorageNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
@@ -240,4 +240,11 @@ export function unsettledRun(messages = []) {
     if (run && !settledPhases.has(run.phase)) return run
   }
   return null
+}
+
+export function messageLocalTime(timestamp) {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return ''
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
