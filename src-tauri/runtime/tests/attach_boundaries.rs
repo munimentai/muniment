@@ -656,9 +656,17 @@ fn runtime_boundaries_answer_all_attach_reads() {
         open_companion_registry(&profile).unwrap(),
     );
 
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let credential_store = KeyringNativeCredentialStore::new();
+    credential_store.clear_session().unwrap();
+    credential_store.save_credentials(&credentials()).unwrap();
+    let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop","expires_at":"2099-01-01T00:00:00Z"},"user":{"id":"30000000-0000-4000-8000-000000000003","email":"user@example.com","status":"active","role":"owner","entitlement_version":7},"org":{"id":"20000000-0000-4000-8000-000000000002","display_name":"Muniment"},"entitlement_snapshot":{"payload":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","entitlement_version":7,"issued_at":"2026-08-01T00:00:00Z","capabilities":[],"grants":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
+    let (base_url, create_server) = spawn_server(200, session_body.into());
+    std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let created_thread = boundaries
         .create_thread("workspace-a", provenance())
         .unwrap();
+    create_server.join().unwrap();
     let created_events = storage
         .lock()
         .unwrap()
@@ -759,11 +767,6 @@ fn runtime_boundaries_answer_all_attach_reads() {
         .unwrap();
     assert_eq!(opened.thread_id, run_thread);
 
-    muniment_core::chat_prompt::use_mock_keyring_for_tests();
-    let credential_store = KeyringNativeCredentialStore::new();
-    credential_store.clear_session().unwrap();
-    credential_store.save_credentials(&credentials()).unwrap();
-
     let status = boundaries.session_status().unwrap();
     assert!(status.signed_in);
     assert_eq!(status.subject.as_deref(), Some("user"));
@@ -790,7 +793,6 @@ fn runtime_boundaries_answer_all_attach_reads() {
     credential_store.save_credentials(&credentials()).unwrap();
     assert!(boundaries.session_status().unwrap().signed_in);
 
-    let session_body = r#"{"session":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","role":"owner","device_id":"10000000-0000-4000-8000-000000000001","client_role":"desktop","expires_at":"2099-01-01T00:00:00Z"},"user":{"id":"30000000-0000-4000-8000-000000000003","email":"user@example.com","status":"active","role":"owner","entitlement_version":7},"org":{"id":"20000000-0000-4000-8000-000000000002","display_name":"Muniment"},"entitlement_snapshot":{"payload":{"org_id":"20000000-0000-4000-8000-000000000002","user_id":"30000000-0000-4000-8000-000000000003","entitlement_version":7,"issued_at":"2026-08-01T00:00:00Z","capabilities":[],"grants":[]},"signature":"signature-secret","algorithm":"hmac-sha256"}}"#;
     let (base_url, summaries_server) = spawn_server(200, session_body.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let summaries = boundaries

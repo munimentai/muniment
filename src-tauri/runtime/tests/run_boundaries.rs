@@ -151,7 +151,7 @@ fn local_mode_run(configured: bool) {
         profile.root.join("home")
     } else {
         assert!(!profile.config.join("home.json").exists());
-        assert!(!documents.join("Muniment").exists());
+        assert!(!documents.join("muniment").exists());
         muniment_core::home::choose_default_home(Some(documents), Some(profile.root.clone()))
             .unwrap()
     };
@@ -251,8 +251,8 @@ fn local_mode_run(configured: bool) {
         event_types,
         [
             "run.started",
-            "runtime.pi_session.bound",
             "model.prompt.accepted",
+            "runtime.pi_session.bound",
             "model.stream.delta",
             "tool.effect.started",
             "tool.effect.completed",
@@ -270,12 +270,13 @@ fn local_mode_run(configured: bool) {
             _ => panic!("the local Pi stub emits only inline events"),
         })
         .collect::<Vec<_>>();
-    assert!(payloads[2].as_object().unwrap().is_empty());
+    assert!(payloads[1].as_object().unwrap().is_empty());
     assert_eq!(payloads[3]["text"].as_str(), Some(" resumed"));
     assert_eq!(payloads[4]["effect_id"].as_str(), Some("tool-1"));
     assert_eq!(payloads[4]["display_name"].as_str(), Some("read"));
     assert_eq!(payloads[5]["effect_id"].as_str(), Some("tool-1"));
-    assert_eq!(payloads[5].as_object().unwrap().len(), 1);
+    assert_eq!(payloads[5].as_object().unwrap().len(), 2);
+    assert_eq!(payloads[5]["output"].as_str(), Some(""));
     let receipt = payloads[6]["receipt"].as_object().unwrap();
     // A local reply carries no route: the time and the tool tally, and the stub names no model.
     assert_eq!(receipt.len(), 2);
