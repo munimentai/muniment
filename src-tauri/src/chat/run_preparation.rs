@@ -20,6 +20,51 @@ pub fn chat_file_metadata(path: PathBuf) -> Result<ChatAttachment, String> {
     })
 }
 
+/// Reads a user-selected local text file for the file panel. Relative tool paths
+/// resolve against the same Home directory as the agent's tools.
+#[tauri::command]
+pub async fn chat_file_content(path: PathBuf) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Read;
+        let path = if path.is_absolute() {
+            path
+        } else {
+            let profile = muniment_runtime::profile_directory()
+                .map_err(|_| "The Home folder is unavailable.")?;
+            muniment_core::launch_facts::working_directory(&profile)
+                .ok_or("The Home folder is unavailable.")?
+                .join(path)
+        };
+        let kind = std::fs::metadata(&path).map_err(|_| "This file is no longer available.")?;
+        if !kind.is_file() {
+            return Err("Choose a regular file.");
+        }
+        let file = std::fs::File::open(path).map_err(|_| "This file is no longer available.")?;
+        let metadata = file.metadata().map_err(|_| "This file cannot be read.")?;
+        if !metadata.is_file() {
+            return Err("Choose a regular file.");
+        }
+        const LIMIT: u64 = 512 * 1024;
+        if metadata.len() > LIMIT {
+            return Err("This file is too large to preview (512 KB maximum).");
+        }
+        let mut bytes = Vec::new();
+        file.take(LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "This file cannot be read.")?;
+        if bytes.len() as u64 > LIMIT {
+            return Err("This file is too large to preview (512 KB maximum).");
+        }
+        if bytes.contains(&0) {
+            return Err("This binary file has no text preview.");
+        }
+        String::from_utf8(bytes).map_err(|_| "This file is not UTF-8 text.")
+    })
+    .await
+    .map_err(|_| "This file cannot be read.".to_string())?
+    .map_err(str::to_owned)
+}
+
 pub(super) fn open_selected_files(
     files: Vec<SelectedFile>,
 ) -> Result<Vec<OpenSelectedFile>, String> {

@@ -108,8 +108,17 @@ cargo test --manifest-path src-tauri/Cargo.toml -p muniment-runtime --locked --t
 The first message requests a one to three word thread name from the model.
 A failed name request keeps a short prompt fallback. A manual rename wins.
 Read, search, command and edit actions appear in expandable groups.
-Open a group, then an action, to read its input, output, state and duration.
+Open a group to see its actions. Only actions with details expand.
+Select a read or edited file to open its current contents in the file panel.
+The file panel resizes and maximizes like the record panel. Syntax colors follow the theme.
+The changed-files chip above the composer opens a file list on hover or click.
+Line totals describe recorded applied changes. Missing or partial counts stay unnumbered.
 Active actions show a text sheen unless reduced motion is enabled.
 Details are bounded and credential-filtered before the local journal saves them.
 An interrupted reply keeps its text. **Try again** sends the same message again.
 During browser sign-in, **Cancel sign-in** or **Escape** restores local mode.
+
+Subscription accounts use the sign-in email when the provider supplies it.
+Hover over an account name and select the pencil to edit it inline.
+Enter saves the name. Escape cancels the edit. A failed save keeps the edit open.
+Grok subscriptions show their reported credits window, remaining percentage and reset time.

@@ -857,7 +857,9 @@ fn save_probe(
     };
     // What the upstream said about the account itself outlives the probe: the
     // email names an account the sign-in left unnamed, and the plan is shown.
-    let placeholder = account.label.contains(" account ");
+    let placeholder = account.label.rsplit_once(" account ").is_some_and(|(prefix, suffix)| {
+        suffix.parse::<usize>().is_ok() && muniment_core::model_router::family::family(&account.family).is_some_and(|f| f.name == prefix)
+    });
     if let Credential::Subscription { email, plan, .. } = &mut account.credential {
         if email.is_none() && probed.email.is_some() {
             *email = probed.email.clone();

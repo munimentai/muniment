@@ -15,6 +15,9 @@
   import LucideIcon from './lib/LucideIcon.svelte'
   import RowControl from './lib/RowControl.svelte'
   import AssistantMarkdown from './lib/AssistantMarkdown.svelte'
+  import FilePanel from './files/FilePanel.svelte'
+  import FileChanges from './files/FileChanges.svelte'
+  import { changedFiles, fileName } from './files/file-changes.js'
   import CodeDiff from './lib/CodeDiff.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
@@ -223,6 +226,10 @@
   // The one rail column: null, 'artifacts' or 'record'. Opening one closes the other.
   let railOccupant = $state(null)
   let artifactRailOpen = $derived(railOccupant === 'artifacts')
+  let viewedFile = $state(null)
+  let filePanelOpen = $derived(railOccupant === 'files')
+  const changed = $derived(changedFiles(messages))
+  function openFile(file) { viewedFile = { ...file, name: file.name || fileName(file.path) }; if (!filePanelOpen) railController.open('files') }
   let recordPanelOpen = $derived(railOccupant === 'record')
   let artifactRailWidth = $state(defaultArtifactRailWidth(window.innerWidth))
   let artifactRailMaximum = $state(ARTIFACT_RAIL_MAX_WIDTH)
@@ -1225,7 +1232,7 @@
       if (workspaceMode() && onboarding.name === 'complete' && isRecordPanelShortcut(event)) {
         event.preventDefault()
         // ⌘K on a maximized record panel returns the sidebar and the thread first.
-        if (recordPanelOpen && recordMaximized) toggleRecordMaximized()
+        if ((recordPanelOpen || filePanelOpen) && recordMaximized) toggleRecordMaximized()
         else toggleRecordPanel()
         return
       }
@@ -1241,7 +1248,7 @@
       }
       if (event.key === 'Escape' && railOccupant !== null) {
         event.preventDefault()
-        if (recordPanelOpen && recordMaximized) toggleRecordMaximized()
+        if ((recordPanelOpen || filePanelOpen) && recordMaximized) toggleRecordMaximized()
         else closeRail()
       }
       if (event.key === 'Escape' && (dictationRequested || isDictationActive(dictation) || dictationFinishing)) {
@@ -1424,7 +1431,7 @@
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
-      <section class="workspace" inert={auth.name === 'signing-in'} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:record-maximized={recordPanelOpen && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" inert={auth.name === 'signing-in'} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
@@ -1525,7 +1532,7 @@
             onkeydown={sidebarKeydown}
           ></div>
         {/if}
-        <div class="thread-panel" style:--composer-height="{composerBoxHeight}px">
+        <div class="thread-panel" style:--composer-height="{composerBoxHeight}px" style:--file-chip-height={changed.length ? '40px' : '0px'}>
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <div class="thread-shell">
         <div class="thread" class:scrolling={threadScrolling} role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={onThreadScroll}>
@@ -1561,7 +1568,7 @@
               {:else if message.run.phase === 'thinking'}
               {:else if message.run.phase === 'streaming'}<div class="streaming" use:streamingUnderline={message.run.text}><AssistantMarkdown text={message.run.text} caret /><span class="streaming-rule" aria-hidden="true"></span></div>
               {:else}<AssistantMarkdown text={message.run.text} />{/if}
-              <ActionFeedback activities={message.run.toolActivity ?? []} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
+              <ActionFeedback onopenfile={openFile} activities={message.run.toolActivity ?? []} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
               {#each message.run.appliedDiffs ?? [] as appliedDiff}
                 <div class="applied-diff tool-card">
                   <strong>Applied file changes</strong>
@@ -1710,6 +1717,7 @@
             {#if speechInstallError}<p class="speech-install-error" role="alert">{speechInstallError}</p>{/if}
           </section>
         {/if}
+          <FileChanges files={changed} onopen={openFile} />
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
@@ -1812,6 +1820,28 @@
             ></div>
           {/if}
           <RecordPanel {tauri} maximized={recordMaximized} refresh={recordRefresh} ontogglemaximized={toggleRecordMaximized} onask={askAboutView} />
+        {/if}
+        {#if filePanelOpen}
+          {#if !recordMaximized}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+            <div
+              class="artifact-divider"
+              role="separator"
+              aria-labelledby="file-panel-title"
+              aria-controls="file-panel"
+              aria-orientation="vertical"
+              aria-valuemin={railBounds('files').min}
+              aria-valuemax={artifactRailMaximum}
+              aria-valuenow={artifactRailWidth}
+              tabindex="0"
+              onpointerdown={artifactRailPointerDown}
+              onpointermove={artifactRailPointerMove}
+              onpointerup={artifactRailPointerEnd}
+              onpointercancel={artifactRailPointerEnd}
+              onkeydown={artifactRailKeydown}
+            ></div>
+          {/if}
+          <FilePanel file={viewedFile} {tauri} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onclose={closeRail} />
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a
              copy confirmation into the run-phase region above would overwrite whatever
@@ -2065,9 +2095,9 @@
   .thread-shell::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 48px; background: linear-gradient(to bottom, var(--surface), transparent); pointer-events: none; }
   .thread-shell::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--composer-height, 120px) + 72px); background: linear-gradient(to bottom, transparent, var(--surface) calc(var(--composer-height, 120px) / 2 + 48px)); pointer-events: none; }
   /* Responses run the panel's full width inside a 36px gutter. The bottom padding is the composer and the fade, so the last line scrolls clear of both. */
-  .thread { width: 100%; height: 100%; margin: 0; padding: 42px 36px calc(var(--composer-height, 120px) + 64px); overflow-y: auto; }
+  .thread { width: 100%; height: 100%; margin: 0; padding: 42px 36px calc(var(--composer-height, 120px) + var(--file-chip-height, 0px) + 64px); overflow-y: auto; }
   .thread.scrolling::-webkit-scrollbar-thumb { background: var(--border); }
-  .latest { position: absolute; z-index: 2; left: 50%; bottom: calc(var(--composer-height, 120px) + 38px); transform: translateX(-50%); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
+  .latest { position: absolute; z-index: 2; left: 50%; bottom: calc(var(--composer-height, 120px) + var(--file-chip-height, 0px) + 38px); transform: translateX(-50%); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-turn { margin: 0 0 28px auto; }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }

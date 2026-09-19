@@ -21,3 +21,14 @@ it('opens the group and action details and stops the active sheen when the run e
   expect(view.container.querySelector('.active-sheen')).toBeNull()
   expect(view.getAllByText('Interrupted')).toHaveLength(2)
 })
+
+it('leaves rows without details static and opens read files in the panel', async () => {
+  const opened = []
+  const view = render(ActionFeedback, { onopenfile: (file) => opened.push(file), activities: [
+    { effectId: 'a', displayName: 'search', status: 'completed', input: '{"query":"renewals"}' },
+    { effectId: 'b', displayName: 'read', status: 'completed', input: '{"path":"src/main.rs"}' },
+  ] })
+  expect(view.getByText('Searched renewals').closest('.plain-action')).not.toBeNull()
+  await fireEvent.click(view.getByRole('button', { name: 'Read main.rs', hidden: true }))
+  expect(opened).toEqual([{ path: 'src/main.rs' }])
+})

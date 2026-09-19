@@ -19,7 +19,7 @@ app without asking anyone and run a harness such as Claude Code.
 ## What this repo is
 
 The shell: the thread surface, the composer, the artifact rail, the record
-panel and the provenance line under every reply, an ACP client of the runtime
+panel, the file panel and the provenance line under every reply, an ACP client of the runtime
 service that mobile and any web client also speak to. The runtime service: the
 single local executor, which runs with no window open, hosts the companies,
 serves the SQL tool, runs local workflows and holds the one relay leg mobile
@@ -345,6 +345,14 @@ panel in the rail's grid area, exclusive with the artifact rail. Its table,
 record view, board and saved views generate from `kind`, `kind_extension` and
 `kind.states`, no screen is hand-written for one kind, and an edit calls
 propose, shows the diff and its warnings, and commits on the user's confirm.
+
+**The file panel.** A read or edited file opens in the shared rail, exclusive
+with records and artifacts, with the same resize and maximize controls.
+Syntax colors follow the selected theme. The composer has a changed-files
+chip with recorded addition and deletion counts. Hover or click opens its
+file list. Unknown counts stay unnumbered. Only actions with details expand.
+Subscription names default to the supplied sign-in email and remain editable
+through a hover pencil and inline form. Grok allowance uses its credits window.
 
 **Readers.** Every source implements Objects, Describe, Page and Delta, and
 nothing else about it reaches the graph. File readers run in Rust inside the

@@ -3,11 +3,27 @@
   // the subscription has left and what the account has served, the sign-ins
   // the pool can take for this provider, and a key form. Every command
   // answers with the whole router settings, and the parent redraws from them.
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
+  import LucideIcon from './LucideIcon.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings } = $props()
 
+  let editingId = $state(null)
+  let nameDraft = $state('')
+  let nameInput = $state()
+  async function editName(account) {
+    editingId = account.id
+    nameDraft = account.label
+    await tick()
+    nameInput?.focus()
+    nameInput?.select()
+  }
+  async function saveName(account) {
+    if (!nameDraft.trim() || pending) return
+    await run('model_router_update_account', { id: account.id, label: nameDraft.trim() })
+    if (!formError) editingId = null
+  }
   let status = $state('')
   let formError = $state('')
   let pending = $state(false)
@@ -30,7 +46,8 @@
     pending = true
     formError = ''
     try {
-      onsettings?.(await tauri.invoke(command, payload))
+      const updated = await tauri.invoke(command, payload)
+      onsettings?.(updated)
       status = done
     } catch (error) {
       formError = String(error?.message ?? error)
@@ -186,9 +203,18 @@
       {#each accounts as account (account.id)}
         <li class="card" class:cooling={cooling(account)}>
           <header>
-            <span class="card-label">{account.label}</span>
+            {#if editingId === account.id}
+              <form class="name-edit" onsubmit={(event) => { event.preventDefault(); void saveName(account) }}>
+                <input bind:this={nameInput} bind:value={nameDraft} aria-label="Account name" maxlength="120" disabled={pending} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); editingId = null } }} />
+                <button disabled={pending || !nameDraft.trim()}>Save</button>
+                <button type="button" disabled={pending} onclick={() => editingId = null}>Cancel</button>
+              </form>
+            {:else}
+              <span class="card-label">{account.label}<button type="button" class="rename quiet" aria-label={`Rename ${account.label}`} disabled={pending} onclick={() => editName(account)}><LucideIcon name="pencil" /></button></span>
+            {/if}
             <span class="tag">{account.source === 'key' ? 'Key' : 'Subscription'}</span>
             {#if account.source !== 'key'}<span class="tag">not yet served</span>{/if}
+
           </header>
           <p class="record tier">{account.source === 'key' ? (account.base_url ?? familyRow?.base_url ?? '') : `${account.plan ?? 'plan not read yet'}`}{#if account.email && account.email !== account.label} · {account.email}{/if}{#if account.models.length} · {account.models.join(' · ')}{/if}</p>
           {#if account.source !== 'key'}
@@ -303,6 +329,12 @@
   .card.cooling { border-color: var(--muted); }
   .card header { display: flex; align-items: center; gap: 8px; }
   .card-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-13); }
+  .card-label { display: flex; align-items: center; gap: 4px; }
+  .rename { opacity: 0; padding: 4px; }
+  .card header:hover .rename, .rename:focus-visible { opacity: 1; }
+  .name-edit { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+  @media (hover: none) { .rename { opacity: 1; } }
+
   .tier { margin: 0; overflow-wrap: anywhere; }
   .window { display: grid; gap: 3px; }
   .window-head { display: flex; justify-content: space-between; gap: 8px; }
