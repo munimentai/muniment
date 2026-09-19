@@ -222,8 +222,8 @@ describe('chat composer and projection', () => {
       route: 'analysis/high', model: 'glm-5.2', cost: '$0.0041', time: '3.8s',
       capabilities: [{ name: 'search', version: '2' }],
       tools: [{ name: 'read', calls: 2, failed: 0 }],
-    })).toEqual({ route: 'analysis/high', model: 'glm 5.2', time: '3.8s' })
-    expect(receiptSummary({ model: 'openai-codex/gpt-5.5', time: '12.6s' })).toEqual({ route: null, model: 'openai codex/gpt 5.5', time: '12.6s' })
+    })).toEqual({ route: 'analysis/high', model: 'glm 5.2', time: '4s' })
+    expect(receiptSummary({ model: 'openai-codex/gpt-5.5', time: '12.6s' })).toEqual({ route: null, model: 'openai codex/gpt 5.5', time: '13s' })
     expect(modelLabel('hf.co/lmstudio-community/Qwen3.5-4B-GGUF:Q4_K_M')).toBe('hf.co/lmstudio community/Qwen3.5 4B GGUF:Q4_K_M')
     expect(modelLabel('')).toBe(null)
   })
@@ -231,7 +231,7 @@ describe('chat composer and projection', () => {
   it('names the route field so signal never lands on another segment', () => {
     // design-spec §1.2: --signal is the route segment's alone.
     expect(receiptSummary({ model: 'glm-5.2', cost: '$0.0041' })).toEqual({ route: null, model: 'glm 5.2', time: null })
-    expect(receiptSummary({ route: '', model: 'glm-5.2', cost: '', time: '3.8s' })).toEqual({ route: null, model: 'glm 5.2', time: '3.8s' })
+    expect(receiptSummary({ route: '', model: 'glm-5.2', cost: '', time: '3.8s' })).toEqual({ route: null, model: 'glm 5.2', time: '4s' })
   })
 
   it('summarizes partial receipts without inventing a field', () => {
@@ -246,11 +246,11 @@ describe('chat composer and projection', () => {
     expect(receiptLabel({
       route: 'analysis/high', model: 'glm-5.2', cost: '$0.0041', time: '3.8s',
       capabilities: [{ name: 'search', version: '2' }],
-    })).toBe('Routed via analysis/high to model glm 5.2, 3.8s')
+    })).toBe('Routed via analysis/high to model glm 5.2, 4s')
   })
 
   it('labels partial receipts without naming a field the receipt lacks', () => {
-    expect(receiptLabel({ route: 'analysis/high', time: '3.8s' })).toBe('Routed via analysis/high, 3.8s')
+    expect(receiptLabel({ route: 'analysis/high', time: '3.8s' })).toBe('Routed via analysis/high, 4s')
     expect(receiptLabel({ model: 'glm-5.2' })).toBe('Model glm 5.2')
     expect(receiptLabel({ cost: '$0.0041' })).toBe('')
     expect(receiptLabel({})).toBe('')

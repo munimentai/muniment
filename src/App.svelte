@@ -52,6 +52,8 @@
   import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
   import RunMark from './lib/RunMark.svelte'
+  import ExecutionTime from './lib/ExecutionTime.svelte'
+  import ProjectRow from './lib/ProjectRow.svelte'
   import { threadTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
@@ -240,13 +242,13 @@
   let threadSummaries = $state([])
   let projectCatalog = $state({ projects: {}, threads: {} })
   let selectedProject = $state(null)
+  let expandedProjects = $state(new Set())
   let projectForm = $state(null)
   let projectName = $state('')
   let projectBusy = $state(false)
   let projectError = $state('')
   const projectRows = $derived(Object.entries(projectCatalog.projects).sort((a, b) => a[1].localeCompare(b[1])))
   const regularThreads = $derived(threadSummaries.filter(thread => !agentListing.state.threads[thread.threadId]))
-  const projectThreads = $derived(selectedProject ? regularThreads.filter((thread) => projectCatalog.threads[thread.threadId] === selectedProject || threadOrganization[thread.threadId]?.pinned) : regularThreads)
   let threadOrganization = $state(readThreadOrganization())
   let threadSearch = $state('')
   let archivedThreads = $state(false)
@@ -254,11 +256,17 @@
   let rowRename = $state(null)
   let rowRenameInput = $state()
   let rowRenamePending = $state(false)
-  const threadGroups = $derived(organizeThreads(projectThreads, threadOrganization, threadSearch, archivedThreads))
-  const visibleThreads = $derived(threadGroups.flatMap(({ threads }) => threads))
-  const showFreshThread = $derived(freshThread && !selectedAgent && !archivedThreads && !threadSearch.trim())
-  const pinnedThreadCount = $derived(threadGroups.find((group) => group.name === 'Pinned')?.threads.length || 0)
-  const shortcutThreads = $derived([...visibleThreads.slice(0, pinnedThreadCount), ...(showFreshThread ? [{ threadId: null }] : []), ...visibleThreads.slice(pinnedThreadCount)])
+  const threadGroups = $derived(organizeThreads(regularThreads, threadOrganization, threadSearch, archivedThreads))
+  const unpinnedThreads = $derived(threadGroups.filter(group => group.name !== 'Pinned').flatMap(group => group.threads))
+  const sidebarSections = $derived([...projectRows.filter(([id]) => expandedProjects.has(id)).map(([id]) => id), null]
+    .map(projectId => ({ projectId, threads: unpinnedThreads.filter(thread => (projectCatalog.threads[thread.threadId] || null) === projectId) })))
+  const pinnedThreads = $derived(threadGroups.find(group => group.name === 'Pinned')?.threads || [])
+  const visibleThreads = $derived([...pinnedThreads, ...sidebarSections.flatMap(section => section.threads)])
+  const showFreshThread = $derived(freshThread && !selectedAgent && !archivedThreads && !threadSearch.trim() && (!selectedProject || expandedProjects.has(selectedProject)))
+  const shortcutThreads = $derived([...pinnedThreads, ...sidebarSections.flatMap(section => [
+    ...(showFreshThread && section.projectId === selectedProject ? [{ threadId: null }] : []), ...section.threads,
+  ])])
+  const freshThreadPosition = $derived(shortcutThreads.findIndex(thread => thread.threadId === null))
   let moreThreads = $state(false)
   let loadingOlderThreads = $state(false)
   let currentThreadId = $state(null)
@@ -497,7 +505,7 @@
   }
 
   $effect(() => {
-    const needsIndex = selectedProject || threadSearch.trim() || archivedThreads || Object.entries(threadOrganization)
+    const needsIndex = expandedProjects.size || threadSearch.trim() || archivedThreads || Object.entries(threadOrganization)
       .some(([id, state]) => state.pinned && !state.archived && !threadSummaries.some((thread) => thread.threadId === id))
     if (needsIndex && moreThreads && !loadingOlderThreads && !threadIndexFailed && !projectBusy) {
       void untrack(indexOlderThreads)
@@ -521,20 +529,17 @@
     } catch (_) { projectError = 'Projects could not be loaded.' }
   }
 
-  async function selectProject(projectId) {
-    if (active || threadSwitching || projectBusy || loadingOlderThreads) return
-    agentsOpen = false
-    projectBusy = true
-    selectedProject = projectId
-    selectedAgent = null
-    threadSearch = ''
-    archivedThreads = false
-    filterThreads()
-    while (moreThreads && !threadIndexFailed && !loadingOlderThreads) await indexOlderThreads()
-    const first = regularThreads.find((thread) => projectCatalog.threads[thread.threadId] === projectId && !threadOrganization[thread.threadId]?.archived)
-    if (first) await chatController.openThread(first.threadId)
-    else await chatController.newThread()
-    projectBusy = false
+  function selectProject(projectId) {
+    const next = new Set(expandedProjects)
+    if (next.has(projectId)) next.delete(projectId)
+    else next.add(projectId)
+    expandedProjects = next
+  }
+
+  async function newProjectThread(projectId) {
+    if (active || threadSwitching || projectBusy) return
+    expandedProjects = new Set([...expandedProjects, projectId])
+    await newSidebarThread(projectId)
   }
 
   async function saveProject() {
@@ -558,7 +563,9 @@
     catch (_) { projectError = 'The project folder could not be opened.' }
   }
 
-  async function newSidebarThread() {
+  async function newSidebarThread(projectId = null) {
+    if (active || threadSwitching || projectBusy) return
+    selectedProject = projectId
     agentsOpen = false
     agentProfileOpen = false
     selectedAgent = null
@@ -1700,12 +1707,12 @@
   }
 </script>
 
-{#snippet projectThreadList()}
-            <ul class="thread-list" aria-label="Threads">
-              {#if showFreshThread}
-                <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(pinnedThreadCount + 1)}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
+{#snippet projectThreadList(projectId = null)}
+            <ul class="thread-list" aria-label={projectId ? `${projectCatalog.projects[projectId]} threads` : "Threads"}>
+              {#if showFreshThread && selectedProject === projectId}
+                <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(freshThreadPosition + 1)}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
               {/if}
-            {#each threadGroups.filter((group) => group.name !== 'Pinned') as group (group.name)}
+            {#each threadGroups.filter((group) => group.name !== 'Pinned').map(group => ({ ...group, threads: group.threads.filter(thread => (projectCatalog.threads[thread.threadId] || null) === projectId) })).filter(group => group.threads.length) as group (group.name)}
                 {#if group.name !== 'Threads'}<li class="side-group" role="presentation"><h3>{group.name}</h3></li>{/if}
               {#each group.threads as summary (summary.threadId)}
                 {@render sidebarThread(summary)}
@@ -1827,7 +1834,7 @@
         <aside id="sidebar" class="sidebar">
           {#if !sidebarCollapsed}
             <div class="side-top">
-              <button class="side-action new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={newSidebarThread}>
+              <button class="side-action new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => newSidebarThread()}>
                 <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
               </button>
               <div class="agents-side-row"><button class="side-action" aria-expanded={agentsOpen} onclick={() => showAgents()}><LucideIcon name="bot" /><span>Agents</span></button><button class="agent-add quiet" aria-label="New agent" onclick={() => showAgents(null, true)}><LucideIcon name="plus" /></button></div>
@@ -1855,18 +1862,16 @@
                 </form>
               {/if}
               {#each projectRows as [projectId, name] (projectId)}
-                <div class="project-row">
-                  <button class="side-action" aria-label={`Project ${name}`} aria-pressed={selectedProject === projectId} disabled={!!active || threadSwitching || projectBusy || loadingOlderThreads} onclick={() => selectProject(projectId)}><LucideIcon name="folder" /><span>{name}</span></button>
-                  <button class="quiet project-control" aria-label={`Open ${name} folder`} onclick={() => openProjectFolder(projectId)}><LucideIcon name="folder-open" size={14} /></button>
-                  <button class="quiet project-control" aria-label={`Rename project ${name}`} disabled={!!active || threadSwitching || projectBusy} onclick={() => { projectForm = projectId; projectName = name }}><LucideIcon name="pencil" size={14} /></button>
-                </div>
-                {#if selectedProject === projectId}<div class="project-threads">{@render projectThreadList()}</div>{/if}
+                <ProjectRow {name} expanded={expandedProjects.has(projectId)} disabled={!!active || threadSwitching || projectBusy}
+                  ontoggle={() => selectProject(projectId)} onnew={() => newProjectThread(projectId)}
+                  onrename={() => { projectForm = projectId; projectName = name }} onopen={() => openProjectFolder(projectId)} />
+                {#if expandedProjects.has(projectId)}<div class="project-threads">{@render projectThreadList(projectId)}</div>{/if}
               {/each}
               {#if !projectRows.length && !projectError}<p class="side-empty">Create a project for your files.</p>{/if}
-              {#if selectedProject}<button class="older-threads" onclick={() => { selectedProject = null; filterThreads() }}>All threads</button>{/if}
               {#if projectError}<p class="side-empty" role="status">{projectError} <button class="quiet" onclick={() => refreshProjects()}>Retry</button></p>{/if}
             </section>
-            {#if !selectedProject}{@render projectThreadList()}{/if}
+            <h3 class="side-group">All threads</h3>
+            {@render projectThreadList()}
             {#if !visibleThreads.length && !showFreshThread}
               <p class="side-empty">{loadingOlderThreads ? 'Searching threads…' : threadSearch.trim() ? 'No matching threads.' : archivedThreads ? 'No archived threads.' : 'No threads yet.'}</p>
             {/if}
@@ -1943,8 +1948,6 @@
                   <p>{message.run.promptStorageNotice}</p>
                 </details>
               {/if}
-              <!-- One mark for the whole run in flight, in its own block so its exit holds nothing else back. -->
-              {#if message.run.phase === 'thinking' || message.run.phase === 'streaming'}<RunMark stage={message.run.stage} />{/if}
               {#if message.run.phase === 'acquiring-pi'}
                 <p class="thinking">{runAnnouncement(message.run)}</p>
               {/if}
@@ -2014,6 +2017,15 @@
                     </div>
                   </div>
                   {#if answerState?.error}<div class="run-error" role="alert">{answerState.error}</div>{/if}
+                </div>
+              {/if}
+              {#if ['thinking', 'streaming', 'acquiring-pi', 'pending-permission', 'recovering', 'resuming'].includes(message.run.phase)}
+                <div class="receipt-line live-receipt">
+                  <RunMark stage={message.run.stage} />
+                  <div class="response-meta">
+                    <ExecutionTime startedAt={message.run.startedAt} />
+                    <span class="copy-slot" aria-hidden="true"></span>
+                  </div>
                 </div>
               {/if}
               {#if message.run.phase === 'complete'}
@@ -2467,11 +2479,6 @@
   .project-heading h3 { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .project-heading button { padding: 2px; }
   .project-threads { padding-left: 12px; }
-  .project-row { display: flex; align-items: center; }
-  .project-row .side-action { flex: 1; min-width: 0; }
-  .project-row .side-action span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .project-control { flex: none; padding: 2px; opacity: 0; }
-  .project-row:hover .project-control, .project-row:focus-within .project-control { opacity: 1; }
   .side-group { margin: 10px 8px 4px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .side-group h3 { margin: 0; font: var(--text-12) var(--font-mono); }
   .side-top { padding: 8px 6px 0; }
@@ -2593,6 +2600,8 @@
   .permission-card .run-error { margin-top: 6px; }
   /* One line under the reply: the receipt, then Copy at its right. */
   .receipt-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .live-receipt { min-height: 28px; }
+  .copy-slot { width: 32px; height: 28px; flex: none; }
   .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
   /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
      font-variant-numeric, so tabular-nums follows it. */
@@ -2606,7 +2615,7 @@
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
   .message-time { font-family: var(--font-mono); font-size: var(--text-provenance); font-weight: 400; line-height: 1.45; font-variant-numeric: tabular-nums; }
-  .receipt-time { display: inline-flex; align-items: center; gap: 4px; }
+  .receipt-time { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   /* The expanded receipt sits plain under the provenance line: no box. */
   .receipt-usage { max-width: 100%; overflow-x: auto; margin-top: 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-usage table { border-collapse: collapse; width: auto; font: inherit; }
