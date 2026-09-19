@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actionGroups, actionDuration } from './action-feedback.js'
+import { actionGroups, actionDuration, responseParts } from './action-feedback.js'
 
 describe('action feedback', () => {
   const actions = [
@@ -24,4 +24,15 @@ describe('action feedback', () => {
     expect(actionDuration('2026-01-01T00:00:00Z', '2026-01-01T00:04:48Z')).toBe('4m 48s')
     expect(actionDuration(undefined, undefined)).toBe('')
   })
+})
+
+it('places actions between the text that precedes and follows them', () => {
+  const first = { effectId: 'search', textOffset: 0 }
+  const second = { effectId: 'read', textOffset: 9 }
+  expect(responseParts({ text: 'Check 🔎. Result.', toolActivity: [first, second] })).toEqual([
+    { type: 'actions', activities: [first] },
+    { type: 'text', text: 'Check 🔎.' },
+    { type: 'actions', activities: [second] },
+    { type: 'text', text: ' Result.' },
+  ])
 })

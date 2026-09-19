@@ -39,10 +39,15 @@
                 <span class="chevron"><LucideIcon name="chevron-right" /></span>
               </summary>
               <div class="action-detail">
+                {#if group.kind === 'web' && action.queries.length}
+                  <strong>Queries:</strong>
+                  <ul class="search-queries">{#each action.queries as query}<li>{query}</li>{/each}</ul>
+                {:else}
                 <p>{action.state}{#if action.startedAt && (action.finishedAt || action.running)} · {actionDuration(action.startedAt, action.finishedAt || (action.running ? now : action.startedAt))}{/if}</p>
                 {#if action.input}<strong>{group.kind === 'command' ? 'Command' : 'Input'}</strong><pre>{action.detailInput}</pre>{/if}
                 {#if action.output}<strong>Output</strong><pre>{action.output}</pre>
                 {:else}<p>{action.running ? 'Waiting for output.' : 'No output was saved.'}</p>{/if}
+                {/if}
               </div>
             </details>
             {/if}
@@ -68,6 +73,8 @@
   details[open] > summary > .chevron { transform: rotate(90deg); }
   .action-list { padding-left: 12px; }
   .action-detail { margin: 6px 0 12px 24px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--faint); }
+  .search-queries { list-style: none; margin: 8px 0 0; padding: 0; }
+  .search-queries li { margin: 4px 0; overflow-wrap: anywhere; }
   .action-detail p { margin: 0 0 8px; }
   .action-detail strong { font-weight: 500; }
   pre { font-family: var(--font-mono); font-size: var(--text-13); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; margin: 8px 0 12px; }

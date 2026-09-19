@@ -694,6 +694,15 @@ export function createChatController({
       return true
     } catch (error) {
       if (destroyed) return
+      if (deliveryFailureReason || recoveryPending || [...buffered.values()].some((events) => events.some((event) => event.threadId && (!readThreadId() || event.threadId === readThreadId())))) {
+        // A lost acknowledgment does not prove that the runtime rejected the run.
+        const restoring = { ...pending, id: `recovering-${submissionId}`, phase: 'recovering' }
+        publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: restoring } : message))
+        onActive(restoring)
+        onAnnounce(restoring)
+        recoveryPending = true
+        return false
+      }
       const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed', failureReason: typeof error === 'string' ? error : 'The message could not be sent.' }
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: failed } : message))
       if (submissionId !== submissionSequence) return

@@ -156,6 +156,7 @@ const runPhaseAnnouncements = {
   thinking: generating,
   streaming: generating,
   'pending-permission': 'Waiting for your decision.',
+  recovering: 'Restoring the reply.',
   resuming: 'Resuming the interrupted reply.',
   cancelled: 'Reply stopped.',
   interrupted: 'Reply interrupted.',
