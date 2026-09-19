@@ -48,6 +48,7 @@ export function cellValue(row, column) {
 
 export function cellText(value, column) {
   if (value === null || value === undefined) return ''
+  if (column?.type === 'state') return stateLabel(value)
   if (column?.type === 'date-time' && typeof value === 'string') {
     const date = new Date(value)
     if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 16).replace('T', ' ')
@@ -176,11 +177,22 @@ export function groupEdges(edges, entityId) {
 }
 
 // The board: one column per state of the kind, and one for rows that hold none.
+export function stateLabel(value) {
+  const text = String(value ?? '').replaceAll('_', ' ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+export function readableValue(value) {
+  if (Array.isArray(value)) return value.map(readableValue).join(', ')
+  if (value && typeof value === 'object') return Object.entries(value).map(([key, entry]) => `${stateLabel(key)}: ${readableValue(entry)}`).join(' · ')
+  return cellText(value, {})
+}
+
 export const NO_STATE_COLUMN = 'no state'
 
 export function boardColumns(kind, rows) {
   const states = Array.isArray(kind?.states) ? kind.states : []
-  const columns = states.map((state) => ({ state, label: state, rows: [] }))
+  const columns = states.map((state) => ({ state, label: stateLabel(state), rows: [] }))
   const unset = { state: null, label: NO_STATE_COLUMN, rows: [] }
   for (const row of rows ?? []) {
     const column = columns.find((candidate) => candidate.state === row.state)

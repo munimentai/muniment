@@ -1681,6 +1681,35 @@ describe('workspace composer entry', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_sign_in')).toHaveLength(1)
   })
 
+  it.each(['button', 'Escape'])('cancels browser sign-in through %s and ignores a late success', async (control) => {
+    const signInRequest = deferred()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter' || command === 'local_mode_leave') return undefined
+      if (command === 'auth_sign_in') return signInRequest.promise
+      if (command === 'chat_thread_open') return []
+      if (command === 'local_mode_provider_inventory') return { providers: [], hidden: [] }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const { container } = render(App)
+    await screen.findByTestId('local-mode')
+    const composer = screen.getByPlaceholderText('Ask anything')
+    await fireEvent.input(composer, { target: { value: 'Keep my draft' } })
+    await openSettings('Account')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Sign in for cloud features' }))
+    const cancel = await screen.findByRole('button', { name: 'Cancel sign-in' })
+    expect(container.querySelector('.workspace')).toHaveProperty('inert', true)
+    expect(composer).toHaveValue('Keep my draft')
+    if (control === 'button') await fireEvent.click(cancel)
+    else await fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(cancel).toBeDisabled())
+    signInRequest.resolve({ signed_in: true, subject: 'late-user' })
+    await screen.findByTestId('local-mode')
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel sign-in' })).not.toBeInTheDocument())
+    expect(container.querySelector('.workspace')).toHaveProperty('inert', false)
+    expect(screen.getByPlaceholderText('Ask anything')).toHaveValue('Keep my draft')
+  })
+
   it('shows the registration wait and completes without another user action', async () => {
     const signInRequest = deferred()
     invoke.mockImplementation(async (command) => {
@@ -1740,7 +1769,7 @@ describe('workspace composer entry', () => {
 
     signInRequest.resolve({ signed_in: true, subject: 'user-a' })
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    expect(screen.queryByTestId('sign-in-link')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByTestId('sign-in-link')).not.toBeInTheDocument())
   })
 
   it('shows the terminal screen for a non-retryable registration error', async () => {
@@ -1897,7 +1926,7 @@ describe('record panel', () => {
     expect(within(table).getAllByRole('columnheader')[0]).not.toHaveClass('mono')
     expect(within(panel).getByText('1 record')).toBeInTheDocument()
     const row = within(table).getAllByRole('row')[1]
-    expect(within(row).getAllByRole('cell')[1]).toHaveTextContent('won')
+    expect(within(row).getAllByRole('cell')[1]).toHaveTextContent('Won')
     expect(within(row).getAllByRole('cell')[1]).toHaveClass('mono')
     expect(within(row).getAllByRole('cell')[2]).toHaveTextContent('2026-09-15 10:30')
 
@@ -1925,7 +1954,7 @@ describe('record panel', () => {
     expect(within(view).getByRole('region', { name: 'Identities' })).toHaveTextContent('external: hubspot:deal:1')
     expect(within(view).getByRole('region', { name: 'Relations' })).toHaveTextContent('concerns')
     expect(within(view).getByRole('button', { name: 'Northwind' })).toBeInTheDocument()
-    expect(within(view).getByRole('region', { name: 'History' })).toHaveTextContent('3 · 2026-09-15 10:00 · created · owner-1')
+    expect(within(view).getByRole('region', { name: 'History' })).toHaveTextContent('2026-09-15 10:00 · Created · Unknown actor')
 
     await fireEvent.click(within(panel).getByRole('button', { name: 'Back' }))
     await within(panel).findByRole('table', { name: 'deal records' })
@@ -2219,8 +2248,8 @@ describe('record panel', () => {
     await fireEvent.click(within(toolbar).getByRole('button', { name: 'Board' }))
     const board = await within(panel).findByRole('region', { name: 'deal board' })
     expect(within(panel).queryByRole('table')).not.toBeInTheDocument()
-    const discovery = within(board).getByRole('region', { name: 'discovery' })
-    const won = within(board).getByRole('region', { name: 'won' })
+    const discovery = within(board).getByRole('region', { name: 'Discovery' })
+    const won = within(board).getByRole('region', { name: 'Won' })
     expect(within(discovery).getByRole('button', { name: 'Contoso pilot' })).toBeInTheDocument()
     expect(within(won).getByRole('button', { name: 'Northwind renewal' })).toBeInTheDocument()
 

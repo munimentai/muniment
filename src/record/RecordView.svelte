@@ -3,7 +3,7 @@
   // own fields, the identities, the edges by relation with their validity
   // windows, and the history. Every value is a record and reads in mono;
   // the title and the prose read in the body face.
-  import { cellText, groupEdges, tableColumns } from './record-table-state.js'
+  import { cellText, groupEdges, readableValue, stateLabel, tableColumns } from './record-table-state.js'
 
   let { detail, onopen } = $props()
 
@@ -24,14 +24,14 @@
   <article class="record-view" aria-label={entity.title}>
     <h3 class="record-title">{entity.title}</h3>
     {#if entity.body_text}<p class="record-prose">{entity.body_text}</p>{/if}
-    <p class="record-meta">{entity.kind} · {entity.id}{entity.state ? ` · ${entity.state}` : ''} · updated {when(entity.updated_at)}</p>
+    <p class="record-meta">{entity.kind}{entity.state ? ` · ${stateLabel(entity.state)}` : ''} · updated {when(entity.updated_at)}</p>
 
     <section class="record-section" aria-label="Fields">
       <h4>Fields</h4>
       <dl class="record-fields">
         {#each coreFields as column (column.key)}
           <dt>{column.label}</dt>
-          <dd class:mono={column.mono}>{cellText(entity.data?.[column.key], column)}</dd>
+          <dd class:mono={column.mono}>{readableValue(entity.data?.[column.key])}</dd>
         {/each}
       </dl>
       {#if ownFields.length}
@@ -39,7 +39,7 @@
         <dl class="record-fields">
           {#each ownFields as column (column.key)}
             <dt>{column.label}</dt>
-            <dd class:mono={column.mono}>{cellText(entity.data?.[column.key], column)}</dd>
+            <dd class:mono={column.mono}>{readableValue(entity.data?.[column.key])}</dd>
           {/each}
         </dl>
       {/if}
@@ -50,7 +50,7 @@
         <h4>Identities</h4>
         <ul class="record-list mono">
           {#each detail.identities as identity (identity.kind + identity.value)}
-            <li>{identity.kind}: {identity.value}</li>
+            <li>{identity.kind}: {identity.value}{#if identity.source} · Source: {identity.source}{/if}</li>
           {/each}
         </ul>
       </section>
@@ -77,14 +77,20 @@
       <h4>History</h4>
       <ol class="record-list mono">
         {#each detail.events ?? [] as event (event.id)}
-          <li>{event.seq} · {when(event.at)} · {event.verb} · {event.actor_id}{event.on_behalf_of ? ` for ${event.on_behalf_of}` : ''}</li>
+          <li>{when(event.at)} · {stateLabel(event.verb)} · {event.actor_label || 'Unknown actor'}{event.on_behalf_of ? ` for ${event.on_behalf_of_label || 'Unknown owner'}` : ''}{#if event.source} · Source: {event.source}{/if}</li>
         {/each}
       </ol>
     </section>
+    <details class="record-section mono">
+      <summary>Raw evidence</summary>
+      <pre>{JSON.stringify({ id: entity.id, data: entity.data, identities: detail.identities, events: detail.events }, null, 2)}</pre>
+    </details>
   </article>
 {/if}
 
 <style>
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--text-12)/1.5 var(--font-mono); }
+  summary { cursor: pointer; min-height: 24px; }
   .record-view { min-height: 0; overflow-y: auto; padding-top: 12px; }
   .record-title { margin: 0; font: 600 var(--text-17)/1.3 var(--font-human); }
   .record-prose { margin: 8px 0 0; font: var(--text-15)/1.55 var(--font-human); }

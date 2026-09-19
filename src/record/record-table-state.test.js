@@ -126,11 +126,11 @@ describe('board, saved views and Ask', () => {
 
   it('lays the rows into one column per state and one for none', () => {
     const columns = boardColumns(kind, rows)
-    expect(columns.map((column) => column.label)).toEqual(['discovery', 'won', NO_STATE_COLUMN])
+    expect(columns.map((column) => column.label)).toEqual(['Discovery', 'Won', NO_STATE_COLUMN])
     expect(columns[0].rows.map((row) => row.id)).toEqual(['b'])
     expect(columns[1].rows.map((row) => row.id)).toEqual(['a'])
     expect(columns[2].rows.map((row) => row.id)).toEqual(['c'])
-    expect(boardColumns(kind, rows.slice(0, 2)).map((column) => column.label)).toEqual(['discovery', 'won'])
+    expect(boardColumns(kind, rows.slice(0, 2)).map((column) => column.label)).toEqual(['Discovery', 'Won'])
     expect(boardColumns({ name: 'person', schema: {} }, [])).toEqual([])
   })
 

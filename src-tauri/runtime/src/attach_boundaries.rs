@@ -794,23 +794,12 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         &self,
         _provenance: Provenance,
     ) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
-        let marker = self
-            .config_directory
-            .join(muniment_core::local_mode::LOCAL_MODE_MARKER);
-        match std::fs::remove_file(marker) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(ProtocolError::persistence_failed_with_reason(format!(
-                    "The runtime could not remove the local mode marker: kind={:?} os_code={:?}.",
-                    error.kind(),
-                    error.raw_os_error(),
-                )))
-            }
-        }
+        // The desktop leaves local mode before requesting sign-in. Returning to
+        // local mode cancels the browser wait without another socket request.
         let _permit = SignInPermit::acquire(Arc::clone(&self.sign_in_running))
             .ok_or_else(ProtocolError::invalid_request)?;
         service::sign_in(
+            &|| !self.local_mode(),
             self.browser_opener.as_ref(),
             &self.entitlement_tracker,
             &self.runtime_activity,

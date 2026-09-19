@@ -484,3 +484,12 @@ never push it past its count: `src/lib` at 56, split by naming family.
 Every file the app, the runtime and the agent harness keep sits under
 `~/.muniment` or the directory `MUNIMENT_STATE_DIR` names. Home is the document
 folder, a different thing, and logs keep their platform paths.
+
+Thread names use a separate model request on the first message, limited to one
+to three words. A failed request keeps a short prompt fallback. Manual names
+win over generated names. Action feedback groups reads, searches, commands
+and edits with expandable, bounded, credential-filtered details. Saved runs
+retain those details. Cancel sign-in returns to local mode and rejects a late
+browser result. Partial replies remain visible with their interruption cause.
+Reports link possible duplicate groups to their records and a merge preview.
+Record fields, states and actor names read as words. Raw evidence stays available.

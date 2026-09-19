@@ -223,6 +223,7 @@ export function createChatController({
       signalRun(payload.runId, payload.threadId)
       return
     }
+    if (payload.turnStarted && !current.turnStarted) void refreshThreads()
     const projected = applyChatEvent(current, payload)
     if (projected) publishMessages(messages().map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message))
     if (projected && (!settledPhases.has(current.phase) || readAnnounced()?.id === payload.runId)) onAnnounce(projected)
