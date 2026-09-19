@@ -31,7 +31,7 @@
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import { solidMilledRingPath } from './lib/mark.js'
-  import { codeDiffPermissionAnswer, composerAction, formatByteSize, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
   import { createChatController } from './lib/chat-controller.js'
   import { listenForLauncher } from './lib/launcher-bridge.js'
   import { composerHeight } from './lib/composer-size.js'
@@ -1611,6 +1611,7 @@
           {#if messages.length === 0}<p class="empty">{auth.name === 'local' ? 'Your model answers here. Ask anything.' : "Ask anything. Your org's routing decides which model answers."}</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
+                {@const userCopyId = `user:${message.id ?? message.submissionId}`}
               <div class="user-turn">
                 <div class="user-message">
                   {#if message.text}<p>{message.text}</p>{:else}<p class="missing-prompt">Prompt unavailable</p>{/if}
@@ -1623,6 +1624,11 @@
                     <p class="attachment-delivery-rule">Supported images are sent with the first prompt.</p>
                   {/if}
                 </div>
+                <div class="user-message-meta message-actions">
+                  {#if messageLocalTime(message.sentAt)}<time datetime={message.sentAt}>{messageLocalTime(message.sentAt)}</time>{/if}
+                  <button type="button" aria-label={copyConfirmed(copy, userCopyId) ? 'Copied message' : 'Copy message'} data-tooltip={copyConfirmed(copy, userCopyId) ? 'Copied' : 'Copy message'} onclick={() => copyResponse({ id: userCopyId, text: message.text })}><LucideIcon name={copyConfirmed(copy, userCopyId) ? 'check' : 'copy'} variant="action" size={14} /></button>
+                </div>
+                {#if copyFailure(copy, userCopyId, modifierLabel)}<p class="copy-failure">{copyFailure(copy, userCopyId, modifierLabel)}</p>{/if}
               </div>
             {:else}
             <div class="response">
@@ -1715,16 +1721,19 @@
                 <div class="receipt-line">
                   {#if recorded}
                     {#if rows.length > 0}
-                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}{#if summary.time !== null}{#if summary.route !== null || summary.model !== null}{' '}{/if}<span class="receipt-time"><LucideIcon name="clock" variant="action" size={12} />{summary.time}</span>{/if}</button>
+                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}</button>
                     {:else}
                       <!-- One row adds nothing beyond the line: a clock stands where the chevron would, and nothing expands. -->
-                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}{#if summary.time !== null}{#if summary.route !== null || summary.model !== null}{' '}{/if}<span class="receipt-time"><LucideIcon name="clock" variant="action" size={12} />{summary.time}</span>{/if}</p>
+                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}</p>
                     {/if}
                   {:else}
                     <p class="provenance">Receipt unavailable</p>
                   {/if}
+                  <div class="response-meta">
+                    {#if summary.time !== null}<span class="receipt-time"><LucideIcon name="clock" variant="action" size={12} />{summary.time}</span>{/if}
                   <div class="message-actions">
-                    <button type="button" onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<LucideIcon name="check" variant="action" size={14} />{:else}<LucideIcon name="copy" variant="action" size={14} />{/if}{copyLabel(copy, message.run.id)}</button>
+                    <button type="button" aria-label={copyLabel(copy, message.run.id)} data-tooltip={copyConfirmed(copy, message.run.id) ? 'Copied' : 'Copy message'} onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<LucideIcon name="check" variant="action" size={14} />{:else}<LucideIcon name="copy" variant="action" size={14} />{/if}</button>
+                  </div>
                   </div>
                 </div>
                 {#if expanded}
@@ -2180,6 +2189,12 @@
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-turn { margin: 0 0 28px auto; }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
+  .user-message-meta.message-actions { justify-content: flex-end; align-items: center; gap: 12px; margin-top: 5px; min-height: 28px; color: var(--muted); font-size: var(--text-12); }
+  .user-turn:hover .message-actions, .user-turn:focus-within .message-actions { opacity: 1; }
+  .response-meta { display: flex; align-items: center; gap: 12px; margin-left: auto; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); flex-shrink: 0; }
+  .message-actions button[data-tooltip] { position: relative; }
+  .message-actions button[data-tooltip]::after { content: attr(data-tooltip); position: absolute; right: 0; bottom: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); white-space: nowrap; pointer-events: none; opacity: 0; }
+  .message-actions button[data-tooltip]:hover::after, .message-actions button[data-tooltip]:focus-visible::after { opacity: 1; }
   .user-message > p { margin: 0; white-space: pre-wrap; }
   .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .prompt-storage-notice { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -2241,6 +2256,7 @@
   .message-actions button:hover:not(:disabled) { border-color: transparent; background: var(--faint); color: var(--ink); }
   /* §1.2: focus rings are ink, never signal. */
   .message-actions button:disabled { opacity: .45; }
+  @media (hover: none) { .message-actions { opacity: 1; } }
   /* Same §1.7 icon geometry as the rail, tracking whatever ink its button carries. */
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }

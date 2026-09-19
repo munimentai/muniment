@@ -6369,11 +6369,27 @@ describe('message action row', () => {
     expect(document.querySelectorAll('.thread-shell [aria-live]')).toHaveLength(1)
   })
 
+  it('shows the local send time and copies the user message with an icon-only button', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    clipboard(writeText)
+    const sentAt = '2026-09-19T01:17:00Z'
+    restore([reply({ sentAt })])
+    const button = await screen.findByRole('button', { name: 'Copy message' })
+    const turn = button.closest('.user-turn')
+    expect(turn.querySelector('time')).toHaveAttribute('datetime', sentAt)
+    expect(turn.querySelector('time')).toHaveTextContent(new Date(sentAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }))
+    expect(button.textContent).toBe('')
+    await fireEvent.click(button)
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(turn.querySelector('.user-message p').textContent))
+    expect(await screen.findByRole('button', { name: 'Copied message' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy' }).textContent).toBe('')
+  })
+
   it('offers copy alone: no fork, share, or retry on a settled reply', async () => {
     restore()
 
     await screen.findByRole('button', { name: 'Copy' })
-    expect(document.querySelectorAll('.message-actions button')).toHaveLength(1)
+    expect(document.querySelectorAll('.response .message-actions button')).toHaveLength(1)
     for (const name of [/fork/i, /share/i, /retry/i, /try again/i]) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
     }
@@ -6411,8 +6427,8 @@ describe('provenance line', () => {
     restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
     const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model glm 5.2, 6.2s' })
-    expect(line.textContent).toBe('analysis/high → glm 5.2 6.2s')
-    expect(line.querySelector('.receipt-time [data-icon="clock"]')).toBeInTheDocument()
+    expect(line.textContent).toBe('analysis/high → glm 5.2')
+    expect(line.closest('.receipt-line').querySelector('.response-meta .receipt-time [data-icon="clock"]')).toBeInTheDocument()
     expect(within(line).getByText('analysis/high')).toHaveClass('route-segment')
     expect(line.querySelectorAll('.route-segment')).toHaveLength(1)
   })
@@ -6421,7 +6437,7 @@ describe('provenance line', () => {
     restore({ model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
     const line = await screen.findByRole('button', { name: 'Expand receipt: Model glm 5.2, 6.2s' })
-    expect(line.textContent).toBe('glm 5.2 6.2s')
+    expect(line.textContent).toBe('glm 5.2')
     expect(line.querySelector('.route-segment')).toBeNull()
   })
 
@@ -6429,8 +6445,8 @@ describe('provenance line', () => {
     restore({ time: '6.2s' })
 
     const line = await screen.findByLabelText('Receipt: 6.2s', { selector: 'p.provenance' })
-    expect(line.textContent).toBe('6.2s')
-    expect(line.querySelector('[data-icon="clock"]')).toBeInTheDocument()
+    expect(line.closest('.receipt-line').querySelector('.response-meta')).toHaveTextContent('6.2s')
+    expect(line.closest('.receipt-line').querySelector('.response-meta [data-icon="clock"]')).toBeInTheDocument()
     expect(line.querySelector('.receipt-marker')).toBeNull()
     expect(line.querySelector('.route-segment')).toBeNull()
     expect(screen.queryByRole('button', { name: /receipt/i })).not.toBeInTheDocument()
@@ -6456,7 +6472,7 @@ describe('provenance line', () => {
 
     const line = await screen.findByRole('button', { name: /^Expand receipt:/ })
     const marker = line.querySelector('.receipt-marker')
-    expect(line.textContent).toBe('analysis/high → glm 5.2 6.2s')
+    expect(line.textContent).toBe('analysis/high → glm 5.2')
     expect(marker).toHaveAttribute('aria-hidden', 'true')
     expect(marker).not.toHaveClass('expanded')
     await fireEvent.click(line)

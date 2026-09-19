@@ -665,7 +665,7 @@ export function createChatController({
     onSend()
     onSubmitError('')
     const submissionId = ++submissionSequence
-    const userMessage = { role: 'user', text: prompt, attachments: [], submissionId }
+    const userMessage = { role: 'user', sentAt: new Date().toISOString(), text: prompt, attachments: [], submissionId }
     const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt, submissionId }
     publishMessages([...messages(), userMessage, { role: 'assistant', run: pending }])
     onActive(pending)

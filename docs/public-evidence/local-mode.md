@@ -133,3 +133,8 @@ An explicit web search workflow in the user configuration remains in effect.
 Actions appear where they occur between assistant text blocks, including restored history.
 Web search details list the queries without provider output or search parameters.
 A lost reply acknowledgment keeps the reply in recovery until the journal read completes.
+
+Hover over a user message to see its local send time and copy control.
+The reply places execution time and an icon-only copy control at the right.
+
+A single action opens its details directly. Multiple actions share a group dropdown.

@@ -6,7 +6,7 @@ import ActionFeedback from './ActionFeedback.svelte'
 afterEach(cleanup)
 
 it('opens the group and action details and stops the active sheen when the run ends', async () => {
-  const activities = [{ effectId: 'command-1', displayName: 'bash', status: 'running', input: '{"command":"cargo test"}', output: '12 tests passed' }]
+  const activities = [{ effectId: 'command-0', displayName: 'bash', status: 'completed', input: '{"command":"pwd"}' }, { effectId: 'command-1', displayName: 'bash', status: 'running', input: '{"command":"cargo test"}', output: '12 tests passed' }]
   const view = render(ActionFeedback, { activities, live: true })
   const group = view.getByText('Running commands').closest('details')
   expect(group).not.toHaveAttribute('open')
@@ -35,7 +35,8 @@ it('leaves rows without details static and opens read files in the panel', async
 
 it('shows only the queries for web search details', () => {
   const view = render(ActionFeedback, { activities: [{ effectId: 'web', displayName: 'web_search', status: 'completed', input: JSON.stringify({ queries: ['First query', 'Second query'], numResults: 6 }), output: 'Long provider output' }] })
-  expect(view.getAllByText('Searched the web')).toHaveLength(2)
+  expect(view.getAllByText('Searched the web')).toHaveLength(1)
+  expect(view.container.querySelectorAll('details')).toHaveLength(1)
   expect(view.getByText('Queries:')).toBeInTheDocument()
   expect(view.getByText('First query')).toBeInTheDocument()
   expect(view.queryByText('Long provider output')).not.toBeInTheDocument()
