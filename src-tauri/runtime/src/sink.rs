@@ -297,6 +297,29 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         Some(self.memory_runtime.agent_extension_path())
     }
 
+    fn agent_instructions(&self) -> Result<Option<String>, PiLaunchError> {
+        let sessions = self.profile.pi_session_root();
+        let profile = sessions
+            .parent()
+            .ok_or(PiLaunchError::UnavailableSessionRoot)?;
+        muniment_core::agents::thread_instructions(profile, &self.thread_id)
+            .map_err(|e| PiLaunchError::rejected("agent", e))
+    }
+
+    fn project_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+        let sessions = self.profile.pi_session_root();
+        let profile = sessions
+            .parent()
+            .ok_or(PiLaunchError::UnavailableSessionRoot)?;
+        muniment_core::projects::workspace_with_config(
+            profile,
+            self.memory_runtime.config_directory(),
+            &self.thread_id,
+        )
+        .map(Some)
+        .map_err(|error| PiLaunchError::rejected("project_folder", error))
+    }
+
     fn earlier_models(&self) -> Vec<String> {
         self.earlier_models.clone()
     }

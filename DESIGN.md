@@ -53,13 +53,13 @@ device beside the theme and the shipped pair stays the default.
 Shape: radius `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
 Nothing pill-shaped. Hairline borders do the work, and `--shadow-window` and
 `--shadow-overlay` are the only two depth tokens. Motion is purposeful and
-rare: the mark's thinking state, the active action's text sheen, the streaming underline, the
+rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the
 panel slide. `prefers-reduced-motion` removes all of it.
 
 ## Laws
 
 1. **Color means computation.** `--signal` appears only on the mark's thinking
-   state, the streaming underline and caret on
+   state, the streaming underscore and caret on
    the active line, the route segment of the provenance line, the live voice
    polish flash, the enabled state of the Models show switch, and workflow-run
    indicators. Buttons, links,
@@ -109,7 +109,7 @@ messages sit right in `faint` bubbles at radius 10. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
 36px gutter, and render as Markdown from the first token. The composer keeps
 its 760px column, and the transcript scrolls on under it and fades into the
-surface above it. Streaming is a 2px signal underline and a signal caret,
+surface above it. Streaming is one signal underscore caret,
 never dots. Tool activity groups file reads, searches, commands and edits.
 Hover or keyboard focus reveals a chevron. Each group opens its action list,
 and each action opens its input, output, state and duration. A neutral text
@@ -120,32 +120,33 @@ border to `muted`, never signal.
 Platform chrome follows the OS and brand tokens stay identical across platforms.
 On macOS the app row sits in the 36px band above the panels beside the native
 traffic lights, and the row's controls and the lights center on that band. The
-row is the drag region and holds the sidebar toggle, New thread, the thread
-title, and Artifacts then Record flush right with the update control beside
-them. New thread, the thread title, Artifacts and Record are one quiet row
+row is the drag region and holds the sidebar toggle, the thread
+title with its actions menu, and Artifacts then Record with the update control beside
+them. The thread title, Artifacts and Record are one quiet row
 control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption
 controls and Linux keeps its decorations. The sidebar is dense: 28px rows,
-threads under project headings with one `Untitled` project by default,
-hairlines edge to edge, and a foot of Settings above the account row, which
-reads `Sign in to cloud` until an account signs in. A thread row shows a delete
-control on hover and focus, Shift and Command clicks select rows, and the
-right-click menu or the Delete key removes the selection after one confirm.
+New thread leads the sidebar, followed by Agents and title search, with no static Threads heading.
+Pinned threads precede recent threads, with a heading only when pins exist.
+Search loads older titles and includes archives. Archived threads has Restore.
+Pins and archives persist on the device. Projects lists folders and scopes threads. The Settings and account footer has one hairline.
+Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
+in one compact menu shared with the title. Shift and Command select rows. Delete asks once.
 Settings is a popup over the workspace with a
-section list on its left, Models, Appearance, Home, Companies and Account, and the
+section list on its left, Models & routing, Preferences, Profile & Memory, Home, Companies and Account, and the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it, and Escape or its close control returns focus to the opener.
 Companies lists every company on the machine with Open, Rename and Delete,
-Delete asks once and names the company, and New company sits under the list. Models
-lists connected providers with their real marks, a source tag, their models
-with a show switch and Disconnect, then the popular providers not yet
-connected as rows; Connect provider searches the rest, and a provider opens
-on one view with its first method and the others one switch away. The model
+Delete asks once and names the company, and New company sits under the list.
+Models & routing leads with automatic or specific model selection. Account
+rows span the page, with allowances visible and usage and weight in details.
+A searchable model list holds visibility and routing statements. Connect
+account opens the provider catalog and its connection methods. The model
 chip shows the provider's mark in its brand colors beside the model id, and
-opens a picker over the shown models with Manage models at its foot. The
+opens a picker over the shown models with Models & routing at its foot. The
 sidebar is resizable by its divider and collapses to nothing: no rail.
 The mark appears on the launch screen and in the thinking state, never in
 the sidebar. Icons are Lucide, vendored as inline SVG at a 1.6px stroke. Sidebar, thread and rail sit

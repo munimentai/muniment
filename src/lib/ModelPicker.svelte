@@ -49,7 +49,7 @@
       </section>
     {/each}
   </div>
-  <button type="button" class="quiet picker-manage" onclick={onmanage}><LucideIcon name="settings" variant="action" size={14} />Manage models</button>
+  <button type="button" class="quiet picker-manage" onclick={onmanage}><LucideIcon name="settings" variant="action" size={14} />Models &amp; routing</button>
 </div>
 
 <style>

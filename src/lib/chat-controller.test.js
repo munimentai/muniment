@@ -336,6 +336,16 @@ describe('chat controller', () => {
     expect(setup().controller.refreshThreads).toEqual(expect.any(Function))
   })
 
+  it('keeps the restored thread selected when the backend has no explicit selection', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_current_thread'
+      ? null
+      : { summaries: [{ threadId: 'thread-1', title: 'Saved title' }], nextCursor: null })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await context.controller.refreshThreads()
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-1')
+    expect(context.onFreshThread).toHaveBeenLastCalledWith(false)
+  })
+
   it('reports a rejected listener registration and retries it with history', async () => {
     const listen = vi.fn()
       .mockRejectedValueOnce(new Error('registration failed'))

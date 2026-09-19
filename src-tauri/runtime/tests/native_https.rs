@@ -65,7 +65,7 @@ fn native_registration_sends_a_tls_client_hello() {
 
     let activity = RuntimeActivityRegistry::new();
     let browser = |_: &str| panic!("A failed TLS handshake must not open the browser.");
-    let result = sign_in(&browser, &Default::default(), &activity);
+    let result = sign_in(&|| true, &browser, &Default::default(), &activity);
     std::env::remove_var("MUNIMENT_API_BASE_URL");
     server.join().unwrap();
     assert!(

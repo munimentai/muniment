@@ -146,6 +146,24 @@ impl RuntimeAttachState {
         self.drain_state.clone()
     }
 
+    pub(crate) fn agent_profile(&self) -> &Path {
+        &self.profile_directory
+    }
+    pub(crate) fn agent_storage(&self) -> muniment_core::run_events::SharedStorage {
+        Arc::clone(&self.storage)
+    }
+    pub(crate) fn agent_events(
+        &self,
+        run: &str,
+    ) -> Result<Vec<muniment_core::journal::EventEnvelope>, String> {
+        self.storage
+            .lock()
+            .map_err(|_| "Agent history is busy.".to_owned())?
+            .journal
+            .events(run)
+            .map_err(|e| e.to_string())
+    }
+
     /// Applies the retention choice currently recorded for this profile.
     pub fn apply_recorded_retention(&self) -> Result<(), String> {
         apply_recorded_retention(&self.config_directory, &self.storage)

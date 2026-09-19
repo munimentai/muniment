@@ -10,16 +10,19 @@ use super::*;
 pub(crate) struct TauriChatEventSink<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
     memory_runtime: Arc<crate::memory::ApplicationMemoryRuntime>,
+    run_id: String,
 }
 
 impl<R: tauri::Runtime> TauriChatEventSink<R> {
     pub(super) fn new(
         app: tauri::AppHandle<R>,
         memory_runtime: Arc<crate::memory::ApplicationMemoryRuntime>,
+        run_id: String,
     ) -> Self {
         Self {
             app,
             memory_runtime,
+            run_id,
         }
     }
 }
@@ -49,6 +52,33 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
             .map_err(|_| PiLaunchError::UnavailableSessionRoot)
     }
 
+    fn project_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+        let profile = muniment_runtime::profile_directory().map_err(|_| PiLaunchError::UnavailableSessionRoot)?;
+        let state = self.app.state::<ChatState>();
+        let thread = state.storage().map_err(|e| PiLaunchError::rejected("project_folder", e))?
+            .lock().map_err(|_| PiLaunchError::UnavailableSessionRoot)?.journal.run_thread_id(&self.run_id)
+            .map_err(|e| PiLaunchError::rejected("project_folder", e))?
+            .ok_or(PiLaunchError::UnavailableSessionRoot)?;
+        if let Some(folder) = muniment_core::projects::thread_folder(&profile, &thread).map_err(|e| PiLaunchError::rejected("project_folder", e))? { return Ok(Some(folder)); }
+        let selected = state.pending_project.lock().map_err(|_| PiLaunchError::UnavailableSessionRoot)?.take();
+        if let Some(project) = selected {
+            muniment_core::projects::assign(&profile, &thread, &project).map_err(|e| PiLaunchError::rejected("project_folder", e))?;
+        }
+        muniment_core::projects::workspace(&profile, &thread).map(Some).map_err(|e| PiLaunchError::rejected("project_folder", e))
+    }
+
+    fn agent_instructions(&self) -> Result<Option<String>, PiLaunchError> {
+        let profile = muniment_runtime::profile_directory().map_err(|_| PiLaunchError::UnavailableSessionRoot)?;
+        let state = self.app.state::<ChatState>();
+        let thread = state.storage().map_err(|e| PiLaunchError::rejected("agent", e))?
+            .lock().map_err(|_| PiLaunchError::UnavailableSessionRoot)?.journal.run_thread_id(&self.run_id)
+            .map_err(|e| PiLaunchError::rejected("agent", e))?.ok_or(PiLaunchError::UnavailableSessionRoot)?;
+        if let Some(id) = state.pending_agent.lock().map_err(|_| PiLaunchError::UnavailableSessionRoot)?.take() {
+            muniment_core::agents::assign(&profile, &thread, &id).map_err(|e| PiLaunchError::rejected("agent", e))?;
+        }
+        muniment_core::agents::thread_instructions(&profile, &thread).map_err(|e| PiLaunchError::rejected("agent", e))
+    }
+
     fn memory_agent_extension_path(&self) -> Option<PathBuf> {
         Some(self.memory_runtime.agent_extension_path())
     }
@@ -60,6 +90,8 @@ pub struct ChatState {
     pub(super) active: Arc<Mutex<Option<ActiveRun>>>,
     pub(super) runtime: Arc<Mutex<Option<PiRuntime>>>,
     pub(crate) session_thread: SessionThread,
+    pub(crate) pending_project: Mutex<Option<String>>,
+    pub(crate) pending_agent: Mutex<Option<String>>,
     pub(crate) runtime_activity: RuntimeActivityRegistry,
     pub(crate) retention_trigger: RetentionTrigger,
 }
@@ -459,7 +491,7 @@ impl<R: tauri::Runtime> RunStartBoundaries for TauriRunStartBoundaries<R> {
                 .inner(),
         );
         tauri::async_runtime::spawn_blocking(move || {
-            let sink = TauriChatEventSink::new(app.clone(), Arc::clone(&memory_runtime));
+            let sink = TauriChatEventSink::new(app.clone(), Arc::clone(&memory_runtime), launch.run_id.clone());
             coordinate(
                 sink,
                 storage,
@@ -501,6 +533,8 @@ impl ChatState {
             active: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             session_thread: SessionThread::default(),
+            pending_project: Mutex::new(None),
+            pending_agent: Mutex::new(None),
             runtime_activity,
             retention_trigger: RetentionTrigger::default(),
         }

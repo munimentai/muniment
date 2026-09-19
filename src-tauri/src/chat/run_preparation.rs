@@ -23,7 +23,7 @@ pub fn chat_file_metadata(path: PathBuf) -> Result<ChatAttachment, String> {
 /// Reads a user-selected local text file for the file panel. Relative tool paths
 /// resolve against the same Home directory as the agent's tools.
 #[tauri::command]
-pub async fn chat_file_content(path: PathBuf) -> Result<String, String> {
+pub async fn chat_file_content(path: PathBuf, thread_id: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::Read;
         let path = if path.is_absolute() {
@@ -31,9 +31,7 @@ pub async fn chat_file_content(path: PathBuf) -> Result<String, String> {
         } else {
             let profile = muniment_runtime::profile_directory()
                 .map_err(|_| "The Home folder is unavailable.")?;
-            muniment_core::launch_facts::working_directory(&profile)
-                .ok_or("The Home folder is unavailable.")?
-                .join(path)
+            project_working_directory(&profile, thread_id.as_deref()).map_err(|_| "The project folder is unavailable.")?.join(path)
         };
         let kind = std::fs::metadata(&path).map_err(|_| "This file is no longer available.")?;
         if !kind.is_file() {
@@ -62,7 +60,7 @@ pub async fn chat_file_content(path: PathBuf) -> Result<String, String> {
     })
     .await
     .map_err(|_| "This file cannot be read.".to_string())?
-    .map_err(str::to_owned)
+    .map_err(|error| error.to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -75,13 +73,20 @@ pub struct ComposerFile {
 
 /// Searches names only. Hidden folders, build output and symlinks are excluded.
 #[tauri::command]
-pub async fn chat_search_files(query: String) -> Result<Vec<ComposerFile>, String> {
+pub async fn chat_search_files(query: String, thread_id: Option<String>) -> Result<Vec<ComposerFile>, String> {
     if query.chars().count() > 256 { return Ok(Vec::new()); }
     tauri::async_runtime::spawn_blocking(move || {
         let profile = muniment_runtime::profile_directory().map_err(|_| "The Home folder is unavailable.")?;
-        let root = muniment_core::launch_facts::working_directory(&profile).ok_or("The Home folder is unavailable.")?;
+        let root = project_working_directory(&profile, thread_id.as_deref())?;
         Ok(search_home_files(&root, &query))
     }).await.map_err(|_| "File search could not finish.".to_owned())?
+}
+
+fn project_working_directory(profile: &std::path::Path, thread: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(thread) = thread {
+        return muniment_core::projects::workspace(profile, thread);
+    }
+    muniment_core::launch_facts::working_directory(profile).ok_or_else(|| "The Home folder is unavailable.".into())
 }
 
 pub(super) fn search_home_files(root: &std::path::Path, query: &str) -> Vec<ComposerFile> {

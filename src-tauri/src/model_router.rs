@@ -61,6 +61,7 @@ pub(crate) struct AccountView {
     label: String,
     /// `key` or `account`.
     source: &'static str,
+    servable: bool,
     base_url: Option<String>,
     models: Vec<String>,
     enabled: bool,
@@ -204,6 +205,7 @@ fn account_view(
         family: account.family.clone(),
         label: account.label.clone(),
         source: account.credential.source(),
+        servable: account.credential.servable(),
         base_url: account.base_url.clone(),
         models: account.models.clone(),
         enabled: account.enabled,
@@ -742,6 +744,16 @@ pub(crate) async fn model_router_test_classifier() -> Result<(), String> {
     .map_err(|_| "The test did not finish. Try again.".to_string())?
 }
 
+#[tauri::command]
+pub(crate) async fn model_router_test_route(app: tauri::AppHandle, sample: String) -> Result<server::RouteTest, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<RouterState>();
+        let held = state.0.lock().map_err(|_| "Cannot reach the router.")?;
+        let handle = held.as_ref().ok_or("Turn on account balancing before testing routing.")?;
+        handle.test_route(&sample)
+    }).await.map_err(|_| "The routing test did not finish.".to_string())?
+}
+
 /// Lifts the credential a pool sign-in left in its scratch directory into the
 /// router as one more account, and answers with the account id. The probe
 /// that names the account by its email runs after, off the sign-in thread.
@@ -813,22 +825,10 @@ pub(crate) fn import_credential<R: tauri::Runtime>(
 /// the account by its email when the sign-in did not. Answers whether the
 /// upstream said anything.
 pub(crate) fn refresh_quota(agent: &Path, id: &str) -> Result<bool, String> {
-    let mut config = load(agent)?;
-    let Some(account) = config.accounts.iter_mut().find(|account| account.id == id) else {
-        return Err("That account is gone.".into());
-    };
-    let original = account.credential.clone();
     let now = chrono::Utc::now().timestamp_millis();
-    // A token inside a minute of dying is refreshed first, so the probe and
-    // the turns that follow run on a live one.
-    if let Some(refreshed) = muniment_core::model_router::native_auth::refresh_if_expiring(
-        &account.credential,
-        now,
-        quota::TIMEOUT,
-    ) {
-        account.credential = refreshed?;
-    }
-    let probed = quota::probe(account, now, quota::TIMEOUT);
+    let account = muniment_core::model_router::native_auth::refresh_account(agent, id, now, quota::TIMEOUT)?;
+    let original = account.credential.clone();
+    let probed = quota::probe(&account, now, quota::TIMEOUT);
     save_probe(agent, id, &original, account.credential.clone(), probed)
 }
 

@@ -16,6 +16,49 @@ The audience is anyone who runs a business, or wants to, with intelligence and
 the company data in one app. Nobody has to be a developer. They install a local
 app without asking anyone and run a harness such as Claude Code.
 
+## Project folders
+
+The default Home is `Documents/muniment`. Existing Home choices persist.
+Projects are folders under Home's `projects/`, with stable thread membership.
+Create makes the folder. Rename moves the folder and preserves its files and threads.
+A project thread runs in its folder. Generated files stay there unless the user names another path.
+Threads without a project use `sessions/<thread-id>/`. Search and previews use the same folder.
+Agent definitions live in `agents/<id>/agent.md`, with name, job title, description, avatar, project and schedule.
+The description supplies persistent instructions. Original SVG avatars use a stable, versioned seed. Faces are mostly neutral or happy; frown and kiss mouths each have a 1-in-500 chance.
+New avatars combine shapes, colors, eyes, mouths, glasses, cheeks and face positions. Saved versions keep their appearance.
+Avatars render locally in the sidebar, catalog and profile. Rename preserves the seed; Change avatar replaces it.
+The Agents control follows New thread and exposes a plus button on hover or keyboard focus.
+It opens a card catalog with name, project and schedule. The first card creates an agent.
+An empty catalog opens the agent editor. Each saved agent opens its existing chat or creates its first conversation.
+Each agent has one persisted primary conversation. Interactive messages and routine runs reuse it.
+Routine history stays in the agent profile with time, status, errors, and conversation links.
+Agent facts live under agents/<id>/memory/facts. Agent recall reads its own memory.
+General recall excludes agent facts. Manual edits and chat tools use the same files, with recoverable deletion.
+Changing the agent project directs new work to that project and preserves existing files.
+The agent is the sidebar and title-bar identity. Its stored conversations do not appear in regular, pinned, archived, or project thread lists.
+An agent profile occupies a 220 px right sidebar. Profile fields reveal inline edit controls on hover or focus.
+Agent chats and regular threads use one shared composer with the same features.
+Agent panels and maximized record panels fill the chat area while the expanded sidebar stays visible.
+Agent threads retain their agent across replies.
+Templates import from JSON, Markdown or public Grok share links into an editable draft.
+Public link imports identify their profile-only coverage. Supplied skills, memories, plugins and routines persist as template context.
+Plugins and routines are setup requirements, not installed capabilities or active schedules. Import never starts a run.
+Portable export preserves template context and the avatar seed, with schedules paused.
+Export for Grok Bot writes a Markdown setup file containing the profile, template context and original SVG.
+Exports omit local project assignments, conversation history, account credentials and private learned memory.
+Chat can list, read, save and run agents through harness tools backed by the same files as manual editing.
+Daily, weekday and weekly schedules use the host time zone and the local background service.
+Due runs wait for the current reply. A missed schedule runs once when the service returns.
+An interrupted dispatch requires review instead of an automatic retry. Run results link to their thread.
+Profile & Memory has separate name, preferred name, work and instructions fields backed by `memory/profile.md`.
+Unrecognized profile sections remain editable. Each new reply receives the saved profile.
+Durable facts live in `memory/facts/<id>.md` with their source. Users can edit and delete them.
+The memory-save tool records the originating thread and run. It rejects credentials.
+Chat maintains facts automatically, including corrections and deletion of verified obsolete facts.
+Deleted facts leave recall and stay in private recovery storage. Settings can restore them.
+Memory search rebuilds its index from files. Profile imports require Save before taking effect.
+Memory and runtime state keep their own locations. A missing project folder stops the run.
+
 ## What this repo is
 
 The shell: the thread surface, the composer, the artifact rail, the record
@@ -111,19 +154,17 @@ the saved default when it is shown, else the first shown model. When no
 provider answers it reads `Connect a model`, and the first Send opens Settings
 → Models. There is no free hosted model without an account.
 
-**Settings → Models is one screen.** Every connection is a named account
-under its provider, a key or a subscription, with its allowance and usage on
-the card. The provider's models list once, never per account, and Routing
-sits at the foot. A key added here goes into Pi's `auth.json`, an
+**Settings → Models & routing is one screen.** Model selection and classifier
+settings lead. Full-width account rows show allowance, with usage and weight
+in account details. One searchable model list holds visibility and routing
+statements. A sample routing test shows the choice and fallback cause without
+generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the desktop owns
 and lands in the same file, or in the router's pool when the router pools
 its family, and a local or custom endpoint goes into Pi's `models.json`, so Pi uses each at once and nothing leaves the machine except
 to that provider. The catalog is Pi's built-in provider table. The section
-lists connected providers, each with its source tag, `Key`, `Account`,
-`Local`, `Custom` or `Claude Code`, its models from `pi --list-models` with a
-show switch, the default model and Disconnect, then Anthropic, OpenAI, xAI,
-Google, OpenRouter, Ollama, LM Studio and a custom endpoint as rows, and
-Connect provider searches the rest. A provider opens on one view with its first
+lists connected providers with their source and Disconnect. Connect account
+opens the provider catalog and searches its connection methods. A provider opens on one view with its first
 method, an account where Pi signs in, Claude Code for Anthropic through
 `pi-claude-bridge`, an API key, or a server URL, with its other methods one
 switch away. The OpenAI redirect lands on the desktop's own page on port
@@ -136,14 +177,14 @@ first-class provider beside the hosted ones, never a fallback. The custom
 endpoint form takes a name, a base URL, an optional key and a model list. The
 chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
 
-**Routing, at the foot of Settings → Models.** Pi's `auth.json` holds one credential per
+**Routing leads Settings → Models & routing.** Pi's `auth.json` holds one credential per
 provider id, so a second account of one provider cannot live there. The router
 holds those pools itself in `muniment-router.json` beside it at the same
 `0600`, answers the OpenAI chat wire on `127.0.0.1` behind a random token, and
 registers as the one Pi provider `muniment-router`. It is off by default, a
 subscription that joins a pool turns it on, and off removes that entry and
 nothing else. The families it pools are OpenAI,
-Anthropic, Google, xAI, Kimi and Devin. A key reaches its family on the
+Anthropic, Google, xAI, Kimi and Devin. An Anthropic key uses Messages. Other keys use the
 OpenAI-compatible route, an account may name a base URL of its own for a
 gateway or a region, and Devin is a subscription alone.
 
@@ -154,7 +195,7 @@ the family, named by its email. Kimi, Antigravity and Devin have no Pi
 sign-in, so the router runs its own: Kimi by device code at `auth.kimi.com`,
 Antigravity and Devin through the browser, each landing on a loopback page in
 muniment's mark. Antigravity is a Google account and pools into Google. A
-Kimi, Google or xAI token refreshes before it dies, ahead of the turn that
+Kimi, Google, xAI, Codex or Claude token refreshes before it dies, ahead of the turn that
 would find it dead. The router asks the upstream
 what the account has left: Codex at `chatgpt.com/backend-api/wham/usage`,
 Anthropic at `api.anthropic.com/api/oauth/usage`, Kimi at
@@ -165,11 +206,15 @@ says what the router cannot read. A window is known by its length in
 seconds, never by its slot, because a Pro plan's primary window is the weekly
 one. The card shows what is left, not what is used, with the reset, the plan,
 and Codex's banked resets. The store in `muniment-router-quota.json` carries
-no token and no prompt. A subscription is shown and probed, and no turn lands
-on it until the router speaks its wire.
+no token and no prompt. Allowances refresh when the settings page opens and
+every two minutes while it is visible, without overlapping probes. Manual
+refresh remains available. Codex and xAI subscriptions use Responses. Claude
+and Kimi subscriptions use Messages. Native streams preserve tool calls and
+usage. Other subscriptions remain ineligible until their transport exists.
 
 **The router balances, and a refusal moves the turn.** Among the accounts of a
-family that serve the model and are not cooling, the one whose served share
+family that serve the model and are not cooling or known to be exhausted,
+the one whose served share plus active reservations
 sits furthest below its weight takes the next turn. A `401`, `402`, `403`,
 `429` or `5xx` is the account refused, not the request: it cools from fifteen
 seconds doubling to fifteen minutes and the next account takes the turn, three
@@ -417,7 +462,7 @@ weaker than the one that built it. Four items:
    reaches the user's MCP servers and, on a paid account, the cloud graph's tools.
 3. **The system prompt.** The desktop passes Pi its own prompt: purpose, tools, the bash
    timeout rule, and the launch facts: the model, earlier thread models, host and shell, and
-   the working directory, which is Home and the agent's `cwd`. Each message opens with its
+   the working directory, which is the thread's project or session folder. Each message opens with its
    send time. No harness or product name. Pi reads `bash` `timeout` in seconds with no
    default, so the prompt says pass one on every call, 60 quick, 600 for a build, longer to `bg_run`.
 4. **The version pin** moves to the version the factory runs.

@@ -5,7 +5,14 @@ import path from 'node:path'
 // Classes may be exempted only when markup intentionally exposes a class for a
 // non-CSS consumer. Each entry must explain that consumer; the stale-entry test
 // below keeps this from becoming a graveyard for removed markup.
-const EXCEPTIONS = {}
+const EXCEPTIONS = {
+  'src/App.svelte': {
+    'new-thread': 'Probe layout checks and sidebar action tests select the new-thread button.',
+    'agent-roster': 'Sidebar tests check that agents appear outside project sections.',
+    'project-section': 'Sidebar tests check the project section boundary.',
+    'archive-toggle': 'Thread archive action restores keyboard focus to this button.',
+  },
+}
 
 // Repo root: `npm test` runs vitest with `--root .`.
 const root = process.cwd()

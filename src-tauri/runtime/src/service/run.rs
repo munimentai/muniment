@@ -130,6 +130,27 @@ pub fn accept_prompt(
     )?;
     let setup = (|| {
         let mut notice = None;
+        let mut provenance = runtime_provenance();
+        if let Some(thread) = thread_id.as_deref() {
+            let events = storage
+                .lock()
+                .map_err(|_| "Conversation history is busy.")?
+                .journal
+                .thread_events(thread)
+                .map_err(|e| e.to_string())?;
+            if events
+                .first()
+                .and_then(|event| event.provenance.extra.get("attach_profile"))
+                .and_then(|value| value.as_str())
+                == Some("desktop-owner")
+            {
+                // RunSubmit is the authenticated desktop-owner path. Keep its
+                // scope when the desktop creates the thread before its first run.
+                provenance
+                    .extra
+                    .insert("attach_profile".into(), "desktop-owner".into());
+            }
+        }
         let mut prepared = prepare_opened_run_with_prompt_storage(
             &storage,
             SessionThreadStart {
@@ -140,7 +161,7 @@ pub fn accept_prompt(
             &grant.workspace,
             subject.as_deref(),
             files,
-            Some(runtime_provenance()),
+            Some(provenance),
             thread_id.as_deref(),
             "muniment-runtime",
             env!("CARGO_PKG_VERSION"),
