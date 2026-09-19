@@ -138,3 +138,5 @@ Hover over a user message to see its local send time and copy control.
 The reply places execution time and an icon-only copy control at the right.
 
 A single action opens its details directly. Multiple actions share a group dropdown.
+
+Routed replies estimate cost per turn using the selected model’s catalog input and output rates. Cached input uses the standard input rate. Subscription allowances and provider discounts do not change this estimate. An unknown model price leaves cost unavailable. Saved receipts retain their recorded values.
