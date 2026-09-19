@@ -21,3 +21,10 @@ it('fails cleanup when the fixture remains signed in', async () => {
 it('does not treat an unavailable authentication service as proof of cleanup', async () => {
   await expect(revokeFixtureSession({ execute: async () => { throw new Error('disconnected') } })).rejects.toThrow('disconnected')
 })
+
+it('confirms an already signed-out fixture without requesting another sign-out', async () => {
+  const invoke = vi.fn(async () => ({ signed_in: false }))
+  vi.stubGlobal('window', { __TAURI__: { core: { invoke } } })
+  await revokeFixtureSession({ execute: (callback) => callback() })
+  expect(invoke.mock.calls).toEqual([['auth_status'], ['auth_status']])
+})

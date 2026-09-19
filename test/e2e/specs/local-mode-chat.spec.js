@@ -73,6 +73,15 @@ describe('installed local-mode chat', () => {
     expect(await composer.getValue()).toBe('Help me organize my notes.')
     // The first Send opens Settings → Models; the composer chip's picker reopens it through Manage models.
     const settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
+    if (await settings.isDisplayed()) {
+      await (await settings.$('button[aria-label="Close settings"]')).click()
+      await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
+    }
+    const emptyChat = await localMode.$('.thread .empty')
+    await browser.waitUntil(async () => await emptyChat.getText() === 'Connect a model in the composer to start chatting.', {
+      timeout: 30000,
+      timeoutMsg: 'empty chat did not explain how to connect a model before the first connection',
+    })
     if (!(await settings.isDisplayed())) {
       const modelChip = await localMode.$('.model-chip')
       await modelChip.waitForDisplayed()
@@ -90,6 +99,10 @@ describe('installed local-mode chat', () => {
     await (await settings.$('button[aria-label="Close settings"]')).click()
     await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
 
+    await browser.waitUntil(async () => (await emptyChat.getText()).endsWith('is selected. Ask a question or request a file.'), {
+      timeout: 30000,
+      timeoutMsg: 'empty chat did not reflect the connected model or explain file creation',
+    })
     await waitForDesktopClient()
     const prompt = `Muniment local E2E chat ${Date.now()}`
     await composer.setValue(prompt)
