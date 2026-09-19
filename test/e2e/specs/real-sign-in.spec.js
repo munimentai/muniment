@@ -220,7 +220,10 @@ describe('installed nightly', () => {
         }, { timeout: 30000, timeoutMsg: 'WebKitWebDriver did not start' })
       }
       signInBrowser = await remote({
-        hostname: '127.0.0.1', port: 9515, logLevel: 'silent',
+        // macOS uses WebdriverIO's managed Chrome driver. Explicit endpoints
+        // disable that setup and require a driver that the macOS runner does not start.
+        ...(process.platform === 'darwin' ? {} : { hostname: '127.0.0.1', port: 9515 }),
+        logLevel: 'silent',
         // A WebKit navigation can hold each command while the page changes.
         // Keep those expected timeouts below the surrounding sign-in waits.
         ...(process.platform === 'linux'
