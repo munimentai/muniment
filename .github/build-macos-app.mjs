@@ -178,6 +178,7 @@ for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArgum
 mustRun("codesign runtime", "codesign", codesignArguments(identity.hash, runtime));
 mustRun("codesign cli", "codesign", codesignArguments(identity.hash, cliBinary));
 mustRun("codesign reader", "codesign", codesignArguments(identity.hash, readerBinary));
+mustRun("codesign CEF helper", "codesign", codesignArguments(identity.hash, join(app, "Contents", "MacOS", "muniment-cef-helper")));
 mustRun("codesign app", "codesign", codesignArguments(identity.hash, app));
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
