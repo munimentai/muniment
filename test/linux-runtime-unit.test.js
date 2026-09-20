@@ -59,7 +59,15 @@ describe('Linux runtime user unit', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'muniment-deb-'))
     const bin = path.join(root, 'usr', 'bin')
     mkdirSync(bin, { recursive: true })
-    const rewrite = (script) => script.replaceAll('/usr/bin/', `${bin}/`).replaceAll('/etc/systemd/user/default.target.wants', path.join(root, 'wants'))
+    const sandbox = path.join(root, 'cef', 'chrome-sandbox')
+    mkdirSync(path.dirname(sandbox))
+    writeFileSync(sandbox, 'sandbox')
+    const rewrite = (script) => script
+      .replaceAll('/usr/bin/', `${bin}/`)
+      .replaceAll('/usr/lib/muniment/cef/chrome-sandbox', sandbox)
+      .replaceAll('/etc/systemd/user/default.target.wants', path.join(root, 'wants'))
+      // Exercise chmod on the fixture without requiring root for chown.
+      .replace('set -e', `set -e\nchown() { [ "$1" = root:root ] && [ "$2" = '${sandbox}' ]; }`)
     const run = (script, arg) => {
       const file = path.join(root, path.basename(script))
       writeFileSync(file, rewrite(readFileSync(script, 'utf8')), { mode: 0o700 })
@@ -69,6 +77,7 @@ describe('Linux runtime user unit', () => {
     try {
       const missingPayload = run(postInstallPath, 'configure')
       expect(missingPayload.status, missingPayload.stderr).toBe(0)
+      expect(lstatSync(sandbox).mode & 0o7777).toBe(0o4755)
       expect(existsSync(path.join(bin, 'muniment'))).toBe(false)
 
       writeFileSync(path.join(bin, 'muniment-desktop'), 'payload')
