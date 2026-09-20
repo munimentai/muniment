@@ -42,4 +42,6 @@ cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment
 # The reader sidecar is Go, static, and lands beside the Rust binaries.
 bash "$repo_root/.github/build-reader.sh" src-tauri/target/release/muniment-reader
 
-exec npm run tauri build -- --verbose "$@"
+npm run tauri build -- --verbose --no-bundle "$@"
+node "$repo_root/scripts/stage-cef-linux.mjs"
+exec npm run tauri bundle -- --verbose "$@" --config '{"bundle":{"resources":{"target/release/cef-resources/":"cef/"}}}'
