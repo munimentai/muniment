@@ -295,11 +295,21 @@ pub fn initialize(_app: Option<&tauri::AppHandle>, root: &Path) -> Result<(), St
     #[cfg(windows)]
     let helper = std::env::current_exe().map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
-    let helper = std::env::current_exe()
+    let cef_directory = std::env::current_exe()
         .map_err(|e| e.to_string())?
         .parent()
         .unwrap()
-        .join("muniment-cef-helper");
+        .to_path_buf();
+    #[cfg(target_os = "linux")]
+    let cef_directory = if cef_directory.join("libcef.so").is_file() {
+        cef_directory
+    } else {
+        cef_directory.join("../lib/muniment/cef")
+    };
+    #[cfg(target_os = "linux")]
+    let helper = cef_directory.join("muniment-cef-helper");
+    #[cfg(target_os = "linux")]
+    std::env::set_var("CHROME_DEVEL_SANDBOX", cef_directory.join("chrome-sandbox"));
     #[cfg(windows)]
     let sandbox = crate::cef_windows::broker();
     #[cfg(not(windows))]
@@ -310,6 +320,10 @@ pub fn initialize(_app: Option<&tauri::AppHandle>, root: &Path) -> Result<(), St
         root_cache_path: CefString::from(root.join("profiles").to_string_lossy().as_ref()),
         persist_session_cookies: 1,
         browser_subprocess_path: CefString::from(helper.to_string_lossy().as_ref()),
+        #[cfg(target_os = "linux")]
+        resources_dir_path: CefString::from(cef_directory.to_string_lossy().as_ref()),
+        #[cfg(target_os = "linux")]
+        locales_dir_path: CefString::from(cef_directory.join("locales").to_string_lossy().as_ref()),
         log_file: CefString::from(root.join("cef.log").to_string_lossy().as_ref()),
         ..Default::default()
     };

@@ -14,6 +14,7 @@ fn main() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").expect("target OS is set by Cargo");
     if os == "linux" {
         println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/muniment/cef");
         // Keep bundled native libraries out of the ELF dynamic symbol table.
         // NSS and WebKit use the system SQLite ABI, not rusqlite's bundled ABI.
         println!("cargo:rustc-link-arg=-Wl,--exclude-libs,ALL");

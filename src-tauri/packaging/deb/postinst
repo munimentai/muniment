@@ -2,6 +2,8 @@
 set -e
 
 if [ "$1" = "configure" ]; then
+  chown root:root /usr/lib/muniment/cef/chrome-sandbox
+  chmod 4755 /usr/lib/muniment/cef/chrome-sandbox
   mkdir -p /etc/systemd/user/default.target.wants
   ln -sfn /usr/lib/systemd/user/muniment-runtime.service \
     /etc/systemd/user/default.target.wants/muniment-runtime.service
