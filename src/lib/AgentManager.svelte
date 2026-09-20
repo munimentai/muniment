@@ -33,7 +33,7 @@
     const timer = setInterval(refresh, 10000)
     return () => clearInterval(timer)
   })
-  function add() { draft = empty(); catalog = false; deleting = false; status = ''; void tick().then(() => panel?.querySelector('input')?.focus()) }
+  function add() { draft = empty(); catalog = false; deleting = false; status = ''; void tick().then(() => panel?.querySelector('input:not([type="file"])')?.focus()) }
   function scheduleLabel(agent) {
     const s = agent.schedule
     if (!s?.enabled) return ''

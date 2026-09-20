@@ -426,7 +426,7 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(native).toContain('run_on_main_thread')
     expect(native).toContain('MUNIMENT_E2E_ONBOARDING_ONLY')
     expect(native).not.toMatch(/AXUIElement|sendEvent|osascript|Command::new/)
-    const main = await readFile(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8')
+    const main = await readFile(new URL('../src-tauri/src/desktop.rs', import.meta.url), 'utf8')
     expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*mod e2e_folder_dialog/)
     expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*e2e_folder_dialog::e2e_drive_folder_dialog/)
     expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*e2e_folder_dialog::e2e_folder_dialog_snapshot/)

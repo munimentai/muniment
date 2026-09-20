@@ -2143,8 +2143,12 @@ describe.skipIf(process.platform === 'win32')('Linux early abort reporting', () 
     const directory = temp()
     const artifacts = path.join(directory, 'artifacts')
     const plantedSecret = 'linux-planted-secret'
+    const bin = path.join(directory, 'bin')
+    fs.mkdirSync(bin)
+    for (const name of ['pkill', 'pgrep']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o700 })
     const env = {
       ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
       DCI_ARTIFACTS_DIR: artifacts,
       MUNIMENT_E2E_SOURCE_SHA: 'a'.repeat(40),
       GH_TOKEN: plantedSecret,
@@ -2185,6 +2189,8 @@ describe.skipIf(process.platform === 'win32')('runner setup causes', () => {
     const bin = path.join(directory, 'bin')
     fs.mkdirSync(bin)
     for (const [name, content] of Object.entries({
+      pkill: '#!/bin/sh\nexit 1\n',
+      pgrep: '#!/bin/sh\nexit 1\n',
       gh: '#!/bin/sh\nprintf \'{"assets":[{"name":"other-platform.zip","id":1}]}\\n\'\n',
       stat: '#!/bin/sh\necho test-user\n',
       id: '#!/bin/sh\necho test-user\n',
@@ -2638,7 +2644,7 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     const control = spawnSync('tar', ['-czf', path.join(packageRoot, 'control.tar.gz'), '-C', controlRoot, '.'], { encoding: 'utf8' })
     expect(control.status, control.stderr).toBe(0)
     const deb = path.join(fixture, 'muniment.deb')
-    const archive = spawnSync('ar', ['r', deb, 'debian-binary', 'control.tar.gz', 'data.tar.gz'], { cwd: packageRoot, encoding: 'utf8' })
+    const archive = spawnSync('ar', ['rcS', deb, 'debian-binary', 'control.tar.gz', 'data.tar.gz'], { cwd: packageRoot, encoding: 'utf8' })
     expect(archive.status, archive.stderr).toBe(0)
 
     const guard = spawnSync('bash', [path.join(root, 'test/e2e/support/webdriver-artifact-guard.sh'), 'present', deb], { cwd: root, encoding: 'utf8' })

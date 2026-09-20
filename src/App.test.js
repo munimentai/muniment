@@ -183,6 +183,8 @@ beforeAll(async () => {
   }
   window.__TAURI__ = {
     core: { invoke: (command, ...args) => {
+      if (command === 'artifact_list') return Promise.resolve([])
+      if (command === 'browser_view') return Promise.resolve()
       if (command === 'chat_thread_summaries') {
         if (args[0]?.cursor === 'older') return Promise.resolve({ summaries: olderThreadSummaryResult, nextCursor: null })
         return Promise.resolve({ summaries: threadSummaryResult, nextCursor: olderThreadSummaryResult ? 'older' : null })
@@ -1263,7 +1265,7 @@ describe('workspace composer entry', () => {
     expect(disabledSendRule).toMatch(/border-color:\s*var\(--border\)/)
     expect(disabledSendRule).toMatch(/color:\s*var\(--muted\)/)
 
-    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
+    const railToggle = screen.getByRole('button', { name: 'Artifacts' })
     railToggle.focus()
     await fireEvent.click(railToggle)
     expect(railToggle).toHaveFocus()
@@ -1865,7 +1867,7 @@ describe('workspace composer entry', () => {
     await waitFor(() => expect(composer).toBeEnabled())
     expect(composer).toHaveFocus()
 
-    const railToggle = screen.getByRole('button', { name: 'Open artifact rail' })
+    const railToggle = screen.getByRole('button', { name: 'Artifacts' })
     railToggle.focus()
     resolveResume({ runId: 'run-interrupted' })
     await waitFor(() => expect(screen.queryByText('Resuming…')).not.toBeInTheDocument())
@@ -1882,26 +1884,26 @@ async function openKinds(panel) {
 }
 
 describe('record panel', () => {
-  it('sits flush right of Artifacts with its shortcut, opens on the report with the kind list behind Kinds, and closes Artifacts', async () => {
+  it('opens the report with its shortcut and closes artifact creation', async () => {
     render(App)
     const record = await screen.findByRole('button', { name: 'Open record panel' })
-    const artifacts = screen.getByRole('button', { name: 'Open artifact rail' })
+    const artifacts = screen.getByRole('button', { name: 'Artifacts' })
     const mac = navigator.platform.startsWith('Mac')
     expect(record).toHaveAttribute('aria-controls', 'record-panel')
     expect(record).toHaveAttribute('aria-keyshortcuts', mac ? 'Meta+K' : 'Control+K')
     expect(within(record).getByText(mac ? '⌘ K' : 'Ctrl K').tagName).toBe('KBD')
     const row = record.closest('.titlebar-thread') ?? record.parentElement
     const controls = [...row.querySelectorAll('.row-control')]
-    expect(controls.indexOf(artifacts)).toBeLessThan(controls.indexOf(record))
+    expect(row).not.toContainElement(artifacts)
     expect(controls.at(-1)).toBe(record)
 
     await fireEvent.click(artifacts)
-    expect(screen.getByRole('complementary', { name: 'Artifacts' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Artifacts' })).toBeInTheDocument()
     await fireEvent.click(record)
     expect(record).toHaveAttribute('aria-expanded', 'true')
     expect(record).toHaveAccessibleName('Close record panel')
     expect(artifacts).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Artifacts' })).not.toBeInTheDocument()
     const panel = screen.getByRole('complementary', { name: 'Record' })
     expect(within(panel).getByRole('heading', { level: 2, name: 'Record' })).toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('record_companies')
@@ -2380,41 +2382,26 @@ describe('record panel', () => {
 })
 
 describe('artifact rail', () => {
-  it('uses one accessible heading for the rail', () => {
-    const railMarkup = appSource.match(/<aside id="artifact-rail"[\s\S]*?<\/aside>/)?.[0] ?? ''
 
-    expect(railMarkup).toMatch(/aria-labelledby="artifact-rail-title"/)
-    expect(railMarkup.match(/<h2 id="artifact-rail-title">Artifacts<\/h2>/g)).toHaveLength(1)
-    expect(railMarkup).not.toMatch(/Thread artifacts/)
-  })
 
-  it('toggles from the titlebar button with accessible state and an honest empty landmark', async () => {
+  it('opens artifact creation from the sidebar below Agents', async () => {
     render(App)
-    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    const toggle = await screen.findByRole('button', { name: 'Artifacts' })
+    const sidebar = document.querySelector('#sidebar')
+    expect(sidebar).toContainElement(toggle)
+    expect([...sidebar.querySelectorAll('.side-action')].map(b => b.textContent)).toEqual(expect.arrayContaining(['Agents', 'Artifacts', 'Browser']))
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(toggle).toHaveAttribute('aria-controls', 'artifact-rail')
-    expect(toggle).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+J' : 'Control+J')
-    expect(within(toggle).getByText('Artifacts')).toBeInTheDocument()
-    expect(within(toggle).getByText(navigator.platform.startsWith('Mac') ? '⌘ J' : 'Ctrl J').tagName).toBe('KBD')
-    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
-
     await fireEvent.click(toggle)
-
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(toggle).toHaveAccessibleName('Close artifact rail')
-    const rail = screen.getByRole('complementary', { name: 'Artifacts' })
-    const empty = rail.querySelector('.artifact-empty')
-    expect(empty).toHaveTextContent('Ask in chat to create a document, table, or file.')
-    expect(empty.children).toHaveLength(1)
-    expect(within(empty).getByText('Ask in chat to create a document, table, or file.').tagName).toBe('P')
-
+    expect(screen.getByRole('heading', { name: 'Create an Artifact' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Artifact HTML' })).toBeInTheDocument()
     await fireEvent.click(toggle)
-    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Artifacts' })).not.toBeInTheDocument()
   })
 
   it('toggles with the platform keyboard shortcut and closes with Escape', async () => {
     render(App)
-    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    const toggle = await screen.findByRole('button', { name: 'Artifacts' })
     const mac = navigator.platform.startsWith('Mac')
     await fireEvent.keyDown(document, { key: 'j', metaKey: mac, ctrlKey: !mac })
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
@@ -2423,55 +2410,9 @@ describe('artifact rail', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
   })
 
-  it('exposes an operable window splitter and resets its width after closing', async () => {
-    render(App)
-    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
-    await fireEvent.click(toggle)
-    const separator = screen.getByRole('separator', { name: 'Artifacts' })
-    expect(separator).toHaveAttribute('tabindex', '0')
-    expect(separator).toHaveAttribute('aria-orientation', 'vertical')
-    expect(separator).toHaveAttribute('aria-valuemin', '380')
-    // 1024 wide, the 195px sidebar and the 320px thread minimum leave 509px.
-    expect(separator).toHaveAttribute('aria-valuemax', '509')
-    expect(separator).toHaveAttribute('aria-valuenow', '380')
 
-    await fireEvent.keyDown(separator, { key: 'ArrowLeft' })
-    expect(separator).toHaveAttribute('aria-valuenow', '400')
-    await fireEvent.keyDown(separator, { key: 'ArrowRight' })
-    expect(separator).toHaveAttribute('aria-valuenow', '380')
-    await fireEvent.keyDown(separator, { key: 'End' })
-    expect(separator).toHaveAttribute('aria-valuenow', separator.getAttribute('aria-valuemax'))
-    await fireEvent.keyDown(separator, { key: 'Home' })
-    expect(separator).toHaveAttribute('aria-valuenow', '380')
 
-    await fireEvent.keyDown(separator, { key: 'ArrowLeft' })
-    await fireEvent.click(toggle)
-    await fireEvent.click(toggle)
-    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuenow', '380')
-  })
 
-  it('reserves the paper frame when sizing and dragging the artifact rail', async () => {
-    render(App)
-    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
-    const workspace = toggle.closest('.workspace')
-    workspace.style.paddingRight = '8px'
-    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({ right: 1024 })
-
-    await fireEvent.click(toggle)
-    const separator = screen.getByRole('separator', { name: 'Artifacts' })
-    expect(separator).toHaveAttribute('aria-valuemax', '477')
-    await fireEvent.keyDown(separator, { key: 'End' })
-    expect(separator).toHaveAttribute('aria-valuenow', '477')
-
-    await fireEvent.pointerDown(separator, { button: 0, pointerId: 7, clientX: 604 })
-    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 616 })
-    expect(separator).toHaveAttribute('aria-valuenow', '400')
-    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 0 })
-    expect(separator).toHaveAttribute('aria-valuenow', '477')
-    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 1024 })
-    expect(separator).toHaveAttribute('aria-valuenow', '380')
-    await fireEvent.pointerUp(separator, { pointerId: 7 })
-  })
 
   it('resizes the sidebar from its divider with the pointer and the keyboard, and keeps the width', async () => {
     render(App)
@@ -2511,38 +2452,18 @@ describe('artifact rail', () => {
     expect(appStyles).not.toMatch(/divider[^{]*::after/)
   })
 
-  it('finishes pointer resizing on release and cancellation', async () => {
-    render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Open artifact rail' }))
-    const separator = screen.getByRole('separator', { name: 'Artifacts' })
-    const workspace = separator.closest('.workspace')
-    vi.spyOn(workspace, 'getBoundingClientRect').mockReturnValue({ right: 1024 })
 
-    await fireEvent.pointerDown(separator, { button: 0, pointerId: 7, clientX: 624 })
-    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 604 })
-    expect(separator).toHaveAttribute('aria-valuenow', '420')
-    await fireEvent.pointerUp(separator, { pointerId: 7 })
-    await fireEvent.pointerMove(separator, { pointerId: 7, clientX: 584 })
-    expect(separator).toHaveAttribute('aria-valuenow', '420')
-
-    await fireEvent.pointerDown(separator, { button: 0, pointerId: 8, clientX: 604 })
-    await fireEvent.pointerMove(separator, { pointerId: 8, clientX: 594 })
-    expect(separator).toHaveAttribute('aria-valuenow', '430')
-    await fireEvent.pointerCancel(separator, { pointerId: 8 })
-    await fireEvent.pointerMove(separator, { pointerId: 8, clientX: 584 })
-    expect(separator).toHaveAttribute('aria-valuenow', '430')
-  })
 
   it('toggles the artifact rail and sidebar from the focused composer', async () => {
     render(App)
-    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    const toggle = await screen.findByRole('button', { name: 'Artifacts' })
     const composer = screen.getByPlaceholderText('Ask anything')
     const mac = navigator.platform.startsWith('Mac')
     expect(composer).toHaveFocus()
 
     await fireEvent.keyDown(composer, { key: 'j', metaKey: mac, ctrlKey: !mac })
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByRole('complementary', { name: 'Artifacts' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Artifacts' })).toBeInTheDocument()
 
     expect(composer).toHaveFocus()
     await fireEvent.keyDown(composer, { key: '\\', metaKey: mac, ctrlKey: !mac })
@@ -2565,11 +2486,11 @@ describe('artifact rail', () => {
     await fireEvent.input(composer, { target: { value: 'Original draft' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Voice' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-pressed', 'true'))
-    await fireEvent.click(screen.getByRole('button', { name: 'Open artifact rail' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Artifacts' }))
 
     await fireEvent.keyDown(document, { key: 'Escape' })
 
-    expect(screen.getByRole('button', { name: 'Open artifact rail' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: 'Artifacts' })).toHaveAttribute('aria-expanded', 'false')
     expect(composer).toHaveValue('Original draft')
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_stop'))
     expect(composer).toHaveFocus()
@@ -2599,7 +2520,7 @@ describe('artifact rail', () => {
     await fireEvent.keyDown(document, shortcut)
     await fireEvent.click(signIn)
 
-    const toggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    const toggle = await screen.findByRole('button', { name: 'Artifacts' })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await fireEvent.click(toggle)
     await fireEvent.click(screen.getByRole('button', { name: /Alice/i }))
@@ -2608,7 +2529,7 @@ describe('artifact rail', () => {
     await fireEvent.keyDown(document, shortcut)
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
-    expect(await screen.findByRole('button', { name: 'Open artifact rail' })).toHaveAttribute('aria-expanded', 'false')
+    expect(await screen.findByRole('button', { name: 'Artifacts' })).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('ignores the rail shortcut during signed-in onboarding', async () => {
@@ -2621,7 +2542,7 @@ describe('artifact rail', () => {
     document.dispatchEvent(shortcut)
 
     expect(shortcut.defaultPrevented).toBe(false)
-    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Artifacts' })).not.toBeInTheDocument()
   })
 })
 
@@ -3220,11 +3141,10 @@ describe('window chrome', () => {
       expect(row).toHaveAttribute('data-tauri-drag-region')
       expect(row.closest('.workspace').classList.contains('macos')).toBe(platform.startsWith('Mac'))
       expect([...row.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
-        'Collapse sidebar', 'Rename thread', 'Thread actions', 'Open artifact rail', 'Open record panel',
+        'Collapse sidebar', 'Rename thread', 'Thread actions', 'Open record panel',
       ])
       expect(row.querySelector('.title-spacer')).toHaveAttribute('data-tauri-drag-region')
       expect(row.querySelector('.update-slot')).toBeEmptyDOMElement()
-      expect(row.querySelector('.artifacts-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘ J' : 'Ctrl J')
       expect(row.querySelector('.record-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘ K' : 'Ctrl K')
       for (const control of row.querySelectorAll('button, input, button *')) {
         expect(control).not.toHaveAttribute('data-tauri-drag-region')
@@ -3232,8 +3152,7 @@ describe('window chrome', () => {
       await fireEvent.click(collapse)
       expect(row).toContainElement(screen.getByRole('button', { name: 'Expand sidebar' }))
       expect(screen.queryByRole('button', { name: 'New thread' })).not.toBeInTheDocument()
-      await fireEvent.click(screen.getByRole('button', { name: 'Open artifact rail' }))
-      expect(row).toContainElement(screen.getByRole('button', { name: 'Close artifact rail' }))
+      expect(row.querySelector('.artifacts-toggle')).not.toBeInTheDocument()
     } finally {
       cleanup()
       platformMock.mockRestore()
@@ -3408,7 +3327,7 @@ describe('sidebar collapse', () => {
     expect(currentThread).not.toHaveAttribute('tabindex')
     expect(currentThread.tabIndex).toBe(-1)
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action')).toHaveLength(4)
+    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action')).toHaveLength(6)
     expect(screen.getByRole('button', { name: 'Settings' })).toHaveTextContent('Settings')
     expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(0)
     expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(1)
@@ -3499,20 +3418,7 @@ describe('sidebar collapse', () => {
     setItem.mockRestore()
   })
 
-  it('widens the artifact rail bounds while the sidebar is a rail', async () => {
-    render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Open artifact rail' }))
-    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuemax', '509')
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
-    const separator = screen.getByRole('separator', { name: 'Artifacts' })
-    expect(separator).toHaveAttribute('aria-valuemax', '560')
-
-    await fireEvent.keyDown(separator, { key: 'End' })
-    expect(separator).toHaveAttribute('aria-valuenow', '560')
-    await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
-    expect(screen.getByRole('separator', { name: 'Artifacts' })).toHaveAttribute('aria-valuenow', '509')
-  })
 })
 
 describe('thread row shortcuts', () => {
@@ -4469,7 +4375,7 @@ describe('voice dictation', () => {
 
   it('captures the artifact rail chord without toggling the rail', async () => {
     render(App)
-    const railToggle = await screen.findByRole('button', { name: 'Open artifact rail' })
+    const railToggle = await screen.findByRole('button', { name: 'Artifacts' })
     const dialog = await openSettings('Account')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     const mac = navigator.platform.startsWith('Mac')
@@ -4479,7 +4385,7 @@ describe('voice dictation', () => {
 
     expect(capture).toHaveTextContent(mac ? 'Meta+J' : 'Control+J')
     expect(railToggle).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Artifacts' })).not.toBeInTheDocument()
   })
 
   it('keeps the previous voice binding when replacement registration collides', async () => {

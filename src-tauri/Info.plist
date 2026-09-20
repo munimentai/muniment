@@ -6,5 +6,7 @@
   <string>muniment</string>
   <key>NSDocumentsFolderUsageDescription</key>
   <string>Muniment saves your work in the Muniment folder inside Documents, so you can open it from Finder.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Muniment uses your microphone when you start voice input.</string>
 </dict>
 </plist>

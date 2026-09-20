@@ -18,6 +18,10 @@
     <path d="m16 15-3-3 3-3" />
   {:else if name === 'bot'}
     <rect x="4" y="7" width="16" height="14" rx="3" /><path d="M12 7V3H9M1 12v5M23 12v5M8 16h.01M16 16h.01" />
+  {:else if name === 'file'}
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm0 0v6h6" />
+  {:else if name === 'arrow-right'}
+    <path d="M5 12h14m-7-7 7 7-7 7" />
   {:else if name === 'folder'}
     <path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2Z" />
   {:else if name === 'folder-open'}
