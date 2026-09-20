@@ -14,7 +14,7 @@
   let fonts = $state([])
   let fontsRead = $state(false)
   let query = $state({ human: '', mono: '' })
-  const registers = [['human', 'Human'], ['mono', 'Mono']]
+  const registers = [['human', 'Conversation'], ['mono', 'Records']]
 
   onMount(() => {
     const follow = (event) => { type = event.detail }
@@ -94,15 +94,17 @@
   </div>
   {#each registers as [register, label] (register)}
     <div class="type-font" role="group" aria-label="{label} font">
-      <p class="group-label">{label}</p>
+      <details class="font-picker">
+      <summary><span>{label}</span><span class="font-current">{type[register] || SHIPPED_FONTS[register]}</span></summary>
       <input type="search" class="font-search" aria-label="Search {label.toLowerCase()} fonts" placeholder="Search installed fonts" bind:value={query[register]}>
       <div class="font-list">
-        <button type="button" class="font-pick" aria-pressed={type[register] === null} onclick={() => chooseFont(register, null)}><span class="font-name">{SHIPPED_FONTS[register]}</span><span class="font-note">shipped</span></button>
+        <button type="button" class="font-pick" aria-pressed={type[register] === null} onclick={() => chooseFont(register, null)}><span class="font-name">{SHIPPED_FONTS[register]}</span><span class="font-note">Default</span></button>
         {#each filterFonts(fonts, query[register]) as name (name)}
           <button type="button" class="font-pick" aria-pressed={type[register] === name} onclick={() => chooseFont(register, name)}><span class="font-name" style:font-family={`'${name}'`}>{name}</span></button>
         {/each}
       </div>
-      {#if fontsRead && fonts.length === 0}<p class="font-note">No installed fonts were read from this device.</p>{/if}
+      {#if fontsRead && fonts.length === 0}<p class="font-note">Installed fonts unavailable.</p>{/if}
+      </details>
     </div>
   {/each}
   </div>
@@ -144,6 +146,10 @@
   .type-readout { min-width: 96px; text-align: center; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .type-reset { margin-left: 4px; }
   .type-font { margin-top: 10px; }
+  .font-picker { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 10px; }
+  .font-picker summary { cursor: pointer; font-size: var(--text-13); overflow-wrap: anywhere; }
+  .font-current { float: right; max-width: 65%; color: var(--muted); }
+  .font-picker[open] summary { margin-bottom: 10px; }
   .font-search { box-sizing: border-box; width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); }
   .font-search:focus { outline: none; border-color: var(--muted); }
   .font-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin: 6px 0 0; }

@@ -27,11 +27,11 @@
 </script>
 <section aria-labelledby="context-heading">
   <h3 id="context-heading">Conversation context</h3>
-  <p>Compaction summarizes older messages so long conversations can continue. The full conversation stays in your history.</p>
+  <p>Summarize older messages to make room. Full history stays saved.</p>
   {#if ready}
     <form onsubmit={(event) => { event.preventDefault(); void save() }}>
       <label class="toggle"><Toggle bind:checked={enabled} disabled={saving} /> Compact automatically</label>
-      <p>Compaction starts before the model runs out of room. If disabled, a full context can stop a reply.</p>
+      <p>When off, a full conversation can stop replies.</p>
       <details><summary>Context limits</summary>
         <label>Room for the next reply (tokens)<input type="number" min="4096" max="131072" step="1" bind:value={reserveTokens} required disabled={saving} /></label>
         <label>Recent messages to keep (tokens)<input type="number" min="4096" max="131072" step="1" bind:value={keepRecentTokens} required disabled={saving} /></label>

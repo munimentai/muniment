@@ -94,3 +94,9 @@ Each record shows its fields and sources before a merge preview.
 Matching names alone do not prove that two records describe the same person.
 States and structured fields use readable labels. History resolves actor names.
 **Raw evidence** shows the stored identifiers and values.
+
+Duplicate review shows differing fields and numbers each record for comparison.
+Sources and all fields remain available in each record's disclosure.
+Choose the record to keep and, in larger groups, the duplicate to merge.
+Preview merge prepares one proposal with its changes and warnings. Commit applies it.
+A preview does not merge records. Larger groups require a separate reviewed merge for each duplicate.

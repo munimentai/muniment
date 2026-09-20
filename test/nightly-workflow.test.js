@@ -57,6 +57,10 @@ describe('nightly macOS package build', () => {
       git() { elapsed=$((elapsed + 100)); }
       npm() { elapsed=$((elapsed + 300)); }
       rustup() { elapsed=$((elapsed + 200)); }
+      .() {
+        [ "$1" = scripts/prepare-cef-macos.sh ] || return 1
+        elapsed=$((elapsed + 50))
+      }
       node() {
         if [ "$1" = .github/build-macos-app.mjs ]; then
           printf '%s %s\\n' "$elapsed" "$MACOS_BUILD_REMAINING_SECONDS"
@@ -66,7 +70,7 @@ describe('nightly macOS package build', () => {
     `], { encoding: 'utf8' })
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
-    expect(result.stdout).toBe('700 2900\n')
+    expect(result.stdout).toBe('750 2850\n')
   })
 
   it('builds and publishes the package while signing stays disabled', () => {

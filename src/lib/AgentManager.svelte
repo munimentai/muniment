@@ -33,7 +33,7 @@
     const timer = setInterval(refresh, 10000)
     return () => clearInterval(timer)
   })
-  function add() { draft = empty(); catalog = false; deleting = false; status = ''; void tick().then(() => panel?.querySelector('input')?.focus()) }
+  function add() { draft = empty(); catalog = false; deleting = false; status = ''; void tick().then(() => panel?.querySelector('input:not([type="file"])')?.focus()) }
   function scheduleLabel(agent) {
     const s = agent.schedule
     if (!s?.enabled) return ''
@@ -123,16 +123,16 @@
     {#if status}<p class="loading" role="status">{status}</p>{/if}
   {:else}
       <div class="body">
-        <p>Give an agent a lasting role. Start a thread with it or schedule its work.</p>
+        <p>Give your agent a name and instructions.</p>
         <form onsubmit={event => { event.preventDefault(); void action('save') }}>
           <div class="draft-avatar"><AgentAvatar agent={draft} size={80} /><button type="button" aria-label="Generate another avatar" disabled={busy} onclick={() => { draft.avatar = newAvatar() }}>Change avatar</button></div>
           <label>Name<input bind:value={draft.name} maxlength="100" required disabled={busy} placeholder="Research assistant" /></label>
           <label>Job title<input bind:value={draft.label} maxlength="120" disabled={busy} placeholder="Research assistant" /></label>
           <label>Description<textarea rows="7" bind:value={draft.instructions} required disabled={busy} placeholder="Describe its role, sources, rules, and expected result."></textarea></label>
-          <p>The description gives the agent its lasting instructions.</p>
+
           {#if draft.template}<details><summary>Imported template details</summary><p>{templateSummary(draft.template)}</p><pre>{JSON.stringify(draft.template, null, 2)}</pre></details>{/if}
           <label>Project<select bind:value={draft.projectId} disabled={busy}><option value={null}>No project · session files</option>{#each projects as [id, name]}<option value={id}>{name}</option>{/each}</select></label>
-          <fieldset disabled={busy}>
+          {#if draft.id}<fieldset disabled={busy}>
             <legend>Schedule</legend>
             <label class="check"><Toggle bind:checked={draft.schedule.enabled} />Run on a schedule</label>
             {#if draft.schedule.enabled}
@@ -144,11 +144,13 @@
               <p>Uses this computer’s time zone ({zone}). Runs while the computer is awake and the background service is available.</p>
               <p>A missed schedule runs once when the service returns.</p>
             {/if}
-          </fieldset>
+          </fieldset>{/if}
           <div class="actions">
-            <button disabled={busy || !draft.name.trim() || !draft.instructions.trim()}>Save agent</button>
+            <button disabled={busy || !draft.name.trim() || !draft.instructions.trim()}>{draft.id ? 'Save changes' : 'Create agent'}</button>
+            {#if draft.id}
             <button type="button" disabled={busy || !draft.name.trim() || !draft.instructions.trim()} onclick={() => action('thread')}>Start thread</button>
             <button type="button" disabled={busy || !draft.name.trim() || !draft.instructions.trim() || ['queued','running','waiting'].includes(run?.status)} onclick={() => action('run')}>Run now</button>
+            {/if}
           </div>
         </form>
         {#if run}

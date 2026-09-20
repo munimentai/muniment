@@ -111,7 +111,7 @@ async function checkWindowChrome(browser, baseUrl) {
         assert.equal(row.top, 0)
         if (platform.startsWith('Mac')) assert.equal(row.clearance, 78)
         else assert.equal(row.padding, '12px')
-        assert.equal(row.controls.length, 5)
+        assert.equal(row.controls.length, 4)
         for (const control of row.controls) {
           assert.ok(control.width >= 24 && control.height >= 24, JSON.stringify(control))
           assert.ok(control.visible && control.inside && control.flush, JSON.stringify(control))
@@ -130,8 +130,10 @@ async function checkWindowChrome(browser, baseUrl) {
       await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click()
       await checkRow()
       assert.equal(await page.locator('.new-thread').innerText(), platform.startsWith('Mac') ? 'New thread\n⌘ N' : 'New thread\nCtrl N')
-      await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
+      await page.getByRole('button', { name: 'Artifacts', exact: true }).click()
+      await checkArtifactCreation(page)
       await checkRow()
+      await page.getByRole('button', { name: 'Close browser panel', exact: true }).click()
       await page.getByRole('button', { name: 'New thread', exact: true }).click()
       await page.waitForFunction(() => document.querySelector('button.thread-title')?.textContent === 'New thread')
       await checkRow()
@@ -148,29 +150,12 @@ async function checkWindowChrome(browser, baseUrl) {
   }
 }
 
-async function checkArtifactEmpty(page) {
-  const rail = page.getByRole('complementary', { name: 'Artifacts', exact: true })
-  if (await rail.count() === 0) return
-  const empty = rail.locator('.artifact-empty')
-  assert.equal(await empty.count(), 1)
-  assert.equal(await empty.innerText(), 'Ask in chat to create a document, table, or other file.')
-  assert.equal(await empty.locator(':scope > *').count(), 1)
-  const layout = await empty.locator('p').evaluate((line) => {
-    const range = document.createRange()
-    range.selectNodeContents(line)
-    const rects = [...range.getClientRects()]
-    const box = line.getBoundingClientRect()
-    return {
-      children: line.childElementCount,
-      lines: rects.length,
-      inside: rects.every((rect) => rect.left >= box.left && rect.right <= box.right),
-      font: getComputedStyle(line).fontFamily,
-    }
-  })
-  assert.equal(layout.children, 0)
-  assert.ok(layout.lines > 0) // File creation guidance can wrap within the rail.
-  assert.equal(layout.inside, true)
-  assert.match(layout.font, /Schibsted Grotesk/)
+async function checkArtifactCreation(page) {
+  const panel = page.getByRole('region', { name: 'Artifacts', exact: true })
+  assert.equal(await panel.getByRole('heading', { name: 'Create an Artifact' }).count(), 1)
+  assert.equal(await panel.getByRole('textbox', { name: 'Name', exact: true }).count(), 1)
+  assert.equal(await panel.getByRole('textbox', { name: 'Artifact HTML' }).count(), 1)
+  assert.equal(await panel.getByRole('button', { name: 'Save and preview' }).isEnabled(), true)
 }
 
 async function checkPaperFrame(browser, baseUrl) {
@@ -205,7 +190,7 @@ async function checkPaperFrame(browser, baseUrl) {
               const border = color('--border')
               // A collapsed sidebar is gone: the panels are the thread and the rail, and the thread slides to the frame.
               const collapsed = workspace.classList.contains('sidebar-collapsed')
-              const panels = [...workspace.querySelectorAll(collapsed ? '.thread-panel, .artifact-rail' : '.sidebar, .thread-panel, .artifact-rail')]
+              const panels = [...workspace.querySelectorAll(collapsed ? '.thread-panel, .record-panel' : '.sidebar, .thread-panel, .record-panel')]
               const boxes = panels.map((panel) => panel.getBoundingClientRect())
               const threadBox = workspace.querySelector('.thread-panel').getBoundingClientRect()
               const fail = (condition, message) => { if (!condition) failures.push(message) }
@@ -236,12 +221,10 @@ async function checkPaperFrame(browser, baseUrl) {
               fail(composer.left > threadBox.left && composer.right < threadBox.right && composer.bottom < threadBox.bottom, 'The composer escaped the thread panel.')
               if (workspace.classList.contains('macos')) {
                 const rect = (selector) => workspace.querySelector(selector).getBoundingClientRect()
-                const artifacts = rect('.artifacts-toggle')
                 const record = rect('.record-toggle')
                 const update = rect('.update-slot')
                 fail(near(record.right, innerWidth - 12), 'Record does not sit flush right in the title row.')
-                fail(artifacts.right <= record.left, 'Artifacts does not sit left of Record.')
-                fail(update.right <= artifacts.left, 'The update slot extends past Artifacts.')
+                fail(update.right <= record.left, 'The update slot extends past Record.')
                 const controlsEnd = parseFloat(style.getPropertyValue('--titlebar-controls-end'))
                 const titleLeft = Math.max(threadBox.left - parseFloat(getComputedStyle(workspace.querySelector('.thread-panel')).marginLeft), controlsEnd)
                 fail(near(rect('.thread-title').left, titleLeft), `The thread title starts at ${rect('.thread-title').left}, expected ${titleLeft}; collapsed=${collapsed}.`)
@@ -291,15 +274,14 @@ async function checkPaperFrame(browser, baseUrl) {
             })
             assert.ok(aligned, 'The expanded thread title does not align with the thread panel or the row controls.')
           }
-          await checkArtifactEmpty(page)
         }
 
         for (const viewport of [{ width: 960, height: 640 }, { width: 1144, height: 640 }, { width: 1440, height: 900 }]) {
           await page.setViewportSize(viewport)
           await checkFrame()
-          await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
+          await page.getByRole('button', { name: 'Open record panel', exact: true }).click()
           await checkFrame(true)
-          const divider = page.getByRole('separator', { name: 'Artifacts', exact: true })
+          const divider = page.getByRole('separator', { name: 'Record', exact: true })
           await divider.press('End')
           await checkFrame(true)
           await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
@@ -314,11 +296,11 @@ async function checkPaperFrame(browser, baseUrl) {
           await page.mouse.move(viewport.width - 408, box.y + box.height / 2)
           await page.mouse.up()
           await checkFrame(true)
-          await page.getByRole('button', { name: 'Close artifact rail', exact: true }).click()
+          await page.getByRole('button', { name: 'Close record panel', exact: true }).click()
           await checkFrame(true)
           await page.emulateMedia({ reducedMotion: 'reduce' })
           await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
-          await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
+          await page.getByRole('button', { name: 'Open record panel', exact: true }).click()
           await checkFrame()
           await divider.press('Escape')
           await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click()
@@ -341,11 +323,11 @@ async function checkComposerActions(browser, baseUrl) {
       await page.waitForSelector('[data-probe-ready]')
       await page.evaluate(() => document.fonts.ready)
       for (const rail of ['closed', 'open', 'maximum']) {
-        if (rail === 'open') await page.getByRole('button', { name: 'Open artifact rail', exact: true }).click()
+        if (rail === 'open') await page.getByRole('button', { name: 'Open record panel', exact: true }).click()
         for (const width of [960, 1100, 1101, 1280, 1440, 1920, 960]) {
           await page.setViewportSize({ width, height: 640 })
           if (rail === 'maximum') {
-            const divider = page.getByRole('separator', { name: 'Artifacts', exact: true })
+            const divider = page.getByRole('separator', { name: 'Record', exact: true })
             await divider.press('End')
           }
           await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))

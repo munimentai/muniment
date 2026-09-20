@@ -1,0 +1,6 @@
+{
+  "identifier": "shell",
+  "description": "Only the local control panel receives application permissions.",
+  "webviews": ["shell"],
+  "permissions": ["core:default"]
+}

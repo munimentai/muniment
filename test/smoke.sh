@@ -3,7 +3,7 @@
 set -eu
 grep -q '"identifier": "ai.muniment.desktop"' src-tauri/tauri.conf.json
 grep -q 'tauri_build::build' src-tauri/build.rs
-grep -q 'generate_context' src-tauri/src/main.rs
+grep -q 'generate_context' src-tauri/src/desktop.rs
 test -f src-tauri/icons/icon.ico
 test -f src-tauri/icons/icon.icns
 test -f src/index.html

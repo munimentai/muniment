@@ -15,6 +15,7 @@
   import AccessPanel from './lib/AccessPanel.svelte'
   import Settings from './lib/Settings.svelte'
   import AgentManager from './lib/AgentManager.svelte'
+  import BrowserWorkspace from './lib/BrowserWorkspace.svelte'
   import AgentAvatar from './lib/AgentAvatar.svelte'
   import AgentProfile from './lib/AgentProfile.svelte'
   import ChatComposer from './composer/ChatComposer.svelte'
@@ -105,10 +106,12 @@
 
   let settingsOpen = $state(false)
   let agentsOpen = $state(false)
+  let browserPanel = $state(null)
+  function showBrowser(mode) { browserPanel = mode; agentsOpen = false; agentProfileOpen = false; closeRail() }
   let agentsRequest = $state(0)
   let agentPanelId = $state(null)
   let agentCreateNew = $state(false)
-  function showAgents(id = null, create = false) { agentPanelId = id; agentCreateNew = create; agentsRequest += 1; agentsOpen = true; agentProfileOpen = false; closeRail() }
+  function showAgents(id = null, create = false) { browserPanel = null; agentPanelId = id; agentCreateNew = create; agentsRequest += 1; agentsOpen = true; agentProfileOpen = false; closeRail() }
   let agentProfileOpen = $state(false)
   let agentOpening = $state(false)
   let selectedAgent = $state(null)
@@ -436,8 +439,8 @@
     onMaximized: (next) => { recordMaximized = next },
   })
   const { fit: fitArtifactRail, pointerDown: artifactRailPointerDown, pointerMove: artifactRailPointerMove, pointerEnd: artifactRailPointerEnd, keydown: artifactRailKeydown } = railController
-  const toggleArtifactRail = () => { agentsOpen = false; agentProfileOpen = false; railController.toggle('artifacts') }
-  const toggleRecordPanel = () => { agentsOpen = false; agentProfileOpen = false; railController.toggle('record') }
+  const toggleArtifactRail = () => { if (browserPanel === 'artifacts') browserPanel = null; else showBrowser('artifacts') }
+  const toggleRecordPanel = () => { browserPanel = null; agentsOpen = false; agentProfileOpen = false; railController.toggle('record') }
   const closeRail = () => railController.close()
   // Ask puts the open view's SQL into the composer as a fenced block, so the reply starts from what the person sees.
   function askAboutView(sql) {
@@ -564,6 +567,7 @@
   }
 
   async function newSidebarThread(projectId = null) {
+    browserPanel = null
     if (active || threadSwitching || projectBusy) return
     selectedProject = projectId
     agentsOpen = false
@@ -706,6 +710,7 @@
     }
     agentsOpen = false
     clearThreadSelection()
+    browserPanel = null
     void chatController.openThread(threadId)
   }
 
@@ -1258,7 +1263,7 @@
   })
 
   $effect(() => {
-    if (!workspaceMode() || onboarding.name !== 'complete') closeRail()
+    if (!workspaceMode() || onboarding.name !== 'complete') { browserPanel = null; closeRail() }
   })
 
   function workspaceMode() {
@@ -1515,7 +1520,8 @@
         if (sidebarCollapsed || active || threadSwitching) return
         const threadId = shortcutThreads[rowPosition - 1]?.threadId
         if (!threadId || threadId === currentThreadId) return
-        void chatController.openThread(threadId)
+        browserPanel = null
+    void chatController.openThread(threadId)
         return
       }
       if (workspaceMode() && onboarding.name === 'complete' && isNewThreadShortcut(event)) {
@@ -1545,6 +1551,7 @@
         settingsShortcutPressed()
         return
       }
+      if (event.key === 'Escape' && browserPanel) { browserPanel = null; event.preventDefault() }
       if (event.key === 'Escape' && railOccupant !== null) {
         event.preventDefault()
         if ((recordPanelOpen || filePanelOpen) && recordMaximized) toggleRecordMaximized()
@@ -1791,7 +1798,7 @@
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
-      <section class="workspace" inert={auth.name === 'signing-in'} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" inert={auth.name === 'signing-in'} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || !!browserPanel} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
@@ -1816,7 +1823,6 @@
             {/if}
             <span class="title-spacer" data-tauri-drag-region></span>
             <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
-            <RowControl kind="artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></RowControl>
             <RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>
           </div>
         </header>
@@ -1838,6 +1844,8 @@
                 <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
               </button>
               <div class="agents-side-row"><button class="side-action" aria-expanded={agentsOpen} onclick={() => showAgents()}><LucideIcon name="bot" /><span>Agents</span></button><button class="agent-add quiet" aria-label="New agent" onclick={() => showAgents(null, true)}><LucideIcon name="plus" /></button></div>
+              <button class="side-action" aria-expanded={browserPanel === 'artifacts'} aria-keyshortcuts={artifactShortcut} onclick={toggleArtifactRail}><LucideIcon name="file" /><span>Artifacts</span></button>
+              <button class="side-action" aria-expanded={browserPanel === 'browser'} onclick={() => showBrowser('browser')}><LucideIcon name="globe" /><span>Browser</span></button>
               <input class="thread-search" type="search" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} />
             </div>
             <div class="side-scroll">
@@ -1918,7 +1926,7 @@
         <div class="thread-shell">
         <div class="thread" class:scrolling={threadScrolling} role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={onThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
-          {#if messages.length === 0}<p class="empty">{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'No enabled account serves this model. Connect an account or choose another model in the composer.' : profileAgent ? `Chat with ${profileAgent.name} using ${modelSourceLabel}.` : auth.name === 'local' ? `${modelSourceLabel} is selected. Ask a question or request a file.` : "Ask a question or request a file. Your org selects the model."}</p>{/if}
+          {#if messages.length === 0}<p class="empty">{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : profileAgent ? `Chat with ${profileAgent.name} using ${modelSourceLabel}.` : 'Ask a question or request a file.'}</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
@@ -2030,9 +2038,10 @@
               {/if}
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
-                {@const rows = receiptRows(message.run.receipt, message.run.recalls)}
+                {@const rows = receiptRows({ ...message.run.receipt, routing: [] }, message.run.recalls)}
+                {@const routing = message.run.receipt?.routing ?? []}
                 {@const columns = receiptUsageColumns(message.run.receipt)}
-                {@const hasDetails = rows.length > 0 || columns.length > 0}
+                {@const hasDetails = rows.length > 0 || columns.length > 0 || routing.length > 0}
                 {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || hasDetails}
                 {@const expanded = hasDetails && expandedReceipts.has(message.run.id)}
                 {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
@@ -2072,6 +2081,21 @@
                       <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}{#each row.files ?? [] as file}<span class="recall-file">{file}</span>{/each}</dd></div>
                     {/each}
                   </dl>
+                  {#if routing.length}
+                    <details class="receipt-routing">
+                      <summary>Routing details · {routing.length} {routing.length === 1 ? 'turn' : 'turns'}</summary>
+                      {#each routing as evidence, index}
+                        <section aria-label={`Routing turn ${index + 1}`}>
+                          <h4>Turn {index + 1}</h4>
+                          <dl class="receipt-record">
+                            {#each receiptRows({ routing: [evidence] }) as row}
+                              <div><dt>{row.label}</dt><dd>{row.value}</dd></div>
+                            {/each}
+                          </dl>
+                        </section>
+                      {/each}
+                    </details>
+                  {/if}
                 {/if}
                 {#if failure}<div class="run-error copy-failure">{failure}</div>{/if}
               {/if}
@@ -2225,7 +2249,7 @@
               <h2 id="artifact-rail-title">Artifacts</h2>
             </header>
             <div class="artifact-empty">
-              <p>Ask in chat to create a document, table, or other file.</p>
+              <p>Ask in chat to create a document, table, or file.</p>
             </div>
           </aside>
         {/if}
@@ -2279,6 +2303,9 @@
         ondelete={() => { agentProfileOpen = false; selectedAgent = null; void refreshAgents() }}
         onopen={(id) => chatController.openThread(id, true)} />{/key}
     {/if}
+  {#if browserPanel}{#key browserPanel}
+    <BrowserWorkspace {tauri} artifacts={browserPanel === 'artifacts'} suspended={settingsOpen || pickerOpen} onclose={() => browserPanel = null} />
+  {/key}{/if}
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} initialId={agentPanelId} createNew={agentCreateNew} projects={projectRows} onclose={() => { agentsOpen = false }} onstart={openAgent} onselect={openAgent} onopen={(id) => chatController.openThread(id)} onchange={(next) => { agentListing = next }} />
   {/key}{/if}
@@ -2624,7 +2651,11 @@
   .receipt-usage th[scope="col"] { white-space: nowrap; }
   .receipt-usage td { min-width: 180px; }
   .receipt-record { display: grid; row-gap: 6px; box-sizing: border-box; width: min(100%, 560px); margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
+  .receipt-record div { display: grid; grid-template-columns: minmax(0, 140px) minmax(0, 1fr); gap: 12px; }
+  .receipt-routing { margin-top: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .receipt-routing summary { cursor: pointer; }
+  .receipt-routing h4 { margin: 12px 0 0; font: inherit; color: var(--ink); }
+  .receipt-record dt { overflow-wrap: anywhere; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .receipt-record .recall-file { display: block; }
   .receipt-record .route-value { color: var(--signal); }

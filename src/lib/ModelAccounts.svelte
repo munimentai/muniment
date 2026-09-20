@@ -212,30 +212,33 @@
             {:else}
               <span class="card-label">{account.label}<button type="button" class="rename quiet" aria-label={`Rename ${account.label}`} disabled={pending} onclick={() => editName(account)}><LucideIcon name="pencil" /></button></span>
             {/if}
-            <span class="tag">{account.source === 'key' ? 'Paid API key' : 'Subscription'}</span>
+            <span class="tag">{account.source === 'key' ? 'API key' : account.plan || 'Subscription'}</span>
           </header>
-          <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Not available for routed turns yet.' : cooling(account) ? 'Waiting for the rate limit to reset.' : account.weight === 0 ? 'Excluded from routed turns.' : 'Available for routed turns.'}</p>
-          <p class="record tier">{account.source === 'key' ? (account.base_url ?? familyRow?.base_url ?? '') : `${account.plan ?? 'plan not read yet'}`}{#if account.email && account.email !== account.label} · {account.email}{/if}{#if account.models.length} · {account.models.join(' · ')}{/if}</p>
+          {#if !account.enabled || account.servable === false || cooling(account) || account.weight === 0}
+            <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Routing unavailable' : cooling(account) ? `Rate limited · retry ${until(account.cooldown_until_ms)}` : 'Excluded from routing'}</p>
+          {/if}
           {#if account.source !== 'key'}
             {#if !account.allowance_readable}
-              <p class="record">Muniment cannot read what this account has left.</p>
+              <p class="record">Allowance unavailable.</p>
             {:else if account.windows.length === 0}
-              <p class="record">{account.quota_observed_ms ? 'No window reported.' : 'Allowance not read yet.'}</p>
+              <p class="record">{account.quota_observed_ms ? 'No allowance reported.' : 'Allowance pending.'}</p>
             {/if}
             {#each account.windows as window (window.label + window.scope)}
               <div class="window">
                 <div class="window-head">
-                  <span class="record">{window.label}{#if window.scope} · {window.scope}{/if}</span>
+                  <span class="record">{window.label.replace(/ window$/i, '')}{#if window.scope} · {window.scope}{/if}</span>
                   <span class="record"><strong>{Math.round(window.remaining_percent)}%</strong> left{#if window.resets_at_ms} · resets {until(window.resets_at_ms)}{/if}</span>
                 </div>
                 <div class="window-bar" data-level={window.limit_reached || window.remaining_percent < 25 ? 'low' : window.remaining_percent <= 60 ? 'medium' : 'plenty'}><span style={`width: ${Math.round(window.remaining_percent)}%`}></span></div>
               </div>
             {/each}
-            {#if account.quota_observed_ms}<p class="support">Allowance updated {when(account.quota_observed_ms)}.</p>{/if}
             {#if account.banked_resets}<p class="record">{account.banked_resets} banked {account.banked_resets === 1 ? 'reset' : 'resets'}</p>{/if}
           {/if}
-          {#if cooling(account)}<p class="tag warn">Rate limited · back in {Math.max(1, Math.round((account.cooldown_until_ms - Date.now()) / 1000))}s</p>{/if}
           <details class="account-details"><summary>Usage and settings</summary>
+          {#if account.source === 'key' || (account.email && account.email !== account.label) || account.models.length}
+          <p class="record tier">{[account.source === 'key' ? account.base_url ?? familyRow?.base_url : null, account.email !== account.label ? account.email : null, ...account.models].filter(Boolean).join(' · ')}</p>
+          {/if}
+          {#if account.quota_observed_ms}<p class="support">Updated {when(account.quota_observed_ms)}.</p>{/if}
           <div class="bars" aria-label={`${account.label} turns per day`}>
             {#each account.days as [day, requests] (day)}
               <span class="bar" style={`height: ${Math.max(2, Math.round((requests / busiest) * 22))}px`} aria-label={`${day}: ${requests} turns`}></span>
@@ -295,9 +298,9 @@
       <input id={`router-key-${family}`} type="password" autocomplete="off" bind:value={key} disabled={pending}>
       <label for={`router-base-${family}`}>Server URL (optional)</label>
       <input id={`router-base-${family}`} type="url" placeholder={familyRow?.base_url ?? ''} bind:value={baseUrl} disabled={pending}>
-      <label for={`router-models-${family}`}>Models this account serves, one per line (optional)</label>
+      <label for={`router-models-${family}`}>Models (optional)</label>
       <textarea id={`router-models-${family}`} rows="2" bind:value={accountModels} disabled={pending}></textarea>
-      <p class="support">Leave the model list empty and the account serves every model of its provider.</p>
+      <p class="support">One per line. Leave blank for all models.</p>
       <div class="actions">
         <button type="submit" disabled={pending || !label.trim() || !key.trim()}>Add key</button>
         <button type="button" class="quiet" onclick={() => { adding = false; formError = '' }}>Cancel</button>
@@ -321,13 +324,13 @@
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
   .small { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
-  .accounts { display: grid; gap: 8px; min-width: 0; }
+  .accounts { container-type: inline-size; display: grid; gap: 8px; min-width: 0; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); overflow-wrap: anywhere; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .warn { color: var(--ink); }
   .error { overflow-wrap: anywhere; }
   /* One card per account: its allowance as bars of what is left, then what it has served. */
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+  @container (max-width: 520px) { .cards { grid-template-columns: 1fr; } }
   .card { display: grid; min-width: 0; gap: 6px; align-content: start; padding: 10px; background: var(--faint); border: 1px solid var(--border); border-radius: var(--radius-control); overflow-wrap: anywhere; }
   .card .support { font-size: var(--text-12); line-height: 1.4; }
   .card p.record { margin: 0; }
@@ -346,8 +349,8 @@
   .window { display: grid; min-width: 0; gap: 4px; }
   .window-head { display: grid; gap: 2px; }
   .window-head strong { color: var(--ink); font-weight: 600; }
-  .window-bar { height: 4px; border-radius: var(--radius-chip); background: var(--faint); }
-  .window-bar span { display: block; height: 100%; border-radius: var(--radius-chip); opacity: var(--signal-opacity); }
+  .window-bar { height: 4px; border-radius: var(--radius-chip); background: var(--border); }
+  .window-bar span { display: block; height: 100%; border-radius: var(--radius-chip); }
   .window-bar[data-level="plenty"] span { background: var(--signal); }
   .window-bar[data-level="medium"] span { background: var(--ochre); }
   .window-bar[data-level="low"] span { background: var(--oxide); }
