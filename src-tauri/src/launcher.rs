@@ -136,7 +136,7 @@ pub fn launcher_is_visible(app: tauri::AppHandle) -> Result<bool, String> {
 #[tauri::command]
 pub fn launcher_present_main(app: tauri::AppHandle) -> Result<(), String> {
     let main = app
-        .get_webview_window("main")
+        .get_window("main")
         .ok_or("The main window is unavailable.")?;
     main.unminimize().map_err(|error| error.to_string())?;
     main.show().map_err(|error| error.to_string())?;
@@ -206,4 +206,40 @@ mod tests {
         assert!(!launcher.visible && !launcher.decorations && !launcher.resizable);
         assert!(launcher.always_on_top && launcher.skip_taskbar);
     }
+}
+
+// The alpha plugin's synchronous IPC holds the plugin store while waiting for
+// the main thread. CEF page-load callbacks need that store on the main thread.
+// These app commands run outside the plugin store through our IPC dispatcher.
+#[tauri::command]
+pub fn shortcut_register(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    shortcut: String,
+    handler: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
+    if webview.label() != "main" {
+        return Err("Shortcuts belong to the app.".into());
+    }
+    let parsed = <Shortcut as std::str::FromStr>::from_str(&shortcut).map_err(|e| e.to_string())?;
+    app.global_shortcut()
+        .on_shortcut(parsed, move |_, key, event| {
+            let _ = handler.send(
+                serde_json::json!({"shortcut":key.into_string(),"id":event.id,"state":event.state}),
+            );
+        })
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn shortcut_unregister(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    shortcut: String,
+) -> Result<(), String> {
+    if webview.label() != "main" {
+        return Err("Shortcuts belong to the app.".into());
+    }
+    app.global_shortcut()
+        .unregister(shortcut.as_str())
+        .map_err(|e| e.to_string())
 }

@@ -1,5 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(feature = "e2e-webdriver")]
+compile_error!("The WKWebView WebDriver adapter cannot drive CEF. Port the runner to CEF before enabling e2e-webdriver.");
+
+mod cef_browser;
 mod account_login;
 mod attach_service;
 mod auth;
@@ -49,6 +53,7 @@ fn restart_muniment(app: tauri::AppHandle) {
     app.restart();
 }
 
+#[tauri_runtime_cef::cef_entry_point]
 fn main() {
     #[cfg(target_os = "macos")]
     {
@@ -70,13 +75,13 @@ fn main() {
             return;
         }
     }
+    let browser_root = cef_browser::prepare();
     let runtime_activity = RuntimeActivityRegistry::new();
     let builder = tauri::Builder::default()
+        .runtime(cef_browser::runtime(&browser_root))
         .manage(runtime_activity.clone())
         .manage(DrainState::new())
         .manage(Mutex::new(PreparedHandoffSlot::new()));
-    #[cfg(feature = "e2e-webdriver")]
-    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
     builder
         .plugin(tauri_plugin_dialog::init())
@@ -100,6 +105,7 @@ fn main() {
             let _ = (webview, payload);
         })
         .setup(move |app| {
+            cef_browser::setup(app, &browser_root)?;
             // Every file the app keeps lives under one root, and an earlier
             // install's files move there before anything opens them.
             let state = muniment_runtime::adopt_state_directory()?;
@@ -132,7 +138,15 @@ fn main() {
             Ok(())
         })
         .on_window_event(launcher::window_event)
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler({
+            let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+            launcher::shortcut_register,
+            launcher::shortcut_unregister,
+            cef_browser::browser_command,
+            cef_browser::browser_view,
+            cef_browser::artifact_list,
+            cef_browser::artifact_save,
+            cef_browser::artifact_read,
             onboarding_diagnostics::onboarding_model_settings_error,
             fonts::installed_fonts,
             auth::auth_sign_in,
@@ -257,7 +271,17 @@ fn main() {
             e2e_folder_dialog::e2e_drive_folder_dialog,
             #[cfg(all(target_os = "macos", feature = "e2e-webdriver"))]
             e2e_folder_dialog::e2e_folder_dialog_snapshot
-        ])
+        ];
+            // CEF delivers IPC on its UI thread. File and runtime commands must
+            // leave that callback before they wait for another app service.
+            move |invoke: tauri::ipc::Invoke| {
+                let resolver = invoke.resolver.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if !handler(invoke) { resolver.reject("Unknown app command."); }
+                });
+                true
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while running muniment")
         .run(|app, event| {

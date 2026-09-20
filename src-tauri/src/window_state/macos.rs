@@ -104,7 +104,7 @@ impl Drop for TrafficLights {
 }
 
 pub(super) fn install<R: tauri::Runtime>(
-    window: &tauri::WebviewWindow<R>,
+    window: &tauri::Window<R>,
     config: &tauri::utils::config::WindowConfig,
 ) -> tauri::Result<()> {
     let Some(inset) = config.traffic_light_position.as_ref() else {

@@ -5,7 +5,8 @@ edition = "2021"
 
 [features]
 default = []
-e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver", "objc2-app-kit/NSOpenPanel", "objc2-app-kit/NSSavePanel", "objc2-app-kit/NSGraphicsContext"]
+local-runtime = []
+e2e-webdriver = ["objc2-app-kit/NSOpenPanel", "objc2-app-kit/NSSavePanel", "objc2-app-kit/NSGraphicsContext"]
 
 [workspace]
 members = [".", "core", "attach", "code-diff", "cli", "acp", "runtime"]
@@ -13,7 +14,8 @@ resolver = "2"
 
 [build-dependencies]
 sha2 = "0.10"
-tauri-build = { version = "2", features = [] }
+tauri-build = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9", features = [] }
+cc = "1"
 
 [dependencies]
 cpal = "0.16"
@@ -22,17 +24,18 @@ muniment-core = { path = "core", features = ["tls"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 semver = "1"
-tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
+tauri = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9", features = ["unstable"] }
+tauri-runtime-cef = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9", features = ["unstable"] }
+tiny_http = "0.12"
+tauri-plugin-dialog = { git = "ssh://git@github.com/tauri-apps/plugins-workspace.git", rev = "53b57024e52edbf0f0c4cc7cf8bf695436a49ed8" }
 uuid = { version = "1", features = ["v7"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-tauri-plugin-global-shortcut = "2"
-tauri-plugin-opener = "=2.5.4"
-tauri-plugin-window-state = "=2.4.1"
+tauri-plugin-global-shortcut = { git = "ssh://git@github.com/tauri-apps/plugins-workspace.git", rev = "53b57024e52edbf0f0c4cc7cf8bf695436a49ed8" }
+tauri-plugin-opener = { git = "ssh://git@github.com/tauri-apps/plugins-workspace.git", rev = "53b57024e52edbf0f0c4cc7cf8bf695436a49ed8" }
+tauri-plugin-window-state = { git = "ssh://git@github.com/tauri-apps/plugins-workspace.git", rev = "53b57024e52edbf0f0c4cc7cf8bf695436a49ed8" }
 url = "2"
 # The shell reads the one state root and the runtime profile on every platform.
 muniment-runtime = { path = "runtime" }
-tauri-plugin-wdio-webdriver = { version = "1.3.0", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Registry"] }
@@ -53,7 +56,7 @@ muniment-attach = { path = "attach", features = ["client"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 tar = "0.4"
-tauri = { version = "2", features = ["test"] }
+tauri = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9", features = ["test", "unstable"] }
 
 [[test]]
 name = "launcher-panel"
@@ -67,3 +70,12 @@ test = false
 
 [profile.release]
 strip = true
+
+[patch.crates-io]
+tauri = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9" }
+tauri-build = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9" }
+tauri-codegen = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9" }
+tauri-macros = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9" }
+tauri-plugin = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9" }
+tauri-utils = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9" }
+tauri-runtime = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9" }

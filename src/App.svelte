@@ -9,12 +9,13 @@
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { getCurrentWindow, UserAttentionType } from '@tauri-apps/api/window'
   import { open } from '@tauri-apps/plugin-dialog'
-  import { register, unregister } from '@tauri-apps/plugin-global-shortcut'
+  import { register, unregister } from './lib/native-shortcuts.js'
   import { openUrl } from '@tauri-apps/plugin-opener'
 
   import AccessPanel from './lib/AccessPanel.svelte'
   import Settings from './lib/Settings.svelte'
   import AgentManager from './lib/AgentManager.svelte'
+  import BrowserWorkspace from './lib/BrowserWorkspace.svelte'
   import AgentAvatar from './lib/AgentAvatar.svelte'
   import AgentProfile from './lib/AgentProfile.svelte'
   import ChatComposer from './composer/ChatComposer.svelte'
@@ -105,10 +106,12 @@
 
   let settingsOpen = $state(false)
   let agentsOpen = $state(false)
+  let browserPanel = $state(null)
+  function showBrowser(mode) { browserPanel = mode; agentsOpen = false; agentProfileOpen = false; closeRail() }
   let agentsRequest = $state(0)
   let agentPanelId = $state(null)
   let agentCreateNew = $state(false)
-  function showAgents(id = null, create = false) { agentPanelId = id; agentCreateNew = create; agentsRequest += 1; agentsOpen = true; agentProfileOpen = false; closeRail() }
+  function showAgents(id = null, create = false) { browserPanel = null; agentPanelId = id; agentCreateNew = create; agentsRequest += 1; agentsOpen = true; agentProfileOpen = false; closeRail() }
   let agentProfileOpen = $state(false)
   let agentOpening = $state(false)
   let selectedAgent = $state(null)
@@ -436,8 +439,8 @@
     onMaximized: (next) => { recordMaximized = next },
   })
   const { fit: fitArtifactRail, pointerDown: artifactRailPointerDown, pointerMove: artifactRailPointerMove, pointerEnd: artifactRailPointerEnd, keydown: artifactRailKeydown } = railController
-  const toggleArtifactRail = () => { agentsOpen = false; agentProfileOpen = false; railController.toggle('artifacts') }
-  const toggleRecordPanel = () => { agentsOpen = false; agentProfileOpen = false; railController.toggle('record') }
+  const toggleArtifactRail = () => { if (browserPanel === 'artifacts') browserPanel = null; else showBrowser('artifacts') }
+  const toggleRecordPanel = () => { browserPanel = null; agentsOpen = false; agentProfileOpen = false; railController.toggle('record') }
   const closeRail = () => railController.close()
   // Ask puts the open view's SQL into the composer as a fenced block, so the reply starts from what the person sees.
   function askAboutView(sql) {
@@ -564,6 +567,7 @@
   }
 
   async function newSidebarThread(projectId = null) {
+    browserPanel = null
     if (active || threadSwitching || projectBusy) return
     selectedProject = projectId
     agentsOpen = false
@@ -706,6 +710,7 @@
     }
     agentsOpen = false
     clearThreadSelection()
+    browserPanel = null
     void chatController.openThread(threadId)
   }
 
@@ -1258,7 +1263,7 @@
   })
 
   $effect(() => {
-    if (!workspaceMode() || onboarding.name !== 'complete') closeRail()
+    if (!workspaceMode() || onboarding.name !== 'complete') { browserPanel = null; closeRail() }
   })
 
   function workspaceMode() {
@@ -1515,7 +1520,8 @@
         if (sidebarCollapsed || active || threadSwitching) return
         const threadId = shortcutThreads[rowPosition - 1]?.threadId
         if (!threadId || threadId === currentThreadId) return
-        void chatController.openThread(threadId)
+        browserPanel = null
+    void chatController.openThread(threadId)
         return
       }
       if (workspaceMode() && onboarding.name === 'complete' && isNewThreadShortcut(event)) {
@@ -1545,6 +1551,7 @@
         settingsShortcutPressed()
         return
       }
+      if (event.key === 'Escape' && browserPanel) { browserPanel = null; event.preventDefault() }
       if (event.key === 'Escape' && railOccupant !== null) {
         event.preventDefault()
         if ((recordPanelOpen || filePanelOpen) && recordMaximized) toggleRecordMaximized()
@@ -1791,7 +1798,7 @@
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
-      <section class="workspace" inert={auth.name === 'signing-in'} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" inert={auth.name === 'signing-in'} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || !!browserPanel} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
@@ -1816,7 +1823,6 @@
             {/if}
             <span class="title-spacer" data-tauri-drag-region></span>
             <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
-            <RowControl kind="artifacts-toggle" aria-controls="artifact-rail" aria-expanded={artifactRailOpen} aria-keyshortcuts={artifactShortcut} aria-label={`${artifactRailOpen ? 'Close' : 'Open'} artifact rail`} onclick={toggleArtifactRail}>Artifacts <kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></RowControl>
             <RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>
           </div>
         </header>
@@ -1838,6 +1844,8 @@
                 <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
               </button>
               <div class="agents-side-row"><button class="side-action" aria-expanded={agentsOpen} onclick={() => showAgents()}><LucideIcon name="bot" /><span>Agents</span></button><button class="agent-add quiet" aria-label="New agent" onclick={() => showAgents(null, true)}><LucideIcon name="plus" /></button></div>
+              <button class="side-action" aria-expanded={browserPanel === 'artifacts'} aria-keyshortcuts={artifactShortcut} onclick={toggleArtifactRail}><LucideIcon name="file" /><span>Artifacts</span></button>
+              <button class="side-action" aria-expanded={browserPanel === 'browser'} onclick={() => showBrowser('browser')}><LucideIcon name="globe" /><span>Browser</span></button>
               <input class="thread-search" type="search" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} />
             </div>
             <div class="side-scroll">
@@ -2295,6 +2303,9 @@
         ondelete={() => { agentProfileOpen = false; selectedAgent = null; void refreshAgents() }}
         onopen={(id) => chatController.openThread(id, true)} />{/key}
     {/if}
+  {#if browserPanel}{#key browserPanel}
+    <BrowserWorkspace {tauri} artifacts={browserPanel === 'artifacts'} suspended={settingsOpen || pickerOpen} onclose={() => browserPanel = null} />
+  {/key}{/if}
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} initialId={agentPanelId} createNew={agentCreateNew} projects={projectRows} onclose={() => { agentsOpen = false }} onstart={openAgent} onselect={openAgent} onopen={(id) => chatController.openThread(id)} onchange={(next) => { agentListing = next }} />
   {/key}{/if}

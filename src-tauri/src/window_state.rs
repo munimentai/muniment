@@ -92,7 +92,7 @@ pub fn restore_main_window<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()>
         .find(|config| config.label == "main")
         .expect("The main window requires a window configuration.");
     let window = app
-        .get_webview_window(&config.label)
+        .get_window(&config.label)
         .expect("The main window must exist before setup.");
     let state = muniment_runtime::profile_directory()
         .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;

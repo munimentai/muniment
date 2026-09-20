@@ -6,7 +6,12 @@
         "Library/LaunchServices/muniment-cli": "target/universal-apple-darwin/release/muniment-cli",
         "Library/LaunchServices/muniment-reader": "target/universal-apple-darwin/release/muniment-reader",
         "Library/LaunchAgents/ai.muniment.runtime.plist": "packaging/ai.muniment.runtime.plist"
-      }
+      },
+      "frameworks": [
+        "target/release/libmuniment_cef_keychain.dylib"
+      ],
+      "signingIdentity": "-",
+      "entitlements": "packaging/entitlements.plist"
     },
     "resources": {
       "third-party/sherpa-onnx-v1.13.2/macos-universal2/libsherpa-onnx-c-api.dylib": "asr-runtime/libsherpa-onnx-c-api.dylib",

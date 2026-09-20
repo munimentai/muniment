@@ -251,7 +251,7 @@ fn is_paste_prompt(title: &str) -> bool {
 }
 
 pub(crate) fn present_main_window(app: &AppHandle) {
-    if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = app.get_window("main") {
         let _ = main.unminimize();
         let _ = main.show();
         let _ = main.set_focus();
