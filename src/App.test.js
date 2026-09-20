@@ -1401,15 +1401,17 @@ describe('workspace composer entry', () => {
     expect(document.documentElement.style.getPropertyValue('--text-15')).toBe('')
     expect(size.getByRole('button', { name: 'Default type size' })).toBeDisabled()
 
-    const human = within(await screen.findByRole('group', { name: 'Human font' }))
+    const human = within(await screen.findByRole('group', { name: 'Conversation font' }))
+    await fireEvent.click(human.getByText('Conversation', { exact: true }))
     expect(human.getByRole('button', { name: /Schibsted Grotesk/ })).toHaveAttribute('aria-pressed', 'true')
     await waitFor(() => expect(human.getByRole('button', { name: 'Inter' })).toBeInTheDocument())
-    await fireEvent.input(human.getByRole('searchbox', { name: 'Search human fonts' }), { target: { value: 'ios' } })
+    await fireEvent.input(human.getByRole('searchbox', { name: 'Search conversation fonts' }), { target: { value: 'ios' } })
     expect(human.getAllByRole('button').map((button) => button.querySelector('.font-name').textContent)).toEqual(['Schibsted Grotesk', 'Iosevka'])
     await fireEvent.click(human.getByRole('button', { name: 'Iosevka' }))
     expect(document.documentElement.style.getPropertyValue('--font-human')).toBe("'Iosevka', 'Schibsted Grotesk', system-ui, sans-serif")
     expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: 'Iosevka', mono: null })
-    const mono = within(screen.getByRole('group', { name: 'Mono font' }))
+    const mono = within(screen.getByRole('group', { name: 'Records font' }))
+    await fireEvent.click(mono.getByText('Records', { exact: true }))
     expect(mono.getByRole('button', { name: /Commit Mono/ })).toHaveAttribute('aria-pressed', 'true')
     expect(document.documentElement.style.getPropertyValue('--font-mono')).toBe('')
 
@@ -2402,9 +2404,9 @@ describe('artifact rail', () => {
     expect(toggle).toHaveAccessibleName('Close artifact rail')
     const rail = screen.getByRole('complementary', { name: 'Artifacts' })
     const empty = rail.querySelector('.artifact-empty')
-    expect(empty).toHaveTextContent('Ask in chat to create a document, table, or other file.')
+    expect(empty).toHaveTextContent('Ask in chat to create a document, table, or file.')
     expect(empty.children).toHaveLength(1)
-    expect(within(empty).getByText('Ask in chat to create a document, table, or other file.').tagName).toBe('P')
+    expect(within(empty).getByText('Ask in chat to create a document, table, or file.').tagName).toBe('P')
 
     await fireEvent.click(toggle)
     expect(screen.queryByRole('complementary', { name: 'Artifacts' })).not.toBeInTheDocument()
@@ -2660,7 +2662,7 @@ describe('history alerts', () => {
       router_models: [{ id: 'openai/model-a', family: 'openai', model: 'model-a', accounts: 0 }],
     }) : base(command, payload))
     render(App)
-    await screen.findByText('No enabled account serves this model. Connect an account or choose another model in the composer.')
+    await screen.findByText('This model needs an account. Connect one or choose another.')
     expect(document.querySelector('.empty')).not.toHaveTextContent('is selected')
   })
 
@@ -6753,6 +6755,19 @@ describe('provenance line', () => {
     expect(line.closest('.receipt-line').querySelector('.response-meta .receipt-time [data-icon="clock"]')).toBeInTheDocument()
     expect(within(line).getByText('analysis/high')).toHaveClass('route-segment')
     expect(line.querySelectorAll('.route-segment')).toHaveLength(1)
+  })
+
+  it('keeps routing turns behind one disclosure while totals stay visible', async () => {
+    restore({ model: 'example', cost: '$0.01', turns: 2, routing: [
+      { account: 'First account', selected_model: 'example', decision: 'Selected', confidence: 0.8 },
+      { account: 'Second account', selected_model: 'fallback', decision: 'Fallback', fallback_causes: ['Rate limited'] },
+    ] })
+    await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
+    expect(document.querySelector('.receipt-record')).toHaveTextContent('Cost$0.01Turns2')
+    expect(screen.getByRole('region', { name: 'Routing turn 1' })).not.toBeVisible()
+    await fireEvent.click(screen.getByText('Routing details · 2 turns'))
+    expect(screen.getByRole('region', { name: 'Routing turn 1' })).toHaveTextContent('First account')
+    expect(screen.getByRole('region', { name: 'Routing turn 2' })).toHaveTextContent('Rate limited')
   })
 
   it('paints nothing green when the receipt records no route', async () => {

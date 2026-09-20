@@ -1918,7 +1918,7 @@
         <div class="thread-shell">
         <div class="thread" class:scrolling={threadScrolling} role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={onThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
-          {#if messages.length === 0}<p class="empty">{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'No enabled account serves this model. Connect an account or choose another model in the composer.' : profileAgent ? `Chat with ${profileAgent.name} using ${modelSourceLabel}.` : auth.name === 'local' ? `${modelSourceLabel} is selected. Ask a question or request a file.` : "Ask a question or request a file. Your org selects the model."}</p>{/if}
+          {#if messages.length === 0}<p class="empty">{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : profileAgent ? `Chat with ${profileAgent.name} using ${modelSourceLabel}.` : 'Ask a question or request a file.'}</p>{/if}
           {#each messages as message}
             {#if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
@@ -2030,9 +2030,10 @@
               {/if}
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
-                {@const rows = receiptRows(message.run.receipt, message.run.recalls)}
+                {@const rows = receiptRows({ ...message.run.receipt, routing: [] }, message.run.recalls)}
+                {@const routing = message.run.receipt?.routing ?? []}
                 {@const columns = receiptUsageColumns(message.run.receipt)}
-                {@const hasDetails = rows.length > 0 || columns.length > 0}
+                {@const hasDetails = rows.length > 0 || columns.length > 0 || routing.length > 0}
                 {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || hasDetails}
                 {@const expanded = hasDetails && expandedReceipts.has(message.run.id)}
                 {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
@@ -2072,6 +2073,21 @@
                       <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}{#each row.files ?? [] as file}<span class="recall-file">{file}</span>{/each}</dd></div>
                     {/each}
                   </dl>
+                  {#if routing.length}
+                    <details class="receipt-routing">
+                      <summary>Routing details · {routing.length} {routing.length === 1 ? 'turn' : 'turns'}</summary>
+                      {#each routing as evidence, index}
+                        <section aria-label={`Routing turn ${index + 1}`}>
+                          <h4>Turn {index + 1}</h4>
+                          <dl class="receipt-record">
+                            {#each receiptRows({ routing: [evidence] }) as row}
+                              <div><dt>{row.label}</dt><dd>{row.value}</dd></div>
+                            {/each}
+                          </dl>
+                        </section>
+                      {/each}
+                    </details>
+                  {/if}
                 {/if}
                 {#if failure}<div class="run-error copy-failure">{failure}</div>{/if}
               {/if}
@@ -2225,7 +2241,7 @@
               <h2 id="artifact-rail-title">Artifacts</h2>
             </header>
             <div class="artifact-empty">
-              <p>Ask in chat to create a document, table, or other file.</p>
+              <p>Ask in chat to create a document, table, or file.</p>
             </div>
           </aside>
         {/if}
@@ -2624,7 +2640,11 @@
   .receipt-usage th[scope="col"] { white-space: nowrap; }
   .receipt-usage td { min-width: 180px; }
   .receipt-record { display: grid; row-gap: 6px; box-sizing: border-box; width: min(100%, 560px); margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .receipt-record div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
+  .receipt-record div { display: grid; grid-template-columns: minmax(0, 140px) minmax(0, 1fr); gap: 12px; }
+  .receipt-routing { margin-top: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .receipt-routing summary { cursor: pointer; }
+  .receipt-routing h4 { margin: 12px 0 0; font: inherit; color: var(--ink); }
+  .receipt-record dt { overflow-wrap: anywhere; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .receipt-record .recall-file { display: block; }
   .receipt-record .route-value { color: var(--signal); }

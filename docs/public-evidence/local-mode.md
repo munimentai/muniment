@@ -35,6 +35,10 @@ Pi can also use provider credentials that the Pi CLI saved in the same store. Lo
 ## Local records
 
 An empty journal shows the composer without a history alert.
+The empty thread shows model lookup errors, missing connections, or unavailable accounts before it offers chat guidance.
+With a model selected and an account available, it reads **Ask a question or request a file.**
+The model chip names the selection. It does not prove that the provider will answer.
+Open **Artifacts** for file creation guidance. **Record** opens the separate company record panel.
 If a history read fails, the alert includes the reader's cause. **Restore history** repeats the failed action.
 A successful history read clears the alert.
 
@@ -119,6 +123,10 @@ An interrupted reply keeps its text. **Try again** sends the same message again.
 During browser sign-in, **Cancel sign-in** or **Escape** restores local mode.
 
 Subscription accounts use the sign-in email when the provider supplies it.
+Account balancing has a visible switch beside its explanation.
+Accounts use two equal columns, including providers with one account, and one column in narrow panels.
+Allowance meters use full-strength green, yellow and red with the remaining percentage and reset time.
+Account cards show routing warnings. Usage and settings holds timestamps, usage totals and account controls.
 Hover over an account name and select the pencil to edit it inline.
 Enter saves the name. Escape cancels the edit. A failed save keeps the edit open.
 Grok subscriptions show their reported credits window, remaining percentage and reset time.
@@ -142,3 +150,10 @@ A single action opens its details directly. Multiple actions share a group dropd
 Routed replies estimate cost per turn using the selected model’s catalog input and output rates. Cached input uses the standard input rate. Subscription allowances and provider discounts do not change this estimate. An unknown model price leaves cost unavailable. Saved receipts retain their recorded values.
 
 Reply receipts list classifier tokens and estimated cost separately from the answering model. Each classifier total includes all calls in the run, including calls that select a fallback. Missing usage stays unavailable.
+
+Reply receipts show cost, tokens, turns and tools before routing details.
+Routing details opens one numbered section per turn, including fallback causes.
+Preferences shows the selected conversation and record fonts in compact pickers.
+Open a picker to search installed fonts or restore the default.
+New agents use one Create agent action. Creating an agent does not start a run.
+Chat, Run now and schedule controls become available after creation.

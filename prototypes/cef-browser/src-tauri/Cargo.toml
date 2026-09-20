@@ -1,0 +1,22 @@
+[package]
+name = "muniment-cef-browser"
+version = "0.1.6"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[build-dependencies]
+cc = "1"
+tauri-build = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9", features = [] }
+
+[dependencies]
+tauri = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9", features = [] }
+tauri-runtime-cef = { git = "ssh://git@github.com/tauri-apps/tauri.git", rev = "747a0612d5dba9829fb3487a3ed6cdf7b5e81dd9", features = ["unstable"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+tiny_http = "0.12"
+
+[profile.release]
+strip = true

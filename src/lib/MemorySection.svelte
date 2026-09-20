@@ -71,7 +71,7 @@
 </script>
 <section aria-label={agentId ? "Agent memory" : "Profile and memory"}>
   {#if !agentId}
-  <p>Your profile guides each reply. Saved facts help Muniment recall what matters across threads.</p>
+  <p>Your profile and saved facts guide replies.</p>
   <div class="profile-fields">
     <label>Name<input bind:value={profile.name} disabled={!loaded || busy} autocomplete="name" /></label>
     <label>Preferred name<input bind:value={profile.preferredName} disabled={!loaded || busy} autocomplete="nickname" /></label>
@@ -86,7 +86,7 @@
   </div>
   {:else}<p>Facts saved here belong to this agent. Its chat can create, correct, and remove them.</p>{/if}
   <h4>Saved memories</h4>
-  <p>Keep one fact per memory. Include its source so you can check or correct it later.</p>
+  <p>Save one fact and its source.</p>
   <input aria-label="Search memories" placeholder="Search memories" bind:value={filter} />
   {#each shown as fact (fact.id)}
     <article>

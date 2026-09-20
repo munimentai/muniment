@@ -3,6 +3,7 @@
   // propose and commit: Link joins it to another record by a relation the
   // vocabulary allows, Merge folds it into a survivor of its kind, and Delete
   // takes it out of every live read while its history stays.
+  import { onMount } from 'svelte'
   import { deleteOperation, diffLines, linkOperation, mergeOperation, relationsFrom } from './record-table-state.js'
 
   let { mode, initialTarget = null, detail, kinds = [], relations = [], tauri, companyId, propose, commit, oncancel, oncommitted } = $props()
@@ -18,6 +19,10 @@
   let pending = $state(null)
   let error = $state(null)
   let searchVersion = 0
+  let busy = $state(false)
+  onMount(() => {
+    if (mode === 'merge' && initialTarget) { target = initialTarget; void proposeAction() }
+  })
 
   $effect(() => {
     if (mode === 'merge') targetKind = entity?.kind ?? ''
@@ -70,13 +75,18 @@
 
   async function proposeAction(event) {
     event?.preventDefault?.()
+    if (busy) return
     error = null
     let operation
     if (mode === 'delete') operation = deleteOperation(entity.id)
     else if (mode === 'link' && target && relation) operation = linkOperation(entity.id, relation, target.id)
     else if (mode === 'merge' && target) operation = mergeOperation(entity.id, target.id)
     if (!operation) return
-    const answer = await propose(operation)
+    busy = true
+    let answer
+    try { answer = await propose(operation) }
+    catch (failure) { error = failure?.message ?? String(failure); return }
+    finally { busy = false }
     if (answer?.error) {
       error = answer.error.message ?? 'The record refused the change.'
       return
@@ -113,6 +123,8 @@
   <p class="record-relate-heading">{heading}</p>
   {#if mode === 'delete'}
     <p class="record-relate-note">The record leaves every table and view. Its history and its identities stay, and a later merge or link cannot name it.</p>
+  {:else if mode === 'merge' && initialTarget}
+    <p class="record-relate-note">Keep: {initialTarget.title}</p>
   {:else}
     <div class="record-relate-controls">
       {#if mode === 'link'}
@@ -158,14 +170,14 @@
     </div>
   {:else}
     <div class="record-relate-actions">
-      <button type="submit" class="record-commit" disabled={mode !== 'delete' && !target}>Propose</button>
+      <button type="submit" class="record-commit" disabled={busy || (mode !== 'delete' && !target)}>{busy ? 'Preparing preview…' : 'Propose'}</button>
       <button type="button" class="record-discard" onclick={() => oncancel?.()}>Cancel</button>
     </div>
   {/if}
 </form>
 
 <style>
-  .record-relate { display: grid; gap: 10px; align-content: start; min-height: 0; overflow-y: auto; padding-top: 12px; }
+  .record-relate { min-width: 0; overflow-wrap: anywhere; display: grid; gap: 10px; align-content: start; min-height: 0; overflow-y: auto; padding-top: 12px; }
   .record-relate-heading { margin: 0; font: 600 var(--text-15)/1.3 var(--font-human); }
   .record-relate-note { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .record-relate-controls { display: grid; gap: 8px; }

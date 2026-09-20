@@ -13,13 +13,13 @@
 </script>
 <section aria-labelledby="test-routing-title">
   <h4 id="test-routing-title">Test routing</h4>
-  <p>The sample reaches your saved classifier. This test does not generate a reply or run tools.</p>
+  <p>Send a sample to your classifier. No reply or tools.</p>
   <label for="routing-sample">Sample request</label>
-  <textarea id="routing-sample" rows="3" placeholder="Describe a task you would ask Muniment to handle." bind:value={sample} disabled={pending}></textarea>
+  <textarea id="routing-sample" rows="3" placeholder="Describe a task." bind:value={sample} disabled={pending}></textarea>
   <button disabled={pending || !sample.trim() || (!settings?.options?.length || !settings?.enabled)} onclick={test}>{pending ? 'Testing…' : 'Test routing'}</button>
   {#if !settings?.enabled}<p>Turn on account balancing before testing.</p>{:else if !settings?.options?.length}<p>Connect an eligible account before testing.</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
-  {#if result}<dl aria-label="Routing test result"><div><dt>Selected model</dt><dd>{result.model}</dd></div><div><dt>Decision</dt><dd>{result.reason}</dd></div><div><dt>Classification time</dt><dd>{result.elapsed_ms} ms</dd></div>{#if result.confidence !== null}<div><dt>Routing confidence</dt><dd>{Math.round(result.confidence * 100)}%</dd></div>{/if}<div><dt>Fallback reason</dt><dd>{result.fallback_reason ?? 'No classification fallback'}</dd></div><div><dt>Eligible models</dt><dd>{result.eligible_models?.join(', ') || 'None currently available'}</dd></div>{#each result.exclusions ?? [] as exclusion}<div><dt>{exclusion.model}</dt><dd>{exclusion.reason}</dd></div>{/each}</dl><p>Routing confidence measures model selection, not answer quality. Provider failures can change the model during a chat turn.</p>{/if}
+  {#if result}<dl aria-label="Routing test result"><div><dt>Selected model</dt><dd>{result.model}</dd></div><div><dt>Decision</dt><dd>{result.reason}</dd></div><div><dt>Classification time</dt><dd>{result.elapsed_ms} ms</dd></div>{#if result.confidence !== null}<div><dt>Routing confidence</dt><dd>{Math.round(result.confidence * 100)}%</dd></div>{/if}<div><dt>Fallback reason</dt><dd>{result.fallback_reason ?? 'No classification fallback'}</dd></div><div><dt>Eligible models</dt><dd>{result.eligible_models?.join(', ') || 'None currently available'}</dd></div>{#each result.exclusions ?? [] as exclusion}<div><dt>{exclusion.model}</dt><dd>{exclusion.reason}</dd></div>{/each}</dl><p>Confidence rates the model choice. Provider failures can change it.</p>{/if}
 </section>
 <style>
   section { display: grid; gap: 10px; border-top: 1px solid var(--border); padding-top: 22px; }
