@@ -84,7 +84,9 @@ if (signing && signingConfig === null) {
 
 // Build the universal app without Tauri signing so this script checks trust before the first codesign call.
 mustRun("build universal runtime", process.execPath, [join(".github", "build-macos-runtime.mjs")]);
-tauri("build", "--target", "universal-apple-darwin", "--bundles", "app", "--no-sign");
+tauri("build", "--target", "universal-apple-darwin", "--no-bundle", "--no-sign");
+mustRun("build universal CEF helper", process.execPath, [join(".github", "build-macos-cef-helper.mjs")]);
+tauri("bundle", "--target", "universal-apple-darwin", "--bundles", "app", "--no-sign");
 
 if (!signing) {
   console.log("macOS signing SKIPPED: MACOS_SIGNING_ENABLED is false (unsigned build)");

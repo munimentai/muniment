@@ -76,7 +76,7 @@
 
 <section class="settings-companies" aria-labelledby="settings-companies-title">
   <h4 id="settings-companies-title" class="settings-label">Companies</h4>
-  <p class="support">Each company is one record on this machine, its graph in its own file. Delete removes the company and every record in it.</p>
+  <p class="support">Company records stay on this device. Deleting a company removes its records.</p>
   {#if companies.length === 0}
     <p class="support">No company yet.</p>
   {:else}

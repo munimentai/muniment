@@ -5,6 +5,8 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 asr_runtime="$repo_root/src-tauri/third-party/sherpa-onnx-v1.13.2/link"
 
 export LD_LIBRARY_PATH="$asr_runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# linuxdeploy must resolve CEF from Cargo output before it copies dependencies.
+export LD_LIBRARY_PATH="$repo_root/src-tauri/target/release:$LD_LIBRARY_PATH"
 
 tauri_cache="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
 mkdir -p "$tauri_cache"
@@ -40,4 +42,4 @@ cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment
 # The reader sidecar is Go, static, and lands beside the Rust binaries.
 bash "$repo_root/.github/build-reader.sh" src-tauri/target/release/muniment-reader
 
-exec npm run tauri build "$@"
+exec npm run tauri build -- --verbose "$@"

@@ -1,0 +1,13 @@
+{
+  "name": "muniment-cef-browser-prototype",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/tauri-cli.mjs dev",
+    "build": "node scripts/build-macos.mjs",
+    "test": "cargo test --release --locked --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml",
+    "test:keychain": "sh scripts/test-keychain-macos.sh"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "3.0.0-alpha.1"
+  }
+}

@@ -274,6 +274,8 @@ export function buildProbeCommandTable(fixtureName) {
 
   async function invoke(command, payload) {
     if (command === 'launcher_register') return null
+    if (command === 'artifact_list') return []
+    if (command === 'browser_view') return null
     if (command === 'runtime_state') return runtimeState
     if (command === 'runtime_start') {
       runtimeState = { revision: 2, lastEvent: 'connected', visible: false, busy: false }

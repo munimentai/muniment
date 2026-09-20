@@ -79,6 +79,12 @@ it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (se
   const calls = spawn.mock.calls;
   const tauri = calls.find(([, args]) => args[0].endsWith("tauri.js"));
   expect(tauri[1]).toContain("--no-sign");
+  expect(tauri[1]).toContain("--no-bundle");
+  const helper = calls.findIndex(([, args]) => args[0].endsWith("build-macos-cef-helper.mjs"));
+  const bundle = calls.findIndex(([, args]) => args[0].endsWith("tauri.js") && args[1] === "bundle");
+  expect(helper).toBeGreaterThan(calls.indexOf(tauri));
+  expect(bundle).toBeGreaterThan(helper);
+  expect(calls[bundle][1]).toContain("--no-sign");
   const registration = calls.findIndex(([command, args]) => command === "security" && args.includes("-s") && args[0] === "list-keychains");
   expect(calls[registration][1]).toContain("/System/Library/Keychains/SystemRootCertificates.keychain");
   const preflight = calls.findIndex(([command, args]) => command === "security" && args.includes("codesigning"));

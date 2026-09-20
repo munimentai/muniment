@@ -10,6 +10,19 @@ import {
   tauriSignCommand,
 } from "./lib/windows-signing.mjs";
 
+// Installer jobs use fresh VMs, independently of the compile preflight.
+if (process.platform === "win32") {
+  const tools = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+    ". ./scripts/prepare-cef-windows.ps1; [Console]::Write($env:PATH)",
+  ], { encoding: "utf8" });
+  if (tools.error) throw tools.error;
+  if (tools.status !== 0 || !tools.stdout.trim()) {
+    process.stderr.write(tools.stderr || "CEF build tool setup failed.\n");
+    process.exit(tools.status || 1);
+  }
+  process.env.PATH = tools.stdout.trim();
+}
+
 const run = (command, pass, ...args) => {
   const cli = join("node_modules", "@tauri-apps", "cli", "tauri.js");
   console.log(`Starting the ${pass} bundling pass.`);

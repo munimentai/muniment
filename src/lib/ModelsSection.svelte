@@ -348,7 +348,7 @@
     {#if refreshingAccounts}<p class="support" role="status">Refreshing allowances…</p>{/if}
     {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
     <header class="models-head">
-      <div><h4 class="models-label">Accounts</h4><p class="support">Allowances refresh on page load and every 2 minutes.</p></div>
+      <div><h4 class="models-label">Accounts</h4></div>
       <button type="button" class="connect" onclick={openConnector}><LucideIcon name="plus" variant="action" size={14} />Connect account</button>
     </header>
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
@@ -361,7 +361,6 @@
         </header>
         <ul class="account-list">
           <li class="account-row">
-            <span class="account-name">{sourceTag(entry.source) === 'Account' ? 'Signed-in account' : `${sourceTag(entry.source)} connection`}</span>
             <span class="tag">{sourceTag(entry.source)}</span>
             {#if entry.base_url}<span class="record">{entry.base_url}</span>{/if}
             <span class="record">direct</span>
@@ -377,7 +376,6 @@
         <header>
           <ProviderLogo provider={familyProvider(family)} size={18} />
           <h5>{familyName(family)}</h5>
-          <span class="tag">Pool</span>
         </header>
         <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} />
       </section>
@@ -503,7 +501,6 @@
   .models { display: grid; gap: 28px; align-content: start; }
   .account-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 28px; padding: 3px 4px; }
-  .account-name { font-size: var(--text-13); }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
   .connect-head h4, .models-head h4 { margin: 0; }

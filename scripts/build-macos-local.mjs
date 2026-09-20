@@ -1,10 +1,10 @@
 // Build, sign and install the macOS desktop app for the local proof.
-// The bundler signs nothing. The Apple signing certificate is read from
+// Direct CEF uses the v2 shell. The Apple signing certificate comes from
 // OpenBao at sign time into a throwaway keychain, every Mach-O is signed leaf
 // first, then the runtime, then the app, with the nightly's codesign arguments
 // from .github/build-macos-app.mjs, and the keychain is deleted on exit.
 // Nothing here stores the certificate, and no hand codesign follows.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, renameSync, writeFileSync } from "node:fs";
+import { cpSync, openSync, readSync, closeSync, existsSync, mkdirSync, mkdtempSync, rmSync, renameSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
@@ -75,7 +75,15 @@ mkdirSync(join(target, "universal-apple-darwin", "release"), { recursive: true }
 cpSync(runtimeSource, runtimeBundled);
 cpSync(cliSource, cliBundled);
 cpSync(readerSource, readerBundled);
-mustRun("build app", process.execPath, [join("node_modules", "@tauri-apps", "cli", "tauri.js"), "build", "--bundles", "app", "--no-sign"]);
+mustRun("build browser helper", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--bin", "muniment-cef-helper", "--release", "--locked"]);
+mustRun("build app", "npm", ["run", "tauri", "build", "--", "--bundles", "app", "--features", "local-runtime", "--no-sign"]);
+mustRun("package direct CEF", process.execPath, ["scripts/package-cef-macos.mjs", app]);
+
+mustRun("link CEF private Keychain bridge", "install_name_tool", [
+  "-change", "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+  "@loader_path/../libmuniment_cef_keychain.dylib",
+  join(app, "Contents", "Frameworks", "Chromium Embedded Framework.framework", "Chromium Embedded Framework"),
+]);
 
 // Everything secret-bearing lives in a throwaway directory removed on exit.
 const workDir = mkdtempSync(join(tmpdir(), "muniment-local-signing-"));
@@ -155,25 +163,37 @@ if (!identity) {
 }
 console.log(`signing identity: ${identity[2]}`);
 
-const nested = [];
-const collectDylibs = async (dir) => {
+const binaries = [];
+const bundles = [];
+const scan = async (dir) => {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) await collectDylibs(full);
-    else if (entry.isFile() && entry.name.endsWith(".dylib")) nested.push(full);
+    if (entry.isDirectory()) {
+      await scan(full);
+      if (/\.(app|framework)$/.test(entry.name)) bundles.push(full);
+    } else if (entry.isFile()) {
+      const fd = openSync(full, "r");
+      const magic = Buffer.alloc(4);
+      try { readSync(fd, magic, 0, 4, 0); } finally { closeSync(fd); }
+      if (["cffaedfe", "feedfacf", "cefaedfe", "feedface", "cafebabe", "bebafeca"].includes(magic.toString("hex"))) binaries.push(full);
+    }
   }
 };
-await collectDylibs(app);
-for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArguments(identity[1], file));
-mustRun("codesign runtime", "codesign", codesignArguments(identity[1], runtime));
-mustRun("codesign reader", "codesign", codesignArguments(identity[1], readerBinary));
-mustRun("codesign app", "codesign", codesignArguments(identity[1], app));
+await scan(app);
+for (const path of [...binaries, ...bundles, app]) {
+  mustRun("sign CEF component", "codesign", [...codesignArguments(identity[1], path), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
+}
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
 // A running service holds the old executable after a bundle replacement.
 // Restart it after the swap so launchd reads the installed bundle.
 if (!process.argv.includes("--build-only")) {
   mustRun("stop app", "pkill", ["-x", "muniment-desktop"], { allowFailure: true });
+  const stopDeadline = Date.now() + 15000;
+  while (spawnSync("pgrep", ["-x", "muniment-desktop"], { stdio: "ignore" }).status === 0) {
+    if (Date.now() >= stopDeadline) throw new Error("The app did not close. The installed bundle was not replaced.");
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
   mkdirSync(join(home, "Applications"), { recursive: true });
   const stage = mkdtempSync(join(home, "Applications", ".muniment-update-"));
   const stagedApp = join(stage, "muniment.app");

@@ -35,10 +35,10 @@ describe('Routing settings', () => {
     }) }
     render(Settings, { tauri, inventory, section: 'routing', onclose: vi.fn() })
     await screen.findByRole('alert')
-    expect(screen.queryByText('Connect an eligible account below to use automatic selection.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Connect an account to choose models automatically.')).not.toBeInTheDocument()
     failed = false
     await fireEvent.click(screen.getByRole('button', { name: 'Retry routing settings' }))
-    await screen.findByText('Connect an eligible account below to use automatic selection.')
+    await screen.findByText('Connect an account to choose models automatically.')
   })
 
   it('shows saved state after mutations and refreshes the composer inventory', async () => {
@@ -56,7 +56,7 @@ describe('Routing settings', () => {
     const summary = await screen.findByLabelText('Saved routing settings')
     expect(within(summary).getByText('jev-latest')).toBeInTheDocument()
     expect(within(summary).getByText('openai/example')).toBeInTheDocument()
-    await fireEvent.click(screen.getByText('Account balancing', { exact: true }))
+    expect(screen.getByRole('switch', { name: 'Use account balancing' }).closest('details')).toBeNull()
     await fireEvent.click(screen.getByRole('switch', { name: 'Use account balancing' }))
     await waitFor(() => expect(screen.getByRole('switch', { name: 'Use account balancing' })).toHaveAttribute('aria-checked', 'false'))
     expect(tauri.invoke).toHaveBeenCalledWith('model_router_set_enabled', { enabled: false })
@@ -69,8 +69,8 @@ it('does not present connected subscriptions or zero-weight keys as ready', () =
   render(ModelAccounts, { tauri: { invoke: vi.fn() }, family: 'openai', settings: {
     ...routing(), accounts: [{ ...account, id: 'subscription', servable: false }, { ...account, id: 'key', label: 'API account', source: 'key', weight: 0 }],
   } })
-  expect(screen.getByText('Not available for routed turns yet.')).toBeInTheDocument()
-  expect(screen.getByText('Excluded from routed turns.')).toBeInTheDocument()
+  expect(screen.getByText('Routing unavailable')).toBeInTheDocument()
+  expect(screen.getByText('Excluded from routing')).toBeInTheDocument()
   expect(screen.queryByText('Available for routed turns.')).not.toBeInTheDocument()
 })
 
@@ -98,7 +98,7 @@ it('refreshes allowances on load and every two minutes, then stops when closed',
 it('shows allowances and manual refresh for routable subscriptions', async () => {
   render(ModelAccounts, { tauri: { invoke: vi.fn() }, family: 'openai', settings: { ...routing(), accounts: [{ id: 'a', family: 'openai', label: 'Test account', source: 'account', servable: true, enabled: true, weight: 1, models: [], days: [], allowance_readable: true, quota_observed_ms: Date.now(), windows: [{ label: 'Weekly', scope: '', remaining_percent: 70, resets_at_ms: null, limit_reached: false }], requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }] } })
   expect(screen.getByText('70%')).toBeInTheDocument()
-  expect(screen.getByText('Available for routed turns.')).toBeInTheDocument()
+  expect(screen.queryByText('Available for routed turns.')).not.toBeInTheDocument()
   await fireEvent.click(screen.getByText('Usage and settings'))
   expect(screen.getByRole('button', { name: 'Refresh allowance' })).toBeInTheDocument()
 })

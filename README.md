@@ -27,12 +27,35 @@ Configure the Linux ACP adapter in [Zed or JetBrains](docs/acp-editors.md).
 
 ```sh
 npm ci
-npm run tauri build        # or: npm run tauri dev
+node scripts/build-macos-local.mjs          # signed local macOS app
+bash scripts/test-cef-linux.sh             # disposable Linux test machine
+powershell -File scripts/test-cef-windows.ps1 # disposable Windows test machine
 ```
 
 Platform prerequisites are pre-provisioned in the CI VM templates (rust
 1.96 + node 24 everywhere; webkit2gtk-4.1 on linux; MSVC + Win11 SDK on
 windows; CLT on macOS).
+
+## Embedded browser
+
+The Tauri v2 shell hosts native CEF child views through `cef-rs`. It does not
+use `tauri-runtime-cef`. The lockfile pins the browser packages. Websites have
+no Tauri bridge. Browser and artifact profiles are separate. Agent access
+requires a user grant for the active origin. Navigation revokes that grant.
+The Unix agent endpoint is `~/.muniment/browser/agent.sock`.
+
+CEF uses its platform sandbox. Windows starts through the CEF bootstrap and
+loads the app DLL. Linux requires X11 and the packaged `chrome-sandbox` helper
+with root ownership and mode 4755. The macOS signed bundle uses a private
+Keychain bridge for its own cookie key. Key access fails without prompting
+when the app cannot access that key.
+
+The platform scripts package CEF resources, helpers, and license notices.
+The standard release installer jobs do not package CEF. Do not use those jobs
+to distribute this browser build. Windows external agent IPC, Wayland, popups,
+and downloads are not implemented. Native macOS page accessibility needs a fix.
+The `cef-smoke` feature runs browser checks in a disposable profile. Do not use
+its state override with a personal profile.
 
 ## Test
 

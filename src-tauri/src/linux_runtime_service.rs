@@ -44,6 +44,13 @@ fn stop_owned_runtime(
 pub(crate) fn start_runtime<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
     (|| {
         let filesystem = AttachFilesystem::from_environment().map_err(|error| error.to_string())?;
+        #[cfg(feature = "local-runtime")]
+        let executable = std::env::current_exe()
+            .map_err(|error| error.to_string())?
+            .parent()
+            .ok_or("The app folder is missing.")?
+            .join("muniment-runtime");
+        #[cfg(not(feature = "local-runtime"))]
         let executable = app
             .path()
             .resource_dir()

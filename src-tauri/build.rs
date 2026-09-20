@@ -12,6 +12,12 @@ const ROOT: &str = "third-party/sherpa-onnx-v1.13.2";
 
 fn main() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").expect("target OS is set by Cargo");
+    if os == "linux" {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+        // Keep bundled native libraries out of the ELF dynamic symbol table.
+        // NSS and WebKit use the system SQLite ABI, not rusqlite's bundled ABI.
+        println!("cargo:rustc-link-arg=-Wl,--exclude-libs,ALL");
+    }
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").expect("target arch is set by Cargo");
     let runtime = match (os.as_str(), arch.as_str()) {
         ("linux", "x86_64") => "linux-x86_64",
@@ -96,6 +102,42 @@ fn main() {
     // lookup relative to the executable so no machine-global install is used.
     if let Some(link_arg) = asr_rpath::link_arg(&os, ExecutableLocation::Desktop) {
         println!("cargo:rustc-link-arg={link_arg}");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        let target = out.ancestors().nth(3).unwrap();
+        let library = target.join("libmuniment_cef_keychain.dylib");
+        let status = cc::Build::new()
+            .get_compiler()
+            .to_command()
+            .args([
+                "-dynamiclib",
+                "-compatibility_version",
+                "1.0",
+                "-current_version",
+                "1.0",
+                "-Wno-deprecated-declarations",
+                "-framework",
+                "CoreFoundation",
+                "-Wl,-reexport_framework,Security",
+                "-Wl,-install_name,@rpath/libmuniment_cef_keychain.dylib",
+                "src/keychain_macos.c",
+                "-o",
+            ])
+            .arg(&library)
+            .status()
+            .expect("Compile private browser key bridge");
+        assert!(status.success());
+        println!("cargo:rustc-link-search=native={}", target.display());
+        println!("cargo:rustc-link-lib=dylib=muniment_cef_keychain");
+        cc::Build::new()
+            .file("src/cef_macos.m")
+            .flag("-fobjc-arc")
+            .compile("muniment_cef_macos");
+        println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rerun-if-changed=src/keychain_macos.c");
+        println!("cargo:rerun-if-changed=src/cef_macos.m");
     }
     tauri_build::build()
 }

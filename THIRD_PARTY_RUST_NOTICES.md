@@ -19,8 +19,14 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `alsa-sys` 0.3.1 — MIT
 - `ambient-authority` 0.0.2 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - `android_system_properties` 0.1.5 — MIT/Apache-2.0
+- `anstream` 1.0.0 — MIT OR Apache-2.0
+- `anstyle` 1.0.14 — MIT OR Apache-2.0
+- `anstyle-parse` 1.0.0 — MIT OR Apache-2.0
+- `anstyle-query` 1.1.5 — MIT OR Apache-2.0
+- `anstyle-wincon` 3.0.11 — MIT OR Apache-2.0
 - `anyhow` 1.0.103 — MIT OR Apache-2.0
 - `arbitrary` 1.4.2 — MIT OR Apache-2.0
+- `ascii` 1.1.0 — Apache-2.0 OR MIT
 - `async-broadcast` 0.7.2 — MIT OR Apache-2.0
 - `async-channel` 2.5.0 — Apache-2.0 OR MIT
 - `async-executor` 1.14.0 — Apache-2.0 OR MIT
@@ -39,6 +45,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `axum-core` 0.5.6 — MIT
 - `base64` 0.21.7 — MIT OR Apache-2.0
 - `base64` 0.22.1 — MIT OR Apache-2.0
+- `base64` 0.23.1 — MIT OR Apache-2.0
 - `base64ct` 1.8.3 — Apache-2.0 OR MIT
 - `bit-set` 0.8.0 — Apache-2.0 OR MIT
 - `bit-vec` 0.8.0 — Apache-2.0 OR MIT
@@ -56,6 +63,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `byteorder-lite` 0.1.0 — Unlicense OR MIT
 - `bytes` 1.12.1 — MIT
 - `bzip2` 0.4.4 — MIT/Apache-2.0
+- `bzip2` 0.6.1 — MIT OR Apache-2.0
 - `bzip2-sys` 0.1.13+1.0.8 — MIT/Apache-2.0
 - `cairo-rs` 0.18.5 — MIT
 - `cairo-sys-rs` 0.18.2 — MIT
@@ -63,24 +71,35 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `cap-fs-ext` 4.0.2 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - `cap-primitives` 4.0.2 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - `cap-std` 4.0.2 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+- `cargo-platform` 0.1.9 — MIT OR Apache-2.0
 - `cargo_metadata` 0.19.2 — MIT
 - `cargo_toml` 0.22.3 — Apache-2.0 OR MIT
-- `cargo-platform` 0.1.9 — MIT OR Apache-2.0
 - `cc` 1.2.67 — MIT OR Apache-2.0
+- `cef` 152.3.0+152.0.6 — Apache-2.0 OR MIT
+- `cef-dll-sys` 152.3.0+152.0.6 — Apache-2.0 OR MIT
 - `cesu8` 1.1.0 — Apache-2.0/MIT
 - `cfb` 0.7.3 — MIT
 - `cfg-expr` 0.15.8 — MIT OR Apache-2.0
 - `cfg-expr` 0.20.8 — MIT OR Apache-2.0
 - `cfg-if` 1.0.4 — MIT OR Apache-2.0
 - `chrono` 0.4.45 — MIT OR Apache-2.0
+- `chunked_transfer` 1.5.0 — MIT OR Apache-2.0
 - `cipher` 0.4.4 — MIT OR Apache-2.0
+- `clap` 4.6.7 — MIT OR Apache-2.0
+- `clap_builder` 4.6.7 — MIT OR Apache-2.0
+- `clap_derive` 4.6.7 — MIT OR Apache-2.0
+- `clap_lex` 1.1.1 — MIT OR Apache-2.0
+- `cmake` 0.1.58 — MIT OR Apache-2.0
 - `color_quant` 1.1.0 — MIT
+- `colorchoice` 1.0.5 — MIT OR Apache-2.0
 - `combine` 4.6.7 — MIT
 - `concurrent-queue` 2.5.0 — Apache-2.0 OR MIT
+- `console` 0.16.6 — MIT
 - `const-oid` 0.9.6 — Apache-2.0 OR MIT
 - `constant_time_eq` 0.3.1 — CC0-1.0 OR MIT-0 OR Apache-2.0
 - `convert_case` 0.10.0 — MIT
 - `cookie` 0.18.1 — MIT OR Apache-2.0
+- `cookie_store` 0.22.1 — MIT OR Apache-2.0
 - `core-foundation` 0.10.1 — MIT OR Apache-2.0
 - `core-foundation` 0.9.4 — MIT OR Apache-2.0
 - `core-foundation-sys` 0.8.7 — MIT OR Apache-2.0
@@ -116,7 +135,9 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `displaydoc` 0.2.6 — MIT OR Apache-2.0
 - `dlopen2` 0.8.2 — MIT
 - `dlopen2_derive` 0.4.3 — MIT
+- `document-features` 0.2.12 — MIT OR Apache-2.0
 - `dom_query` 0.27.0 — MIT
+- `download-cef` 3.0.0 — Apache-2.0 OR MIT
 - `dpi` 0.1.2 — Apache-2.0 AND MIT
 - `dtoa` 1.0.11 — MIT OR Apache-2.0
 - `dtoa-short` 0.3.5 — MPL-2.0
@@ -126,8 +147,9 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `dyn-clone` 1.0.20 — MIT OR Apache-2.0
 - `ed25519` 2.2.3 — Apache-2.0 OR MIT
 - `ed25519-dalek` 2.2.0 — BSD-3-Clause
-- `embed_plist` 1.2.2 — MIT OR Apache-2.0
 - `embed-resource` 3.0.11 — MIT
+- `embed_plist` 1.2.2 — MIT OR Apache-2.0
+- `encode_unicode` 1.0.0 — Apache-2.0 OR MIT
 - `endi` 1.1.1 — MIT
 - `enumflags2` 0.7.12 — MIT OR Apache-2.0
 - `enumflags2_derive` 0.7.12 — MIT OR Apache-2.0
@@ -152,6 +174,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `foreign-types-macros` 0.2.3 — MIT/Apache-2.0
 - `foreign-types-shared` 0.3.1 — MIT/Apache-2.0
 - `form_urlencoded` 1.2.2 — MIT OR Apache-2.0
+- `fs-err` 3.3.1 — MIT OR Apache-2.0
 - `fs-set-times` 0.20.3 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - `fs2` 0.4.3 — MIT/Apache-2.0
 - `futures` 0.3.33 — MIT OR Apache-2.0
@@ -229,6 +252,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `image-webp` 0.2.4 — MIT OR Apache-2.0
 - `indexmap` 1.9.3 — Apache-2.0 OR MIT
 - `indexmap` 2.14.0 — Apache-2.0 OR MIT
+- `indicatif` 0.18.6 — MIT
 - `infer` 0.19.0 — MIT
 - `inout` 0.1.4 — MIT OR Apache-2.0
 - `io-extras` 0.19.0 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
@@ -237,6 +261,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `ipnet` 2.12.0 — MIT OR Apache-2.0
 - `is-docker` 0.2.0 — MIT
 - `is-wsl` 0.4.0 — MIT
+- `is_terminal_polyfill` 1.70.2 — MIT OR Apache-2.0
 - `itoa` 1.0.18 — MIT OR Apache-2.0
 - `javascriptcore-rs` 1.1.2 — MIT
 - `javascriptcore-rs-sys` 1.1.1 — MIT
@@ -251,14 +276,17 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `keyring` 3.6.3 — MIT OR Apache-2.0
 - `libappindicator` 0.9.0 — Apache-2.0 OR MIT
 - `libappindicator-sys` 0.9.0 — Apache-2.0 OR MIT
+- `libbz2-rs-sys` 0.2.5 — bzip2-1.0.6
 - `libc` 0.2.186 — MIT OR Apache-2.0
 - `libdbus-sys` 0.2.7 — Apache-2.0/MIT
 - `libloading` 0.7.4 — ISC
+- `libloading` 0.9.0 — ISC
 - `libredox` 0.1.18 — MIT
 - `libsqlite3-sys` 0.30.1 — MIT
 - `linux-keyutils` 0.2.5 — Apache-2.0 OR MIT
 - `linux-raw-sys` 0.12.1 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - `litemap` 0.8.2 — Unicode-3.0
+- `litrs` 1.0.0 — MIT OR Apache-2.0
 - `lock_api` 0.4.14 — MIT OR Apache-2.0
 - `log` 0.4.33 — MIT OR Apache-2.0
 - `mach2` 0.4.3 — BSD-2-Clause OR MIT OR Apache-2.0
@@ -276,11 +304,11 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `ndk-context` 0.1.1 — MIT OR Apache-2.0
 - `ndk-sys` 0.6.0+11769913 — MIT OR Apache-2.0
 - `new_debug_unreachable` 1.0.6 — MIT
-- `num_enum` 0.7.6 — BSD-3-Clause OR MIT OR Apache-2.0
-- `num_enum_derive` 0.7.6 — BSD-3-Clause OR MIT OR Apache-2.0
 - `num-conv` 0.2.2 — MIT OR Apache-2.0
 - `num-derive` 0.4.2 — MIT OR Apache-2.0
 - `num-traits` 0.2.19 — MIT OR Apache-2.0
+- `num_enum` 0.7.6 — BSD-3-Clause OR MIT OR Apache-2.0
+- `num_enum_derive` 0.7.6 — BSD-3-Clause OR MIT OR Apache-2.0
 - `objc2` 0.6.4 — MIT
 - `objc2-app-kit` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-audio-toolbox` 0.3.2 — Zlib OR Apache-2.0 OR MIT
@@ -306,6 +334,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `objc2-user-notifications` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-web-kit` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `once_cell` 1.21.4 — MIT OR Apache-2.0
+- `once_cell_polyfill` 1.70.2 — MIT OR Apache-2.0
 - `open` 5.4.0 — MIT
 - `openssl-probe` 0.1.6 — MIT/Apache-2.0
 - `option-ext` 0.2.0 — MPL-2.0
@@ -332,6 +361,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `png` 0.17.16 — MIT OR Apache-2.0
 - `png` 0.18.1 — MIT OR Apache-2.0
 - `polling` 3.11.0 — Apache-2.0 OR MIT
+- `portable-atomic` 1.15.0 — Apache-2.0 OR MIT
 - `potential_utf` 0.1.5 — Unicode-3.0
 - `powerfmt` 0.2.0 — MIT OR Apache-2.0
 - `precomputed-hash` 0.1.1 — MIT
@@ -360,8 +390,8 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `rfd` 0.16.0 — MIT
 - `ring` 0.17.14 — Apache-2.0 AND ISC
 - `rusqlite` 0.32.1 — MIT
-- `rustc_version` 0.4.1 — MIT OR Apache-2.0
 - `rustc-hash` 2.1.3 — Apache-2.0 OR MIT
+- `rustc_version` 0.4.1 — MIT OR Apache-2.0
 - `rustix` 1.1.4 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - `rustix-linux-procfs` 0.1.1 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - `rustls` 0.23.42 — Apache-2.0 OR ISC OR MIT
@@ -385,6 +415,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `selectors` 0.36.1 — MPL-2.0
 - `semver` 1.0.28 — MIT OR Apache-2.0
 - `serde` 1.0.228 — MIT OR Apache-2.0
+- `serde-untagged` 0.1.9 — MIT OR Apache-2.0
 - `serde_core` 1.0.228 — MIT OR Apache-2.0
 - `serde_derive` 1.0.228 — MIT OR Apache-2.0
 - `serde_derive_internals` 0.29.1 — MIT OR Apache-2.0
@@ -396,11 +427,11 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `serde_urlencoded` 0.7.1 — MIT/Apache-2.0
 - `serde_with` 3.21.0 — MIT OR Apache-2.0
 - `serde_with_macros` 3.21.0 — MIT OR Apache-2.0
-- `serde-untagged` 0.1.9 — MIT OR Apache-2.0
 - `serialize-to-javascript` 0.1.2 — MIT OR Apache-2.0
 - `serialize-to-javascript-impl` 0.1.2 — MIT OR Apache-2.0
 - `servo_arc` 0.4.3 — MIT OR Apache-2.0
 - `sha1` 0.10.7 — MIT OR Apache-2.0
+- `sha1_smol` 1.0.1 — BSD-3-Clause
 - `sha2` 0.10.9 — MIT OR Apache-2.0
 - `shell-words` 1.1.1 — MIT/Apache-2.0
 - `sherpa-onnx` 1.13.2 — Apache-2.0
@@ -413,6 +444,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `slab` 0.4.12 — MIT
 - `smallvec` 1.15.2 — MIT OR Apache-2.0
 - `socket2` 0.6.4 — MIT OR Apache-2.0
+- `socks` 0.3.4 — MIT/Apache-2.0
 - `softbuffer` 0.4.8 — MIT OR Apache-2.0
 - `soup3` 0.5.0 — MIT
 - `soup3-sys` 0.5.0 — MIT
@@ -461,6 +493,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `time` 0.3.53 — MIT OR Apache-2.0
 - `time-core` 0.1.9 — MIT OR Apache-2.0
 - `time-macros` 0.2.31 — MIT OR Apache-2.0
+- `tiny_http` 0.12.0 — MIT OR Apache-2.0
 - `tinystr` 0.8.3 — Unicode-3.0
 - `tinyvec` 1.12.0 — Zlib OR Apache-2.0 OR MIT
 - `tinyvec_macros` 0.1.1 — MIT OR Apache-2.0 OR Zlib
@@ -497,16 +530,22 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `unic-ucd-version` 0.9.0 — MIT/Apache-2.0
 - `unicode-ident` 1.0.24 — (MIT OR Apache-2.0) AND Unicode-3.0
 - `unicode-segmentation` 1.13.3 — MIT OR Apache-2.0
+- `unicode-width` 0.2.2 — MIT OR Apache-2.0
 - `unicode-xid` 0.2.6 — MIT OR Apache-2.0
+- `unit-prefix` 0.5.2 — MIT
 - `untrusted` 0.9.0 — ISC
 - `ureq` 2.12.1 — MIT OR Apache-2.0
+- `ureq` 3.4.2 — MIT OR Apache-2.0
+- `ureq-proto` 0.6.4 — MIT OR Apache-2.0
 - `url` 2.5.8 — MIT OR Apache-2.0
 - `urlpattern` 0.3.0 — MIT
+- `utf8-zero` 0.8.1 — MIT OR Apache-2.0
 - `utf8_iter` 1.0.4 — Apache-2.0 OR MIT
+- `utf8parse` 0.2.2 — Apache-2.0 OR MIT
 - `uuid` 1.23.5 — Apache-2.0 OR MIT
 - `vcpkg` 0.2.15 — MIT/Apache-2.0
-- `version_check` 0.9.5 — MIT/Apache-2.0
 - `version-compare` 0.2.1 — MIT
+- `version_check` 0.9.5 — MIT/Apache-2.0
 - `vswhom` 0.1.0 — MIT
 - `vswhom-sys` 0.1.3 — MIT
 - `walkdir` 2.5.0 — Unlicense/MIT
@@ -519,8 +558,9 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `wasm-bindgen-macro-support` 0.2.126 — MIT OR Apache-2.0
 - `wasm-bindgen-shared` 0.2.126 — MIT OR Apache-2.0
 - `wasm-streams` 0.5.0 — MIT OR Apache-2.0
-- `web_atoms` 0.2.5 — MIT OR Apache-2.0
 - `web-sys` 0.3.103 — MIT OR Apache-2.0
+- `web-time` 1.1.0 — MIT OR Apache-2.0
+- `web_atoms` 0.2.5 — MIT OR Apache-2.0
 - `webkit2gtk` 2.0.2 — MIT
 - `webkit2gtk-sys` 2.0.2 — MIT
 - `webpki-roots` 0.26.11 — CDLA-Permissive-2.0
@@ -536,29 +576,6 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `window-vibrancy` 0.6.0 — Apache-2.0 OR MIT
 - `windows` 0.54.0 — MIT OR Apache-2.0
 - `windows` 0.61.3 — MIT OR Apache-2.0
-- `windows_aarch64_gnullvm` 0.42.2 — MIT OR Apache-2.0
-- `windows_aarch64_gnullvm` 0.52.6 — MIT OR Apache-2.0
-- `windows_aarch64_gnullvm` 0.53.1 — MIT OR Apache-2.0
-- `windows_aarch64_msvc` 0.42.2 — MIT OR Apache-2.0
-- `windows_aarch64_msvc` 0.52.6 — MIT OR Apache-2.0
-- `windows_aarch64_msvc` 0.53.1 — MIT OR Apache-2.0
-- `windows_i686_gnu` 0.42.2 — MIT OR Apache-2.0
-- `windows_i686_gnu` 0.52.6 — MIT OR Apache-2.0
-- `windows_i686_gnu` 0.53.1 — MIT OR Apache-2.0
-- `windows_i686_gnullvm` 0.52.6 — MIT OR Apache-2.0
-- `windows_i686_gnullvm` 0.53.1 — MIT OR Apache-2.0
-- `windows_i686_msvc` 0.42.2 — MIT OR Apache-2.0
-- `windows_i686_msvc` 0.52.6 — MIT OR Apache-2.0
-- `windows_i686_msvc` 0.53.1 — MIT OR Apache-2.0
-- `windows_x86_64_gnu` 0.42.2 — MIT OR Apache-2.0
-- `windows_x86_64_gnu` 0.52.6 — MIT OR Apache-2.0
-- `windows_x86_64_gnu` 0.53.1 — MIT OR Apache-2.0
-- `windows_x86_64_gnullvm` 0.42.2 — MIT OR Apache-2.0
-- `windows_x86_64_gnullvm` 0.52.6 — MIT OR Apache-2.0
-- `windows_x86_64_gnullvm` 0.53.1 — MIT OR Apache-2.0
-- `windows_x86_64_msvc` 0.42.2 — MIT OR Apache-2.0
-- `windows_x86_64_msvc` 0.52.6 — MIT OR Apache-2.0
-- `windows_x86_64_msvc` 0.53.1 — MIT OR Apache-2.0
 - `windows-collections` 0.2.0 — MIT OR Apache-2.0
 - `windows-core` 0.54.0 — MIT OR Apache-2.0
 - `windows-core` 0.61.2 — MIT OR Apache-2.0
@@ -584,6 +601,29 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `windows-targets` 0.53.5 — MIT OR Apache-2.0
 - `windows-threading` 0.1.0 — MIT OR Apache-2.0
 - `windows-version` 0.1.7 — MIT OR Apache-2.0
+- `windows_aarch64_gnullvm` 0.42.2 — MIT OR Apache-2.0
+- `windows_aarch64_gnullvm` 0.52.6 — MIT OR Apache-2.0
+- `windows_aarch64_gnullvm` 0.53.1 — MIT OR Apache-2.0
+- `windows_aarch64_msvc` 0.42.2 — MIT OR Apache-2.0
+- `windows_aarch64_msvc` 0.52.6 — MIT OR Apache-2.0
+- `windows_aarch64_msvc` 0.53.1 — MIT OR Apache-2.0
+- `windows_i686_gnu` 0.42.2 — MIT OR Apache-2.0
+- `windows_i686_gnu` 0.52.6 — MIT OR Apache-2.0
+- `windows_i686_gnu` 0.53.1 — MIT OR Apache-2.0
+- `windows_i686_gnullvm` 0.52.6 — MIT OR Apache-2.0
+- `windows_i686_gnullvm` 0.53.1 — MIT OR Apache-2.0
+- `windows_i686_msvc` 0.42.2 — MIT OR Apache-2.0
+- `windows_i686_msvc` 0.52.6 — MIT OR Apache-2.0
+- `windows_i686_msvc` 0.53.1 — MIT OR Apache-2.0
+- `windows_x86_64_gnu` 0.42.2 — MIT OR Apache-2.0
+- `windows_x86_64_gnu` 0.52.6 — MIT OR Apache-2.0
+- `windows_x86_64_gnu` 0.53.1 — MIT OR Apache-2.0
+- `windows_x86_64_gnullvm` 0.42.2 — MIT OR Apache-2.0
+- `windows_x86_64_gnullvm` 0.52.6 — MIT OR Apache-2.0
+- `windows_x86_64_gnullvm` 0.53.1 — MIT OR Apache-2.0
+- `windows_x86_64_msvc` 0.42.2 — MIT OR Apache-2.0
+- `windows_x86_64_msvc` 0.52.6 — MIT OR Apache-2.0
+- `windows_x86_64_msvc` 0.53.1 — MIT OR Apache-2.0
 - `winnow` 0.5.40 — MIT
 - `winnow` 0.7.15 — MIT
 - `winnow` 1.0.4 — MIT

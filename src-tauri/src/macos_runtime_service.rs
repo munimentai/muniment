@@ -1055,7 +1055,7 @@ mod tests {
 
     #[test]
     fn main_registers_runtime_service_commands() {
-        let main = include_str!("main.rs");
+        let main = include_str!("desktop.rs");
         assert!(main.contains("runtime_owner::runtime_state"));
         assert!(main.contains("runtime_owner::runtime_start"));
         assert!(main.contains("macos_runtime_service::open_login_items"));

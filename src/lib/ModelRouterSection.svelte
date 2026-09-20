@@ -130,12 +130,12 @@
 </script>
 
 <section class="routing" aria-labelledby="routing-title">
-  <header class="routing-head"><div><h4 id="routing-title">Routing</h4><p class="support">Choose who picks the model for your next message.</p></div></header>
+  <header class="routing-head"><div><h4 id="routing-title">Routing</h4></div></header>
   {#if status}<p class="support" role="status">{status}</p>{/if}
   {#if formError}<p class="support" role="alert">{formError}</p>{/if}
   <div class="selection" role="group" aria-label="Model selection">
-    <button type="button" aria-pressed={automatic} disabled={pending || !settings.options.length} onclick={() => selectModel('muniment-router', 'auto')}><strong>Choose automatically</strong><span>{settings.classifier.kind === 'none' ? 'Use the fallback until you choose a classifier.' : 'Let the classifier select from eligible models.'}</span></button>
-    <button type="button" aria-pressed={!automatic} disabled={pending || !modelRows.length} onclick={() => { if (automatic && modelRows[0]) void selectModel(modelRows[0].provider, modelRows[0].choice) }}><strong>Use a specific model</strong><span>Keep model choice in your hands.</span></button>
+    <button type="button" aria-pressed={automatic} disabled={pending || !settings.options.length} onclick={() => selectModel('muniment-router', 'auto')}><strong>Choose automatically</strong><span>{settings.classifier.kind === 'none' ? 'Uses the fallback until a classifier is set.' : 'Pick a model for each message.'}</span></button>
+    <button type="button" aria-pressed={!automatic} disabled={pending || !modelRows.length} onclick={() => { if (automatic && modelRows[0]) void selectModel(modelRows[0].provider, modelRows[0].choice) }}><strong>Use a specific model</strong><span>Use the same model for every message.</span></button>
   </div>
   {#if !automatic && modelRows.length}
     <label for="selected-model">Selected model</label>
@@ -148,11 +148,11 @@
     <div><dt>Eligible models</dt><dd>{settings.options.length}</dd></div>
     <div><dt>Fallback</dt><dd>{settings.options.length ? settings.fallback || 'Lowest known price' : 'No eligible model'}</dd></div>
   </dl>
-  {#if !settings.options.length}<p class="support">Connect an eligible account below to use automatic selection.</p>{/if}
+  {#if !settings.options.length}<p class="support">Connect an account to choose models automatically.</p>{/if}
   <details class="configure">
     <summary>Classifier and fallback</summary>
     <div class="disclosure-body">
-    <p class="support">The classifier receives your last message. It selects a model without generating your reply.</p>
+    <p class="support">Your last message goes to the classifier to choose a model.</p>
     {#each ['Built to classify', 'On your accounts'] as group}
       <h6 class="catalog-label">{group}</h6>
       <ul class="catalog">
@@ -179,8 +179,8 @@
     {/each}
     <h6 class="catalog-label">Your own</h6>
     <ul class="catalog">
-      <li><button type="button" class="quiet catalog-row" aria-pressed={chosen === 'endpoint'} onclick={chooseEndpoint}><span class="catalog-name">Another endpoint</span><span class="record">answers the same choice question</span>{#if chosen === 'endpoint'}<LucideIcon name="check" variant="action" size={14} />{/if}</button></li>
-      <li><button type="button" class="quiet catalog-row" aria-pressed={chosen === ''} onclick={chooseNone}><span class="catalog-name">No classifier</span><span class="record">every turn takes the fallback model</span>{#if chosen === ''}<LucideIcon name="check" variant="action" size={14} />{/if}</button></li>
+      <li><button type="button" class="quiet catalog-row" aria-pressed={chosen === 'endpoint'} onclick={chooseEndpoint}><span class="catalog-name">Another endpoint</span><span class="record">custom classifier</span>{#if chosen === 'endpoint'}<LucideIcon name="check" variant="action" size={14} />{/if}</button></li>
+      <li><button type="button" class="quiet catalog-row" aria-pressed={chosen === ''} onclick={chooseNone}><span class="catalog-name">No classifier</span><span class="record">always use the fallback</span>{#if chosen === ''}<LucideIcon name="check" variant="action" size={14} />{/if}</button></li>
     </ul>
     {#if classifierKind === 'endpoint'}
       <label for="classifier-url">Classifier URL</label>
@@ -199,24 +199,20 @@
     {#if drafts.length}
       <label for="router-fallback">Fallback</label>
       <select id="router-fallback" bind:value={fallback}>
-        <option value="">The cheapest model in the running</option>
+        <option value="">Lowest known price</option>
         {#each drafts as draft (draft.family + '/' + draft.model)}<option value={draft.draftKey}>{draft.draftKey}</option>{/each}
       </select>
       <label for="router-confidence">Confidence floor · {Number(confidence).toFixed(2)}</label>
       <input id="router-confidence" type="range" min="0" max="1" step="0.05" bind:value={confidence}>
-      <p class="support">A classification under the floor takes the fallback instead.</p>
+      <p class="support">Below this confidence, use the fallback.</p>
       <button type="button" class="save" disabled={pending} onclick={saveRoutes}>Save routing rules</button>
     {/if}
     </div>
   </details>
-  <details class="configure">
-    <summary>Account balancing</summary>
-    <div class="disclosure-body">
-      <p class="support">Routed models distribute turns across available accounts by weight. Limited accounts wait while another takes the turn.</p>
-      <div class="routing-head"><span>Use account balancing</span><button type="button" role="switch" class="switch" aria-checked={settings.enabled} aria-label="Use account balancing" onclick={toggleRouter} disabled={pending}><span></span></button></div>
-      <p class="support">{settings.enabled ? 'Choose a pooled model below to use balancing.' : 'Balancing is off. Direct provider connections remain available.'}</p>
-    </div>
-  </details>
+  <div class="configure balancing">
+    <div><h5>Account balancing</h5><p class="support" id="balancing-help">Share requests across accounts and skip accounts at their limit.</p></div>
+    <button type="button" role="switch" class="switch" aria-checked={settings.enabled} aria-label="Use account balancing" aria-describedby="balancing-help" onclick={toggleRouter} disabled={pending}><span></span></button>
+  </div>
 </section>
 
 <style>
@@ -237,6 +233,8 @@
   .selection strong { font-weight: 600; }
   .selection span { color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
   .configure { border-top: 1px solid var(--border); padding-top: 10px; }
+  .balancing { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .balancing h5 { margin: 0 0 4px; font-size: var(--text-13); font-weight: 600; }
   summary { cursor: pointer; font-size: var(--text-13); min-height: 24px; }
   .disclosure-body { display: grid; gap: 10px; padding: 12px 0; }
   select { max-width: 100%; }

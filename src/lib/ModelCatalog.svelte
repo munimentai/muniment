@@ -30,7 +30,7 @@
   }
 </script>
 <section class="catalog" aria-labelledby="models-heading">
-  <header><h4 id="models-heading">Models</h4><p>Choose a model or decide which ones appear in the composer.</p></header>
+  <header><h4 id="models-heading">Models</h4><p>Choose a model. Show it in the composer.</p></header>
   <input type="search" aria-label="Search models" placeholder="Search models or providers" bind:value={query}>
   {#if error}<p role="alert">{error}</p>{/if}
   {#if !groups.length}<p>No models match.</p>{/if}
@@ -44,7 +44,7 @@
         {@const shown = !hidden.has(modelKey(model.provider, model.choice))}
         <div class="model">
           <div class="model-row">
-            <div class="identity"><span class="model-id">{model.label}</span><span class="meta">{route ? `${model.accounts || 1} eligible ${model.accounts > 1 ? 'accounts' : 'account'}` : 'Direct connection'}{#if model.context} · {model.context} context{/if}</span></div>
+            <div class="identity"><span class="model-id">{model.label}</span><span class="meta">{route ? `${model.accounts || 1} ${model.accounts > 1 ? 'accounts' : 'account'}` : 'Direct'}{#if model.context} · {model.context} context{/if}</span></div>
             {#if current?.provider === provider && current?.model === choice}<span class="meta">Selected</span>{:else}<button disabled={pending || !shown} onclick={() => run('local_mode_set_default_model', { provider, model: choice })}>Use</button>{/if}
             <label class="show"><Toggle checked={shown} disabled={pending} aria-label={`Show ${model.id} in the selector`} onchange={() => run('local_mode_set_model_hidden', { provider: model.provider, model: model.choice, hidden: shown })} />Show</label>
           </div>
