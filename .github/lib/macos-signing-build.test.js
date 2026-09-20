@@ -90,16 +90,17 @@ it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (se
   const preflight = calls.findIndex(([command, args]) => command === "security" && args.includes("codesigning"));
   const signing = calls.flatMap(([command, args], index) => command === "codesign" && args[0] === "--force" ? [index] : []);
   expect(registration).toBeLessThan(preflight);
-  // The dylib leaf, the runtime, the record CLI and the reader beside it, then the app.
-  expect(signing).toHaveLength(5);
+  // Sign each nested binary, including the CEF helper, before the app.
+  expect(signing).toHaveLength(6);
   expect(preflight).toBeLessThan(signing[0]);
   expect(calls[signing[0]][1].at(-1)).toMatch(/asr\.dylib$/);
   expect(calls[signing[1]][1].at(-1)).toMatch(/LaunchServices\/muniment-runtime$/);
   expect(calls[signing[2]][1].at(-1)).toMatch(/LaunchServices\/muniment-cli$/);
   expect(calls[signing[3]][1].at(-1)).toMatch(/LaunchServices\/muniment-reader$/);
-  expect(calls[signing[4]][1].at(-1)).toMatch(/muniment\.app$/);
+  expect(calls[signing[4]][1].at(-1)).toMatch(/MacOS\/muniment-cef-helper$/);
+  expect(calls[signing[5]][1].at(-1)).toMatch(/muniment\.app$/);
   const submission = calls.findIndex(([command, args]) => command === "xcrun" && args[0] === "notarytool" && args[1] === "submit");
-  expect(submission).toBeGreaterThan(signing[4]);
+  expect(submission).toBeGreaterThan(signing[5]);
   const packaging = calls.slice(submission).filter(([command]) => ["xcrun", "ditto", "productbuild"].includes(command));
   expect(packaging.map(([command, args]) => command === "xcrun" ? args.slice(0, 2).join(" ") : command)).toEqual([
     "notarytool submit", "notarytool info", "stapler staple", "stapler validate",
