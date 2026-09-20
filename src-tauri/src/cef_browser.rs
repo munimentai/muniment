@@ -461,7 +461,6 @@ mod tests {
 }
 
 #[cfg(feature = "cef-smoke")]
-#[path = "cef_smoke.rs"]
 mod smoke;
 #[cfg(feature = "cef-smoke")]
 pub fn start_smoke(app: tauri::AppHandle) {
