@@ -365,6 +365,7 @@ onboarding spec proves the composer, the three chips and a first Send.
     writes back to a source.
 14. **Monetization, launch and publicity are owner-only.**
 
+Settings loads on demand. Models & routing has Accounts, Models, and Routing pill tabs. Storage distinguishes the workspace from managed extensions.
 ## Workspace panels
 
 The title bar menu opens Browser, Files and Terminal in a shared tab panel.
@@ -372,10 +373,10 @@ Tabs keep a fixed width and scroll horizontally without a scrollbar. Edge fades
 stay inside the tab strip, clear of the maximize and panel-collapse controls.
 Browser labels show the host, path, query and fragment without the scheme or
 leading `www.`. Long browser labels fade on the right. Terminal and Files labels
-show the final folder name and fade on the left. Open file tabs retain file names.
+show readable folder names without generated task suffixes and fade on the left. Hover reveals full paths. Artifact tabs show artifact names. Open file tabs retain file names.
 Terminal and Files path headers share `OverflowText.svelte`: the full path stays
 on one line, starts at its end, and scrolls horizontally without a scrollbar.
-Fades mark clipped content and clear when the content fits.
+Fades mark clipped content and clear when the content fits. The browser defaults to bundled offline desktop docs. Closing a browser tab releases its native view.
 
 **The file panel.** A read or edited file opens in the shared rail, exclusive
 with records and artifacts, with the same resize and maximize controls.
@@ -591,7 +592,7 @@ produce an error before installation. Plugin dependencies install with package
 lifecycle scripts disabled.
 
 The composer tools menu has MCPs, Plugins and Skills branches. File attachments use a paperclip.
-MCP switches and inline slash commands apply to one turn and reset after submission.
+MCP switches and inline slash commands apply to one turn and reset after submission. Unsent text, files, and extension choices stay with each task in the open app session. Creation plans remain temporary until Send and offer Cancel creation.
 All composer panels share the same anchor. Explicit selections take priority. Disabled
 extensions stay outside the runtime MCP snapshot and skill context.
 Optional extension routing uses the configured classifier and only installed,

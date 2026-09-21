@@ -1,4 +1,5 @@
 <script>
+  import Toggle from '../lib/Toggle.svelte'
   import AllowanceMeter from './AllowanceMeter.svelte'
   // One provider's accounts in the router's pool: each a named card with what
   // the subscription has left and what the account has served, the sign-ins
@@ -258,7 +259,7 @@
           <footer>
             <button type="button" class="quiet small" onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is removed.`)}>Remove</button>
             {#if account.source !== 'key' && account.allowance_readable}<button type="button" class="quiet small" onclick={() => refreshQuota(account)}>Refresh allowance</button>{/if}
-            <button type="button" role="switch" class="switch" aria-checked={account.enabled} aria-label={`Use ${account.label}`} onclick={() => run('model_router_update_account', { id: account.id, enabled: !account.enabled })}><span></span></button>
+            <Toggle checked={account.enabled} label={`Use ${account.label}`} disabled={pending} onchange={enabled => run('model_router_update_account', { id: account.id, enabled })} />
           </footer>
           </details>
         </li>
@@ -358,7 +359,6 @@
   .figures dd { margin: 0; font: var(--text-12) var(--font-mono); }
   .figures input { width: 52px; }
   .card footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 2px; }
-  .card footer .switch { margin-left: auto; }
   .sign-ins { display: flex; flex-wrap: wrap; gap: 6px; }
   .sign-in { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
   .login { display: grid; gap: 8px; justify-items: start; }
@@ -372,9 +372,4 @@
   input[type="password"], input[type="url"], input[type="text"], textarea { width: min(420px, 100%); }
   input:focus, textarea:focus { border-color: var(--muted); outline: 0; }
   textarea { resize: vertical; font-family: var(--font-mono); font-size: var(--text-12); }
-  .switch { position: relative; flex: none; width: 30px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
-  .switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: var(--radius-chip); background: var(--muted); transition: transform 120ms ease, background 120ms ease; }
-  .switch[aria-checked="true"] { border-color: var(--signal); background: var(--signal-soft); }
-  .switch[aria-checked="true"] span { transform: translateX(12px); background: var(--signal); }
-  .switch:hover:not(:disabled) { background: var(--faint); }
 </style>

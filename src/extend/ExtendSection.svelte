@@ -1,10 +1,12 @@
 <script>
+  import SettingsTabs from '../lib/SettingsTabs.svelte'
+  import Toggle from '../lib/Toggle.svelte'
   import { onMount, tick } from 'svelte'
   import { catalog, categories, categoryLabel, filterCatalog, sortCatalog } from './catalog.js'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import McpIcon from './McpIcon.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
-  let { tauri } = $props()
+  let { tauri, oncreate } = $props()
   let state = $state({ items: [], threads: {} }), tab = $state('mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
   let filtersOpen = $state(false), formDialog = $state()
   $effect(() => { if (form && formDialog && !formDialog.open) formDialog.showModal() })
@@ -64,10 +66,8 @@
 </script>
 <section class="extend" aria-label="Extend">
   <p class="intro">Add tools and instructions to your local workspace.</p>
-  <div class="tabs" role="tablist" aria-label="Extension types">
-    {#each [['mcp', 'MCP servers'], ['skill', 'Skills'], ['plugin', 'Plugins']] as [id, label]}<button type="button" role="tab" aria-label={`${label}${counts[id] ? ` (${counts[id]})` : ''}`} aria-selected={tab === id} onclick={() => { tab = id; resetSearch(); form = null; preview = null }}>{#if id === 'mcp'}<McpIcon />{:else}<LucideIcon name={id === 'skill' ? 'pencil-sparkles' : 'unplug'} variant="action" size={16} />{/if}{label}{#if counts[id]} <span class="tab-count">({counts[id]})</span>{/if}</button>{/each}
-  </div>
-  <div class="toolbar">{#if tab === 'mcp'}<button type="button" class="filter-toggle" aria-label="Filters" aria-expanded={filtersOpen} aria-controls="mcp-filters" onclick={() => filtersOpen = !filtersOpen}><LucideIcon name="sliders-vertical" size={18} /></button>{/if}<input type="search" aria-label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" bind:value={query} oninput={() => page = 0} /><button type="button" disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Add source'}</button>{#if tab !== 'mcp'}<button type="button" disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</button>{/if}</div>
+  <SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'unplug',count:counts.plugin}]} onchange={id => { tab = id; resetSearch(); form = null; preview = null }} />
+  <div class="toolbar">{#if tab === 'mcp'}<button type="button" class="filter-toggle" aria-label="Filters" aria-expanded={filtersOpen} aria-controls="mcp-filters" onclick={() => filtersOpen = !filtersOpen}><LucideIcon name="sliders-vertical" size={18} /></button>{/if}{#if tab === 'mcp' || counts[tab]}<input type="search" aria-label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" bind:value={query} oninput={() => page = 0} />{/if}<button type="button" disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Install'}</button>{#if tab !== 'mcp'}{#if oncreate}<button type="button" onclick={() => oncreate(tab)}>Create from chat</button>{/if}<button type="button" disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</button>{/if}</div>
   {#if tab === 'mcp' && filtersOpen}
     <div class="filters" id="mcp-filters">
       <label>Category<select bind:value={category} onchange={() => page = 0}><option value="">All categories</option>{#each categories as value}<option value={value}>{categoryLabel(value)}</option>{/each}</select></label>
@@ -110,7 +110,7 @@
   {#if tab !== 'mcp' && installed.length}
     <h4>Installed</h4>
     <div class="list" aria-label="Installed extensions">{#each installed as item (item.id)}<article class="entry">
-      <div class="head"><strong>{#if item.kind === 'mcp'}<ProviderIcon entry={item} size={24} />{/if}{item.name}</strong><label class="check"><input type="checkbox" checked={item.enabled !== false} disabled={busy} onchange={e => mutate('toggle', { id: item.id, enabled: e.currentTarget.checked })} />Available in chats</label></div>
+      <div class="head"><strong>{#if item.kind === 'mcp'}<ProviderIcon entry={item} size={24} />{/if}{item.name}</strong><Toggle checked={item.enabled !== false} label={`Use ${item.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: item.id, enabled })} /></div>
       <p>{item.description || (item.kind === 'mcp' ? item.definition.url || item.definition.command : item.source)}</p>
       {#if item.lastCheck}<p>Last connection test: {item.lastCheck.status}. {item.lastCheck.tools} tools.</p>{/if}
       {#if item.kind === 'plugin'}{#each Object.entries(item.servers || {}) as [serverName, definition]}<div class="actions"><McpIcon /><span>{serverName}</span><button type="button" disabled={busy} onclick={() => connection({id: `${item.id}:${serverName}`,name: serverName}, 'test')}>Test connection</button>{#if definition.url}<button type="button" disabled={busy} onclick={() => connection({id: `${item.id}:${serverName}`,name: serverName}, 'auth')}>Sign in</button>{/if}</div>{/each}{/if}
@@ -123,7 +123,7 @@
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
         {#if entry.publisher}<p class="publisher">{entry.publisher}</p>{/if}
         <p class="category">{entry.categories.map(categoryLabel).join(' · ')}</p>
-        <div class="actions"><button type="button" class="details-link" onclick={() => showDetails(entry)}>Details</button>{#if connected}<button type="button" role="switch" class="switch" aria-checked={connected.enabled !== false} aria-label={`Use ${entry.name} in chats`} disabled={busy} onclick={() => mutate('toggle', { id: connected.id, enabled: connected.enabled === false })}><span></span></button>{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
+        <div class="actions"><button type="button" class="details-link" onclick={() => showDetails(entry)}>Details</button>{#if connected}<Toggle checked={connected.enabled !== false} label={`Use ${entry.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: connected.id, enabled })} />{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
       </article>{/each}</div>
     {/snippet}
     {#if featured.length}
@@ -185,17 +185,13 @@
   .detail-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
   button.details-link { padding: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px; }
 
-  .extend { display: grid; gap: 14px; min-width: 0; } .intro { color: var(--muted); } p, h4 { margin: 0; } .tabs, .toolbar, .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; } .tabs button, strong { display: inline-flex; align-items: center; gap: 8px; } .tabs button { border: 0; border-radius: var(--radius-pill); padding: 6px 12px; background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); cursor: pointer; } .tabs button[aria-selected=true] { background: var(--signal-soft); color: var(--signal); } .tabs button:hover { background: var(--faint); } .toolbar input { flex: 1; min-width: 150px; } label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); } .list { display: grid; gap: 8px; } .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
+  .extend { display: grid; gap: 14px; min-width: 0; } .intro { color: var(--muted); } p, h4 { margin: 0; } .toolbar, .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; }     .toolbar input { flex: 1; min-width: 150px; } label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); } .list { display: grid; gap: 8px; } .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
   .extend { container-type: inline-size; }
   button { font-family: var(--font-human); border: 0; border-radius: var(--radius-control); padding: 5px 9px; color: var(--ink); background: var(--faint); cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }
   .catalog-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   .catalog-card.connected { background: var(--signal-soft); border-color: var(--signal); }
   .catalog-card.connected strong { color: var(--signal); }
-  .switch { position: relative; flex: none; width: 30px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
-  .switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: var(--radius-chip); background: var(--muted); transition: transform 120ms ease, background 120ms ease; }
-  .switch[aria-checked="true"] { border-color: var(--signal); background: var(--signal-soft); }
-  .switch[aria-checked="true"] span { transform: translateX(12px); background: var(--signal); }
   .catalog-card { min-width: 0; gap: 5px; align-content: start; }
   .card-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
   .card-title strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-13); }

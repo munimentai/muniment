@@ -15,15 +15,21 @@ const routing = () => ({
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('Routing settings', () => {
-  it('combines routing, accounts, models and testing on one page', async () => {
+  it('separates accounts, models and routing on one settings screen', async () => {
     const tauri = { invoke: vi.fn(async (command) => command === 'model_router_settings' ? routing() : inventory) }
     render(Settings, { tauri, inventory, section: 'models', onclose: vi.fn() })
-    await screen.findByLabelText('Saved routing settings')
-    expect(screen.getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Choose automatically/ })).toBeDisabled()
+    await screen.findByRole('button', { name: 'Connect account' })
+    expect(screen.queryByRole('searchbox', { name: 'Search models' })).toBeNull()
+    await fireEvent.click(screen.getByRole('tab', { name: 'Models', exact: true }))
     expect(screen.getByRole('searchbox', { name: 'Search models' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Sample request')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Routing', exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Connect account' })).toBeNull()
+    await fireEvent.click(screen.getByRole('tab', { name: 'Routing', exact: true }))
+    await screen.findByLabelText('Saved routing settings')
+    expect(screen.getByRole('button', { name: /Choose automatically/ })).toBeDisabled()
+    const advanced = screen.getByText('Test routing', {selector:'summary'})
+    expect(advanced.closest('details')).not.toHaveAttribute('open')
+    await fireEvent.click(advanced)
+    expect(screen.getByLabelText('Sample request')).toBeVisible()
   })
 
   it('retries failed reads without displaying an empty pool as fact', async () => {

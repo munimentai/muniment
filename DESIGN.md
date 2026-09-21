@@ -49,8 +49,8 @@ The super key with `=`, `-` and `0` moves the same step. Both live on the
 device beside the theme and the shipped pair stays the default.
 
 Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
-Shape: Extend tabs use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
-Extend tabs use pill shapes. Other controls use the radius scale. Hairline borders do the work, and `--shadow-window` and
+Shape: Settings tabs use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
+Settings tabs use pill shapes. Other controls use the radius scale. Hairline borders do the work, and `--shadow-window` and
 `--shadow-overlay` are the only two depth tokens. Motion is purposeful and
 rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide. `prefers-reduced-motion` removes all of it.
 
@@ -61,7 +61,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    state, the streaming underscore and caret on
    the active line, the route segment of the provenance line, the live voice
    polish flash, the enabled state of the Models show switch, and workflow-run
-   indicators. Extend tabs and enabled extension switches use the theme signal.
+   indicators. Settings tabs and enabled extension switches use the theme signal.
    Other buttons, links, selection, icons at rest and badges are ink on paper.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
@@ -70,7 +70,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
 3. **Anti-patterns are hard fails.** No surface gradients, no violet, no glassmorphism
    or backdrop blur on a surface, no orbs or ambient animation, no assistant
    avatar, no typing dots, no sparkles or wand iconography, no emoji in UI
-   copy, pill radius only on Extend tabs, no "AI", "magic", "supercharge" or "unlock" in copy.
+   copy, pill radius only on Settings tabs, no "AI", "magic", "supercharge" or "unlock" in copy.
    The one blur is the Settings scrim: the workspace under Settings blurs
    behind the theme's paper, dark in dark mode and light in light mode, while
    the popup covers most of it.
@@ -133,14 +133,14 @@ Pins and archives persist on the device. Projects group ordinary chats and autom
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings is a popup over the workspace with a
-section list on its left: Models & routing, Preferences, Profile & Memory and Home.
+section list on its left: Models & routing, Extend, Preferences, Profile & Memory and Storage.
 The company-record flag adds Companies. The cloud flag adds Account. It shows the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it, and Escape or its close control returns focus to the opener.
 With the company-record flag enabled, Companies lists every company on the machine with Open, Rename and Delete,
 Delete asks once and names the company, and New company sits under the list.
-Models & routing leads with automatic or specific model selection. Account
+Models & routing has Accounts, Models, and Routing pill tabs. Account
 rows span the page, with allowances visible and usage and weight in details.
 A searchable model list holds visibility and routing statements. Connect
 account opens the provider catalog and its connection methods. The model

@@ -1,4 +1,5 @@
 <script>
+  import Toggle from './Toggle.svelte'
   // Routing settings: the router switch, the classifier
   // that picks a model per turn, and the statements it reads for every model
   // in the running. The accounts themselves sit under their providers above.
@@ -218,7 +219,7 @@
   </details>
   <div class="configure balancing">
     <div><h5>Account balancing</h5><p class="support" id="balancing-help">Share requests across accounts and skip accounts at their limit.</p></div>
-    <button type="button" role="switch" class="switch" aria-checked={settings.enabled} aria-label="Use account balancing" aria-describedby="balancing-help" onclick={toggleRouter} disabled={pending}><span></span></button>
+    <Toggle checked={settings.enabled} label="Use account balancing" onchange={toggleRouter} disabled={pending} />
   </div>
 </section>
 
@@ -270,9 +271,4 @@
   input[type="password"], input[type="url"], select { width: min(420px, 100%); }
   input:focus, select:focus { border-color: var(--muted); outline: 0; }
   input[type="range"] { width: min(300px, 100%); accent-color: var(--ink); }
-  .switch { position: relative; flex: none; width: 30px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
-  .switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: var(--radius-chip); background: var(--muted); transition: transform 120ms ease, background 120ms ease; }
-  .switch[aria-checked="true"] { border-color: var(--signal); background: var(--signal-soft); }
-  .switch[aria-checked="true"] span { transform: translateX(12px); background: var(--signal); }
-  .switch:hover:not(:disabled) { background: var(--faint); }
 </style>

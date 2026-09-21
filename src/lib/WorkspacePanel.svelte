@@ -4,7 +4,7 @@
   import { confirm } from '@tauri-apps/plugin-dialog'
   import LucideIcon from './LucideIcon.svelte'
   import OverflowText from './OverflowText.svelte'
-  import { folderLabel, browserLabel } from './workspace-labels.js'
+  import { workspaceLabel, browserLabel } from './workspace-labels.js'
   import { overflowFade } from './overflow-fade.js'
   import BrowserWorkspace from './BrowserWorkspace.svelte'
   import TerminalWorkspace from './TerminalWorkspace.svelte'
@@ -15,13 +15,15 @@
   let { context = null, tauri, selected = null, onselect, threadId = null, projectId = null, suspended = false, requestedFile = null, requestedArtifact = null, navigation = null, onnavigationhandled, onfolder } = $props()
   let tabs = $state([])
   let browserUrl = $state('')
+  let artifactName = $state('')
   let folderPaths = $state({})
   let terminalPaths = $state({})
   let tabList
   function tabName(tab) {
     if (tab.id === 'browser' && browserUrl) return browserLabel(browserUrl)
-    if (tab.id === 'files') return folderLabel(folderPaths[contextKey]) || tab.name
-    if (tab.id === 'terminal') return folderLabel(terminalPaths[contextKey]) || tab.name
+    if (tab.id === 'files') return workspaceLabel(folderPaths[contextKey], context || {threadId}) || tab.name
+    if (tab.id === 'terminal') return workspaceLabel(terminalPaths[contextKey], context || {threadId}) || tab.name
+    if (tab.id === 'artifacts' && artifactName) return artifactName
     return tab.name
   }
   let dirtyFiles = $state(new Set())
@@ -64,6 +66,7 @@
   function close(id, discard = false) {
     if (dirtyFiles.has(id) && !discard) { closing = id; return }
     if (id === 'terminal') terminalSessions = []
+    if (id === 'browser' || id === 'artifacts') void tauri.invoke('browser_command', {request:{view:id === 'artifacts' ? 'artifact' : 'browser',action:'close',value:''}}).catch(() => {})
     markDirty(id, false)
     const index = tabs.findIndex(t => t.id === id)
     tabs = tabs.filter(t => t.id !== id)
@@ -92,7 +95,7 @@
     <div class="tabs fade-viewport" bind:this={tabList} use:overflowFade role="tablist" tabindex="-1" aria-label="Open workspace tabs" onkeydown={keys}>
       {#each tabs as tab (tab.id)}
         <div class="tab" class:active={selected === tab.id}>
-          <button type="button" role="tab" aria-selected={selected === tab.id} tabindex={selected === tab.id ? 0 : -1} onclick={() => onselect(tab.id)}>
+          <button type="button" role="tab" title={tab.file?.path || (tab.id === 'files' ? folderPaths[contextKey] : tab.id === 'terminal' ? terminalPaths[contextKey] : tabName(tab))} aria-selected={selected === tab.id} tabindex={selected === tab.id ? 0 : -1} onclick={() => onselect(tab.id)}>
             {#if tab.file}<FileIcon name={tab.name} />{:else}<LucideIcon name={tab.icon} />{/if}<OverflowText text={tabName(tab)} side={tab.id === 'browser' ? 'right' : 'left'} scroll={false} />{#if dirtyFiles.has(tab.id)}<span class="dirty" aria-label="Unsaved changes">•</span>{/if}
           </button>
           <button class="tab-close" type="button" aria-label={`Close ${tab.name} tab`} onclick={() => close(tab.id)}><LucideIcon name="x" size={12} /></button>
@@ -103,7 +106,7 @@
     <button data-panel-control class="panel-control" type="button" aria-label="Hide workspace panel" onclick={() => onselect(null)}><LucideIcon name="panel-right-close" /></button>
   </header>
   {#if selected === 'browser' || selected === 'artifacts'}{#key selected}
-    <BrowserWorkspace onurl={url => browserUrl = url} {tauri} {requestedArtifact} {navigation} {onnavigationhandled} artifacts={selected === 'artifacts'} suspended={suspended || !!closing} />
+    <BrowserWorkspace onartifact={name => artifactName = name} onurl={url => browserUrl = url} {tauri} {requestedArtifact} {navigation} {onnavigationhandled} artifacts={selected === 'artifacts'} suspended={suspended || !!closing} />
   {/key}{/if}
   {#if tabs.some(t => t.id === 'files')}{#key contextKey}<FilesWorkspace {context} onwillchange={canChange} onchanged={filesChanged} hidden={selected !== 'files'} {tauri} {threadId} {projectId} initialPath="" onfolder={path => { folderPaths = {...folderPaths, [contextKey]: path}; onfolder?.(path) }} onfile={openFile} />{/key}{/if}
   {#each terminalSessions as session (session.key)}<TerminalWorkspace oncwd={path => terminalPaths = {...terminalPaths, [session.key]: path}} {tauri} context={session.context} hidden={selected !== 'terminal' || session.key !== contextKey} />{/each}

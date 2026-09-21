@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { readHomepage, saveHomepage, DEFAULT_HOMEPAGE } from './browser-settings.js'
   import LucideIcon from './LucideIcon.svelte'
-  let { tauri, artifacts = false, requestedArtifact = null, suspended = false, navigation = null, onnavigationhandled, onurl } = $props()
+  let { tauri, artifacts = false, requestedArtifact = null, suspended = false, navigation = null, onnavigationhandled, onurl, onartifact } = $props()
   let homepage = $state(readHomepage())
   let homepageDraft = $state(homepage)
   let settingsOpen = $state(false)
@@ -16,6 +16,7 @@
   let active = true
   let queue = Promise.resolve()
   let displayedArtifact = null
+  $effect(() => { if (artifacts) onartifact?.(items.find(item => item.id === selected)?.name || '') })
   const view = $derived(artifacts ? 'artifact' : 'browser')
   const visible = $derived(!suspended && (!artifacts || !!selected))
   function layout() {

@@ -201,7 +201,12 @@ wrap_life_span_handler! {
     struct Lifetime;
     impl LifeSpanHandler {
         fn on_after_created(&self,_browser:Option<&mut Browser>) {BROWSER_COUNT.fetch_add(1,Ordering::AcqRel);}
-        fn on_before_close(&self,_browser:Option<&mut Browser>) {BROWSER_COUNT.fetch_sub(1,Ordering::AcqRel);}
+        fn on_before_close(&self,browser:Option<&mut Browser>) {
+            if let Some(browser) = browser {
+                PAGES.with(|pages| pages.borrow_mut().retain(|_, page| page.browser.identifier() != browser.identifier()));
+            }
+            BROWSER_COUNT.fetch_sub(1,Ordering::AcqRel);
+        }
         fn on_before_popup(&self,_browser:Option<&mut Browser>,_frame:Option<&mut Frame>,_id:i32,_url:Option<&CefString>,_name:Option<&CefString>,_disposition:WindowOpenDisposition,_gesture:i32,_features:Option<&PopupFeatures>,_window:Option<&mut WindowInfo>,_client:Option<&mut Option<Client>>,_settings:Option<&mut BrowserSettings>,_extra:Option<&mut Option<DictionaryValue>>,_access:Option<&mut i32>)->i32 {1}
     }
 }
@@ -496,6 +501,25 @@ fn set_bounds(browser: &Browser, b: &Bounds, hidden: bool) -> Result<(), String>
     }
     Ok(())
 }
+pub fn close_view(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
+    let label = label.to_owned();
+    let closing = label.clone();
+    on_main(app, move || {
+        // Release the map borrow before CEF can call the lifetime handler.
+        let browser = PAGES.with(|pages| pages.borrow().get(&label).map(|page| page.browser.clone()));
+        if let Some(browser) = browser {
+            if let Some(host) = browser.host() { host.close_browser(1); }
+        }
+        Ok(())
+    })?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let key = closing.clone();
+        if on_main(app, move || Ok(PAGES.with(|pages| !pages.borrow().contains_key(&key))))? { return Ok(()); }
+        if std::time::Instant::now() >= deadline { return Err("The browser view did not close.".into()); }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 pub fn hide_all(app: &tauri::AppHandle) -> Result<(), String> {
     on_main(app, || {
         PAGES.with(|pages| {
@@ -732,13 +756,8 @@ pub fn shutdown() {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    PAGES.with(|pages| {
-        for page in pages.borrow().values() {
-            if let Some(host) = page.browser.host() {
-                host.close_browser(1);
-            }
-        }
-    });
+    let browsers = PAGES.with(|pages| pages.borrow().values().map(|page| page.browser.clone()).collect::<Vec<_>>());
+    for browser in browsers { if let Some(host) = browser.host() { host.close_browser(1); } }
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while BROWSER_COUNT.load(Ordering::Acquire) > 0 {
         cef::do_message_loop_work();

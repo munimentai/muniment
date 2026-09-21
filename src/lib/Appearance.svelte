@@ -70,6 +70,7 @@
       <button type="button" aria-pressed={theme.mode === option[1]} onclick={() => chooseMode(option[1])}>{option[0]}</button>
     {/each}
   </div>
+  <details><summary>Browse themes</summary>
   <div class="themes" role="group" aria-labelledby="appearance-heading">
     {#each themeGroups as [label, row]}
       <p class="group-label">{label}</p>
@@ -83,6 +84,7 @@
       </div>
     {/each}
   </div>
+  </details>
 
   <div class="type-section" role="group" aria-labelledby="type-heading">
   <h3 id="type-heading" class="access-label">Type</h3>

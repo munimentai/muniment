@@ -2,6 +2,7 @@
   import { panelScroll } from './panel-scroll.js'
   import LucideIcon from './LucideIcon.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
+  import { familyName } from './provider-catalog.js'
   import AllowanceMeter from './AllowanceMeter.svelte'
   let { tauri, onmanage, onclose } = $props()
   let settings = $state(null)
@@ -26,12 +27,13 @@
     <div class="accounts">
     {#each (settings.accounts ?? []).filter(account => account.source === 'account') as account (account.id)}
       <article>
-        <h3><ProviderLogo provider={account.family} /><span>{account.label}</span></h3>
+        <h3><ProviderLogo provider={account.family} /><span>{familyName(account.family)} · {account.label}</span></h3>
         {#if account.exclusion_reason}<p>{account.exclusion_reason}</p>{/if}
         {#each account.windows ?? [] as window}
           <div class="allowance">
-            <div class="amount"><span>{window.label}{window.scope ? ` · ${window.scope}` : ''}</span><strong>{Math.round(window.remaining_percent)}%</strong></div>
+            <div class="amount"><span>{window.label}{window.scope ? ` · ${window.scope}` : ''}</span><strong>{Math.round(window.remaining_percent)}% remaining</strong></div>
             <AllowanceMeter remaining={window.remaining_percent} limited={window.limit_reached} />
+            {#if window.resets_at_ms}<p>Resets {new Date(window.resets_at_ms).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>{/if}
           </div>
         {:else}<p>{account.source === 'key' ? 'Usage billed by API' : 'Allowance unavailable'}</p>{/each}
       </article>

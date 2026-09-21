@@ -1,4 +1,4 @@
-export const DEFAULT_HOMEPAGE = 'https://muniment.ai/'
+export const DEFAULT_HOMEPAGE = 'https://muniment.ai/docs/'
 const key = 'muniment.browser.homepage'
 export function homepageUrl(value) {
   const text = value.trim()
@@ -8,7 +8,7 @@ export function homepageUrl(value) {
   return url.href
 }
 export function readHomepage() {
-  try { return homepageUrl(localStorage.getItem(key) || DEFAULT_HOMEPAGE) }
+  try { const saved = localStorage.getItem(key); return homepageUrl(!saved || saved === 'https://muniment.ai/' ? DEFAULT_HOMEPAGE : saved) }
   catch { return DEFAULT_HOMEPAGE }
 }
 export function saveHomepage(value) {

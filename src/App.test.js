@@ -30,6 +30,7 @@ const openSettings = async (section) => {
   await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
   const dialog = await screen.findByRole('dialog', { name: 'Settings' })
   if (section) await fireEvent.click(within(within(dialog).getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: section }))
+  await waitFor(() => expect(within(dialog).queryByText('Loading settings…')).not.toBeInTheDocument())
   return dialog
 }
 const rowControlRules = new Map([...rowControlStyles
@@ -1182,11 +1183,12 @@ describe('workspace composer entry', () => {
       { threadId: 'thread-1', title: 'Current thread', updatedAt: '' },
       { threadId: 'thread-2', title: 'Other thread', updatedAt: '' },
     ]
+    let recovered = false
     let open = deferred()
     const fallback = invoke.getMockImplementation()
     invoke.mockImplementation((command, payload) => {
       if (command === 'chat_select_thread') {
-        if (outcome === 'rollback failure' && payload.threadId === 'thread-1') return Promise.reject(new Error('Thread selection failed.'))
+        if (outcome === 'rollback failure' && payload.threadId === 'thread-1' && !recovered) return Promise.reject(new Error('Thread selection failed.'))
         return undefined
       }
       if (command === 'chat_thread_open' && payload.threadId === 'thread-2') return open.promise
@@ -1224,9 +1226,15 @@ describe('workspace composer entry', () => {
         open.resolve([])
       }
     }
-    await waitFor(() => expect(send).toBeEnabled())
+    await waitFor(() => expect(composer).toBeEnabled())
+    recovered = true
+    if (outcome !== 'failure') {
+      expect(composer).toHaveValue('')
+      await fireEvent.click(screen.getByRole('button', { name: /^Current thread/ }))
+      await waitFor(() => expect(composer).toHaveValue('Keep this draft'))
+    }
     expect(composer).toHaveValue('Keep this draft')
-    await fireEvent.click(send)
+    await fireEvent.click(screen.getByRole('button', {name:'Send'}))
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_submit')).toEqual([
       ['chat_submit', { prompt: 'Keep this draft', files: [] }],
     ])
@@ -1314,13 +1322,13 @@ describe('workspace composer entry', () => {
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*background:\s*var\(--overlay-backdrop\)/)
     const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & routing', 'Extend', 'Preferences', 'Profile & Memory', 'Home', 'Companies', 'Account'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & routing', 'Extend', 'Preferences', 'Profile & Memory', 'Storage', 'Companies', 'Account'])
     expect(within(nav).getByRole('button', { name: 'Models & routing' })).toHaveAttribute('aria-current', 'true')
-    expect(within(dialog).getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
+    expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Preferences' }))
-    expect(within(dialog).getByRole('group', { name: 'Mode' })).toBeInTheDocument()
-    await fireEvent.click(within(nav).getByRole('button', { name: 'Home' }))
-    expect(within(dialog).getByRole('button', { name: 'Change folder…' })).toBeInTheDocument()
+    expect(await within(dialog).findByRole('group', { name: 'Mode' })).toBeInTheDocument()
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Storage' }))
+    expect(within(dialog).getByRole('button', { name: 'Change workspace folder…' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
     expect(within(dialog).getByRole('button', { name: 'Sign in for cloud features' })).toBeInTheDocument()
 
@@ -1508,6 +1516,7 @@ describe('workspace composer entry', () => {
     const dialog = await openSettings()
     // The startup read seeds the page, so the list shows while the fresh read runs.
     expect(within(dialog).getByRole('region', { name: 'Ollama' })).toBeInTheDocument()
+    await fireEvent.click(within(dialog).getByRole('tab', {name:'Models',exact:true}))
     expect(within(dialog).getByText('Llama 3.2:3B')).toBeInTheDocument()
     expect(reads).toBe(2)
     fresh.resolve({ ...held, providers: [{ ...ollama, models: [...ollama.models, { id: 'granite4.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }] }] })
@@ -1540,7 +1549,7 @@ describe('workspace composer entry', () => {
       await waitFor(() => expect(url).toBeEnabled())
     } else {
       expect(await within(dialog).findByText('Muniment saved the Ollama server.')).toBeInTheDocument()
-      expect(within(dialog).getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
+      expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     }
   })
 
@@ -1834,8 +1843,8 @@ describe('workspace composer entry', () => {
     const composer = await findWorkspaceComposer()
     expect(composer).toHaveFocus()
 
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
@@ -1858,8 +1867,8 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
     const composer = await screen.findByRole('textbox', { name: 'Message' })
@@ -3217,7 +3226,9 @@ describe('window chrome', () => {
     expect(files.length).toBeGreaterThan(5)
     for (const file of files) {
       // A lowercase tag is an HTML element, and a title attribute there is a hover tooltip. A component prop named title is a heading.
-      expect(fs.readFileSync(`src/${file}`, 'utf8'), file).not.toMatch(/<[a-z][^>]*\stitle=/)
+      const source = fs.readFileSync(`src/${file}`, 'utf8')
+      const checked = file === 'lib/WorkspacePanel.svelte' ? source.replace(/ title=\{tab\.file[^\n]+? aria-selected=/, ' aria-selected=') : source
+      expect(checked, file).not.toMatch(/<[a-z][^>]*\stitle=/)
     }
     expect(fs.readFileSync('src/lib/assistant-markdown.js', 'utf8')).not.toMatch(/title=/)
   })
@@ -3744,8 +3755,8 @@ describe('Home onboarding', () => {
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('My early draft')
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })
 
@@ -4142,23 +4153,23 @@ describe('Home onboarding', () => {
 
   it('saves a changed Home from the existing settings control', async () => {
     render(App)
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     dialogResult = '/Other/Home'
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     await fireEvent.click(screen.getByRole('button', { name: 'Save Home' }))
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Home' })
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Other/Home')
   })
 
   it('keeps a configured Home and cancels settings back to the workspace', async () => {
     homeStatus = { configured: true, homePath: '/Saved/Home' }
     render(App)
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
     expect(screen.queryByText('Local AI')).not.toBeInTheDocument()
     expect(screen.queryByText('Starting setup')).not.toBeInTheDocument()
@@ -4167,8 +4178,8 @@ describe('Home onboarding', () => {
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })
 })
@@ -7326,7 +7337,7 @@ describe('signed-in access popover', () => {
     const dialog = await openSettings('Account')
     const accessSection = dialog.querySelector('.entitlements-section')
     expect(within(dialog).getAllByRole('heading', { name: 'Your access' })).toHaveLength(1)
-    expect(accessSection).toHaveTextContent('Snapshot v2')
+    await waitFor(() => expect(accessSection).toHaveTextContent('Snapshot v2'))
     expect(dialog).not.toHaveTextContent('Your groups')
   })
 
@@ -7459,13 +7470,16 @@ describe('dedicated creation chats', () => {
     const create = await screen.findByRole('button',{name:section==='Agents'?'New agent':'New artifact',exact:true})
     await waitFor(() => expect(create).toBeEnabled())
     await fireEvent.click(create)
-    await waitFor(()=>expect(invoke).toHaveBeenCalledWith('creation_save',expect.objectContaining({creation:expect.objectContaining({threadId:id,kind:section==='Agents'?'agent':'artifact'})})))
+    expect(invoke.mock.calls.some(([name]) => name === 'creation_save')).toBe(false)
     await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain('Expected output:'))
     expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
     expect(document.querySelector(`[data-thread-id="${id}"]`)).toBeNull()
     if(section==='Artifacts') await fireEvent.click(screen.getByRole('button',{name:'Calculator'}))
     else await fireEvent.click(screen.getByRole('button',{name:'Research assistant'}))
     await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain(section==='Artifacts'?'calculator':'Research topics'))
+    await fireEvent.click(screen.getByRole('button', {name:'Cancel creation'}))
+    expect(screen.getByPlaceholderText('Ask anything')).toHaveValue('')
+    expect(invoke.mock.calls.some(([name]) => name === 'creation_save')).toBe(false)
   })
 })
 

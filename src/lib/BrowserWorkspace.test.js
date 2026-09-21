@@ -68,7 +68,7 @@ describe('shared browser', () => {
 
 it('saves a homepage and uses it for Home and fresh native views', async () => {
   const view = render(BrowserWorkspace, {tauri:{invoke}})
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_view', expect.objectContaining({homepage:'https://muniment.ai/'})))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_view', expect.objectContaining({homepage:'https://muniment.ai/docs/'})))
   await fireEvent.click(screen.getByRole('button', {name:'Browser settings'}))
   await fireEvent.input(screen.getByLabelText('Homepage'), {target:{value:'https://example.net/start'}})
   await fireEvent.click(screen.getByRole('button', {name:'Save'}))

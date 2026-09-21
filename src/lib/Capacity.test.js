@@ -11,7 +11,7 @@ it('shows separate allowance meters and account exclusions', async () => {
   ]}))
   const onclose = vi.fn()
   render(Capacity,{tauri:{invoke},onclose,onmanage:vi.fn()})
-  await screen.findByText('Work')
+  await screen.findByText('OpenAI · Work')
   expect(screen.queryByText('API key')).not.toBeInTheDocument()
   expect(screen.getByRole('meter')).toHaveAttribute('aria-valuenow','20')
   expect(screen.getByRole('meter')).toHaveAttribute('data-level','low')

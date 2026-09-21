@@ -1,16 +1,17 @@
 <script>
-  import ExtendSection from '../extend/ExtendSection.svelte'
+  import SettingsSection from './SettingsSection.svelte'
+  const ExtendSection = () => import('../extend/ExtendSection.svelte')
   import { featureFlags } from '../feature-flags.js'
   import { panelScroll } from './panel-scroll.js'
   // Settings is one popup over the workspace: a section list on its left, the
   // section on its right, and the workspace darkened and blurred behind it.
   import { onMount, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
-  import Appearance from './Appearance.svelte'
-  import MemorySection from './MemorySection.svelte'
-  import ModelsSection from './ModelsSection.svelte'
-  import AccountSettings from './AccountSettings.svelte'
-  import CompaniesSection from './CompaniesSection.svelte'
+  const Appearance = () => import('./Appearance.svelte')
+  const MemorySection = () => import('./MemorySection.svelte')
+  const ModelsSection = () => import('./ModelsSection.svelte')
+  const AccountSettings = () => import('./AccountSettings.svelte')
+  const CompaniesSection = () => import('./CompaniesSection.svelte')
 
   let {
     tauri,
@@ -18,6 +19,7 @@
     section = $bindable('models'),
     onclose,
     homePath = '',
+    oncreateextension,
     onchangehome,
     local = false,
     signInDisabled = false,
@@ -32,10 +34,11 @@
     defaultVoiceShortcut = '',
   } = $props()
 
-  const sections = [['models', 'Models & routing'], ['extend', 'Extend'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Home'], ...(featureFlags.companyRecord ? [['companies', 'Companies']] : []), ...(featureFlags.cloud ? [['account', 'Account']] : [])]
+  const sections = [['models', 'Models & routing'], ['extend', 'Extend'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Storage'], ...(featureFlags.companyRecord ? [['companies', 'Companies']] : []), ...(featureFlags.cloud ? [['account', 'Account']] : [])]
   $effect(() => {
     if ((section === 'companies' && !featureFlags.companyRecord) || (section === 'account' && !featureFlags.cloud)) section = 'models'
   })
+  let storageError = $state('')
   let panel = $state()
   const sectionLabel = $derived(section === 'routing' ? 'Models & routing' : sections.find(([id]) => id === section)?.[1] ?? 'Settings')
 
@@ -91,24 +94,29 @@
       </header>
       <div class="settings-content" use:panelScroll>
         {#if section === 'extend'}
-          <ExtendSection {tauri} />
+          <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension}} />
         {:else if section === 'models' || section === 'routing'}
           {#key section}
-            <ModelsSection {tauri} {listen} {oninventory} {inventory}  />
+            <SettingsSection load={ModelsSection} properties={{tauri, listen, oninventory, inventory, initialTab: section === 'routing' ? 'routing' : 'accounts'}} />
           {/key}
         {:else if section === 'appearance'}
-          <Appearance {tauri} />
+          <SettingsSection load={Appearance} properties={{tauri}} />
         {:else if section === 'memory'}
-          <MemorySection {tauri} />
+          <SettingsSection load={MemorySection} properties={{tauri}} />
         {:else if section === 'home'}
           <section class="settings-home" aria-labelledby="settings-home-title">
-            <h4 id="settings-home-title" class="settings-label">Home</h4>
+            <h4 id="settings-home-title" class="settings-label">Workspace</h4>
             <p class="settings-path">{homePath}</p>
-            <p class="support">Muniment keeps memory, agents, projects and sessions here.</p>
-            <button type="button" onclick={onchangehome}>Change folder…</button>
+            <p class="support">Your workspace holds memory, agents, projects and session files.</p>
+            <button type="button" onclick={onchangehome}>Change workspace folder…</button>
+            <h4 class="settings-label">Managed extensions</h4>
+            <p class="settings-path">~/.muniment</p>
+            <p class="support">Installed skills and plugins live in managed storage, separate from your workspace.</p>
+            <button type="button" onclick={() => tauri.invoke('extend_command', {action:'open_folder',data:{}}).catch(() => storageError = 'The extension folder could not open.')}>Open extension folder</button>
+            {#if storageError}<p role="alert">{storageError}</p>{/if}
           </section>
         {:else if featureFlags.companyRecord && section === 'companies'}
-          <CompaniesSection {tauri} onchanged={oncompanieschange} />
+          <SettingsSection load={CompaniesSection} properties={{tauri, onchanged:oncompanieschange}} />
         {:else if featureFlags.cloud && section === 'account'}
           <section class="settings-account" aria-labelledby="settings-account-title">
             <h4 id="settings-account-title" class="settings-label">Account</h4>
@@ -118,7 +126,7 @@
             {/if}
             {#if accountStatus}<p class="support" role="status">{accountStatus}</p>{/if}
             {#if !local}
-              <AccountSettings {tauri} {voiceShortcut} {voiceShortcutChanging} {onVoiceShortcutChange} {defaultVoiceShortcut} />
+              <SettingsSection load={AccountSettings} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
             {/if}
           </section>
         {/if}

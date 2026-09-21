@@ -1,3 +1,5 @@
+#[path = "desktop_docs.rs"]
+mod desktop_docs;
 use crate::cef_native;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -45,6 +47,11 @@ fn allowed_url(value: &str) -> Result<tauri::Url, String> {
 fn origin(value: &str) -> Result<String, String> {
     Ok(allowed_url(value)?.origin().ascii_serialization())
 }
+fn docs_destination(app: &tauri::AppHandle, url: &str) -> String {
+    if url == desktop_docs::URL {
+        format!("{}/docs/", app.state::<BrowserStorage>().origin)
+    } else { url.to_owned() }
+}
 fn target(app: &tauri::AppHandle, label: &str) -> Result<cef_native::View, String> {
     cef_native::view(app, label)
 }
@@ -88,6 +95,11 @@ fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, S
         return Ok(json!({"stopped":true}));
     }
     let _serial = control.serial.lock().unwrap();
+    if req.action == "close" && !agent {
+        cef_native::close_view(app, &req.view)?;
+        if *control.active.lock().unwrap() == req.view { *control.active.lock().unwrap() = String::new(); }
+        return Ok(json!({"closed": true}));
+    }
     let webview = target(app, &req.view)?;
     let url = webview.url().map_err(err)?.to_string();
     if agent {
@@ -105,7 +117,7 @@ fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, S
             Ok(json!({"allowed":true}))
         }
         "navigate" => {
-            let next = allowed_url(&req.value)?;
+            let next = allowed_url(&docs_destination(app, &req.value))?;
             if req.view == "artifact" && next.origin().ascii_serialization() != app.state::<BrowserStorage>().origin { return Err("Artifact previews stay local.".into()); }
             webview.navigate(next).map_err(err)?;
             Ok(json!({"navigating":true}))
@@ -318,7 +330,7 @@ pub async fn browser_view(
                 })
                 .transpose()?
         } else {
-            Some(allowed_url(homepage.as_deref().unwrap_or("https://muniment.ai/"))?.to_string())
+            Some(allowed_url(&docs_destination(&app, homepage.as_deref().unwrap_or(desktop_docs::URL)))?.to_string())
         };
         cef_native::layout(
             &app,
@@ -391,6 +403,14 @@ pub fn setup(app: &mut tauri::App, root: &std::path::Path) -> Result<(), String>
     let files = root.to_path_buf();
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
+            if request.url() == "/docs/" {
+                let mut response = tiny_http::Response::from_string(desktop_docs::html());
+                for (key, value) in [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"), ("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'")] {
+                    response.add_header(tiny_http::Header::from_bytes(key, value).unwrap());
+                }
+                let _ = request.respond(response);
+                continue;
+            }
             let body = request
                 .url()
                 .strip_prefix(&prefix)

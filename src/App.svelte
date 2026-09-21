@@ -17,7 +17,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener'
 
   import AccessPanel from './lib/AccessPanel.svelte'
-  import Settings from './lib/Settings.svelte'
+  const loadSettings = () => import('./lib/Settings.svelte')
   import ThreadFilter from './lib/ThreadFilter.svelte'
   import ProjectCatalog from './lib/ProjectCatalog.svelte'
   import CatalogActions from './lib/CatalogActions.svelte'
@@ -154,7 +154,7 @@
   let creations = $state([])
   let artifactItems = $state([])
   let requestedArtifact = $state(null)
-  const currentCreation = $derived(creations.find(item => item.threadId === currentThreadId))
+  const currentCreation = $derived(pendingCreation || creations.find(item => item.threadId === currentThreadId))
   const artifactChats = $derived([
     ...creations.filter(item => item.kind === 'artifact').map(item => ({...item,name:artifactItems.find(a=>a.id===item.resultId)?.name})),
     ...artifactItems.filter(item => !creations.some(p=>p.threadId === item.threadId || p.resultId === item.id) && artifactItems.find(a=>a.threadId===item.threadId)?.id===item.id),
@@ -217,25 +217,27 @@
     if (values[1].status === 'fulfilled' && Array.isArray(values[1].value)) artifactItems = values[1].value
   }
   async function startCreation(kind, chosen = creationDefaults(kind)) {
-    if (active || threadSwitching || draft.trim() || selectedFiles.length) { submitError = 'Finish or clear the current message before starting a creation.'; return }
+    if (active || threadSwitching) return
     if (!await newSidebarThread(selectedProject) || !currentThreadId) return
-    try {
-      const plan = await tauri.invoke('creation_save',{creation:{threadId:currentThreadId,kind,goal:chosen.goal,output:chosen.output,resultId:null}})
-      creationsRevision += 1
-      creations = [...creations.filter(item=>item.threadId!==currentThreadId),plan]
-      if (kind === 'agent') agentsExpanded = true
-      else artifactsExpanded = true
-      draft = creationPrompt(kind,plan)
-      await tick(); composer?.focus()
-    } catch(e) { submitError=String(e) }
+    pendingCreation = { threadId: currentThreadId, kind, goal: chosen.goal, output: chosen.output, resultId: null }
+    draft = creationPrompt(kind, pendingCreation)
+    await tick()
+    composer?.focus()
   }
   async function useCreationSuggestion(chosen) {
-    try {
-      const plan = await tauri.invoke('creation_save',{creation:{...currentCreation,goal:chosen.goal,output:chosen.output}})
-      creationsRevision += 1
-      creations = creations.map(item=>item.threadId===plan.threadId?plan:item)
-      draft=creationPrompt(plan.kind,plan); await tick(); composer?.focus()
-    } catch(e) {submitError=String(e)}
+    if (pendingCreation) {
+      pendingCreation = { ...pendingCreation, goal: chosen.goal, output: chosen.output }
+      draft = creationPrompt(pendingCreation.kind, pendingCreation)
+    }
+    await tick()
+    composer?.focus()
+  }
+  function cancelCreation() {
+    pendingCreation = null
+    draft = ''
+    selectedFiles = []
+    turnExtensions = { enabled: [], blocked: [], automatic: false }
+    composer?.focus()
   }
   async function openCreation(item) {
     if (active || threadSwitching) return
@@ -330,6 +332,15 @@
     settingsOpen = true
   }
 
+  async function createExtensionDraft(kind) {
+    if (active || threadSwitching) return
+    if (!await newSidebarThread(selectedProject)) return
+    closeSettings()
+    draft = `Help me create a ${kind}. Ask about its purpose, then save it in managed extension storage.`
+    await tick()
+    composer?.focus()
+  }
+
   function closeSettings() {
     settingsOpen = false
     const opener = settingsOpener ?? settingsButton ?? composer
@@ -398,6 +409,19 @@
   function openModelSettings() {
     pickerOpen = false
     openSettings('models', modelChip)
+  }
+  const taskDrafts = new Map()
+  let pendingCreation = $state(null)
+  let turnExtensions = $state({ enabled: [], blocked: [], automatic: false })
+  function selectTask(next) {
+    if (next === currentThreadId) return
+    taskDrafts.set(currentThreadId, { text: draft, files: selectedFiles, extensions: turnExtensions, creation: pendingCreation })
+    const saved = taskDrafts.get(next) || (currentThreadId === null && next ? taskDrafts.get(null) : null)
+    draft = saved?.text || ''
+    selectedFiles = saved?.files || []
+    turnExtensions = saved?.extensions || { enabled: [], blocked: [], automatic: false }
+    pendingCreation = saved?.creation || null
+    currentThreadId = next
   }
   let draft = $state('')
   let selectedFiles = $state([])
@@ -657,9 +681,18 @@
   let extensionCommandNames = $state([])
   const chatController = createChatController({
     invoke: (command, args) => {
-      const preparation = command === 'chat_submit' ? composerExtensions?.prepare(args.prompt) : null
-      const send = () => tauri.invoke(command, ...(args === undefined ? [] : [args]))
-      return preparation ? preparation.then(send).then(result => { composerExtensions?.submitted(); return result }) : send()
+      const submit = () => {
+        const preparation = command === 'chat_submit' ? composerExtensions?.prepare(args.prompt) : null
+        const send = () => tauri.invoke(command, ...(args === undefined ? [] : [args]))
+        return preparation ? preparation.then(send).then(result => { composerExtensions?.submitted(); return result }) : send()
+      }
+      if (command !== 'chat_submit' || !pendingCreation) return submit()
+      return tauri.invoke('creation_save', { creation: pendingCreation }).then(plan => {
+        creationsRevision += 1
+        creations = [...creations.filter(item => item.threadId !== plan.threadId), plan]
+        pendingCreation = null
+        return submit()
+      })
     },
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
     readMessages: () => messages,
@@ -684,7 +717,7 @@
     onMoreThreads: (next) => { moreThreads = next },
     readProject: () => selectedProject,
     readAgent: () => selectedAgent,
-    onThreadSelected: (next) => { currentThreadId = next; selectedAgent = agentListing.state.threads[next] ?? null; if (!selectedAgent) agentProfileOpen = false; void refreshProjects(next); void refreshAgents(); void refreshCreations() },
+    onThreadSelected: (next) => { selectTask(next); selectedAgent = agentListing.state.threads[next] ?? null; if (!selectedAgent) agentProfileOpen = false; void refreshProjects(next); void refreshAgents(); void refreshCreations() },
     onThreadSwitch: (next) => { threadSwitching = next },
     onFreshThread: (next) => { freshThread = next },
     onHistoryStart: () => { expandedReceipts = new Set(); parallelTools = new Map() },
@@ -2176,7 +2209,7 @@
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
           {#if messages.length === 0 && !currentCreation}<p class="empty">{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : profileAgent ? `Chat with ${profileAgent.name} using ${modelSourceLabel}.` : 'Ask a question or request a file.'}</p>{/if}
           {#if currentCreation}
-            <section class="creation-goal" aria-label="Creation goal"><strong>{currentCreation.kind === 'agent' ? 'Agent' : 'Artifact'}</strong><p>Goal: {currentCreation.goal}</p><p>Output: {currentCreation.output}</p></section>
+            <section class="creation-goal" aria-label="Creation goal"><strong>{currentCreation.kind === 'agent' ? 'Agent' : 'Artifact'}</strong><p>Goal: {currentCreation.goal}</p><p>Output: {currentCreation.output}</p>{#if pendingCreation}<button type="button" onclick={cancelCreation}>Cancel creation</button>{/if}</section>
             {#if !messages.length}<div class="creation-suggestions" aria-label="Creation suggestions">{#each creationOptions[currentCreation.kind] as option}<button onclick={()=>useCreationSuggestion(option)}>{option.name}</button>{/each}</div>{/if}
           {/if}
           {#each messages as message}
@@ -2448,7 +2481,7 @@
           {/if}
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
-            <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} />
+            <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} />
             {#if auth.name === 'local'}
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
               {#if hasSubscriptions}<button type="button" class="quiet capacity-trigger" aria-haspopup="dialog" aria-expanded={capacityOpen} onclick={() => openComposerPanel(capacityOpen ? null : 'capacity')}><LucideIcon name="gauge" size={14} /><span class="model-chip-label">Capacity</span></button>{/if}
@@ -2589,7 +2622,10 @@
     </ConfirmDialog>
   {/if}
   {#if settingsOpen}
-    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} />
+    {#await loadSettings() then module}
+    {@const Settings = module.default}
+    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} />
+    {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
   {/if}
 {#if pairingRequests[0]}
   {#key pairingRequests[0]}
@@ -2881,7 +2917,8 @@
   .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: var(--text-12); }
   .attachment-delivery-rule { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .response { margin: 0 0 34px; }
+  .response { margin: 0 0 20px; }
+  .response, .user-turn { content-visibility: auto; contain-intrinsic-size: auto 120px; }
   .streaming { position: relative; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .tool-card { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-13) var(--font-mono); }

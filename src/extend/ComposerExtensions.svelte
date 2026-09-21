@@ -1,13 +1,14 @@
 <script>
+  import Toggle from '../lib/Toggle.svelte'
   import { onMount, tick } from 'svelte'
-  import { commandChoices, selectedCommands, invocationQuery } from './catalog.js'
+  import { commandChoices, selectedCommands, invocationQuery } from './commands.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from '../lib/composer-panels.js'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import McpIcon from './McpIcon.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
-  import { catalog } from './catalog.js'
-  let { tauri, threadId, active = false, draft = $bindable(''), commandNames = $bindable([]), onmanage } = $props()
-  let state = $state({ items: [] }), open = $state(false), branch = $state(''), enabled = $state([]), blocked = $state([]), automatic = $state(false), error = $state(''), busy = $state(false), highlighted = $state(0), dismissed = $state(null), rootElement = $state(), trigger = $state()
+  let catalog = $state([])
+  let { tauri, threadId, active = false, draft = $bindable(''), commandNames = $bindable([]), selection = $bindable({ enabled: [], blocked: [], automatic: false }), onmanage } = $props()
+  let state = $state({ items: [] }), open = $state(false), branch = $state(''), error = $state(''), busy = $state(false), highlighted = $state(0), dismissed = $state(null), rootElement = $state(), trigger = $state()
   const choices = $derived(commandChoices(state.items))
   const command = $derived(draft === dismissed ? null : invocationQuery(draft))
   const shown = $derived(choices.filter(item => `${item.command} ${item.description || ''}`.toLowerCase().includes(command || '')).slice(0, 20))
@@ -18,12 +19,12 @@
     catch { if (open) error = 'Extensions could not be loaded.' }
   }
   onMount(() => {
-    const follow = event => { if (event.detail && event.detail !== 'extend' && event.detail !== 'commands') dismissed = draft; open = event.detail === 'extend'; if (open) { branch = ''; void refresh() } }
+    const follow = event => { if (event.detail && event.detail !== 'extend' && event.detail !== 'commands') dismissed = draft; open = event.detail === 'extend'; if (open) { branch = ''; void refresh(); void import('./catalog.js').then(module => catalog = module.catalog) } }
     window.addEventListener(COMPOSER_PANEL_EVENT, follow)
     void refresh()
     return () => window.removeEventListener(COMPOSER_PANEL_EVENT, follow)
   })
-  $effect(() => { void threadId; enabled = []; blocked = []; automatic = false; branch = ''; open = false })
+  $effect(() => { void threadId; branch = ''; open = false })
   $effect(() => { commandNames = choices.map(item => item.command) })
   $effect(() => { if (command !== null) { highlighted = 0; openComposerPanel('commands'); void refresh() } })
   function close() { openComposerPanel(null); open = false }
@@ -35,8 +36,8 @@
     document.getElementById('composer-message')?.focus()
   }
   function toggle(id, checked) {
-    enabled = checked ? [...new Set([...enabled, id])] : enabled.filter(value => value !== id)
-    blocked = checked ? blocked.filter(value => value !== id) : [...new Set([...blocked, id])]
+    selection.enabled = checked ? [...new Set([...selection.enabled, id])] : selection.enabled.filter(value => value !== id)
+    selection.blocked = checked ? selection.blocked.filter(value => value !== id) : [...new Set([...selection.blocked, id])]
   }
   export function prepare(prompt) {
     if (!state.items.length) return
@@ -45,13 +46,13 @@
   async function prepareSelected(prompt) {
     await refresh()
     const id = threadId || await tauri.invoke('chat_current_thread') || await tauri.invoke('chat_new_thread')
-    await call('turn', { threadId: id, selected: [...selectedCommands(prompt, choices), ...enabled], disabled: blocked, automatic })
-    if (automatic) {
+    await call('turn', { threadId: id, selected: [...selectedCommands(prompt, choices), ...selection.enabled], disabled: selection.blocked, automatic: selection.automatic })
+    if (selection.automatic) {
       busy = true
       try { await call('route', { threadId: id, prompt }) } finally { busy = false }
     }
   }
-  export function submitted() { enabled = []; blocked = []; automatic = false; close() }
+  export function submitted() { selection.enabled = []; selection.blocked = []; selection.automatic = false; close() }
   export function handleKey(event) {
     if (command === null || !shown.length) return false
     if (event.key === 'Escape') { dismissed = draft; event.preventDefault(); return true }
@@ -78,9 +79,9 @@
         </div>
         {#if branch}<div class="submenu" aria-label={branch === 'mcp' ? 'Available MCPs' : branch === 'plugin' ? 'Available plugins' : 'Available skills'}>
           {#if branch === 'mcp'}
-            {#each servers as server}<label class="server">{#if server.entry}<ProviderIcon entry={server.entry} size={22} />{:else}<McpIcon />{/if}<span>{server.name}</span><input type="checkbox" checked={enabled.includes(server.id)} onchange={e => toggle(server.id, e.currentTarget.checked)} /></label>{/each}
+            {#each servers as server}<div class="server">{#if server.entry}<ProviderIcon entry={server.entry} size={22} />{:else}<McpIcon />{/if}<span>{server.name}</span><Toggle checked={selection.enabled.includes(server.id)} label={`Use ${server.name} for this turn`} onchange={checked => toggle(server.id, checked)} /></div>{/each}
             {#if !servers.length}<p>No MCPs installed.</p>{/if}
-            <label class="automatic"><span>Auto-select for this turn</span><input type="checkbox" bind:checked={automatic} /></label>
+            <div class="automatic"><span>Auto-select for this turn</span><Toggle checked={selection.automatic} label="Auto-select for this turn" onchange={checked => selection.automatic = checked} /></div>
           {:else}
             {#each choices.filter(item => item.kind === branch) as item}<button type="button" class="choice" onclick={() => choose(item)}><span>/{item.command}</span><small>{item.description || item.name}</small></button>{/each}
             {#if !choices.some(item => item.kind === branch)}<p>No {branch === 'plugin' ? 'plugins' : 'skills'} installed.</p>{/if}
@@ -113,7 +114,6 @@
   .submenu { min-width: 0; border-left: 1px solid var(--border); padding-left: 6px; overflow-y: auto; max-height: 42vh; }
   .server, .automatic { display: flex; align-items: center; gap: 8px; padding: 7px; font-size: var(--text-13); }
   .server span, .automatic span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  input { accent-color: var(--signal); }
   .automatic { border-top: 1px solid var(--border); margin-top: 5px; color: var(--muted); }
   .manage { display: block; width: 100%; text-align: left; border-top: 1px solid var(--border); margin-top: 5px; padding-top: 10px; }
   .choice { display: grid; width: 100%; gap: 3px; text-align: left; }
