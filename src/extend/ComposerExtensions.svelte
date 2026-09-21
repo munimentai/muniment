@@ -17,14 +17,14 @@
     catch { if (open) error = 'Extensions could not be loaded.' }
   }
   onMount(() => {
-    const follow = event => { if (event.detail && event.detail !== 'extend') dismissed = draft; open = event.detail === 'extend'; if (open) { branch = ''; void refresh() } }
+    const follow = event => { if (event.detail && event.detail !== 'extend' && event.detail !== 'commands') dismissed = draft; open = event.detail === 'extend'; if (open) { branch = ''; void refresh() } }
     window.addEventListener(COMPOSER_PANEL_EVENT, follow)
     void refresh()
     return () => window.removeEventListener(COMPOSER_PANEL_EVENT, follow)
   })
   $effect(() => { void threadId; enabled = []; blocked = []; automatic = false; branch = ''; open = false })
   $effect(() => { commandNames = choices.map(item => item.command) })
-  $effect(() => { if (command !== null) { highlighted = 0; void refresh() } })
+  $effect(() => { if (command !== null) { highlighted = 0; openComposerPanel('commands'); void refresh() } })
   function close() { openComposerPanel(null); open = false }
   function choose(item) {
     const token = `/${item.command} `

@@ -27,10 +27,11 @@ def refresh():
     def save(entry):
         if existing.get(entry['id']) and (ROOT / 'public' / existing[entry['id']]['path'].lstrip('/')).exists():
             return entry['id'], existing[entry['id']]
-        match = logos.get(normalize(entry['name']))
+        alias = {'microsoft-365': 'Microsoft Office'}.get(entry['id'], entry['name'])
+        match = logos.get(normalize(alias))
         if not match:
             publisher = re.sub(r'(?i)\b(inc|llc|ltd|limited|corporation|corp)\b[.,]?', '', entry['publisher']).strip()
-            match = logos.get(normalize(publisher))
+            match = logos.get(normalize(publisher)) if publisher != 'Anthropic' else None
         urls = []
         if match:
             route = match['route']
@@ -38,7 +39,7 @@ def refresh():
             urls.append(route.get('light') if isinstance(route, dict) else route)
         urls.append(entry.get('iconUrl'))
         site = urlparse(entry.get('website') or '')
-        if site.scheme == 'https' and site.netloc:
+        if site.scheme == 'https' and site.netloc and site.netloc not in ('anthropic.com', 'www.anthropic.com'):
             urls.append(f'https://{site.netloc}/favicon.ico')
         for url in filter(None, urls):
             try:

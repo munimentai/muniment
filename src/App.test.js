@@ -7649,3 +7649,25 @@ describe('release feature flags', () => {
     }
   })
 })
+
+it('inserts and colors skill commands in the message and prepares them for one turn', async () => {
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command, args) => {
+    if (command === 'extend_command') return Promise.resolve({items:[{id:'review',kind:'skill',skills:[{name:'review',path:'SKILL.md',description:'Review code'}]}]})
+    if (command === 'chat_current_thread') return Promise.resolve('thread-1')
+    if (command === 'chat_submit') return Promise.resolve({runId:'extension-turn',attachments:[]})
+    return original(command,args)
+  })
+  render(App)
+  const composer = await findWorkspaceComposer()
+  await fireEvent.input(composer,{target:{value:'/rev'}})
+  await screen.findByRole('button',{name:/\/review.*Review code/})
+  await fireEvent.keyDown(composer,{key:'Enter'})
+  await waitFor(()=>expect(composer).toHaveValue('/review '))
+  expect(document.querySelector('.reference-overlay .reference')?.textContent).toBe('/review')
+  expect(screen.queryByLabelText('Selected extensions')).not.toBeInTheDocument()
+  await fireEvent.input(composer,{target:{value:'/review Inspect this change'}})
+  await fireEvent.keyDown(composer,{key:'Enter'})
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('extend_command',{action:'turn',data:{threadId:'thread-1',selected:['review:SKILL.md'],disabled:[],automatic:false}}))
+  await waitFor(()=>expect(composer).toHaveValue(''))
+})

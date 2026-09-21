@@ -541,10 +541,7 @@
     "path": "/extension-icons/5d05eab2bea4022eb51c.png",
     "source": "https://www.cloze.com/img/icon-light-256x256.png"
   },
-  "cms-coverage": {
-    "path": "/extension-icons/51635844d2ae983077bb.svg",
-    "source": "https://svgl.app/library/anthropic_black.svg"
-  },
+  "cms-coverage": null,
   "cocounsel-legal": {
     "path": "/extension-icons/b38acb6b44c9956ac7b4.png",
     "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/dcc5719bf04e88cdc0fa5f6dad1e19c8e1ef9b53-300x300.png?w=128&fit=max&auto=format"
@@ -709,7 +706,10 @@
     "path": "/extension-icons/6643b99bf89b24d383d8.svg",
     "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/0560a28ae045763f79541d02ac612f16f53a0059-160x159.svg?w=128&fit=max&auto=format"
   },
-  "datarails-financeos": null,
+  "datarails-financeos": {
+    "path": "/extension-icons/e3b0c44298fc1c149afb.ico",
+    "source": "https://www.datarails.com/favicon.ico"
+  },
   "datasite": {
     "path": "/extension-icons/0a25050b71b2ce5329b0.svg",
     "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/f1fafa910502f5c62b3bbfb3e57a7e1123cf57d5-500x500.svg?w=128&fit=max&auto=format"
@@ -1691,8 +1691,8 @@
     "source": "https://metricool.com/wp-content/uploads/cropped-web-app-manifest-512x512-1-180x180.png"
   },
   "microsoft-365": {
-    "path": "/extension-icons/51635844d2ae983077bb.svg",
-    "source": "https://svgl.app/library/anthropic_black.svg"
+    "path": "/extension-icons/8c40e1eec40fb98f8172.svg",
+    "source": "https://svgl.app/library/microsoft-office.svg"
   },
   "microsoft-clarity": {
     "path": "/extension-icons/6506017bc03499861060.png",
