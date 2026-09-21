@@ -52,16 +52,16 @@ it('opens provider details inside the app and adds the server from the dialog', 
   try {
     const invoke = vi.fn(async (_, {action, data}) => action === 'server' ? {items:[{id:'saved',...data}]} : action === 'auth' ? {status:'connected',tools:[]} : {items:[]})
     render(ExtendSection, {tauri:{invoke}})
-    await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'Google Drive'}})
+    await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'Notion'}})
     await fireEvent.click(screen.getAllByRole('button', {name:'Details'})[0])
-    const dialog = await screen.findByRole('dialog', {name:'Google Drive'})
+    const dialog = await screen.findByRole('dialog', {name:'Notion'})
     expect(within(dialog).getByText('Server URL')).toBeInTheDocument()
     expect(within(dialog).getByText('Publisher')).toBeInTheDocument()
     expect(within(dialog).getByRole('link')).toHaveAttribute('target','_blank')
     expect(invoke.mock.calls.every(([,args]) => args.action === 'read')).toBe(true)
     await waitFor(() => expect(within(dialog).getByRole('button', {name:'Connect'})).not.toBeDisabled())
     await fireEvent.click(within(dialog).getByRole('button', {name:'Connect'}))
-    expect(screen.queryByRole('dialog', {name:'Google Drive'})).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', {name:'Notion'})).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('extend_command',{action:'auth',data:{id:'saved'}}))
   } finally { HTMLDialogElement.prototype.showModal = oldShow; HTMLDialogElement.prototype.close = oldClose }
@@ -70,7 +70,7 @@ it('opens provider details inside the app and adds the server from the dialog', 
 it('starts OAuth after saving a catalog connection and opens managed storage', async () => {
   const invoke = vi.fn(async (_, {action,data}) => action === 'auth' ? {status:'connected',tools:[]} : action === 'server' ? {items:[{id:'saved',...data}]} : {items:[]})
   render(ExtendSection, {tauri:{invoke}})
-  await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'Google Drive'}})
+  await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'Notion'}})
   await waitFor(() => expect(screen.getAllByRole('button',{name:'Connect'})[0]).not.toBeDisabled())
   await fireEvent.click(screen.getAllByRole('button',{name:'Connect'})[0])
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

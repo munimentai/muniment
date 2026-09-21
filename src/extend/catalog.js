@@ -1,4 +1,5 @@
 import anthropic from './anthropic-catalog.json'
+import automaticRegistration from './automatic-registration.json'
 // Discovery metadata is not a connection proxy. Never offer catalog-hosted relays.
 export function providerDestination(value) {
   try {
@@ -8,7 +9,9 @@ export function providerDestination(value) {
       && !['anthropic.com', 'claude.com', 'claude.ai', 'example-server.modelcontextprotocol.io'].some(domain => host === domain || host.endsWith(`.${domain}`))
   } catch { return false }
 }
-export const catalog = anthropic.filter(entry => entry.type === 'remote' && (!entry.url || providerDestination(entry.url)))
+// Bind eligibility to the inspected endpoint. New or changed endpoints require another check.
+export const catalog = anthropic.filter(entry => entry.type === 'remote' && providerDestination(entry.url)
+  && automaticRegistration[entry.id] === entry.url)
   .map(entry => ({ ...entry, publisher: /anthropic/i.test(entry.publisher) ? '' : entry.publisher,
     website: providerDestination(entry.website) ? entry.website : entry.url ? new URL(entry.url).origin : '',
     categories: entry.categories?.length ? entry.categories : ['other'] }))

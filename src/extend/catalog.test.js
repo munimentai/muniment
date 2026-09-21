@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { catalog, categories, filterCatalog, invocations, invocationQuery, sortCatalog, commandChoices, selectedCommands, providerDestination } from './catalog.js'
 describe('extension discovery', () => {
   it('lists only remote servers without catalog branding or duplicate identities', () => {
-    expect(catalog.length).toBeGreaterThanOrEqual(680)
+    expect(catalog).toHaveLength(492)
+    expect(catalog.some(item => item.name === 'Notion')).toBe(true)
+    expect(catalog.some(item => ['Slack', 'Google Drive', 'Asana'].includes(item.name))).toBe(false)
+    expect(catalog.every(item => item.url)).toBe(true)
     expect(catalog.every(item => item.type === 'remote' && !/anthropic/i.test(item.name + item.publisher))).toBe(true)
     expect(new Set(catalog.map(item => item.id)).size).toBe(catalog.length)
     expect(catalog.every(item => item.source.startsWith('https://claude.com/connectors/') && item.categories.length)).toBe(true)
