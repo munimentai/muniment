@@ -15,7 +15,7 @@ while the desktop grows. This file lists remaining outcomes, not completed work.
 - The production Pi pin has a verified rollback and passing platform evidence.
 - The cloud and company-record flags remain off in the default release. Each
   feature can be enabled alone in a development build. Provider accounts remain usable.
-- Public release has an open-source license, dependency notices, contributor
+- Public release carries FSL-1.1-Apache-2.0, dependency notices, contributor
   guidance, a security policy, signed installers and a repeatable update path.
 - The public repo and its history pass the secret scan. External pull requests
   cannot reach private build credentials or an automatic merge path.

@@ -1,7 +1,7 @@
 # Agent operating instructions
 
 Muniment desktop is the local harness for the user's models, tools and work.
-Phase one delivers the free desktop and its open-source release. Phase two
+Phase one delivers the free desktop and its public release. Phase two
 adds cloud availability with paid accounts. The Tauri shell, Rust runtime,
 Pi sidecar and on-device voice stack serve the desktop without a Muniment account.
 `SPEC.md` defines current behavior and `ROADMAP.md` lists remaining outcomes.

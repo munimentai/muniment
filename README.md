@@ -6,11 +6,12 @@ agents, artifacts, files, a terminal and an embedded browser in one app.
 Memory, permissions and on-device voice support the same thread surface.
 No Muniment account is required.
 
-Phase one is the desktop app and its open-source release. Phase two adds cloud
+Phase one is the desktop app and its public release. Phase two adds cloud
 availability with paid accounts while the desktop remains useful on its own.
 The company record and cloud account surfaces are hidden by default through
-independent build flags. The public release requires a license aligned with
-that goal, contributor guidance, a security policy and third-party notices.
+independent build flags. The desktop uses FSL-1.1-Apache-2.0. Each version converts to Apache 2.0
+two years after its release. Contributor guidance, a security policy and
+third-party notices accompany the public release.
 
 This repo contains the Tauri v2 shell, Rust runtime service, Pi sidecar and
 on-device voice stack. The local macOS build runs the runtime as an app child.

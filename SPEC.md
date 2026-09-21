@@ -1,7 +1,7 @@
 # muniment-desktop — SPEC
 
 Muniment desktop is a local harness for the user's models, tools and work.
-Phase one delivers a free desktop app with an open-source release as its goal.
+Phase one delivers a free desktop app with a public release under FSL-1.1-Apache-2.0.
 The app integrates provider accounts, API keys, local models, MCP tools,
 projects, agents, artifacts, files, a terminal, a browser, memory and voice.
 No Muniment account is required to use the desktop.
@@ -12,8 +12,8 @@ hidden feature while the desktop harness earns adoption.
 
 This repo contains the Tauri v2 shell, Rust runtime, Pi sidecar and on-device
 voice stack. Existing company data and cloud credentials remain on disk when
-those features are hidden. The release license must match the open-source goal;
-licensing and third-party notices are public-release gates.
+those features are hidden. The release license is FSL-1.1-Apache-2.0. Each version converts to
+Apache 2.0 two years after its release. Third-party notices ship with the app.
 
 ## Feature availability
 
