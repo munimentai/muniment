@@ -2,7 +2,9 @@
   import { overflowFade } from './overflow-fade.js'
   let { text = '', side = 'left', scroll = true } = $props()
 </script>
-<span class="overflow-text fade-viewport" class:scroll use:overflowFade={{end: side === 'left', text}} title={text} tabindex={scroll ? 0 : undefined}>{text}</span>
+<!-- Scrollable text needs keyboard focus so arrow keys can reveal the full path. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<span class="overflow-text fade-viewport" class:scroll use:overflowFade={{end: side === 'left', text}} title={text} role={scroll ? 'region' : undefined} aria-label={scroll ? 'Full path' : undefined} tabindex={scroll ? 0 : undefined}>{text}</span>
 <style>
   .overflow-text { display:block; min-width:0; max-width:100%; flex:1; white-space:nowrap; overflow:hidden; }
   .scroll { overflow-x:auto; }

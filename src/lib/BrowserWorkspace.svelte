@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte'
   import template from './artifact-template.html?raw'
   import LucideIcon from './LucideIcon.svelte'
-  let { tauri, artifacts = false, suspended = false, onclose } = $props()
+  let { tauri, artifacts = false, suspended = false, onclose, onurl } = $props()
   let host = $state()
   let address = $state('https://example.org')
   let status = $state('')
@@ -29,7 +29,7 @@
     try {
       status = ''
       const result = await tauri.invoke('browser_command', { request: { view, action, value } })
-      if (action === 'status' && /^https?:/.test(result.url)) address = result.url
+      if (action === 'status' && /^https?:/.test(result.url)) { address = result.url; onurl?.(result.url) }
       if (action === 'grant') allowed = true
       if (action === 'stop' || action === 'navigate') allowed = false
       if (action === 'snapshot') pageText = JSON.parse(result).text
@@ -70,7 +70,7 @@
     let unlisten
     let unlistenAction
     void window.__TAURI__?.event?.listen('browser-page-change', ({ payload }) => {
-      if (payload.view === view) { allowed = false; if (!artifacts) address = payload.url }
+      if (payload.view === view) { allowed = false; if (!artifacts) { address = payload.url; onurl?.(payload.url) } }
     }).then(fn => { if (active) unlisten = fn; else fn() })
     void window.__TAURI__?.event?.listen('agent-action', ({ payload }) => {
       if (payload.action === 'stop') allowed = false
