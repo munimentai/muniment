@@ -1,20 +1,39 @@
 # muniment-desktop — SPEC
 
-Muniment is a company system of record. One schema of eight tables holds
-entities, identities, edges, an append-only event log, and a provenance row
-that binds every extracted fact to the sentence it came from. Go importers fill
-it from the tools a business already runs. A grooming report over the resolved
-graph is the thing that sells.
+Muniment desktop is a local harness for the user's models, tools and work.
+Phase one delivers a free desktop app with an open-source release as its goal.
+The app integrates provider accounts, API keys, local models, MCP tools,
+projects, agents, artifacts, files, a terminal, a browser, memory and voice.
+No Muniment account is required to use the desktop.
 
-muniment desktop is the local app. It is a Tauri v2 shell, a Rust runtime
-service, a Pi sidecar, and on-device voice, with the local graph embedded in
-the runtime. The harness is a component of the local app and never the offer.
-The graph and the report are the product. Its licence is FSL-1.1-Apache-2.0,
-and each version converts to Apache 2.0 two years after its own release.
+Phase two adds cloud availability with paid accounts. Cloud development does
+not block the desktop release. The company record and graph remain a separate,
+hidden feature while the desktop harness earns adoption.
 
-The audience is anyone who runs a business, or wants to, with intelligence and
-the company data in one app. Nobody has to be a developer. They install a local
-app without asking anyone and run a harness such as Claude Code.
+This repo contains the Tauri v2 shell, Rust runtime, Pi sidecar and on-device
+voice stack. Existing company data and cloud credentials remain on disk when
+those features are hidden. The release license must match the open-source goal;
+licensing and third-party notices are public-release gates.
+
+## Feature availability
+
+`src/feature-flags.js` is the single source of frontend feature availability.
+Both flags default off. Only the literal build-time value `true` enables one.
+These are developer build options, not controls in user Settings.
+
+- `VITE_MUNIMENT_CLOUD=true` enables Muniment cloud sign-in, the account footer,
+  Account settings, saved-session startup and cloud entitlement notices.
+- `VITE_MUNIMENT_COMPANY_RECORD=true` enables Record, its keyboard shortcut,
+  the company record panel and Companies settings.
+
+The flags are independent. Enabling either does not enable the other.
+Disabled sections have no visible controls, empty placeholders or working
+shortcuts. A request for a hidden Settings section opens Models & routing.
+With cloud disabled, startup enters local mode without reading a cloud session.
+A local startup failure offers a local retry, never a cloud sign-in prompt.
+Provider sign-in, model routing, allowances, MCP pairing and local tools remain
+available. They are not Muniment cloud features. These UI flags do not replace
+backend authorization and do not remove stored sessions, companies or graph APIs.
 
 ## Project folders
 
@@ -62,46 +81,36 @@ Memory and runtime state keep their own locations. A missing project folder stop
 
 ## What this repo is
 
-The shell: the thread surface, the composer, the artifact rail, the record
-panel, the file panel and the provenance line under every reply, an ACP client of the runtime
-service that mobile and any web client also speak to. The runtime service: the
-single local executor, which runs with no window open, hosts the companies,
-serves the SQL tool, runs local workflows and holds the one relay leg mobile
-drives, with one shell component owning its lifecycle for every window. The Pi
-sidecar at parity with the factory's Pi. The bundled router classifier and the
-optional extractor download. The run journal, attach, the CAS store, the memory
-index, the code-diff crates, ACP interop and the voice stack.
+The desktop harness, the thread surface, workspace tabs and local runtime are
+phase one. The runtime owns execution, the run journal, provider integration,
+permissions, memory and voice. The app provides local project and session
+folders, agent and artifact catalogs, routing and editable files.
 
 ## What this repo is not
 
-Not the product: the graph and the grooming report are. Not the cloud console:
-sharing, scheduled execution off the machine, routing enforcement, SSO, SCIM,
-billing and cross-user audit live in muniment-cloud. Not mobile, which is a
-remote-control window onto this runtime. Not a second store of the graph: the
-webview holds no copy of it. Not a sign-in wall: local mode needs no cloud
-session. Not a harness for sale: Pi, OpenClaw, opencode and their peers are
-free.
+The desktop is not an account requirement or a cloud subscription client first.
+It does not require a company graph, an importer or a grooming report to release.
+Hosted multi-user services, billing and cloud execution belong to phase two.
+The company record remains implemented behind its own flag.
 
 ## Interfaces
 
-**The public core.** One app, one download, the FSL app at every tier. With no
-account the whole local product works. A free account adds the mobile
-connection through the relay. Payment unlocks sharing, scheduled execution and
-routing enforcement in the same app. The graph, the SQL tool, the readers, the
-local report and the record panel are built here. The cloud client code stays
-in the app. At the FSL release this repo becomes `munimentai/muniment` by
-transfer, history included, so every commit here is written as public.
+**The public desktop.** One app and one download provide the free local harness.
+Public release uses the desktop repo, with contributor instructions, a security
+policy, a license and third-party notices. Optional cloud client code and the
+company graph remain in this repo behind separate UI flags. Cloud servers stay
+in `muniment-cloud`.
 
-**muniment-cloud.** Sign-in gates cloud features only. The signing-in screen
+**muniment-cloud, phase two.** When the cloud flag is enabled, sign-in gates cloud features only. The signing-in screen
 shows the sign-in link for a browser that did not open. Cloud-backed use passes
 short-lived session tokens and the user's gateway virtual endpoint.
 The desktop sends no classification metadata. The cloud classifies every
 request at ingress. The desktop posts the protocol alone to `/v1/chat/grants`.
 The receipt request carries the run id alone. The relay is one outbound HTTPS
 leg from the runtime to MUNICLOUD, direct-first with relay fallback, end-to-end
-encrypted, and it needs a free MUNICLOUD account.
+encrypted, and its account tiers belong to phase two.
 
-**muniment-mobile.** Mobile drives this runtime through the relay and sees the
+**muniment-mobile, phase two.** Mobile drives this runtime through the relay and sees the
 live tool stream, Stop, queued follow-ups and the permission-gate card that
 becomes a run receipt, and approving a proposal from the phone is that card.
 
@@ -129,8 +138,8 @@ checkable in the diff:
 - `muniment-runtime` carries the ASR rpath on macOS, `../../Resources`, one
   directory deeper than the app binary, and the Linux e2e runner exports no
   `LD_LIBRARY_PATH`, so the probe proves the real install.
-- A saved cloud session launches signed in. Any other launch enters the thread
-  surface in local mode, with sign-in at the sidebar foot. The Pi sidecar
+- With cloud enabled, a saved cloud session can launch signed in. With cloud
+  disabled, every launch enters the thread surface in local mode. The Pi sidecar
   authenticates with Pi's own credential store, never a cloud virtual key.
 - The runtime logs its startup and the desktop logs the native-auth call, so a
   silent auth path names its cause from an envelope.
@@ -153,7 +162,7 @@ that starts a new thread with the line typed into it.
 **The model chip.** The chip shows the provider's mark and the model id in use,
 the saved default when it is shown, else the first shown model. When no
 provider answers it reads `Connect a model`, and the first Send opens Settings
-→ Models. There is no free hosted model without an account.
+→ Models. The user supplies model access through a provider or local server.
 
 **Settings → Models & routing is one screen.** Model selection and classifier
 settings lead. Full-width account rows show allowance, with usage and weight
@@ -315,7 +324,7 @@ onboarding spec proves the composer, the three chips and a first Send.
 2. **Cloud credentials stay scoped.** Local mode passes no cloud virtual key.
    Entitlement snapshots are display hints. The server enforces cloud use.
 3. **One mode.** The desktop runs a single mode, **the thread surface**, with
-   no mode switcher, and the artifact rail and the record panel are panels of
+   no mode switcher. Workspace tabs and the optional record panel are panels of
    it. This file and the ROADMAP name that mode identically and never as a
    chat, and [docs/desktop-single-mode.md](docs/desktop-single-mode.md) maps
    it to the cloud routing-surface name. Enforcer:
@@ -351,12 +360,41 @@ onboarding spec proves the composer, the three chips and a first Send.
     `docs/public-evidence/` in the same pull request. Evidence is plain factual
     reference prose with copy-pasteable commands, no roadmap speculation, no
     internal codenames, no pricing.
-13. **The write path is propose and commit.** A model never writes a row. The
+13. **Company graph writes use propose and commit.** A model never writes a graph row. The
     SQL tool is read-only. Kind validation applies to every write. No reader
     writes back to a source.
 14. **Monetization, launch and publicity are owner-only.**
 
-## The local graph
+## Workspace panels
+
+The title bar menu opens Browser, Files and Terminal in a shared tab panel.
+Tabs keep a fixed width and scroll horizontally without a scrollbar. Edge fades
+stay inside the tab strip, clear of the maximize and panel-collapse controls.
+Browser labels show the host, path, query and fragment without the scheme or
+leading `www.`. Long browser labels fade on the right. Terminal and Files labels
+show the final folder name and fade on the left. Open file tabs retain file names.
+Terminal and Files path headers share `OverflowText.svelte`: the full path stays
+on one line, starts at its end, and scrolls horizontally without a scrollbar.
+Fades mark clipped content and clear when the content fits.
+
+**The file panel.** A read or edited file opens in the shared rail, exclusive
+with records and artifacts, with the same resize and maximize controls.
+Syntax colors follow the selected theme. The composer has a changed-files
+chip with recorded addition and deletion counts. Hover or click opens its
+file list. Unknown counts stay unnumbered. Only actions with details expand.
+Subscription names default to the supplied sign-in email and remain editable
+through a hover pencil and inline form. Grok allowance uses its credits window.
+
+The composer highlights URLs and attached file references. Typing `@` searches
+file names under the selected Files folder or the active workspace; selecting a result attaches it. Search excludes hidden
+files, generated folders and symbolic links. Preferences controls automatic
+context compaction and its token limits. Compaction preserves the conversation
+and reports start, completion, cancellation or failure in the action feed.
+Web search returns sources without opening a browser unless configured to do so.
+
+## The company record behind its flag
+
+This section defines the optional company graph. It is not a phase-one release gate.
 
 A company is one SQLite graph at `~/.muniment/companies/<id>/graph.sqlite3`
 beside a `company.json` that names it, opened through the rusqlite the desktop
@@ -392,21 +430,6 @@ record view, board and saved views generate from `kind`, `kind_extension` and
 `kind.states`, no screen is hand-written for one kind, and an edit calls
 propose, shows the diff and its warnings, and commits on the user's confirm.
 
-**The file panel.** A read or edited file opens in the shared rail, exclusive
-with records and artifacts, with the same resize and maximize controls.
-Syntax colors follow the selected theme. The composer has a changed-files
-chip with recorded addition and deletion counts. Hover or click opens its
-file list. Unknown counts stay unnumbered. Only actions with details expand.
-Subscription names default to the supplied sign-in email and remain editable
-through a hover pencil and inline form. Grok allowance uses its credits window.
-
-The composer highlights URLs and attached file references. Typing `@` searches
-file names under Home; selecting a result attaches it. Search excludes hidden
-files, generated folders and symbolic links. Preferences controls automatic
-context compaction and its token limits. Compaction preserves the conversation
-and reports start, completion, cancellation or failure in the action feed.
-Web search returns sources without opening a browser unless configured to do so.
-
 **Readers.** Every source implements Objects, Describe, Page and Delta, and
 nothing else about it reaches the graph. File readers run in Rust inside the
 runtime, one CSV file as one object. Network readers are Go: one bundled
@@ -421,8 +444,8 @@ the graph, never from the source API.
 
 ## Pi version policy
 
-The desktop owns its Pi release cycle. Its agent harness is Pi alone. It takes
-neither the Claude Agent SDK nor the Claude Code CLI. [ADR 0008](docs/decisions/0008-pi-runtime-distribution.md)
+The desktop owns its Pi release cycle. Its agent harness is Pi. The optional Claude provider bridge uses the
+user's Claude Code connection. Other providers use their configured transports. [ADR 0008](docs/decisions/0008-pi-runtime-distribution.md)
 governs executable acquisition and rollback.
 
 ### Production pin and candidate
@@ -475,13 +498,14 @@ the exact pin.
 
 ## Local models
 
-**The router is an encoder, bundled, never downloaded.** Routing is three
+**The cloud-routing classifier is bundled.** It is separate from the optional
+local provider classifier configured in Models & routing. Its taxonomy is three
 classes, `route.cloud`, `route.local`, `route.proxy`. The shipped artifact is
 granite-embedding-278m-multilingual, Apache-2.0, int8 per-channel ONNX, about
 282 MB with its tokenizer, and [ADR
 0028](docs/decisions/0028-bundled-router-classifier.md) names the bytes. The
-user never opts in, routing always works, and the desktop keeps the
-classifier's result off the cloud-bound wire.
+desktop keeps this classifier's result off the cloud-bound wire. Its presence
+does not enable cloud sign-in or require a company graph.
 
 **The extractor is a generative model, an optional download, on request only.**
 About 2.5 GB, it downloads only when the user enables extraction, and it gates
@@ -515,8 +539,8 @@ is open work: closing it is a gate change first and a symptom ticket second.
    setup are the default download, need no administration and register for the
    user. The `-machine.msi` registers for the machine, the managed install for
    MDM and RMM. Enforcer: `test/windows-installers.ps1` in the desktop-build job.
-4. macOS builds are signed, notarized and stapled once Apple clears the
-   enrollment. Owner-gated. Enforcer: `docs/macos-signing.md` plus the
+4. macOS release builds are signed, notarized and stapled. The local build
+   script signs and verifies the app but does not establish notarization. Enforcer: `docs/macos-signing.md` plus the
    fail-fast behavior in `.github/lib/macos-signing.mjs`.
 5. A release promotes only the exact bytes of a green nightly SHA. Enforcer:
    `.github/lib/release-promotion.mjs`.
@@ -537,8 +561,7 @@ mirror source except where a harness needs a layout. Append-only stores,
 generated, vendored and asset trees are exempt. `docs/public-evidence/`,
 `protocol-fixtures/` and `docs/decisions/` are frozen machine-read paths that
 move only with a consumer sweep. A directory over the ceiling is a recorded
-gap, closed gate-first with a check that holds the new shape, and new files
-never push it past its count: `src/lib` at 56, split by naming family.
+gap, closed gate-first with a check that holds the new shape, and related changes include their readers when a family moves.
 
 ## State on disk
 

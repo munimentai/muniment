@@ -1,5 +1,9 @@
 # The company record
 
+The company-record interface is hidden in the default desktop build.
+`VITE_MUNIMENT_COMPANY_RECORD=true` enables Record and Companies settings.
+This flag is independent of cloud sign-in. Hiding it preserves stored companies.
+
 Muniment keeps each company's record in one SQLite file on the machine. The runtime service owns the file and opens it with no window open.
 
 ## Files

@@ -1,19 +1,20 @@
 # muniment-desktop
 
-The local app for muniment, the company system of record.
+Muniment is a free desktop harness for your models, tools and local work.
+Connect provider accounts, API keys or local models. Work with projects,
+agents, artifacts, files, a terminal and an embedded browser in one app.
+Memory, permissions and on-device voice support the same thread surface.
+No Muniment account is required.
 
-Muniment writes down the graph a company already is: people, organizations,
-deals, threads, tickets, commitments, and every relationship between them, in
-one schema of eight tables, with every extracted fact bound to the sentence it
-came from. Importers fill the graph from the tools a business already runs. A
-grooming report over the resolved graph shows the duplicates, the dead fields,
-the seat waste and the contradictions that nothing else reports.
+Phase one is the desktop app and its open-source release. Phase two adds cloud
+availability with paid accounts while the desktop remains useful on its own.
+The company record and cloud account surfaces are hidden by default through
+independent build flags. The public release requires a license aligned with
+that goal, contributor guidance, a security policy and third-party notices.
 
-This repo is the Tauri v2 shell, the Rust runtime service, the Pi sidecar and
-the on-device voice stack. The graph lives in SQLite inside the runtime and is
-reached through one read-only SQL tool from the harness the user already runs.
-Local mode needs no account. Sign-in gates cloud features only. The published
-local product carries FSL-1.1-Apache-2.0.
+This repo contains the Tauri v2 shell, Rust runtime service, Pi sidecar and
+on-device voice stack. The local macOS build runs the runtime as an app child.
+It preserves the user's workspace, credentials, companies and logs.
 
 `SPEC.md` is this repo's slice of the plan and the rules a reviewer holds a
 diff against. `ROADMAP.md` lists the outcomes this repo owns. `DESIGN.md` holds
@@ -36,6 +37,23 @@ Platform prerequisites are pre-provisioned in the CI VM templates (rust
 1.96 + node 24 everywhere; webkit2gtk-4.1 on linux; MSVC + Win11 SDK on
 windows; CLT on macOS).
 
+## Feature flags
+
+The default build hides Muniment cloud and the company record. Set either
+flag independently before `npm run dev`, `npm run build` or the local build:
+
+```sh
+VITE_MUNIMENT_CLOUD=true node scripts/build-macos-local.mjs
+VITE_MUNIMENT_COMPANY_RECORD=true node scripts/build-macos-local.mjs
+```
+
+Only `true` enables a flag. Omit both for the phase-one desktop. Flags take
+effect at build time and have no user Settings switch. Cloud controls sign-in
+and Account settings. Company record controls Record, its shortcut, and
+Companies settings. Hidden Settings sections return to Models & routing.
+Provider account connections and local routing remain available in every build.
+These flags control UI availability, not backend authorization or data deletion.
+
 ## Embedded browser
 
 The Tauri v2 shell hosts native CEF child views through `cef-rs`. It does not
@@ -46,7 +64,9 @@ The title bar menu opens a shared tab panel for Browser, Files and Terminal.
 Files use a nested tree and Seti type icons. The file menu supports rename, duplicate, copy and paste, paths, system reveal, and Trash. Text files open in Monaco with syntax highlighting and Cmd/Ctrl+S.
 The editor preserves drafts across tabs and rejects saves over changed files. The editor supports UTF-8 files up to 2 MB.
 Composer @ references search the selected Files folder, or the current project or session workspace.
-The terminal runs the user shell in the selected folder.
+The terminal retains one shell per context, started in its workspace folder.
+Fixed-width tabs show browser URLs or folder names with fades. The tab strip
+and shared full-path headers scroll horizontally without visible scrollbars.
 HTML files written in chat appear in Artifacts. The app has no manual artifact editor.
 The Unix agent endpoint is `~/.muniment/browser/agent.sock`.
 
@@ -88,6 +108,8 @@ defines pinned artifact installation plus WDIO chat, real sign-in, onboarding,
 and cleanup on Linux, Windows, and macOS.
 The macOS lane runs `macos.sh` for the pinned `.app` smoke and Proxmox
 screendump, then `macos-wdio.sh` for the specs.
+Cloud sign-in checks require a build with the cloud flag enabled. The default
+build must prove local chat with both optional features hidden.
 WDIO uses the embedded provider with separate E2E builds from the pinned
 source, not the released artifacts.
 

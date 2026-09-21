@@ -1,6 +1,10 @@
 # Local mode
 
-The desktop can open the thread surface without a Muniment account. Select **Use local mode** from the signed-out screen.
+The default desktop opens the thread surface in local mode without a Muniment account.
+Cloud sign-in and Account settings are hidden unless the build enables
+`VITE_MUNIMENT_CLOUD=true`. The independent
+`VITE_MUNIMENT_COMPANY_RECORD=true` flag enables Record and Companies settings.
+Both flags default off. Provider connections and local routing remain available.
 
 Local mode does not contact the Muniment control plane for authentication or model access. Pi runs on the device and reads its provider credentials from Pi's credential store. The desktop does not pass a Muniment virtual key to Pi in local mode.
 
@@ -28,7 +32,12 @@ Failure captures use that window too.
 
 ## Provider access
 
-Open the sidebar's **Local mode** section from the thread surface. Select **Anthropic**, **Google**, or **OpenAI**. Enter the key in **Provider API key**, then select **Save key**. The desktop writes the key to Pi's `~/.pi/agent/auth.json` store with Pi's file lock.
+Open **Settings → Models & routing** and select **Connect account**.
+Choose a provider and its connection method: account sign-in, API key,
+Claude Code connection or a local/custom endpoint. Model access uses the
+configured provider, not a Muniment cloud account. Credentials stay in the
+local provider stores under the app's state root.
+
 
 Pi can also use provider credentials that the Pi CLI saved in the same store. Local mode removes inherited provider credential and endpoint variables from the Pi process environment.
 
@@ -120,18 +129,18 @@ Line totals describe recorded applied changes. Missing or partial counts stay un
 Active actions show a text sheen unless reduced motion is enabled.
 Details are bounded and credential-filtered before the local journal saves them.
 An interrupted reply keeps its text. **Try again** sends the same message again.
-During browser sign-in, **Cancel sign-in** or **Escape** restores local mode.
+In a cloud-enabled build, **Cancel sign-in** or **Escape** restores local mode.
 
 Subscription accounts use the sign-in email when the provider supplies it.
 Account balancing has a visible switch beside its explanation.
-Accounts use two equal columns, including providers with one account, and one column in narrow panels.
+Account rows span the settings page. Details hold usage, weight and account controls.
 Allowance meters use full-strength green, yellow and red with the remaining percentage and reset time.
 Account cards show routing warnings. Usage and settings holds timestamps, usage totals and account controls.
 Hover over an account name and select the pencil to edit it inline.
 Enter saves the name. Escape cancels the edit. A failed save keeps the edit open.
 Grok subscriptions show their reported credits window, remaining percentage and reset time.
 
-Type `@` in the composer to find a file in Home. Select a result to attach it.
+Type `@` in the composer to find a file in the selected Files folder or current workspace. Select a result to attach it.
 URLs and file references use the theme reference color and show icon links.
 Preferences includes automatic context compaction and token limits.
 Compaction keeps the conversation history and records its outcome in the action feed.
@@ -157,3 +166,9 @@ Preferences shows the selected conversation and record fonts in compact pickers.
 Open a picker to search installed fonts or restore the default.
 New agents use one Create agent action. Creating an agent does not start a run.
 Chat, Run now and schedule controls become available after creation.
+
+The workspace panel holds fixed-width Browser, Files, Terminal and file tabs.
+The tab strip scrolls without a scrollbar and fades clipped tabs clear of the controls.
+Browser labels show the host and URL path with a right fade. Folder labels show
+the final folder name with a left fade. Terminal and Files share a single-line
+full-path header that scrolls horizontally without a scrollbar.

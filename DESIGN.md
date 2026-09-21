@@ -1,11 +1,9 @@
 # muniment-desktop — Design standard
 
-muniment desktop is the local app for muniment, the company system of record.
-The interface is the user's territory and the model is a visitor. The design
-language comes from institutions that hold things in trust: registries,
-standards bodies, ledgers. Calm, permanent, meticulous about records. The
-thread surface, the provenance line, the receipt and the local report all
-render the same graph, and nothing in the shell is decoration.
+Muniment desktop is a local harness for models, tools and work. Phase one puts
+chat, projects, agents, artifacts and workspace tools first. Paid cloud follows
+in phase two. Cloud and the company record have independent flags, both off by
+default. The interface is the user's territory and the model is a visitor.
 
 ## Tokens
 
@@ -103,7 +101,7 @@ motion keeps the original static pose. No light balls traverse the graph.
 
 ## Grammar
 
-Layout is sidebar, thread, and one rail column for workspace tabs or Record (⌘K).
+Layout is sidebar, thread, and one rail column for workspace tabs or the optional Record panel (⌘K).
 Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
 messages sit right in `faint` bubbles at radius 10. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
@@ -121,7 +119,7 @@ Platform chrome follows the OS and brand tokens stay identical across platforms.
 On macOS the app row sits in the 36px band above the panels beside the native
 traffic lights, and the row's controls and the lights center on that band. The
 row is the drag region and holds the sidebar toggle, the thread
-title with its actions menu, Record, then the vertical ellipsis for workspace tools.
+title with its actions menu, optional Record, then the vertical ellipsis for workspace tools.
 Seti icons identify file types. Scrollbars share a faint 3px thumb. The title and Record use a quiet row
 control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
@@ -131,15 +129,16 @@ controls and Linux keeps its decorations. The sidebar is dense: 28px rows,
 New thread leads the sidebar, followed by Agents and title search, with no static Threads heading.
 Pinned threads precede recent threads, with a heading only when pins exist.
 Search loads older titles and includes archives. Archived threads has Restore.
-Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings and account footer has one hairline.
+Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. The cloud flag adds the account controls.
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings is a popup over the workspace with a
-section list on its left, Models & routing, Preferences, Profile & Memory, Home, Companies and Account, and the
+section list on its left: Models & routing, Preferences, Profile & Memory and Home.
+The company-record flag adds Companies. The cloud flag adds Account. It shows the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it, and Escape or its close control returns focus to the opener.
-Companies lists every company on the machine with Open, Rename and Delete,
+With the company-record flag enabled, Companies lists every company on the machine with Open, Rename and Delete,
 Delete asks once and names the company, and New company sits under the list.
 Models & routing leads with automatic or specific model selection. Account
 rows span the page, with allowances visible and usage and weight in details.
@@ -172,66 +171,20 @@ composer line, nothing else. A global shortcut opens it above every app,
 centered in the upper third of the screen. Enter sends the line as the first
 message of a new thread and brings the shell forward. Escape closes it. A microphone closes the row at its right, and a missing speech model opens a popover over the composer like the model picker: one sentence, the download size, the free disk required and one Install control, with the source and licenses one Details disclosure away. An attached file sits above the text under a hairline the composer's full inner width.
 
-The record panel takes the rail column at a 480px minimum and its own
-remembered width, and one control maximizes it over the sidebar and the
-thread until ⌘K or Escape restores them. Its header is one mono row: the
-company name as a picker, the kind list, a search field and Maximize. The
-table view sets column headers, identifiers, dates, amounts, states and
-sources in Commit Mono and the title and prose fields in Schibsted Grotesk,
-with 28px hairline rows and no zebra fill. A cell in edit shows the
-composer's muted hairline. A proposed change renders its diff in mono under
-the row with Commit and Discard, and a warning from propose sits in ochre
-text above them. The board's columns are the kind's states, its cards are
-`surface` on `paper` at `--radius-control`, and a card in flight shows no
-color. A workflow run in progress is the one place the panel shows signal.
-A company with no records opens on Connect your data: one paragraph that
-says what the company record is, then the sources as tiles, each under the
-company's own mark with CSV file among them, and a tile opens the import on
-that source with the kind chosen from the object. A kind list row reads the
-kind's record count, or `none yet`. The kind toolbar is one mono row: the layout switch, Table or Board, is two
-quiet controls with `aria-pressed`, the state filter and the saved-view
-picker are 24px native selects, and Import, Save view and Ask are quiet
-controls. A saved view is a `view` record and Save view proposes it like any
-change. Ask sends the open view's SQL to the composer as a fenced block. The
-empty state of a kind is one line. Under a table that holds more rows than it
-shows, Show more is one quiet mono control that appends the next page. An
-open record carries Link, Merge and Delete as quiet controls at the header's
-right, each opening one form in the record's place: a relation and target
-kind as 24px selects, a search field with a list of matches by title, the
-diff, and Commit and Discard. On the kind list, Rename beside the company
-picker turns the picker into one text field with Save. Import first lists
-the sources as one quiet list, CSV file and every network source the sidecar
-reads, with a mono note beside each. A file opens the file dialog. A network
-source not yet connected shows one sentence and one field per credential it
-asks for, a password field for a secret, then its objects as
-the same list. The object then fills the kind body with one mono table of its
-columns: the column name,
-what its samples read as with three examples, and a 24px select of the
-property it fills, with `skip` first. One select under it names the column
-that keys each row. Propose mapping shows the mapping record's diff, Commit
-and run applies it, and the run reports `n of total rows` as one mono status
-line. The result is three mono lines, rows, counts and rows not placed, then
-one mono table of row, title and reason for every row the mapping could not
-place, with Done and Run again. A mapping record's view carries Run at the
-header's right, where New sits for a kind.
+The optional Record panel uses the shared rail. Tables, boards and saved views
+follow the company kinds. Records, amounts and evidence use mono. Proposed
+changes show their diff before Commit. Companies settings and every record
+entry point disappear together when the company-record flag is off.
+File previews, code diffs and permission gates remain part of the local harness.
+A diff uses the stored change and stacks its sides below 480 pixels.
 
-Conversation, tool, permission, and receipt state is rebuilt from the
-append-only local run journal. Reopen reduces committed events; snapshots are
-disposable, and uncertain external effects require explicit attention rather
-than silent replay.
-A memory recall renders as one row with its query inside the expanded receipt and nowhere else.
-Each saved attachment shows its media type when the record provides one. The image delivery rule appears once under the attachment list.
-A code-diff gate renders the stored diff. It never re-reads the workspace for display.
-A card that renders code sizes its layout from its own width rather than the window width. It stacks diff sides below 480 pixels.
-A card that cannot show a stored change says whether Muniment applied the change.
-
-The signed-in shell has one workspace `h1`, a headed thread list, and a transcript region named for the open thread.
+The workspace has one `h1`, a headed thread list, and a transcript region named for the open thread.
 An error message names the failure. The control beside it names and repeats the action that failed.
 The background service notice reuses the auth error state's mono record register.
 One owner starts, watches and stops the runtime for every window. When the runtime exits, every window shows the same one-sentence notice and one control that starts it again.
 The notice waits out a two second dwell, so a drop shorter than that leaves the workspace on screen. A first status that already reports the service unreachable shows the notice at once.
 An error that rejects one item from a set names that item.
-A surface that renders model or user text wraps an unbreakable string.
+Prose wraps unbreakable strings. Tab labels and path headers stay on one line.
 A control renders as a control at rest.
 A control presents a hit area of at least 24 by 24 CSS pixels.
 The first run is the composer with three mono chips under it, the model source, the Home path and the scan result. A chip is a control at rest, opens its own panel, and never blocks Send. A scan row reads `Name: N files` in mono with a checkbox at rest.
@@ -248,3 +201,9 @@ The account name shows a pencil on hover or focus and edits inline.
 
 Composer URLs and file references use the theme-aware reference color.
 The `@` file list supports arrows, Enter, Tab and Escape.
+
+Workspace tabs keep a fixed width. Their scroll area hides its scrollbar and
+fades clipped tabs without covering panel controls. Browser labels preserve the
+host and URL path, query and fragment, with a right fade. Folder labels use the
+last folder with a left fade. Terminal and Files share the full-path scroll
+component. Hidden features leave no controls, Settings entries or empty space.
