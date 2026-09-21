@@ -9,6 +9,7 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
 // build.frontendDist.
 export default defineConfig({
   root: 'src',
+  publicDir: '../public',
   plugins: [svelte()],
   resolve: {
     conditions: ['browser'],

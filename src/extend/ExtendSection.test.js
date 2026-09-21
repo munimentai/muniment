@@ -6,7 +6,8 @@ afterEach(cleanup)
 it('searches and filters the MCP catalog before displaying a page', async () => {
   render(ExtendSection, { tauri:{invoke:vi.fn(async()=>({items:[],threads:{}}))} })
   await fireEvent.input(screen.getByRole('searchbox', {name:'Search MCP servers'}), {target:{value:'Airtable'}})
-  expect(screen.getByText('Airtable')).toBeInTheDocument()
+  expect(screen.getByText('Airtable', {selector:'strong'})).toBeInTheDocument()
+  expect(screen.queryByRole('navigation', {name:'Catalog pages'})).not.toBeInTheDocument()
   await fireEvent.change(screen.getByLabelText('Connection'), {target:{value:'local'}})
   expect(screen.getByText('No servers match these filters.')).toBeInTheDocument()
   await fireEvent.click(screen.getByRole('button', {name:'Clear filters'}))
@@ -24,4 +25,12 @@ it('previews a source before installing selected skills', async () => {
   expect(invoke.mock.calls.some(([,arg])=>arg.action==='install')).toBe(false)
   await fireEvent.click(screen.getByRole('button',{name:'Install selected'}))
   expect(invoke).toHaveBeenCalledWith('extend_command',{action:'install',data:{previewId:'preview',skills:['SKILL.md'],replaceId:null}})
+})
+
+it('shows twelve popular cards before the rest and supports name sorting', async () => {
+  render(ExtendSection, {tauri:{invoke:vi.fn(async()=>({items:[]}))}})
+  expect(screen.getByLabelText('Popular MCP servers').querySelectorAll('article')).toHaveLength(12)
+  expect(screen.getByLabelText('Sort')).toHaveValue('popular')
+  await fireEvent.change(screen.getByLabelText('Sort'), {target:{value:'name'}})
+  expect(screen.queryByLabelText('Popular MCP servers')).not.toBeInTheDocument()
 })

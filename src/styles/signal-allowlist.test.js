@@ -7,6 +7,8 @@ import path from 'node:path'
 // components on the allowed list". Every entry names the clause that permits it;
 // adding one is a spec decision, not a styling one.
 const ALLOWED = {
+  'src/extend/ExtendSection.svelte': { '.tabs button[aria-selected=true]': 'Extend uses theme colors for its selected pill tab.' },
+  'src/extend/ComposerExtensions.svelte': { 'input': 'Enabled per-turn MCP and classifier switches use the signature color.' },
   'src/lib/Toggle.svelte': {
     'input:checked + .track': 'The signature track for every enabled checkbox.',
     'input:checked + .track .knob': 'The signature knob for every enabled checkbox.',

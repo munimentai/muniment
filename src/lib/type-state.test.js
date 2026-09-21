@@ -30,12 +30,12 @@ const root = () => {
 
 describe('type state', () => {
   it('round-trips a state and restores the defaults for missing or malformed data', () => {
-    expect(parseType(null)).toEqual({ step: 0, human: null, mono: null })
-    expect(parseType('nonsense')).toEqual({ step: 0, human: null, mono: null })
-    expect(parseType('{"step":9,"human":"","mono":42}')).toEqual({ step: 0, human: null, mono: null })
-    expect(parseType('{"step":-1,"human":" Inter ","mono":"Iosevka"}')).toEqual({ step: -1, human: 'Inter', mono: 'Iosevka' })
+    expect(parseType(null)).toEqual({ step: 0, human: null, mono: null, heading: null })
+    expect(parseType('nonsense')).toEqual({ step: 0, human: null, mono: null, heading: null })
+    expect(parseType('{"step":9,"human":"","mono":42}')).toEqual({ step: 0, human: null, mono: null, heading: null })
+    expect(parseType('{"step":-1,"human":" Inter ","mono":"Iosevka"}')).toEqual({ step: -1, human: 'Inter', mono: 'Iosevka', heading: null })
     expect(parseType('{"step":1,"human":"Bad\\"; url(x)"}').human).toBeNull()
-    expect(serializeType({ step: 2, human: 'Inter', mono: null })).toBe('{"step":2,"human":"Inter","mono":null}')
+    expect(serializeType({ step: 2, human: 'Inter', mono: null, heading: null })).toBe('{"step":2,"human":"Inter","mono":null,"heading":null}')
   })
 
   it('steps within the range and names the body size', () => {
@@ -49,12 +49,12 @@ describe('type state', () => {
 
   it('scales every text token together and clears them at the default', () => {
     const target = root()
-    applyType(target, { step: 2, human: null, mono: null })
+    applyType(target, { step: 2, human: null, mono: null, heading: null })
     expect(target.style.get('--text-15')).toBe('18px')
     expect(target.style.get('--text-12')).toBe('14.4px')
     expect(target.style.get('--text-provenance')).toBe('13.8px')
     expect(target.style.size()).toBe(Object.keys(BASE_TEXT_TOKENS).length)
-    applyType(target, { step: 0, human: null, mono: null })
+    applyType(target, { step: 0, human: null, mono: null, heading: null })
     expect(target.style.size()).toBe(0)
   })
 
@@ -62,10 +62,10 @@ describe('type state', () => {
     expect(fontStack('human', 'Inter')).toBe("'Inter', 'Schibsted Grotesk', system-ui, sans-serif")
     expect(fontStack('mono', null)).toBeNull()
     const target = root()
-    applyType(target, { step: 0, human: 'Inter', mono: 'Iosevka' })
+    applyType(target, { step: 0, human: 'Inter', mono: 'Iosevka', heading: null })
     expect(target.style.get('--font-human')).toBe("'Inter', 'Schibsted Grotesk', system-ui, sans-serif")
     expect(target.style.get('--font-mono')).toBe("'Iosevka', 'Commit Mono', ui-monospace, monospace")
-    applyType(target, { step: 0, human: null, mono: null })
+    applyType(target, { step: 0, human: null, mono: null, heading: null })
     expect(target.style.size()).toBe(0)
   })
 
@@ -93,4 +93,13 @@ describe('type state', () => {
     expect(filterFonts(fonts, 'i', 2)).toEqual(['Avenir Next', 'Inter'])
     expect(filterFonts(null, 'x')).toEqual([])
   })
+})
+
+it('stores the header family separately from conversation and records', () => {
+  const type = parseType({ heading: 'Avenir Next', human: 'Inter', mono: 'Iosevka' })
+  const target = root()
+  applyType(target, type)
+  expect(target.style.get('--font-heading')).toContain("'Avenir Next'")
+  expect(parseType(serializeType(type)).heading).toBe('Avenir Next')
+  expect(target.style.get('--font-human')).toContain("'Inter'")
 })

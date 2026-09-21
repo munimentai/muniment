@@ -59,7 +59,7 @@ These flags control UI availability, not backend authorization or data deletion.
 
 Settings → Extend manages MCP servers, skills and plugins. Search the MCP
 catalog by name, publisher or category, and filter by connection type,
-installation or setup requirements. Custom servers support remote URLs and
+installation or setup requirements. Sort by popularity or name. Custom servers support remote URLs and
 local commands, OAuth sign-in and stored bearer tokens.
 
 Install skills and compatible plugins from a GitHub repository, local folder,
@@ -67,12 +67,14 @@ or ZIP/TAR archive. Review the package contents before installation. Updates
 retain a previous version for rollback. Plugins can supply skills, MCP servers
 and Pi code extensions. Unsupported plugin components produce an error.
 
-The composer tools menu contains file attachments, MCP switches and extension
-invocations. Type a leading `/` or `\` to select a skill or plugin. Each chat
-keeps its own switches and selections. Automatic extension selection uses the
-configured classifier and respects disabled extensions.
+The composer ellipsis opens MCPs, Plugins and Skills branches. A paperclip adds files.
+Type `/` or `\` to insert a skill or plugin slash command into the message.
+MCP switches and commands apply to one turn. Optional automatic selection uses
+the configured classifier and respects disabled extensions. Preferences includes
+separate Conversation, Headers and Records font controls.
 
 Refresh the bundled public catalog with `python3 scripts/refresh-mcp-catalog.py`.
+Refresh provider logos with `python3 scripts/refresh-extension-icons.py`.
 Catalog entries describe provider services, not accounts included with Muniment.
 
 ## Embedded browser

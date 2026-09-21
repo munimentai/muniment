@@ -1,21 +1,24 @@
 <script>
   import { onMount } from 'svelte'
-  import { catalog, categories, categoryLabel, filterCatalog } from './catalog.js'
+  import { catalog, categories, categoryLabel, filterCatalog, sortCatalog } from './catalog.js'
   import McpIcon from './McpIcon.svelte'
+  import ProviderIcon from './ProviderIcon.svelte'
   let { tauri } = $props()
-  let state = $state({ items: [], threads: {} }), tab = $state('mcp'), query = $state(''), category = $state(''), type = $state(''), scope = $state('all'), page = $state(0)
+  let state = $state({ items: [], threads: {} }), tab = $state('mcp'), query = $state(''), category = $state(''), type = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
   let busy = $state(false), error = $state(''), status = $state(''), form = $state(null), preview = $state(null), selected = $state([])
   let name = $state(''), url = $state(''), source = $state(''), config = $state(''), token = $state(''), authentication = $state('none'), replaceId = $state(null)
   const installedSources = $derived(new Set(state.items.map(item => item.source)))
-  const filtered = $derived(filterCatalog(catalog, { query, category, type, installed: scope === 'installed', setup: scope === 'setup' }, installedSources))
-  const results = $derived(filtered.slice(page * 30, (page + 1) * 30))
+  const filtered = $derived(sortCatalog(filterCatalog(catalog, { query, category, type, installed: scope === 'installed', setup: scope === 'setup' }, installedSources), sort))
+  const featured = $derived(!query.trim() && !category && !type && scope === 'all' && sort === 'popular' ? filtered.slice(0, 12) : [])
+  const remaining = $derived(featured.length ? filtered.slice(12) : filtered)
+  const results = $derived(remaining.slice(page * 30, (page + 1) * 30))
   const unchanged = $derived(!!preview && !!replaceId && preview.digest === state.items.find(item => item.id === replaceId)?.digest)
   const installed = $derived(state.items.filter(item => item.kind === tab && `${item.name} ${item.description || ''}`.toLowerCase().includes(query.toLowerCase())))
   async function call(action, data = {}) { return tauri.invoke('extend_command', { action, data }) }
   async function work(fn) { busy = true; error = ''; status = ''; try { await fn() } catch (e) { error = typeof e === 'string' ? e : e.message || 'The operation failed.' } finally { busy = false } }
   async function refresh() { const result = await call('read'); if (result?.items) state = result }
   onMount(() => { void work(refresh) })
-  function resetSearch() { query = ''; category = ''; type = ''; scope = 'all'; page = 0 }
+  function resetSearch() { query = ''; category = ''; type = ''; scope = 'all'; sort = 'popular'; page = 0 }
   function add(entry = null) { form = entry || {}; name = entry?.name || ''; url = entry?.url || ''; source = entry?.source || ''; config = ''; token = ''; authentication = 'none'; preview = null; error = ''; replaceId = null }
   async function saveServer() {
     await work(async () => {
@@ -40,6 +43,7 @@
       <label>Category<select bind:value={category} onchange={() => page = 0}><option value="">All categories</option>{#each categories as value}<option value={value}>{categoryLabel(value)}</option>{/each}</select></label>
       <label>Connection<select bind:value={type} onchange={() => page = 0}><option value="">All connections</option><option value="remote">Remote</option><option value="local">Local</option></select></label>
       <label>Show<select bind:value={scope} onchange={() => page = 0}><option value="all">All servers</option><option value="installed">Installed</option><option value="setup">Setup required</option></select></label>
+      <label>Sort<select bind:value={sort} onchange={() => page = 0}><option value="popular">Popularity</option><option value="name">Name A–Z</option><option value="name-desc">Name Z–A</option></select></label>
       <button type="button" onclick={resetSearch}>Clear filters</button>
     </div>
   {/if}
@@ -85,16 +89,37 @@
   {#if tab === 'mcp'}
     <div class="head"><h4>Discover MCP servers</h4><span aria-live="polite">{filtered.length} {filtered.length === 1 ? 'result' : 'results'}</span></div>
     <p class="intro">Includes all {catalog.length} entries from Anthropic’s public catalog. Providers control access and account requirements.</p>
-    <div class="list" aria-label="MCP catalog">{#each results as entry (entry.id)}<article class="entry">
-      <div class="head"><strong><McpIcon />{entry.name}</strong><span>{entry.type === 'local' ? 'Local' : 'Remote'}</span></div>
-      <p>{entry.publisher} · {entry.categories.map(categoryLabel).join(' · ')}</p>
-      <div class="actions"><a href={entry.source} target="_blank" rel="noreferrer">Details</a><button type="button" disabled={busy || installedSources.has(entry.source)} onclick={() => add(entry)}>{installedSources.has(entry.source) ? 'Installed' : entry.url ? 'Add server' : 'Set up'}</button></div>
-    </article>{/each}</div>
-    {#if !results.length}<p>No servers match these filters.</p>{/if}
-    <nav class="pages" aria-label="Catalog pages"><button type="button" disabled={page === 0} onclick={() => page--}>Previous</button><span>Page {page + 1} of {Math.max(1, Math.ceil(filtered.length / 30))}</span><button type="button" disabled={(page + 1) * 30 >= filtered.length} onclick={() => page++}>Next</button></nav>
-    <small>MCP icon: Microsoft Codicons, <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. <a href="https://github.com/microsoft/vscode-codicons" target="_blank" rel="noreferrer">Source</a></small>
+    {#snippet cards(entries, label)}
+      <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}<article class="entry catalog-card">
+        <div class="card-title"><ProviderIcon {entry} /><strong title={entry.name}>{entry.name}</strong></div>
+        <p class="publisher" title={entry.publisher}>{entry.publisher}</p>
+        <p class="category">{entry.categories.map(categoryLabel).join(' · ')}</p>
+        <div class="actions"><span class="connection">{entry.type === 'local' ? 'Local' : 'Remote'}</span><a href={entry.source} target="_blank" rel="noreferrer">Details</a><button type="button" disabled={busy || installedSources.has(entry.source)} onclick={() => add(entry)}>{installedSources.has(entry.source) ? 'Installed' : entry.url ? 'Add' : 'Set up'}</button></div>
+      </article>{/each}</div>
+    {/snippet}
+    {#if featured.length}
+      <h4>Popular MCPs</h4>
+      {@render cards(featured, 'Popular MCP servers')}
+      <h4>More MCPs</h4>
+    {/if}
+    {@render cards(results, 'MCP catalog')}
+    {#if !filtered.length}<p>No servers match these filters.</p>{/if}
+    {#if remaining.length > 30}<nav class="pages" aria-label="Catalog pages"><button type="button" disabled={page === 0} onclick={() => page--}>Previous</button><span>Page {page + 1} of {Math.ceil(remaining.length / 30)}</span><button type="button" disabled={(page + 1) * 30 >= remaining.length} onclick={() => page++}>Next</button></nav>{/if}
   {/if}
 </section>
 <style>
-  .extend { display: grid; gap: 14px; min-width: 0; } .intro, small { color: var(--muted); } p, h4 { margin: 0; } .tabs, .toolbar, .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; } .tabs button, strong { display: inline-flex; align-items: center; gap: 8px; } .tabs [aria-selected=true] { background: var(--surface-2, var(--border)); color: var(--ink); } .toolbar input { flex: 1; min-width: 150px; } label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); } .list { display: grid; gap: 8px; } .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
+  .extend { display: grid; gap: 14px; min-width: 0; } .intro { color: var(--muted); } p, h4 { margin: 0; } .tabs, .toolbar, .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; } .tabs button, strong { display: inline-flex; align-items: center; gap: 8px; } .tabs button { border: 0; border-radius: var(--radius-pill); padding: 6px 12px; background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); cursor: pointer; } .tabs button[aria-selected=true] { background: var(--signal-soft); color: var(--signal); } .tabs button:hover { background: var(--faint); } .toolbar input { flex: 1; min-width: 150px; } label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); } .list { display: grid; gap: 8px; } .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
+  .extend { container-type: inline-size; }
+  button { font-family: var(--font-human); border: 0; border-radius: var(--radius-control); padding: 5px 9px; color: var(--ink); background: var(--faint); cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .catalog-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .catalog-card { min-width: 0; gap: 5px; align-content: start; }
+  .card-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .card-title strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-13); }
+  .publisher { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-12); }
+  .category { font-size: var(--text-provenance); min-height: 2.8em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .connection { margin-right: auto; color: var(--muted); font-size: var(--text-provenance); }
+  .catalog-card .actions { gap: 8px; margin-top: 5px; }
+  @container (max-width: 680px) { .catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @container (max-width: 390px) { .catalog-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

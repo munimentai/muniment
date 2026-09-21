@@ -28,6 +28,8 @@ def parse_catalog(html):
             "url": value.get("serverUrl") or "", "type": value["type"],
             "source": "https://claude.com/connectors/" + slug,
             "website": value.get("authorUrl") or "",
+            "iconUrl": value.get("iconUrl") or "",
+            "popularity": value.get("popularityScore") or 0,
         }
     return sorted(entries.values(), key=lambda entry: entry["name"].lower())
 

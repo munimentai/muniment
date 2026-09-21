@@ -34,6 +34,7 @@ h2,
 h3,
 h4 {
   margin: 0;
+  font-family: var(--font-heading);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-heading);
   letter-spacing: var(--tracking-heading);
@@ -89,3 +90,6 @@ pre {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* All composer panels anchor to the full composer, above its top edge. */
+[data-composer-panel] { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); max-height: 60vh; }

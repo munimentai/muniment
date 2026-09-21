@@ -13,8 +13,8 @@
   let type = $state(readStoredType())
   let fonts = $state([])
   let fontsRead = $state(false)
-  let query = $state({ human: '', mono: '' })
-  const registers = [['human', 'Conversation'], ['mono', 'Records']]
+  let query = $state({ human: '', mono: '', heading: '' })
+  const registers = [['human', 'Conversation'], ['heading', 'Headers'], ['mono', 'Records']]
 
   onMount(() => {
     const follow = (event) => { type = event.detail }

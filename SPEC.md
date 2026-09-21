@@ -333,7 +333,7 @@ onboarding spec proves the composer, the three chips and a first Send.
    mark's thinking state, the running-tool pulse, the streaming underline and
    caret, the provenance route segment, the voice polish flash, and
    workflow-run indicators. Everything else is ink on paper. No gradients,
-   violet, glassmorphism, typing dots, avatars, sparkles, emoji, or pill radius.
+   violet, glassmorphism, typing dots, avatars, sparkles, emoji, or pill radius outside Extend tabs.
 5. **If it is a record, it is mono.** Provenance lines, tool cards, costs,
    model names and paths render in Commit Mono. Conversation renders in
    Schibsted Grotesk.
@@ -578,7 +578,7 @@ browser result. Partial replies remain visible with their interruption cause.
 Reports link possible duplicate groups to their records and a merge preview.
 Record fields, states and actor names read as words. Raw evidence stays available.
 ### Extend
-Settings → Extend manages MCP servers, skills and plugins without a Muniment account. The MCP catalog includes Anthropic's public connector directory.
+Settings → Extend manages MCP servers, skills and plugins without a Muniment account. The MCP catalog includes Anthropic's public connector directory, provider logos, compact responsive cards and popularity sorting.
 Search matches names, publishers and categories. Category, connection type,
 installed and setup-required filters combine before pagination. Provider account
 requirements and unsupported setup methods remain visible.
@@ -590,9 +590,9 @@ update, and the previous installed version supports rollback. Unsupported hooks
 produce an error before installation. Plugin dependencies install with package
 lifecycle scripts disabled.
 
-The composer tools menu retains file attachments, offers chat-specific MCP
-switches, and selects skills and plugin commands. A leading slash or backslash
-opens the invocation picker. Explicit selections take priority. Disabled
+The composer tools menu has MCPs, Plugins and Skills branches. File attachments use a paperclip.
+MCP switches and inline slash commands apply to one turn and reset after submission.
+All composer panels share the same anchor. Explicit selections take priority. Disabled
 extensions stay outside the runtime MCP snapshot and skill context.
 Optional extension routing uses the configured classifier and only installed,
 enabled candidates. A timeout or low confidence adds no capability. Credentials

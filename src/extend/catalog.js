@@ -19,3 +19,25 @@ export function invocationQuery(text) {
   const match = text.match(/^[\\/]([\w-]*)$/)
   return match ? match[1].toLowerCase() : null
 }
+
+export function sortCatalog(entries, sort = 'popular') {
+  return [...entries].sort((a, b) => (sort === 'popular' ? (b.popularity || 0) - (a.popularity || 0) : 0)
+    || (sort === 'name-desc' ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name)))
+}
+export function commandName(item) {
+  return item.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-|-$/g, '') || item.kind
+}
+export function commandChoices(items) {
+  const used = new Set()
+  return invocations(items).map(item => {
+    const base = commandName(item)
+    let name = base, index = 2
+    while (used.has(name)) name = `${base}-${index++}`
+    used.add(name)
+    return { ...item, command: name }
+  })
+}
+export function selectedCommands(prompt, choices) {
+  const names = new Set([...prompt.matchAll(/(?:^|\s)\/([a-z0-9_-]+)(?=\s|$)/g)].map(match => match[1]))
+  return choices.filter(item => names.has(item.command)).map(item => item.id)
+}

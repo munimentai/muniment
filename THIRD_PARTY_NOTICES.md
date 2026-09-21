@@ -694,3 +694,12 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 =========================================
 END OF vscode-swift NOTICES AND INFORMATION
+
+## Extension icons
+
+The MCP glyph is from [Microsoft Codicons](https://github.com/microsoft/vscode-codicons),
+licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+The path is unchanged. App logos come from [SVGL](https://svgl.app/) and the
+[Anthropic connector directory](https://claude.com/connectors/).
+`src/extend/provider-icons.json` identifies each bundled logo source.
+Provider names and marks belong to their respective owners.

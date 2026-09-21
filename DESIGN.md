@@ -44,13 +44,13 @@ display serif. No italic except semantic emphasis in user content.
 Preferences moves two things and nothing else: a size step scales every
 `--text-*` token and `--text-provenance` together by a tenth per step, from
 two steps down to four up, and a family picked from the device's installed
-fonts sits in front of the shipped stack in `--font-human` or `--font-mono`.
+fonts sits in front of the shipped stack in `--font-human`, `--font-heading` or `--font-mono`. Headers have a separate picker.
 The super key with `=`, `-` and `0` moves the same step. Both live on the
 device beside the theme and the shipped pair stays the default.
 
 Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
-Shape: radius `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
-Nothing pill-shaped. Hairline borders do the work, and `--shadow-window` and
+Shape: Extend tabs use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
+Extend tabs use pill shapes. Other controls use the radius scale. Hairline borders do the work, and `--shadow-window` and
 `--shadow-overlay` are the only two depth tokens. Motion is purposeful and
 rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide. `prefers-reduced-motion` removes all of it.
 
@@ -70,7 +70,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
 3. **Anti-patterns are hard fails.** No surface gradients, no violet, no glassmorphism
    or backdrop blur on a surface, no orbs or ambient animation, no assistant
    avatar, no typing dots, no sparkles or wand iconography, no emoji in UI
-   copy, no pill radius, no "AI", "magic", "supercharge" or "unlock" in copy.
+   copy, pill radius only on Extend tabs, no "AI", "magic", "supercharge" or "unlock" in copy.
    The one blur is the Settings scrim: the workspace under Settings blurs
    behind the theme's paper, dark in dark mode and light in light mode, while
    the popup covers most of it.
@@ -211,13 +211,19 @@ component. Hidden features leave no controls, Settings entries or empty space.
 ## Extend
 
 Extend uses the shared Settings panel. MCP servers, Skills and Plugins occupy
-three tabs. Search and category, connection and installation filters narrow
-the MCP catalog before pagination. Installed entries expose their availability,
-connection test, source and update actions. Package review separates instructions,
-MCP servers and executable code. The MCP mark uses the Microsoft Codicons glyph
-in the current text color, with attribution in the catalog.
+three theme-colored pill tabs. Search, category, connection, installation and
+sort filters narrow the catalog. Popularity uses the source catalog score.
+Twelve popular entries precede the remaining catalog. Compact cards use three
+columns, two in narrower panels, and one when needed. Each card shows its
+provider logo with initials as a fallback. Pagination appears only for multiple pages.
+Installed entries expose availability, connection tests, source and update actions.
+Package review separates instructions, MCP servers and executable code.
+Icon notices live in the bundled third-party notices, outside the catalog.
 
-The composer tools button uses a vertical ellipsis. File attachments remain its
-first action. MCP switches belong to the chat. Skill and plugin selections use
-removable chips, and the command picker supports the keyboard. Automatic
-selections have a separate label from explicit selections.
+The composer ellipsis has a background only on hover or keyboard focus.
+Its three branches are MCPs, Plugins and Skills, followed by Manage extensions.
+File attachments use a separate paperclip. All composer panels share one
+anchor above the full composer with an eight-pixel gap. Only one opens at a time.
+Skill and plugin commands appear inline as slash commands in the reference color.
+MCP switches and optional classifier selection apply to one turn. The next turn
+starts without selected extensions. No extension chips sit below the message.

@@ -1,0 +1,3061 @@
+{
+  "10x-genomics-cloud": {
+    "path": "/extension-icons/26e72375607b5baf9267.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.ant.txg.mcp-server/versions/1.0.2/icon.png"
+  },
+  "8am-mycase": {
+    "path": "/extension-icons/64d7cfa08170f4da4133.png",
+    "source": "https://www.8am.com/favicon.png"
+  },
+  "abency": {
+    "path": "/extension-icons/e3b0c44298fc1c149afb.ico",
+    "source": "https://abency.com/favicon.ico"
+  },
+  "ableton-knowledge": {
+    "path": "/extension-icons/67598ff29d3c7ab600ae.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.ableton.ableton-knowledge/versions/0.8.1/icon.png"
+  },
+  "accuweather": {
+    "path": "/extension-icons/ddd6b168feff10eb4741.ico",
+    "source": "https://www.accuweather.com/favicon.ico"
+  },
+  "activecampaign": {
+    "path": "/extension-icons/910df4e0a2aedd793481.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/bb3c88854c2452aedfbe3aec0f82fcd1f30ac118-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "actively": {
+    "path": "/extension-icons/367c607dbe28c99a0583.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d4736e7d1168c4eca64fe7a7d3973ccec19cba58-320x320.jpg?w=128&fit=max&auto=format"
+  },
+  "addepar": {
+    "path": "/extension-icons/f48d203a9f6c80e4bdd0.png",
+    "source": "https://addepar.com/assets/logo/addepar-logo-icon-white.png"
+  },
+  "adisinsight": {
+    "path": "/extension-icons/2fcb4c80aed043fe80c6.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/c4b6418a1e6b6ae317967d5115393213266a3b57-800x800.png?w=128&fit=max&auto=format"
+  },
+  "adobe-cja": {
+    "path": "/extension-icons/b99b41710adc839b62ac.svg",
+    "source": "https://svgl.app/library/adobe.svg"
+  },
+  "adobe-experience-manager": {
+    "path": "/extension-icons/b99b41710adc839b62ac.svg",
+    "source": "https://svgl.app/library/adobe.svg"
+  },
+  "adobe-creativity": {
+    "path": "/extension-icons/b99b41710adc839b62ac.svg",
+    "source": "https://svgl.app/library/adobe.svg"
+  },
+  "adobe-journey-optimizer": {
+    "path": "/extension-icons/b99b41710adc839b62ac.svg",
+    "source": "https://svgl.app/library/adobe.svg"
+  },
+  "adobe-marketing-agent": {
+    "path": "/extension-icons/b99b41710adc839b62ac.svg",
+    "source": "https://svgl.app/library/adobe.svg"
+  },
+  "adobe-workfront": {
+    "path": "/extension-icons/9fa34b1e2e580b31af13.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e3b4aa5a89eaadeb323470ac9e7d2a7b33d738fa-512x512.png?w=128&fit=max&auto=format"
+  },
+  "adwhispr-ads": {
+    "path": "/extension-icons/aab0b6a07451fc61eb64.ico",
+    "source": "https://adwhispr.com/favicon.ico"
+  },
+  "affinity": {
+    "path": "/extension-icons/57cad56c10913372d60f.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/08a79e6d1292d51f06ad23127ffd3e3b28307a9a-400x400.svg?w=128&fit=max&auto=format"
+  },
+  "affinity-106b90": {
+    "path": "/extension-icons/164cc42ecb3d960c3930.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.canva.affinity/versions/1.0.8/icon.png"
+  },
+  "aftership-channels-for-tiktok-shop": {
+    "path": "/extension-icons/e86adce7f9b8327c2a10.svg",
+    "source": "https://websites.am-static.com/assets/brands/glyph/aftership_feed.svg"
+  },
+  "agentmail": {
+    "path": "/extension-icons/510420a1cc0fa7bde913.ico",
+    "source": "https://www.agentmail.to/favicon.ico"
+  },
+  "agility-cms": {
+    "path": "/extension-icons/4d52da502137d71d4360.ico",
+    "source": "https://agilitycms.com/favicon.ico"
+  },
+  "ahrefs": {
+    "path": "/extension-icons/c01708558ad4e085750f.svg",
+    "source": "https://svgl.app/library/ahrefs.svg"
+  },
+  "aiera": {
+    "path": "/extension-icons/996e783dde4547a42cb7.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/cff115c54b71738b71967e6ed7c71bcb536e8d8d-320x320.jpg?w=128&fit=max&auto=format"
+  },
+  "airbnb-search-listings": {
+    "path": "/extension-icons/76e30990c4af26f54953.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.openbnb-org.mcp-server-airbnb/versions/0.1.3/icon.png"
+  },
+  "airfield-directory": {
+    "path": "/extension-icons/2dae64795caec72c4146.svg",
+    "source": "https://cdn.airfield.directory/assets/logo/airfield-directory-logo-dark-3cbf586a.svg"
+  },
+  "airmail": {
+    "path": "/extension-icons/a20f54dbe13619f754e8.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.airmail.airmail-mcp/versions/1.0.24/icon.png"
+  },
+  "airops": {
+    "path": "/extension-icons/d09dc79e0701bc7519e1.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/87d245bbf245daec027d9a19bf3753aff79f9c82-319x319.svg?w=128&fit=max&auto=format"
+  },
+  "airtable": {
+    "path": "/extension-icons/0002d6dcb691d1983818.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4f835b9f1fd278d8d48eac532ea5611b107b1b10-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "airwallex": {
+    "path": "/extension-icons/0bfcf07de6095340c692.ico",
+    "source": "https://www.airwallex.com/favicon.ico"
+  },
+  "aiwyn-tax": {
+    "path": "/extension-icons/656bdd776f9c73369dd9.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/70f365e0bfc5e71d7247bf1de0d4e7e8478d8631-320x320.jpg?w=128&fit=max&auto=format"
+  },
+  "aleph": null,
+  "alltrails": {
+    "path": "/extension-icons/91fd572bb0887d9433da.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/f3d52ba04ee2ee570c9216186843a6ed06c762b2-1080x1080.svg?w=128&fit=max&auto=format"
+  },
+  "alma": {
+    "path": "/extension-icons/117f36c9c84e472acb1e.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8d86ad8498fcfb748ccab5e3167874108c7642aa-516x516.svg?w=128&fit=max&auto=format"
+  },
+  "alpha-vantage": null,
+  "alphaxiv": {
+    "path": "/extension-icons/76df75031b7310138e4e.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e36effced5439d327b14f495721f2b4fcef38f96-1650x1650.png?w=128&fit=max&auto=format"
+  },
+  "alpic": {
+    "path": "/extension-icons/10f00c6b1aac294b69c7.png",
+    "source": "https://assets.alpic.ai/logo-black-fill.png"
+  },
+  "amass": {
+    "path": "/extension-icons/2b8ad2d33455a8f736fc.ico",
+    "source": "https://amass.tech/favicon.ico"
+  },
+  "amplitude": {
+    "path": "/extension-icons/01c82416d4b2bbe08305.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/146691c66a6bf83bab0278993cd3ab5c1d102dcc-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "android-mcp": {
+    "path": "/extension-icons/a0d8ce1678f643423602.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.cursortouch.android-mcp/versions/0.1.0/icon.png"
+  },
+  "angellist": {
+    "path": "/extension-icons/6bc90833f3b072046f9e.ico",
+    "source": "https://www.angellist.com/favicon.ico"
+  },
+  "economic-index": {
+    "path": "/extension-icons/f809e9ac1f62fc008b9b.svg",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/economic-index.svg"
+  },
+  "apify": {
+    "path": "/extension-icons/89dd4560992c3df9c9d9.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.apify.apify-mcp-server/versions/0.14.3/icon.png"
+  },
+  "apollo": {
+    "path": "/extension-icons/a91ff800b027365e5f83.svg",
+    "source": "https://svgl.app/library/apollo-io.svg"
+  },
+  "appfolio-realm-x": {
+    "path": "/extension-icons/68dac87b9ba0652051b4.ico",
+    "source": "https://appfolio.com/favicon.ico"
+  },
+  "articulate": {
+    "path": "/extension-icons/cb7f953fd7a1d969f8f7.ico",
+    "source": "https://www.articulate.com/favicon.ico"
+  },
+  "asana": {
+    "path": "/extension-icons/f1a2bf6a5b20d6f36965.svg",
+    "source": "https://svgl.app/library/asana-logo.svg"
+  },
+  "ashby": null,
+  "astravue": null,
+  "atlar": null,
+  "atlassian": {
+    "path": "/extension-icons/5360084587bad58c225a.svg",
+    "source": "https://svgl.app/library/atlassian.svg"
+  },
+  "attention": {
+    "path": "/extension-icons/9c0db2626b5ad51499be.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/2329389899cb4d4fa47ccd7d0ba6ee927becff8e-408x408.png?w=128&fit=max&auto=format"
+  },
+  "attio": {
+    "path": "/extension-icons/3889ed84d24f0c690bab.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/23eec04ec96ed5e0e44fefb23e4fcd813970010d-1000x1000.svg?w=128&fit=max&auto=format"
+  },
+  "audible": {
+    "path": "/extension-icons/152fd1257294a4788d80.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e7383623d6d204a1928827f914eceb8d29a1150c-320x320.jpg?w=128&fit=max&auto=format"
+  },
+  "august-digital-twins": null,
+  "aura": {
+    "path": "/extension-icons/241309fd336d803a137c.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e63352a565de31e00ca4a7bad98a87af85445fc8-320x320.jpg?w=128&fit=max&auto=format"
+  },
+  "aurora": {
+    "path": "/extension-icons/9898cce75e3e86e91173.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d7342934fb64bbb41d8d0a392f6de948c091ace5-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "autodesk-fusion": {
+    "path": "/extension-icons/36dfd5e71b441cfb0ecb.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.autodesk.fusion-mcp/versions/1.0.1/icon.png"
+  },
+  "autodesk-product-help": {
+    "path": "/extension-icons/43a90261c1556d632b1d.svg",
+    "source": "https://up1.autodesk.com/prd/2027/FSND/0DD9B647-5DC0-53C7-AAEE-49FC06FF66F0/server_logo_black.svg"
+  },
+  "automox": {
+    "path": "/extension-icons/751ccb37002f1ab0bb2f.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.automoxcommunity.automox-mcp/versions/2.2.9/icon.png"
+  },
+  "autorfp-ai": {
+    "path": "/extension-icons/9eb306860cbaeaa90215.ico",
+    "source": "https://autorfp.ai/favicon.ico"
+  },
+  "avanquest-pdf-api-extension": {
+    "path": "/extension-icons/5a11cd1585c6f3851c81.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.avanquest-software.avanquest-pdfapi-mcp-server/versions/1.0.6/icon.png"
+  },
+  "aws-api-mcp-server": {
+    "path": "/extension-icons/0926485e1dacce4dcf72.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.awslabs.aws-api-mcp-server/versions/1.3.3/icon.png"
+  },
+  "aws-marketplace": {
+    "path": "/extension-icons/f9c1290df5893027fdcb.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/23b02eab57da6c6d74a03a309f883236727c03a8-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "aws-mcp": {
+    "path": "/extension-icons/94de254f3fadea01265e.png",
+    "source": "https://a0.awsstatic.com/libra-css/images/logos/aws_logo_smile_179x109.png"
+  },
+  "azure-mcp-server": {
+    "path": "/extension-icons/fd22580cf7bf048326dd.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.microsoft.mcp-win-x64/versions/2.0.5/icon.png"
+  },
+  "azure-mcp-server-7eab26": {
+    "path": "/extension-icons/fd22580cf7bf048326dd.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.microsoft.mcp-osx-arm64/versions/2.0.5/icon.png"
+  },
+  "azure-mcp-server-76eac1": {
+    "path": "/extension-icons/fd22580cf7bf048326dd.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.microsoft.mcp-linux-x64/versions/2.0.5/icon.png"
+  },
+  "b12-website-generator": {
+    "path": "/extension-icons/230e876ec5d61046682b.png",
+    "source": "https://claude.ai/api/dxt/extensions/website-generator/versions/1.0.3/icon.png"
+  },
+  "backlog": {
+    "path": "/extension-icons/5d1c5dc12c3c9a47a150.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.nulab.backlog-mcp-server/versions/0.18.0/icon.png"
+  },
+  "badger-maps-standard": null,
+  "bamboohr": {
+    "path": "/extension-icons/45322f2a7c1d7dc3b199.svg",
+    "source": "https://resources.bamboohr.com/images/logo-bamboohr-b.svg"
+  },
+  "baremetrics": {
+    "path": "/extension-icons/c2f02c6588bd4c8a028d.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.baremetrics.bm-mcp/versions/1.0.0/icon.png"
+  },
+  "base44": {
+    "path": "/extension-icons/80b6ad53423c3b943f12.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d9407ce509ca7986fc435a261553cb01026a1225-1000x1000.svg?w=128&fit=max&auto=format"
+  },
+  "beehiiv": null,
+  "benchling": {
+    "path": "/extension-icons/d06c15d8b2247813e2ad.jpg",
+    "source": "https://cdn.prod.website-files.com/68a44d4040f98a4adf2207b6/690abdfc622a31cabb4ed418_Benchling.jpg"
+  },
+  "benevity": {
+    "path": "/extension-icons/e46f489917defd81862a.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/86e48756822917435a21e4b9a8f05f9b637e15c3-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "bigdata": {
+    "path": "/extension-icons/3f498b46160ae8be1e0f.ico",
+    "source": "https://www.ravenpack.com/favicon.ico"
+  },
+  "bigin-zohomcp-com": {
+    "path": "/extension-icons/cb0f5f98fe623ac3fd89.png",
+    "source": "https://zohomcp-development.zohostratus.com/logo/Bigin-512.png"
+  },
+  "biorender": {
+    "path": "/extension-icons/24dcf78deac72b49c228.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/87fa7d3a56175563a74f77047df4d7ae49ca580f-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "biorxiv": {
+    "path": "/extension-icons/ce412025016e5535bbb5.png",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/biorxiv.png"
+  },
+  "bitly": {
+    "path": "/extension-icons/90200aca232ed62fe3dd.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/acd2bf0f91593bf741ac20aabb9e98e485f48665-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "black-diamond": {
+    "path": "/extension-icons/15d69d3b349fcb39d14b.svg",
+    "source": "https://bd3.bdreporting.com/content/logo.svg"
+  },
+  "black-duck-security-scanner": {
+    "path": "/extension-icons/0a73f20a737a95d64d5a.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.blackducksoftware.mcp-server/versions/1.1.8-push.1/icon.png"
+  },
+  "blackbaud": {
+    "path": "/extension-icons/d40f30e96498181ff24f.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/ce80adaa7980e4331b151d9f6716adf43f5d733e-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "blackrock-advisor-center": {
+    "path": "/extension-icons/b3bc6c6810d7ddf58a41.ico",
+    "source": "https://www.blackrock.com/favicon.ico"
+  },
+  "blender": {
+    "path": "/extension-icons/60a4c31343f8356ecbaa.svg",
+    "source": "https://svgl.app/library/blender.svg"
+  },
+  "blockchainquery": {
+    "path": "/extension-icons/d1524d2b9622c74f8719.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.pokt-network.blockchain-query-mcp/versions/2.1.2/icon.png"
+  },
+  "blockscout": {
+    "path": "/extension-icons/089073d8590e2598beb5.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/acd0928e480e490f57ab3514997f446b98ad4668-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "bloomberg-law": {
+    "path": "/extension-icons/cda34c702e24b2856ff9.png",
+    "source": "https://assets.bbhub.io/bna/sites/18/2026/07/Bloomberg-Law-Favicon-Connector.png"
+  },
+  "blueconic": {
+    "path": "/extension-icons/b7cd3e7c6389097df616.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.blueconic.blueconic-mcp/versions/1.1.2/icon.png"
+  },
+  "boardwise": {
+    "path": "/extension-icons/1f8547980f3f8aab4460.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a9b11460665e1201fd5a0deb088183efafe50a9d-160x160.png?w=128&fit=max&auto=format"
+  },
+  "boltz-api": {
+    "path": "/extension-icons/58de678a94243c1b457a.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e31ffb2d548ec2d2e27973c5cd22aac517f709a0-400x400.png?w=128&fit=max&auto=format"
+  },
+  "bonsai": null,
+  "booking": {
+    "path": "/extension-icons/715d1a498f0509550864.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/691cb72f30bc0571f792493922a894a8631d0bde-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "box": {
+    "path": "/extension-icons/64efef90d7542ba48745.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a3993c65fa8f97cf216621f8c413ebf1d0985249-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "pending-brand24": null,
+  "brandfetch": {
+    "path": "/extension-icons/7acb01f6cefa6b9325de.png",
+    "source": "https://cdn.brandfetch.io/idL0iThUh6/w/480/h/480/theme/dark/icon.png?c=1dxbfHSJFAPEGdCLU4o5B"
+  },
+  "brave-applescript": {
+    "path": "/extension-icons/5b317cf1cf9a1ec022e5.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.tariqalagha.brave-browser-control/versions/0.1.1/icon.png"
+  },
+  "braze": {
+    "path": "/extension-icons/361550bfad14ba7d1188.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4fb25ab44ecd2ab0f9bf26fe82259e371acc1534-200x200.jpg?w=128&fit=max&auto=format"
+  },
+  "brevo": {
+    "path": "/extension-icons/b9414a428bd5bd824bb0.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b1dfda85810526042f096f57ae3dee77e8d468de-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "brex": {
+    "path": "/extension-icons/25ddf4c2eec10c6b37c3.svg",
+    "source": "https://brand.brex.com/m/232ed2ecefdd95c0/original/Brex-symbol-ink-gray-1024x1024px.svg"
+  },
+  "brightdeck-ai": null,
+  "brighthire": {
+    "path": "/extension-icons/ccf571d5cf8ff516ee79.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b8d6b6aae52f50dc918ad5bb8dd2efd7b2cc3cbc-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "brisk-teaching": {
+    "path": "/extension-icons/238a85f2ce48bc1916ba.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/7ec072cb992abe7e3445df60c672ac1b60dc8d62-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "bronto": {
+    "path": "/extension-icons/b1ad6f9d7937690bfa1c.png",
+    "source": "https://bronto.io/downloads/brand/logomark.png"
+  },
+  "busycal": {
+    "path": "/extension-icons/3f3bb3c84dbe27f0edee.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.beehiveinnovations.busycal/versions/0.1.9/icon.png"
+  },
+  "calendly": {
+    "path": "/extension-icons/1f976341f4ed6a63b688.svg",
+    "source": "https://svgl.app/library/calendly.svg"
+  },
+  "campfire": {
+    "path": "/extension-icons/d972e896fa97924e0f57.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/391529198d0e49613ed0df6552fa4d1d3b18e701-200x200.jpg?w=128&fit=max&auto=format"
+  },
+  "canary-data": {
+    "path": "/extension-icons/02dc1c6160723b8cbd3f.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/69ef144fb97e3f80e99fe31ccfeebbf96d93c491-119x121.svg?w=128&fit=max&auto=format"
+  },
+  "candid": {
+    "path": "/extension-icons/8c87665aa3d2236cb1b1.svg",
+    "source": "https://cdn.candid.org/images/candid-logo/candid-icon.svg"
+  },
+  "canva": {
+    "path": "/extension-icons/242bb82ed2be97ce4213.svg",
+    "source": "https://svgl.app/library/canva.svg"
+  },
+  "cargoai": {
+    "path": "/extension-icons/7941b46561d4280f43a9.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/0b05a77008bcfc5d2c8b42ee1f36969654e7db40-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "cargurus": null,
+  "carrefour": {
+    "path": "/extension-icons/2a8d0eb8865dcf00001a.svg",
+    "source": "https://www.carrefour.com/themes/custom/c4com/img/logo_dark.svg"
+  },
+  "carta": {
+    "path": "/extension-icons/a911001a318fee9924d6.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/590266fe4f5b3cce5ea5b5b493e83f5ed6cb5834-800x800.svg?w=128&fit=max&auto=format"
+  },
+  "catalyst-by-zoho": {
+    "path": "/extension-icons/4328c9c80ba8e8ea7c86.png",
+    "source": "https://zohomcp-development.zohostratus.com/logo/Catalyst-32.png"
+  },
+  "cb-insights": {
+    "path": "/extension-icons/e1b44bffef0ca8f4b934.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/88b1971c168c3d7912f740394a25fd363a2d86ac-512x512.png?w=128&fit=max&auto=format"
+  },
+  "cdata-connect-ai": {
+    "path": "/extension-icons/f778d3ee9711307fbe63.ico",
+    "source": "https://www.cdata.com/favicon.ico"
+  },
+  "celayix": {
+    "path": "/extension-icons/3e95e7cc6bb7a1d34b79.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.celayix-open-source.celayix-mcp/versions/1.0.0/icon.png"
+  },
+  "celigo": {
+    "path": "/extension-icons/a1825af0bd745581238d.ico",
+    "source": "https://www.celigo.com/favicon.ico"
+  },
+  "chargebee": {
+    "path": "/extension-icons/bb17439319bed42fbaf9.png",
+    "source": "https://www.chargebee.com/static/resources/brand/favicon.png"
+  },
+  "chartmogul": null,
+  "checkatrade": {
+    "path": "/extension-icons/80b7c67ecedf2bb58440.ico",
+    "source": "https://www.checkatrade.com/favicon.ico"
+  },
+  "chembl": {
+    "path": "/extension-icons/a257fafc1d6ad5c57a31.png",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/chembl.png"
+  },
+  "chronograph": {
+    "path": "/extension-icons/c53c201eaea20707321f.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/6c501c44d89f3c42220a4d8d210099a0f377ea5e-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "circleback": {
+    "path": "/extension-icons/a77b6eedc4ab579e9b97.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8ac1a2992a2377dadce40bd0a6398bb923d4976b-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "circleci": {
+    "path": "/extension-icons/066b37ff00f0f968b903.ico",
+    "source": "https://circleci.com/favicon.ico"
+  },
+  "civitatis": {
+    "path": "/extension-icons/aa6fd6126087ef60d425.ico",
+    "source": "https://www.civitatis.com/favicon.ico"
+  },
+  "ckan-mcp-server": {
+    "path": "/extension-icons/c29c66e42e67fb3a403e.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.ondata.ckan-mcp-server/versions/0.4.116/icon.png"
+  },
+  "clarify": {
+    "path": "/extension-icons/5db81ad5cdf9fbb49f59.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a6e20e00a9dfeecf86afff8ce38062b964f325ce-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "clarity-ai": {
+    "path": "/extension-icons/ba438ed010719b0c23cb.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/68f536ad6615a8cd2aec0900d39dbda55ae4e49f-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "clarivate-compumark": {
+    "path": "/extension-icons/ad93c1c11a7ba8faf797.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/1a98732c1dc12d8f24817454d8412e51058422e4-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "clay": {
+    "path": "/extension-icons/f949380d240919495ec5.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/681c653c13aaa4f804f51d0bc48a42ca76d7b4d0-320x320.jpg?w=128&fit=max&auto=format"
+  },
+  "clearstreet": null,
+  "clerk": {
+    "path": "/extension-icons/4833dd802dd55468cf91.svg",
+    "source": "https://svgl.app/library/clerk-icon-light.svg"
+  },
+  "clickhouse": {
+    "path": "/extension-icons/3522815f1e5beacc5213.svg",
+    "source": "https://raw.githubusercontent.com/ClickHouse/ClickHouse/28d984fc85e6899b805bc16beb8b21ca0f687fa6/docker/server/README.src/logo.svg"
+  },
+  "clickup": {
+    "path": "/extension-icons/a8b08e70df4a7d7c949a.svg",
+    "source": "https://svgl.app/library/clickup.svg"
+  },
+  "clickup-2f35af": {
+    "path": "/extension-icons/a8b08e70df4a7d7c949a.svg",
+    "source": "https://svgl.app/library/clickup.svg"
+  },
+  "clinical-trials": {
+    "path": "/extension-icons/6136f7db817a75fd75a5.png",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/clinical-trials.png"
+  },
+  "close": {
+    "path": "/extension-icons/b2ed71e491e375531628.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/00968a41517afec047fc392ef3106b0486d3e500-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "cloudflare": {
+    "path": "/extension-icons/b8dff311e8041942b600.svg",
+    "source": "https://svgl.app/library/cloudflare.svg"
+  },
+  "cloudglue": {
+    "path": "/extension-icons/ea21da9bf654989d3601.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.cloudglue.cloudglue-mcp/versions/0.3.1/icon.png"
+  },
+  "cloudinary": {
+    "path": "/extension-icons/7f2045602c564ca1f801.svg",
+    "source": "https://svgl.app/library/cloudinary.svg"
+  },
+  "cloudinary-asset-management": {
+    "path": "/extension-icons/c177012759d47db6bcf3.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.cloudinary.mcp-servers/versions/0.11.0/icon.png"
+  },
+  "cloverleaf": {
+    "path": "/extension-icons/e3b0c44298fc1c149afb.ico",
+    "source": "https://cloverleaf.me/favicon.ico"
+  },
+  "cloze": {
+    "path": "/extension-icons/5d05eab2bea4022eb51c.png",
+    "source": "https://www.cloze.com/img/icon-light-256x256.png"
+  },
+  "cms-coverage": {
+    "path": "/extension-icons/51635844d2ae983077bb.svg",
+    "source": "https://svgl.app/library/anthropic_black.svg"
+  },
+  "cocounsel-legal": {
+    "path": "/extension-icons/b38acb6b44c9956ac7b4.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/dcc5719bf04e88cdc0fa5f6dad1e19c8e1ef9b53-300x300.png?w=128&fit=max&auto=format"
+  },
+  "codewords": {
+    "path": "/extension-icons/26d57d3aee316938753d.ico",
+    "source": "https://codewords.ai/favicon.ico"
+  },
+  "cognito-forms": {
+    "path": "/extension-icons/e1028d74ca7e3199a878.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8f17632663dda0721f5ec898cc749687708ce75b-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "coindesk": {
+    "path": "/extension-icons/70e8c18a84592b997e9c.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a6fc48fb418ee07fc1d8a30e2801f90881d624e1-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "cometchat": null,
+  "commerce-layer-metrics": {
+    "path": "/extension-icons/aadfed095e7ce5f96b7e.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.commercelayer.mcp-server-metrics/versions/1.0.0/icon.png"
+  },
+  "common-room": {
+    "path": "/extension-icons/3a803595ffef7ce5e38b.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/7c7c0af91b7995c6fd78f1c094a4c0650be3add9-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "conductor": {
+    "path": "/extension-icons/be9f59cfca8235b97853.svg",
+    "source": "https://svgl.app/library/conductor_light.svg"
+  },
+  "consensus": {
+    "path": "/extension-icons/4afb9c84aa94f2f50bb9.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/caeb1d53e5d2180939e1ef607a19944eb1a08b7f-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "contentful-mcp": null,
+  "contentsquare": {
+    "path": "/extension-icons/a374d6cb3762aa04a498.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9c34d5f357419bb079e12ec50ea9a375dc68cbea-1000x1000.png?w=128&fit=max&auto=format"
+  },
+  "context7": {
+    "path": "/extension-icons/1165942109f480ebab72.png",
+    "source": "https://context7.com/context7-icon-green.png"
+  },
+  "contract-factory-siren": {
+    "path": "/extension-icons/1f627d2ef9070d5f4b1b.png",
+    "source": "https://www.contract-factory.com/img/logo/CFcarreHD.png"
+  },
+  "control-chrome": {
+    "path": "/extension-icons/e0f7aba62714e1b66fd4.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.ant.anthropic.chrome-control/versions/0.1.6/icon.png"
+  },
+  "controlplane": {
+    "path": "/extension-icons/a7a175a5e0fb2f70b756.png",
+    "source": "https://controlplane.com/images/logos/logomark.png"
+  },
+  "control-your-mac": {
+    "path": "/extension-icons/eac7874db2bd15315665.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.k6l3.osascript/versions/0.0.1/icon.png"
+  },
+  "conviso-mcp-server": {
+    "path": "/extension-icons/fdeefe00be1a1880f93d.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.convisoappsec.conviso-mcp/versions/0.6.2/icon.png"
+  },
+  "coralogix": {
+    "path": "/extension-icons/e0d742fec31d886be220.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d491b95327ce54dc846eb5904704347c87b324ea-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "cortellis-cmc-intelligence": {
+    "path": "/extension-icons/d42d672e72732c62dfc4.png",
+    "source": "https://is1-ssl.mzstatic.com/image/thumb/Purple112/v4/20/99/8f/20998fe7-dd23-ba49-aa02-8d0d939c5d7e/AppIcon-0-0-1x_U007emarketing-0-0-0-2-0-0-sRGB-0-0-0-GLES2_U002c0-512MB-85-220-0-0.png/1200x630wa.png"
+  },
+  "cortellis-regulatory": {
+    "path": "/extension-icons/866cd24ba2f8f3c20ffd.ico",
+    "source": "https://clarivate.com/favicon.ico"
+  },
+  "coteach": {
+    "path": "/extension-icons/139c3cfaf9513f4924f8.svg",
+    "source": "https://coteach.ai/mini-logo.svg"
+  },
+  "cottages": null,
+  "coupler-io": {
+    "path": "/extension-icons/ddf8d78493c891f96a44.ico",
+    "source": "https://coupler.io/favicon.ico"
+  },
+  "coupler-io-578a0a": {
+    "path": "/extension-icons/2321ba637cf8ded443c6.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.railsware.couplerio/versions/0.0.5/icon.png"
+  },
+  "coursera": {
+    "path": "/extension-icons/1835f3c9f31264390c68.svg",
+    "source": "https://svgl.app/library/coursera.svg"
+  },
+  "courtlistener": {
+    "path": "/extension-icons/5ded60412d71b4886c56.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/61092e10bd1a61a50c38b4a9a2d2a95953848df7-350x391.svg?w=128&fit=max&auto=format"
+  },
+  "courtroom5": {
+    "path": "/extension-icons/19033ba923c3986a61bc.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/ab1a4678d464c39c6058d425b99f3c3d50cceafc-480x480.svg?w=128&fit=max&auto=format"
+  },
+  "craft": {
+    "path": "/extension-icons/0305d29571e0adc0a2c8.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8ea79f510348877999d2015bfcb0ba64e5f57179-512x512.png?w=128&fit=max&auto=format"
+  },
+  "craft-io": {
+    "path": "/extension-icons/395dacb00c6c452b0ba2.png",
+    "source": "https://www.google.com/s2/favicons?domain=craft.io&sz=64"
+  },
+  "crossbeam": {
+    "path": "/extension-icons/d3be1aaa85dd546968c4.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/fddce392eddee04aef03c9a7d1f39a034980ce79-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "crunchbase-mcp": {
+    "path": "/extension-icons/d87623753c805ff33405.ico",
+    "source": "https://www.crunchbase.com/favicon.ico?v=2.0"
+  },
+  "crustdata": null,
+  "crypto-com": {
+    "path": "/extension-icons/5516a2c01dfe784a5611.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/c5d8bdf8a8221dabf5f3dfe80d1bcb141b1f2a67-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "cucumber-studio-mcp": {
+    "path": "/extension-icons/c1c322d0e0f27f7635e8.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.herosizy.cucumberstudio-mcp/versions/1.1.5/icon.png"
+  },
+  "customer-io": {
+    "path": "/extension-icons/9b5da8e89564150fc140.svg",
+    "source": "https://cdn.sanity.io/images/onirtmj2/production/e1ead94ff38d1ec15140dc0879661ed1b3bd1857-259x258.svg"
+  },
+  "db-fa-mcp": {
+    "path": "/extension-icons/1c313ac0d9f5a296a40c.svg",
+    "source": "https://www.dnb.com/content/dam/web/assets/logos/company/DnB_Ampersand_Logo.svg"
+  },
+  "dnb-risk-analytics": {
+    "path": "/extension-icons/7df870ea3e8b51f44dd1.ico",
+    "source": "https://www.dnb.com/favicon.ico"
+  },
+  "daloopa": {
+    "path": "/extension-icons/f0dcedc69ee0ca0b73df.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4514be8fe3fda813fa1e4a80142f84b1f459c626-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "dash": {
+    "path": "/extension-icons/b7f4a9ed1c0dc0526eaf.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.kapeli.dash-mcp/versions/1.1.0/icon.png"
+  },
+  "databricks": {
+    "path": "/extension-icons/1db3559897279f06ad31.svg",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/databricks-genie.svg"
+  },
+  "datacamp": {
+    "path": "/extension-icons/87b28e7f11ecff75f5ae.png",
+    "source": "https://www.datacamp.com/marketing-backgrounds/favicons/favicon-196x196.png"
+  },
+  "datadog": {
+    "path": "/extension-icons/d7c954e9f3316e1fea43.svg",
+    "source": "https://svgl.app/library/datadog.svg"
+  },
+  "datagrail": {
+    "path": "/extension-icons/fe58b600210d4180bc79.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9f68701db0ecf0196df601fa74776f4cb2c68284-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "datahub": {
+    "path": "/extension-icons/6643b99bf89b24d383d8.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/0560a28ae045763f79541d02ac612f16f53a0059-160x159.svg?w=128&fit=max&auto=format"
+  },
+  "datarails-financeos": null,
+  "datasite": {
+    "path": "/extension-icons/0a25050b71b2ce5329b0.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/f1fafa910502f5c62b3bbfb3e57a7e1123cf57d5-500x500.svg?w=128&fit=max&auto=format"
+  },
+  "day-ai": {
+    "path": "/extension-icons/14bf8e30381386a67c64.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/6754eec5f7b40e954793b23fee674ca6a3b33e28-600x600.png?w=128&fit=max&auto=format"
+  },
+  "dbt": {
+    "path": "/extension-icons/973efd5099a61477b716.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/32842362f0abff34928f46b95203046eb498b594-704x704.svg?w=128&fit=max&auto=format"
+  },
+  "deel": {
+    "path": "/extension-icons/1e3a557ec88c1ff29abc.ico",
+    "source": "https://www.deel.com/favicon.ico"
+  },
+  "deepl": {
+    "path": "/extension-icons/72d1bc58928208edb304.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d6f8ffdd1f8caad4a978e621ae344a9fa5ba0313-54x68.svg?w=128&fit=max&auto=format"
+  },
+  "defense-com-threat-analysis": {
+    "path": "/extension-icons/e4911b895b0920041854.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.defensedotcom.defense-mcp/versions/1.0.4/icon.png"
+  },
+  "definely": {
+    "path": "/extension-icons/b24e03f0072b56a48ef3.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/10bf6a28080b9ec52a9429fcd2d08889031cba3e-84x84.svg?w=128&fit=max&auto=format"
+  },
+  "dhs-program": {
+    "path": "/extension-icons/3a1e372dd557ce557e65.ico",
+    "source": "https://dhsprogram.com/favicon.ico"
+  },
+  "denodo-mcp-connector": {
+    "path": "/extension-icons/b112b261d40062cd68a1.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.denodo.denodocommunity-claude-vdp-connector/versions/1.3.2/icon.png"
+  },
+  "descript": {
+    "path": "/extension-icons/241295c7f1310c1d6249.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/79f9c7be02a63e4ef27ae08ad0c6bd61200cdc38-288x339.svg?w=128&fit=max&auto=format"
+  },
+  "descrybe": {
+    "path": "/extension-icons/ba6cc6c4752ee583a37d.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/323c7058f3196a7fa2093e0acbaff50b69f6faf0-2500x2500.svg?w=128&fit=max&auto=format"
+  },
+  "desktop-commander": {
+    "path": "/extension-icons/b5a9082663d57b64df78.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.wonderwhy-er.desktopcommandermcp/versions/0.2.46/icon.png"
+  },
+  "devrev": null,
+  "dice": {
+    "path": "/extension-icons/b636b1415be650e57e13.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/7ab2eee2a09b693947d7e62cc1b9ed83f3e1b183-159x159.svg?w=128&fit=max&auto=format"
+  },
+  "diffit": {
+    "path": "/extension-icons/3c79f6a0ce5471729c31.png",
+    "source": "https://app.diffit.me/favicon.png"
+  },
+  "digits": {
+    "path": "/extension-icons/61475b671155657a5472.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/cb91050fef89f3c3fd8e2ede270bfdae96a7bee3-1200x1200.svg?w=128&fit=max&auto=format"
+  },
+  "directbooker": {
+    "path": "/extension-icons/79c099b38361fc1109b3.png",
+    "source": "https://www.directbooker.ai/android-chrome-512x512.png"
+  },
+  "docfarm": {
+    "path": "/extension-icons/dbcf74655282238e16a6.png",
+    "source": "https://doc.farm/logo.png"
+  },
+  "docling-mcp": {
+    "path": "/extension-icons/f2133f1ee83f4f572388.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.docling-project.docling-mcp/versions/2.1.0/icon.png"
+  },
+  "docuseal": {
+    "path": "/extension-icons/942388b5fb70c319aefc.svg",
+    "source": "https://www.docuseal.com/logo_square.svg"
+  },
+  "docusign": {
+    "path": "/extension-icons/c5835e96f0a912584cd7.ico",
+    "source": "https://www.docusign.com/favicon.ico"
+  },
+  "dominos-india": null,
+  "leaveadot": null,
+  "dovetail": {
+    "path": "/extension-icons/dd6ffeb0cb4507d8e9ef.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b40b06072dc850973782f404be219d7a9cbecf0e-800x800.svg?w=128&fit=max&auto=format"
+  },
+  "drafts": {
+    "path": "/extension-icons/25a101e54b0ee6eb1f49.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.agiletortoise.drafts-mcp/versions/1.0.12/icon.png"
+  },
+  "dremio-cloud": {
+    "path": "/extension-icons/bb0aa1ae7a35a370bcf4.svg",
+    "source": "https://app.dremio.cloud/favicon.svg"
+  },
+  "dropbox": {
+    "path": "/extension-icons/ef6eeed72f74fcd89674.svg",
+    "source": "https://svgl.app/library/dropbox.svg"
+  },
+  "droplinked": {
+    "path": "/extension-icons/c6ee6a216cfe01c29fb8.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.droplinked.droplinked-mcp-extension/versions/0.1.1/icon.png"
+  },
+  "dualentry": {
+    "path": "/extension-icons/55fb5857f5b2ada25dda.webp",
+    "source": "https://dualentry.com/favicon.ico"
+  },
+  "dynatrace-mcp-server": {
+    "path": "/extension-icons/5294459904f0d143bd6c.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.dynatrace-oss.dynatrace-mcp/versions/2.1.2/icon.png"
+  },
+  "eden-basecamp-research": {
+    "path": "/extension-icons/8ba4dfcb67d55b564077.png",
+    "source": "https://basecamp-research.com/favicon.ico"
+  },
+  "eedi": {
+    "path": "/extension-icons/c632a021b688cbb6f2fe.svg",
+    "source": "https://home-content.eedi.com/eedi-home/content/eedi-icon-circle.svg"
+  },
+  "egnyte": {
+    "path": "/extension-icons/7fff5dbc3d9dec542235.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/60c7467730cee0eec4367a86c6cce1e27f8cf811-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "elevenlabs": {
+    "path": "/extension-icons/91d08360611de5c0a2f5.png",
+    "source": "https://eleven-public-cdn.elevenlabs.io/mcp/elevenlabs-symbol.png"
+  },
+  "elfcare": {
+    "path": "/extension-icons/84877c24076a39baa2b9.svg",
+    "source": "https://patient.elf.care/mcp/elfcare.svg"
+  },
+  "elicit": {
+    "path": "/extension-icons/f41ccebf034146712c1d.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3900be23997567a70b0cd7d8924abd5bfd2d97e7-96x96.png?w=128&fit=max&auto=format"
+  },
+  "embat": {
+    "path": "/extension-icons/7cc60dc6c19658234609.svg",
+    "source": "https://storage.googleapis.com/embat-production-public/Embat%20logo%20-%20Dark%20blue.svg"
+  },
+  "energy-aspects": {
+    "path": "/extension-icons/1f658761d6081d4a9b53.ico",
+    "source": "https://www.energyaspects.com/favicon.ico"
+  },
+  "enrichr-mcp-server": {
+    "path": "/extension-icons/bb5a1ba26f1e5b1adee1.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.tianqitang1.enrichr-mcp-server/versions/0.3.0/icon.png"
+  },
+  "entendre": {
+    "path": "/extension-icons/81795ade89d821a5c68f.ico",
+    "source": "https://entendre.ai/favicon.ico"
+  },
+  "enterpret-wisdom": {
+    "path": "/extension-icons/edc231f822f52f929924.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8624c72969839391bfd7eee584437673cd62084c-256x256.svg?w=128&fit=max&auto=format"
+  },
+  "era-context": {
+    "path": "/extension-icons/48d52bccb5104cae7a39.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/fe3adef2b3e4e2fdf14fbaa76fec16ed6d454edc-150x150.svg?w=128&fit=max&auto=format"
+  },
+  "eraser": {
+    "path": "/extension-icons/91f89d36ff6f5cfe6d2e.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4cf1a8d367eee39cd5bf71b82391a1c35fae569a-140x140.svg?w=128&fit=max&auto=format"
+  },
+  "euler": {
+    "path": "/extension-icons/39e53af8fcfc72d80418.png",
+    "source": "https://mcp.eulerapp.com/icon.png"
+  },
+  "everlaw": {
+    "path": "/extension-icons/d3bb10972ecf93a21a79.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/31a790160e4f189e3f0f9b5b09408bedec12e9af-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "exa": {
+    "path": "/extension-icons/45f0cd7ae693919f21aa.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/503c426c7d6486e30e07dcac2a70c68573f605db-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "excalidraw-app-demo": {
+    "path": "/extension-icons/d28e2ad76f5a89690892.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/5284edb173b815d3a5ca89e29b54f724b1f0969c-180x180.png?w=128&fit=max&auto=format"
+  },
+  "expedia": {
+    "path": "/extension-icons/53720a7495a15020e88c.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/86abcca4425fcde6ad847045b402b3761d9c2296-1024x1024.png?w=128&fit=max&auto=format"
+  },
+  "expo": {
+    "path": "/extension-icons/d304768a7a3c8de8638e.svg",
+    "source": "https://svgl.app/library/expo.svg"
+  },
+  "factset": {
+    "path": "/extension-icons/6fc85cc2ebf0a3386a92.png",
+    "source": "https://www.factset.com/favicon.ico"
+  },
+  "fantastical": {
+    "path": "/extension-icons/7750ef81ae3aff88db41.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.flexibits.fantastical-mcp/versions/1.1.2/icon.png"
+  },
+  "fathom": null,
+  "fellow-ai": {
+    "path": "/extension-icons/c23e3a24f0288437da96.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/6abc255db034d7c7ec365729294ef7981d54961d-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "felt-maps": {
+    "path": "/extension-icons/18ccc0cd07b6a11bb51c.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/2869677d2524fdbf66aef1868a71e528ec386ec3-170x170.svg?w=128&fit=max&auto=format"
+  },
+  "fever-event-discovery": {
+    "path": "/extension-icons/8448912bbd31481701d5.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/baa270786692c99349f31358a055e94e54538e8f-200x200.svg?w=128&fit=max&auto=format"
+  },
+  "fibery": {
+    "path": "/extension-icons/c7802aeb27495a8531a9.svg",
+    "source": "https://fibery.com/favicon.svg"
+  },
+  "figma": {
+    "path": "/extension-icons/5bcdea3417293412845b.svg",
+    "source": "https://svgl.app/library/figma.svg"
+  },
+  "files-com": null,
+  "filesystem": {
+    "path": "/extension-icons/ca32305a170e344ccc92.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.ant.anthropic.filesystem/versions/2026.7.10/icon.png"
+  },
+  "filevine-api": {
+    "path": "/extension-icons/ddf1d37cd04b30dcb595.png",
+    "source": "https://us-shard-b.filevineapp.com/public/img/logos/fv-logo-64x64.png"
+  },
+  "finance-toolkit": {
+    "path": "/extension-icons/144bcbeb7b7645d28b55.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.jerbouma.financetoolkit/versions/2.1.4/icon.png"
+  },
+  "firecrawl": {
+    "path": "/extension-icons/f5ecdf6ffce04ed6bc2f.svg",
+    "source": "https://svgl.app/library/firecrawl.svg"
+  },
+  "fireflies": {
+    "path": "/extension-icons/8470c5c316dd8b023263.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a0b38b95ab883bce98049569cc51340a855f4512-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "firefox-control": {
+    "path": "/extension-icons/551242b1d7b185f6ba5c.png",
+    "source": "https://claude.ai/api/dxt/extensions/browser-control-firefox/versions/1.5.2/icon.png"
+  },
+  "fiscal-ai": {
+    "path": "/extension-icons/43489b9c35eb824cd89a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/792295cb64872606b341c24ad9ed1989ff7b05cf-1200x1200.svg?w=128&fit=max&auto=format"
+  },
+  "fitch-solutions": {
+    "path": "/extension-icons/81b3c4903fb5e770bb4f.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d42e4f8202df1c2ecb6f105120ca07b59db77bb3-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "flitiq-fmcsa-carrier-intelligence": {
+    "path": "/extension-icons/5a3e758b70f66b466daa.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.smartlink-basics.flitiq-mcp/versions/0.1.4/icon.png"
+  },
+  "floot-mcp-updated": {
+    "path": "/extension-icons/503ff08e770b73375e52.ico",
+    "source": "https://floot.com/favicon.ico"
+  },
+  "flourish-studio": {
+    "path": "/extension-icons/51013c80f4a2cb4eb810.ico",
+    "source": "https://flourish.studio/favicon.ico"
+  },
+  "flourish-financial": {
+    "path": "/extension-icons/c822b8f1d780b3f62a22.svg",
+    "source": "https://resources.flourish.com/logos/flourish-platform-badge-light-v2.svg"
+  },
+  "fmp": {
+    "path": "/extension-icons/79f0a975e916ac07ae89.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/dd63a5515216422e7213d2a8d26f1735e09c2b12-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "freee": {
+    "path": "/extension-icons/9c866174c0a60eff119d.ico",
+    "source": "https://corp.freee.co.jp/img/favicon.ico"
+  },
+  "freshservice": {
+    "path": "/extension-icons/b979f1e81415c0c4027f.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/66999be808aa72e1b921be7ba05bf3a7bc9b3e78-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "frontify": {
+    "path": "/extension-icons/d62e27fd0fa86d1bb851.png",
+    "source": "https://cdn.prod.website-files.com/66e0711541e49a7979011342/67cac2d33dabe44b10910510_web-app-manifest-256x256.png"
+  },
+  "fullstory": null,
+  "function": {
+    "path": "/extension-icons/6209d34cd5418464a3de.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b3a0f59d59a91b3e663ee65c368eef40bc22ed36-320x320.jpg?w=128&fit=max&auto=format"
+  },
+  "funnel": {
+    "path": "/extension-icons/ec03d85deb80e9d4cac0.png",
+    "source": "https://funnel.io/hubfs/Branding/Logos/funnel-favicon-web.png"
+  },
+  "fyxer": {
+    "path": "/extension-icons/49e07c10aa378a4cf587.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/24f0a58d34a6b5db079f259ae3bca9f3b6cc6fdc-256x256.png?w=128&fit=max&auto=format"
+  },
+  "g2": {
+    "path": "/extension-icons/ec3178dd1403d2551087.png",
+    "source": "https://company.g2.com/hs-fs/hubfs/brand-guide/g2-logo.png?width=300&name=g2-logo.png"
+  },
+  "gainsight-cs": {
+    "path": "/extension-icons/50073c9b50c4c09b445e.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/1a9cfd692fa82eb2cb2762879c5bd3a03b355f70-185x185.png?w=128&fit=max&auto=format"
+  },
+  "gainsight-customer-communities": {
+    "path": "/extension-icons/50073c9b50c4c09b445e.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/1a9cfd692fa82eb2cb2762879c5bd3a03b355f70-185x185.png?w=128&fit=max&auto=format"
+  },
+  "gainsight-staircase-ai": {
+    "path": "/extension-icons/50073c9b50c4c09b445e.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/1a9cfd692fa82eb2cb2762879c5bd3a03b355f70-185x185.png?w=128&fit=max&auto=format"
+  },
+  "gamma": {
+    "path": "/extension-icons/73680bb8657004d48dc9.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/f2ce571e7dee9dab1b2ad699d52d275e8fb83a59-378x378.png?w=128&fit=max&auto=format"
+  },
+  "gem": {
+    "path": "/extension-icons/f97fd7fb4b564e85bf95.svg",
+    "source": "https://mcp.gem.com/favicon.svg"
+  },
+  "general-legal": {
+    "path": "/extension-icons/d0cfe64d6755741b671c.png",
+    "source": "https://cdn.prod.website-files.com/69d3ac38e8e442c9fce520b4/6a0742ee5d1bde6d18668e0b_Frame.png"
+  },
+  "giscloud": {
+    "path": "/extension-icons/8a4b23fc621437c47a24.ico",
+    "source": "https://www.giscloud.com/favicon.ico"
+  },
+  "givebutter": {
+    "path": "/extension-icons/5d53c53f46d078181faf.svg",
+    "source": "https://mcp.givebutter.com/mcp/icon.svg"
+  },
+  "glean": {
+    "path": "/extension-icons/b3d705626fb7a9189a5a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3c4b60083a14efad618f5622efebbe7ab9f8f3d5-32x32.svg?w=128&fit=max&auto=format"
+  },
+  "glg": {
+    "path": "/extension-icons/bc9b51d5548ae7e95953.png",
+    "source": "https://access.glgresearch.com/mcp-myglg-gateway/icon.png"
+  },
+  "glovo": {
+    "path": "/extension-icons/ff66a5c9267f6dc94ba2.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e308e1ce2cefc0fc9f7e0a6d3cc51f67b528f33f-512x512.png?w=128&fit=max&auto=format"
+  },
+  "gmail": {
+    "path": "/extension-icons/6e0a1db3ce3893a809c3.svg",
+    "source": "https://svgl.app/library/gmail.svg"
+  },
+  "gocardless": {
+    "path": "/extension-icons/20ba9c2149c51793dfad.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3584ecaf22a79ba68f6ab69392e42e722cdc70c3-1000x1000.svg?w=128&fit=max&auto=format"
+  },
+  "godaddy": {
+    "path": "/extension-icons/0af96d636c740f6c4917.svg",
+    "source": "https://svgl.app/library/godaddy.svg"
+  },
+  "goodnotes": {
+    "path": "/extension-icons/c803e83cbe9dee2e2ad0.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/f58fd2853ad79cfea5a48d142cd9cb27b2603715-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "google-calendar": {
+    "path": "/extension-icons/643e0b6b34b278cf062b.svg",
+    "source": "https://svgl.app/library/google-calendar.svg"
+  },
+  "bigquery": {
+    "path": "/extension-icons/a60266dab17c1c00981c.svg",
+    "source": "https://svgl.app/library/google.svg"
+  },
+  "google-compute-engine": {
+    "path": "/extension-icons/a60266dab17c1c00981c.svg",
+    "source": "https://svgl.app/library/google.svg"
+  },
+  "google-drive": {
+    "path": "/extension-icons/2a0272583e3ea138ba5b.svg",
+    "source": "https://svgl.app/library/drive.svg"
+  },
+  "goplus-agentguard": {
+    "path": "/extension-icons/604114f30e6fc8b5e5f0.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.goplussecurity.agentguard/versions/1.1.28/icon.png"
+  },
+  "govtribe": {
+    "path": "/extension-icons/61f99502d09299a8f45a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e8d06ffe0348fc333f41e2b94c161b496fb47d52-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "grafana-mcp-server": {
+    "path": "/extension-icons/0ff32cdf0377090bac95.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.grafana.grafana-mcp/versions/0.10.0/icon.png"
+  },
+  "grain": {
+    "path": "/extension-icons/33f9592f430fc8cda80a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8f76cc3e4fcc8216fa437a92a5dc28bf3cbded6a-160x171.svg?w=128&fit=max&auto=format"
+  },
+  "granola": {
+    "path": "/extension-icons/82826bd3a435a4c244b8.svg",
+    "source": "https://svgl.app/library/granola-light.svg"
+  },
+  "granted": {
+    "path": "/extension-icons/b965e246aa19ebb51e57.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/526ffe17c19979b32a45a2c8c46239e63539173c-249x249.png?w=128&fit=max&auto=format"
+  },
+  "graphos-tools": {
+    "path": "/extension-icons/603ecf5ca375f1ed78a8.png",
+    "source": "https://www.datocms-assets.com/102461/1728074900-symbol.png"
+  },
+  "grasp": {
+    "path": "/extension-icons/560e1ca00057f8c8de1d.svg",
+    "source": "https://app.grasp-ai.com/logo-dark.svg"
+  },
+  "grasshopper-bank": {
+    "path": "/extension-icons/7e1f1fe0037dc0121640.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/ecd8390ac6022669830aa3801b8ba582760b6295-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "growthbook": {
+    "path": "/extension-icons/f8304d76a1146aeefbbd.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.growthbook.growthbook-mcp/versions/1.8.1/icon.png"
+  },
+  "grtwo-docs": {
+    "path": "/extension-icons/83cedcfc550a3303f641.svg",
+    "source": "https://www.grtwo.app/gryz-mark.svg"
+  },
+  "guidepoint": {
+    "path": "/extension-icons/614dbc3f9b819fd88085.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/08c35973937b01ca83287fd2e38bd82aca907d2e-64x64.svg?w=128&fit=max&auto=format"
+  },
+  "guru": {
+    "path": "/extension-icons/9a5e846757e444acbc6a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/55d5b44130f9a977babba71d0cab2d530f5ed50a-200x200.svg?w=128&fit=max&auto=format"
+  },
+  "gusto": {
+    "path": "/extension-icons/f8ff4622e8fcb05b4dbf.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a9ccef1440cefadaa9554f4b71e3aa9a234780b3-160x160.png?w=128&fit=max&auto=format"
+  },
+  "haloo-trademark-clearance": {
+    "path": "/extension-icons/fe82bfd2ea085dd597dd.ico",
+    "source": "https://haloo.ai/favicon.ico"
+  },
+  "hanover-park": null,
+  "harmonic": {
+    "path": "/extension-icons/c582cccf5a417044c7e8.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3fc0d793e7c0bd921fe19e957a8afe0366941520-160x160.png?w=128&fit=max&auto=format"
+  },
+  "harness": null,
+  "harness-mcp-server": {
+    "path": "/extension-icons/c1cc473e4a88d0a815c6.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.harness.mcp-server/versions/0.9.2/icon.png"
+  },
+  "harvey": {
+    "path": "/extension-icons/fdcbe4cb51a1051eb541.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e9b61c1f24468f659352733124759459ce6cdb08-300x300.jpg?w=128&fit=max&auto=format"
+  },
+  "have-i-been-pwned": {
+    "path": "/extension-icons/440498ff84a20b2de35e.svg",
+    "source": "https://raw.githubusercontent.com/HaveIBeenPwned/Branding/refs/heads/main/Logos/Icon/Blue%20on%20Black/Icon.svg"
+  },
+  "health-data-avatar-hda": {
+    "path": "/extension-icons/e3ec0f0af43bdf19b59d.svg",
+    "source": "https://support.healthdataavatar.com/HDA-square.svg"
+  },
+  "healthex": {
+    "path": "/extension-icons/26655168b50653e70977.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/963f0667bca2d82bc9316d5b1e90ae06fa34fdbb-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "hebbia": {
+    "path": "/extension-icons/d4a59b9683d0469b64ad.png",
+    "source": "https://www.hebbia.com/apple-touch-icon.png"
+  },
+  "helena-by-enrich-labs": {
+    "path": "/extension-icons/61d5c8d2e4d066e3f17e.png",
+    "source": "https://agent.enrichlabs.ai/avatars/helena.png"
+  },
+  "helium-10": {
+    "path": "/extension-icons/b70431600bc3af692a68.ico",
+    "source": "https://www.helium10.com/favicon.ico"
+  },
+  "helix-genosphere": {
+    "path": "/extension-icons/777a6e3b10a91c492300.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/deaeb4297c3773c37b57d61de3ffc6e7b5e85ac0-16x16.svg?w=128&fit=max&auto=format"
+  },
+  "hex": {
+    "path": "/extension-icons/3c8e3c003bf31d7f7c6c.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/58dca04174196c2dcbdba0161466fd4914b70a82-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "highspot": {
+    "path": "/extension-icons/12324b610b2614c507ef.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a3829fa02ba4fccf9f64a03187490abad57ff620-54x54.svg?w=128&fit=max&auto=format"
+  },
+  "honeycomb": {
+    "path": "/extension-icons/c69e8114cde150e81c93.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/71681f759d7085becb936bd464400724af6754ba-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "hubspot": {
+    "path": "/extension-icons/a9206ffa5dbb51bd4030.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/88987cdffe5dac52f9f9383f9dd296a7b8c5671a-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "hugging-face": {
+    "path": "/extension-icons/b5d3cd5fd73e72a38784.svg",
+    "source": "https://svgl.app/library/hugging_face.svg"
+  },
+  "hyperframes": {
+    "path": "/extension-icons/88129ff619e6caffc7e6.ico",
+    "source": "https://www.heygen.com/favicon.ico"
+  },
+  "ibisworld": {
+    "path": "/extension-icons/44121d4eb680102ab04e.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/bb0a70e4dd9a38b92cd301cb0f0c003c75163a24-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "icd-10-codes": {
+    "path": "/extension-icons/a3979ead660e2d901aba.svg",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/icd-10-codes.svg"
+  },
+  "ice-data-services": {
+    "path": "/extension-icons/23201ead2c935d086269.ico",
+    "source": "https://www.ice.com/publicdocs/images/favicon_ice.ico"
+  },
+  "idealista": {
+    "path": "/extension-icons/f6eb244c5cbcd94346c9.ico",
+    "source": "https://www.idealista.com/favicon.ico"
+  },
+  "vdr-ideals": null,
+  "idiolect": {
+    "path": "/extension-icons/62ea05908745dc93a593.svg",
+    "source": "https://idiolect.app/logo-mark.svg"
+  },
+  "ifttt": {
+    "path": "/extension-icons/57d57ab511fd341b3853.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/67769fef15ffe36dd042c371c765430381d512a3-1024x1024.svg?w=128&fit=max&auto=format"
+  },
+  "imanage": {
+    "path": "/extension-icons/0323fb86dfcf09a6cf18.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/aa9cf0ec0a026a9833cac182b07a604dc754f02a-216x216.jpg?w=128&fit=max&auto=format"
+  },
+  "incident-io": {
+    "path": "/extension-icons/3936559d52ffb2d59ca9.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/6d5ea0e4ba2b179882949e7f9202cd5c4af0aeaa-512x512.svg?w=128&fit=max&auto=format"
+  },
+  "indeed": {
+    "path": "/extension-icons/9d503dcbd6813b843f2b.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/ae0465745858dfc836b8ce4ae6bef9368ea2d0de-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "inductive-bio": {
+    "path": "/extension-icons/b2067e9e881421c8751c.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/09b36ce6a39e849c23aac50ee145091435a35c3d-332x332.png?w=128&fit=max&auto=format"
+  },
+  "infobip-message": {
+    "path": "/extension-icons/1c9d185e9c743452ccc6.png",
+    "source": "https://cdn-web.infobip.com/uploads/2025/05/infobip-symbol-orange.png"
+  },
+  "informatica-catalog-discovery": {
+    "path": "/extension-icons/9bcd024e8fa5e69c2d9a.png",
+    "source": "https://www.informatica.com/content/dam/informatica-com/en/image/misc/logo-mark.png"
+  },
+  "informatica-data-exploration": {
+    "path": "/extension-icons/9bcd024e8fa5e69c2d9a.png",
+    "source": "https://www.informatica.com/content/dam/informatica-com/en/image/misc/logo-mark.png"
+  },
+  "inkbox": {
+    "path": "/extension-icons/fa872c87cb1dd0d09620.png",
+    "source": "https://inkbox.ai/static/logos/inkbox-logo.png"
+  },
+  "insider-one": {
+    "path": "/extension-icons/1ed4e0d0be9f21ffc124.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9f1eccd4505ac2dd8486c17e4140212f7f2eac23-192x192.png?w=128&fit=max&auto=format"
+  },
+  "instacart": {
+    "path": "/extension-icons/ec5253506115259cd537.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8eccb953d331400a7a630cfed7a454265240ff4b-300x300.svg?w=128&fit=max&auto=format"
+  },
+  "instrumentl": {
+    "path": "/extension-icons/ed5c954a1939fb9c1010.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/75c8a849f4166acf11126f4272c3fd49a5b03314-260x260.svg?w=128&fit=max&auto=format"
+  },
+  "intapp-celeste": {
+    "path": "/extension-icons/ecd57aa20ea71ae7cd8d.ico",
+    "source": "https://intapp.com/favicon.ico"
+  },
+  "interactive-brokers": {
+    "path": "/extension-icons/15737642668db5a9b5aa.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b0fad375363319cfd4af8d19df8402c9fec27337-900x900.jpg?w=128&fit=max&auto=format"
+  },
+  "intercom": {
+    "path": "/extension-icons/0fe6c09786b79f1f299f.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d46e0accf7e542ec1c0748d8b20893b1163eb011-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "introhive": {
+    "path": "/extension-icons/21baa9345bb0132ade3e.svg",
+    "source": "https://d.cdn.introhive.com/introhive_logo.svg"
+  },
+  "intuit-credit-karma": {
+    "path": "/extension-icons/7d3ae2aedc1b985339a5.ico",
+    "source": "https://creditkarma.com/favicon.ico"
+  },
+  "intuit-mailchimp": {
+    "path": "/extension-icons/1e9840287decb8799f6d.ico",
+    "source": "https://mailchimp.com/favicon.ico"
+  },
+  "quickbooks": {
+    "path": "/extension-icons/348fdbe1a52e02746bc8.svg",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/quickbooks.svg"
+  },
+  "intuit-turbotax": {
+    "path": "/extension-icons/b9b1cc2e94d3ef02d9b6.svg",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/turbotax.svg"
+  },
+  "ipgeolocation-io-mcp-server": {
+    "path": "/extension-icons/0af34ea8eee95c6b62cd.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.ipgeolocation.ipgeolocation-io-mcp/versions/2.0.0/icon.png"
+  },
+  "ironclad": {
+    "path": "/extension-icons/8f829f1d45be9972739e.png",
+    "source": "https://ironcladapp.com/favicon.ico"
+  },
+  "isolved": {
+    "path": "/extension-icons/92aa9855502203377f05.svg",
+    "source": "https://dam.isolvedhcm.com/9e0fafae-351c-4b61-9e5b-b459015dd5f4/isolved_logo_mark_-_rev_original_file.svg"
+  },
+  "isometric": null,
+  "item": {
+    "path": "/extension-icons/ba21829b178c500efc30.ico",
+    "source": "https://item.app/favicon.ico"
+  },
+  "iubenda": {
+    "path": "/extension-icons/c3db46541bd1912d6de8.ico",
+    "source": "https://www.iubenda.com/favicon.ico"
+  },
+  "jam": {
+    "path": "/extension-icons/9ed0a7e10e860dc3113b.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a37921974579c309e9ef119bfbc8d5c71ca20c3d-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "jasper": {
+    "path": "/extension-icons/f1a0ee52423e5cae1d1e.svg",
+    "source": "https://cdn.prod.website-files.com/6807ee8d73c233fb82842313/6a1ddb6c015444b36eb1c428_Jasper%20Logo%20Square%202026.svg"
+  },
+  "jaz-accounting": {
+    "path": "/extension-icons/e69243fd3d822bdb73cb.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.teamtinvio.jaz-ai/versions/5.40.4/icon.png"
+  },
+  "jedify": {
+    "path": "/extension-icons/aa39a1b2403ffb2e89f0.ico",
+    "source": "https://app.jedify.com/favicon.ico"
+  },
+  "jentic": {
+    "path": "/extension-icons/4fc89917d4f0a751185f.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/0eeb8c333649b9a24ea2500a6dc6e916c8f8d903-2000x2000.png?w=128&fit=max&auto=format"
+  },
+  "jobber": {
+    "path": "/extension-icons/e3e2caec90eb6efb10ec.ico",
+    "source": "https://www.getjobber.com/favicon.ico"
+  },
+  "jotform": {
+    "path": "/extension-icons/4d65d0ca79767acfff00.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d8e560303955a80f985db0ce8e71175007c8c2db-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "jotform-apps": {
+    "path": "/extension-icons/14b932f1a5981777939b.png",
+    "source": "https://jotform.com/assets/img/portal/jotformAppsLogo.png"
+  },
+  "jotform-sign": {
+    "path": "/extension-icons/30f920b97459d662186f.png",
+    "source": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/82/ae/4c/82ae4ce7-6614-ea43-f543-d3cbd11e9726/AppIcon-0-0-1x_U007epad-0-10-0-85-220.png/512x512bb.png"
+  },
+  "jupiterone": {
+    "path": "/extension-icons/2884c977634f8ce60a52.svg",
+    "source": "https://j1dev.apps.us.jupiterone.io/static/jupiterone/images/jupiterone-logo-on-light-background.svg"
+  },
+  "juro": null,
+  "jus-mundi": null,
+  "kapture-browser-automation": {
+    "path": "/extension-icons/17a346b0dd0b47cabf95.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.williamkapke.kapture/versions/2.1.2/icon.png"
+  },
+  "karp-inspector-lite": {
+    "path": "/extension-icons/cfc5f1a50ecf767b4e83.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.karp.inspector-mcp/versions/1.0.1/icon.png"
+  },
+  "kepler": {
+    "path": "/extension-icons/3996574be284b4297d8d.ico",
+    "source": "https://kepler.ai/favicon.ico"
+  },
+  "ketryx": {
+    "path": "/extension-icons/885aeff372734185eb15.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/34bd334e17e8a9658002e523f8fc84e07d791dcb-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "kick-co": {
+    "path": "/extension-icons/01463b661b590dc27a09.svg",
+    "source": "https://svgl.app/library/kick-light.svg"
+  },
+  "kindora-funder-discovery": {
+    "path": "/extension-icons/065ff575da99d7a129d3.ico",
+    "source": "https://www.kindora.co/favicon.ico"
+  },
+  "kiteworks-mcp-server": {
+    "path": "/extension-icons/ec0fb6322e3b166ea43d.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.kiteworks.mcp/versions/0.9.4%20(a08b7f91)/icon.png"
+  },
+  "kiwi-com": {
+    "path": "/extension-icons/678757cee88b99c07237.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9be76864ff8e820ad906ec9649d10f93a26b9f8f-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "klaviyo": {
+    "path": "/extension-icons/e4dfd6719053d09ccd7c.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9ab354ca01b71e660d0010f997d43418571f3de2-76x76.png?w=128&fit=max&auto=format"
+  },
+  "klue": {
+    "path": "/extension-icons/85c3e2fc743a6c86f1a7.ico",
+    "source": "https://klue.com/favicon.ico"
+  },
+  "kpler": {
+    "path": "/extension-icons/5bcf108e84c48fd23d12.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4a84db8cc3086552a941dc6bb501393099790217-160x137.svg?w=128&fit=max&auto=format"
+  },
+  "krisp": {
+    "path": "/extension-icons/c172036ca31e2123aaac.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/040b21c5e411c10fa6175751a5d1156d6fcb77f2-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "kubernetes-mcp-server": {
+    "path": "/extension-icons/f90112854198ea1dddfa.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.flux159.mcp-server-kubernetes/versions/4.1.4/icon.png"
+  },
+  "kuliko-ai": {
+    "path": "/extension-icons/388258bcd739343cb957.png",
+    "source": "https://kuliko.ai/logo.png"
+  },
+  "la-growth-machine": {
+    "path": "/extension-icons/8da5b774bcd3b14967c7.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.lagrowthmachine.lgm-mcp-server/versions/1.0.0/icon.png"
+  },
+  "lastminute-com": null,
+  "latchbio": {
+    "path": "/extension-icons/8b8f6afe86d91967db38.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e54ae32acc106452b6514b7370fa85eae31d1694-1200x1200.svg?w=128&fit=max&auto=format"
+  },
+  "lattice": {
+    "path": "/extension-icons/a8b89e0603266c947e41.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/7ee466e550dcfc95a00e27a5de62adf9f33e2009-400x400.png?w=128&fit=max&auto=format"
+  },
+  "lawstronaut": {
+    "path": "/extension-icons/8c7ac18fa4f812838fb6.png",
+    "source": "https://lawstronaut-publica-assests-319993545899-us-east-1-an.s3.us-east-1.amazonaws.com/Logos/lawstronautvblack.png"
+  },
+  "lawve-ai": null,
+  "lawvu": {
+    "path": "/extension-icons/95327f45cafe7f46a8bb.png",
+    "source": "https://lawvu.com/wp-content/uploads/cropped-favcion-1-32x32.png"
+  },
+  "learning-commons-knowledge-graph": {
+    "path": "/extension-icons/a37c1b6bec6427eab409.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9b0c2515ac5c08c376b2b67c14c9157abf2c8224-200x200.jpg?w=128&fit=max&auto=format"
+  },
+  "legal-brain-agent": {
+    "path": "/extension-icons/0be0e7846cb37e1f1e3e.ico",
+    "source": "https://www.bengo4.com/favicon.ico"
+  },
+  "legal-data-hunter": {
+    "path": "/extension-icons/a86ee138b7dfc5666ff0.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9a609a1f12bb7dec26dd66e1c105181af8a9e88d-512x512.svg?w=128&fit=max&auto=format"
+  },
+  "legalzoom": {
+    "path": "/extension-icons/7fc6a47bf49b0941a696.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b0a9bcd843ce8c54daa481f3b013cdc5d40ddb07-182x181.svg?w=128&fit=max&auto=format"
+  },
+  "lens-studio": {
+    "path": "/extension-icons/22e8f61df8d3a9e5091c.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.snapchat.lens-studio/versions/1.0.0/icon.png"
+  },
+  "letsbot": {
+    "path": "/extension-icons/80ab65edee0253c85426.svg",
+    "source": "https://letsbot.net/img/brand/letsbot-mark.svg"
+  },
+  "light": {
+    "path": "/extension-icons/24401ba9655687efdb86.svg",
+    "source": "https://app.light.inc/images/logo.svg"
+  },
+  "lightfield": {
+    "path": "/extension-icons/c970ed4042be504fc1d6.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/672491d14e2d3a034dc5d880a7b715ab268f107b-2000x2000.svg?w=128&fit=max&auto=format"
+  },
+  "lilt": {
+    "path": "/extension-icons/6760e34fa2133871fdfd.ico",
+    "source": "https://lilt.com/favicon.ico"
+  },
+  "lindo-ai": {
+    "path": "/extension-icons/b88dff30f1e5435bd732.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.lindoai.mcp-server/versions/1.1.1/icon.png"
+  },
+  "linear": {
+    "path": "/extension-icons/e669549bf9917d616f3a.svg",
+    "source": "https://svgl.app/library/linear.svg"
+  },
+  "links-connect": {
+    "path": "/extension-icons/9f81a54b72e4dfacb3aa.ico",
+    "source": "https://www.thelinks.ai/favicon.ico"
+  },
+  "listen-labs": {
+    "path": "/extension-icons/35512cbc42567119580a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/1cee95c71a09cefc02c2101912367630590c5e82-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "litmus-mcp": {
+    "path": "/extension-icons/be0d112064adfe0f4020.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.litmusautomation.litmus-mcp-server/versions/1.4.0/icon.png"
+  },
+  "livestorm": {
+    "path": "/extension-icons/80ed6b3a14004414eebc.png",
+    "source": "https://www.datocms-assets.com/1127/1633449106-logo-livestorm.png"
+  },
+  "llamaparse": {
+    "path": "/extension-icons/a8d30ba38c768826c131.svg",
+    "source": "https://www.llamaindex.ai/favicon.svg"
+  },
+  "lloyd": null,
+  "local-falcon": {
+    "path": "/extension-icons/349dc14f95129525a886.ico",
+    "source": "https://www.localfalcon.com/favicon.ico"
+  },
+  "local-falcon-7832b1": {
+    "path": "/extension-icons/a49041793bc1985af678.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.local-falcon.mcp/versions/1.4.7/icon.png"
+  },
+  "lorikeet": {
+    "path": "/extension-icons/4b448907ff05796bea0c.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/ec6690e1b065f86963b0831e606414d2ce4d67cf-436x435.svg?w=128&fit=max&auto=format"
+  },
+  "lovable": {
+    "path": "/extension-icons/a5aa75b9ac3d40073492.svg",
+    "source": "https://svgl.app/library/lovable.svg"
+  },
+  "london-stock-exchange-group": {
+    "path": "/extension-icons/8095e134aa74a4d6a80e.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/11719741cf09f493f5d9fcfc44c71e81d8f73a79-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "lucid": {
+    "path": "/extension-icons/be68b2c6728a9bedb4a7.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/60395516cb91a4d5482c8d4ca489bf2f2f661518-512x512.svg?w=128&fit=max&auto=format"
+  },
+  "lumin": {
+    "path": "/extension-icons/f45527e1410cbc7079ee.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b0fef3994c459a48b12f74efe2b6e88763a649ca-160x163.svg?w=128&fit=max&auto=format"
+  },
+  "lumin-82219f": {
+    "path": "/extension-icons/767e65d974db7066491f.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.lumin.lumin-mcp/versions/0.0.3/icon.png"
+  },
+  "lumonic": null,
+  "lunarcrush": {
+    "path": "/extension-icons/5a2d9f4f7ae76939f2ed.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/235216dc50aedc74facaea0d55b9603572a94022-2048x2048.png?w=128&fit=max&auto=format"
+  },
+  "lusha": {
+    "path": "/extension-icons/8d05ba85982398cf8cca.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/0016aa3062eb9025751cc93886bec11a168665a8-180x180.png?w=128&fit=max&auto=format"
+  },
+  "lyrenth": {
+    "path": "/extension-icons/8134936970f29bd868d3.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.lyrenth.lyrenth-mcp/versions/0.1.4/icon.png"
+  },
+  "lz-virtual-mail": {
+    "path": "/extension-icons/1e2e097293e1d756d334.ico",
+    "source": "https://api.earthclassmail.com/v2/favicon.ico"
+  },
+  "macaly-cloud": {
+    "path": "/extension-icons/fe3e6139ae840af2ecc8.svg",
+    "source": "https://www.macaly.com/favicon.svg"
+  },
+  "macos-mcp": {
+    "path": "/extension-icons/a0d8ce1678f643423602.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.cursortouch.macos-mcp/versions/0.3.17/icon.png"
+  },
+  "magic-patterns": {
+    "path": "/extension-icons/8d25743b84b69a006101.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3bde74050925366ce5f4f429cefc0cc19018e37a-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "magicschool-ai": {
+    "path": "/extension-icons/f6b5f0cd2e60a7e0a68e.webp",
+    "source": "https://cdn.prod.website-files.com/645187265d5e5e386be40629/69446a90ee324df666f4baea_Favicon_32x32.webp"
+  },
+  "mailerlite": {
+    "path": "/extension-icons/b6d5f8dee51a60d262b0.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3a0b18f95123881e47c4f55146fb317947bc0479-510x510.jpg?w=128&fit=max&auto=format"
+  },
+  "mailtrap": {
+    "path": "/extension-icons/fd6cd447a0e1ebe06cc2.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.mailtrap.mailtrap-mcp/versions/0.7.0/icon.png"
+  },
+  "make": {
+    "path": "/extension-icons/c4de6a1167c1e6261246.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/86f54c06e7e31de8ed84748a74027f24c0f38875-512x512.svg?w=128&fit=max&auto=format"
+  },
+  "malwarebytes": {
+    "path": "/extension-icons/1e7ba888137898188f8c.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d4c33265a3089e10d0909c8caea2abe7f0da40c2-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "manufact": {
+    "path": "/extension-icons/6550b805911869f6fe23.ico",
+    "source": "https://manufact.com/favicon.ico"
+  },
+  "mary": {
+    "path": "/extension-icons/1df10cae7baff56ff5e4.png",
+    "source": "https://mcp.us.marytechnology.com/favicon.png"
+  },
+  "maryland-compass": {
+    "path": "/extension-icons/e56a06bdf1abf4a5ebd1.png",
+    "source": "https://compass.maryland.gov/assets/compass-icon.png"
+  },
+  "mastercard-developers": {
+    "path": "/extension-icons/bc5e915bab46a4e2668b.ico",
+    "source": "https://developer.mastercard.com/favicon.ico"
+  },
+  "maven-bio": {
+    "path": "/extension-icons/ec87afeff4395b2363cf.ico",
+    "source": "https://mavenbio.com/favicon.ico"
+  },
+  "mcafee": {
+    "path": "/extension-icons/acfaa872c648e4e7fa7c.png",
+    "source": "https://claude-public-asset.s3-us-west-2.amazonaws.com/icons/McAfee.png"
+  },
+  "mcp-instana-server": {
+    "path": "/extension-icons/92780ca5c1b20dcf2886.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.instana.mcp-instana/versions/0.3.1/icon.png"
+  },
+  "mcp-memory": {
+    "path": "/extension-icons/ead4cdbe2d2f2175f2f9.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.mnemoverse.mcp-memory-server/versions/0.8.3/icon.png"
+  },
+  "mdn": {
+    "path": "/extension-icons/77b58351b9f57ca4f663.svg",
+    "source": "https://developer.mozilla.org/favicon.svg"
+  },
+  "medidata": {
+    "path": "/extension-icons/2bdb4fcffb40507b3f17.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/cb6258ed6bf54ca8d159930a44df60e637e72b31-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "meetgeek": {
+    "path": "/extension-icons/30351825c17f06fc8be5.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.meetgeek.meetgeek-mcp/versions/1.0.1/icon.png"
+  },
+  "meistertask": null,
+  "meko": null,
+  "melon": {
+    "path": "/extension-icons/79b5e3c634980c7a7c00.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4358435caa4717c2ab7e10f359067163ef5f7395-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "meltwater": {
+    "path": "/extension-icons/330f9c4417109dc16747.ico",
+    "source": "https://www.meltwater.com/favicon.ico"
+  },
+  "mem": {
+    "path": "/extension-icons/50014c989be1def1e6b6.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9defd43d834d8f878d4241211e05a4702dd73ed2-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "mem0": {
+    "path": "/extension-icons/6cb3575084dac2e06551.svg",
+    "source": "https://framerusercontent.com/images/2ys67ADJdvcyGmQnhp8vKWSq8.svg"
+  },
+  "mercury": {
+    "path": "/extension-icons/5c14f841e5069e52617b.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/5f1f210d03e706fee7a9f5917f2ba729bc4a57d0-64x64.svg?w=128&fit=max&auto=format"
+  },
+  "meridian-ai": {
+    "path": "/extension-icons/2cfecabdef4d5401ff29.png",
+    "source": "https://meridianproduction.blob.core.windows.net/static/favicon/favicon-120x120.png"
+  },
+  "meridian-connector-for-quickbooks": {
+    "path": "/extension-icons/7dd4a5389651491bd9d2.png",
+    "source": "https://qbo-connector.meridian.pilot.com/assets/favicon.png"
+  },
+  "mermaid-chart": null,
+  "metabase": {
+    "path": "/extension-icons/dc7f1e294a5a89dcab8c.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/56b14e1133779f8c9203db597501a12d1b0553b1-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "metabase-unofficial-community": {
+    "path": "/extension-icons/17699f278742cfa7e69c.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.jerichosequitin.metabase/versions/1.1.7/icon.png"
+  },
+  "metal": null,
+  "metaview": {
+    "path": "/extension-icons/68d2fb498ccf0e1e7383.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/fafe044c0158824204c110d77e28e6848f2b82b3-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "metricool-social-media-management": {
+    "path": "/extension-icons/2c8004a9b64b73d7d4a8.png",
+    "source": "https://metricool.com/wp-content/uploads/cropped-web-app-manifest-512x512-1-180x180.png"
+  },
+  "microsoft-365": {
+    "path": "/extension-icons/51635844d2ae983077bb.svg",
+    "source": "https://svgl.app/library/anthropic_black.svg"
+  },
+  "microsoft-clarity": {
+    "path": "/extension-icons/6506017bc03499861060.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.microsoft.clarity-mcp-server/versions/2.0.1/icon.png"
+  },
+  "dataverse": {
+    "path": "/extension-icons/b12a6d78e98fde0b8063.png",
+    "source": "https://conn-afd-prod-endpoint-bmc9bqahasf3grgk.b01.azurefd.net/releases/v1.0.1802/1.0.1802.4638/commondataserviceforapps/icon.png"
+  },
+  "microsoft-learn": {
+    "path": "/extension-icons/726aa11548b3771591cc.svg",
+    "source": "https://svgl.app/library/microsoft.svg"
+  },
+  "midpage": {
+    "path": "/extension-icons/1b7a63d15429d7b1adb0.ico",
+    "source": "https://www.midpage.ai/favicon.ico"
+  },
+  "miggo": {
+    "path": "/extension-icons/7c6acbee3383b5667feb.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.miggo-io.miggo-mcp/versions/0.8.2/icon.png"
+  },
+  "mintlify": {
+    "path": "/extension-icons/3943a56499b82f690f0a.svg",
+    "source": "https://svgl.app/library/mintlify.svg"
+  },
+  "minutes-conversation-memory": {
+    "path": "/extension-icons/aca9303e4c1ee707f6fa.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.silverstein.minutes/versions/0.25.1/icon.png"
+  },
+  "miro": {
+    "path": "/extension-icons/13be125e7d02fc672346.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/c0db06d74e8dd507c5ec1f5645333f503c1a6c66-400x400.svg?w=128&fit=max&auto=format"
+  },
+  "mittwald": {
+    "path": "/extension-icons/f27c5167cfd0280cecff.ico",
+    "source": "https://mittwald.de/favicon.ico"
+  },
+  "mixpanel": {
+    "path": "/extension-icons/aaf2c1fe58b4631e09d9.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/bf3c43be6f8c9fdbc1508fb7973591c74a00c633-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "mobbin": {
+    "path": "/extension-icons/35b5220352a50dba278a.svg",
+    "source": "https://storage.googleapis.com/assets.mobbin.com/claude.ai/logo.svg"
+  },
+  "moda": {
+    "path": "/extension-icons/6a034be6819bab67ef71.ico",
+    "source": "https://moda.app/favicon.ico"
+  },
+  "pocket-capture": null,
+  "monday": {
+    "path": "/extension-icons/18c1c08609e9a5cb9388.ico",
+    "source": "https://monday.com/favicon.ico"
+  },
+  "mongodb-atlas": {
+    "path": "/extension-icons/873cf00837b6cc30a01c.svg",
+    "source": "https://svgl.app/library/mongodb-icon-light.svg"
+  },
+  "monte-carlo": {
+    "path": "/extension-icons/36df299d22dd61e12b84.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/0c573ca68b9a9b854c1757211155f791a77d46a2-200x200.jpg?w=128&fit=max&auto=format"
+  },
+  "moodys-analytics": {
+    "path": "/extension-icons/1d8944281b3d1d17cbc9.ico",
+    "source": "https://moodys.com/favicon.ico"
+  },
+  "morningstar": {
+    "path": "/extension-icons/8ddf09fa0a9715329afa.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9b37e81b33d17409c6da9542955d30b5fef88966-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "morningstar-credit-analytics": {
+    "path": "/extension-icons/fb9fcd3a5fb99240b924.ico",
+    "source": "https://credit.morningstar.com/favicon.ico"
+  },
+  "mospi": {
+    "path": "/extension-icons/4fa27c50e15b22d83c72.ico",
+    "source": "https://www.mospi.gov.in/favicon.ico"
+  },
+  "motherduck": {
+    "path": "/extension-icons/42ca0df087f849850d7c.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/929e1a9b6729a6870ce6d36d58831d26b271adba-3850x2824.svg?w=128&fit=max&auto=format"
+  },
+  "motion": {
+    "path": "/extension-icons/a7c9f6e36ca30ee04249.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8d44b0704864d09949922e99813993144864a88a-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "msci": {
+    "path": "/extension-icons/9c8a33e9f00399713375.ico",
+    "source": "https://msci.com/favicon.ico"
+  },
+  "mt-newswires": {
+    "path": "/extension-icons/dd0e09d4476fba9531e4.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/2a2a4ed33c7ea37ca09c05ba6e5c88c18c550927-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "mulesoft": {
+    "path": "/extension-icons/2abfaf46e3aa6d04003c.svg",
+    "source": "https://svgl.app/library/mulesoft.svg"
+  },
+  "mygeotab-mcp-prod": {
+    "path": "/extension-icons/938a0617d9f988a63dc1.ico",
+    "source": "https://mcp.geotab.com/favicon.ico"
+  },
+  "myob": {
+    "path": "/extension-icons/e7efa845b0ade1f4e2db.png",
+    "source": "https://www.myob.com/favicons/sme/favicon-32x32.png"
+  },
+  "n8n": {
+    "path": "/extension-icons/de2f3496ee97a2f7adea.svg",
+    "source": "https://svgl.app/library/n8n.svg"
+  },
+  "natoma": {
+    "path": "/extension-icons/8a24cc9c9048638e116a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/40056bd5b6d2ad0f10ce586f23e87e900ae7d8db-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "neon": {
+    "path": "/extension-icons/3af6fa33e85ad9dff82a.svg",
+    "source": "https://svgl.app/library/neon.svg"
+  },
+  "netdocuments": {
+    "path": "/extension-icons/d00d0a6866c22a8fbc30.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/0b6d192bed22ac1cceac51f96c361b986415f2a4-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "netlify": {
+    "path": "/extension-icons/49c48ca9efc5f9419acc.svg",
+    "source": "https://svgl.app/library/netlify.svg"
+  },
+  "oracle-netsuite": null,
+  "nimble": {
+    "path": "/extension-icons/62c411592c24e3a72621.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/efc8b7eb2f9d1d9dc62ee9a99aad0c5a6fae04f4-256x256.svg?w=128&fit=max&auto=format"
+  },
+  "ninout": null,
+  "nooks": null,
+  "norton": null,
+  "noteplan": {
+    "path": "/extension-icons/01bc404720368bcefe74.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.noteplan.noteplan-mcp/versions/1.1.29/icon.png"
+  },
+  "notion": {
+    "path": "/extension-icons/0d94471649fb9badd434.svg",
+    "source": "https://svgl.app/library/notion.svg"
+  },
+  "novasol": null,
+  "npi-registry": {
+    "path": "/extension-icons/3e17e33488c1ea5ccdfe.svg",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/npi-registry.svg"
+  },
+  "nutrient-dws": {
+    "path": "/extension-icons/e205709f3b10151afdc9.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.pspdfkit.nutrient-dws-mcp-server/versions/0.0.6/icon.png"
+  },
+  "nutrient-pdf-editor": {
+    "path": "/extension-icons/e205709f3b10151afdc9.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.pspdfkit.nutrient-pdf-editor-mcp/versions/1.0.0/icon.png"
+  },
+  "nutshell-crm": null,
+  "oilpriceapi-oil-gas-commodity-prices": {
+    "path": "/extension-icons/c2f8476d2db0617023c3.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.oilpriceapi.mcp-server/versions/2.4.2/icon.png"
+  },
+  "omni-analytics": {
+    "path": "/extension-icons/8cb4d81bd63312709918.ico",
+    "source": "https://omni.co/favicon.ico"
+  },
+  "onesignal": {
+    "path": "/extension-icons/c9d8349a33bdbe6fd6b0.svg",
+    "source": "https://onesignal.com/favicon.svg"
+  },
+  "ontra": {
+    "path": "/extension-icons/cca707a9229e2a4c5b5a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/77e68e8988f7f72f2151345841c30f3cba448c53-273x342.svg?w=128&fit=max&auto=format"
+  },
+  "open-targets": {
+    "path": "/extension-icons/eac7bbf16209e18b930c.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/27e159694678fd3ae2bca65b3004c601aba4d675-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "openreplay": {
+    "path": "/extension-icons/764a2c9857e92d18d6d6.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.openreplay.openreplay/versions/1.27.0/icon.png"
+  },
+  "openrush": {
+    "path": "/extension-icons/69ffc2c755c64db6c0cb.png",
+    "source": "https://www.openrush.com/openrush-mcp-icon-dark-200.png"
+  },
+  "openstaad-mcp-server": {
+    "path": "/extension-icons/779d2173b541f4436d28.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.bentleysystems.openstaad-mcp/versions/1.2.0/icon.png"
+  },
+  "opusclip": {
+    "path": "/extension-icons/4387aa7b905dcc56183c.svg",
+    "source": "https://help.opus.pro/logo/opus_logo.svg"
+  },
+  "cash-app": {
+    "path": "/extension-icons/70b98e7ddc804596e8e3.svg",
+    "source": "https://cash-f.squarecdn.com/static/cash-app-green-jewel.svg"
+  },
+  "origin": {
+    "path": "/extension-icons/432d43407f1d7d5f3a9d.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/cf889db74ab43ecfa0e6e4ae17a48b06aef68171-2048x2048.png?w=128&fit=max&auto=format"
+  },
+  "orion-advisor-solutions": {
+    "path": "/extension-icons/a9cf402da9a1027e7d4f.svg",
+    "source": "https://resources.swsapp.com/shared/orion.svg"
+  },
+  "orion": {
+    "path": "/extension-icons/6fef0eaf5f5a0eb59937.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/0f0ede79f43f93938d4e314ed62da2cfe75e178e-512x512.svg?w=128&fit=max&auto=format"
+  },
+  "otter-ai": {
+    "path": "/extension-icons/fa827213caf15136bc4f.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b8e552a09b62ce361376e415e0ff29a559007aef-512x512.jpg?w=128&fit=max&auto=format"
+  },
+  "otto-travel": {
+    "path": "/extension-icons/ad2d6c42b204c2748db2.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/22ac1e8d765c6d73cdbf9c395417833425d08201-160x162.png?w=128&fit=max&auto=format"
+  },
+  "outreach": {
+    "path": "/extension-icons/acdda95e1647b3595ece.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/17d2eb1f1c9798167d013e7b634bf8f128225586-800x760.png?w=128&fit=max&auto=format"
+  },
+  "owkin": {
+    "path": "/extension-icons/70897c2775627247ba14.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e41608c51de832ef66b6aaa9d4921c3a90e1fb44-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "oxford-economics": {
+    "path": "/extension-icons/e3b0c44298fc1c149afb.ico",
+    "source": "https://www.oxfordeconomics.com/favicon.ico"
+  },
+  "oreilly": {
+    "path": "/extension-icons/00335745fbbf686f86f7.svg",
+    "source": "https://cdn.oreillystatic.com/oreilly/logos/oreilly_odot_square.svg"
+  },
+  "padlet-mcp": {
+    "path": "/extension-icons/6b68860e9a97473e2771.png",
+    "source": "https://padlet.net/logos/padlet_crane_icon.png"
+  },
+  "pagerduty": {
+    "path": "/extension-icons/226188648c7dc3ec1444.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4ce55b3d437d65b875231df274ee114553f9506b-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "pandadoc": {
+    "path": "/extension-icons/0d0145a28446fc90a96d.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/7d4e0d3f94c9089b978ad33f6bf8195df3c35625-100x100.svg?w=128&fit=max&auto=format"
+  },
+  "panos-mcp": {
+    "path": "/extension-icons/d8b56cd17b3257e7250a.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.apius-tech.panos-mcp/versions/1.3.29/icon.png"
+  },
+  "parallel-search": {
+    "path": "/extension-icons/b8d96dcf3cd44e71ca0d.ico",
+    "source": "https://parallel.ai/favicon.ico"
+  },
+  "pasteapp": {
+    "path": "/extension-icons/63262123b6c399da1d51.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.pasteapp.paste-mcp/versions/0.1.3/icon.png"
+  },
+  "pathmode": {
+    "path": "/extension-icons/101523e04c1d35072343.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.pathmode.pathmode/versions/1.8.0/icon.png"
+  },
+  "patlytics": null,
+  "paxton-legal-research": {
+    "path": "/extension-icons/adb30c8984dee996fffa.png",
+    "source": "https://app.paxton.ai/images/paxton-favicon.png"
+  },
+  "paypal": {
+    "path": "/extension-icons/be46ba3ede93ac6d513f.svg",
+    "source": "https://svgl.app/library/paypal.svg"
+  },
+  "paytm-for-business": {
+    "path": "/extension-icons/eea9230c6829c242ccaf.ico",
+    "source": "https://www.paytmpayments.com/favicon.ico"
+  },
+  "pdf-tools": {
+    "path": "/extension-icons/2d25f5da2765a45ec983.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.silverstein.pdf-filler-simple/versions/0.11.0/icon.png"
+  },
+  "pdf-viewer": {
+    "path": "/extension-icons/f6f33e24e95846f9ae25.svg",
+    "source": "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/refs/heads/main/blog/static/favicon.svg"
+  },
+  "pdf-viewer-5f8ba9": {
+    "path": "/extension-icons/85015f17d06050e32a71.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.anthropic.pdf-server-mcp/versions/2.0.0/icon.png"
+  },
+  "pdf-net": {
+    "path": "/extension-icons/15a5c00ad6478387fa42.ico",
+    "source": "https://pdf.net/favicon.ico"
+  },
+  "peec-ai": {
+    "path": "/extension-icons/2cb61639c47386e155df.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/04f404d2802c5079422085764b2e78c6de0bee7c-180x180.png?w=128&fit=max&auto=format"
+  },
+  "pendo": {
+    "path": "/extension-icons/515364216ea11940b626.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/f11096d29ba3b79f7a16091546a40c44fc286156-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "perseus-vault-persistent-memory-for-claude": {
+    "path": "/extension-icons/d2c50db1d85b7b260730.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.perseus-computing-llc.perseus-vault/versions/2.23.0/icon.png"
+  },
+  "perspective-ai": {
+    "path": "/extension-icons/268b641d904b374e7e7f.png",
+    "source": "https://raw.githubusercontent.com/Perspective-AI/mcp/main/icon.png"
+  },
+  "pg-aiguide": {
+    "path": "/extension-icons/4d9d4ded81e9ad47af4c.svg",
+    "source": "https://assets.tigerdata.com/timescale-web/brand/tiger-data/flat-logos/logo-badge-yellow.svg"
+  },
+  "pga-play-golf": null,
+  "phished": {
+    "path": "/extension-icons/77db0d694d791ea963a5.ico",
+    "source": "https://phished.io/favicon.ico"
+  },
+  "phoenix": {
+    "path": "/extension-icons/e8b50bc32bf9c5f80a73.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/de875596652e2a1dfa28137206f0ef06a86b3b77-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "pi-security": null,
+  "picpay": {
+    "path": "/extension-icons/3a90ab7400d06a473b50.ico",
+    "source": "https://picpay.com/favicon.ico"
+  },
+  "pigment": {
+    "path": "/extension-icons/1b18c13e1a3abbfe0c3b.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/82758870edb82594bd5110add5d6fce4e75eb13a-600x600.png?w=128&fit=max&auto=format"
+  },
+  "pine-labs-payments-assistant": {
+    "path": "/extension-icons/6b48db38531e084845aa.ico",
+    "source": "https://www.pinelabs.com/favicon.ico"
+  },
+  "pinegap": {
+    "path": "/extension-icons/abee169274ad782ad688.png",
+    "source": "https://www.pinegap.ai/favicon.ico"
+  },
+  "pipedrive-mcp": {
+    "path": "/extension-icons/ea4e3804aa421ce91156.ico",
+    "source": "https://pipedrive.com/favicon.ico"
+  },
+  "pitchbook": null,
+  "plaid": null,
+  "planday": {
+    "path": "/extension-icons/5400ab8fd0cecd5fb824.png",
+    "source": "https://public-mcp-server.prod-westeurope.planday.cloud/favicon.png"
+  },
+  "planetscale": {
+    "path": "/extension-icons/e82ee94c34a2a832fd49.svg",
+    "source": "https://svgl.app/library/planetscale.svg"
+  },
+  "planning-center": {
+    "path": "/extension-icons/6b4234b9f66a795a3734.png",
+    "source": "https://a-us.storyblok.com/f/1002845/512x512/bb81c2f8da/favicon-claude-mcp.png"
+  },
+  "plaud": null,
+  "play-sheet-music": {
+    "path": "/extension-icons/f6f33e24e95846f9ae25.svg",
+    "source": "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/refs/heads/main/blog/static/favicon.svg"
+  },
+  "playmcp": {
+    "path": "/extension-icons/bdc2d9679ffb7f6562e2.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b08d2609108e0e393442701c7e45f5fd189aa1ce-500x500.png?w=128&fit=max&auto=format"
+  },
+  "pocketsmith-complete-access": {
+    "path": "/extension-icons/70cd1c661c6d2ea47772.png",
+    "source": "https://pocketsmith-assets.s3.us-east-1.amazonaws.com/pocketsmith-device-square.png"
+  },
+  "polar-analytics": {
+    "path": "/extension-icons/cabfa09350f9b1cd436e.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/37a5a04666b0d88f03691f9992825db482ba3496-500x500.svg?w=128&fit=max&auto=format"
+  },
+  "pophive": {
+    "path": "/extension-icons/cae104efaff1d9027345.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4efd5077ac46efa6dfe794fad16605908b12e56d-206x206.svg?w=128&fit=max&auto=format"
+  },
+  "pophive-public-health-data": {
+    "path": "/extension-icons/e3adadb41730baf5f8c0.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.cicatriiz.pophive/versions/1.1.1/icon.png"
+  },
+  "porkbun": {
+    "path": "/extension-icons/f1a0f7b12e36774a75da.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.oborseth.porkbun-mcp/versions/0.17.1/icon.png"
+  },
+  "port-io": {
+    "path": "/extension-icons/4ea7c7d59d3c24a257ee.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/fe220366d8216308a2e2ca4f97d409e033d0c93b-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "posthog": {
+    "path": "/extension-icons/3fec8f0274ad4956866b.svg",
+    "source": "https://svgl.app/library/posthog.svg"
+  },
+  "postman": {
+    "path": "/extension-icons/5fc6ed981f9c44d5b178.svg",
+    "source": "https://svgl.app/library/postman.svg"
+  },
+  "powerpoint-by-anthropic": {
+    "path": "/extension-icons/6787f9867245fdd34ad0.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.ant.anthropic.ms_office_powerpoint/versions/0.4.2/icon.png"
+  },
+  "prefect": {
+    "path": "/extension-icons/6731524bedc8d94e75b0.svg",
+    "source": "https://www.prefect.io/brand/prefect-logo-2026.svg"
+  },
+  "privacy": {
+    "path": "/extension-icons/1fa25df4b3b493ea0f28.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/dca3a74f14584cf9e0bff68a56dde6209d01bd52-512x512.png?w=128&fit=max&auto=format"
+  },
+  "process-street": {
+    "path": "/extension-icons/8c22a191ed2fbeec6e21.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/7ef8c929cd7e73eb8aaa275a5dcfcbb3170db4af-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "productised": {
+    "path": "/extension-icons/0d24d72474ffe0c47e78.png",
+    "source": "https://www.google.com/s2/favicons?domain=productised.ai&sz=64"
+  },
+  "productive-io": null,
+  "profound": {
+    "path": "/extension-icons/027cb05c1bf4d43b2eb4.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3f1ba8156fba53f6a142b4d533a10b3244a99bc6-160x165.svg?w=128&fit=max&auto=format"
+  },
+  "pubmed": {
+    "path": "/extension-icons/a677ecb9865f7a0dbfff.svg",
+    "source": "https://storage.googleapis.com/media-assets-299d7136-cb52-d546-ee02-34bc1307c35f/mcp-directory/icons/pubmed.svg"
+  },
+  "pushwoosh-manymoney": {
+    "path": "/extension-icons/562bc4d7c1f7231cbf0c.svg",
+    "source": "https://www.pushwoosh.com/favicon.svg"
+  },
+  "pylon": {
+    "path": "/extension-icons/4f45ca4ee3ea3cbcc9b1.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/24a47c5e68688927a5a52a81c4f3ffb96794f65f-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "qase-test-management": {
+    "path": "/extension-icons/7be8f4480ee02456df9a.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.qase-tms.qase-mcp-server/versions/2.1.1/icon.png"
+  },
+  "qonto": {
+    "path": "/extension-icons/93e91338e334607586c8.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/43790f11a86746962056441df52cbb45465745ad-1061x1061.svg?w=128&fit=max&auto=format"
+  },
+  "quartr": {
+    "path": "/extension-icons/b55f32cdabba03613850.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/55a9d3c48b4d1242b7e3c676a148376d3a9a4fee-512x512.png?w=128&fit=max&auto=format"
+  },
+  "quicknode": {
+    "path": "/extension-icons/8a310521fde5f5ea6689.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a74dc37d211b3865f8363ab9acb35bb20bc9d583-512x512.svg?w=128&fit=max&auto=format"
+  },
+  "quinbook": {
+    "path": "/extension-icons/8dec0c5114fab45992b5.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.quinbook.quinbook-mcp/versions/0.2.9/icon.png"
+  },
+  "quo": {
+    "path": "/extension-icons/b0be5c87851fb5858890.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/773031060cd3ae75c35c3e1a8c635540398bb60f-1024x1024.svg?w=128&fit=max&auto=format"
+  },
+  "railway": {
+    "path": "/extension-icons/3e22cde367ddca01e9b7.svg",
+    "source": "https://svgl.app/library/railway.svg"
+  },
+  "rally-mcp": null,
+  "ramp": {
+    "path": "/extension-icons/7711e1c1be6314e40ad9.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b8b090ce157d1176ebe5a97bf7bd79665a471858-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "ramp-data": {
+    "path": "/extension-icons/7a1cfe36a490c907981e.ico",
+    "source": "https://ramp.com/favicon.ico"
+  },
+  "rapid7-bulk-export": {
+    "path": "/extension-icons/270dda2ade2d607cc602.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.rapid7.rapid7-bulk-export-mcp/versions/0.5.2/icon.png"
+  },
+  "ratehub-mortgage": {
+    "path": "/extension-icons/c97403b955a8490fe876.ico",
+    "source": "https://www.ratehub.ca/favicon.ico"
+  },
+  "ravendb": {
+    "path": "/extension-icons/34578ecdc6b1c1035156.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.ravendb.ravendb-mcp/versions/1.0.3/icon.png"
+  },
+  "razorpay": {
+    "path": "/extension-icons/20c5257bec4732f1b22f.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/76cbbf70c9fa1b11bc8610520688278088bfbcae-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "react-aria": {
+    "path": "/extension-icons/e133f4e5497044cdfb24.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.adobe.react-aria/versions/1.1.0/icon.png"
+  },
+  "react-spectrum-s2": {
+    "path": "/extension-icons/d5c9d7af46af2a84c89c.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.adobe.s2/versions/1.1.0/icon.png"
+  },
+  "read-ai": {
+    "path": "/extension-icons/cf171b777a8ce592303d.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/1b4b9e03bea5aaafd37c251ac7fcc1fbe4119885-1024x1024.svg?w=128&fit=max&auto=format"
+  },
+  "read-and-send-imessages": {
+    "path": "/extension-icons/15af9261283c50794739.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.ant.anthropic.imessage/versions/0.1.11/icon.png"
+  },
+  "read-and-write-apple-notes": {
+    "path": "/extension-icons/29eac0e48c0dc5e67f61.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.ant.anthropic.notes/versions/0.1.7/icon.png"
+  },
+  "readwise": {
+    "path": "/extension-icons/d7bd9c0d30a6f5bf92ca.ico",
+    "source": "https://readwise.io/favicon.ico"
+  },
+  "reclaim-ai": null,
+  "reco": null,
+  "redacta": {
+    "path": "/extension-icons/49d6815b58a1ae4aba72.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.nickjlamb.redacta/versions/1.2.2/icon.png"
+  },
+  "reddit-mcp-buddy": {
+    "path": "/extension-icons/2ee43237d196100210f1.ico",
+    "source": "https://github.com/favicon.ico"
+  },
+  "relativity": {
+    "path": "/extension-icons/8f2b5b4d34bf8410b03c.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/d1509cc44fb68d166aaeda08596f0d0d4af24be9-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "remesh": null,
+  "remote-com": {
+    "path": "/extension-icons/df37f285ef04a18f9a80.ico",
+    "source": "https://remote.com/favicon.ico"
+  },
+  "render": {
+    "path": "/extension-icons/ee09996a19157a73dbae.svg",
+    "source": "https://svgl.app/library/render_black.svg"
+  },
+  "replicant-mcp": {
+    "path": "/extension-icons/161ea9aca7f24f8379c6.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.thecombatwombat.replicant-mcp/versions/1.6.7/icon.png"
+  },
+  "replit": {
+    "path": "/extension-icons/e5f9e579255ff505b3b3.svg",
+    "source": "https://svgl.app/library/replit.svg"
+  },
+  "resend": {
+    "path": "/extension-icons/7251dba7137e25a41171.svg",
+    "source": "https://svgl.app/library/resend-icon-black.svg"
+  },
+  "resolume-arena-mcp-server": {
+    "path": "/extension-icons/bc4e32a07e0218c604d1.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.resolume.resolume-arena/versions/7.26.0/icon.png"
+  },
+  "resolume-wire-mcp-server": {
+    "path": "/extension-icons/a3d7f0fbabfebb4cd4b1.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.resolume.resolume-wire/versions/7.26.0/icon.png"
+  },
+  "resy": {
+    "path": "/extension-icons/5395e25f9b7d3cd9483c.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/dec450a730bce127e1c28a12fa702281e657a401-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "retool": {
+    "path": "/extension-icons/71d9634e58cf600cd471.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/fd1acc9faf71069d0242e15d1b9424d297a86222-400x400.png?w=128&fit=max&auto=format"
+  },
+  "revealed": null,
+  "revolut-x": {
+    "path": "/extension-icons/578451a97e9c675bf95a.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.revolut-engineering.revolut-x-api/versions/1.0.47/icon.png"
+  },
+  "revvity-signals-ai": null,
+  "rillet": {
+    "path": "/extension-icons/d857373208683a346627.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/33d6fd95432b610c5759b42eb818535a004d0758-244x244.svg?w=128&fit=max&auto=format"
+  },
+  "ringcentral-chat": {
+    "path": "/extension-icons/072d775b0e85346cdc2d.png",
+    "source": "https://assets-developers.ringcentral.com/app/logo/88DWlp6XQ7eS48OwbMYsVw~f5vX_dY7SpK-_EUsEkJdqA/e6666b88-1310-49df-9dbf-afefb24a99ce.png"
+  },
+  "riverside": {
+    "path": "/extension-icons/9dfe43ecfec986135871.png",
+    "source": "https://cdn.prod.website-files.com/685be7dcd32275d3830651d3/685be7dcd32275d383065e48_RS_favicon.png"
+  },
+  "roam-research": {
+    "path": "/extension-icons/3053dc936d105f67884b.ico",
+    "source": "https://roamresearch.com/favicon.ico"
+  },
+  "roboflow": {
+    "path": "/extension-icons/63ec0f0504ae557b2c5e.svg",
+    "source": "https://app.roboflow.com/images/logomark-color.svg"
+  },
+  "rocketreach": {
+    "path": "/extension-icons/b72691cce88dfae81aaf.ico",
+    "source": "https://rocketreach.co/favicon.ico"
+  },
+  "rockhopper": null,
+  "rome2rio": {
+    "path": "/extension-icons/05633095d786232e4cbe.ico",
+    "source": "https://www.rome2rio.com/favicon.ico"
+  },
+  "rt-request-tracker": {
+    "path": "/extension-icons/25f124763ab000568a7e.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.bestpractical.mcp-server-rt/versions/0.2.1/icon.png"
+  },
+  "runway-team": null,
+  "s-p-global": null,
+  "s-p-global-adaptive-retrieval": null,
+  "saga-project-tracker-for-ai-agents": {
+    "path": "/extension-icons/686c51c38c6770c413aa.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.spranab.saga-mcp/versions/1.6.0/icon.png"
+  },
+  "salesflare": {
+    "path": "/extension-icons/42c56db5f888986494b2.ico",
+    "source": "https://salesflare.com/favicon.ico"
+  },
+  "salesforce-headless-360": {
+    "path": "/extension-icons/aa6d730bbb164c2df9ab.svg",
+    "source": "https://svgl.app/library/salesforce.svg"
+  },
+  "salesloft": {
+    "path": "/extension-icons/8b933e3c06ad19234bf3.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/5f101e5c6f211bbe6c0302a479e085425cdc4ad8-64x64.svg?w=128&fit=max&auto=format"
+  },
+  "sandboxaq": {
+    "path": "/extension-icons/ff03c19e776287fb494a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/1b2148f6b5ca43cd78dbabb2c0f465193c6e7d5f-150x150.svg?w=128&fit=max&auto=format"
+  },
+  "sanity": {
+    "path": "/extension-icons/3b80206f784fcdd78ae4.svg",
+    "source": "https://svgl.app/library/sanity-light.svg"
+  },
+  "sap-cap-mcp-server": {
+    "path": "/extension-icons/e363278ee1b467ea2636.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.sap.cap-js-mcp-server/versions/0.0.5/icon.png"
+  },
+  "sap-fiori-mcp-server": {
+    "path": "/extension-icons/aae938801f19b6297bad.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.sap.fiori-mcp-server/versions/1.11.9/icon.png"
+  },
+  "sap-mdk-mcp-server": {
+    "path": "/extension-icons/12983c44063ff1ae5f81.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.sap.mdk-mcp-server/versions/0.4.0/icon.png"
+  },
+  "sapui5-mcp-server": {
+    "path": "/extension-icons/507a3122461daa855978.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.sap.ui5-mcp-server/versions/0.2.18/icon.png"
+  },
+  "savri": {
+    "path": "/extension-icons/797ab4c97dda3a5b8d6f.png",
+    "source": "https://savri.io/savri-favicon.png"
+  },
+  "scholar-gateway": {
+    "path": "/extension-icons/6d0311ee072acc69f676.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/bc84b281ae9eff7a5a6f58410e0ad235cefce7b4-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "scholar-sidekick": {
+    "path": "/extension-icons/4b32a65ba8d09dccf203.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.mlava.scholar-sidekick-mcp/versions/0.8.8/icon.png"
+  },
+  "scite": {
+    "path": "/extension-icons/32c9cb41bc120d7f2e50.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/499d8f3074d016b95144477ad5d9121dfad30ced-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "seamless": null,
+  "seismic": {
+    "path": "/extension-icons/cfb0607e0c73239cfdfd.ico",
+    "source": "https://www.seismic.com/favicon.ico"
+  },
+  "semrush": {
+    "path": "/extension-icons/66a6cdd6dfcbda2b16da.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4f369cbc59e8aab54bf00824dbfd9e21804e7dea-512x512.svg?w=128&fit=max&auto=format"
+  },
+  "send": {
+    "path": "/extension-icons/f4e12f8b1ce595a9553d.ico",
+    "source": "https://www.send.co/favicon.ico"
+  },
+  "sentry": {
+    "path": "/extension-icons/1469719716614dcb8f95.svg",
+    "source": "https://svgl.app/library/sentry.svg"
+  },
+  "servicenow": {
+    "path": "/extension-icons/02727617a4e52dbe5dc5.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/0ce5bf6c11f9d325264783b1763b24142cdb4524-180x180.svg?w=128&fit=max&auto=format"
+  },
+  "shadcn-ui": {
+    "path": "/extension-icons/e428d7ab874700aa57e6.svg",
+    "source": "https://svgl.app/library/shadcn-ui.svg"
+  },
+  "shapes": {
+    "path": "/extension-icons/a5a71fbc1fa5d8bfd17f.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/7cf167a5d1d4c5301c4f59ca8816da884e6182d6-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "shipbob": {
+    "path": "/extension-icons/c45d985b10a4cf81b96a.svg",
+    "source": "https://uiassets-afd.shipbob.com/anthropics/shipbob.svg"
+  },
+  "shippo": null,
+  "shipt": {
+    "path": "/extension-icons/7b8c8cd05b1b5f185f64.ico",
+    "source": "https://www.shipt.com/favicon.ico"
+  },
+  "shopify": {
+    "path": "/extension-icons/86e19afda708cead229b.svg",
+    "source": "https://svgl.app/library/shopify.svg"
+  },
+  "shutterstock": {
+    "path": "/extension-icons/3adfe10d0ec992eb6963.png",
+    "source": "https://www.shutterstock.com/favicon.ico"
+  },
+  "sigma": {
+    "path": "/extension-icons/e87214caa18019c9d452.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e1331529de6132553af90b6f47a164f3c8d718df-1200x1200.svg?w=128&fit=max&auto=format"
+  },
+  "signeasy": null,
+  "signnow": {
+    "path": "/extension-icons/52d9ccb6e9fde132914e.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8389ba619f30e355487181f71dd40e5f92b3eb77-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "signwell": {
+    "path": "/extension-icons/d097615944765df9b5f0.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.signwell.signwell-mcp/versions/0.3.2/icon.png"
+  },
+  "similarweb": {
+    "path": "/extension-icons/0256f0f5c986ec6f9533.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/905cb76a256ab4c50ab57ba084d521827681c368-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "sketch": {
+    "path": "/extension-icons/1abe4769e34613abbced.svg",
+    "source": "https://svgl.app/library/sketch_light.svg"
+  },
+  "slack": {
+    "path": "/extension-icons/29734796b3a85f9d0e03.svg",
+    "source": "https://svgl.app/library/slack.svg"
+  },
+  "slidesgpt": {
+    "path": "/extension-icons/c5184151637fe00730e6.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/8202d8eac147a23edad607ee636e263f7e4a9df7-480x480.jpg?w=128&fit=max&auto=format"
+  },
+  "smartbear-mcp": {
+    "path": "/extension-icons/c488bb20002d6020a2f4.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.smartbear.smartbear-mcp/versions/0.28.0/icon.png"
+  },
+  "smarter-drafter": {
+    "path": "/extension-icons/d123dddbca604d2ee358.png",
+    "source": "https://4406958.fs1.hubspotusercontent-na1.net/hubfs/4406958/Help%20Center%20SD%20Pro/Logos/sd-pro.png"
+  },
+  "smartling": {
+    "path": "/extension-icons/8c89ac90d0cf74a62796.png",
+    "source": "https://www.smartling.com/favicon.ico"
+  },
+  "smartsheet": {
+    "path": "/extension-icons/f363193cad8db30fd020.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3e840d1e3f1c0849eb94ed98db3cf0486e3ed014-97x119.svg?w=128&fit=max&auto=format"
+  },
+  "snagajob": {
+    "path": "/extension-icons/b885d2d5f4f205a14af7.ico",
+    "source": "https://www.jobget.com/favicon.ico"
+  },
+  "snomed-ct-terminology": {
+    "path": "/extension-icons/4fc0caa02ca77189cdb5.png",
+    "source": "https://static-web.ihtsdotools.org/images/favicon.png"
+  },
+  "snowflake": {
+    "path": "/extension-icons/7c3f864a2868ecde6ab5.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b0ed1626a948fd76b807f26c6ec5085e4fbfe6a7-300x300.jpg?w=128&fit=max&auto=format"
+  },
+  "snyk-security": {
+    "path": "/extension-icons/a7e539acee3b89fde3f9.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.snyk.studio-mcp/versions/v1.1306.2/icon.png"
+  },
+  "socket": {
+    "path": "/extension-icons/6a161891af67d1349353.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.socketdev.socket-mcp/versions/0.0.19/icon.png"
+  },
+  "solve-intelligence": {
+    "path": "/extension-icons/bec94155c3c54af35df0.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/2928d7321dc73de60aa91ac4b503941557846104-512x512.svg?w=128&fit=max&auto=format"
+  },
+  "sonos-mcp": {
+    "path": "/extension-icons/5214b78324b8fd592b33.ico",
+    "source": "https://mcp.ws.sonos.com/favicon.ico"
+  },
+  "sourcegraph": {
+    "path": "/extension-icons/7c26c4df05457bf41d93.svg",
+    "source": "https://svgl.app/library/sourcegraph.svg"
+  },
+  "spark": {
+    "path": "/extension-icons/d2e148abdee0b6c1d23b.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.readdle.spark-claude-extension/versions/1.3.0/icon.png"
+  },
+  "speko": {
+    "path": "/extension-icons/69c020310d0fc4333ebf.ico",
+    "source": "https://speko.ai/favicon.ico"
+  },
+  "spinach-ai": {
+    "path": "/extension-icons/d733d5d585f52b107729.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/1c260b673c416aaf51276d3133a1a5a762a85e21-500x500.png?w=128&fit=max&auto=format"
+  },
+  "splice": {
+    "path": "/extension-icons/e5ad205ff0c1bf166249.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e8b946cf2cc659e06fd819c6d193fd2362b9a9f9-225x265.svg?w=128&fit=max&auto=format"
+  },
+  "spotify": {
+    "path": "/extension-icons/d3f7f94d90089fd318a2.svg",
+    "source": "https://svgl.app/library/spotify.svg"
+  },
+  "sprinto-mcp-plugins": {
+    "path": "/extension-icons/fbb732dddf4b8679318d.svg",
+    "source": "https://static.sprinto.com/_next/static/images/sprinto-logo.svg"
+  },
+  "sprites": {
+    "path": "/extension-icons/e84b47f6381754202797.ico",
+    "source": "https://fly.io/favicon.ico"
+  },
+  "sprouts": {
+    "path": "/extension-icons/64d38ba393d65c6209a3.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/5cca56012eaf6810aed4cf0ba79a4b47a5fdaab1-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "square": {
+    "path": "/extension-icons/887d5be92c5b12e92b00.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/2ffe19631a4f8c74a29adeae7c7f430070639f95-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "stack-overflow": {
+    "path": "/extension-icons/4f8838781664e9c878f1.svg",
+    "source": "https://svgl.app/library/stackoverflow.svg"
+  },
+  "stackql-mcp-server": {
+    "path": "/extension-icons/606903b3f0ce8bf55697.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.stackql.stackql/versions/0.10.601/icon.png"
+  },
+  "starburst": {
+    "path": "/extension-icons/6f76a63f96ec73791ac9.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/7fcf7de609c9b8dd205eb87ded27c2af6238abb3-215x215.svg?w=128&fit=max&auto=format"
+  },
+  "stats-compass": {
+    "path": "/extension-icons/af42564ef44e0e4d95a6.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.oogunbiyi21.stats-compass-mcp/versions/0.3.23/icon.png"
+  },
+  "steadybit": {
+    "path": "/extension-icons/39013628f604cfe651b5.svg",
+    "source": "https://downloads.steadybit.com/logomark.svg"
+  },
+  "strava": {
+    "path": "/extension-icons/0798c1810df35afe4140.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/bf5c24bcece6d7f0465fe45c7c8000daea3d626b-500x705.svg?w=128&fit=max&auto=format"
+  },
+  "stripe": {
+    "path": "/extension-icons/d1dd829f330c3c17a02c.svg",
+    "source": "https://svgl.app/library/stripe.svg"
+  },
+  "stubhub": {
+    "path": "/extension-icons/56db0565d04a284d64ec.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/567eafacd8d76795dd647bb8bf3eda5db8d3577f-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "stytch": {
+    "path": "/extension-icons/7577a595143825aee601.ico",
+    "source": "https://stytch.com/favicon.ico"
+  },
+  "subtext": {
+    "path": "/extension-icons/45cf6ed33e7c819aa1a2.png",
+    "source": "https://subtext.fullstory.com/brand/icons/marketplace/claude-connector.png"
+  },
+  "sumble": {
+    "path": "/extension-icons/1091c60dbf672848e428.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/79d7bf7fbd21db0ace179f320ac238489d711330-512x512.png?w=128&fit=max&auto=format"
+  },
+  "sumsub": {
+    "path": "/extension-icons/8cd30c2d757521ea0317.ico",
+    "source": "https://sumsub.com/favicon.ico"
+  },
+  "supabase": {
+    "path": "/extension-icons/1f9387ffd2d8bea4b535.svg",
+    "source": "https://svgl.app/library/supabase.svg"
+  },
+  "super-com": null,
+  "superhuman-docs": {
+    "path": "/extension-icons/bce6bfc3e0f4505c556b.png",
+    "source": "https://cdn.coda.io/icons/png/color/superhuman-docs-128.png"
+  },
+  "superhuman-mail": {
+    "path": "/extension-icons/3e51f4a823d22bd34e26.png",
+    "source": "https://mcp.mail.superhuman.com/favicon.ico"
+  },
+  "supermetrics": {
+    "path": "/extension-icons/0dfac3464c309151152f.png",
+    "source": "https://www.google.com/s2/favicons?domain=supermetrics.com&sz=256"
+  },
+  "surveymonkey": {
+    "path": "/extension-icons/30d3b1221b92c458aaf3.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/c27f04a46c55533a46376cb045e227f6c351df5b-500x500.svg?w=128&fit=max&auto=format"
+  },
+  "swagger": {
+    "path": "/extension-icons/bc47850429e1c88e740e.svg",
+    "source": "https://svgl.app/library/swagger.svg"
+  },
+  "sybill": {
+    "path": "/extension-icons/0f0e2ff34f6933e0656a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4579cf1fc9505bf31eaed29d23d0793c7392c21c-160x144.svg?w=128&fit=max&auto=format"
+  },
+  "synapse-org": {
+    "path": "/extension-icons/6ee4f96c25b5f8dbc24a.ico",
+    "source": "https://sagebionetworks.org/favicon.ico"
+  },
+  "synthesize-bio": {
+    "path": "/extension-icons/4cf934d37af429558efe.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/81a13f9710ee936fcdaf06958196b8b5e2cbaa98-200x200.jpg?w=128&fit=max&auto=format"
+  },
+  "synthflow": {
+    "path": "/extension-icons/109e00be190f237f35f7.svg",
+    "source": "https://storage.googleapis.com/granular-changelog/style-changelog/synthflow_symbol.svg"
+  },
+  "tableau": {
+    "path": "/extension-icons/165254116e487dc46319.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.tableau.tableau-mcp/versions/4.3.2/icon.png"
+  },
+  "tabs": {
+    "path": "/extension-icons/3dd273643a888b736267.png",
+    "source": "https://www.tabs.com/favicon-180x180.png"
+  },
+  "tactiq": null,
+  "tally": {
+    "path": "/extension-icons/7be44b9f98589383a8c8.png",
+    "source": "https://tally.so/favicon.png"
+  },
+  "tango": {
+    "path": "/extension-icons/1e98cb06244eaca30e6c.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/c765d45d6d82f745fb0987ffc88b0f3f50b55a9c-512x512.png?w=128&fit=max&auto=format"
+  },
+  "taskrabbit": {
+    "path": "/extension-icons/4859e69020ae3e281483.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/568e3721fb702c1722194b0af91bff2b74ad85be-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "tavily": {
+    "path": "/extension-icons/59f7fcb8f58181b74c74.svg",
+    "source": "https://tavily-public-assets-prod.s3.amazonaws.com/images/logo.svg"
+  },
+  "taxact": {
+    "path": "/extension-icons/72b28a52c35534265ca3.svg",
+    "source": "https://mcp.taxact.com/icon.svg"
+  },
+  "teamtailor": {
+    "path": "/extension-icons/7bb41baab389ddd24a29.ico",
+    "source": "https://teamtailor.com/favicon.ico"
+  },
+  "tella": {
+    "path": "/extension-icons/43ad7a95c0e022d82c7c.ico",
+    "source": "https://tella.com/favicon.ico"
+  },
+  "terminal49": {
+    "path": "/extension-icons/e0d8b0eda724a39ddce3.ico",
+    "source": "https://terminal49.com/favicon.ico"
+  },
+  "things-applescript": {
+    "path": "/extension-icons/8f38dcfbff554477119b.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.mbmccormick.things/versions/1.3.0/icon.png"
+  },
+  "third-bridge": {
+    "path": "/extension-icons/61c62a103123ee39e3a0.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/488fb923fa34bf0c2dbafed11021a16b6986ce0f-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "thoughtspot-spotter": {
+    "path": "/extension-icons/588027db1ec889563b0c.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3c9b753b114d982a1b6e0a02e2906e81f74c1a37-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "threejs-3d-viewer": {
+    "path": "/extension-icons/f6f33e24e95846f9ae25.svg",
+    "source": "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/refs/heads/main/blog/static/favicon.svg"
+  },
+  "thumbtack": {
+    "path": "/extension-icons/45c97a4b376dcb427452.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/2dd03878c210882cb0e52defafd54113eaf51dce-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "ticket-tailor": {
+    "path": "/extension-icons/8b1085df6b3a9e267cef.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/c327c47d78a4eda869e324a59b61486ce1ea19b5-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "ticketmaster": {
+    "path": "/extension-icons/af41fe07dce8a4a2a8f9.ico",
+    "source": "https://www.ticketmaster.com/favicon.ico"
+  },
+  "ticktick": {
+    "path": "/extension-icons/dfa18eac0622de6fb34c.ico",
+    "source": "https://ticktick.com/favicon.ico"
+  },
+  "tiktok-for-business": {
+    "path": "/extension-icons/d07d73c12868843cd864.svg",
+    "source": "https://svgl.app/library/tiktok-icon-light.svg"
+  },
+  "tiller": null,
+  "tines": {
+    "path": "/extension-icons/b186c66e0a1215ef54aa.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/c5e278448df8eda1141af9061a6e5f84fd25f79d-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "tinyfish": null,
+  "tixel": {
+    "path": "/extension-icons/e8b53f9f72c2bb722f87.svg",
+    "source": "https://tixel.com/images/icons/tixel.svg"
+  },
+  "tldraw": {
+    "path": "/extension-icons/d4bd96b9b646547109ad.ico",
+    "source": "https://www.tldraw.dev/favicon.ico"
+  },
+  "tldv": {
+    "path": "/extension-icons/bca19a6bfc349c0bc7cf.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9b83d63a483d868c8eeca64c5a7fd959c95d81ea-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "todoist": {
+    "path": "/extension-icons/78240ee4a39bcf705a90.svg",
+    "source": "https://svgl.app/library/todoist.svg"
+  },
+  "tomba-mcp-server": {
+    "path": "/extension-icons/ed12bb6caaa2df63f304.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.tomba.tomba-mcp/versions/1.0.5/icon.png"
+  },
+  "tomtom-maps": {
+    "path": "/extension-icons/01036d60fdc9e9dc64d7.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/ec89493826d12a91a18bef5bee33a1558abee948-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "tooluniverse": {
+    "path": "/extension-icons/640a4d558ac07de1bd7f.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.tooluniverse.tooluniverse-mcp/versions/1.0.16/icon.png"
+  },
+  "topcounsel": null,
+  "tray-ai": {
+    "path": "/extension-icons/7ccc9d799c543be83f52.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b9ed173a9c68ed7c5019a113e285ca4cd30bfa8d-1000x1000.svg?w=128&fit=max&auto=format"
+  },
+  "trellis": {
+    "path": "/extension-icons/839f5f63016abc95b558.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/49498524e5f566e53d6349109ccd40856da0d37d-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "trello": {
+    "path": "/extension-icons/a5422037fb80fcd3a1b7.svg",
+    "source": "https://svgl.app/library/trello.svg"
+  },
+  "sketchup": {
+    "path": "/extension-icons/285908bea1b0f4a8eb1e.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3f6f0747bd77b918768a73f0b78c4849a5ca34da-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "tripadvisor": {
+    "path": "/extension-icons/77ffc97be0ba4ce9caca.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9642e367cea97a5a84b95953b41d7fc90f787229-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "trivago": {
+    "path": "/extension-icons/a224536dc142fdf3447c.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/f253065cd922adc1a2390dabba0671c6849bbf0e-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "tropic": {
+    "path": "/extension-icons/7ad28174730c98fc252a.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/2bb03181ce73602f267d7baa7122ba4fb3af7c02-900x900.svg?w=128&fit=max&auto=format"
+  },
+  "trussi-ai": null,
+  "tseha": {
+    "path": "/extension-icons/6af1aafda75d9633715f.ico",
+    "source": "https://tseha.io/favicon.ico"
+  },
+  "turkish-airlines": {
+    "path": "/extension-icons/d0111a281fcdc630f229.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/9f1e1317b1b8e1b36d7571a98aff7c13fccfc248-50x50.svg?w=128&fit=max&auto=format"
+  },
+  "turo": {
+    "path": "/extension-icons/5b45c0c2a53e5cff7364.ico",
+    "source": "https://resources.turo.com/resources/img/favicon.ico"
+  },
+  "turquoise": {
+    "path": "/extension-icons/be1045b9d3ef335fedb9.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/cb25ee92f212a80e236e3a997810ba5497bf21b4-216x216.svg?w=128&fit=max&auto=format"
+  },
+  "twelvedata": {
+    "path": "/extension-icons/e3b0c44298fc1c149afb.ico",
+    "source": "https://twelvedata.com/favicon.ico"
+  },
+  "twilio": {
+    "path": "/extension-icons/16de11fe08c106fc52a9.svg",
+    "source": "https://svgl.app/library/twilio.svg"
+  },
+  "typefully": {
+    "path": "/extension-icons/f2cd6b09dddec76e35dc.png",
+    "source": "https://mcp.typefully.com/icon.png"
+  },
+  "uber": {
+    "path": "/extension-icons/7b1e21e850dcf4664c8f.svg",
+    "source": "https://svgl.app/library/uber_light.svg"
+  },
+  "uber-eats": {
+    "path": "/extension-icons/e684dbdeefb0e46160c3.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/db0c621dc255d79ab35051b5eb8710890ee50f58-1024x1024.svg?w=128&fit=max&auto=format"
+  },
+  "udemy-business": {
+    "path": "/extension-icons/899cd9425cf3a2677f79.svg",
+    "source": "https://svgl.app/library/udemy.svg"
+  },
+  "ultipa": {
+    "path": "/extension-icons/d5c75fdeccfaaf51b041.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.ultipa.ultipa-mcp/versions/1.2.0/icon.png"
+  },
+  "unblocked": {
+    "path": "/extension-icons/26f06ab3d84521f3733d.ico",
+    "source": "https://getunblocked.com/favicon.ico"
+  },
+  "unify": {
+    "path": "/extension-icons/f5e9bc2dfb83121201c4.ico",
+    "source": "https://app.unifygtm.com/favicon.ico"
+  },
+  "unsplash": {
+    "path": "/extension-icons/923423ed014ab0bc033b.png",
+    "source": "https://unsplash.com/favicon-32x32.png"
+  },
+  "unstructured-transform": null,
+  "unthread": {
+    "path": "/extension-icons/19dd6324fde90930d63e.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/6c3b14241822575df309861467e1028c7a288fc2-697x697.svg?w=128&fit=max&auto=format"
+  },
+  "unwrap": {
+    "path": "/extension-icons/3e5253b0adae4dea4e45.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/29e1d2ea17f0a11bfcd0efefe60b3dc562150bb8-1536x1536.svg?w=128&fit=max&auto=format"
+  },
+  "v0": {
+    "path": "/extension-icons/6501b54310eff20c2959.svg",
+    "source": "https://svgl.app/library/v0_light.svg"
+  },
+  "vaisala-xweather": {
+    "path": "/extension-icons/2a70a82925c5c1a7c8db.ico",
+    "source": "https://www.xweather.com/favicon.ico"
+  },
+  "valuecase-v2": null,
+  "vanguard-advisor-tools": {
+    "path": "/extension-icons/5cffa84be6843f729fc6.ico",
+    "source": "https://advisors.vanguard.com/favicon.ico"
+  },
+  "vani": {
+    "path": "/extension-icons/e2cfb57fd7b746b905e3.svg",
+    "source": "https://www.vanihq.com/sites/vanihq/files/vanihq/prereleasevani/vani-logo-96x96.svg"
+  },
+  "vasara": null,
+  "veltra-activities": {
+    "path": "/extension-icons/321d0c4d3fee3a5b12ba.svg",
+    "source": "https://ai.veltra.com/help/mcp/assets/veltra-app-icon.svg"
+  },
+  "vendr-software-pricing-tools": {
+    "path": "/extension-icons/ade512a0961743dbf469.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.vendr.vendr-mcp/versions/1.1.1/icon.png"
+  },
+  "vercel": {
+    "path": "/extension-icons/565f40e56abbd9c9f31e.svg",
+    "source": "https://svgl.app/library/vercel.svg"
+  },
+  "verisk-underwriting-intelligence": null,
+  "verisk-xactrestore": null,
+  "vertiso-memory": {
+    "path": "/extension-icons/b359ce74744be94f3697.png",
+    "source": "https://memory.vertiso.ai/icon.png"
+  },
+  "vianexus-vast": {
+    "path": "/extension-icons/a6abb8e53c2f1fa701ab.ico",
+    "source": "https://vianexus.com/assets/images/favicon/favicon.ico"
+  },
+  "viator": {
+    "path": "/extension-icons/9a91cd1a2bfeae75730d.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/5fa5b84d45afc0bd5970df214d4011d17df3878d-225x225.jpg?w=128&fit=max&auto=format"
+  },
+  "vibe-ai": {
+    "path": "/extension-icons/50bfd485184a2d2ca4ce.ico",
+    "source": "https://vibe.us/favicon.ico"
+  },
+  "vibeprospecting": {
+    "path": "/extension-icons/28ee9cda7664d71d0bde.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/dc0fbde8ffbaf1dfce40a72f61df8d9befc9b08a-160x160.png?w=128&fit=max&auto=format"
+  },
+  "vibe-prospecting": {
+    "path": "/extension-icons/f4e775f69c2afe9b8301.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.explorium-ai.agentsource/versions/2.0.0/icon.png"
+  },
+  "viberate": {
+    "path": "/extension-icons/5cdb941e144db0611ed1.ico",
+    "source": "https://viberate.com/favicon.ico"
+  },
+  "vidiq": null,
+  "visier": {
+    "path": "/extension-icons/cdff15682d7a79f46558.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/7ab986ffc8be9dc420049199fd9f1bb052d86174-160x160.png?w=128&fit=max&auto=format"
+  },
+  "voluum": {
+    "path": "/extension-icons/c93ffd7705f15175d859.ico",
+    "source": "https://voluum.com/favicon.ico"
+  },
+  "vuetify-mcp": {
+    "path": "/extension-icons/3f3501ca67fb347b6754.svg",
+    "source": "https://cdn.vuetifyjs.com/docs/images/brand-kit/v-logo.svg"
+  },
+  "vybit-notifications": {
+    "path": "/extension-icons/7d23bb5ddc47c815c07a.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.flatirontek.vybit-mcp/versions/1.5.8/icon.png"
+  },
+  "wealth-com": {
+    "path": "/extension-icons/e3b0c44298fc1c149afb.ico",
+    "source": "https://www.wealth.com/favicon.ico"
+  },
+  "wealthbox": {
+    "path": "/extension-icons/e5afb62cb4195f5c12e2.svg",
+    "source": "https://cdn.crmworkspace.com/assets/favicon.svg"
+  },
+  "webex-meetings": {
+    "path": "/extension-icons/a4652e26a228d45e39df.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/a817dfafd854962a4eb168135db74326163341f5-216x216.svg?w=128&fit=max&auto=format"
+  },
+  "webflow": {
+    "path": "/extension-icons/6c7af754c04acbff9c59.svg",
+    "source": "https://svgl.app/library/webflow.svg"
+  },
+  "website-auditor": {
+    "path": "/extension-icons/44b1566c986db9c609d9.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.spikeycoder.website-auditor-mcp/versions/1.0.19/icon.png"
+  },
+  "website-generator-by-b12": {
+    "path": "/extension-icons/8c4424ba29df6c1974de.png",
+    "source": "https://cdn.b12.io/branding/b12-logo-purple.png"
+  },
+  "webull": {
+    "path": "/extension-icons/7e9376e3347f5122c904.ico",
+    "source": "https://www.webull.com/favicon.ico"
+  },
+  "weweb": {
+    "path": "/extension-icons/c8b150a8e49a1245a510.svg",
+    "source": "https://dashboard-cdn.weweb.io/favicon.svg"
+  },
+  "whimsical": {
+    "path": "/extension-icons/7aa98f39450430e19aad.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/3a4b0f60dc01c99442d7d0fbd1917c4c2c27e0f5-240x240.svg?w=128&fit=max&auto=format"
+  },
+  "windmill-hr": {
+    "path": "/extension-icons/f0a5835c0acd1f959961.ico",
+    "source": "https://gowindmill.com/favicon.ico"
+  },
+  "windows-mcp": {
+    "path": "/extension-icons/a0d8ce1678f643423602.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.cursortouch.windows-mcp/versions/0.7.2/icon.png"
+  },
+  "windsor-ai": {
+    "path": "/extension-icons/cc7b6e1c3e41145d165d.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/acefe8e90e0e795cb9d4d036554e531e59741ff2-160x160.png?w=128&fit=max&auto=format"
+  },
+  "wingify": {
+    "path": "/extension-icons/4ecdf4d94104198367f9.ico",
+    "source": "https://vwo.com/favicon.ico"
+  },
+  "wispr-flow": null,
+  "within": {
+    "path": "/extension-icons/efa850ff915abedb2052.ico",
+    "source": "https://developers.within.ai/mintlify-assets/_mintlify/favicons/within-mcp/Pyp5zg-khgTtgqQe/_generated/favicon-dark/favicon.ico"
+  },
+  "wix": {
+    "path": "/extension-icons/aad83fde4e53d24e1434.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/fba46531d17953c85c53ead61629734e1cd6f889-512x512.png?w=128&fit=max&auto=format"
+  },
+  "wolfram": {
+    "path": "/extension-icons/6ba32c1c7cc330b11ceb.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/6cd44b7c1177673a1c6be8f27644aac5336b588a-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "word-by-anthropic": {
+    "path": "/extension-icons/0c0ac1fd3c5d96988c0d.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.ant.anthropic.ms_office_word/versions/0.4.2/icon.png"
+  },
+  "wordpress-com": {
+    "path": "/extension-icons/5b658f5a51a2cc169e3c.ico",
+    "source": "https://wordpress.com/favicon.ico"
+  },
+  "workable": {
+    "path": "/extension-icons/ead14ae687b4b6f4f7cd.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/17ac2c53c7d0d2c657b789254c4c4e06d45527ee-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "workato": {
+    "path": "/extension-icons/338e4a7599c17209b4ce.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/019e16c5567ef7b20e6ecaefcca730a80c31a13c-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "workos": {
+    "path": "/extension-icons/564931f909334c5269b2.svg",
+    "source": "https://svgl.app/library/workos.svg"
+  },
+  "wrike": {
+    "path": "/extension-icons/309b0da1580a7da46461.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/ef8ec074366f27949263f4bfa082c1b6dcb17596-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "wyndham-hotels": {
+    "path": "/extension-icons/3d55be313233386d3559.jpg",
+    "source": "https://www.wyndhamhotels.com/favicon.ico"
+  },
+  "xero": {
+    "path": "/extension-icons/44ce90b692ec932b4772.ico",
+    "source": "https://mcp.xero.com/favicon.ico"
+  },
+  "xtiles": {
+    "path": "/extension-icons/c2e1e475865c9daa2b13.png",
+    "source": "https://xtiles.app/favicon-180.png"
+  },
+  "yardi-matrix": {
+    "path": "/extension-icons/9deb629637088856fe61.ico",
+    "source": "https://www.yardi.com/favicon.ico"
+  },
+  "yardi-virtuoso": {
+    "path": "/extension-icons/79f58d6711a53e54f1c5.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/f6d556c82560f5a98f06361ae07c754b8aef3197-400x400.jpg?w=128&fit=max&auto=format"
+  },
+  "youtrack": {
+    "path": "/extension-icons/b9c3b5baf971b8fe8d62.png",
+    "source": "https://resources.jetbrains.com/storage/products/company/brand/logos/YouTrack_icon.png"
+  },
+  "zacks-data": {
+    "path": "/extension-icons/aa32a325446158065ddc.png",
+    "source": "https://ai.zacksdata.com/connector-icon-512.png"
+  },
+  "zapier": {
+    "path": "/extension-icons/2fbc043ad6c77a9d4f4b.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/4c0e34cb56acf4f2fe4b3628ea2197ed9293914f-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "ziprecruiter": {
+    "path": "/extension-icons/3dc7b802a626f75ca694.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/612ca5ad0745396fb8f1fb40f12808a91704bb27-160x160.svg?w=128&fit=max&auto=format"
+  },
+  "zite": {
+    "path": "/extension-icons/d176833994b12ad271fe.svg",
+    "source": "https://cdn.prod.website-files.com/693ad62eeb48e420b2465a58/6984d179969335ec6c3c7b99_zite-icon.svg"
+  },
+  "zocks": {
+    "path": "/extension-icons/e3f80237f6ed2b612d63.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/b7d7835b761c105f6c9f779ae6ed72362614d67a-1024x1024.svg?w=128&fit=max&auto=format"
+  },
+  "zoho-analytics": {
+    "path": "/extension-icons/ddc77fcfd78b2b3d2b72.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.zoho.analytics-mcp-server/versions/1.0.2/icon.png"
+  },
+  "zoho-books": {
+    "path": "/extension-icons/c1933e1173c334188dd5.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/76e19d7493efd9a7a211df0953ad71864c292e9a-1536x1536.png?w=128&fit=max&auto=format"
+  },
+  "zoho-crm": {
+    "path": "/extension-icons/36f42b65872beb4553ad.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/e96b9a75f3d779e0e57e3b636ee6f01cdb676db6-1536x1536.png?w=128&fit=max&auto=format"
+  },
+  "zoho-desk": {
+    "path": "/extension-icons/3cf42dad18407add45ee.svg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/071302054405a252f2870f7f6423a738d5933d7e-1024x1024.svg?w=128&fit=max&auto=format"
+  },
+  "zoho-projects": {
+    "path": "/extension-icons/8a83e41e97c829bf0bc8.png",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/638dfb5eb6cef053c01b61b78ff1895e6c5ab4b2-1536x1536.png?w=128&fit=max&auto=format"
+  },
+  "zoho-show": {
+    "path": "/extension-icons/3c2fb397b03a3cfece70.svg",
+    "source": "https://www.zoho.com/sites/zweb/images/show/show-logo.svg"
+  },
+  "zomato": {
+    "path": "/extension-icons/6249bb5a4fd988c4bfca.ico",
+    "source": "https://www.zomato.com/favicon.ico"
+  },
+  "zoom-for-claude": {
+    "path": "/extension-icons/5d1bf4d38bc5fc437578.svg",
+    "source": "https://svgl.app/library/zoom.svg"
+  },
+  "zoominfo": {
+    "path": "/extension-icons/984684b485c49c5282f0.jpg",
+    "source": "https://cdn.sanity.io/images/4zrzovbb/claude-com/892f75695d4c4736048cd8825ea325ad20cc824f-160x160.jpg?w=128&fit=max&auto=format"
+  },
+  "zscaler-mcp-server": {
+    "path": "/extension-icons/3dceea5235f82223e27b.png",
+    "source": "https://claude.ai/api/dxt/extensions/ant.dir.gh.zscaler.zscaler-mcp-server/versions/0.15.3/icon.png"
+  },
+  "cna-mcp": {
+    "path": "/extension-icons/95563e46621aabb9c4f9.png",
+    "source": "https://ask.cna.com.tw/ask/fav_icon_256x256.png"
+  }
+}

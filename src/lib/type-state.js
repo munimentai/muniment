@@ -21,12 +21,12 @@ export const BASE_TEXT_TOKENS = {
   '--text-provenance': 11.5,
 }
 export const BODY_TOKEN = '--text-15'
-export const FONT_TOKENS = { human: '--font-human', mono: '--font-mono' }
-export const SHIPPED_FONTS = { human: 'Schibsted Grotesk', mono: 'Commit Mono' }
-const SHIPPED_STACKS = { human: "'Schibsted Grotesk', system-ui, sans-serif", mono: "'Commit Mono', ui-monospace, monospace" }
+export const FONT_TOKENS = { human: '--font-human', mono: '--font-mono', heading: '--font-heading' }
+export const SHIPPED_FONTS = { human: 'Schibsted Grotesk', mono: 'Commit Mono', heading: 'Schibsted Grotesk' }
+const SHIPPED_STACKS = { heading: "'Schibsted Grotesk', system-ui, sans-serif", human: "'Schibsted Grotesk', system-ui, sans-serif", mono: "'Commit Mono', ui-monospace, monospace" }
 const MAX_FAMILY_LENGTH = 120
 
-const defaults = () => ({ step: 0, human: null, mono: null })
+const defaults = () => ({ step: 0, human: null, mono: null, heading: null })
 
 export function validFamily(name) {
   return typeof name === 'string'
@@ -46,12 +46,13 @@ export function parseType(stored) {
   if (Number.isInteger(parsed.step) && parsed.step >= SIZE_STEP_MIN && parsed.step <= SIZE_STEP_MAX) state.step = parsed.step
   if (validFamily(parsed.human)) state.human = parsed.human.trim()
   if (validFamily(parsed.mono)) state.mono = parsed.mono.trim()
+  if (validFamily(parsed.heading)) state.heading = parsed.heading.trim()
   return state
 }
 
 export function serializeType(type) {
-  const { step, human, mono } = parseType(type)
-  return JSON.stringify({ step, human, mono })
+  const { step, human, mono, heading } = parseType(type)
+  return JSON.stringify({ step, human, mono, heading })
 }
 
 export function sizeScale(step) {
