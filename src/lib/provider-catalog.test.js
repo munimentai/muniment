@@ -66,7 +66,7 @@ describe('provider catalog', () => {
 
   it('reads the saved default when it is shown, else the first shown model, and labels the chip', () => {
     expect(currentModel(inventory)).toMatchObject({ provider: 'ollama', model: 'llama3.2:3b' })
-    expect(modelChipLabel(inventory)).toBe('llama3.2:3b')
+    expect(modelChipLabel(inventory)).toBe('Llama 3.2:3B')
     const hiddenDefault = { ...inventory, hidden: ['ollama/llama3.2:3b'] }
     expect(currentModel(hiddenDefault)).toMatchObject({ provider: 'openai-codex', model: 'gpt-5.5' })
     expect(modelChipLabel({ providers: [], hidden: [] })).toBe('Connect a model')
@@ -94,15 +94,15 @@ describe('the model router in the picker', () => {
     const groups = pickerGroups(routed)
     expect(groups.map((group) => group.id)).toEqual(['muniment-router', 'openai-codex', 'router:kimi'])
     expect(groups[0].classifier).toBe('jev-latest')
-    expect(groups[0].models).toEqual([{ id: 'auto', context: '', label: 'jev-latest picks', provider: 'muniment-router', choice: 'auto', accounts: 0 }])
+    expect(groups[0].models).toEqual([{ id: 'auto', context: '', label: 'Jev Latest picks', provider: 'muniment-router', choice: 'auto', accounts: 0 }])
     expect(groups[1].classifier).toBe('')
     expect(sourceTag('router')).toBe('Router')
-    expect(modelChipLabel({ ...routed, default_provider: 'muniment-router', default_model: 'auto' })).toBe('jev-latest picks')
+    expect(modelChipLabel({ ...routed, default_provider: 'muniment-router', default_model: 'auto' })).toBe('Jev Latest picks')
   })
 
   it('lists a model once under its provider and routes it through the router when two accounts serve it', () => {
     const openai = pickerGroups(routed).find((group) => group.id === 'openai-codex')
-    expect(openai.models).toEqual([{ id: 'gpt-5.5', context: '400K', label: 'gpt-5.5', provider: 'muniment-router', choice: 'fast', accounts: 2 }])
+    expect(openai.models).toEqual([{ id: 'gpt-5.5', context: '400K', label: 'GPT 5.5', provider: 'muniment-router', choice: 'fast', accounts: 2 }])
     // One pooled account still needs the native router transport.
     const single = { ...routed, router_models: [{ id: 'fast', family: 'openai', model: 'gpt-5.5', accounts: 1 }] }
     expect(pickerGroups(single).find((group) => group.id === 'openai-codex').models[0]).toMatchObject({ provider: 'muniment-router', choice: 'fast', accounts: 1 })
@@ -117,7 +117,7 @@ describe('the model router in the picker', () => {
     const kimi = pickerGroups(routed).find((group) => group.id === 'router:kimi')
     expect(kimi.name).toBe('Kimi')
     expect(kimi.source).toBe('router')
-    expect(kimi.models).toEqual([{ id: 'kimi-k3', context: '', label: 'kimi-k3', provider: 'muniment-router', choice: 'kimi/kimi-k3', accounts: 1 }])
+    expect(kimi.models).toEqual([{ id: 'kimi-k3', context: '', label: 'Kimi K3', provider: 'muniment-router', choice: 'kimi/kimi-k3', accounts: 1 }])
     expect(pickerGroups({ ...routed, hidden: ['muniment-router/kimi/kimi-k3'] }).map((group) => group.id)).toEqual(['muniment-router', 'openai-codex'])
   })
 
@@ -128,10 +128,10 @@ describe('the model router in the picker', () => {
   })
 
   it('keeps the saved default when a row still saves it, and names the row in use', () => {
-    expect(currentModel({ ...routed, default_provider: 'muniment-router', default_model: 'fast' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'gpt-5.5' })
+    expect(currentModel({ ...routed, default_provider: 'muniment-router', default_model: 'fast' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT 5.5' })
     // Preserve a saved specific model when its pool becomes available.
-    expect(currentModel(routed)).toEqual({ provider: 'muniment-router', model: 'fast', label: 'gpt-5.5' })
-    expect(modelChipLabel(routed)).toBe('gpt-5.5')
+    expect(currentModel(routed)).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT 5.5' })
+    expect(modelChipLabel(routed)).toBe('GPT 5.5')
     expect(currentModel({ ...routed, router_classifier: null, default_provider: 'openai', default_model: 'gone' })).toEqual({ provider: 'muniment-router', model: 'auto', label: 'Automatic' })
   })
 })

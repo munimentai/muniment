@@ -4,6 +4,7 @@ import '@testing-library/jest-dom/vitest'
 import BrowserWorkspace from './BrowserWorkspace.svelte'
 let invoke
 beforeEach(() => {
+  localStorage.clear()
   window.__TAURI__ = { event: { listen: vi.fn(async () => () => {}) } }
   globalThis.ResizeObserver = class { observe() {} disconnect() {} }
   invoke = vi.fn(async (command, args) => {
@@ -29,28 +30,59 @@ describe('shared browser', () => {
     view.unmount()
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('browser_view', { label: null, bounds: null, artifactId: null }))
   })
-  it('requires an explicit grant and offers stop after it succeeds', async () => {
-    render(BrowserWorkspace, { tauri: { invoke }, onclose: vi.fn() })
-    await fireEvent.click(screen.getByRole('button', { name: 'Allow agent control' }))
-    expect(invoke).toHaveBeenCalledWith('browser_command', { request: { view: 'browser', action: 'grant', value: '' } })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Stop agent control' }))
-    expect(await screen.findByRole('button', { name: 'Allow agent control' })).toBeInTheDocument()
+  it('loads a requested chat link after positioning the native browser', async () => {
+    const request = {url:'https://xtermjs.org/'}
+    const onnavigationhandled = vi.fn()
+    render(BrowserWorkspace,{tauri:{invoke},navigation:request,onnavigationhandled})
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_command',{request:{view:'browser',action:'navigate',value:request.url}}))
+    await waitFor(() => expect(onnavigationhandled).toHaveBeenCalledWith(request))
+    const viewIndex = invoke.mock.calls.findIndex(([name]) => name === 'browser_view')
+    const navigationIndex = invoke.mock.calls.findIndex(([name,args]) => name === 'browser_command' && args.request.action === 'navigate')
+    expect(viewIndex).toBeLessThan(navigationIndex)
   })
-  it('shows that control stopped when the agent ends its grant', async () => {
-    render(BrowserWorkspace, { tauri: { invoke }, onclose: vi.fn() })
-    await fireEvent.click(screen.getByRole('button', { name: 'Allow agent control' }))
-    await screen.findByRole('button', { name: 'Stop agent control' })
-    const listener = window.__TAURI__.event.listen.mock.calls.find(([name]) => name === 'agent-action')[1]
-    listener({ payload: { view: 'browser', action: 'stop', ok: true } })
-    expect(await screen.findByRole('button', { name: 'Allow agent control' })).toBeInTheDocument()
+  it('navigates on Enter without manual control or page-reading buttons', async () => {
+    render(BrowserWorkspace, {tauri:{invoke}})
+    const input = screen.getByRole('textbox',{name:'Website address'})
+    await fireEvent.input(input,{target:{value:'example.com'}})
+    await fireEvent.submit(input.closest('form'))
+    expect(invoke).toHaveBeenCalledWith('browser_command',{request:{view:'browser',action:'navigate',value:'https://example.com'}})
+    for (const name of ['Go','Allow agent control','Read page','Close']) expect(screen.queryByRole('button',{name})).toBeNull()
   })
-  it('saves an artifact before opening its isolated preview', async () => {
-    render(BrowserWorkspace, { tauri: { invoke }, artifacts: true, onclose: vi.fn() })
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Counter' } })
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Artifact HTML' }), { target: { value: '<h1>Counter</h1>' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Save and preview' }))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('artifact_save', { id: null, name: 'Counter', html: '<h1>Counter</h1>' }))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_view', expect.objectContaining({ label: 'artifact', artifactId: '01900000-0000-7000-8000-000000000001' })))
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
+  it('shows an empty chat artifact list without an editor', async () => {
+    render(BrowserWorkspace,{tauri:{invoke},artifacts:true})
+    expect(await screen.findByText('Artifacts created in chat appear here.')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(invoke.mock.calls.some(([command]) => command === 'artifact_save')).toBe(false)
   })
+  it('opens saved session artifacts and refreshes the preview when chat updates one', async () => {
+    const id = '01900000-0000-7000-8000-000000000001'
+    invoke.mockImplementation(async command => command === 'artifact_list' ? [{id,name:'Counter'}] : {})
+    render(BrowserWorkspace,{tauri:{invoke},artifacts:true})
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_view',expect.objectContaining({label:'artifact',artifactId:id})))
+    invoke.mockClear()
+    const listener = window.__TAURI__.event.listen.mock.calls.find(([name]) => name === 'artifact-created')[1]
+    listener({payload:{id}})
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_view',expect.objectContaining({label:'artifact',artifactId:id})))
+  })
+})
+
+it('saves a homepage and uses it for Home and fresh native views', async () => {
+  const view = render(BrowserWorkspace, {tauri:{invoke}})
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_view', expect.objectContaining({homepage:'https://muniment.ai/'})))
+  await fireEvent.click(screen.getByRole('button', {name:'Browser settings'}))
+  await fireEvent.input(screen.getByLabelText('Homepage'), {target:{value:'https://example.net/start'}})
+  await fireEvent.click(screen.getByRole('button', {name:'Save'}))
+  await fireEvent.click(screen.getByRole('button', {name:'Home'}))
+  expect(invoke).toHaveBeenCalledWith('browser_command', {request:{view:'browser',action:'navigate',value:'https://example.net/start'}})
+  view.unmount()
+  invoke.mockClear()
+  render(BrowserWorkspace, {tauri:{invoke}})
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_view', expect.objectContaining({homepage:'https://example.net/start'})))
+})
+it('rejects unsupported homepage schemes', async () => {
+  render(BrowserWorkspace, {tauri:{invoke}})
+  await fireEvent.click(screen.getByRole('button', {name:'Browser settings'}))
+  await fireEvent.input(screen.getByLabelText('Homepage'), {target:{value:'file:///tmp/private'}})
+  await fireEvent.click(screen.getByRole('button', {name:'Save'}))
+  expect(screen.getByRole('alert')).toHaveTextContent('HTTP or HTTPS')
 })

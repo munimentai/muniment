@@ -208,6 +208,13 @@ wrap_life_span_handler! {
 wrap_load_handler! {
     struct Loading { loaded: Arc<AtomicBool> }
     impl LoadHandler {
+        fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _status: i32) {
+            if let Some(frame) = frame {
+                let css = serde_json::to_string(&format!("{}\n{}", include_str!("../../src/styles/scrollbars.css"), include_str!("../../src/styles/selection.css"))).unwrap();
+                let script = format!("(()=>{{const s=new CSSStyleSheet();s.replaceSync({css});document.adoptedStyleSheets=[...document.adoptedStyleSheets,s]}})()");
+                frame.execute_java_script(Some(&CefString::from(script.as_str())), None, 0);
+            }
+        }
         fn on_loading_state_change(&self, _browser: Option<&mut Browser>, loading: i32, _back: i32, _forward: i32) {
             self.loaded.store(loading == 0, Ordering::Release);
         }
@@ -546,7 +553,7 @@ pub fn layout(
                 .get(&initial_label)
                 .map(|p| p.browser.clone())
         }) {
-            if let Some(url) = initial_url {
+            if let Some(url) = initial_url.filter(|_| initial_label == "artifact") {
                 browser
                     .main_frame()
                     .ok_or("No page.")?
@@ -655,7 +662,7 @@ pub fn layout(
             Some(&info),
             Some(&mut client),
             Some(&CefString::from(
-                url.as_deref().unwrap_or("https://example.org"),
+                url.as_deref().unwrap_or("https://muniment.ai/"),
             )),
             Some(&BrowserSettings::default()),
             None,

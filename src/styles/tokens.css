@@ -39,6 +39,7 @@
   color-scheme: light dark;
 
   /* §1.3 light color tokens */
+  --overlay-backdrop: color-mix(in srgb, var(--paper) 64%, transparent);
   --paper: #F6F7F6;
   --surface: #FFFFFF;
   --faint: #EDEFEE;

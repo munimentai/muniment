@@ -34,6 +34,7 @@ export function createChatController({
   onHistoryStart = () => {},
   onThreadSummaries = () => {},
   onMoreThreads = () => {},
+  onThreadListError = () => {},
   readProject = () => null,
   readAgent = () => null,
   onThreadSelected = () => {},
@@ -321,10 +322,10 @@ export function createChatController({
       threadPageCount += 1
       nextThreadCursor = result.nextCursor
       onMoreThreads(nextThreadCursor != null)
-      onHistoryError('')
+      onThreadListError('')
       return firstThreadId
     } catch (_) {
-      if (!destroyed && sequence === threadRefreshSequence) onHistoryError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
+      if (!destroyed && sequence === threadRefreshSequence) onThreadListError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
       return null
     } finally {
       loadingOlderThreads = false

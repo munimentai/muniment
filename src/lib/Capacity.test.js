@@ -2,30 +2,25 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import Capacity from './Capacity.svelte'
-
 afterEach(cleanup)
-
-it('keeps provider allowances separate and shows runtime exclusion evidence', async () => {
-  const invoke = vi.fn(async () => ({ enabled: true, running: true, accounts: [
-    { id: 'a', label: 'Work', family: 'openai', source: 'account', exclusion_reason: null, windows: [{ label: 'Weekly', remaining_percent: 20 }] },
-    { id: 'b', label: 'Personal', family: 'anthropic', source: 'key', exclusion_reason: 'Account is turned off.', windows: [] },
-  ] }))
-  const { container } = render(Capacity, { tauri: { invoke }, onmanage: vi.fn() })
-  const details = container.querySelector('details')
-  details.open = true
-  await fireEvent(details, new Event('toggle'))
-  await screen.findByText('Account is turned off.')
-  expect(screen.getByText('Weekly: 20% remaining')).toBeInTheDocument()
-  expect(screen.getByText('Remaining allowance unavailable')).toBeInTheDocument()
-  expect(screen.getByText('anthropic · Paid API key')).toBeInTheDocument()
-  expect(screen.getByText('Ready for supported models')).toBeInTheDocument()
-  expect(invoke).toHaveBeenCalledWith('model_router_settings')
+it('shows separate allowance meters and account exclusions', async () => {
+  const invoke = vi.fn(async () => ({enabled:true,running:true,accounts:[
+    {id:'api',source:'key',label:'API key',family:'openai',windows:[]},
+    {id:'a',source:'account',label:'Work',family:'openai',windows:[{label:'Weekly',remaining_percent:20}]},
+    {id:'b',source:'account',label:'Personal',family:'anthropic',exclusion_reason:'Account is turned off.',windows:[]},
+  ]}))
+  const onclose = vi.fn()
+  render(Capacity,{tauri:{invoke},onclose,onmanage:vi.fn()})
+  await screen.findByText('Work')
+  expect(screen.queryByText('API key')).not.toBeInTheDocument()
+  expect(screen.getByRole('meter')).toHaveAttribute('aria-valuenow','20')
+  expect(screen.getByRole('meter')).toHaveAttribute('data-level','low')
+  expect(screen.getByText('Account is turned off.')).toBeInTheDocument()
+  expect(screen.getByText('Allowance unavailable')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button',{name:'Close capacity'}))
+  expect(onclose).toHaveBeenCalledOnce()
 })
-
-it('does not claim a ready account when account balancing is disabled', async () => {
-  const { container } = render(Capacity, { tauri: { invoke: vi.fn(async () => ({ enabled: false, running: false, accounts: [{ id: 'a', label: 'Work', source: 'key', exclusion_reason: null }] })) }, onmanage: vi.fn() })
-  container.querySelector('details').open = true
-  await fireEvent(container.querySelector('details'), new Event('toggle'))
-  await screen.findByText('Excluded while account balancing is off')
-  expect(screen.queryByText('Ready for supported models')).not.toBeInTheDocument()
+it('shows when balancing is disabled', async () => {
+  render(Capacity,{tauri:{invoke:vi.fn(async()=>({enabled:false,accounts:[]}))},onclose:vi.fn(),onmanage:vi.fn()})
+  expect(await screen.findByText('Account balancing is off.')).toBeInTheDocument()
 })

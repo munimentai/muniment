@@ -15,7 +15,7 @@ type Reply = mpsc::Sender<Result<Value, String>>;
 #[derive(Default)]
 struct Control {
     pending: Mutex<HashMap<i32, Reply>>,
-    grants: Mutex<HashMap<String, String>>,
+    stopped: Mutex<bool>,
     serial: Mutex<()>,
     active: Mutex<String>,
 }
@@ -84,7 +84,7 @@ fn evaluate(app: &tauri::AppHandle, view: &str, expression: String) -> Result<Va
 fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, String> {
     let control = app.state::<Arc<Control>>();
     if req.action == "stop" {
-        control.grants.lock().unwrap().clear();
+        *control.stopped.lock().unwrap() = true;
         return Ok(json!({"stopped":true}));
     }
     let _serial = control.serial.lock().unwrap();
@@ -92,23 +92,21 @@ fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, S
     let url = webview.url().map_err(err)?.to_string();
     if agent {
         if *control.active.lock().unwrap() != req.view {
-            return Err("Select this view before allowing agent control.".into());
+            return Err("Open this view before using agent control.".into());
         }
-        let grant = control.grants.lock().unwrap().get(&req.view).cloned();
-        if grant.as_deref() != Some(origin(&url)?.as_str()) {
-            return Err("Allow agent control for this page first.".into());
+        allowed_url(&url)?;
+        if *control.stopped.lock().unwrap() {
+            return Err("Agent control stopped.".into());
         }
     }
     match req.action.as_str() {
         "grant" if !agent => {
-            let site = origin(&url)?;
-            control.grants.lock().unwrap().insert(req.view, site.clone());
-            Ok(json!({"origin":site}))
+            *control.stopped.lock().unwrap() = false;
+            Ok(json!({"allowed":true}))
         }
         "navigate" => {
             let next = allowed_url(&req.value)?;
             if req.view == "artifact" && next.origin().ascii_serialization() != app.state::<BrowserStorage>().origin { return Err("Artifact previews stay local.".into()); }
-            if agent && origin(next.as_str())? != origin(&url)? { return Err("Open the new site and allow agent control there.".into()); }
             webview.navigate(next).map_err(err)?;
             Ok(json!({"navigating":true}))
         }
@@ -118,8 +116,8 @@ fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, S
             let selector = serde_json::to_string(&req.selector).unwrap();
             let check = format!("(()=>{{const e=document.querySelector({selector});if(!e)throw Error('Element not found');if(e.type==='password')throw Error('Enter passwords yourself');e.scrollIntoView({{block:'center'}});e.focus();const r=e.getBoundingClientRect();return {{x:r.x+r.width/2,y:r.y+r.height/2}}}})()");
             let point = evaluate(app,&req.view,check)?;
-            // Recheck consent after page inspection, before an input event.
-            if agent && !control.grants.lock().unwrap().contains_key(&req.view) { return Err("Agent control stopped.".into()); }
+            // A stop received during page inspection cancels pending input.
+            if agent && *control.stopped.lock().unwrap() { return Err("Agent control stopped.".into()); }
             if req.action == "type" {
                 cdp(app,&req.view,"Input.insertText",json!({"text":req.value}))
             } else {
@@ -136,7 +134,7 @@ fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, S
             cdp(app,&req.view,"Page.navigateToHistoryEntry",json!({"entryId":entry["id"]}))
         }
         "reload" if !agent => cdp(app,&req.view,"Page.reload",json!({})),
-        "status" if !agent => Ok(json!({"url":url,"allowed":control.grants.lock().unwrap().contains_key(&req.view),"chromium":"152.0.6"})),
+        "status" if !agent => Ok(json!({"url":url,"allowed":! *control.stopped.lock().unwrap(),"chromium":"152.0.6"})),
         _ => Err("Unsupported browser action.".into()),
     }
 }
@@ -207,12 +205,7 @@ struct BrowserStorage {
     origin: String,
     token: String,
 }
-#[derive(Serialize, Deserialize)]
-pub struct Artifact {
-    id: String,
-    name: String,
-    html: String,
-}
+use muniment_core::creations::Artifact;
 fn shell(webview: &tauri::Webview) -> Result<(), String> {
     if webview.label() != "main" {
         return Err("Only the app can change browser settings.".into());
@@ -235,7 +228,9 @@ pub fn artifact_list(app: tauri::AppHandle, webview: tauri::Webview) -> Result<V
         }
         let artifact: Artifact =
             serde_json::from_slice(&std::fs::read(path).map_err(err)?).map_err(err)?;
-        items.push(json!({"id":artifact.id,"name":artifact.name}));
+        let profile = muniment_runtime::profile_directory().map_err(err)?;
+        muniment_core::creations::artifact_folder(&profile, &artifact.id)?;
+        items.push(json!({"id":artifact.id,"name":artifact.name,"threadId":artifact.thread_id}));
     }
     Ok(items)
 }
@@ -249,28 +244,24 @@ pub fn artifact_read(
     let path = artifact_path(&app.state::<BrowserStorage>().root, &id)?;
     serde_json::from_slice(&std::fs::read(path).map_err(err)?).map_err(err)
 }
+/// Register an HTML file written by a chat session. The shell has no manual editor.
 #[tauri::command]
-pub fn artifact_save(
+pub async fn artifact_from_file(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    id: Option<String>,
-    name: String,
-    html: String,
-) -> Result<Artifact, String> {
+    thread_id: String,
+    path: PathBuf,
+) -> Result<Value, String> {
     shell(&webview)?;
-    if name.trim().is_empty() || name.len() > 120 || html.len() > 2_000_000 {
-        return Err("Use a name under 120 characters and HTML under 2 MB.".into());
-    }
-    let item = Artifact {
-        id: id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
-        name: name.trim().into(),
-        html,
-    };
-    let path = artifact_path(&app.state::<BrowserStorage>().root, &item.id)?;
-    let temp = path.with_extension("tmp");
-    std::fs::write(&temp, serde_json::to_vec(&item).map_err(err)?).map_err(err)?;
-    std::fs::rename(temp, path).map_err(err)?;
-    Ok(item)
+    tauri::async_runtime::spawn_blocking(move || {
+        let profile = muniment_runtime::profile_directory().map_err(err)?;
+        let item = muniment_core::creations::publish(&profile, &thread_id, &path, None)?;
+        let result = json!({"id":item.id,"name":item.name,"threadId":item.thread_id});
+        let _ = app.emit_to("main", "artifact-created", &result);
+        Ok(result)
+    })
+    .await
+    .map_err(err)?
 }
 #[derive(Clone, Deserialize)]
 pub struct Bounds {
@@ -286,6 +277,7 @@ pub async fn browser_view(
     label: Option<String>,
     bounds: Option<Bounds>,
     artifact_id: Option<String>,
+    homepage: Option<String>,
 ) -> Result<(), String> {
     shell(&webview)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -296,7 +288,7 @@ pub async fn browser_view(
             return Err("Unknown browser view.".into());
         }
         if *control.active.lock().unwrap() != label {
-            control.grants.lock().unwrap().clear();
+            *control.stopped.lock().unwrap() = false;
         }
         *control.active.lock().unwrap() = label.clone();
         cef_native::hide_all(&app)?;
@@ -314,7 +306,6 @@ pub async fn browser_view(
         }
         let storage = app.state::<BrowserStorage>();
         let pending = control.inner().clone();
-        let grants = control.inner().clone();
         let events = app.clone();
         let name = label.clone();
         let origin = storage.origin.clone();
@@ -327,7 +318,7 @@ pub async fn browser_view(
                 })
                 .transpose()?
         } else {
-            None
+            Some(allowed_url(homepage.as_deref().unwrap_or("https://muniment.ai/"))?.to_string())
         };
         cef_native::layout(
             &app,
@@ -345,7 +336,6 @@ pub async fn browser_view(
                 }
             },
             move |url| {
-                grants.grants.lock().unwrap().remove(&name);
                 let _ = events.emit_to(
                     "main",
                     "browser-page-change",

@@ -73,11 +73,15 @@ pub struct ComposerFile {
 
 /// Searches names only. Hidden folders, build output and symlinks are excluded.
 #[tauri::command]
-pub async fn chat_search_files(query: String, thread_id: Option<String>) -> Result<Vec<ComposerFile>, String> {
+pub async fn chat_search_files(query: String, thread_id: Option<String>, project_id: Option<String>, directory: Option<PathBuf>) -> Result<Vec<ComposerFile>, String> {
     if query.chars().count() > 256 { return Ok(Vec::new()); }
     tauri::async_runtime::spawn_blocking(move || {
         let profile = muniment_runtime::profile_directory().map_err(|_| "The Home folder is unavailable.")?;
-        let root = project_working_directory(&profile, thread_id.as_deref())?;
+        let root = if let Some(path) = directory {
+            crate::workspace_tools::directory(&path)?
+        } else if let Some(id) = project_id {
+            muniment_core::projects::folder(&profile, &id)?
+        } else { project_working_directory(&profile, thread_id.as_deref())? };
         Ok(search_home_files(&root, &query))
     }).await.map_err(|_| "File search could not finish.".to_owned())?
 }

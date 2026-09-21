@@ -50,15 +50,16 @@ fonts sits in front of the shipped stack in `--font-human` or `--font-mono`.
 The super key with `=`, `-` and `0` moves the same step. Both live on the
 device beside the theme and the shipped pair stays the default.
 
+Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
 Shape: radius `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
 Nothing pill-shaped. Hairline borders do the work, and `--shadow-window` and
 `--shadow-overlay` are the only two depth tokens. Motion is purposeful and
-rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the
-panel slide. `prefers-reduced-motion` removes all of it.
+rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide. `prefers-reduced-motion` removes all of it.
 
 ## Laws
 
-1. **Color means computation.** `--signal` appears only on the mark's thinking
+1. **Color means computation.** The static setup brand graph also uses
+   `--signal`. Otherwise `--signal` appears only on the mark's thinking
    state, the streaming underscore and caret on
    the active line, the route segment of the provenance line, the live voice
    polish flash, the enabled state of the Models show switch, and workflow-run
@@ -88,23 +89,22 @@ panel slide. `prefers-reduced-motion` removes all of it.
 
 ## The ring
 
-The mark is a ring with a milled edge: a circle whose radius is modulated by a
-uniform 22-tooth wave, `r(t) = 16.5 + 1.6·sin(22t)` in a 48-unit viewBox,
-monoline stroke, round caps. At rest it is static ink. Thinking, it is
-verdigris and animated: an irregular breath that flexes scale, stroke and
-milling depth together, a spin that eases toward a new random target and often
-stops, and a rare trace that runs the outline once. All visible instances
-animate in sync as one organism. At 20px and below it renders as a solid
-two-edge reduction. That reduction is the seal: the application icon is the
-seal in verdigris on the dark brand card, and the lockup on the launch
-screen renders the seal in ink at 34px so the mark there matches the icon.
-[docs/design-reference/ring/muniment-ring-pulse-spin.html](docs/design-reference/ring/muniment-ring-pulse-spin.html)
-is the reference geometry and animation engine.
+The mark is the woven graph ring. Its canonical vertices and size reductions
+live in `src/lib/graph-mark.js`. The 20px, 32px and 56px variants use 22, 33
+and 55 nodes with two connections per node and thicker lines at small sizes.
+At 96px and above the full graph has 110 nodes, 220 connections and node dots.
+The setup lockup shows the static 160px graph with the wordmark in its center.
+Static marks retain the original proportions. Native icons use size reductions
+in verdigris on the dark brand card. Provider callbacks use the static 56px graph.
+Only the 20px chat mark moves: irregular pulse, eased random rotation, and
+an occasional outline trace. The inner graph contracts during the pulse so
+the center opening shrinks. Visible chat marks share one clock. Reduced
+motion keeps the original static pose. No light balls traverse the graph.
 
 ## Grammar
 
-Layout is sidebar, thread, and one rail column that the artifact rail (⌘J)
-or the record panel (⌘K) fills, both closed by default. User
+Layout is sidebar, thread, and one rail column for workspace tabs or Record (⌘K).
+Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
 messages sit right in `faint` bubbles at radius 10. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
 36px gutter, and render as Markdown from the first token. The composer keeps
@@ -121,8 +121,8 @@ Platform chrome follows the OS and brand tokens stay identical across platforms.
 On macOS the app row sits in the 36px band above the panels beside the native
 traffic lights, and the row's controls and the lights center on that band. The
 row is the drag region and holds the sidebar toggle, the thread
-title with its actions menu, and Artifacts then Record with the update control beside
-them. The thread title, Artifacts and Record are one quiet row
+title with its actions menu, Record, then the vertical ellipsis for workspace tools.
+Seti icons identify file types. Scrollbars share a faint 3px thumb. The title and Record use a quiet row
 control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
@@ -131,9 +131,9 @@ controls and Linux keeps its decorations. The sidebar is dense: 28px rows,
 New thread leads the sidebar, followed by Agents and title search, with no static Threads heading.
 Pinned threads precede recent threads, with a heading only when pins exist.
 Search loads older titles and includes archives. Archived threads has Restore.
-Pins and archives persist on the device. Projects lists folders and scopes threads. The Settings and account footer has one hairline.
+Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings and account footer has one hairline.
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
-in one compact menu shared with the title. Shift and Command select rows. Delete asks once.
+in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings is a popup over the workspace with a
 section list on its left, Models & routing, Preferences, Profile & Memory, Home, Companies and Account, and the
 section on its right; the sidebar control, the composer's model chip and the
@@ -243,7 +243,7 @@ lists every control and surface, its states, and the token each state reads.
 
 The file panel shares the record panel rail, resize and maximize behavior.
 The changed-files chip sits above the composer and opens its list on hover or click.
-File links open current text. Only actions with more details use disclosure arrows.
+File links open an editable Monaco tab with syntax highlighting. Only actions with more details use disclosure arrows.
 The account name shows a pencil on hover or focus and edits inline.
 
 Composer URLs and file references use the theme-aware reference color.

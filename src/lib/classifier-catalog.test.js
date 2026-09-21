@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { DEDICATED, POOLED, catalog, matchSaved, pooledReady, priceLabel } from './classifier-catalog.js'
+import { DEDICATED, SELF_HOSTED, POOLED, catalog, matchSaved, pooledReady, priceLabel } from './classifier-catalog.js'
 
 describe('classifier catalog', () => {
   it('lists a model built to classify before the models on your own accounts', () => {
     const rows = catalog([])
     expect(rows[0].id).toBe('typesafe/jev-latest')
     expect(rows[0].group).toBe('Built to classify')
-    expect(rows.slice(1).every((row) => row.group === 'On your accounts')).toBe(true)
-    expect(rows.length).toBe(DEDICATED.length + POOLED.length)
+    expect(rows.slice(DEDICATED.length + SELF_HOSTED.length).every((row) => row.group === 'On your accounts')).toBe(true)
+    expect(rows.length).toBe(DEDICATED.length + SELF_HOSTED.length + POOLED.length)
   })
 
   it('offers a pooled classifier only while its provider holds an enabled account', () => {
@@ -34,6 +34,7 @@ describe('classifier catalog', () => {
     expect(matchSaved({ kind: 'pooled', family: 'openai', model: 'gpt-5.6-luna' })).toBe('openai/gpt-5.6-luna')
     expect(matchSaved({ kind: 'pooled', family: 'openai', model: 'gpt-5.6' })).toBe('openai/gpt-5.6')
     expect(matchSaved({ kind: 'endpoint' })).toBe('endpoint')
+    expect(matchSaved({ kind: 'endpoint', model: 'decider-2b' })).toBe('mapika/decider-2b')
     expect(matchSaved({ kind: 'none' })).toBe('')
     expect(matchSaved(null)).toBe('')
   })

@@ -10,7 +10,7 @@
     else logos[name] = { any: svg }
   }
   // Pi ids that share a mark with the provider the user connected.
-  const ALIASES = { 'openai-codex': 'openai', 'claude-bridge': 'anthropic', 'opencode-go': 'opencode', 'qwen-token-plan-individual': 'qwen-token-plan', 'minimax-cn': 'minimax', 'zai-coding-cn': 'zai', kimi: 'kimi-coding' }
+  const ALIASES = { 'jev-latest': 'typesafe', 'openai-codex': 'openai', 'claude-bridge': 'anthropic', 'opencode-go': 'opencode', 'qwen-token-plan-individual': 'qwen-token-plan', 'minimax-cn': 'minimax', 'zai-coding-cn': 'zai', kimi: 'kimi-coding' }
 
   let { provider, size = 16 } = $props()
   const logo = $derived(logos[ALIASES[provider] ?? provider?.replace(/^custom-.*/, 'custom')] ?? null)

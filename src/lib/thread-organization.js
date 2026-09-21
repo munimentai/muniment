@@ -10,13 +10,13 @@ export function readThreadOrganization(storage = localStorage) {
   }
 }
 
-export function organizeThreads(summaries, organization, query, archivedOnly) {
+export function organizeThreads(summaries, organization, query, archivedOnly, includeAll = false) {
   const search = query.trim().toLocaleLowerCase()
   const groups = { Pinned: [], Threads: [], Archived: [] }
   for (const summary of summaries) {
     const state = organization[summary.threadId] || {}
     if (search && !(summary.title || 'New thread').toLocaleLowerCase().includes(search)) continue
-    if (archivedOnly ? !state.archived : state.archived && !search) continue
+    if (!includeAll && (archivedOnly ? !state.archived : state.archived && !search)) continue
     groups[state.archived ? 'Archived' : state.pinned ? 'Pinned' : 'Threads'].push(summary)
   }
   return Object.entries(groups).filter(([, threads]) => threads.length).map(([name, threads]) => ({ name, threads }))

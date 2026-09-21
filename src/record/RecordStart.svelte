@@ -4,10 +4,10 @@
   // one sentence, so the page shows what the record does before it asks for
   // anything. Behind it the seal is drawn as a graph: the 110 vertices of its
   // outer edge, the wave pushed out, each joined to two others across the
-  // ring, which is brand/logo/ring-graph-3.svg drawn live. This is
+  // ring, which is brand/logo/ring-graph.svg drawn live. This is
   // the one screen DESIGN.md §4 exempts from the one-line empty state,
   // because a machine with no company has nothing else to show.
-  import { sealGraphPoints } from '../lib/mark.js'
+  import { GRAPH_POINTS } from '../lib/graph-mark.js'
   import RecordSources from './RecordSources.svelte'
   import { sourceOptions } from './record-import-state.js'
   import { findingClaim, sampleLeadLine, topFindings } from './record-sample.js'
@@ -22,7 +22,7 @@
   // Every vertex of the seal's outer edge is a node, and each node joins the
   // nodes 7 and 17 places on, so the mark reads as a graph rather than as an
   // outline.
-  const nodes = sealGraphPoints()
+  const nodes = GRAPH_POINTS
   const chords = nodes.map((point, index) => [point, nodes[(index + 7) % nodes.length], nodes[(index + 17) % nodes.length]])
 
   const sourceLabel = $derived(sourceOptions().find((option) => option.value === source)?.label ?? null)

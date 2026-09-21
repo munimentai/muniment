@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { graphPaths } from './graph-mark.js'
 import { REST_POSE, paint, step, subscribe } from './ring-motion.js'
 
 afterEach(() => vi.restoreAllMocks())
@@ -24,20 +25,21 @@ describe('ring motion', () => {
     expect(poses.some((pose) => pose.trace !== null)).toBe(true)
   })
 
-  it('paints the rest pose as the unrotated seal with the accent hidden', () => {
-    const group = fakePath(); const body = fakePath(); const accent = fakePath()
-    paint(REST_POSE, { group, body, accent, width: 5.8 })
+  it('paints the rest pose as the unrotated graph with the accent hidden', () => {
+    const group = fakePath(); const body = fakePath(); const accent = fakePath(); const outline = fakePath()
+    paint(REST_POSE, { group, body, outline, accent })
     expect(group.attributes.transform).toBe('rotate(0.00 24 24)')
-    expect(body.attributes.d).toMatch(/^M.+ Z M.+ Z$/)
+    expect(body.attributes.d).toBe(graphPaths(20).edges)
+    expect(outline.attributes.d).toBe(graphPaths(20).outline)
     expect(accent.style.opacity).toBe(0)
     expect(accent.attributes.d).toBeUndefined()
   })
 
-  it('paints a trace as a dash segment on the centreline in signal', () => {
-    const group = fakePath(); const body = fakePath(); const accent = fakePath()
-    paint({ ...REST_POSE, angle: 90, trace: 0.5 }, { group, body, accent, width: 5.8 })
+  it('paints a trace as a dash segment on the outline in signal', () => {
+    const group = fakePath(); const body = fakePath(); const accent = fakePath(); const outline = fakePath()
+    paint({ ...REST_POSE, angle: 90, trace: 0.5 }, { group, body, outline, accent })
     expect(group.attributes.transform).toBe('rotate(90.00 24 24)')
-    expect(accent.attributes['stroke-width']).toBe((5.8 * 1.15).toFixed(2))
+    expect(accent.attributes['stroke-width']).toBe((0.75 * 1.5).toFixed(2))
     expect(accent.style.strokeDasharray).toBe('32 200')
     expect(accent.style.opacity).toBeCloseTo(0.9, 6)
   })

@@ -5,7 +5,39 @@
 </script>
 
 <svg class="lucide" class:side-icon={variant === 'side'} class:action-icon={variant === 'action'} width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" data-icon={name}>
-  {#if name === 'settings'}
+  {#if name === 'house'}
+    <path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1ZM9 21v-8h6v8" />
+  {:else if name === 'file-plus'}
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M12 12v6M9 15h6" />
+  {:else if name === 'scale'}
+    <path d="M12 3v18" /><path d="m19 8 3 8a5 5 0 0 1-6 0zV7" /><path d="M3 7h1a17 17 0 0 0 8-2 17 17 0 0 0 8 2h1" /><path d="m5 8 3 8a5 5 0 0 1-6 0zV7" /><path d="M7 21h10" />
+  {:else if name === 'route'}
+    <circle cx="6" cy="19" r="3" /><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" /><circle cx="18" cy="5" r="3" />
+  {:else if name === 'gauge'}
+    <path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" />
+  {:else if name === 'sliders-vertical'}
+    <path d="M10 8h4" /><path d="M12 21v-9" /><path d="M12 8V3" /><path d="M17 16h4" /><path d="M19 12V3" /><path d="M19 21v-5" /><path d="M3 14h4" /><path d="M5 10V3" /><path d="M5 21v-7" />
+  {:else if name === 'sliders-horizontal'}
+    <path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" />
+  {:else if name === 'layout-dashboard'}
+    <rect x="3" y="3" width="7" height="9" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="16" width="7" height="5" rx="1" />
+  {:else if name === 'folder-plus'}
+    <path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2ZM12 10v6M9 13h6" />
+  {:else if name === 'ellipsis-vertical'}
+    <circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="19" r="1" />
+  {:else if name === 'menu'}
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  {:else if name === 'image'}
+    <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" />
+  {:else if name === 'file-code'}
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm0 0v6h6M10 13l-2 2 2 2m4-4 2 2-2 2" />
+  {:else if name === 'sheet'}
+    <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 9v12M15 9v12" />
+  {:else if name === 'music'}
+    <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+  {:else if name === 'video'}
+    <rect x="3" y="5" width="13" height="14" rx="2" /><path d="m16 10 5-3v10l-5-3" />
+  {:else if name === 'settings'}
     <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
     <circle cx="12" cy="12" r="3" />
   {:else if name === 'panel-left-open'}
@@ -16,6 +48,11 @@
     <rect width="18" height="18" x="3" y="3" rx="2" />
     <path d="M9 3v18" />
     <path d="m16 15-3-3 3-3" />
+  {:else if name === 'panel-right-open'}
+    <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M15 3v18m-5-6-3-3 3-3" />
+  {:else if name === 'panel-right-close'}
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+    <path d="M15 3v18m-7-6 3-3-3-3" />
   {:else if name === 'bot'}
     <rect x="4" y="7" width="16" height="14" rx="3" /><path d="M12 7V3H9M1 12v5M23 12v5M8 16h.01M16 16h.01" />
   {:else if name === 'file'}
@@ -56,6 +93,8 @@
     <path d="M16 17H8" />
   {:else if name === 'chevron-left'}
     <path d="m15 18-6-6 6-6" />
+  {:else if name === 'chevron-up'}
+    <path d="m18 15-6-6-6 6" />
   {:else if name === 'chevron-right'}
     <path d="m9 18 6-6-6-6" />
   {:else if name === 'maximize-2'}

@@ -41,7 +41,13 @@ windows; CLT on macOS).
 The Tauri v2 shell hosts native CEF child views through `cef-rs`. It does not
 use `tauri-runtime-cef`. The lockfile pins the browser packages. Websites have
 no Tauri bridge. Browser and artifact profiles are separate. Agent access
-requires a user grant for the active origin. Navigation revokes that grant.
+is available while the browser view is open. Websites have no workspace or terminal access.
+The title bar menu opens a shared tab panel for Browser, Files and Terminal.
+Files use a nested tree and Seti type icons. The file menu supports rename, duplicate, copy and paste, paths, system reveal, and Trash. Text files open in Monaco with syntax highlighting and Cmd/Ctrl+S.
+The editor preserves drafts across tabs and rejects saves over changed files. The editor supports UTF-8 files up to 2 MB.
+Composer @ references search the selected Files folder, or the current project or session workspace.
+The terminal runs the user shell in the selected folder.
+HTML files written in chat appear in Artifacts. The app has no manual artifact editor.
 The Unix agent endpoint is `~/.muniment/browser/agent.sock`.
 
 CEF uses its platform sandbox. Windows starts through the CEF bootstrap and

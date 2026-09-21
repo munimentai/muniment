@@ -193,8 +193,8 @@ const TEXT_SOURCE = /\.(?:css|html|js|json|jsx|md|mjs|rs|svelte|svg|toml|ts|tsx|
 const EXCLUDED_DIRECTORIES = new Set(['node_modules', 'target', 'third-party', '_ds'])
 
 export function forbiddenUiCopy(source, file = '<fixture>') {
-  // The official Grok share host is a domain, not promotional copy.
-  const prose = source.replace(/\bx\.ai\b/g, (host) => " ".repeat(host.length))
+  // Official product and provider hosts are domains, not promotional copy.
+  const prose = source.replace(/\b(?:x|muniment)\.ai\b/g, (host) => " ".repeat(host.length))
   return [...prose.matchAll(FORBIDDEN)].map((match) => ({
     file,
     line: source.slice(0, match.index).split('\n').length,

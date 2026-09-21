@@ -194,6 +194,7 @@ pub struct RuntimeChatEventSink {
     thread_id: String,
     workspace: String,
     earlier_models: Vec<String>,
+    project_context: String,
 }
 
 impl RuntimeChatEventSink {
@@ -243,6 +244,7 @@ impl RuntimeChatEventSink {
             thread_id,
             workspace,
             earlier_models: Vec::new(),
+            project_context: String::new(),
         }
     }
 
@@ -252,6 +254,11 @@ impl RuntimeChatEventSink {
     }
 
     /// The models that answered earlier runs of this thread, for the prompt's facts.
+    pub fn with_project_context(mut self, context: String) -> Self {
+        self.project_context = context;
+        self
+    }
+
     pub fn with_earlier_models(mut self, earlier_models: Vec<String>) -> Self {
         self.earlier_models = earlier_models;
         self
@@ -297,13 +304,24 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         Some(self.memory_runtime.agent_extension_path())
     }
 
+    fn project_context(&self) -> Option<&str> {
+        (!self.project_context.is_empty()).then_some(self.project_context.as_str())
+    }
+
     fn agent_instructions(&self) -> Result<Option<String>, PiLaunchError> {
         let sessions = self.profile.pi_session_root();
         let profile = sessions
             .parent()
             .ok_or(PiLaunchError::UnavailableSessionRoot)?;
-        muniment_core::agents::thread_instructions(profile, &self.thread_id)
-            .map_err(|e| PiLaunchError::rejected("agent", e))
+        let mut instructions = muniment_core::agents::thread_instructions(profile, &self.thread_id)
+            .map_err(|e| PiLaunchError::rejected("agent", e))?
+            .unwrap_or_default();
+        if let Some(plan) = muniment_core::creations::read(profile, &self.thread_id)
+            .map_err(|e| PiLaunchError::rejected("creation", e))?
+        {
+            instructions.push_str(&format!("\nCreation thread: {}\nGoal: {}\nSpecified output: {}\nUse creation-plan to retain user-approved refinements. Continue in this dedicated thread.",plan.kind,plan.goal,plan.output));
+        }
+        Ok((!instructions.is_empty()).then_some(instructions))
     }
 
     fn project_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {

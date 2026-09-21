@@ -1,16 +1,16 @@
 <script>
-  import LucideIcon from '../lib/LucideIcon.svelte'
-  let { files = [], loading = false, error = '', selected = 0, onchoose } = $props()
+  import FileIcon from '../files/FileIcon.svelte'
+  let { rootLabel = 'Muniment folder', files = [], loading = false, error = '', selected = 0, onchoose } = $props()
 </script>
 <div class="mentions">
-  <p>Files in your Home folder</p>
+  <p>Files in {rootLabel}</p>
   {#if loading}<p role="status">Searching files…</p>
   {:else if error}<p role="alert">{error}</p>
-  {:else if !files.length}<p role="status">No matching files. Use Add files to choose another folder.</p>
+  {:else if !files.length}<p role="status">No matching files. Choose another folder in Files.</p>
   {/if}
   <div id="file-mentions" role="listbox" aria-label="File suggestions">
     {#each files as file, i (file.path)}
-      <button id={`file-mention-${i}`} type="button" role="option" aria-selected={selected === i} onpointerdown={(event) => event.preventDefault()} onclick={() => onchoose(file)}><LucideIcon name="file-text" /><span>{file.relativePath}</span></button>
+      <button id={`file-mention-${i}`} type="button" role="option" aria-selected={selected === i} onpointerdown={(event) => event.preventDefault()} onclick={() => onchoose(file)}><FileIcon name={file.displayName || file.relativePath} /><span>{file.relativePath}</span></button>
     {/each}
   </div>
 </div>

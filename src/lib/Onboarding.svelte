@@ -157,7 +157,7 @@
         <button data-testid="onboarding-scan" aria-expanded={panel === 'scan'} aria-controls="onboarding-scan-panel" onclick={() => { panel = panel === 'scan' ? null : 'scan' }}>{scanError ? 'Scan unavailable' : report ? (report.errors.length && !rows.some((row) => row.fileCount > 0) ? 'Assistant memory scan incomplete' : scanSummary(rows)) : 'Scanning assistant memory…'}</button>
       </div>
       {#if panel === 'model'}
-        <section class="panel" id="onboarding-model-panel" aria-labelledby="model-title">
+        <section data-panel="onboarding" class="panel" id="onboarding-model-panel" aria-labelledby="model-title">
           <h2 id="model-title">Connect a model</h2>
           <p>No free hosted model exists at the no-account tier.</p>
           <p>Use your own provider key or a local server.</p>
@@ -167,7 +167,7 @@
           {/if}
         </section>
       {:else if panel === 'home'}
-        <section class="panel" id="onboarding-home-panel" aria-labelledby="home-title">
+        <section data-panel="onboarding" class="panel" id="onboarding-home-panel" aria-labelledby="home-title">
           <h2 id="home-title">Home</h2>
           <p class="path">{onboarding.homePath}</p>
           <p>The first Send creates memory/, agents/, projects/, and sessions/.</p>
@@ -175,7 +175,7 @@
           {#if !onboarding.homePath}<button onclick={loadHome} disabled={busy || picking}>Retry Home</button>{/if}
         </section>
       {:else if panel === 'scan'}
-        <section class="panel" id="onboarding-scan-panel" aria-labelledby="scan-title">
+        <section data-panel="onboarding" class="panel" id="onboarding-scan-panel" aria-labelledby="scan-title">
           <h2 id="scan-title">Assistant memory</h2>
           {#if report}
             {#if rows.length}
@@ -209,7 +209,7 @@
   .chips button { max-width: 100%; border-radius: var(--radius-chip); font: var(--text-12) var(--font-mono); text-align: left; overflow-wrap: anywhere; }
   .home-chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chips button[aria-expanded="true"] { background: var(--faint); }
-  .panel { min-height: 0; overflow-y: auto; margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+  .panel { overflow-y: auto; margin-top: 16px; padding: 16px; }
   h1 { font-size: var(--text-22); }
   h2 { margin: 0 0 12px; font-size: var(--text-15); font-weight: 600; }
   p { margin: 8px 0; font-size: var(--text-13); overflow-wrap: anywhere; }

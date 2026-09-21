@@ -18,7 +18,10 @@
         "visible": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 9, "y": 11 },
+        "trafficLightPosition": {
+          "x": 9,
+          "y": 11
+        },
         "width": 1280,
         "height": 800,
         "minWidth": 960,
@@ -36,11 +39,26 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visibleOnAllWorkspaces": true
+      },
+      {
+        "label": "workspace-menu",
+        "title": "Workspace tools",
+        "url": "index.html?workspace-menu",
+        "visible": false,
+        "width": 240,
+        "height": 140,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
-    }
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

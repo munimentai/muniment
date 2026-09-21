@@ -1,7 +1,8 @@
 <script>
+  import { panelScroll } from '../lib/panel-scroll.js'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { highlightFile } from './file-highlight.js'
-  let { file, tauri, threadId = null, maximized = false, ontogglemaximized, onclose } = $props()
+  let { file, tauri, threadId = null, maximized = false, ontogglemaximized, onclose, embedded = false } = $props()
   let content = $state('')
   let error = $state('')
   let loading = $state(false)
@@ -17,24 +18,25 @@
   })
 </script>
 
-<aside id="file-panel" class="file-panel" aria-labelledby="file-panel-title">
-  <header>
+<aside data-panel="file" data-panel-variant={embedded ? "embedded" : undefined} id="file-panel" class="file-panel" class:embedded aria-labelledby="file-panel-title">
+  <header data-panel-header>
     <h2 id="file-panel-title">{file?.name ?? 'File'}</h2>
     <button type="button" aria-label="Reload file" onclick={() => reload += 1}><LucideIcon name="refresh-ccw-dot" /></button>
-    <button type="button" aria-label={maximized ? 'Restore' : 'Maximize'} onclick={ontogglemaximized}><LucideIcon name={maximized ? 'minimize-2' : 'maximize-2'} /></button>
-    <button type="button" aria-label="Close file panel" onclick={onclose}><LucideIcon name="x" /></button>
+    {#if ontogglemaximized}<button type="button" aria-label={maximized ? 'Restore' : 'Maximize'} onclick={ontogglemaximized}><LucideIcon name={maximized ? 'minimize-2' : 'maximize-2'} /></button>{/if}
+    {#if onclose}<button type="button" aria-label="Close file panel" onclick={onclose}><LucideIcon name="x" /></button>{/if}
   </header>
   <p class="path">{file?.path}</p>
   {#if loading}<p role="status">Reading file…</p>
   {:else if error}<p role="alert">{error}</p>
   {:else}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <pre role="region" tabindex="0" aria-label="File contents"><code>{@html highlighted}</code></pre>{/if}
+    <pre use:panelScroll role="region" tabindex="0" aria-label="File contents"><code>{@html highlighted}</code></pre>{/if}
 </aside>
 
 <style>
-  .file-panel { grid-area: rail; display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); overflow: hidden; }
-  header { display: flex; align-items: center; gap: 6px; padding: 12px; border-bottom: 1px solid var(--border); }
+  .file-panel.embedded { flex:1; }
+  .file-panel { grid-area: rail; display: flex; flex-direction: column;      overflow: hidden; }
+  header { display: flex; align-items: center; gap: 6px; padding: var(--panel-control-inset); border-bottom: 1px solid var(--border); }
   h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; font: var(--text-13) var(--font-mono); }
   button { display: flex; align-items: center; min-height: 28px; padding: 4px 6px; color: var(--ink); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; font-size: var(--text-12); cursor: pointer; }
   button:hover { background: var(--faint); }

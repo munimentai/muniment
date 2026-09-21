@@ -1,7 +1,7 @@
 <script>
   import { onMount, tick } from 'svelte'
 
-  let { title, children, onDecision } = $props()
+  let { title, children, onDecision, cancelLabel = 'Deny', confirmLabel = 'Allow' } = $props()
   let dialogPanel
   let denyButton
   let pending = $state(false)
@@ -45,24 +45,24 @@
   async function decide(approve) {
     if (pending) return
     pending = true
-    await onDecision(approve)
+    try { await onDecision(approve) } finally { pending = false }
   }
 </script>
 
 <div class="dialog-backdrop">
-  <div bind:this={dialogPanel} class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+  <div data-panel="confirm" data-panel-variant="overlay" bind:this={dialogPanel} class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
     <h2 id="confirm-dialog-title">{title}</h2>
     <div class="dialog-copy">{@render children()}</div>
     <div class="dialog-actions">
-      <button bind:this={denyButton} disabled={pending} onclick={() => decide(false)}>Deny</button>
-      <button class="allow" disabled={pending} onclick={() => decide(true)}>Allow</button>
+      <button bind:this={denyButton} disabled={pending} onclick={() => decide(false)}>{cancelLabel}</button>
+      <button class="allow" disabled={pending} onclick={() => decide(true)}>{confirmLabel}</button>
     </div>
   </div>
 </div>
 
 <style>
-  .dialog-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--ink) 28%, transparent); }
-  .dialog-panel { width: min(440px, 100%); padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); font-family: var(--font-human); }
+  .dialog-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 24px; background: var(--overlay-backdrop); }
+  .dialog-panel { width: min(440px, 100%); padding: 24px;      font-family: var(--font-human); }
   h2 { margin: 0; font-size: var(--text-22); line-height: var(--leading-heading); letter-spacing: var(--tracking-heading); }
   .dialog-copy { margin-top: 12px; color: var(--muted); font-size: var(--text-15); line-height: var(--leading-body); overflow-wrap: anywhere; }
   .dialog-copy :global(p) { margin: 0; }

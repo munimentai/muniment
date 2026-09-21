@@ -32,7 +32,7 @@ const START_ERROR: &str = "The sign-in could not start. Try again.";
 const CALLBACK_PROVIDER: &str = "openai-codex";
 const CALLBACK_PORT: u16 = 1455;
 const CALLBACK_PATH: &str = "/auth/callback";
-const MARK_SVG: &str = include_str!("../icons/muniment-milled-ring.svg");
+const MARK_SVG: &str = include_str!("../icons/muniment-graph-auth.svg");
 
 struct ActiveLogin {
     child: Child,

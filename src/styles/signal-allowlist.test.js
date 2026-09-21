@@ -12,6 +12,7 @@ const ALLOWED = {
     'input:checked + .track .knob': 'The signature knob for every enabled checkbox.',
   },
   'src/App.svelte': {
+    '.lockup': 'The static brand graph on setup and sign-in.',
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
   },
@@ -35,8 +36,8 @@ const ALLOWED = {
     '.switch[aria-checked="true"] span': '§1.2 the knob of an enabled model\'s show switch',
   },
   // The same switch turns an account in a pool on, and turns routing on.
+  'src/lib/AllowanceMeter.svelte': { '.window-bar[data-level="plenty"] span': 'Green marks plentiful remaining allowance.' },
   'src/lib/ModelAccounts.svelte': {
-    '.window-bar[data-level="plenty"] span': 'Green marks plentiful remaining allowance.',
     '.switch[aria-checked="true"]': '§1.2 the track of an enabled account\'s switch',
     '.switch[aria-checked="true"] span': '§1.2 the knob of an enabled account\'s switch',
   },

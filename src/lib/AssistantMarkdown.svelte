@@ -1,4 +1,8 @@
 <script>
+  import { onDestroy } from 'svelte'
+  import { Menu } from '@tauri-apps/api/menu'
+  import { LogicalPosition } from '@tauri-apps/api/dpi'
+  import { save } from '@tauri-apps/plugin-dialog'
   import { openUrl } from '@tauri-apps/plugin-opener'
   import { renderAssistantMarkdown } from './assistant-markdown.js'
   import { createExternalLinkHandler } from './external-link.js'
@@ -6,11 +10,52 @@
 
   // `caret` draws the active-line caret at the end of the last text block, so a
   // reply renders as Markdown from its first token with the caret inside it.
-  let { text = '', caret = false } = $props()
+  let { text = '', caret = false, onopenlink, tauri } = $props()
   let rendered = $derived(renderAssistantMarkdown(text))
   let container
   let caretElement
-  const handleExternalLink = createExternalLinkHandler(openUrl)
+  let linkStatus = $state('')
+  let linkMenu
+  const openInBrowser = address => /^https?:/i.test(address) && onopenlink ? onopenlink(address) : openUrl(address)
+  const handleExternalLink = createExternalLinkHandler(openInBrowser)
+  async function linkAction(action) {
+    linkStatus = ''
+    try { await action() } catch (error) { linkStatus = String(error?.message ?? error) }
+  }
+  async function saveLink(url) {
+    const pathname = new URL(url).pathname
+    let filename = pathname.split('/').at(-1) || 'index.html'
+    try { filename = decodeURIComponent(filename) } catch { /* Keep the URL filename. */ }
+    filename = filename.replace(/[\\/:*?"<>|]/g, '_')
+    const path = await save({defaultPath:filename})
+    if (!path) return
+    linkStatus = 'Saving link…'
+    await tauri.invoke('workspace_save_link',{url,path})
+    linkStatus = 'Link saved.'
+  }
+  async function linkContextMenu(event) {
+    const link = event.target?.closest?.('a[href]')
+    if (!link || !container.contains(link)) return
+    const address = link.getAttribute('href')
+    let url
+    try { url = new URL(address) } catch { return }
+    if (!['http:','https:','mailto:'].includes(url.protocol)) return
+    event.preventDefault()
+    const rect = link.getBoundingClientRect()
+    const position = new LogicalPosition(event.clientX || rect.left, event.clientY || rect.bottom)
+    await linkAction(async () => {
+      await linkMenu?.close()
+      linkMenu = await Menu.new({items:[
+        {text:'Open in browser',enabled:url.protocol !== 'mailto:',action:() => linkAction(() => openInBrowser(address))},
+        {text:'Open in external browser',action:() => linkAction(() => openUrl(address))},
+        {item:'Separator'},
+        {text:'Copy link',action:() => linkAction(async () => { await navigator.clipboard.writeText(address); linkStatus = 'Link copied.' })},
+        {text:'Save link as…',enabled:!!tauri && url.protocol !== 'mailto:',action:() => linkAction(() => saveLink(address))},
+      ]})
+      await linkMenu.popup(position)
+    })
+  }
+  onDestroy(() => { void linkMenu?.close().catch(() => {}) })
 
   // The block that holds the reply's last text: descend through the last child
   // while it is a block that takes inline content, and stop above a code block,
@@ -80,13 +125,15 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (The handler delegates native link activation.) -->
-<div class="assistant-markdown" onclick={handleExternalLink} bind:this={container}>
+<div class="assistant-markdown" onclick={handleExternalLink} oncontextmenu={linkContextMenu} bind:this={container}>
   {#if rendered.kind === 'html'}
     {@html rendered.html}
   {:else}{rendered.text}{/if}
 </div>
+{#if linkStatus}<p class="link-status" role="status">{linkStatus}</p>{/if}
 
 <style>
+  .link-status { color:var(--muted); font:var(--text-12) var(--font-mono); margin-top:6px; }
   .assistant-markdown { color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
   .assistant-markdown :global(p) { margin: 0 0 12px; }
   .assistant-markdown :global(p:last-child) { margin-bottom: 0; }

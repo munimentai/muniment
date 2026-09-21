@@ -1,0 +1,10 @@
+/* A readable selection in every theme, including embedded web pages. */
+:root {
+  --selection-background: #FFD84D;
+  --selection-foreground: #171A18;
+}
+::selection {
+  background: var(--selection-background, #FFD84D) !important;
+  color: var(--selection-foreground, #171A18) !important;
+  text-shadow: none !important;
+}

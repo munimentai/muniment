@@ -1,0 +1,13 @@
+{
+  "identifier": "workspace-menu",
+  "description": "The workspace popup displays tools above the embedded browser.",
+  "windows": [
+    "workspace-menu"
+  ],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus"
+  ]
+}

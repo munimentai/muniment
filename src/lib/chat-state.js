@@ -1,3 +1,4 @@
+import { modelLabel, modelReason } from './model-label.js'
 import { shortcutDisplayLabel } from './artifact-rail-state.js'
 import { receiptTime } from './execution-time.js'
 
@@ -41,11 +42,7 @@ const recorded = (value) => value !== undefined && value !== null && value !== '
 
 const count = (value) => Number(value).toLocaleString('en-US')
 
-// A model id reads as words on the line: hyphens become spaces, and the
-// provider keeps its slash. The receipt keeps the raw id.
-export function modelLabel(model) {
-  return recorded(model) ? String(model).replaceAll('-', ' ') : null
-}
+export { modelLabel } from './model-label.js'
 
 // The provenance line is `route → model` and the clock time, nothing else. The
 // rows carry the rest, and nothing appears twice. Route stays a named field
@@ -93,11 +90,11 @@ export function receiptRows(receipt = {}, recalls = []) {
   const rows = []
   for (const evidence of receipt?.routing ?? []) {
     if (recorded(evidence.account)) rows.push({ label: 'Account', value: evidence.account, route: false })
-    if (recorded(evidence.selected_model)) rows.push({ label: 'Selected model', value: evidence.selected_model, route: false })
+    if (recorded(evidence.selected_model)) rows.push({ label: 'Selected model', value: modelLabel(evidence.selected_model), route: false })
     if (recorded(evidence.decision)) rows.push({ label: 'Routing decision', value: evidence.decision, route: false })
     if (Number.isFinite(evidence.confidence)) rows.push({ label: 'Routing confidence', value: `${Math.round(evidence.confidence * 100)}% · Model selection, not answer quality`, route: false })
     if (Number.isFinite(evidence.classification_ms)) rows.push({ label: 'Classification time', value: `${evidence.classification_ms} ms`, route: false })
-    for (const reason of evidence.exclusions ?? []) rows.push({ label: 'Excluded model', value: reason, route: false })
+    for (const reason of evidence.exclusions ?? []) rows.push({ label: 'Excluded model', value: modelReason(reason), route: false })
     for (const reason of evidence.fallback_causes ?? []) rows.push({ label: 'Fallback cause', value: reason, route: false })
   }
   if (!receipt?.classifiers?.length && recorded(receipt?.cost)) rows.push({ label: 'Cost', value: receipt.cost, route: false })

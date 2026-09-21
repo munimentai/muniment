@@ -660,3 +660,21 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `zvariant` 5.13.1 — MIT
 - `zvariant_derive` 5.13.1 — MIT
 - `zvariant_utils` 3.5.0 — MIT
+
+- `cfg_aliases` 0.1.1 — MIT
+- `downcast-rs` 1.2.1 — MIT/Apache-2.0
+- `filedescriptor` 0.8.3 — MIT
+- `lazy_static` 1.5.0 — MIT OR Apache-2.0
+- `nix` 0.28.0 — MIT
+- `portable-pty` 0.9.0 — MIT
+- `serial2` 0.2.38 — BSD-2-Clause OR Apache-2.0
+- `shared_library` 0.1.9 — Apache-2.0/MIT
+- `winreg` 0.10.1 — MIT
+
+- `trash` 5.2.9 — MIT
+- `urlencoding` 2.1.3 — MIT
+- `windows-collections` 0.3.2 — MIT OR Apache-2.0
+- `windows-future` 0.3.2 — MIT OR Apache-2.0
+- `windows-numerics` 0.3.1 — MIT OR Apache-2.0
+- `windows-threading` 0.2.1 — MIT OR Apache-2.0
+- `windows` 0.62.2 — MIT OR Apache-2.0

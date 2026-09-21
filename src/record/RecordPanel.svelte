@@ -1,4 +1,5 @@
 <script>
+  import { panelScroll } from '../lib/panel-scroll.js'
   // The record panel: the rail column's second occupant. Its header is one
   // mono row, the company picker, the crumb and Maximize. The body walks
   // three levels, the kind list, one kind's table, one record, and every
@@ -412,8 +413,8 @@
   })
 </script>
 
-<aside id="record-panel" class="record-panel" aria-labelledby="record-panel-title" data-testid="record-panel">
-  <header class="record-header">
+<aside data-panel="record" id="record-panel" class="record-panel" aria-labelledby="record-panel-title" data-testid="record-panel">
+  <header data-panel-header class="record-header">
     {#if selectedKind || importing || listing}
       <button type="button" class="record-back" aria-label="Back" onclick={back}><LucideIcon name="chevron-left" size={14} /></button>
     {/if}
@@ -537,7 +538,7 @@
   {:else if !listing}
     <RecordReport {tauri} {company} {refresh} onopenkind={openKind} onmerge={reviewMerge} />
   {:else}
-    <nav class="record-kinds" aria-label="Kinds">
+    <nav class="record-kinds" use:panelScroll aria-label="Kinds">
       <ul>
         {#each kinds as entry (entry.name)}
           <li>
@@ -554,7 +555,8 @@
 
 <style>
   /* The panel clips and never scrolls, so the End key scrolls the list or the table under the header, never the header away. */
-  .record-panel { grid-area: rail; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); padding: 14px 16px 16px; overflow: clip; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .record-header {margin:0 calc(-1 * var(--panel-control-inset));}
+  .record-panel { grid-area: rail;  display: grid; grid-template-rows: auto minmax(0, 1fr); padding: 0 var(--panel-control-inset) var(--panel-control-inset); overflow: clip;    }
   .record-header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--border); font: var(--text-13) var(--font-mono); }
   .record-header h2 { margin: 0; font: 600 var(--text-15)/1.3 var(--font-human); }
   .record-back { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink); cursor: pointer; }

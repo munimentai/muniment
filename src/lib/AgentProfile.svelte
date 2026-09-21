@@ -1,4 +1,5 @@
 <script>
+  import { panelScroll } from './panel-scroll.js'
   import Toggle from './Toggle.svelte'
   import { tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
@@ -60,9 +61,9 @@
     })
   }
 </script>
-<aside class="profile" aria-label="Agent profile" bind:this={panel}>
-  <header><h2>Agent profile</h2><button class="quiet" aria-label="Close agent profile" onclick={onclose}><LucideIcon name="x" size={16} /></button></header>
-  <div class="body">
+<aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel}>
+  <header data-panel-header><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
+  <div class="body" use:panelScroll>
     <div class="avatar"><AgentAvatar {agent} size={92} /><button class="edit quiet" aria-label="Generate another avatar" disabled={busy} onclick={changeAvatar}><LucideIcon name="refresh-cw" size={14} /></button></div>
     {#each [['name', 'Name'], ['label', 'Job title'], ['instructions', 'Description'], ['projectId', 'Project'], ['schedule', 'Schedule']] as [field, label]}
       <section class="field">
@@ -108,8 +109,8 @@
   </div>
 </aside>
 <style>
-  .profile { grid-area: rail; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--surface); color: var(--ink); border-left: 1px solid var(--border); }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px; }
+  .profile { grid-area: rail;   display: flex; flex-direction: column; overflow: hidden;     }
+
   h2 { margin: 0; font-size: var(--text-13); }
   .body { overflow: auto; padding: 8px 16px 24px; }
   .avatar { display: flex; align-items: end; margin-bottom: 8px; }

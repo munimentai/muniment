@@ -1,0 +1,47 @@
+/* Shared panel appearance. Components own placement, sizing, and content layout. */
+[data-panel] {
+  --panel-control-inset: 12px;
+  --panel-control-size: 28px;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+}
+[data-panel][data-panel-variant="overlay"] { box-shadow: var(--shadow-overlay); }
+[data-panel][data-panel-variant="embedded"] { border: 0; border-radius: 0; }
+/* Icon-only close controls share one borderless treatment across the app. */
+button:has(> svg[data-icon="x"]) {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 4px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+}
+button:has(> svg[data-icon="x"]):hover { background: var(--faint); color: var(--ink); }
+button:has(> svg[data-icon="x"]) > svg { width: 16px; height: 16px; }
+/* Panel bodies fade only where content continues beyond the visible edge. */
+[data-panel-scroll] {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--panel-fade-top, 0px), #000 calc(100% - var(--panel-fade-bottom, 0px)), transparent);
+}
+/* The chat body keeps its larger bottom fade above the floating composer. */
+[data-panel-fade="chat"]::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 48px; background: linear-gradient(to bottom, var(--surface), transparent); pointer-events: none; }
+[data-panel-fade="chat"]::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--composer-height, 120px) + 72px); background: linear-gradient(to bottom, transparent, var(--surface) calc(var(--composer-height, 120px) / 2 + 48px)); pointer-events: none; }
+
+/* Panel headers and corner controls use the same edge inset and hit area. */
+[data-panel-header] { display:flex;align-items:center;gap:8px;min-height:var(--panel-control-size);padding:var(--panel-control-inset);box-sizing:content-box; }
+[data-panel-header] > :is(h2,h3) {margin:0;flex:1;}
+[data-panel-control] {display:inline-flex!important;align-items:center;justify-content:center;width:var(--panel-control-size)!important;height:var(--panel-control-size)!important;min-width:var(--panel-control-size);padding:4px!important;border:0!important;border-radius:var(--radius-control);color:var(--muted);background:transparent;box-sizing:border-box;}
+[data-panel-control] > svg {width:16px;height:16px;}
+[data-panel-control]:hover {background:var(--faint);color:var(--ink);}
+[data-panel-control="corner"] {position:absolute;top:var(--panel-control-inset);right:var(--panel-control-inset);z-index:3;}
+[data-panel-header] > button {height:var(--panel-control-size);min-height:var(--panel-control-size);box-sizing:border-box;padding-top:4px;padding-bottom:4px;}

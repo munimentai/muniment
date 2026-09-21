@@ -1,4 +1,5 @@
 <script>
+  import AllowanceMeter from './AllowanceMeter.svelte'
   // One provider's accounts in the router's pool: each a named card with what
   // the subscription has left and what the account has served, the sign-ins
   // the pool can take for this provider, and a key form. Every command
@@ -229,7 +230,7 @@
                   <span class="record">{window.label.replace(/ window$/i, '')}{#if window.scope} · {window.scope}{/if}</span>
                   <span class="record"><strong>{Math.round(window.remaining_percent)}%</strong> left{#if window.resets_at_ms} · resets {until(window.resets_at_ms)}{/if}</span>
                 </div>
-                <div class="window-bar" data-level={window.limit_reached || window.remaining_percent < 25 ? 'low' : window.remaining_percent <= 60 ? 'medium' : 'plenty'}><span style={`width: ${Math.round(window.remaining_percent)}%`}></span></div>
+                <AllowanceMeter remaining={window.remaining_percent} limited={window.limit_reached} />
               </div>
             {/each}
             {#if account.banked_resets}<p class="record">{account.banked_resets} banked {account.banked_resets === 1 ? 'reset' : 'resets'}</p>{/if}
@@ -349,11 +350,6 @@
   .window { display: grid; min-width: 0; gap: 4px; }
   .window-head { display: grid; gap: 2px; }
   .window-head strong { color: var(--ink); font-weight: 600; }
-  .window-bar { height: 4px; border-radius: var(--radius-chip); background: var(--border); }
-  .window-bar span { display: block; height: 100%; border-radius: var(--radius-chip); }
-  .window-bar[data-level="plenty"] span { background: var(--signal); }
-  .window-bar[data-level="medium"] span { background: var(--ochre); }
-  .window-bar[data-level="low"] span { background: var(--oxide); }
   .bars { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 2px; min-height: 26px; }
   .bar { width: 5px; background: var(--muted); }
   .figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin: 0; }

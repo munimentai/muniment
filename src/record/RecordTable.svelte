@@ -1,4 +1,5 @@
 <script>
+  import { panelScroll } from '../lib/panel-scroll.js'
   // One kind's rows. Columns generate from the kind, typed values read in
   // mono and titles in the body face, a header click sorts, a row click opens
   // the record, and a double-click on a cell edits it: Enter proposes, the
@@ -93,7 +94,7 @@
   {#if page && page.rows.length === 0 && !loading}
     <p class="record-empty">No {kind?.name} records yet</p>
   {:else if page}
-    <div class="record-scroll">
+    <div class="record-scroll" use:panelScroll>
       <table class="record-grid" aria-label="{kind?.name} records">
         <thead>
           <tr>
