@@ -52,10 +52,10 @@ describe('local extension installation',()=>{
  })
 })
 
-it('rejects catalog relay endpoints before connecting', () => {
+it('allows custom server hosts outside the discovery catalog', () => {
   const {call} = fixture()
   for (const url of ['https://microsoft365.mcp.claude.com/mcp','https://hcls.mcp.claude.com./mcp','https://example-server.modelcontextprotocol.io/pdf/mcp']) {
-    expect(call('server',{name:'Example',definition:{url}}).error).toMatch(/direct MCP server URL/)
+    expect(call('server',{name:'Example',definition:{url}}).ok).toBe(true)
   }
   expect(call('server',{name:'Notion',definition:{url:'https://mcp.notion.com/mcp'}}).ok).toBe(true)
 })

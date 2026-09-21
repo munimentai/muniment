@@ -41,3 +41,11 @@ it('excludes directory relays and example endpoints without rejecting provider-o
   expect(catalog.every(entry => !entry.url || providerDestination(entry.url))).toBe(true)
   expect(catalog.every(entry => !entry.website || providerDestination(entry.website))).toBe(true)
 })
+
+it('searches description and category words across fields regardless of punctuation or accents', () => {
+  const entries = [{name:'Example',publisher:'Acme',description:'Résumé search and incident reports',categories:['developer-tools'],type:'remote'}]
+  expect(filterCatalog(entries,{query:'resume developer tools'})).toEqual(entries)
+  expect(filterCatalog(entries,{query:'ACME incident'})).toEqual(entries)
+  expect(filterCatalog(entries,{query:'incident finance'})).toEqual([])
+  expect(filterCatalog(entries,{query:'incident',category:'finance'})).toEqual([])
+})

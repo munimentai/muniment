@@ -23,7 +23,7 @@
   async function saveServer() {
     await work(async () => {
       const definition = config.trim() ? JSON.parse(config) : { url: url.trim(), ...(authentication === 'oauth' ? { auth: 'oauth' } : {}) }
-      state = await call('server', { id: form?.id, name, source, definition, token, description: form?.categories?.map(categoryLabel).join(', ') || form?.description || '' }); form = null; token = ''; status = 'Server saved. Test the connection or sign in.'
+      state = await call('server', { id: form?.id, name, source, definition, token, description: form?.description || form?.categories?.map(categoryLabel).join(', ') || '' }); form = null; token = ''; status = 'Server saved. Test the connection or sign in.'
     })
   }
   async function inspect() { await work(async () => { preview = await call('preview', { source: source.trim(), kind: tab }); selected = preview.skills.map(skill => skill.path) }) }
@@ -37,7 +37,7 @@
   <div class="tabs" role="tablist" aria-label="Extension types">
     {#each [['mcp', 'MCP servers'], ['skill', 'Skills'], ['plugin', 'Plugins']] as [id, label]}<button type="button" role="tab" aria-selected={tab === id} onclick={() => { tab = id; resetSearch(); form = null; preview = null }}>{#if id === 'mcp'}<McpIcon />{/if}{label}</button>{/each}
   </div>
-  <div class="toolbar"><input type="search" aria-label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, publishers, or categories" bind:value={query} oninput={() => page = 0} /><button type="button" disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Add server' : 'Add source'}</button></div>
+  <div class="toolbar"><input type="search" aria-label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" bind:value={query} oninput={() => page = 0} /><button type="button" disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Add server' : 'Add source'}</button></div>
   {#if tab === 'mcp'}
     <div class="filters">
       <label>Category<select bind:value={category} onchange={() => page = 0}><option value="">All categories</option>{#each categories as value}<option value={value}>{categoryLabel(value)}</option>{/each}</select></label>

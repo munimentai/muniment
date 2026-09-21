@@ -15,10 +15,11 @@ export const catalog = anthropic.filter(entry => entry.type === 'remote' && (!en
 export const categoryLabel = value => value.split('-').map(word => word[0]?.toUpperCase() + word.slice(1)).join(' ')
 export const categories = [...new Set(catalog.flatMap(entry => entry.categories))].sort()
 export function filterCatalog(entries, { query = '', category = '', type = '', installed = false, setup = false } = {}, installedSources = new Set()) {
-  const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean)
+  const normalize = value => String(value || '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const words = normalize(query).split(/\s+/).filter(Boolean)
   return entries.filter(entry => (!category || entry.categories.includes(category)) && (!type || entry.type === type)
     && (!installed || installedSources.has(entry.source)) && (!setup || !entry.url)
-    && words.every(word => `${entry.name} ${entry.publisher} ${entry.categories.join(' ')} ${entry.url}`.toLowerCase().includes(word)))
+    && words.every(word => normalize([entry.name, entry.publisher, entry.description, ...(entry.categories || []), entry.url].filter(Boolean).join(' ')).includes(word)))
 }
 export function invocations(items) {
   return items.filter(item => item.enabled !== false).flatMap(item => [

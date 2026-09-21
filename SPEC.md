@@ -578,8 +578,8 @@ browser result. Partial replies remain visible with their interruption cause.
 Reports link possible duplicate groups to their records and a merge preview.
 Record fields, states and actor names read as words. Raw evidence stays available.
 ### Extend
-Settings → Extend manages MCP servers, skills and plugins without a Muniment account. The MCP catalog lists remote servers with provider logos, compact cards and popularity sorting. Connections use provider endpoints, never directory-hosted relays.
-Search matches names, publishers and categories. Category, connection type,
+Settings → Extend manages MCP servers, skills and plugins without a Muniment account. The MCP catalog lists remote servers with provider logos, compact cards and popularity sorting. Catalog entries use provider endpoints. Users can add any custom server.
+Search matches names, descriptions, publishers and categories. Category,
 installed and setup-required filters combine before pagination. Provider account
 requirements and unsupported setup methods remain visible.
 

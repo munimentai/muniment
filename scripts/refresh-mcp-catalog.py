@@ -24,6 +24,7 @@ def parse_catalog(html):
         entries[slug] = {
             "id": slug, "name": value["title"].replace("—", "-"),
             "publisher": (value["author"] or "").replace("—", "-"),
+            "description": (value.get("oneLiner") or "").replace("—", "-"),
             "categories": value.get("categories") or ["other"],
             "url": value.get("serverUrl") or "", "type": value["type"],
             "source": "https://claude.com/connectors/" + slug,
