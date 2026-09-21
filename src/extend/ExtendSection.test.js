@@ -18,7 +18,7 @@ it('previews a source before installing selected skills', async () => {
   await fireEvent.click(screen.getByRole('tab',{name:'Skills'}))
   await waitFor(()=>expect(screen.getByRole('button',{name:'Add source'})).not.toBeDisabled())
   await fireEvent.click(screen.getByRole('button',{name:'Add source'}))
-  await fireEvent.input(screen.getByLabelText('GitHub repository or local folder'),{target:{value:'https://github.com/example/skills'}})
+  await fireEvent.input(screen.getByLabelText('GitHub repository, local folder, or archive'),{target:{value:'https://github.com/example/skills'}})
   await fireEvent.click(screen.getByRole('button',{name:'Review package'}))
   await screen.findByRole('button',{name:'Install selected'})
   expect(invoke.mock.calls.some(([,arg])=>arg.action==='install')).toBe(false)

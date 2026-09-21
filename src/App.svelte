@@ -655,9 +655,10 @@
 
   let composerExtensions = $state()
   const chatController = createChatController({
-    invoke: async (command, args) => {
-      if (command === 'chat_submit') await composerExtensions?.prepare(args.prompt)
-      return tauri.invoke(command, ...(args === undefined ? [] : [args]))
+    invoke: (command, args) => {
+      const preparation = command === 'chat_submit' ? composerExtensions?.prepare(args.prompt) : null
+      const send = () => tauri.invoke(command, ...(args === undefined ? [] : [args]))
+      return preparation ? preparation.then(send) : send()
     },
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
     readMessages: () => messages,

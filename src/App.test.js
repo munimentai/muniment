@@ -280,6 +280,7 @@ beforeEach(() => {
   })
   unregisterGlobalShortcut = vi.fn(async (shortcut) => { registeredShortcuts.delete(shortcut) })
   invoke = vi.fn(async (command, payload) => {
+    if (command === 'extend_command') return { items: [], threads: {} }
     if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'onboarding_scan') return
@@ -1313,7 +1314,7 @@ describe('workspace composer entry', () => {
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*background:\s*var\(--overlay-backdrop\)/)
     const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & routing', 'Preferences', 'Profile & Memory', 'Home', 'Companies', 'Account'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & routing', 'Extend', 'Preferences', 'Profile & Memory', 'Home', 'Companies', 'Account'])
     expect(within(nav).getByRole('button', { name: 'Models & routing' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Preferences' }))
@@ -3334,7 +3335,7 @@ describe('sidebar collapse', () => {
     expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 })
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
     expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
-    expect(screen.getByRole('button', { name: 'Add files' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tools and attachments' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Voice' })).toBeInTheDocument()
     const divider = screen.getByRole('separator', {name: 'Agent profile width'})
     const width = Number(divider.getAttribute('aria-valuenow'))
@@ -5227,6 +5228,7 @@ describe('local file selection', () => {
   it('shows and clears the native drop affordance, then de-duplicates dropped files', async () => {
     dialogResult = ['/private/contracts/lease.pdf']
     render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Tools and attachments' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
     await waitFor(() => expect(dragDropListener).toBeDefined())
 
@@ -5296,7 +5298,7 @@ describe('local file selection', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /New thread/ }))
     const composer = await findWorkspaceComposer()
-    await screen.findByRole('button', { name: 'Add files' })
+    await screen.findByRole('button', { name: 'Tools and attachments' })
     await tick()
     await fireEvent.input(composer, { target: { value: 'Read @iss' } })
     composer.setSelectionRange(9, 9)
@@ -5314,12 +5316,15 @@ describe('local file selection', () => {
 
   it('treats picker cancel as a no-op and removes a selected file', async () => {
     render(App)
-    const add = await screen.findByRole('button', { name: 'Add files' })
-    await fireEvent.click(add)
+    const add = async () => {
+      await fireEvent.click(await screen.findByRole('button', { name: 'Tools and attachments' }))
+      await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
+    }
+    await add()
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
 
     dialogResult = ['/private/contracts/lease.pdf', 'C:\\notes\\brief.txt']
-    await fireEvent.click(add)
+    await add()
     expect(await screen.findByText('lease.pdf')).toBeInTheDocument()
     expect(screen.getByText('brief.txt')).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Remove lease.pdf' }))
@@ -5348,6 +5353,7 @@ describe('local file selection', () => {
       await fireEvent.scroll(thread)
     }
 
+    await fireEvent.click(screen.getByRole('button', { name: 'Tools and attachments' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Add files' }))
     await screen.findByRole('list', { name: 'Selected files' })
     await waitFor(() => expect(thread.scrollTop).toBe(withFiles))
@@ -5372,6 +5378,7 @@ describe('local file selection', () => {
     })
     dialogResult = ['/secret/location/evidence.pdf']
     render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Tools and attachments' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review this' } })
@@ -5404,6 +5411,7 @@ describe('local file selection', () => {
     })
     dialogResult = ['/private/contracts/lease.png', '/private/notes.txt']
     render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Tools and attachments' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review these' } })

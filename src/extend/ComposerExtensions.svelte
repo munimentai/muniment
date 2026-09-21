@@ -3,7 +3,7 @@
   import { invocations, invocationQuery } from './catalog.js'
   import McpIcon from './McpIcon.svelte'
   let { tauri, threadId, active = false, draft = $bindable(''), onattach, onmanage } = $props()
-  let state = $state({ items: [], threads: {} }), open = $state(false), query = $state(''), selected = $state([]), disabled = $state([]), automatic = $state(false), error = $state(''), loadedThread = null, busy = $state(false), highlighted = $state(0), suggestions = $state([]), dismissed = $state(null)
+  let state = $state({ items: [], threads: {} }), open = $state(false), query = $state(''), selected = $state([]), disabled = $state([]), automatic = $state(false), error = $state(''), loadedThread = null, busy = $state(false), highlighted = $state(0), suggestions = $state([]), dismissed = $state(null), rootElement = $state(), trigger = $state()
   const choices = $derived(invocations(state.items))
   const command = $derived(draft === dismissed ? null : invocationQuery(draft))
   const shown = $derived(choices.filter(item => `${item.name} ${item.description}`.toLowerCase().includes(command ?? query.toLowerCase())).slice(0, 20))
@@ -16,7 +16,7 @@
       if (loadedThread !== threadId) {
         const rules = state.threads[threadId] || {}; selected = rules.selected || []; disabled = rules.disabled || []; automatic = !!rules.automatic; loadedThread = threadId
       }
-    } catch { error = 'Extensions could not be loaded.' }
+    } catch { if (open) error = 'Extensions could not be loaded.' }
   }
   $effect(() => { const id = threadId; void id; void refresh() })
   $effect(() => { if (command !== null) void refresh() })
@@ -26,9 +26,12 @@
   }
   async function choose(item) { if (!selected.includes(item.id)) selected = [...selected, item.id]; if (command !== null) draft = ''; open = false; await save() }
   async function toggle(id, checked) { disabled = checked ? disabled.filter(value => value !== id) : [...disabled, id]; await save() }
-  export async function prepare(prompt) {
-    await refresh()
+  export function prepare(prompt) {
     if (!state.items.length) return
+    return prepareSelected(prompt)
+  }
+  async function prepareSelected(prompt) {
+    await refresh()
     const id = threadId || await tauri.invoke('chat_current_thread') || await tauri.invoke('chat_new_thread')
     await call('thread', { threadId: id, selected, disabled, automatic })
     if (automatic) {
@@ -44,11 +47,12 @@
     return false
   }
   function keys(event) {
-    if (event.key === 'Escape') { open = false; query = ''; event.stopPropagation() }
+    if (event.key === 'Escape') { open = false; query = ''; trigger?.focus(); event.stopPropagation() }
   }
 </script>
-<div class="extensions" onkeydown={keys} role="group" aria-label="Chat extensions">
-  {#if !active}<button type="button" class="quiet trigger" aria-label="Tools and attachments" aria-expanded={open} onclick={async () => { open = !open; if (open) { await refresh(); await tick() } }}><span aria-hidden="true">⋮</span></button>{/if}
+<svelte:window onkeydown={event => { if (open) keys(event) }} onpointerdown={event => { if (open && !rootElement?.contains(event.target)) open = false }} />
+<div class="extensions" bind:this={rootElement} role="group" aria-label="Chat extensions">
+  {#if !active}<button type="button" class="trigger" bind:this={trigger} aria-label="Tools and attachments" aria-expanded={open} onclick={async () => { open = !open; if (open) { await refresh(); await tick() } }}><span aria-hidden="true">⋮</span></button>{/if}
   {#if selected.length}<div class="chips" aria-label="Selected extensions">{#each selected as id}{@const item = choices.find(i => i.id === id)}{#if item}<button type="button" disabled={active} aria-label={`Remove ${item.name}`} onclick={() => { selected = selected.filter(v => v !== id); void save() }}>{item.name} ×</button>{/if}{/each}</div>{/if}
   {#if open || (command !== null && shown.length && !active)}
     <section class="menu" aria-label="Tools and attachments menu">
@@ -63,5 +67,5 @@
   {#if error}<span role="alert">{error}</span>{/if}
 </div>
 <style>
-  .extensions { position: relative; display: flex; align-items: center; gap: 5px; } .trigger { font-size: 22px; width: 28px; height: 28px; } .menu { position: absolute; bottom: 38px; left: 0; width: min(360px, 75vw); max-height: 440px; overflow: auto; display: grid; gap: 8px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 36px #0006; z-index: 20; } .menu input[type=search] { min-width: 0; padding: 8px; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 6px; } h4, p { margin: 0; font-size: 12px; } p, .choice span { color: var(--muted); } .server { display: flex; align-items: center; gap: 8px; font-size: 12px; } .server span { flex: 1; } .choice { display: grid; gap: 3px; text-align: left; } .choice span { font-size: 11px; } .highlighted { background: var(--border); } .suggestions { font-size: 11px; color: var(--muted); } .chips { display: flex; flex-wrap: wrap; gap: 4px; max-width: 240px; } .chips button { font-size: 11px; }
+  .extensions { position: relative; display: flex; align-items: center; gap: 5px; } .trigger { background: transparent; border: 0; padding: 0; font-size: var(--text-22); width: 28px; height: 28px; } .menu { position: absolute; bottom: 38px; left: 0; width: min(360px, 75vw); max-height: 440px; overflow: auto; display: grid; gap: 8px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); box-shadow: var(--shadow-overlay); z-index: 20; } .menu input[type=search] { min-width: 0; padding: 8px; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); } h4, p { margin: 0; font-size: var(--text-12); } p, .choice span { color: var(--muted); } .server { display: flex; align-items: center; gap: 8px; font-size: var(--text-12); } .server span { flex: 1; } .choice { display: grid; gap: 3px; text-align: left; } .choice span { font-size: var(--text-provenance); } .highlighted { background: var(--border); } .suggestions { font-size: var(--text-provenance); color: var(--muted); } .chips { display: flex; flex-wrap: wrap; gap: 4px; max-width: 240px; } .chips button { font-size: var(--text-provenance); }
 </style>
