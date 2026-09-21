@@ -9,6 +9,7 @@
   const installedSources = $derived(new Set(state.items.map(item => item.source)))
   const filtered = $derived(filterCatalog(catalog, { query, category, type, installed: scope === 'installed', setup: scope === 'setup' }, installedSources))
   const results = $derived(filtered.slice(page * 30, (page + 1) * 30))
+  const unchanged = $derived(!!preview && !!replaceId && preview.digest === state.items.find(item => item.id === replaceId)?.digest)
   const installed = $derived(state.items.filter(item => item.kind === tab && `${item.name} ${item.description || ''}`.toLowerCase().includes(query.toLowerCase())))
   async function call(action, data = {}) { return tauri.invoke('extend_command', { action, data }) }
   async function work(fn) { busy = true; error = ''; status = ''; try { await fn() } catch (e) { error = typeof e === 'string' ? e : e.message || 'The operation failed.' } finally { busy = false } }
@@ -65,7 +66,8 @@
           {#if Object.keys(preview.dependencies || {}).length}<p>Package dependencies: {Object.keys(preview.dependencies).join(', ')}. Install scripts stay off.</p>{/if}
           {#if preview.extensions.length}<p>This plugin runs {preview.extensions.length} code extensions when invoked.</p>{/if}
           {#if Object.keys(preview.servers).length}<p>Included MCP servers: {Object.keys(preview.servers).join(', ')}</p>{/if}
-          <button type="button" disabled={busy} onclick={install}>{replaceId ? 'Install update' : 'Install selected'}</button>
+          {#if unchanged}<p>This matches the installed version.</p>{/if}
+          <button type="button" disabled={busy || unchanged} onclick={install}>{replaceId ? 'Install update' : 'Install selected'}</button>
         {/if}
       {/if}
     </section>
@@ -73,7 +75,7 @@
   {#if installed.length}
     <h4>Installed</h4>
     <div class="list" aria-label="Installed extensions">{#each installed as item (item.id)}<article class="entry">
-      <div class="head"><strong>{#if item.kind === 'mcp'}<McpIcon />{/if}{item.name}</strong><label class="check"><input type="checkbox" checked={item.enabled !== false} disabled={busy} onchange={e => mutate('toggle', { id: item.id, enabled: e.currentTarget.checked })} />Available in new chats</label></div>
+      <div class="head"><strong>{#if item.kind === 'mcp'}<McpIcon />{/if}{item.name}</strong><label class="check"><input type="checkbox" checked={item.enabled !== false} disabled={busy} onchange={e => mutate('toggle', { id: item.id, enabled: e.currentTarget.checked })} />Available in chats</label></div>
       <p>{item.description || (item.kind === 'mcp' ? item.definition.url || item.definition.command : item.source)}</p>
       {#if item.lastCheck}<p>Last connection test: {item.lastCheck.status}. {item.lastCheck.tools} tools.</p>{/if}
       {#if item.kind === 'plugin'}{#each Object.entries(item.servers || {}) as [serverName, definition]}<div class="actions"><McpIcon /><span>{serverName}</span><button type="button" disabled={busy} onclick={() => connection({id: `${item.id}:${serverName}`,name: serverName}, 'test')}>Test connection</button>{#if definition.url}<button type="button" disabled={busy} onclick={() => connection({id: `${item.id}:${serverName}`,name: serverName}, 'auth')}>Sign in</button>{/if}</div>{/each}{/if}
