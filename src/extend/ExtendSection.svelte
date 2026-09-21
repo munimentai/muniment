@@ -12,6 +12,7 @@
   async function showDetails(entry) { details = entry; await tick(); detailsDialog.showModal() }
   let busy = $state(false), error = $state(''), status = $state(''), form = $state(null), preview = $state(null), selected = $state([])
   let name = $state(''), url = $state(''), source = $state(''), config = $state(''), token = $state(''), authentication = $state('none'), replaceId = $state(null)
+  const counts = $derived({ mcp: catalog.length, skill: state.items.filter(item => item.kind === 'skill').length, plugin: state.items.filter(item => item.kind === 'plugin').length })
   const installedSources = $derived(new Set(state.items.map(item => item.source)))
   const filtered = $derived(sortCatalog(filterCatalog(catalog, { query, category, installed: scope === 'installed', setup: scope === 'setup' }, installedSources), sort))
   const featured = $derived(!query.trim() && !category && scope === 'all' && sort === 'popular' ? filtered.slice(0, 12) : [])
@@ -62,7 +63,7 @@
 <section class="extend" aria-label="Extend">
   <p class="intro">Add tools and instructions to your local workspace.</p>
   <div class="tabs" role="tablist" aria-label="Extension types">
-    {#each [['mcp', 'MCP servers'], ['skill', 'Skills'], ['plugin', 'Plugins']] as [id, label]}<button type="button" role="tab" aria-selected={tab === id} onclick={() => { tab = id; resetSearch(); form = null; preview = null }}>{#if id === 'mcp'}<McpIcon />{:else}<LucideIcon name={id === 'skill' ? 'pencil-sparkles' : 'unplug'} variant="action" size={16} />{/if}{label}</button>{/each}
+    {#each [['mcp', 'MCP servers'], ['skill', 'Skills'], ['plugin', 'Plugins']] as [id, label]}<button type="button" role="tab" aria-selected={tab === id} onclick={() => { tab = id; resetSearch(); form = null; preview = null }}>{#if id === 'mcp'}<McpIcon />{:else}<LucideIcon name={id === 'skill' ? 'pencil-sparkles' : 'unplug'} variant="action" size={16} />{/if}{label}{#if counts[id]}<span class="tab-count">({counts[id]})</span>{/if}</button>{/each}
   </div>
   <div class="toolbar">{#if tab === 'mcp'}<button type="button" class="filter-toggle" aria-label="Filters" aria-expanded={filtersOpen} aria-controls="mcp-filters" onclick={() => filtersOpen = !filtersOpen}><LucideIcon name="sliders-vertical" size={18} /></button>{/if}<input type="search" aria-label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" bind:value={query} oninput={() => page = 0} /><button type="button" disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Add source'}</button>{#if tab !== 'mcp'}<button type="button" disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</button>{/if}</div>
   {#if tab === 'mcp' && filtersOpen}
@@ -115,7 +116,6 @@
     </article>{/each}</div>
   {:else if tab !== 'mcp'}<p>No {tab === 'skill' ? 'skills' : 'plugins'} installed. Add a GitHub repository, local folder, or archive to get started.</p>{/if}
   {#if tab === 'mcp'}
-    <div class="head"><h4>Discover MCP servers</h4><span aria-live="polite">{filtered.length} {filtered.length === 1 ? 'result' : 'results'}</span></div>
     {#snippet cards(entries, label)}
       <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}<article class="entry catalog-card">
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
@@ -151,6 +151,7 @@
 </dialog>
 
 <style>
+  .tab-count { font-size: var(--text-12); font-variant-numeric: tabular-nums; }
   .filter-toggle { display: grid; place-items: center; flex: none; }
   .filter-toggle[aria-expanded="true"] { color: var(--accent); }
   .server-details { position: fixed; inset: 0; margin: auto; width: min(560px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--paper); color: var(--ink); font-family: var(--font-human); }
