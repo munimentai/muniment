@@ -207,3 +207,17 @@ fades clipped tabs without covering panel controls. Browser labels preserve the
 host and URL path, query and fragment, with a right fade. Folder labels use the
 last folder with a left fade. Terminal and Files share the full-path scroll
 component. Hidden features leave no controls, Settings entries or empty space.
+
+## Extend
+
+Extend uses the shared Settings panel. MCP servers, Skills and Plugins occupy
+three tabs. Search and category, connection and installation filters narrow
+the MCP catalog before pagination. Installed entries expose their availability,
+connection test, source and update actions. Package review separates instructions,
+MCP servers and executable code. The MCP mark uses the Microsoft Codicons glyph
+in the current text color, with attribution in the catalog.
+
+The composer tools button uses a vertical ellipsis. File attachments remain its
+first action. MCP switches belong to the chat. Skill and plugin selections use
+removable chips, and the command picker supports the keyboard. Automatic
+selections have a separate label from explicit selections.
