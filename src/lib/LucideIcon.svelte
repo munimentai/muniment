@@ -70,6 +70,8 @@
     <path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16M8 16H3v5" />
   {:else if name === 'pencil'}
     <path d="m16 3 5 5M3 21l1-6L16 3a2 2 0 0 1 5 5L9 20Z" />
+  {:else if name === 'paperclip'}
+    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l10.6-10.6a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l9.2-9.19" />
   {:else if name === 'ellipsis'}
     <circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" />
   {:else if name === 'archive'}

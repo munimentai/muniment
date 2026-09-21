@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { commandChoices, selectedCommands, invocationQuery } from './catalog.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from '../lib/composer-panels.js'
+  import LucideIcon from '../lib/LucideIcon.svelte'
   import McpIcon from './McpIcon.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
   import { catalog } from './catalog.js'
@@ -66,7 +67,7 @@
 </script>
 <svelte:window onkeydown={event => { if (open) keys(event) }} onpointerdown={event => { if (open && !rootElement?.contains(event.target)) close() }} />
 <div class="extensions" bind:this={rootElement} role="group" aria-label="Turn extensions">
-  {#if !active}<button type="button" class="trigger" bind:this={trigger} aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} onclick={() => openComposerPanel(open ? null : 'extend')}><span aria-hidden="true">⋮</span></button>{/if}
+  {#if !active}<button type="button" class="trigger" bind:this={trigger} aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} onclick={() => openComposerPanel(open ? null : 'extend')}><LucideIcon name="ellipsis" variant="action" size={14} /></button>{/if}
   {#if open}
     <div data-composer-panel data-panel="extend" data-panel-variant="overlay" class="menu" role="dialog" tabindex="-1" aria-label="Extensions for this turn">
       <div class="tree" class:expanded={!!branch}>
@@ -100,7 +101,7 @@
   .extensions { display: flex; align-items: center; gap: 5px; }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); cursor: pointer; border: 0; border-radius: var(--radius-control); background: transparent; padding: 7px 9px; }
   button:hover, button:focus-visible, .highlighted { background: var(--faint); }
-  .trigger { display: grid; place-items: center; padding: 0; width: 28px; height: 28px; font-size: var(--text-22); background: transparent; }
+  .trigger { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 3px 4px; border: 1px solid transparent; font: var(--text-12) var(--font-mono); background: transparent; }
   .trigger:hover { background: var(--faint); }
   .menu { width: min(520px, 100%); padding: 6px; }
   .menu:has(.tree:not(.expanded)) { width: min(240px, 100%); }

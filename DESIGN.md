@@ -220,9 +220,10 @@ Installed entries expose availability, connection tests, source and update actio
 Package review separates instructions, MCP servers and executable code.
 Icon notices live in the bundled third-party notices, outside the catalog.
 
-The composer ellipsis has a background only on hover or keyboard focus.
+The horizontal composer ellipsis sits first at the left and matches the model and capacity controls.
+It has a background only on hover or keyboard focus.
 Its three branches are MCPs, Plugins and Skills, followed by Manage extensions.
-File attachments use a separate paperclip. All composer panels share one
+File attachments use a separate paperclip beside Voice. All composer panels share one
 anchor above the full composer with an eight-pixel gap. Only one opens at a time.
 Skill and plugin commands appear inline as slash commands in the reference color.
 MCP switches and optional classifier selection apply to one turn. The next turn
