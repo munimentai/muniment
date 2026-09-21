@@ -51,3 +51,11 @@ describe('local extension installation',()=>{
   expect(state.turns.one.automaticSelected).toEqual([])
  })
 })
+
+it('rejects catalog relay endpoints before connecting', () => {
+  const {call} = fixture()
+  for (const url of ['https://microsoft365.mcp.claude.com/mcp','https://hcls.mcp.claude.com./mcp','https://example-server.modelcontextprotocol.io/pdf/mcp']) {
+    expect(call('server',{name:'Example',definition:{url}}).error).toMatch(/direct MCP server URL/)
+  }
+  expect(call('server',{name:'Notion',definition:{url:'https://mcp.notion.com/mcp'}}).ok).toBe(true)
+})

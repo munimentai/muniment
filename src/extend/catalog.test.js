@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { catalog, categories, filterCatalog, invocations, invocationQuery, sortCatalog, commandChoices, selectedCommands } from './catalog.js'
+import { catalog, categories, filterCatalog, invocations, invocationQuery, sortCatalog, commandChoices, selectedCommands, providerDestination } from './catalog.js'
 describe('extension discovery', () => {
-  it('covers the public Anthropic catalog without duplicate identities', () => {
-    expect(catalog.length).toBeGreaterThanOrEqual(824)
+  it('lists only remote servers without catalog branding or duplicate identities', () => {
+    expect(catalog.length).toBeGreaterThanOrEqual(680)
+    expect(catalog.every(item => item.type === 'remote' && !/anthropic/i.test(item.name + item.publisher))).toBe(true)
     expect(new Set(catalog.map(item => item.id)).size).toBe(catalog.length)
     expect(catalog.every(item => item.source.startsWith('https://claude.com/connectors/') && item.categories.length)).toBe(true)
   })
@@ -29,4 +30,14 @@ it('sorts by source popularity and resolves unique inline commands for this prom
   expect(choices.map(item => item.command)).toEqual(['review','review-2'])
   expect(selectedCommands('/review-2 Check this', choices)).toEqual(['two'])
   expect(selectedCommands('Check this', choices)).toEqual([])
+})
+
+it('excludes directory relays and example endpoints without rejecting provider-owned host names', () => {
+  expect(providerDestination('https://microsoft365.mcp.claude.com/mcp')).toBe(false)
+  expect(providerDestination('https://HCLS.MCP.CLAUDE.COM./mcp')).toBe(false)
+  expect(providerDestination('https://example-server.modelcontextprotocol.io/pdf/mcp')).toBe(false)
+  expect(providerDestination('https://anthropic.mcp.creditkarma.com/mcp')).toBe(true)
+  expect(providerDestination('https://mcp.notion.com/mcp')).toBe(true)
+  expect(catalog.every(entry => !entry.url || providerDestination(entry.url))).toBe(true)
+  expect(catalog.every(entry => !entry.website || providerDestination(entry.website))).toBe(true)
 })

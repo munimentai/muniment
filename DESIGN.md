@@ -211,8 +211,8 @@ component. Hidden features leave no controls, Settings entries or empty space.
 ## Extend
 
 Extend uses the shared Settings panel. MCP servers, Skills and Plugins occupy
-three theme-colored pill tabs. Search, category, connection, installation and
-sort filters narrow the catalog. Popularity uses the source catalog score.
+three theme-colored pill tabs. Search, category, installation and sort filters
+narrow the remote-server catalog. Details open the provider site. Directory relays and example servers stay out. Popularity uses the source catalog score.
 Twelve popular entries precede the remaining catalog. Compact cards use three
 columns, two in narrower panels, and one when needed. Each card shows its
 provider logo with initials as a fallback. Pagination appears only for multiple pages.

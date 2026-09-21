@@ -1,5 +1,17 @@
 import anthropic from './anthropic-catalog.json'
-export const catalog = anthropic.map(entry => ({ ...entry, categories: entry.categories?.length ? entry.categories : ['other'] }))
+// Discovery metadata is not a connection proxy. Never offer catalog-hosted relays.
+export function providerDestination(value) {
+  try {
+    const url = new URL(value)
+    const host = url.hostname.toLowerCase().replace(/\.$/, '')
+    return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password
+      && !['anthropic.com', 'claude.com', 'claude.ai', 'example-server.modelcontextprotocol.io'].some(domain => host === domain || host.endsWith(`.${domain}`))
+  } catch { return false }
+}
+export const catalog = anthropic.filter(entry => entry.type === 'remote' && (!entry.url || providerDestination(entry.url)))
+  .map(entry => ({ ...entry, publisher: /anthropic/i.test(entry.publisher) ? '' : entry.publisher,
+    website: providerDestination(entry.website) ? entry.website : entry.url ? new URL(entry.url).origin : '',
+    categories: entry.categories?.length ? entry.categories : ['other'] }))
 export const categoryLabel = value => value.split('-').map(word => word[0]?.toUpperCase() + word.slice(1)).join(' ')
 export const categories = [...new Set(catalog.flatMap(entry => entry.categories))].sort()
 export function filterCatalog(entries, { query = '', category = '', type = '', installed = false, setup = false } = {}, installedSources = new Set()) {

@@ -58,8 +58,8 @@ These flags control UI availability, not backend authorization or data deletion.
 ## Extend
 
 Settings → Extend manages MCP servers, skills and plugins. Search the MCP
-catalog by name, publisher or category, and filter by connection type,
-installation or setup requirements. Sort by popularity or name. Custom servers support remote URLs and
+catalog of remote servers by name, publisher or category. Filter by installation
+or setup requirements. Servers connect directly to provider endpoints. Directory-hosted relays stay out. Sort by popularity or name. Custom servers support remote URLs and
 local commands, OAuth sign-in and stored bearer tokens.
 
 Install skills and compatible plugins from a GitHub repository, local folder,

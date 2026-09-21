@@ -194,7 +194,7 @@ const EXCLUDED_DIRECTORIES = new Set(['node_modules', 'target', 'third-party', '
 
 export function forbiddenUiCopy(source, file = '<fixture>') {
   // Official product and provider hosts are domains, not promotional copy.
-  const prose = source.replace(/\b(?:x|muniment)\.ai\b/g, (host) => " ".repeat(host.length))
+  const prose = source.replace(/\b(?:x|muniment|claude)\.ai\b/g, (host) => " ".repeat(host.length))
   return [...prose.matchAll(FORBIDDEN)].map((match) => ({
     file,
     line: source.slice(0, match.index).split('\n').length,

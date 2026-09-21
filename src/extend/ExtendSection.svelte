@@ -4,12 +4,12 @@
   import McpIcon from './McpIcon.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
   let { tauri } = $props()
-  let state = $state({ items: [], threads: {} }), tab = $state('mcp'), query = $state(''), category = $state(''), type = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
+  let state = $state({ items: [], threads: {} }), tab = $state('mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
   let busy = $state(false), error = $state(''), status = $state(''), form = $state(null), preview = $state(null), selected = $state([])
   let name = $state(''), url = $state(''), source = $state(''), config = $state(''), token = $state(''), authentication = $state('none'), replaceId = $state(null)
   const installedSources = $derived(new Set(state.items.map(item => item.source)))
-  const filtered = $derived(sortCatalog(filterCatalog(catalog, { query, category, type, installed: scope === 'installed', setup: scope === 'setup' }, installedSources), sort))
-  const featured = $derived(!query.trim() && !category && !type && scope === 'all' && sort === 'popular' ? filtered.slice(0, 12) : [])
+  const filtered = $derived(sortCatalog(filterCatalog(catalog, { query, category, installed: scope === 'installed', setup: scope === 'setup' }, installedSources), sort))
+  const featured = $derived(!query.trim() && !category && scope === 'all' && sort === 'popular' ? filtered.slice(0, 12) : [])
   const remaining = $derived(featured.length ? filtered.slice(12) : filtered)
   const results = $derived(remaining.slice(page * 30, (page + 1) * 30))
   const unchanged = $derived(!!preview && !!replaceId && preview.digest === state.items.find(item => item.id === replaceId)?.digest)
@@ -18,7 +18,7 @@
   async function work(fn) { busy = true; error = ''; status = ''; try { await fn() } catch (e) { error = typeof e === 'string' ? e : e.message || 'The operation failed.' } finally { busy = false } }
   async function refresh() { const result = await call('read'); if (result?.items) state = result }
   onMount(() => { void work(refresh) })
-  function resetSearch() { query = ''; category = ''; type = ''; scope = 'all'; sort = 'popular'; page = 0 }
+  function resetSearch() { query = ''; category = ''; scope = 'all'; sort = 'popular'; page = 0 }
   function add(entry = null) { form = entry || {}; name = entry?.name || ''; url = entry?.url || ''; source = entry?.source || ''; config = ''; token = ''; authentication = 'none'; preview = null; error = ''; replaceId = null }
   async function saveServer() {
     await work(async () => {
@@ -41,7 +41,6 @@
   {#if tab === 'mcp'}
     <div class="filters">
       <label>Category<select bind:value={category} onchange={() => page = 0}><option value="">All categories</option>{#each categories as value}<option value={value}>{categoryLabel(value)}</option>{/each}</select></label>
-      <label>Connection<select bind:value={type} onchange={() => page = 0}><option value="">All connections</option><option value="remote">Remote</option><option value="local">Local</option></select></label>
       <label>Show<select bind:value={scope} onchange={() => page = 0}><option value="all">All servers</option><option value="installed">Installed</option><option value="setup">Setup required</option></select></label>
       <label>Sort<select bind:value={sort} onchange={() => page = 0}><option value="popular">Popularity</option><option value="name">Name A–Z</option><option value="name-desc">Name Z–A</option></select></label>
       <button type="button" onclick={resetSearch}>Clear filters</button>
@@ -54,7 +53,7 @@
     <section class="form" aria-label={tab === 'mcp' ? 'Add MCP server' : 'Add extension source'}>
       <div class="head"><h4>{tab === 'mcp' ? name || 'Add MCP server' : replaceId ? 'Review update' : 'Add source'}</h4><button type="button" disabled={busy} onclick={() => { form = null; preview = null; token = '' }}>Cancel</button></div>
       {#if tab === 'mcp'}
-        {#if form.source && !form.url}<p>This entry needs a local command or a URL from your provider.</p><a href={form.source} target="_blank" rel="noreferrer">View setup instructions</a>{/if}
+        {#if form.source && !form.url}<p>This entry needs a local command or a URL from your provider.</p>{#if form.website}<a href={form.website} target="_blank" rel="noreferrer">View setup instructions</a>{/if}{/if}
         <label>Name<input bind:value={name} /></label><label>Server URL<input type="url" bind:value={url} placeholder="https://example.com/mcp" /></label>
         <label>Authentication<select bind:value={authentication}><option value="none">None or token</option><option value="oauth">Sign in with OAuth</option></select></label>
         <label>Bearer token<input type="password" bind:value={token} autocomplete="off" placeholder="Optional. Stored in the system credential store." /></label>
@@ -88,13 +87,12 @@
   {:else if tab !== 'mcp'}<p>No {tab === 'skill' ? 'skills' : 'plugins'} installed. Add a GitHub repository, local folder, or archive to get started.</p>{/if}
   {#if tab === 'mcp'}
     <div class="head"><h4>Discover MCP servers</h4><span aria-live="polite">{filtered.length} {filtered.length === 1 ? 'result' : 'results'}</span></div>
-    <p class="intro">Includes all {catalog.length} entries from Anthropic’s public catalog. Providers control access and account requirements.</p>
     {#snippet cards(entries, label)}
       <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}<article class="entry catalog-card">
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
-        <p class="publisher">{entry.publisher}</p>
+        {#if entry.publisher}<p class="publisher">{entry.publisher}</p>{/if}
         <p class="category">{entry.categories.map(categoryLabel).join(' · ')}</p>
-        <div class="actions"><span class="connection">{entry.type === 'local' ? 'Local' : 'Remote'}</span><a href={entry.source} target="_blank" rel="noreferrer">Details</a><button type="button" disabled={busy || installedSources.has(entry.source)} onclick={() => add(entry)}>{installedSources.has(entry.source) ? 'Installed' : entry.url ? 'Add' : 'Set up'}</button></div>
+        <div class="actions">{#if entry.website}<a href={entry.website} target="_blank" rel="noreferrer">Details</a>{/if}<button type="button" disabled={busy || installedSources.has(entry.source)} onclick={() => add(entry)}>{installedSources.has(entry.source) ? 'Installed' : entry.url ? 'Add' : 'Set up'}</button></div>
       </article>{/each}</div>
     {/snippet}
     {#if featured.length}
@@ -118,8 +116,7 @@
   .card-title strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-13); }
   .publisher { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-12); }
   .category { font-size: var(--text-provenance); min-height: 2.8em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .connection { margin-right: auto; color: var(--muted); font-size: var(--text-provenance); }
-  .catalog-card .actions { gap: 8px; margin-top: 5px; }
+  .catalog-card .actions { justify-content: space-between; gap: 8px; margin-top: 5px; }
   @container (max-width: 680px) { .catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @container (max-width: 390px) { .catalog-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>
