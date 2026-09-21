@@ -91,8 +91,8 @@
     <p class="intro">Includes all {catalog.length} entries from Anthropic’s public catalog. Providers control access and account requirements.</p>
     {#snippet cards(entries, label)}
       <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}<article class="entry catalog-card">
-        <div class="card-title"><ProviderIcon {entry} /><strong title={entry.name}>{entry.name}</strong></div>
-        <p class="publisher" title={entry.publisher}>{entry.publisher}</p>
+        <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
+        <p class="publisher">{entry.publisher}</p>
         <p class="category">{entry.categories.map(categoryLabel).join(' · ')}</p>
         <div class="actions"><span class="connection">{entry.type === 'local' ? 'Local' : 'Remote'}</span><a href={entry.source} target="_blank" rel="noreferrer">Details</a><button type="button" disabled={busy || installedSources.has(entry.source)} onclick={() => add(entry)}>{installedSources.has(entry.source) ? 'Installed' : entry.url ? 'Add' : 'Set up'}</button></div>
       </article>{/each}</div>

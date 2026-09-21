@@ -27,7 +27,7 @@
 
 <svelte:window onkeydown={keydown} />
 
-<div data-panel="model-picker" data-panel-variant="overlay" class="model-picker" role="dialog" aria-label="Model">
+<div data-panel="model-picker" data-panel-variant="overlay" data-composer-panel class="model-picker" role="dialog" aria-label="Model">
   <div class="picker-search">
     <LucideIcon name="search" variant="action" size={14} />
     <input type="search" aria-label="Search models" placeholder="Search models" bind:this={search} bind:value={query}>
@@ -65,7 +65,7 @@
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
-  .model-picker { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: min(380px, 100%); max-height: 60vh; display: flex; flex-direction: column; overflow: hidden;      }
+  .model-picker { width: min(380px, 100%); max-height: 60vh; display: flex; flex-direction: column; overflow: hidden;      }
   .picker-search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
   .picker-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
   .picker-close { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; color: var(--muted); }

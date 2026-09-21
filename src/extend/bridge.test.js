@@ -43,11 +43,11 @@ describe('local extension installation',()=>{
  })
  it('keeps toggles separate between chats and resets automatic selections',()=>{
   const {call}=fixture()
-  call('thread',{threadId:'one',disabled:['docs'],selected:['review'],automatic:true})
-  call('thread',{threadId:'two',disabled:[],selected:[]})
+  call('turn',{threadId:'one',disabled:['docs'],selected:['review'],automatic:true})
+  call('turn',{threadId:'two',disabled:[],selected:[]})
   const state=call('read').result
-  expect(state.threads.one.disabled).toEqual(['docs'])
-  expect(state.threads.two.disabled).toEqual([])
-  expect(state.threads.one.automaticSelected).toEqual([])
+  expect(state.turns.one.disabled).toEqual(['docs'])
+  expect(state.turns.two.disabled).toEqual([])
+  expect(state.turns.one.automaticSelected).toEqual([])
  })
 })

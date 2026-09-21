@@ -332,7 +332,7 @@ onboarding spec proves the composer, the three chips and a first Send.
 4. **Color law.** Color means computation. `--signal` appears only on the
    mark's thinking state, the running-tool pulse, the streaming underline and
    caret, the provenance route segment, the voice polish flash, and
-   workflow-run indicators. Everything else is ink on paper. No gradients,
+   workflow-run indicators, selected Extend tabs and enabled extension switches. No gradients,
    violet, glassmorphism, typing dots, avatars, sparkles, emoji, or pill radius outside Extend tabs.
 5. **If it is a record, it is mono.** Provenance lines, tool cards, costs,
    model names and paths render in Commit Mono. Conversation renders in

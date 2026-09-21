@@ -654,11 +654,12 @@
   const { fit: fitSidebar, pointerDown: sidebarPointerDown, pointerMove: sidebarPointerMove, pointerEnd: sidebarPointerEnd, keydown: sidebarKeydown } = sidebarResizeController
 
   let composerExtensions = $state()
+  let extensionCommandNames = $state([])
   const chatController = createChatController({
     invoke: (command, args) => {
       const preparation = command === 'chat_submit' ? composerExtensions?.prepare(args.prompt) : null
       const send = () => tauri.invoke(command, ...(args === undefined ? [] : [args]))
-      return preparation ? preparation.then(send) : send()
+      return preparation ? preparation.then(send).then(result => { composerExtensions?.submitted(); return result }) : send()
     },
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
     readMessages: () => messages,
@@ -2378,7 +2379,7 @@
         {/if}
         {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <section data-panel="speech" data-panel-variant="overlay" class="speech-install-popover" aria-labelledby="speech-install-title" onkeydown={speechInstallKeydown}>
+          <section data-composer-panel data-panel="speech" data-panel-variant="overlay" class="speech-install-popover" aria-labelledby="speech-install-title" onkeydown={speechInstallKeydown}>
             <header class="speech-install-head">
               <strong id="speech-install-title">Speech model install</strong>
               <button type="button" class="quiet close-card" aria-label="Close speech model install" onclick={dismissSpeechInstall}><LucideIcon name="x" variant="action" size={14} /></button>
@@ -2431,7 +2432,7 @@
           {/if}
           <div class="composer-input">
             {#if mention}<FileMentions rootLabel={workspaceDirectory || (selectedProject ? 'Project folder' : currentThreadId ? 'Thread workspace' : 'Muniment folder')} files={mentionFiles} loading={mentionLoading} error={mentionError} selected={mentionSelected} onchoose={chooseMention} />{/if}
-            <ComposerReferences text={draft} references={selectedFiles.map((file) => file.referenceName)} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
+            <ComposerReferences commands={extensionCommandNames} text={draft} references={selectedFiles.map((file) => file.referenceName)} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
             <label class="visually-hidden" for="composer-message">Message</label>
             <textarea id="composer-message" class="reference-input" aria-autocomplete="list" aria-controls={mention ? 'file-mentions' : undefined} aria-activedescendant={mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
           </div>
@@ -2447,7 +2448,8 @@
           {/if}
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
-            <ComposerExtensions bind:this={composerExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onattach={chooseFiles} onmanage={() => openSettings('extend')} />
+            {#if !active}<button type="button" class="quiet attachment-trigger" aria-label="Add files" onclick={chooseFiles}><LucideIcon name="paperclip" size={16} /></button>{/if}
+            <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} />
             {#if auth.name === 'local'}
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
               {#if hasSubscriptions}<button type="button" class="quiet capacity-trigger" aria-haspopup="dialog" aria-expanded={capacityOpen} onclick={() => openComposerPanel(capacityOpen ? null : 'capacity')}><LucideIcon name="gauge" size={14} /><span class="model-chip-label">Capacity</span></button>{/if}
@@ -2764,7 +2766,7 @@
   /* A hairline edge keeps the chip legible over the control's --faint hover. */
   .titlebar kbd { margin-left: 2px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); }
   .update-slot { flex: 0 0 24px; height: 24px; }
-  .thread-title-heading { display: flex; min-width: 24px; max-width: 100%; margin: 0; font: inherit; }
+  .thread-title-heading { display: flex; min-width: 24px; max-width: 100%; margin: 0; font: inherit; font-family: var(--font-heading); }
   /* The rename field keeps the title control's register while it shows. */
   /* Editing is the rename control's active state: the composer's muted hairline, no ring. */
   input.thread-title { flex: 0 1 320px; max-width: 100%; overflow: hidden; border: 1px solid var(--muted); outline: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
@@ -2970,6 +2972,7 @@
   /* The input no longer keeps a spare empty row once it grows, so the action
      row carries the gap itself, matching the owner mockup's 8px .comprow rhythm. */
   .composer-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
+  .attachment-trigger { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; }
   .composer-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
   /* The three composer controls share the plus button's box: 4px padding, a 24px minimum, the control radius. */
@@ -2992,7 +2995,7 @@
   .capture-meter i:nth-child(2), .capture-meter i:nth-child(4) { height: 10px; animation-delay: -300ms; }
   .capture-meter i:nth-child(3) { height: 14px; animation-delay: -600ms; }
   .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .speech-install-popover { position: absolute; z-index: 5; right: 0; bottom: calc(100% + 8px); width: min(340px, 100%); padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
+  .speech-install-popover { width: min(340px, 100%); padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .speech-install-lead { margin: 7px 0 0; color: var(--ink); font: var(--text-13) var(--font-human); }
   .speech-install-details { margin-top: 7px; color: var(--muted); }
   .speech-install-details summary { cursor: pointer; }

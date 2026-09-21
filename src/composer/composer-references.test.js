@@ -19,3 +19,8 @@ it('keeps file names with spaces as a single unquoted reference', () => {
   expect(text).toBe('@Project files/ISSUES.md ')
   expect(composerParts(text, ['Project files/ISSUES.md'])[0]).toEqual({ type: 'file', text: '@Project files/ISSUES.md' })
 })
+
+it('styles installed slash commands like URLs without matching path fragments', () => {
+  const parts = composerParts('/review Check https://example.com/review and /Users/review', [], ['review'])
+  expect(parts.filter(part => part.type === 'link').map(part => part.text)).toEqual(['/review', 'https://example.com/review'])
+})

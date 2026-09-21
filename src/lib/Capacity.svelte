@@ -19,7 +19,7 @@
     return () => { disposed = true; clearInterval(timer) }
   })
 </script>
-<div data-panel="capacity" use:panelScroll data-panel-variant="overlay" class="capacity" role="dialog" aria-label="Account capacity">
+<div data-panel="capacity" use:panelScroll data-panel-variant="overlay" data-composer-panel class="capacity" role="dialog" aria-label="Account capacity">
   <header><strong>Capacity</strong><button onclick={onclose} aria-label="Close capacity"><LucideIcon name="x" /></button></header>
   {#if error}<p role="alert">{error}</p>{:else if !settings}<p role="status">Reading account capacity…</p>{:else}
     {#if !settings.enabled}<p>Account balancing is off.</p>{:else if !settings.running}<p>The account router is not running.</p>{/if}
@@ -41,7 +41,7 @@
   <footer><button onclick={() => { onclose(); onmanage() }}>Account details</button></footer>
 </div>
 <style>
-  .capacity { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: 100%; box-sizing: border-box; max-height: 60vh; overflow-y: auto; padding: var(--panel-control-inset); font: var(--text-12) var(--font-human); }
+  .capacity { width: 100%; box-sizing: border-box; max-height: 60vh; overflow-y: auto; padding: var(--panel-control-inset); font: var(--text-12) var(--font-human); }
   header, .amount, h3 { display: flex; align-items: center; gap: 8px; }
   header, .amount { justify-content: space-between; }
   .accounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin: 12px 0; }

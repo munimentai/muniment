@@ -1400,7 +1400,7 @@ describe('workspace composer entry', () => {
     expect(size.getByRole('status')).toHaveTextContent('16.5 px body')
     expect(document.documentElement.style.getPropertyValue('--text-15')).toBe('16.5px')
     expect(document.documentElement.style.getPropertyValue('--text-provenance')).toBe('12.7px')
-    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 1, human: null, mono: null })
+    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 1, human: null, mono: null, heading: null })
 
     await fireEvent.keyDown(document, { key: '=', metaKey: mac, ctrlKey: !mac })
     expect(size.getByRole('status')).toHaveTextContent('18 px body')
@@ -1419,7 +1419,7 @@ describe('workspace composer entry', () => {
     expect(human.getAllByRole('button').map((button) => button.querySelector('.font-name').textContent)).toEqual(['Schibsted Grotesk', 'Iosevka'])
     await fireEvent.click(human.getByRole('button', { name: 'Iosevka' }))
     expect(document.documentElement.style.getPropertyValue('--font-human')).toBe("'Iosevka', 'Schibsted Grotesk', system-ui, sans-serif")
-    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: 'Iosevka', mono: null })
+    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: 'Iosevka', mono: null, heading: null })
     const mono = within(screen.getByRole('group', { name: 'Records font' }))
     await fireEvent.click(mono.getByText('Records', { exact: true }))
     expect(mono.getByRole('button', { name: /Commit Mono/ })).toHaveAttribute('aria-pressed', 'true')
@@ -1427,7 +1427,7 @@ describe('workspace composer entry', () => {
 
     await fireEvent.click(human.getByRole('button', { name: /Schibsted Grotesk/ }))
     expect(document.documentElement.style.getPropertyValue('--font-human')).toBe('')
-    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: null, mono: null })
+    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: null, mono: null, heading: null })
   })
 
   it('offers each provider its methods and the form for the chosen one', async () => {
@@ -3335,7 +3335,7 @@ describe('sidebar collapse', () => {
     expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 })
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
     expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
-    expect(screen.getByRole('button', { name: 'Tools and attachments' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Extensions' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Voice' })).toBeInTheDocument()
     const divider = screen.getByRole('separator', {name: 'Agent profile width'})
     const width = Number(divider.getAttribute('aria-valuenow'))
@@ -5228,7 +5228,6 @@ describe('local file selection', () => {
   it('shows and clears the native drop affordance, then de-duplicates dropped files', async () => {
     dialogResult = ['/private/contracts/lease.pdf']
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Tools and attachments' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
     await waitFor(() => expect(dragDropListener).toBeDefined())
 
@@ -5298,7 +5297,7 @@ describe('local file selection', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /New thread/ }))
     const composer = await findWorkspaceComposer()
-    await screen.findByRole('button', { name: 'Tools and attachments' })
+    await screen.findByRole('button', { name: 'Extensions' })
     await tick()
     await fireEvent.input(composer, { target: { value: 'Read @iss' } })
     composer.setSelectionRange(9, 9)
@@ -5317,8 +5316,7 @@ describe('local file selection', () => {
   it('treats picker cancel as a no-op and removes a selected file', async () => {
     render(App)
     const add = async () => {
-      await fireEvent.click(await screen.findByRole('button', { name: 'Tools and attachments' }))
-      await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
+        await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
     }
     await add()
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
@@ -5353,7 +5351,6 @@ describe('local file selection', () => {
       await fireEvent.scroll(thread)
     }
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Tools and attachments' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Add files' }))
     await screen.findByRole('list', { name: 'Selected files' })
     await waitFor(() => expect(thread.scrollTop).toBe(withFiles))
@@ -5378,7 +5375,6 @@ describe('local file selection', () => {
     })
     dialogResult = ['/secret/location/evidence.pdf']
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Tools and attachments' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review this' } })
@@ -5411,7 +5407,6 @@ describe('local file selection', () => {
     })
     dialogResult = ['/private/contracts/lease.png', '/private/notes.txt']
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Tools and attachments' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review these' } })

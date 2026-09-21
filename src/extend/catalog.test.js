@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { catalog, categories, filterCatalog, invocations, invocationQuery } from './catalog.js'
+import { catalog, categories, filterCatalog, invocations, invocationQuery, sortCatalog, commandChoices, selectedCommands } from './catalog.js'
 describe('extension discovery', () => {
   it('covers the public Anthropic catalog without duplicate identities', () => {
     expect(catalog.length).toBeGreaterThanOrEqual(824)
@@ -20,4 +20,13 @@ describe('extension discovery', () => {
     expect(invocationQuery('/review')).toBe('review')
     for (const text of ['/Users/me', 'C:\\path', 'some /thing', '```/code']) expect(invocationQuery(text)).toBeNull()
   })
+})
+
+it('sorts by source popularity and resolves unique inline commands for this prompt', () => {
+  const sorted = sortCatalog(catalog)
+  expect(sorted[0].popularity).toBe(Math.max(...catalog.map(item => item.popularity)))
+  const choices = commandChoices([{id:'one',kind:'plugin',name:'Review'}, {id:'two',kind:'plugin',name:'Review'}])
+  expect(choices.map(item => item.command)).toEqual(['review','review-2'])
+  expect(selectedCommands('/review-2 Check this', choices)).toEqual(['two'])
+  expect(selectedCommands('Check this', choices)).toEqual([])
 })
