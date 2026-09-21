@@ -201,6 +201,30 @@ wrap_life_span_handler! {
     struct Lifetime;
     impl LifeSpanHandler {
         fn on_after_created(&self,_browser:Option<&mut Browser>) {BROWSER_COUNT.fetch_add(1,Ordering::AcqRel);}
+        fn do_close(&self, browser: Option<&mut Browser>) -> i32 {
+            // CEF's default closes the top-level app window. Destroy only its child view.
+            if let Some(host) = browser.and_then(|browser| browser.host()) {
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    unsafe extern "C" { fn muniment_cef_remove_view(handle: *mut std::ffi::c_void); }
+                    muniment_cef_remove_view(host.window_handle());
+                }
+                #[cfg(windows)]
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(host.window_handle().0.cast()); }
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    if let Ok(xlib) = x11_dl::xlib::Xlib::open() {
+                        let display = (xlib.XOpenDisplay)(std::ptr::null());
+                        if !display.is_null() {
+                            (xlib.XDestroyWindow)(display, host.window_handle() as _);
+                            (xlib.XFlush)(display);
+                            (xlib.XCloseDisplay)(display);
+                        }
+                    }
+                }
+            }
+            1
+        }
         fn on_before_close(&self,browser:Option<&mut Browser>) {
             if let Some(browser) = browser {
                 PAGES.with(|pages| pages.borrow_mut().retain(|_, page| page.browser.identifier() != browser.identifier()));
