@@ -50,7 +50,7 @@ it('opens provider details inside the app and adds the server from the dialog', 
   const oldClose = HTMLDialogElement.prototype.close
   HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')) }
   try {
-    const invoke = vi.fn(async () => ({items:[]}))
+    const invoke = vi.fn(async (_, {action, data}) => action === 'server' ? {items:[{id:'saved',...data}]} : action === 'auth' ? {status:'connected',tools:[]} : {items:[]})
     render(ExtendSection, {tauri:{invoke}})
     await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'Google Drive'}})
     await fireEvent.click(screen.getAllByRole('button', {name:'Details'})[0])
@@ -62,19 +62,19 @@ it('opens provider details inside the app and adds the server from the dialog', 
     await waitFor(() => expect(within(dialog).getByRole('button', {name:'Connect'})).not.toBeDisabled())
     await fireEvent.click(within(dialog).getByRole('button', {name:'Connect'}))
     expect(screen.queryByRole('dialog', {name:'Google Drive'})).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Name')).toHaveValue('Google Drive')
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('extend_command',{action:'auth',data:{id:'saved'}}))
   } finally { HTMLDialogElement.prototype.showModal = oldShow; HTMLDialogElement.prototype.close = oldClose }
 })
 
 it('starts OAuth after saving a catalog connection and opens managed storage', async () => {
-  const state = {items:[{id:'saved',kind:'mcp',name:'Google Drive',definition:{url:'https://example.com/mcp'}}]}
-  const invoke = vi.fn(async (_, {action}) => action === 'auth' ? {status:'connected',tools:[]} : action === 'server' ? state : {items:[]})
+  const invoke = vi.fn(async (_, {action,data}) => action === 'auth' ? {status:'connected',tools:[]} : action === 'server' ? {items:[{id:'saved',...data}]} : {items:[]})
   render(ExtendSection, {tauri:{invoke}})
   await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'Google Drive'}})
   await waitFor(() => expect(screen.getAllByRole('button',{name:'Connect'})[0]).not.toBeDisabled())
   await fireEvent.click(screen.getAllByRole('button',{name:'Connect'})[0])
-  expect(screen.getByLabelText('Authentication')).toHaveValue('oauth')
-  await fireEvent.click(screen.getByRole('button',{name:'Save and sign in'}))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Authentication')).not.toBeInTheDocument()
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('extend_command',{action:'auth',data:{id:'saved'}}))
   await fireEvent.click(screen.getByRole('tab',{name:'Skills'}))
   await waitFor(() => expect(screen.getByRole('button',{name:'Open folder'})).not.toBeDisabled())

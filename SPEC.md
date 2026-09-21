@@ -578,7 +578,7 @@ browser result. Partial replies remain visible with their interruption cause.
 Reports link possible duplicate groups to their records and a merge preview.
 Record fields, states and actor names read as words. Raw evidence stays available.
 ### Extend
-Settings → Extend manages MCP servers, skills and plugins without a Muniment account. The MCP catalog lists remote servers with provider logos, compact cards and popularity sorting. Details and Custom open app dialogs. Connect opens setup with OAuth sign-in. A sliders button reveals filters. Custom servers attempt to cache a service favicon. Catalog entries use provider endpoints. Users can add any custom server.
+Settings → Extend manages MCP servers, skills and plugins without a Muniment account. The MCP catalog lists remote servers with provider logos, compact cards and popularity sorting. Details and Custom open app dialogs. Connect starts browser OAuth sign-in directly. A sliders button reveals filters. Custom servers attempt to cache a service favicon. Catalog entries use provider endpoints. Users can add any custom server.
 Search matches names, descriptions, publishers and categories. Category,
 installed and setup-required filters combine before pagination. Provider account
 requirements and unsupported setup methods remain visible.

@@ -25,6 +25,19 @@
   onMount(() => { void work(refresh) })
   function resetSearch() { query = ''; category = ''; scope = 'all'; sort = 'popular'; page = 0 }
   function add(entry = null) { form = entry ? { ...entry, id: entry.kind === 'mcp' ? entry.id : undefined } : {}; name = entry?.name || ''; url = entry?.url || ''; source = entry?.source || ''; config = ''; token = ''; authentication = entry?.url && entry?.kind !== 'mcp' ? 'oauth' : 'none'; preview = null; error = ''; replaceId = null }
+  async function connectCatalog(entry) {
+    await work(async () => {
+      if (!entry.url) throw new Error('This provider has not published a connection URL. Use Custom with the URL supplied by the provider.')
+      status = 'Opening browser sign-in…'
+      state = await call('server', { name: entry.name, source: entry.source, description: entry.description || '', definition: { url: entry.url, auth: 'oauth' } })
+      const item = state.items.find(item => item.source === entry.source)
+      if (!item) throw new Error('The server could not be saved.')
+      status = 'Complete sign-in in your browser.'
+      const result = await call('auth', { id: item.id })
+      status = `${item.name}: ${result.status}. ${result.tools.length} tools available.`
+      await refresh()
+    })
+  }
   async function saveServer() {
     await work(async () => {
       const definition = config.trim() ? JSON.parse(config) : { url: url.trim(), ...(authentication === 'oauth' ? { auth: 'oauth' } : {}) }
@@ -108,7 +121,7 @@
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
         {#if entry.publisher}<p class="publisher">{entry.publisher}</p>{/if}
         <p class="category">{entry.categories.map(categoryLabel).join(' · ')}</p>
-        <div class="actions"><button type="button" class="details-link" onclick={() => showDetails(entry)}>Details</button><button type="button" disabled={busy || installedSources.has(entry.source)} onclick={() => add(entry)}>{installedSources.has(entry.source) ? 'Installed' : 'Connect'}</button></div>
+        <div class="actions"><button type="button" class="details-link" onclick={() => showDetails(entry)}>Details</button><button type="button" disabled={busy || installedSources.has(entry.source)} onclick={() => connectCatalog(entry)}>{installedSources.has(entry.source) ? 'Installed' : 'Connect'}</button></div>
       </article>{/each}</div>
     {/snippet}
     {#if featured.length}
@@ -133,7 +146,7 @@
       {#if details.website}<dt>Provider website</dt><dd><a href={details.website} target="_blank" rel="noreferrer">{details.website}</a></dd>{/if}
     </dl>
     <p class="requirements">The provider may require an account or subscription. Configure authentication when you add the server.</p>
-    <div class="detail-actions"><button type="button" disabled={busy || installedSources.has(details.source)} onclick={() => { const entry = details; detailsDialog.close(); add(entry) }}>{installedSources.has(details.source) ? 'Installed' : 'Connect'}</button></div>
+    <div class="detail-actions"><button type="button" disabled={busy || installedSources.has(details.source)} onclick={() => { const entry = details; detailsDialog.close(); void connectCatalog(entry) }}>{installedSources.has(details.source) ? 'Installed' : 'Connect'}</button></div>
   {/if}
 </dialog>
 
