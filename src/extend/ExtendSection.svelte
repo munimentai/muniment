@@ -12,9 +12,11 @@
   async function showDetails(entry) { details = entry; await tick(); detailsDialog.showModal() }
   let busy = $state(false), error = $state(''), status = $state(''), form = $state(null), preview = $state(null), selected = $state([])
   let name = $state(''), url = $state(''), source = $state(''), config = $state(''), token = $state(''), authentication = $state('none'), replaceId = $state(null)
-  const counts = $derived({ mcp: catalog.length, skill: state.items.filter(item => item.kind === 'skill').length, plugin: state.items.filter(item => item.kind === 'plugin').length })
-  const installedSources = $derived(new Set(state.items.map(item => item.source)))
-  const filtered = $derived(sortCatalog(filterCatalog(catalog, { query, category, installed: scope === 'installed', setup: scope === 'setup' }, installedSources), sort))
+  const mcpEntries = $derived([...catalog, ...state.items.filter(item => item.kind === 'mcp' && !catalog.some(entry => entry.source === item.source)).map(item => ({ ...item, source: item.source || `custom:${item.id}`, url: item.definition.url, categories: ['other'], popularity: 0 }))])
+  const detailsInstalled = $derived(details && state.items.find(item => item.kind === 'mcp' && (item.source ? item.source === details.source : `custom:${item.id}` === details.source)))
+  const counts = $derived({ mcp: mcpEntries.length, skill: state.items.filter(item => item.kind === 'skill').length, plugin: state.items.filter(item => item.kind === 'plugin').length })
+  const installedSources = $derived(new Set(state.items.map(item => item.source || `custom:${item.id}`)))
+  const filtered = $derived(sortCatalog(filterCatalog(mcpEntries, { query, category, installed: scope === 'installed', setup: scope === 'setup' }, installedSources), sort))
   const featured = $derived(!query.trim() && !category && scope === 'all' && sort === 'popular' ? filtered.slice(0, 12) : [])
   const remaining = $derived(featured.length ? filtered.slice(12) : filtered)
   const results = $derived(remaining.slice(page * 30, (page + 1) * 30))
@@ -63,7 +65,7 @@
 <section class="extend" aria-label="Extend">
   <p class="intro">Add tools and instructions to your local workspace.</p>
   <div class="tabs" role="tablist" aria-label="Extension types">
-    {#each [['mcp', 'MCP servers'], ['skill', 'Skills'], ['plugin', 'Plugins']] as [id, label]}<button type="button" role="tab" aria-selected={tab === id} onclick={() => { tab = id; resetSearch(); form = null; preview = null }}>{#if id === 'mcp'}<McpIcon />{:else}<LucideIcon name={id === 'skill' ? 'pencil-sparkles' : 'unplug'} variant="action" size={16} />{/if}{label}{#if counts[id]}<span class="tab-count">({counts[id]})</span>{/if}</button>{/each}
+    {#each [['mcp', 'MCP servers'], ['skill', 'Skills'], ['plugin', 'Plugins']] as [id, label]}<button type="button" role="tab" aria-label={`${label}${counts[id] ? ` (${counts[id]})` : ''}`} aria-selected={tab === id} onclick={() => { tab = id; resetSearch(); form = null; preview = null }}>{#if id === 'mcp'}<McpIcon />{:else}<LucideIcon name={id === 'skill' ? 'pencil-sparkles' : 'unplug'} variant="action" size={16} />{/if}{label}{#if counts[id]} <span class="tab-count">({counts[id]})</span>{/if}</button>{/each}
   </div>
   <div class="toolbar">{#if tab === 'mcp'}<button type="button" class="filter-toggle" aria-label="Filters" aria-expanded={filtersOpen} aria-controls="mcp-filters" onclick={() => filtersOpen = !filtersOpen}><LucideIcon name="sliders-vertical" size={18} /></button>{/if}<input type="search" aria-label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" bind:value={query} oninput={() => page = 0} /><button type="button" disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Add source'}</button>{#if tab !== 'mcp'}<button type="button" disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</button>{/if}</div>
   {#if tab === 'mcp' && filtersOpen}
@@ -105,7 +107,7 @@
       {#if error}<p role="alert">{error}</p>{/if}
     </dialog>
   {/if}
-  {#if installed.length}
+  {#if tab !== 'mcp' && installed.length}
     <h4>Installed</h4>
     <div class="list" aria-label="Installed extensions">{#each installed as item (item.id)}<article class="entry">
       <div class="head"><strong>{#if item.kind === 'mcp'}<ProviderIcon entry={item} size={24} />{/if}{item.name}</strong><label class="check"><input type="checkbox" checked={item.enabled !== false} disabled={busy} onchange={e => mutate('toggle', { id: item.id, enabled: e.currentTarget.checked })} />Available in chats</label></div>
@@ -117,11 +119,11 @@
   {:else if tab !== 'mcp'}<p>No {tab === 'skill' ? 'skills' : 'plugins'} installed. Add a GitHub repository, local folder, or archive to get started.</p>{/if}
   {#if tab === 'mcp'}
     {#snippet cards(entries, label)}
-      <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}<article class="entry catalog-card">
+      <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}{@const connected = state.items.find(item => item.kind === 'mcp' && (item.source ? item.source === entry.source : `custom:${item.id}` === entry.source))}<article class="entry catalog-card" class:connected={!!connected}>
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
         {#if entry.publisher}<p class="publisher">{entry.publisher}</p>{/if}
         <p class="category">{entry.categories.map(categoryLabel).join(' · ')}</p>
-        <div class="actions"><button type="button" class="details-link" onclick={() => showDetails(entry)}>Details</button><button type="button" disabled={busy || installedSources.has(entry.source)} onclick={() => connectCatalog(entry)}>{installedSources.has(entry.source) ? 'Installed' : 'Connect'}</button></div>
+        <div class="actions"><button type="button" class="details-link" onclick={() => showDetails(entry)}>Details</button>{#if connected}<button type="button" role="switch" class="switch" aria-checked={connected.enabled !== false} aria-label={`Use ${entry.name} in chats`} disabled={busy} onclick={() => mutate('toggle', { id: connected.id, enabled: connected.enabled === false })}><span></span></button>{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
       </article>{/each}</div>
     {/snippet}
     {#if featured.length}
@@ -141,12 +143,29 @@
     <dl>
       {#if details.publisher}<dt>Publisher</dt><dd>{details.publisher}</dd>{/if}
       <dt>Categories</dt><dd>{details.categories.map(categoryLabel).join(' · ')}</dd>
-      <dt>Connection</dt><dd>Remote MCP server</dd>
-      <dt>Server URL</dt><dd>{details.url || 'Get the server URL from the provider.'}</dd>
+      {#if detailsInstalled?.definition.command}
+        <dt>Connection</dt><dd>Local MCP server</dd>
+        <dt>Command</dt><dd>{detailsInstalled.definition.command}</dd>
+      {:else}
+        <dt>Connection</dt><dd>Remote MCP server</dd>
+        <dt>Server URL</dt><dd>{details.url || 'Get the server URL from the provider.'}</dd>
+      {/if}
       {#if details.website}<dt>Provider website</dt><dd><a href={details.website} target="_blank" rel="noreferrer">{details.website}</a></dd>{/if}
     </dl>
-    <p class="requirements">The provider may require an account or subscription. Configure authentication when you add the server.</p>
-    <div class="detail-actions"><button type="button" disabled={busy || installedSources.has(details.source)} onclick={() => { const entry = details; detailsDialog.close(); void connectCatalog(entry) }}>{installedSources.has(details.source) ? 'Installed' : 'Connect'}</button></div>
+    {#if detailsInstalled}
+      {#if detailsInstalled.lastCheck}<p>Last connection test: {detailsInstalled.lastCheck.status}. {detailsInstalled.lastCheck.tools} tools.</p>{/if}
+      <div class="detail-actions actions">
+        <button type="button" disabled={busy} onclick={() => connection(detailsInstalled, 'test')}>Test connection</button>
+        {#if detailsInstalled.definition.url}<button type="button" disabled={busy} onclick={() => connection(detailsInstalled, 'auth')}>Sign in</button>{/if}
+        <button type="button" disabled={busy} onclick={() => { const item = detailsInstalled; detailsDialog.close(); add(item); config = JSON.stringify(item.definition, null, 2) }}>Configure</button>
+        <button type="button" disabled={busy} onclick={() => { const id = detailsInstalled.id; detailsDialog.close(); void mutate('remove', { id }) }}>Uninstall</button>
+      </div>
+      {#if error}<p role="alert">{error}</p>{/if}
+      {#if status}<p role="status">{status}</p>{/if}
+    {:else}
+      <p class="requirements">The provider may require an account or subscription. Configure authentication when you add the server.</p>
+      <div class="detail-actions"><button type="button" disabled={busy} onclick={() => { const entry = details; detailsDialog.close(); void connectCatalog(entry) }}>Connect</button></div>
+    {/if}
   {/if}
 </dialog>
 
@@ -171,6 +190,12 @@
   button { font-family: var(--font-human); border: 0; border-radius: var(--radius-control); padding: 5px 9px; color: var(--ink); background: var(--faint); cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }
   .catalog-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .catalog-card.connected { background: var(--signal-soft); border-color: var(--signal); }
+  .catalog-card.connected strong { color: var(--signal); }
+  .switch { position: relative; flex: none; width: 30px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
+  .switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: var(--radius-chip); background: var(--muted); transition: transform 120ms ease, background 120ms ease; }
+  .switch[aria-checked="true"] { border-color: var(--signal); background: var(--signal-soft); }
+  .switch[aria-checked="true"] span { transform: translateX(12px); background: var(--signal); }
   .catalog-card { min-width: 0; gap: 5px; align-content: start; }
   .card-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
   .card-title strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-13); }

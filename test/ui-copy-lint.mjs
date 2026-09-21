@@ -138,6 +138,9 @@ const DIAGNOSTICS = new Map([
   ['journal/reducer.rs', ['run cannot acquire Pi', 'Pi acquisition has not started', 'Pi session may only be bound once', 'Pi session binding payload is invalid']],
   ['pi_packages.rs', [
     'Pi package acquisition failed.', 'Pi package acquisition timed out.', 'Pi package acquisition did not install the pinned versions.',
+    // Exact upstream copy matched when branding the pinned MCP adapter.
+    'You can close this page and return to Pi.',
+    String.raw`export function getAppName(): string {\n  const name = readPiConfig()?.name\n  return typeof name === \"string\" && name.trim() ? name.trim() : \"pi\"\n}`,
     // Exact source literals used to migrate the pinned extension's private paths.
     "'.pi'", "parts[0] === '.pi'", "['.pi', '.muniment'].includes(parts[0])",
     "join(ctx.cwd, '.pi', 'tasks', runId); join('.pi', 'tasks', runId);", 'Output is written to .pi/tasks',

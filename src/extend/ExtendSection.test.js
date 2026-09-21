@@ -95,3 +95,33 @@ it('hides filters initially and opens custom setup as a dialog', async () => {
   await fireEvent.click(screen.getByRole('button',{name:'Cancel'}))
   expect(screen.queryByRole('dialog',{name:'Add MCP server'})).not.toBeInTheDocument()
 })
+
+it('keeps installed MCPs in the catalog with a switch and detail controls', async () => {
+  const { catalog } = await import('./catalog.js')
+  const source = catalog.find(entry => entry.name === 'Notion')
+  const item = {id:'notion',kind:'mcp',name:'Notion',source:source.source,enabled:true,definition:{url:source.url}}
+  const invoke = vi.fn(async (_, {action,data}) => ({items:[action === 'toggle' ? {...item,enabled:data.enabled} : item]}))
+  render(ExtendSection,{tauri:{invoke}})
+  const toggle = await screen.findByRole('switch',{name:'Use Notion in chats'})
+  expect(toggle).toHaveAttribute('aria-checked','true')
+  expect(screen.queryByRole('heading',{name:'Installed'})).not.toBeInTheDocument()
+  expect(screen.getAllByText('Notion',{selector:'strong'})).toHaveLength(1)
+  expect(toggle.closest('article')).toHaveClass('connected')
+  await fireEvent.click(toggle)
+  await waitFor(()=>expect(toggle).toHaveAttribute('aria-checked','false'))
+  expect(invoke).toHaveBeenCalledWith('extend_command',{action:'toggle',data:{id:'notion',enabled:false}})
+  await fireEvent.click(screen.getByRole('button',{name:'Filters'}))
+  await fireEvent.change(screen.getByLabelText('Show'),{target:{value:'installed'}})
+  expect(screen.queryByText('Canva',{selector:'strong'})).not.toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button',{name:'Details'}))
+  const dialog = await screen.findByRole('dialog',{name:'Notion'})
+  expect(within(dialog).getByRole('button',{name:'Configure'})).toBeInTheDocument()
+  expect(within(dialog).getByRole('button',{name:'Uninstall'})).toBeInTheDocument()
+})
+
+it('keeps custom and excluded installed MCPs available in the catalog', async () => {
+  render(ExtendSection,{tauri:{invoke:vi.fn(async()=>({items:[{id:'custom',kind:'mcp',name:'Custom docs',source:'',enabled:true,definition:{url:'https://example.com/mcp'}}]}))}})
+  await screen.findByRole('tab',{name:'MCP servers (493)'})
+  await fireEvent.input(screen.getByRole('searchbox'),{target:{value:'Custom docs'}})
+  expect(await screen.findByRole('switch',{name:'Use Custom docs in chats'})).toBeInTheDocument()
+})
