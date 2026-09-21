@@ -8,6 +8,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { featureFlags } from './feature-flags.js'
+vi.mock('./feature-flags.js', () => ({featureFlags: {cloud: true, companyRecord: true}}))
+
 import { historyMessages } from './lib/chat-state.js'
 
 const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.svelte'), 'utf8')
@@ -227,6 +230,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  Object.assign(featureFlags, {cloud: true, companyRecord: true})
   localStorage.clear()
   recordQueryResult = { page: { kind: 'deal', total: 1, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [{ id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', created_at: '2026-09-15T10:00:00.000Z', body_text: 'Northwind renewal: won.', data: { name: 'Northwind renewal', stage: 'won' } }] } }
   recordEntityResult = { entity: { entity: { id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', body_text: 'Northwind renewal: won.', data: { name: 'Northwind renewal', stage: 'won' } }, kind: { name: 'deal', schema: { properties: { name: {}, stage: {} }, stateProperty: 'stage' }, states: ['discovery', 'won'], extension: null }, identities: [{ kind: 'external', value: 'hubspot:deal:1', entity_id: 'deal-1' }], edges: [{ id: 'edge-1', relation: 'concerns', src_id: 'deal-1', dst_id: 'org-1', dst_title: 'Northwind', dst_kind: 'org', src_title: 'Northwind renewal', src_kind: 'deal', valid_from: '2026-09-15T10:00:00.000Z', valid_to: null }], events: [{ id: 'ev-1', seq: 3, at: '2026-09-15T10:00:00.000Z', verb: 'created', actor_id: 'owner-1', on_behalf_of: null }] } }
@@ -3282,12 +3286,12 @@ describe('sidebar collapse', () => {
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{projectId:'research'}))
     await fireEvent.click(screen.getByRole('button',{name:'Agents',exact:true}))
     const agents=await screen.findByRole('region',{name:'Agents',exact:true})
-    expect(screen.getByRole('tab',{name:'Files'})).toHaveAttribute('aria-selected','true')
+    expect(await screen.findByRole('tab',{name:'context'})).toHaveAttribute('aria-selected','true')
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{catalog:'agents'}))
     expect(agents).toBeInTheDocument()
     await fireEvent.click(within(agents).getByRole('button',{name:/^Scout/}))
     expect(screen.queryByRole('complementary',{name:'Agent profile'})).toBeNull()
-    expect(screen.getByRole('tab',{name:'Files'})).toHaveAttribute('aria-selected','true')
+    expect(await screen.findByRole('tab',{name:'context'})).toHaveAttribute('aria-selected','true')
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{agentId:'agent-1'}))
   })
 
@@ -7588,4 +7592,57 @@ it.each(['Browser','Files'])('resizes the shared %s workspace panel with keyboar
  expect(divider).toHaveAttribute('aria-valuenow','340')
  await fireEvent.keyDown(divider,{key:'End'})
  expect(divider.getAttribute('aria-valuenow')).toBe(divider.getAttribute('aria-valuemax'))
+})
+
+
+describe('release feature flags', () => {
+  it.each([[false, false], [true, false], [false, true], [true, true]])('keeps cloud=%s and companyRecord=%s independent', async (cloud, companyRecord) => {
+    Object.assign(featureFlags, {cloud, companyRecord})
+    localModeStatus = true
+    render(App)
+    await screen.findByTestId('local-mode')
+    expect(Boolean(screen.queryByRole('button', {name: 'Sign in to cloud'}))).toBe(cloud)
+    expect(Boolean(screen.queryByRole('button', {name: 'Open record panel'}))).toBe(companyRecord)
+    const dialog = await openSettings()
+    const nav = within(dialog).getByRole('navigation', {name: 'Settings sections'})
+    expect(Boolean(within(nav).queryByRole('button', {name: 'Account', exact: true}))).toBe(cloud)
+    expect(Boolean(within(nav).queryByRole('button', {name: 'Companies', exact: true}))).toBe(companyRecord)
+    expect(within(nav).getByRole('button', {name: 'Models & routing'})).toBeInTheDocument()
+    await fireEvent.click(within(dialog).getByRole('button', {name: 'Close settings'}))
+    if (!companyRecord) {
+      await fireEvent.keyDown(window, {key: 'k', metaKey: true, ctrlKey: true})
+      expect(screen.queryByRole('button', {name: 'Close record panel'})).toBeNull()
+      expect(invoke.mock.calls.some(([command]) => command.startsWith('record_'))).toBe(false)
+    }
+    if (!cloud) expect(invoke).not.toHaveBeenCalledWith('auth_status')
+  })
+
+  it('uses local mode without reading a saved cloud session when cloud is hidden', async () => {
+    Object.assign(featureFlags, {cloud: false, companyRecord: false})
+    localModeStatus = false
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'local_mode_enter') return
+      if (command === 'local_mode_provider_inventory') return emptyInventory
+      return original(command, args)
+    })
+    render(App)
+    await screen.findByTestId('local-mode')
+    expect(invoke).toHaveBeenCalledWith('local_mode_enter')
+    expect(invoke).not.toHaveBeenCalledWith('auth_status')
+    expect(invoke).not.toHaveBeenCalledWith('auth_sign_out')
+    expect(screen.queryByRole('region', {name: 'Sign in'})).toBeNull()
+  })
+
+  it('rejects a hidden settings section before it mounts', async () => {
+    Object.assign(featureFlags, {cloud: false, companyRecord: false})
+    const Settings = (await import('./lib/Settings.svelte')).default
+    for (const section of ['account', 'companies']) {
+      const view = render(Settings, {tauri: {invoke}, section, onclose: vi.fn()})
+      await waitFor(() => expect(screen.getByRole('heading', {name: 'Models & routing'})).toBeInTheDocument())
+      expect(invoke).not.toHaveBeenCalledWith('auth_entitlement_snapshot')
+      expect(invoke.mock.calls.some(([command]) => command.startsWith('record_'))).toBe(false)
+      view.unmount()
+    }
+  })
 })

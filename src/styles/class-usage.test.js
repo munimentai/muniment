@@ -9,8 +9,7 @@ const EXCEPTIONS = {
   'src/App.svelte': {
     'new-thread': 'Probe layout checks and sidebar action tests select the new-thread button.',
     'agent-roster': 'Sidebar tests check that agents appear outside project sections.',
-    'project-section': 'Sidebar tests check the project section boundary.',
-    'archive-toggle': 'Thread archive action restores keyboard focus to this button.',
+    'sidebar-collection': 'App tests select collection sections in the sidebar.',
   },
 }
 
@@ -51,6 +50,7 @@ const definedClasses = (source) => new Set(
 const globalClasses = new Set([
   ...definedClasses(read('src/styles/base.css')),
   ...definedClasses(read('src/styles/tokens.css')),
+  ...definedClasses(read('src/lib/OverflowText.svelte')),
 ])
 
 const missingClasses = (source, exceptions = {}) => {

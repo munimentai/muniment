@@ -18,9 +18,12 @@ vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   unregister: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn().mockResolvedValue(null) }))
+vi.mock('@tauri-apps/api/event', () => ({listen: vi.fn().mockResolvedValue(vi.fn())}))
 vi.mock('@tauri-apps/api/window', () => ({
   UserAttentionType: { Informational: 2 },
   getCurrentWindow: () => ({
+    onMoved: vi.fn().mockResolvedValue(vi.fn()),
+    onResized: vi.fn().mockResolvedValue(vi.fn()),
     isFocused: vi.fn().mockResolvedValue(true),
     requestUserAttention: vi.fn().mockResolvedValue(undefined),
   }),

@@ -209,7 +209,7 @@
   .chips button { max-width: 100%; border-radius: var(--radius-chip); font: var(--text-12) var(--font-mono); text-align: left; overflow-wrap: anywhere; }
   .home-chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chips button[aria-expanded="true"] { background: var(--faint); }
-  .panel { overflow-y: auto; margin-top: 16px; padding: 16px; }
+  .panel { min-height: 0; overflow-y: auto; margin-top: 16px; padding: 16px; }
   h1 { font-size: var(--text-22); }
   h2 { margin: 0 0 12px; font-size: var(--text-15); font-weight: 600; }
   p { margin: 8px 0; font-size: var(--text-13); overflow-wrap: anywhere; }

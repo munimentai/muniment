@@ -1,4 +1,5 @@
 <script>
+  import { featureFlags } from './feature-flags.js'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
@@ -628,7 +629,7 @@
   })
   const { fit: fitArtifactRail, pointerDown: artifactRailPointerDown, pointerMove: artifactRailPointerMove, pointerEnd: artifactRailPointerEnd, keydown: artifactRailKeydown } = railController
   const toggleArtifactRail = () => { if (artifactsOpen) artifactsOpen = false; else void showArtifacts() }
-  const toggleRecordPanel = () => { artifactsOpen = false; browserPanel = null; projectsOpen = false; agentsOpen = false; agentProfileOpen = false; railController.toggle('record') }
+  const toggleRecordPanel = () => { if (!featureFlags.companyRecord) return; artifactsOpen = false; browserPanel = null; projectsOpen = false; agentsOpen = false; agentProfileOpen = false; railController.toggle('record') }
   const closeRail = () => railController.close()
   // Ask puts the open view's SQL into the composer as a fenced block, so the reply starts from what the person sees.
   function askAboutView(sql) {
@@ -1504,6 +1505,7 @@
   }
 
   async function run(action) {
+    if (!featureFlags.cloud) return false
     const version = ++authRequestVersion
     const command = {
       status: 'auth_status',
@@ -1574,7 +1576,7 @@
   }
 
   async function signIn() {
-    if (localEntryPending || (auth.name !== 'signed-out' && auth.name !== 'local')) return
+    if (!featureFlags.cloud || localEntryPending || (auth.name !== 'signed-out' && auth.name !== 'local')) return
     settingsOpen = false
     signInFromLocal = auth.name === 'local'
     if (auth.name === 'local') {
@@ -1597,6 +1599,9 @@
         auth = { name: 'local', subject: null }
         void refreshInventory()
         await chatController.loadHistory()
+      } else if (!featureFlags.cloud) {
+        auth = { name: 'signed-out' }
+        await enterLocalMode()
       } else {
         await run('status')
       }
@@ -1634,7 +1639,7 @@
       })
     }
     const refreshAuthAfterStartup = (connectionRecovered) => {
-      if (!connectionRecovered || markerStartupLocalMode === true) return
+      if (!featureFlags.cloud || !connectionRecovered || markerStartupLocalMode === true) return
       if (markerStartupLocalMode === false) {
         if (!destroyed && !localEntryPending && auth.name !== 'local') void run('status')
         return
@@ -1659,7 +1664,7 @@
       }
       await readDesktopClientStatus()
     }
-    window.__TAURI__?.event?.listen('auth-registration-retry', ({ payload }) => {
+    if (featureFlags.cloud) window.__TAURI__?.event?.listen('auth-registration-retry', ({ payload }) => {
       if (auth.name === 'signing-in') auth = registrationRetryState(payload?.delay_seconds)
     }).then((stop) => {
       if (destroyed) stop()
@@ -1703,7 +1708,7 @@
         // Register only after the main window can receive a launcher message.
         return tauri.invoke('launcher_register')
       }).catch((error) => console.error('The launcher could not start. Restart the app.', error))
-      entitlementToast.start()
+      if (featureFlags.cloud) entitlementToast.start()
       voiceShortcutManager.start()
     }
     const shortcuts = (event) => {
@@ -1751,7 +1756,7 @@
         toggleArtifactRail()
         return
       }
-      if (workspaceMode() && onboarding.name === 'complete' && isRecordPanelShortcut(event)) {
+      if (featureFlags.companyRecord && workspaceMode() && onboarding.name === 'complete' && isRecordPanelShortcut(event)) {
         event.preventDefault()
         // ⌘K on a maximized record panel returns the sidebar and the thread first.
         if ((recordPanelOpen || filePanelOpen) && recordMaximized) toggleRecordMaximized()
@@ -2000,7 +2005,7 @@
         <button type="button" disabled={runtimeNotice.busy} onclick={() => backgroundServiceNotice.retry()}>{runtimeNotice.control}</button>
       </section>
     {:else if onboarding.name === 'complete'}
-      {#if auth.name === 'signed-out' || auth.name === 'signing-in'}
+      {#if featureFlags.cloud && (auth.name === 'signed-out' || auth.name === 'signing-in')}
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <section role="region" aria-label="Sign in" class="auth-state" class:sign-in-overlay={auth.name === 'signing-in' && signInFromLocal} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); void cancelSignIn() } }}>
         <p class="support" aria-live="polite">{auth.name === 'signing-in' ? auth.message : 'Sign in for cloud features, or use local mode.'}</p>
@@ -2012,6 +2017,12 @@
           <button bind:this={signInCancelControl} disabled={localEntryPending} onclick={auth.name === 'signing-in' ? cancelSignIn : enterLocalMode}>{auth.name === 'signing-in' ? 'Cancel sign-in' : 'Use local mode'}</button>
         </div>
         {#if localEntryError}<p class="record error-record" role="alert">{localEntryError}</p>{/if}
+      </section>
+    {/if}
+    {#if !featureFlags.cloud && auth.name === 'signed-out'}
+      <section class="auth-state" aria-label="Local workspace">
+        {#if localEntryError}<p class="record error-record" role="alert">{localEntryError}</p>{/if}
+        <button type="button" disabled={localEntryPending} onclick={enterLocalMode}>{localEntryPending ? 'Opening workspace…' : 'Open workspace'}</button>
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
@@ -2035,7 +2046,7 @@
 
             <span class="title-spacer" data-tauri-drag-region></span>
             <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
-            <RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>
+            {#if featureFlags.companyRecord}<RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>{/if}
             <WorkspaceMenu selected={browserPanel} onselect={showBrowser} onopenchange={value => toolsMenuOpen = value} />
           </div>
         </header>
@@ -2120,10 +2131,12 @@
             <div class="settings-block">
               <button class="side-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
             </div>
+            {#if featureFlags.cloud}
             {#if auth.name === 'signed-in'}
               <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} />
             {:else}
               <button class="side-action" disabled={!!active || localEntryPending} onclick={signIn}><LucideIcon name="log-in" size={18} /><span>Sign in to cloud</span></button>
+            {/if}
             {/if}
           </div>
           {/if}
@@ -2148,7 +2161,7 @@
           ></div>
         {/if}
         <div data-panel="chat" class="thread-panel" style:--composer-height="{composerBoxHeight}px" style:--file-chip-height={changed.length ? '40px' : '0px'}>
-          {#if profileAgent && !agentProfileOpen && !agentsOpen}<button type="button" data-panel-control="corner" class="quiet agent-profile-reveal" aria-label="Reveal agent profile" onclick={revealAgentProfile}><LucideIcon name="panel-right-open" /></button>{/if}
+          {#if profileAgent && !agentProfileOpen && !agentsOpen}<button type="button" data-panel-control="corner" class="quiet" aria-label="Reveal agent profile" onclick={revealAgentProfile}><LucideIcon name="panel-right-open" /></button>{/if}
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <div class="thread-shell" data-panel-fade="chat">
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
@@ -2457,7 +2470,7 @@
           {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
         </ChatComposer>
         </div>
-        {#if entitlementToastVisible}
+        {#if featureFlags.cloud && entitlementToastVisible}
           <div class="entitlement-toast" role="status">Your access changed. Some models or connections may differ.</div>
         {/if}
         {#if artifactRailOpen}
@@ -2487,7 +2500,7 @@
             </div>
           </aside>
         {/if}
-        {#if recordPanelOpen}
+        {#if featureFlags.companyRecord && recordPanelOpen}
           {#if !recordMaximized}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
             <div

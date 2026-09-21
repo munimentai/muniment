@@ -1,4 +1,5 @@
 <script>
+  import { featureFlags } from '../feature-flags.js'
   import { panelScroll } from './panel-scroll.js'
   // Settings is one popup over the workspace: a section list on its left, the
   // section on its right, and the workspace darkened and blurred behind it.
@@ -30,7 +31,10 @@
     defaultVoiceShortcut = '',
   } = $props()
 
-  const sections = [['models', 'Models & routing'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Home'], ['companies', 'Companies'], ['account', 'Account']]
+  const sections = [['models', 'Models & routing'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Home'], ...(featureFlags.companyRecord ? [['companies', 'Companies']] : []), ...(featureFlags.cloud ? [['account', 'Account']] : [])]
+  $effect(() => {
+    if ((section === 'companies' && !featureFlags.companyRecord) || (section === 'account' && !featureFlags.cloud)) section = 'models'
+  })
   let panel = $state()
   const sectionLabel = $derived(section === 'routing' ? 'Models & routing' : sections.find(([id]) => id === section)?.[1] ?? 'Settings')
 
@@ -98,9 +102,9 @@
             <p class="support">Muniment keeps memory, agents, projects and sessions here.</p>
             <button type="button" onclick={onchangehome}>Change folder…</button>
           </section>
-        {:else if section === 'companies'}
+        {:else if featureFlags.companyRecord && section === 'companies'}
           <CompaniesSection {tauri} onchanged={oncompanieschange} />
-        {:else if section === 'account'}
+        {:else if featureFlags.cloud && section === 'account'}
           <section class="settings-account" aria-labelledby="settings-account-title">
             <h4 id="settings-account-title" class="settings-label">Account</h4>
             {#if local}

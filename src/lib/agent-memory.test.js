@@ -42,6 +42,6 @@ it('opens an existing agent dedicated chat', async () => {
   const invoke=vi.fn(async()=>({agents:[{id:'scout',name:'Scout',instructions:'Find sources.'}],state:{runs:{},threads:{}}}))
   const onselect=vi.fn()
   render(AgentManager,{tauri:{invoke},onselect,oncreate:vi.fn(),onclose:vi.fn()})
-  await fireEvent.click(await screen.findByRole('button',{name:/Scout/}))
+  await fireEvent.click(await screen.findByRole('button',{name:/^Scout/}))
   expect(onselect).toHaveBeenCalledWith(expect.objectContaining({id:'scout'}))
 })
