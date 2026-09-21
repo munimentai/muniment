@@ -42,6 +42,8 @@
   onMount(() => {
     void tick().then(() => panel?.querySelector('[aria-current="true"]')?.focus())
     const onKeydown = (event) => {
+      // Native child dialogs own focus and Escape until they close.
+      if (event.target?.closest?.('dialog[open]')) return
       if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()

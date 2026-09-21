@@ -2,7 +2,7 @@
   import icons from './provider-icons.json'
   let { entry, size = 28 } = $props()
   let failed = $state(false)
-  const icon = $derived(icons[entry.id]?.path)
+  const icon = $derived(entry.icon || icons[entry.id]?.path || icons[entry.source?.split('/').at(-1)]?.path)
   $effect(() => { void entry.id; failed = false })
 </script>
 <span class="logo" style:width={`${size}px`} style:height={`${size}px`} aria-hidden="true">

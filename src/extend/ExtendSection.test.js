@@ -1,13 +1,18 @@
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import ExtendSection from './ExtendSection.svelte'
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.open = true }
+  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')) }
+})
 afterEach(cleanup)
 it('searches and filters the MCP catalog before displaying a page', async () => {
   render(ExtendSection, { tauri:{invoke:vi.fn(async()=>({items:[],threads:{}}))} })
   await fireEvent.input(screen.getByRole('searchbox', {name:'Search MCP servers'}), {target:{value:'Airtable'}})
   expect(screen.getByText('Airtable', {selector:'strong'})).toBeInTheDocument()
   expect(screen.queryByRole('navigation', {name:'Catalog pages'})).not.toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button',{name:'Filters'}))
   await fireEvent.change(screen.getByLabelText('Category'), {target:{value:'legal'}})
   expect(screen.getByText('No servers match these filters.')).toBeInTheDocument()
   await fireEvent.click(screen.getByRole('button', {name:'Clear filters'}))
@@ -32,7 +37,61 @@ it('previews a source before installing selected skills', async () => {
 it('shows twelve popular cards before the rest and supports name sorting', async () => {
   render(ExtendSection, {tauri:{invoke:vi.fn(async()=>({items:[]}))}})
   expect(screen.getByLabelText('Popular MCP servers').querySelectorAll('article')).toHaveLength(12)
+  await fireEvent.click(screen.getByRole('button',{name:'Filters'}))
   expect(screen.getByLabelText('Sort')).toHaveValue('popular')
   await fireEvent.change(screen.getByLabelText('Sort'), {target:{value:'name'}})
   expect(screen.queryByLabelText('Popular MCP servers')).not.toBeInTheDocument()
+})
+
+it('opens provider details inside the app and adds the server from the dialog', async () => {
+  const show = vi.fn(function () { this.open = true })
+  const oldShow = HTMLDialogElement.prototype.showModal
+  HTMLDialogElement.prototype.showModal = show
+  const oldClose = HTMLDialogElement.prototype.close
+  HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')) }
+  try {
+    const invoke = vi.fn(async () => ({items:[]}))
+    render(ExtendSection, {tauri:{invoke}})
+    await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'Google Drive'}})
+    await fireEvent.click(screen.getAllByRole('button', {name:'Details'})[0])
+    const dialog = await screen.findByRole('dialog', {name:'Google Drive'})
+    expect(within(dialog).getByText('Server URL')).toBeInTheDocument()
+    expect(within(dialog).getByText('Publisher')).toBeInTheDocument()
+    expect(within(dialog).getByRole('link')).toHaveAttribute('target','_blank')
+    expect(invoke.mock.calls.every(([,args]) => args.action === 'read')).toBe(true)
+    await waitFor(() => expect(within(dialog).getByRole('button', {name:'Connect'})).not.toBeDisabled())
+    await fireEvent.click(within(dialog).getByRole('button', {name:'Connect'}))
+    expect(screen.queryByRole('dialog', {name:'Google Drive'})).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Name')).toHaveValue('Google Drive')
+  } finally { HTMLDialogElement.prototype.showModal = oldShow; HTMLDialogElement.prototype.close = oldClose }
+})
+
+it('starts OAuth after saving a catalog connection and opens managed storage', async () => {
+  const state = {items:[{id:'saved',kind:'mcp',name:'Google Drive',definition:{url:'https://example.com/mcp'}}]}
+  const invoke = vi.fn(async (_, {action}) => action === 'auth' ? {status:'connected',tools:[]} : action === 'server' ? state : {items:[]})
+  render(ExtendSection, {tauri:{invoke}})
+  await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'Google Drive'}})
+  await waitFor(() => expect(screen.getAllByRole('button',{name:'Connect'})[0]).not.toBeDisabled())
+  await fireEvent.click(screen.getAllByRole('button',{name:'Connect'})[0])
+  expect(screen.getByLabelText('Authentication')).toHaveValue('oauth')
+  await fireEvent.click(screen.getByRole('button',{name:'Save and sign in'}))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('extend_command',{action:'auth',data:{id:'saved'}}))
+  await fireEvent.click(screen.getByRole('tab',{name:'Skills'}))
+  await waitFor(() => expect(screen.getByRole('button',{name:'Open folder'})).not.toBeDisabled())
+  await fireEvent.click(screen.getByRole('button',{name:'Open folder'}))
+  expect(invoke).toHaveBeenCalledWith('extend_command',{action:'open_folder',data:{}})
+})
+
+it('hides filters initially and opens custom setup as a dialog', async () => {
+  render(ExtendSection,{tauri:{invoke:vi.fn(async()=>({items:[]}))}})
+  expect(screen.queryByLabelText('Category')).not.toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button',{name:'Filters'}))
+  expect(screen.getByLabelText('Category')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button',{name:'Filters'}))
+  expect(screen.queryByLabelText('Category')).not.toBeInTheDocument()
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Custom'})).not.toBeDisabled())
+  await fireEvent.click(screen.getByRole('button',{name:'Custom'}))
+  expect(await screen.findByRole('dialog',{name:'Add MCP server'})).toHaveAttribute('open')
+  await fireEvent.click(screen.getByRole('button',{name:'Cancel'}))
+  expect(screen.queryByRole('dialog',{name:'Add MCP server'})).not.toBeInTheDocument()
 })
