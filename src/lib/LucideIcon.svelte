@@ -15,6 +15,10 @@
     <circle cx="6" cy="19" r="3" /><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" /><circle cx="18" cy="5" r="3" />
   {:else if name === 'gauge'}
     <path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" />
+  {:else if name === 'pencil-sparkles'}
+    <path d="M10 3H8" /><path d="m15.007 5.008 3.987 3.986" /><path d="M20 15v4" /><path d="M21.174 6.813a2.82 2.82 0 0 0-3.986-3.987L3.842 16.175a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="M22 17h-4" /><path d="M4 5v4" /><path d="M6 7H2" /><path d="M9 2v2" />
+  {:else if name === 'unplug'}
+    <path d="m19 5 3-3" /><path d="m2 22 3-3" /><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z" /><path d="M7.5 13.5 10 11" /><path d="M10.5 16.5 13 14" /><path d="m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z" />
   {:else if name === 'sliders-vertical'}
     <path d="M10 8h4" /><path d="M12 21v-9" /><path d="M12 8V3" /><path d="M17 16h4" /><path d="M19 12V3" /><path d="M19 21v-5" /><path d="M3 14h4" /><path d="M5 10V3" /><path d="M5 21v-7" />
   {:else if name === 'sliders-horizontal'}

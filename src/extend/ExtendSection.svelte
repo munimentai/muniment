@@ -62,7 +62,7 @@
 <section class="extend" aria-label="Extend">
   <p class="intro">Add tools and instructions to your local workspace.</p>
   <div class="tabs" role="tablist" aria-label="Extension types">
-    {#each [['mcp', 'MCP servers'], ['skill', 'Skills'], ['plugin', 'Plugins']] as [id, label]}<button type="button" role="tab" aria-selected={tab === id} onclick={() => { tab = id; resetSearch(); form = null; preview = null }}>{#if id === 'mcp'}<McpIcon />{/if}{label}</button>{/each}
+    {#each [['mcp', 'MCP servers'], ['skill', 'Skills'], ['plugin', 'Plugins']] as [id, label]}<button type="button" role="tab" aria-selected={tab === id} onclick={() => { tab = id; resetSearch(); form = null; preview = null }}>{#if id === 'mcp'}<McpIcon />{:else}<LucideIcon name={id === 'skill' ? 'pencil-sparkles' : 'unplug'} variant="action" size={16} />{/if}{label}</button>{/each}
   </div>
   <div class="toolbar">{#if tab === 'mcp'}<button type="button" class="filter-toggle" aria-label="Filters" aria-expanded={filtersOpen} aria-controls="mcp-filters" onclick={() => filtersOpen = !filtersOpen}><LucideIcon name="sliders-vertical" size={18} /></button>{/if}<input type="search" aria-label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" bind:value={query} oninput={() => page = 0} /><button type="button" disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Add source'}</button>{#if tab !== 'mcp'}<button type="button" disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</button>{/if}</div>
   {#if tab === 'mcp' && filtersOpen}
