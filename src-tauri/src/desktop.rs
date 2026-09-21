@@ -13,6 +13,7 @@ mod dictation;
 mod e2e_folder_dialog;
 mod fonts;
 mod home;
+mod extend;
 mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_runtime_service;
@@ -161,6 +162,7 @@ pub fn run() {
         })
         .on_window_event(launcher::window_event)
         .invoke_handler(tauri::generate_handler![
+            extend::extend_command,
             creations::creation_list,
             creations::creation_save,
             creations::creation_delete,

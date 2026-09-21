@@ -51,6 +51,7 @@
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import GraphMark from './lib/GraphMark.svelte'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
+  import ComposerExtensions from './extend/ComposerExtensions.svelte'
   import { createChatController } from './lib/chat-controller.js'
   import { listenForLauncher } from './lib/launcher-bridge.js'
   import { composerHeight } from './lib/composer-size.js'
@@ -652,8 +653,12 @@
   })
   const { fit: fitSidebar, pointerDown: sidebarPointerDown, pointerMove: sidebarPointerMove, pointerEnd: sidebarPointerEnd, keydown: sidebarKeydown } = sidebarResizeController
 
+  let composerExtensions = $state()
   const chatController = createChatController({
-    invoke: (...args) => tauri.invoke(...args),
+    invoke: async (command, args) => {
+      if (command === 'chat_submit') await composerExtensions?.prepare(args.prompt)
+      return tauri.invoke(command, ...(args === undefined ? [] : [args]))
+    },
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
     readMessages: () => messages,
     readActive: () => active,
@@ -1900,6 +1905,7 @@
   }
 
   function keydown(event) {
+    if (composerExtensions?.handleKey(event)) return
     if (mention && !event.isComposing) {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMentions(); return }
       if (['ArrowDown', 'ArrowUp'].includes(event.key) && mentionFiles.length) {
@@ -2440,7 +2446,7 @@
           {/if}
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
-            {#if !active}<button type="button" class="quiet composer-icon" aria-label="Add files" onclick={chooseFiles}><LucideIcon name="plus" variant="action" size={16} /></button>{/if}
+            <ComposerExtensions bind:this={composerExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onattach={chooseFiles} onmanage={() => openSettings('extend')} />
             {#if auth.name === 'local'}
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
               {#if hasSubscriptions}<button type="button" class="quiet capacity-trigger" aria-haspopup="dialog" aria-expanded={capacityOpen} onclick={() => openComposerPanel(capacityOpen ? null : 'capacity')}><LucideIcon name="gauge" size={14} /><span class="model-chip-label">Capacity</span></button>{/if}

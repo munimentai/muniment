@@ -1,4 +1,5 @@
 <script>
+  import ExtendSection from '../extend/ExtendSection.svelte'
   import { featureFlags } from '../feature-flags.js'
   import { panelScroll } from './panel-scroll.js'
   // Settings is one popup over the workspace: a section list on its left, the
@@ -31,7 +32,7 @@
     defaultVoiceShortcut = '',
   } = $props()
 
-  const sections = [['models', 'Models & routing'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Home'], ...(featureFlags.companyRecord ? [['companies', 'Companies']] : []), ...(featureFlags.cloud ? [['account', 'Account']] : [])]
+  const sections = [['models', 'Models & routing'], ['extend', 'Extend'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Home'], ...(featureFlags.companyRecord ? [['companies', 'Companies']] : []), ...(featureFlags.cloud ? [['account', 'Account']] : [])]
   $effect(() => {
     if ((section === 'companies' && !featureFlags.companyRecord) || (section === 'account' && !featureFlags.cloud)) section = 'models'
   })
@@ -87,7 +88,9 @@
         <button type="button" class="quiet close" aria-label="Close settings" onclick={onclose}><LucideIcon name="x" variant="action" size={16} /></button>
       </header>
       <div class="settings-content" use:panelScroll>
-        {#if section === 'models' || section === 'routing'}
+        {#if section === 'extend'}
+          <ExtendSection {tauri} />
+        {:else if section === 'models' || section === 'routing'}
           {#key section}
             <ModelsSection {tauri} {listen} {oninventory} {inventory}  />
           {/key}

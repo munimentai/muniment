@@ -292,6 +292,9 @@ impl ChatEventSink for RuntimeChatEventSink {
 }
 
 impl PiLaunchBoundaries for RuntimeChatEventSink {
+    fn extension_thread_id(&self) -> Option<String> {
+        Some(self.thread_id.clone())
+    }
     fn pi_artifact(&self) -> PiArtifactDescriptor {
         self.pi_artifact
     }

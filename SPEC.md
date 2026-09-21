@@ -577,3 +577,25 @@ retain those details. Cancel sign-in returns to local mode and rejects a late
 browser result. Partial replies remain visible with their interruption cause.
 Reports link possible duplicate groups to their records and a merge preview.
 Record fields, states and actor names read as words. Raw evidence stays available.
+
+### Extend
+
+Settings → Extend manages MCP servers, skills and plugins without a Muniment
+account. The MCP catalog includes Anthropic's public connector directory.
+Search matches names, publishers and categories. Category, connection type,
+installed and setup-required filters combine before pagination. Provider account
+requirements and unsupported setup methods remain visible.
+
+Skills and plugins install from GitHub repositories or local folders. A preview
+lists supported skills, MCP servers and executable plugin components. The user
+selects skills before installation. Versions stay pinned until an explicit
+update, and the previous installed version supports rollback. Unsupported hooks
+and package dependencies produce an error before installation.
+
+The composer tools menu retains file attachments, offers chat-specific MCP
+switches, and selects skills and plugin commands. A leading slash or backslash
+opens the invocation picker. Explicit selections take priority. Disabled
+extensions stay outside the runtime MCP snapshot and skill context.
+Optional extension routing uses the configured classifier and only installed,
+enabled candidates. A timeout or low confidence adds no capability. Credentials
+stay in the system credential store or use environment variable references.
