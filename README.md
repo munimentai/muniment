@@ -1,29 +1,61 @@
-# Muniment
+<p align="center">
+  <a href="https://muniment.ai"><img src="docs/assets/muniment.svg" width="72" height="72" alt="Muniment" /></a>
+</p>
 
-Muniment is a free desktop harness for your models, tools and local work.
-Connect provider accounts, API keys or local models. Work with projects,
-agents, artifacts, files, a terminal and an embedded browser in one app.
-Memory, permissions and on-device voice support the same thread surface.
+<h1 align="center">Your models. Working together.</h1>
+
+<p align="center">
+  The desktop harness for your accounts, tools, and files.<br />
+  Route requests between models. Balance work across accounts. Create agents and artifacts.
+</p>
+
+<p align="center">
+  <a href="https://muniment.ai">Website</a> ·
+  <a href="https://muniment.ai/docs/">Docs</a> ·
+  <a href="https://muniment.ai/docs/install/">Get the app</a> ·
+  <a href="https://muniment.ai/docs/start/">Getting started</a>
+</p>
+
+<p align="center">Free desktop · Source under FSL.</p>
+
+[![Muniment desktop with project threads, Jev selected, and a launch readiness artifact beside the chat. Sample data.](docs/assets/desktop-workspace.jpg)](https://muniment.ai)
+
+## One place to work
+
+Bring your provider accounts, API keys, or local models. Muniment keeps the
+conversation beside your files, terminal, browser, and interactive artifacts.
 No Muniment account is required.
 
-Phase one is the desktop app and its public release. Phase two adds cloud
-availability with paid accounts while the desktop remains useful on its own.
-The company record and cloud account surfaces are hidden by default through
-independent build flags. The desktop uses [FSL-1.1-ALv2](LICENSE.md), a Fair Source license. Each version
-converts to Apache 2.0 after two years. Read [Contributing](CONTRIBUTING.md)
-for participation and [Security](SECURITY.md) for private vulnerability reports.
-Third-party components retain the licenses listed in the bundled notices.
+| | |
+| --- | --- |
+| **Your models** | Choose a model or let Jev route the request. Balance work across provider accounts. |
+| **Your tools** | Connect MCP servers, install skills and plugins, and choose what each turn can use. |
+| **Your workspace** | Organize projects and threads. Work with files, folders, a terminal, and an embedded browser. |
+| **Your agents and artifacts** | Give reusable agents a purpose. Keep interactive outputs beside the conversation. |
+| **Your preferences** | Use on-device voice, persistent memory, themes, and separate conversation and header fonts. |
 
-This repo contains the Tauri v2 shell, Rust runtime service, Pi sidecar and
-on-device voice stack. The local macOS build runs the runtime as an app child.
-It preserves the user's workspace, credentials, companies and logs.
+Start with the [desktop guide](https://muniment.ai/docs/).
+The [install guide](https://muniment.ai/docs/install/) lists release availability and platform requirements.
 
-`SPEC.md` defines desktop behavior and the rules for reviewing a change. `ROADMAP.md` lists the outcomes this repo owns. `DESIGN.md` holds
-the tokens and the visual laws. `docs/decisions/` holds the ADRs.
+## Built for the desktop
 
-See [THREAT_MODEL.md](THREAT_MODEL.md) for the desktop runtime trust boundary.
+Phase one is the desktop harness. Phase two adds cloud availability with paid
+accounts while the desktop remains useful on its own. Independent build flags
+hide the cloud account and optional company record by default.
 
-Configure the Linux ACP adapter in [Zed or JetBrains](docs/acp-editors.md).
+The app combines a Tauri v2 shell, Rust runtime, Pi sidecar, CEF browser,
+and on-device voice stack. See [SPEC.md](SPEC.md) for behavior,
+[DESIGN.md](DESIGN.md) for interface rules, and [ROADMAP.md](ROADMAP.md) for direction.
+[THREAT_MODEL.md](THREAT_MODEL.md) explains the desktop runtime trust boundary.
+
+## Issues and source
+
+Bug reports and feature requests are welcome. The project does not accept outside
+code contributions. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the issue guide
+and [SECURITY.md](SECURITY.md) to report a vulnerability privately.
+
+Muniment uses [FSL-1.1-ALv2](LICENSE.md), a Fair Source license. Each version
+converts to Apache 2.0 after two years. Third-party components retain their own licenses.
 
 ## Build
 
