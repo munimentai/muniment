@@ -1,7 +1,8 @@
 <script>
   import { panelScroll } from './panel-scroll.js'
+  import CatalogActions from './CatalogActions.svelte'
   import LucideIcon from './LucideIcon.svelte'
-  let { selected = $bindable(null), projects = [], threads = [], assignments = {}, busy = false, error = '', loading = false, oncreate, onthread, onnewthread, onclose } = $props()
+  let { selected = $bindable(null), projects = [], threads = [], assignments = {}, busy = false, error = '', loading = false, oncreate, onthread, onnewthread, onrename, onopen, onclose } = $props()
   let creating = $state(false)
   let name = $state('')
   let search = $state('')
@@ -39,7 +40,10 @@
     <div class="catalog">
       {#each matches as [id, title] (id)}
         {@const count = threads.filter(thread => assignments[thread.threadId] === id).length}
-        <button class="card" onclick={() => selected = id}><LucideIcon name="folder" size={32}/><strong>{title}</strong><span>{count} {count === 1 ? 'thread' : 'threads'}</span></button>
+        <div class="card-wrap">
+          <CatalogActions name={title} disabled={busy} allowArchive={false} allowDelete={false} maxNameLength={80} extraActions={[{id:'new',label:'New thread',icon:'square-pen'},{id:'open',label:'Open folder',icon:'folder-open'}]} onaction={(action, name) => action === 'rename' ? onrename(id, name) : action === 'new' ? onnewthread(id) : onopen(id)}/>
+          <button class="card" aria-label={`${title} ${count} ${count === 1 ? 'thread' : 'threads'}`} disabled={busy} onclick={() => selected = id}><LucideIcon name="folder" size={32}/><strong>{title}</strong><span>{count} {count === 1 ? 'thread' : 'threads'}</span></button>
+        </div>
       {/each}
     </div>
     {#if !matches.length}<p>{search ? 'No matching projects.' : 'Create a project to keep related threads together.'}</p>{/if}
@@ -55,6 +59,8 @@
   form input { margin-bottom: 0; }
   .panel > :global(:not(header):not(.catalog)) {margin-left:12px;margin-right:12px;}
   .catalog {padding:0 12px 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-  .card { flex-direction: column; align-items: flex-start; gap: 12px; text-align: left; padding: 20px; overflow-wrap: anywhere; }
+  .card-wrap { position:relative; display:flex; }
+  .card-wrap :global(.catalog-actions) { position:absolute; right:8px; top:8px; }
+  .card { width:100%; flex-direction: column; align-items: flex-start; gap: 12px; text-align: left; padding: 20px; overflow-wrap: anywhere; }
   span, p { color: var(--muted); }
 </style>
