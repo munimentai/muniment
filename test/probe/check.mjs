@@ -371,7 +371,7 @@ async function checkComposerActions(browser, baseUrl) {
           // The actions hold file attachment, voice, and a stop button during a turn.
           assert.deepEqual(layout.buttons.map(({ label }) => label), fixture === 'in-flight.html'
             ? ['Voice', 'Stop']
-            : ['Add files', 'Voice'], context)
+            : ['Add files or folders', 'Voice'], context)
           for (const button of layout.buttons) {
             assert.equal(button.lines, 1, context)
             assert.ok(button.width >= 24 && button.height >= 24, context)

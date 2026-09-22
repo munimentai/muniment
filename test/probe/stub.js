@@ -273,6 +273,7 @@ export function buildProbeCommandTable(fixtureName) {
     : { revision: 0, lastEvent: 'connected', visible: false, busy: false }
 
   async function invoke(command, payload) {
+    if (command === 'app_update_prepare') return null
     if (command === 'launcher_register') return null
     if (command === 'artifact_list' || command === 'creation_list') return []
     if (command === 'extend_command' && payload?.action === 'read') return { items: [] }
