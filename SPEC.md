@@ -117,17 +117,17 @@ becomes a run receipt, and approving a proposal from the phone is that card.
 **muniment-qa.** The local-mode chat smoke is the first installed nightly spec
 on Linux, Windows and macOS, and real sign-in gates no other spec.
 
-**homebrew-muniment.** The nightly bumps the cask version and hashes, publish
-skips while the tap is unseeded, and seeding the tap is human.
-
+**Homebrew.** The stable macOS app is submitted to `Homebrew/homebrew-cask`.
+There is no custom tap. Acceptance belongs to the Homebrew maintainers.
 **muniment-site.** `docs/public-evidence/` is lifted verbatim into the public
 docs, and a change to what an outside user sees updates it, law 12.
 
-**Updates.** The package manager is the update path before the first public
-release, ADR 0029. That release adds the in-app updater, which reads the public
-release feed the nightly publishes, sends nothing that names the user or the
-machine, shows one control in the app row once a build is downloaded, and
-installs on the click.
+**Updates.** The in-app updater reads the public stable release feed, sends
+nothing that identifies the user or machine, and verifies signatures bound to
+the announced version. It shows one install control after download and waits
+for idle runtime activity. Windows preserves MSI scope or NSIS identity, macOS
+uses the signed app bundle, and Linux uses AppImage. Debian updates use the
+system package manager. ADR 0029 defines the update path.
 
 ## The definition of working
 

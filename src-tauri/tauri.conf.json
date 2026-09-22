@@ -61,7 +61,7 @@
     "macOSPrivateApi": true
   },
   "plugins": {
-    "updater": { "pubkey": "" }
+    "updater": { "pubkey": "", "requireSignedVersion": true }
   },
   "bundle": {
     "active": true,

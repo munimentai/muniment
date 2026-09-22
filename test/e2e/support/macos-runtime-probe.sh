@@ -21,6 +21,7 @@ collect_macos_runtime_diagnostics() {
 
 probe_macos_runtime() {
   local target=$1 app_pid=$2 app_log=$3 endpoint=$4 diagnostic=$5
+  local runtime_executable=${6:-} child_pid=
   local launchctl_command=${MUNIMENT_E2E_LAUNCHCTL:-/bin/launchctl}
   local wait_seconds=${MUNIMENT_E2E_RUNTIME_WAIT_SECONDS:-60}
   local deadline=$((SECONDS + wait_seconds)) job_active=false endpoint_present=false client_connected=false job_status connection_status
@@ -38,8 +39,14 @@ probe_macos_runtime() {
     else
       client_connected=false
     fi
-    if [[ $job_active == true && $endpoint_present == true && $client_connected == true ]]; then
-      printf 'job_active=true\nendpoint_present=true\nclient_connected=true\n' >"$diagnostic"
+    child_pid=
+    if [[ -n $runtime_executable ]]; then
+      child_pid=$(pgrep -P "$app_pid" -f "^${runtime_executable//./[.]}$" || true)
+    fi
+    if [[ ( $job_active == true || $child_pid =~ ^[1-9][0-9]*$ ) && $endpoint_present == true && $client_connected == true ]]; then
+      local runtime_mode=launchd
+      [[ $job_active == true ]] || runtime_mode=child
+      printf 'runtime_mode=%s\njob_active=%s\nendpoint_present=true\nclient_connected=true\n' "$runtime_mode" "$job_active" >"$diagnostic"
       return 0
     fi
     kill -0 "$app_pid" 2>/dev/null || break

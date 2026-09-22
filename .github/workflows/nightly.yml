@@ -71,6 +71,8 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
           REPO_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           REPOSITORY: ${{ github.repository }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           # Azure Artifact Signing (Windows). Empty until the six repo secrets
@@ -151,7 +153,7 @@ jobs:
               "APPLE_API_ISSUER=$APPLE_API_ISSUER")
           fi
           # Compile the candidate into the app and runtime for installed E2E.
-          { printf '%s\n' "GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1"; if [ -n "${signing_env:-}" ]; then printf '%s\n' "$signing_env"; fi; } \
+          { printf '%s\n' "GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1" "TAURI_SIGNING_PRIVATE_KEY=$TAURI_SIGNING_PRIVATE_KEY" "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"; if [ -n "${signing_env:-}" ]; then printf '%s\n' "$signing_env"; fi; } \
           | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
                 desktopci@10.1.10.10 "$ssh_cmd --env-stdin"
@@ -187,6 +189,12 @@ jobs:
               ["-nsis.exe"],
               [".app.zip"],
               [".pkg"],
+              [".app.tar.gz"],
+              [".app.tar.gz.sig"],
+              [".AppImage.sig"],
+              [".msi.sig", "-machine.msi.sig"],
+              ["-machine.msi.sig"],
+              ["-nsis.exe.sig"],
             ];
             for (const [suffix, excludeSuffix] of expected) {
               const matches = release.assets.filter((asset) =>
@@ -419,7 +427,7 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
           trap 'rm -f "$key" "$output"' EXIT
 
-          cmd='bash test/e2e/runner/macos.sh >/tmp/muniment-macos-smoke-artifacts && bash test/e2e/runner/macos-wdio.sh'
+          cmd='bash test/e2e/support/macos-keychain-session.sh bash test/e2e/runner/macos.sh >/tmp/muniment-macos-smoke-artifacts && bash test/e2e/support/macos-keychain-session.sh bash test/e2e/runner/macos-wdio.sh'
           remote="sudo desktop-ci macos --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts --screendump"
           set +e
           printf '%s\n' \

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
+import { createServer } from 'node:net'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import './e2e/support/windows-msi-registration-contract.js'
@@ -1305,6 +1306,47 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
     expect(report).toContain(clientResult)
     expect(report).toContain('endpoint_present=false')
     expect(report).not.toContain(directory)
+  })
+
+  it.each([
+    ['launchd', true, false, true, 0],
+    ['child', false, true, true, 0],
+    ['unowned runtime', false, false, true, 1],
+    ['disconnected child', false, true, false, 1],
+  ])('verifies ownership and connection for %s runtime', async (mode, job, child, connected, status) => {
+    const directory = temp()
+    const endpoint = path.join(directory, 'attach.sock')
+    const appLog = path.join(directory, 'app.log')
+    const diagnostic = path.join(directory, 'diagnostic.log')
+    const launchctl = path.join(directory, 'launchctl')
+    const server = createServer()
+    await new Promise(resolve => server.listen(endpoint, resolve))
+    fs.writeFileSync(appLog, `desktop runtime client connected=${connected}\n`)
+    fs.writeFileSync(launchctl, job ? '#!/bin/sh\nprintf "state = running\npid = 42\n"\n' : '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    try {
+      const result = spawnSync('bash', ['-c', `
+        source "$1"
+        pgrep() {
+          [[ $1 == -P && $2 == "$EXPECTED_PARENT" && $3 == -f && $4 == '^/Applications/muniment[.]app/Contents/Library/LaunchServices/muniment-runtime$' ]] || return 99
+          [[ $CHILD_PRESENT == true ]] && printf '123\\n'
+        }
+        probe_macos_runtime test "$2" "$3" "$4" "$5" /Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime
+      `, 'bash', path.join(root, 'test/e2e/support/macos-runtime-probe.sh'), String(process.pid), appLog, endpoint, diagnostic], {
+        encoding: 'utf8', env: { ...process.env, EXPECTED_PARENT: String(process.pid), CHILD_PRESENT: String(child), MUNIMENT_E2E_LAUNCHCTL: launchctl, MUNIMENT_E2E_RUNTIME_WAIT_SECONDS: '1' },
+      })
+      expect(result.status, result.stderr).toBe(status)
+      const report = fs.readFileSync(diagnostic, 'utf8')
+      expect(report).toContain('endpoint_present=true')
+      if (!status) expect(report).toContain(`runtime_mode=${mode}`)
+    } finally { await new Promise(resolve => server.close(resolve)) }
+  })
+
+  it('captures the notice offset before stopping either runtime mode', () => {
+    const offset = runner.indexOf('notice_offset=$(wc -l')
+    expect(offset).toBeLessThan(runner.indexOf('if stop_notice_runtime'))
+    expect(runner).toContain("grep -Fxq 'runtime_mode=child'")
+    expect(runner).toContain('pkill -TERM -P "$app_pid"')
+    expect(runner).toContain('launchctl bootout "$runtime_target"')
   })
 
   const collectMacosDiagnostics = ({ job = 'missing', log, serviceLog, secret = '' } = {}) => {
@@ -3762,12 +3804,12 @@ describe('installed model settings controls', () => {
 describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
   const start = runner.lastIndexOf('\n  Install-Product') + '\n  Install-Product'.length
-  const lookup = runner.slice(start, runner.indexOf('\n  Write-ToolchainState "before-e2e-build"', start))
+  const lookup = runner.slice(start, runner.indexOf('\n  & (Join-Path $repoRoot "test/e2e/support/windows-installed-smoke.ps1")', start))
   const native = runner.slice(runner.indexOf('function Resolve-NativeCommand'), runner.indexOf('function Get-UninstallEntries'))
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
   const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
 
-  it('Uses the shipped desktop name for both guards.', () => {
+  it('Checks the shipped sandbox host and application library.', () => {
     const cargo = fs.readFileSync(path.join(root, 'src-tauri/Cargo.toml'), 'utf8')
     const config = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri/tauri.conf.json'), 'utf8'))
     expect(cargo).toMatch(/^\[package\]\s+name = "muniment-desktop"/)
@@ -3777,10 +3819,10 @@ describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
     expect(lookup).not.toContain('$installDisplayIcon')
     expect(lookup).toContain('webdriver-release-guard.mjs absent `"$appBinary`"')
     const build = runner.indexOf('"`"$tauriCli`" build --no-bundle --features e2e-webdriver')
-    const binary = runner.indexOf('"../../../src-tauri/target/release/muniment-desktop.exe"')
+    const binary = runner.indexOf('"../../../src-tauri/target/release/muniment_desktop.dll"')
     expect(build).toBeGreaterThan(start)
     expect(binary).toBeGreaterThan(build)
-    expect(runner.indexOf('webdriver-release-guard.mjs present `"$appBinary`"')).toBeGreaterThan(binary)
+    expect(runner.indexOf('webdriver-release-guard.mjs present `"$appLibrary`"')).toBeGreaterThan(binary)
     expect(runner).not.toContain('muniment.exe')
   })
 
@@ -3793,14 +3835,18 @@ describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
     expect(launch).toBeGreaterThan(build)
     const staging = runner.slice(build, launch)
     expect(staging).toContain('Test-Path -LiteralPath $webdriverBinary -PathType Leaf')
-    const copy = staging.indexOf('Copy-Item -LiteralPath $webdriverBinary -Destination $appBinary -Force -ErrorAction Stop')
+    const copy = staging.indexOf('Copy-Item -LiteralPath $webdriverBinary -Destination $appLibrary -Force -ErrorAction Stop')
     expect(copy).toBeGreaterThan(0)
-    expect(staging.indexOf('webdriver-release-guard.mjs present `"$appBinary`"')).toBeGreaterThan(copy)
+    expect(staging.indexOf('webdriver-release-guard.mjs present `"$appLibrary`"')).toBeGreaterThan(copy)
     expect(staging).not.toMatch(/\$appBinary\s*=/)
+    expect(staging).not.toContain('-Destination $appBinary')
+    expect(lookup).toContain('webdriver-release-guard.mjs absent `"$appLibrary`"')
+    expect(runner).toContain('--release --locked --lib --features e2e-webdriver,tauri/custom-protocol')
+    expect(runner).toContain('$env:TAURI_CONFIG = $savedTauriConfig')
   })
 
   it.skipIf(!hasPowerShell).each([
-    ['desktop', ['muniment-desktop.exe', 'muniment-runtime.exe', 'product.ico'], 0],
+    ['desktop', ['muniment-desktop.exe', 'muniment-desktop.dll', 'muniment-runtime.exe', 'product.ico'], 0],
     ['wrong name', ['muniment.exe', 'muniment-runtime.exe', 'product.ico'], 1],
     ['nested desktop', ['nested/muniment-desktop.exe', 'muniment-runtime.exe'], 1],
     ['directory named executable', ['muniment-desktop.exe/child.txt'], 1],

@@ -13,6 +13,7 @@ on:
 permissions:
   contents: write
   checks: read
+  actions: read
 concurrency:
   # Share the nightly lock so its tag/assets cannot move between validation
   # and publication; this also serializes stable promotions.
@@ -35,6 +36,7 @@ jobs:
           trap 'rm -rf -- "$work"' EXIT
           gh release download nightly --pattern "nightly-${SOURCE_SHA}-*" --dir "$work/assets"
           for artifact in "$work"/assets/*; do
+            [[ $artifact == *.sig ]] && continue
             bash test/e2e/support/webdriver-artifact-guard.sh absent "$artifact"
           done
           node test/e2e/support/webdriver-capability-guard.mjs
