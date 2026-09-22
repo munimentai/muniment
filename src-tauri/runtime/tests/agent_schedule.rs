@@ -83,7 +83,7 @@ fn queued_agent_runs_once_in_its_project_and_records_completion() {
     assert!(catalog.history[&agent.id]
         .iter()
         .all(|run| run.status == "completed"));
-    // A due routine outside a project gets its own session workspace.
+    // A due routine outside a project uses its persistent agent workspace.
     let scheduled = agents::save(
         profile,
         Agent {
@@ -111,7 +111,8 @@ fn queued_agent_runs_once_in_its_project_and_records_completion() {
     assert_eq!(due.status, "running");
     let session =
         muniment_core::projects::workspace(profile, due.thread_id.as_ref().unwrap()).unwrap();
-    assert!(session.ends_with(format!("sessions/{}", due.thread_id.as_ref().unwrap())));
+    assert_eq!(session, agents::folder(profile, &scheduled.id).unwrap());
+    assert!(session.is_dir());
     assert!(due.next_run.unwrap() > agents::now());
     let deadline = Instant::now() + Duration::from_secs(30);
     while state.boundaries().active_run_exists() && Instant::now() < deadline {
