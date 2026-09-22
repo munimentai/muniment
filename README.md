@@ -139,9 +139,8 @@ with root ownership and mode 4755. The macOS signed bundle uses a private
 Keychain bridge for its own cookie key. Key access fails without prompting
 when the app cannot access that key.
 
-The platform scripts package CEF resources, helpers, and license notices.
-The standard release installer jobs do not package CEF. Do not use those jobs
-to distribute this browser build. Windows external agent IPC, Wayland, popups,
+The platform scripts and release installer jobs package CEF resources, helpers,
+and license notices. Windows external agent IPC, Wayland, popups,
 and downloads are not implemented. Native macOS page accessibility needs a fix.
 The `cef-smoke` feature runs browser checks in a disposable profile. Do not use
 its state override with a personal profile.
@@ -180,11 +179,13 @@ source, not the released artifacts.
 it through `src-tauri/tauri.conf.json`. The owner updates it before the nightly
 build, then manually runs **Promote stable desktop release** with that nightly's
 exact 40-character SHA and matching `vMAJOR.MINOR.PATCH`. Promotion requires
-green CI and the finalized seven-asset nightly, and copies those bytes without
-rebuilding or changing `nightly`.
+green CI and all three installed E2E checks. It copies the thirteen finalized
+nightly assets without rebuilding or changing `nightly`, then adds the
+update manifest for the signed packages.
 
-The desktop checks for updates on launch and hourly. Builds enable the updater with
-`MUNIMENT_UPDATER_PUBLIC_KEY` set to the Tauri public signing key at build time.
+The desktop checks for updates on launch and hourly. Release builds use the
+public signing key in `src-tauri/updater.pub`. `MUNIMENT_UPDATER_PUBLIC_KEY`
+can override that key at build time.
 `MUNIMENT_UPDATER_ENDPOINT` can override the default public GitHub release feed at
 `https://github.com/munimentai/muniment/releases/latest/download/latest.json`.
 An unconfigured build offers no update. The app verifies the download before it
@@ -192,11 +193,14 @@ shows the green Update control. Click installs and restarts. Active replies,
 voice capture and unsaved file edits block that control.
 
 Publish `latest.json` only after the matching signed updater packages exist.
-Use a final signed macOS `.app.tar.gz`, a Linux `.AppImage` and a Windows NSIS
-installer, each with its Tauri `.sig`. Sign after all packaging and code signing.
+Use a final signed macOS `.app.tar.gz`, a Linux `.AppImage`, Windows NSIS, and
+both per-user and per-machine MSI installers, each with its Tauri `.sig`.
+Sign after all packaging and code signing.
 The manifest uses Tauri platform keys (`darwin-aarch64`, `darwin-x86_64`,
 `linux-x86_64`, `windows-x86_64`), each with an HTTPS `url` and `signature`,
-plus the matching SemVer `version`. Keep the private update signing key outside
+plus the matching SemVer `version`. Windows also uses `windows-x86_64-nsis`,
+`windows-x86_64-msi-user` and `windows-x86_64-msi-machine` targets to preserve
+the installation type. Keep the private update signing key outside
 source control and provide it only to the release signing job. Package-manager
 installs on Linux use their package manager instead of the in-app updater.
 
@@ -216,5 +220,5 @@ See [Homebrew](docs/homebrew.md) for official catalog submission requirements.
 
 `.dmg` bundling is excluded from CI targets: Tauri's `bundle_dmg.sh` drives
 Finder via AppleScript and needs a GUI session, which the SSH-only CI VMs do
-not have. The `.app` bundle builds fine. DMG creation is a release-time step
-(an hdiutil-based script or a GUI-session build), not part of the CI gate.
+not have. The release provides a signed, notarized `.app` archive and `.pkg`.
+A DMG is not required for installation or stable promotion.
