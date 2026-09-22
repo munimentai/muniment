@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ALLOWED = {
+  'test/macos-keychain-session.test.js:27:22': "describe.skipIf(process.platform === 'win32')('macOS CI keychain session')",
   'test/desktop-e2e-harness.test.js:1327:22': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/ci-artifacts.test.js:27:27': "it.skipIf(process.platform === 'win32') on the artifact publisher test",
   'test/macos-local-mode-config.test.js:18:29': "The fixture shell runs only through it.skipIf(process.platform === 'win32').",
