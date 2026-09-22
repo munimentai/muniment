@@ -70,7 +70,7 @@
       <button type="button" aria-pressed={theme.mode === option[1]} onclick={() => chooseMode(option[1])}>{option[0]}</button>
     {/each}
   </div>
-  <details><summary>Browse themes</summary>
+  <details class="theme-browser"><summary>Browse themes</summary>
   <div class="themes" role="group" aria-labelledby="appearance-heading">
     {#each themeGroups as [label, row]}
       <p class="group-label">{label}</p>
@@ -124,6 +124,7 @@
   .theme-options button:hover { background: var(--faint); color: var(--ink); }
   .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
   /* The light themes under one label and the dark under another, four to a row, a swatch of each theme's paper and surface beside its name. */
+  .theme-browser { margin-top: 14px; }
   .themes { margin-top: 10px; max-width: 560px; }
   .group-label { margin: 8px 0 4px; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
   .theme-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
