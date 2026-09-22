@@ -1,10 +1,11 @@
 <script>
+  import { creationTitle } from './thread-title.js'
   import { panelScroll } from './panel-scroll.js'
   import {onMount} from 'svelte'
   import CatalogActions from './CatalogActions.svelte'
   import AgentAvatar from './AgentAvatar.svelte'
   import LucideIcon from './LucideIcon.svelte'
-  let {tauri, projects=[], onclose, onselect, oncreate, onchange=()=>{}, pending=[], onopen, agents=null, isArchived=()=>false, onaction=()=>{}}=$props()
+  let {tauri, projects=[], onclose, onselect, oncreate, onchange=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, isArchived=()=>false, onaction=()=>{}}=$props()
   let archived = $state(false)
   let listing=$state({agents:[],state:{runs:{},threads:{}}}), error=$state(''), loading=$state(true)
   onMount(()=>{let alive=true;tauri.invoke('agent_list').then(value=>{if(alive){listing=value;onchange(value)}}).catch(e=>error=String(e)).finally(()=>loading=false);return()=>{alive=false}})
@@ -15,7 +16,7 @@
   {#if loading}<p role="status">Loading agents…</p>{/if}
   <div class="catalog">
     {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (agent.id)}<div class="card-wrap"><CatalogActions name={agent.name} {archived} onaction={(action,name)=>onaction('agent',agent,action,name)}/><button class="card" onclick={()=>onselect(agent)}><AgentAvatar {agent} size={48} /><strong>{agent.name}</strong><span>{agent.label || agent.instructions}</span><small>{projects.find(([id])=>id===agent.projectId)?.[1] || 'No project'}</small></button></div>{/each}
-    {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}<div class="card-wrap"><CatalogActions name={plan.goal} {archived} onaction={(action,name)=>onaction('creation',plan,action,name)}/><button class="card" onclick={()=>onopen(plan)}><LucideIcon name="bot" size={32}/><strong>{plan.goal}</strong><span>{plan.output}</span><small>Continue creation</small></button></div>{/each}
+    {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}<div class="card-wrap"><CatalogActions name={creationTitle(plan, threadSummaries)} {archived} onaction={(action,name)=>onaction('creation',plan,action,name)}/><button class="card" onclick={()=>onopen(plan)}><LucideIcon name="bot" size={32}/><strong>{creationTitle(plan, threadSummaries)}</strong><span>{plan.output}</span><small>Continue creation</small></button></div>{/each}
   </div>
 </section>
 <style>

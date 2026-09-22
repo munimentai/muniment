@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { threadTitle } from './thread-title.js'
+import { threadTitle, creationTitle } from './thread-title.js'
 
 describe('thread title', () => {
   it('uses a short first user prompt', () => {
@@ -28,5 +28,17 @@ describe('thread title', () => {
       { role: 'user', text },
       { role: 'user', text: 'A later prompt' },
     ])).toBe('New thread')
+  })
+})
+
+describe('creation titles', () => {
+  it.each(['agent', 'artifact'])('uses the shared short thread name for a pending %s', kind => {
+    const creation = {kind, threadId:'draft', goal:'Create a polished dashboard with charts and a checklist'}
+    expect(creationTitle(creation, [{threadId:'draft', title:'Launch readiness'}])).toBe('Launch readiness')
+    expect(creationTitle(creation, [{threadId:'draft', title:creation.goal}])).toBe(`New ${kind}`)
+  })
+  it('keeps an explicit published name and a short renamed draft', () => {
+    expect(creationTitle({kind:'artifact', goal:'Draft report'})).toBe('Draft report')
+    expect(creationTitle({kind:'artifact'}, [], 'Launch readiness')).toBe('Launch readiness')
   })
 })

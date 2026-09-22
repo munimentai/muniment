@@ -68,7 +68,7 @@
   import RunMark from './lib/RunMark.svelte'
   import ExecutionTime from './lib/ExecutionTime.svelte'
   import ProjectRow from './lib/ProjectRow.svelte'
-  import { threadTitle } from './lib/thread-title.js'
+  import { threadTitle, creationTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
   import { createWindowTitle } from './lib/window-title.js'
@@ -156,7 +156,7 @@
   let requestedArtifact = $state(null)
   const currentCreation = $derived(pendingCreation || creations.find(item => item.threadId === currentThreadId))
   const artifactChats = $derived([
-    ...creations.filter(item => item.kind === 'artifact').map(item => ({...item,name:artifactItems.find(a=>a.id===item.resultId)?.name})),
+    ...creations.filter(item => item.kind === 'artifact').map(item => ({...item,name:creationTitle(item, threadSummaries, artifactItems.find(a=>a.id===item.resultId)?.name)})),
     ...artifactItems.filter(item => !creations.some(p=>p.threadId === item.threadId || p.resultId === item.id) && artifactItems.find(a=>a.threadId===item.threadId)?.id===item.id),
   ])
   const CATALOG_ARCHIVE_KEY = 'muniment.catalog-archive'
@@ -474,7 +474,7 @@
   let moreThreads = $state(false)
   let loadingOlderThreads = $state(false)
   let currentThreadId = $state(null)
-  let currentThreadTitle = $derived(profileAgent?.name || artifactItems.find(item=>item.id===currentCreation?.resultId)?.name || currentCreation?.goal || threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages))
+  let currentThreadTitle = $derived(profileAgent?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
   let freshThread = $state(false)
   let threadSwitching = $state(false)
   let editingThreadTitle = $state(false)
@@ -2121,7 +2121,7 @@
                 {/each}
               </div>
             {/if}
-            {#if creations.some(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))}<div class="agent-roster" aria-label="Agents in progress">{#each creations.filter(item=>item.kind==='agent'&&!catalogArchived('creation',item)&&!agentListing.agents.some(agent=>agent.id===item.resultId)) as item (item.threadId)}<div class="catalog-sidebar-row"><button class="side-action" disabled={!!active || threadSwitching} onclick={()=>openCreation(item)}><LucideIcon name="bot"/><span>{item.goal}</span></button><CatalogActions name={item.goal} disabled={!!active || threadSwitching} onaction={(action,name)=>catalogAction('creation',item,action,name)}/></div>{/each}</div>{/if}
+            {#if creations.some(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))}<div class="agent-roster" aria-label="Agents in progress">{#each creations.filter(item=>item.kind==='agent'&&!catalogArchived('creation',item)&&!agentListing.agents.some(agent=>agent.id===item.resultId)) as item (item.threadId)}<div class="catalog-sidebar-row"><button class="side-action" disabled={!!active || threadSwitching} onclick={()=>openCreation(item)}><LucideIcon name="bot"/><span>{creationTitle(item, threadSummaries)}</span></button><CatalogActions name={creationTitle(item, threadSummaries)} disabled={!!active || threadSwitching} onaction={(action,name)=>catalogAction('creation',item,action,name)}/></div>{/each}</div>{/if}
               </div>{/if}
             </section>
             <section class="sidebar-collection" aria-label="Artifacts group">
@@ -2597,7 +2597,7 @@
   {#if browserPanel}<div class="artifact-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}></div>{/if}
   <WorkspacePanel context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={settingsOpen || !!deletingThreadId} />
   {#if agentsOpen}{#key agentsRequest}
-    <AgentManager {tauri} agents={agentListing.agents} isArchived={catalogArchived} onaction={catalogAction} projects={projectRows} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={()=>startCreation('agent')} onclose={() => { agentsOpen = false }} onselect={openAgent} onopen={openCreation} onchange={(next) => { agentListing = next }} />
+    <AgentManager {tauri} agents={agentListing.agents} isArchived={catalogArchived} onaction={catalogAction} projects={projectRows} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={()=>startCreation('agent')} onclose={() => { agentsOpen = false }} onselect={openAgent} onopen={openCreation} onchange={(next) => { agentListing = next }} />
   {/key}{/if}
   {#if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={!!active || threadSwitching || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} onclose={() => projectsOpen = false} />{/if}
   {#if artifactsOpen}<ArtifactCatalog items={artifactChats} isArchived={catalogArchived} onaction={catalogAction} onopen={openCreation} oncreate={()=>startCreation('artifact')} onclose={()=>artifactsOpen=false}/>{/if}
