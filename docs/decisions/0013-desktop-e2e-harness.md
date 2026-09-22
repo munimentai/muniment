@@ -13,6 +13,12 @@ They forbid mocked commands, mocked identity providers, and test credentials
 compiled into the app.
 
 All three lanes require chat, real sign-in, onboarding, and cleanup coverage.
+
+The local release keeps cloud features disabled. Its sign-in phase proves that
+the desktop opens without a Muniment account, provider connections remain
+available, and cloud sign-in stays hidden. The production cloud authentication
+case is skipped in that build and does not count as an authentication pass.
+Cloud-enabled builds run that case with `MUNIMENT_E2E_CLOUD=true`.
 A successful launch alone does not prove that the desktop works.
 The chat spec must send a message and see a reply.
 

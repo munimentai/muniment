@@ -73,7 +73,7 @@ describe('installed production chat contract', () => {
     expect(spec).toContain("timeoutMsg: 'the signed-out screen and Local mode did not appear after onboarding'")
     expect(spec).toContain('throw new Error(`${waitError.message} ${await shellState()}`)')
     expect(spec).toContain('return `desktop client status: ${connection}. shell: ${rendered}`')
-    expect(spec.indexOf('async function shellState()')).toBeLessThan(spec.indexOf("describe('installed nightly'"))
+    expect(spec.indexOf('async function shellState()')).toBeLessThan(spec.indexOf("('installed nightly cloud features'"))
   })
 
   it('runs and stops the installed runtime inside each Linux E2E session', () => {

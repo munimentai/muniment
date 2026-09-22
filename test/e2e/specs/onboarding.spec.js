@@ -155,14 +155,14 @@ describe('installed nightly model-ready onboarding', () => {
     expect(await newThread.getAttribute('aria-label')).toBe('New thread')
     expect(await newThread.isDisplayed()).toBe(true)
     expect((await newThread.getSize()).height).toBeGreaterThanOrEqual(24)
-    for (const name of ['Collapse sidebar', 'Rename thread', 'Open artifact rail']) {
+    for (const name of ['Collapse sidebar', 'Rename thread', 'Workspace tools']) {
       const control = await row.$(`button[aria-label="${name}"]`)
       expect(await control.isDisplayed()).toBe(true)
       const size = await control.getSize()
       expect(size.width).toBeGreaterThanOrEqual(24)
       expect(size.height).toBeGreaterThanOrEqual(24)
     }
-    expect(await (await row.$('.artifacts-toggle kbd')).isDisplayed()).toBe(true)
+    expect(await (await $('#sidebar button[aria-label="Artifacts"]')).isDisplayed()).toBe(true)
     expect(await (await row.$('.update-slot')).getProperty('childElementCount')).toBe(0)
     expect(await row.getAttribute('data-tauri-drag-region')).not.toBeNull()
     expect(await (await $('textarea[placeholder="Ask anything"]')).getValue()).toBe('Help me organize my notes.')

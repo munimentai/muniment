@@ -100,9 +100,9 @@ describe('installed local-mode chat', () => {
     await (await settings.$('button[aria-label="Close settings"]')).click()
     await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
 
-    await browser.waitUntil(async () => (await emptyChat.getText()).endsWith('is selected. Ask a question or request a file.'), {
+    await browser.waitUntil(async () => await emptyChat.getText() === 'Ask a question or request a file.', {
       timeout: 30000,
-      timeoutMsg: 'empty chat did not reflect the connected model or explain file creation',
+      timeoutMsg: 'empty chat did not become ready after connecting a model',
     })
     await waitForDesktopClient()
     const prompt = `Muniment local E2E chat ${Date.now()}`
