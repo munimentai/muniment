@@ -3,7 +3,7 @@ import { join } from 'node:path'
 const target = 'src-tauri/target/release'
 const output = process.argv[2] || join(target,'cef-app')
 mkdirSync(output,{recursive:true})
-for (const name of ['THIRD_PARTY_NOTICES.md','THIRD_PARTY_RUST_NOTICES.md']) copyFileSync(name,join(output,name))
+for (const name of ['LICENSE.md','THIRD_PARTY_NOTICES.md','THIRD_PARTY_RUST_NOTICES.md']) copyFileSync(name,join(output,name))
 for (const entry of readdirSync(target)) {
   if (/\.(dll|pak|bin|dat|json)$/.test(entry)) copyFileSync(join(target,entry),join(output,entry))
 }

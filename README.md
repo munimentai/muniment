@@ -1,4 +1,4 @@
-# muniment-desktop
+# Muniment
 
 Muniment is a free desktop harness for your models, tools and local work.
 Connect provider accounts, API keys or local models. Work with projects,
@@ -9,16 +9,16 @@ No Muniment account is required.
 Phase one is the desktop app and its public release. Phase two adds cloud
 availability with paid accounts while the desktop remains useful on its own.
 The company record and cloud account surfaces are hidden by default through
-independent build flags. The desktop uses FSL-1.1-Apache-2.0. Each version converts to Apache 2.0
-two years after its release. Contributor guidance, a security policy and
-third-party notices accompany the public release.
+independent build flags. The desktop uses [FSL-1.1-ALv2](LICENSE.md), a Fair Source license. Each version
+converts to Apache 2.0 after two years. Read [Contributing](CONTRIBUTING.md)
+for participation and [Security](SECURITY.md) for private vulnerability reports.
+Third-party components retain the licenses listed in the bundled notices.
 
 This repo contains the Tauri v2 shell, Rust runtime service, Pi sidecar and
 on-device voice stack. The local macOS build runs the runtime as an app child.
 It preserves the user's workspace, credentials, companies and logs.
 
-`SPEC.md` is this repo's slice of the plan and the rules a reviewer holds a
-diff against. `ROADMAP.md` lists the outcomes this repo owns. `DESIGN.md` holds
+`SPEC.md` defines desktop behavior and the rules for reviewing a change. `ROADMAP.md` lists the outcomes this repo owns. `DESIGN.md` holds
 the tokens and the visual laws. `docs/decisions/` holds the ADRs.
 
 See [THREAT_MODEL.md](THREAT_MODEL.md) for the desktop runtime trust boundary.
@@ -27,16 +27,24 @@ Configure the Linux ACP adapter in [Zed or JetBrains](docs/acp-editors.md).
 
 ## Build
 
+Use Node.js 24, Rust 1.96, Go, and the native build tools for your platform.
+macOS requires Xcode Command Line Tools. Windows requires MSVC and the Windows SDK.
+Linux requires the Tauri WebKitGTK development libraries and the CEF dependencies
+listed in `scripts/test-cef-linux.sh`.
+
 ```sh
 npm ci
-node scripts/build-macos-local.mjs          # signed local macOS app
-bash scripts/test-cef-linux.sh             # disposable Linux test machine
-powershell -File scripts/test-cef-windows.ps1 # disposable Windows test machine
+npm run dev                               # frontend preview
+npm run build                             # frontend production assets
+npm test                                  # unit and browser tests
 ```
 
-Platform prerequisites are pre-provisioned in the CI VM templates (rust
-1.96 + node 24 everywhere; webkit2gtk-4.1 on linux; MSVC + Win11 SDK on
-windows; CLT on macOS).
+Native packaging includes a Rust runtime, Go reader, Pi sidecar and CEF helpers.
+The scripts under `scripts/` and `.github/` define each platform's packaging.
+`scripts/build-macos-local.mjs` is a maintainer signing tool that requires private
+signing infrastructure. It is not required for frontend work or Rust unit tests.
+Use a disposable machine for the Linux and Windows packaging test scripts.
+They install dependencies and configure browser sandbox permissions.
 
 ## Feature flags
 
@@ -67,7 +75,7 @@ or ZIP/TAR archive. Review the package contents before installation. Updates
 retain a previous version for rollback. Plugins can supply skills, MCP servers
 and Pi code extensions. Unsupported plugin components produce an error.
 
-The composer ellipsis opens MCPs, Plugins and Skills branches. A paperclip adds files.
+The composer ellipsis opens MCPs, Plugins and Skills branches. A paperclip adds files and folders.
 Type `/` or `\` to insert a skill or plugin slash command into the message.
 MCP switches and commands apply to one turn. Optional automatic selection uses
 the configured classifier and respects disabled extensions. Preferences includes
@@ -117,14 +125,12 @@ scripts/check-steering.sh .                # steering files
 
 ## CI
 
-Real builds run on ephemeral pve01 VM clones via `desktop-ci`
-(`ssh pve01 sudo desktop-ci <platform> --repo <url> --cmd '<build>'`),
-one VM at a time, clone destroyed after. Pull requests are gated on the
-structure smoke, the steering check, Rust and JS unit tests, followed by
-sequential Linux, Windows, and macOS builds via `desktop-ci`; pushes to `main`
-run the smoke only. Nightly and manually dispatched release builds use the same
-serialized VMs and replace the assets on the private repository's `nightly`
-pre-release.
+Native CI uses disposable platform machines through the `desktop-ci` driver.
+Maintainers provide the runner and release credentials. Contributor checks use
+repository-local commands and do not require access to that infrastructure.
+Pull requests run smoke checks, unit tests and applicable native build checks.
+Nightly builds also test the installed app on Linux, Windows and macOS.
+A successful installer build alone does not prove the app works.
 
 The [installed-nightly desktop E2E architecture](docs/decisions/0013-desktop-e2e-harness.md)
 defines pinned artifact installation plus WDIO chat, real sign-in, onboarding,

@@ -14,6 +14,7 @@ const requiredResources = {
   '../THIRD_PARTY_RUST_NOTICES.md': 'third-party-notices/THIRD_PARTY_RUST_NOTICES.md',
   '../src/fonts/SchibstedGrotesk-OFL.txt': 'third-party-notices/SchibstedGrotesk-OFL.txt',
   '../src/fonts/CommitMono-LICENSE.txt': 'third-party-notices/CommitMono-LICENSE.txt',
+  '../LICENSE.md': 'LICENSE.md',
 }
 
 const cargoPackages = (lockfile) => [...lockfile.matchAll(

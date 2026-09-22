@@ -2462,7 +2462,7 @@
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
-                <li title={file.path}>
+                <li>
                   <LucideIcon name={file.isDirectory ? 'folder' : 'file-text'} size={14} />
                   {#if file.isDirectory}<span class="attachment-name">{file.displayName}</span>
                   {:else}<button type="button" class="attachment-name" onclick={() => openFile({ path: file.path })}>{file.displayName}</button>{/if}

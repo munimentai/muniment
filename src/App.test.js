@@ -2802,7 +2802,7 @@ describe('thread name', () => {
     await waitFor(() => expect(hoverDelete).toBeEnabled())
     await fireEvent.click(hoverDelete)
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Vendor audit' }))
-    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel', 'Delete'])
+    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete'])
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
     const menu = screen.getByRole('menu', { name: 'Vendor audit actions' })
@@ -2819,7 +2819,7 @@ describe('thread name', () => {
     expect(screen.getByRole('menu', { name: 'Vendor audit actions' })).toHaveStyle({ left: '8px', top: '8px' })
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Vendor audit' }))
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
-    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel', 'Delete'])
+    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete'])
 
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByLabelText('Delete Vendor audit?')).not.toBeInTheDocument()
@@ -2870,9 +2870,9 @@ describe('thread name', () => {
 
     await fireEvent.contextMenu(archive)
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete 2 threads…' }))
-    // Several rows confirm with two controls and no sentence.
+    // Several rows confirm with explicit actions and a close control.
     const confirm = screen.getByLabelText('Delete 2 threads?')
-    expect(within(confirm).getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel', 'Delete 2 threads'])
+    expect(within(confirm).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete 2 threads'])
     await fireEvent.click(within(confirm).getByRole('button', { name: 'Delete 2 threads' }))
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' })
@@ -2882,7 +2882,7 @@ describe('thread name', () => {
     // Delete on a focused row opens the confirm for that row alone.
     const budget = screen.getByRole('button', { name: 'Budget notes' })
     await fireEvent.keyDown(budget, { key: 'Delete' })
-    expect(within(screen.getByLabelText('Delete Budget notes?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel', 'Delete'])
+    expect(within(screen.getByLabelText('Delete Budget notes?')).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete'])
   })
 
   it('deletes a selection that holds the open thread and lands on a fresh thread', async () => {
@@ -3182,7 +3182,8 @@ describe('window chrome', () => {
         'Collapse sidebar', 'Rename thread', 'Thread actions', 'Open record panel', 'Workspace tools',
       ])
       expect(row.querySelector('.title-spacer')).toHaveAttribute('data-tauri-drag-region')
-      expect(row.querySelector('.update-slot')).toBeEmptyDOMElement()
+      expect(row.querySelector('.update-slot')).not.toHaveTextContent(/Update|Installing/)
+      expect(row.querySelector('.update-slot button')).toBeNull()
       expect(row.querySelector('.record-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘ K' : 'Ctrl K')
       for (const control of row.querySelectorAll('button, input, button *')) {
         expect(control).not.toHaveAttribute('data-tauri-drag-region')

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 const target='src-tauri/target/release'
 const output=process.argv[2] || join(target,'cef-app')
 mkdirSync(output,{recursive:true})
-for (const name of ['THIRD_PARTY_NOTICES.md','THIRD_PARTY_RUST_NOTICES.md']) copyFileSync(name,join(output,name))
+for (const name of ['LICENSE.md','THIRD_PARTY_NOTICES.md','THIRD_PARTY_RUST_NOTICES.md']) copyFileSync(name,join(output,name))
 // A test run installs the official helper as root-owned and setuid. Replace it
 // through its writable containing directory before packaging another build.
 rmSync(join(output,'chrome-sandbox'),{force:true})

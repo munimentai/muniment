@@ -703,3 +703,5 @@ The path is unchanged. App logos come from [SVGL](https://svgl.app/) and the
 [Anthropic connector directory](https://claude.com/connectors/).
 `src/extend/provider-icons.json` identifies each bundled logo source.
 Provider names and marks belong to their respective owners.
+
+The application license ships as `LICENSE.md`. It does not replace third-party licenses.

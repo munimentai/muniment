@@ -26,9 +26,10 @@
 </script>
 {#if version}
   <div class="update">
-    <button type="button" class:installing disabled={busy || installing} aria-label={installing ? 'Installing update' : `Install update ${version} and restart`} title={busy ? 'Finish the current action before updating.' : `Install ${version} and restart`} onclick={install}>
+    <button type="button" class:installing disabled={busy || installing} aria-label={installing ? 'Installing update' : `Install update ${version} and restart`} aria-describedby={busy ? 'update-busy-reason' : undefined} onclick={install}>
       <span>{installing ? 'Installing' : 'Update'}</span><LucideIcon name="arrow-down" variant="action" size={16} />
     </button>
+    {#if busy}<span id="update-busy-reason" hidden>Finish the current action before updating.</span>{/if}
     {#if error}<p role="alert">{error}</p>{/if}
   </div>
 {/if}

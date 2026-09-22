@@ -9,8 +9,8 @@ Pi sidecar and on-device voice stack serve the desktop without a Muniment accoun
 ## Local work and optional features
 
 Local desktop work uses local commits. Do not push without an explicit request.
-Preserve unrelated work and user data. Commit as `mikeydiamonds` with simple
-messages and no Co-Authored-By line. Run `../tools/check.sh .` before each commit.
+Preserve unrelated work and user data. Use simple commit messages and preserve the contributor identity.
+Run `scripts/check-steering.sh .` before each commit.
 `CLAUDE.md` imports this file and carries no separate product rules.
 
 `src/feature-flags.js` defines the independent cloud and company-record flags.
@@ -47,5 +47,6 @@ pull request numbers. No history phrases: "decided", "superseded", "previously",
 No ledger file under any name: no open-items,
 build-history, decision-log, handoff, journal, notes, or todo file. A finished
 roadmap phase is deleted, not marked done. Caps: `SPEC.md` 600 lines,
-`DESIGN.md` 250, `ROADMAP.md` 150, `AGENTS.md` 120. State lives in Plane and
-history lives in git.
+`DESIGN.md` 250, `ROADMAP.md` 150, `AGENTS.md` 120. Issues track work and git holds history.
+`CONTRIBUTING.md`, `SECURITY.md` and `LICENSE.md` define public participation,
+private vulnerability reporting and licensing.
