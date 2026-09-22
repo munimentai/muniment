@@ -288,6 +288,7 @@ beforeEach(() => {
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
     if (command === 'onboarding_model_settings_error') return
     if (command === 'chat_thread_open') return []
+    if (command === 'chat_pick_attachments') return dialogResult
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
@@ -5242,7 +5243,6 @@ describe('local file selection', () => {
     dialogResult = ['/private/contracts/lease.pdf']
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
-    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Add files' }))
     await waitFor(() => expect(dragDropListener).toBeDefined())
 
     dragDropListener({ payload: { type: 'over', position: { x: 10, y: 10 } } })
@@ -5331,7 +5331,6 @@ describe('local file selection', () => {
     render(App)
     const add = async () => {
         await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
-    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Add files' }))
     }
     await add()
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
@@ -5367,7 +5366,6 @@ describe('local file selection', () => {
     }
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
-    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Add files' }))
     await screen.findByRole('list', { name: 'Selected files' })
     await waitFor(() => expect(thread.scrollTop).toBe(withFiles))
 
@@ -5383,7 +5381,8 @@ describe('local file selection', () => {
       if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
-      if (command === 'chat_file_metadata') return { displayName: 'evidence.pdf', byteLength: 2048 }
+      if (command === 'chat_pick_attachments') return dialogResult
+    if (command === 'chat_file_metadata') return { displayName: 'evidence.pdf', byteLength: 2048 }
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') throw 'One or more selected files could not be added. Check the files and try again.'
@@ -5392,7 +5391,6 @@ describe('local file selection', () => {
     dialogResult = ['/secret/location/evidence.pdf']
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
-    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Add files' }))
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review this' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -5414,6 +5412,7 @@ describe('local file selection', () => {
       if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
+      if (command === 'chat_pick_attachments') return dialogResult
       if (command === 'chat_file_metadata') {
         return { displayName: payload.path.split('/').pop(), byteLength: 1024 }
       }
@@ -5425,7 +5424,6 @@ describe('local file selection', () => {
     dialogResult = ['/private/contracts/lease.png', '/private/notes.txt']
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
-    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Add files' }))
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review these' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -7694,21 +7692,27 @@ it('inserts and colors skill commands in the message and prepares them for one t
 })
 
 
-it('attaches a folder through the paperclip and sends its path for local inspection', async () => {
+it('attaches multiple files and folders directly with compact removable names', async () => {
   const original = invoke.getMockImplementation()
   invoke.mockImplementation((command, payload) => command === 'chat_file_metadata'
-    ? Promise.resolve({ displayName: 'Research', byteLength: 0, isDirectory: true })
+    ? Promise.resolve({ displayName: payload.path.split('/').pop(), byteLength: 0, isDirectory: !payload.path.endsWith('.md') })
     : command === 'chat_submit' ? Promise.resolve({ runId: 'folder-run', attachments: [] }) : original(command, payload))
-  dialogResult = ['/tmp/Research']
+  dialogResult = ['/tmp/Research', '/tmp/Assets', '/tmp/brief.md', '/tmp/plan.md']
   render(App)
   await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
-  await fireEvent.click(screen.getByRole('menuitem', { name: 'Add folder' }))
+  expect(invoke).toHaveBeenCalledWith('chat_pick_attachments')
   const selected = await screen.findByRole('list', { name: 'Selected files' })
-  expect(selected).toHaveTextContent('Research')
-  expect(selected).toHaveTextContent('Folder')
-  await fireEvent.input(await findWorkspaceComposer(), { target: { value: 'Review this folder' } })
+  for (const name of ['Research', 'Assets', 'brief.md', 'plan.md']) {
+    expect(selected).toHaveTextContent(name)
+    expect(within(selected).getByRole('button', { name: `Remove ${name}` })).toBeInTheDocument()
+  }
+  expect(selected).not.toHaveTextContent('Folder')
+  expect(selected).not.toHaveTextContent('Remove')
+  await fireEvent.click(within(selected).getByRole('button', { name: 'Remove plan.md' }))
+  expect(selected).not.toHaveTextContent('plan.md')
+  await fireEvent.input(await findWorkspaceComposer(), { target: { value: 'Review these' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', {
-    prompt: expect.stringContaining('"/tmp/Research"'), files: [],
+    prompt: expect.stringContaining('"/tmp/Research"\n"/tmp/Assets"'), files: [{ path: '/tmp/brief.md' }],
   }))
 })

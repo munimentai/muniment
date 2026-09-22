@@ -1,5 +1,6 @@
 mod account_login;
 mod app_update;
+mod attachment_picker;
 mod agents;
 mod attach_service;
 mod auth;
@@ -264,6 +265,7 @@ pub fn run() {
             record::reader_objects,
             record::reader_connect,
             restart_muniment,
+            attachment_picker::chat_pick_attachments,
             app_update::app_update_prepare,
             app_update::app_update_install,
             launcher::launcher_register,

@@ -53,7 +53,6 @@
   import GraphMark from './lib/GraphMark.svelte'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
-  import AttachmentMenu from './lib/AttachmentMenu.svelte'
   import AppUpdate from './lib/AppUpdate.svelte'
   import { createChatController } from './lib/chat-controller.js'
   import { listenForLauncher } from './lib/launcher-bridge.js'
@@ -1894,12 +1893,12 @@
     }
   }
 
-  async function chooseFiles(directory = false) {
+  async function chooseFiles() {
     if (active) return
     submitError = ''
     let picked
     try {
-      picked = await open({ multiple: true, directory })
+      picked = await tauri.invoke('chat_pick_attachments')
     } catch (_) {
       submitError = 'Files could not be selected. Try again.'
       return
@@ -2463,7 +2462,12 @@
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
-                <li><span title={file.path}>{#if file.isDirectory}<LucideIcon name="folder" />{file.displayName}{:else}<button type="button" class="file-reference" onclick={() => openFile({ path: file.path })}><LucideIcon name="file-text" /><span>{file.displayName}</span></button>{/if}</span><span>{file.isDirectory ? "Folder" : formatByteSize(file.byteLength)}</span><button type="button" aria-label={`Remove ${file.displayName}`} onclick={() => { selectedFiles = selectedFiles.filter(({ path }) => path !== file.path) }}>Remove</button></li>
+                <li title={file.path}>
+                  <LucideIcon name={file.isDirectory ? 'folder' : 'file-text'} size={14} />
+                  {#if file.isDirectory}<span class="attachment-name">{file.displayName}</span>
+                  {:else}<button type="button" class="attachment-name" onclick={() => openFile({ path: file.path })}>{file.displayName}</button>{/if}
+                  <PopupClose label={`Remove ${file.displayName}`} onclick={() => { selectedFiles = selectedFiles.filter(({ path }) => path !== file.path) }} />
+                </li>
               {/each}
             </ul>
           {/if}
@@ -2502,7 +2506,7 @@
             {/if}
             </div>
             <div class="composer-actions">
-            {#if !active}<AttachmentMenu onfiles={() => chooseFiles(false)} onfolder={() => chooseFiles(true)} />{/if}
+            {#if !active}<button type="button" class="quiet attachment-trigger" aria-label="Add files or folders" onclick={chooseFiles}><LucideIcon name="paperclip" size={16} /></button>{/if}
               <button type="button" class="quiet composer-icon" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
               {#if active || draft.trim()}
                 <button type="button" class="composer-action" class:primary={!active} class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
@@ -2997,11 +3001,11 @@
   .update-notice .support { font-size: var(--text-12); }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 -12px 8px; padding: 0 12px 8px; border-bottom: 1px solid var(--border); list-style: none; }
-  .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .attachments button { padding: 1px 5px; border: 0; background: transparent; color: inherit; font-size: var(--text-12); }
+  .attachments li { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: min(260px, 100%); height: 28px; padding: 0 0 0 6px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .attachments .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attachments button.attachment-name { border: 0; background: transparent; color: var(--ink); font: inherit; padding: 0; cursor: pointer; }
   .composer-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .composer-links button, .attachments .file-reference { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; color: var(--reference); border: 0; background: transparent; padding: 2px 0; font: inherit; cursor: pointer; }
+  .composer-links button { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; color: var(--reference); border: 0; background: transparent; padding: 2px 0; font: inherit; cursor: pointer; }
   .composer-links button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   textarea.reference-input { position: relative; color: transparent; caret-color: var(--ink); }
   textarea.reference-input::placeholder { color: var(--muted); }

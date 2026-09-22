@@ -228,7 +228,7 @@ Icon notices live in the bundled third-party notices, outside the catalog.
 The horizontal composer ellipsis sits first at the left and matches the model and capacity controls.
 It has a background only on hover or keyboard focus.
 Its three branches are MCPs, Plugins and Skills, followed by Manage extensions.
-The paperclip beside Voice offers files and folders. Folder paths reach local tools. All composer panels share one
+The paperclip opens the OS picker directly. macOS accepts multiple files and folders together. Attachment chips are one 28px row: icon, name with extension, hover-only X. Folder paths reach local tools. All composer panels share one
 anchor above the full composer with an eight-pixel gap. Only one opens at a time.
 Skill and plugin commands appear inline as slash commands in the reference color.
 MCP switches and optional classifier selection apply to one turn. The next turn
