@@ -1,6 +1,6 @@
 // Bundled desktop guides share the website's public product evidence.
 pub const URL: &str = "https://muniment.ai/docs/";
-const GUIDE: &str = include_str!("../../docs/public-evidence/desktop-guide.json");
+const GUIDE: &str = include_str!("../../../docs/public-evidence/desktop-guide.json");
 fn escape(value: &str) -> String {
     value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }

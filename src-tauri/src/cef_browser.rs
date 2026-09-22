@@ -1,4 +1,3 @@
-#[path = "desktop_docs.rs"]
 mod desktop_docs;
 use crate::cef_native;
 use serde::{Deserialize, Serialize};
