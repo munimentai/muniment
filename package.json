@@ -10,7 +10,7 @@
     "test:records": "vitest run --root . src/styles/record-font.test.js",
     "test:provenance": "vitest run --root . src/App.test.js -t 'provenance line'",
     "probe": "npm run build && printf 'Empty history: http://127.0.0.1:4173/test/probe/index.html\\nRestored history: http://127.0.0.1:4173/test/probe/history.html\\nLocal mode: http://127.0.0.1:4173/test/probe/local-mode.html\\nRun in flight: http://127.0.0.1:4173/test/probe/in-flight.html\\nMarkdown reply: http://127.0.0.1:4173/test/probe/markdown.html\\nSigned out: http://127.0.0.1:4173/test/probe/signed-out.html\\nFirst-run onboarding: http://127.0.0.1:4173/test/probe/onboarding.html\\nAssistant memory: http://127.0.0.1:4173/test/probe/assistant-memory.html\\nInput request: http://127.0.0.1:4173/test/probe/input.html\\nEditor request: http://127.0.0.1:4173/test/probe/editor.html\\nPermission request: http://127.0.0.1:4173/test/probe/permission.html\\nSelect request: http://127.0.0.1:4173/test/probe/select.html\\nCode diff request: http://127.0.0.1:4173/test/probe/code-diff.html\\nUnavailable code diff request: http://127.0.0.1:4173/test/probe/code-diff-unavailable.html\\nApplied diff: http://127.0.0.1:4173/test/probe/applied-diff.html\\n' && python3 -m http.server 4173 --bind 127.0.0.1",
-    "probe:check": "npm run build && node test/probe/check.mjs",
+    "probe:check": "node test/probe/run.mjs",
     "preview": "vite preview",
     "test": "node scripts/test.mjs",
     "test:browser": "npx vitest run --config vitest.browser.config.js",

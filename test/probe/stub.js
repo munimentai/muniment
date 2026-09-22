@@ -274,7 +274,8 @@ export function buildProbeCommandTable(fixtureName) {
 
   async function invoke(command, payload) {
     if (command === 'launcher_register') return null
-    if (command === 'artifact_list') return []
+    if (command === 'artifact_list' || command === 'creation_list') return []
+    if (command === 'extend_command' && payload?.action === 'read') return { items: [] }
     if (command === 'browser_view') return null
     if (command === 'runtime_state') return runtimeState
     if (command === 'runtime_start') {
