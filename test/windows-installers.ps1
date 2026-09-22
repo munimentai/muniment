@@ -13,6 +13,15 @@ if ($nsis.Count -ne 1 -or $machineMsi.Count -ne 1 -or $regularMsi.Count -ne 1 -o
   throw "Expected one NSIS installer, one regular MSI, one machine MSI, and one upgrade-base MSI"
 }
 
+function Assert-CefInstallation([string]$Directory) {
+  foreach ($name in @("muniment-desktop.exe", "muniment-desktop.dll", "libcef.dll", "chrome_elf.dll", "icudtl.dat", "v8_context_snapshot.bin", "resources.pak", "locales\en-US.pak", "CEF-CREDITS.html")) {
+    $file = Join-Path $Directory $name
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Get-Item -LiteralPath $file).Length -eq 0) {
+      throw "The installed CEF resource is missing or empty: $file"
+    }
+  }
+}
+
 function Write-MsiProperties($Package) {
   $installer = $database = $summary = $null
   try {
@@ -112,6 +121,7 @@ $machineRuntime = Join-Path $env:ProgramFiles "muniment\muniment-runtime.exe"
 if (-not (Test-Path $machineRuntime)) {
   throw "Machine MSI runtime not found at $machineRuntime"
 }
+Assert-CefInstallation (Split-Path $machineRuntime)
 if (Test-Path "HKCU:\Software\Muniment\muniment") {
   throw "Per-machine MSI wrote application registration under HKCU"
 }
@@ -161,6 +171,7 @@ try {
   }
   if (Test-Path $machineKey) { throw "The per-user MSI wrote application registration under HKLM." }
   if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
+  Assert-CefInstallation (Split-Path $userRuntime)
 } finally {
   try {
     Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
@@ -181,6 +192,7 @@ try {
 $nsisProcess = Start-Process $nsis.FullName -ArgumentList "/S" -Wait -PassThru
 if ($nsisProcess.ExitCode -ne 0) { throw "Silent NSIS install failed: $($nsisProcess.ExitCode)" }
 if (-not (Test-Path $userRuntime)) { throw "NSIS runtime not found at $userRuntime" }
+Assert-CefInstallation (Split-Path $userRuntime)
 $nsisUninstaller = Join-Path $env:LOCALAPPDATA "muniment\uninstall.exe"
 if (-not (Test-Path $nsisUninstaller)) { throw "NSIS uninstaller not found at $nsisUninstaller" }
 $nsisUninstall = Start-Process $nsisUninstaller -ArgumentList "/S" -Wait -PassThru
