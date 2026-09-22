@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
+import { createServer } from 'node:net'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import './e2e/support/windows-msi-registration-contract.js'
@@ -1305,6 +1306,47 @@ printf 'Load command 0\\n      cmd LC_RPATH\\n  cmdsize 72\\n     path %s (offse
     expect(report).toContain(clientResult)
     expect(report).toContain('endpoint_present=false')
     expect(report).not.toContain(directory)
+  })
+
+  it.each([
+    ['launchd', true, false, true, 0],
+    ['child', false, true, true, 0],
+    ['unowned runtime', false, false, true, 1],
+    ['disconnected child', false, true, false, 1],
+  ])('verifies ownership and connection for %s runtime', async (mode, job, child, connected, status) => {
+    const directory = temp()
+    const endpoint = path.join(directory, 'attach.sock')
+    const appLog = path.join(directory, 'app.log')
+    const diagnostic = path.join(directory, 'diagnostic.log')
+    const launchctl = path.join(directory, 'launchctl')
+    const server = createServer()
+    await new Promise(resolve => server.listen(endpoint, resolve))
+    fs.writeFileSync(appLog, `desktop runtime client connected=${connected}\n`)
+    fs.writeFileSync(launchctl, job ? '#!/bin/sh\nprintf "state = running\npid = 42\n"\n' : '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    try {
+      const result = spawnSync('bash', ['-c', `
+        source "$1"
+        pgrep() {
+          [[ $1 == -P && $2 == "$EXPECTED_PARENT" && $3 == -f && $4 == '^/Applications/muniment[.]app/Contents/Library/LaunchServices/muniment-runtime$' ]] || return 99
+          [[ $CHILD_PRESENT == true ]] && printf '123\\n'
+        }
+        probe_macos_runtime test "$2" "$3" "$4" "$5" /Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime
+      `, 'bash', path.join(root, 'test/e2e/support/macos-runtime-probe.sh'), String(process.pid), appLog, endpoint, diagnostic], {
+        encoding: 'utf8', env: { ...process.env, EXPECTED_PARENT: String(process.pid), CHILD_PRESENT: String(child), MUNIMENT_E2E_LAUNCHCTL: launchctl, MUNIMENT_E2E_RUNTIME_WAIT_SECONDS: '1' },
+      })
+      expect(result.status, result.stderr).toBe(status)
+      const report = fs.readFileSync(diagnostic, 'utf8')
+      expect(report).toContain('endpoint_present=true')
+      if (!status) expect(report).toContain(`runtime_mode=${mode}`)
+    } finally { await new Promise(resolve => server.close(resolve)) }
+  })
+
+  it('captures the notice offset before stopping either runtime mode', () => {
+    const offset = runner.indexOf('notice_offset=$(wc -l')
+    expect(offset).toBeLessThan(runner.indexOf('if stop_notice_runtime'))
+    expect(runner).toContain("grep -Fxq 'runtime_mode=child'")
+    expect(runner).toContain('pkill -TERM -P "$app_pid"')
+    expect(runner).toContain('launchctl bootout "$runtime_target"')
   })
 
   const collectMacosDiagnostics = ({ job = 'missing', log, serviceLog, secret = '' } = {}) => {

@@ -254,7 +254,7 @@ runtime_touched=1
 
 runtime_endpoint="$runtime_state/muniment/attach-v1.sock"
 runtime_target="gui/$(id -u)/ai.muniment.runtime"
-if probe_macos_runtime "$runtime_target" "$app_pid" "$raw/driver-app.log" "$runtime_endpoint" "$raw/runtime-connection.log"; then
+if probe_macos_runtime "$runtime_target" "$app_pid" "$raw/driver-app.log" "$runtime_endpoint" "$raw/runtime-connection.log" "$installed_bundle/Contents/Library/LaunchServices/muniment-runtime"; then
   node test/e2e/support/probe-companion-pairing.mjs "$runtime_endpoint" >"$raw/companion-pairing.log" 2>&1 || status=1
   node test/e2e/support/probe-run-start.mjs "$installed_bundle/Contents/MacOS/$process_name" \
     "$runtime_endpoint" "$runtime_state" "$runtime_config" "$raw/driver-app.log" >"$raw/run-start.log" 2>&1 || status=1
@@ -284,9 +284,18 @@ else
   printf 'process_alive=true\nvisible_windows=%s\nscreendump=requested-by-desktop-ci\n' "$window_count" >"$raw/smoke.log"
 fi
 
-# Read the installed webview after the service leaves its launchd domain.
-if launchctl bootout "$runtime_target" >>"$raw/runtime-connection.log" 2>&1; then
-  notice_offset=$(wc -l <"$raw/driver-app.log")
+# Stop the runtime mode that the installed app started. Record the log offset
+# before stopping so a fast disconnect notice cannot be missed.
+notice_offset=$(wc -l <"$raw/driver-app.log")
+stop_notice_runtime() {
+  if grep -Fxq 'runtime_mode=child' "$raw/runtime-connection.log"; then
+    local escaped_bundle=${installed_bundle//./[.]}
+    pkill -TERM -P "$app_pid" -f "^$escaped_bundle/Contents/Library/LaunchServices/muniment-runtime$"
+  else
+    launchctl bootout "$runtime_target"
+  fi
+}
+if stop_notice_runtime >>"$raw/runtime-connection.log" 2>&1; then
   notice_deadline=$((SECONDS + 30))
   notice_read=0
   while (( SECONDS < notice_deadline )); do
