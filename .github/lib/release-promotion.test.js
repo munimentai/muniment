@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { assertGreenCi, expectedNightlyAssets, macosSigningProvenance, promoteRelease, releaseBody, validatePromotionInputs, windowsSigningProvenance } from "./release-promotion.mjs";
 
@@ -154,4 +158,26 @@ describe("stable release promotion", () => {
     expect(calls.some(({ url, options }) => url.endsWith("/releases/42") && options.method === "DELETE")).toBe(true);
     expect(calls.some(({ url, options }) => url.includes(`/git/refs/tags/${version}`) && options.method === "DELETE")).toBe(true);
   });
+});
+
+
+it.each([
+  ["release-promotion.mjs", ["owner/repo", sha, version]],
+  ["winget-release.mjs", ["owner/repo", version, "/tmp/unused-winget-fixture"]],
+])("%s reads API authorization from the environment", (script, args) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "muniment-release-auth-"));
+  try {
+    const preload = path.join(directory, "fetch.mjs");
+    writeFileSync(preload, `
+      globalThis.fetch = async (_url, options) => {
+        if (options.headers.Authorization !== 'Bearer ' + process.env.GH_TOKEN) throw new Error('wrong header');
+        if (process.argv.some(arg => arg.includes(process.env.GH_TOKEN))) throw new Error('token in argv');
+        throw new Error('AUTH_CHECK_PASSED');
+      };
+    `);
+    expect(() => execFileSync(process.execPath, ["--import", preload,
+      path.resolve(".github/lib", script), ...args], {
+      env: { ...process.env, GH_TOKEN: "fixture-only-release-token" }, stdio: "pipe", timeout: 10000,
+    })).toThrow(/AUTH_CHECK_PASSED/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

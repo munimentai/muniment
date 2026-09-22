@@ -112,4 +112,4 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) { const [token, repository, sha, version] = process.argv.slice(2); await promoteRelease({ token, repository, sha, version }); console.log(`promoted ${sha} to ${version}`); }
+if (import.meta.url === `file://${process.argv[1]}`) { const [repository, sha, version] = process.argv.slice(2); const token = process.env.GH_TOKEN; await promoteRelease({ token, repository, sha, version }); console.log(`promoted ${sha} to ${version}`); }
