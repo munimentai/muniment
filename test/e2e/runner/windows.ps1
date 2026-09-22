@@ -625,6 +625,8 @@ try {
   Write-Output "The installed desktop executable is $appBinary"
 
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs absent `"$appBinary`"" $installerLog "release WebDriver guard failed"
+  $appLibrary = Join-Path $installDirectory "muniment-desktop.dll"
+  Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs absent `"$appLibrary`"" $installerLog "release DLL WebDriver guard failed"
   Write-ToolchainState "before-e2e-build"
   $readerOutput = Join-Path $repoRoot "src-tauri/target/release/muniment-reader.exe"
   Invoke-NativeCommand "powershell.exe" "-NoProfile -ExecutionPolicy Bypass -File .github/build-reader.ps1 `"$readerOutput`"" $installerLog "E2E reader build failed"
@@ -632,11 +634,19 @@ try {
   $tauriCli = Join-Path $repoRoot "node_modules/@tauri-apps/cli/tauri.js"
   if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) { throw "The local Tauri CLI entry is missing: $tauriCli" }
   Invoke-NativeCommand "node" "`"$tauriCli`" build --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json" $installerLog "E2E application build failed"
-  $webdriverBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment-desktop.exe"))
+  # Build the library loaded by the installed Chromium sandbox bootstrap.
+  $savedTauriConfig = $env:TAURI_CONFIG
+  try {
+    $env:TAURI_CONFIG = Get-Content -LiteralPath (Join-Path $repoRoot "src-tauri/tauri.e2e.conf.json") -Raw
+    Invoke-NativeCommand "cargo" "build --manifest-path src-tauri/Cargo.toml --package muniment-desktop --release --locked --lib --features e2e-webdriver,tauri/custom-protocol" $installerLog "E2E application library build failed"
+  } finally {
+    $env:TAURI_CONFIG = $savedTauriConfig
+  }
+  $webdriverBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment_desktop.dll"))
   if (-not (Test-Path -LiteralPath $webdriverBinary -PathType Leaf)) { throw "E2E application binary is unavailable" }
-  # The runtime admits only the installed desktop path, even with WebDriver.
-  Copy-Item -LiteralPath $webdriverBinary -Destination $appBinary -Force -ErrorAction Stop
-  Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs present `"$appBinary`"" $installerLog "E2E WebDriver guard failed"
+  # Preserve the installed sandbox bootstrap and replace only its application DLL.
+  Copy-Item -LiteralPath $webdriverBinary -Destination $appLibrary -Force -ErrorAction Stop
+  Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs present `"$appLibrary`"" $installerLog "E2E WebDriver guard failed"
 
   New-Item -Path $handlerKey -Force | Out-Null
   Set-ItemProperty $handlerKey -Name '(default)' -Value 'URL:muniment-e2e-https'

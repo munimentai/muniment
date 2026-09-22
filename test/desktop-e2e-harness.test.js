@@ -3809,7 +3809,7 @@ describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
   const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
 
-  it('Uses the shipped desktop name for both guards.', () => {
+  it('Checks the shipped sandbox host and application library.', () => {
     const cargo = fs.readFileSync(path.join(root, 'src-tauri/Cargo.toml'), 'utf8')
     const config = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri/tauri.conf.json'), 'utf8'))
     expect(cargo).toMatch(/^\[package\]\s+name = "muniment-desktop"/)
@@ -3819,10 +3819,10 @@ describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
     expect(lookup).not.toContain('$installDisplayIcon')
     expect(lookup).toContain('webdriver-release-guard.mjs absent `"$appBinary`"')
     const build = runner.indexOf('"`"$tauriCli`" build --no-bundle --features e2e-webdriver')
-    const binary = runner.indexOf('"../../../src-tauri/target/release/muniment-desktop.exe"')
+    const binary = runner.indexOf('"../../../src-tauri/target/release/muniment_desktop.dll"')
     expect(build).toBeGreaterThan(start)
     expect(binary).toBeGreaterThan(build)
-    expect(runner.indexOf('webdriver-release-guard.mjs present `"$appBinary`"')).toBeGreaterThan(binary)
+    expect(runner.indexOf('webdriver-release-guard.mjs present `"$appLibrary`"')).toBeGreaterThan(binary)
     expect(runner).not.toContain('muniment.exe')
   })
 
@@ -3835,14 +3835,18 @@ describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
     expect(launch).toBeGreaterThan(build)
     const staging = runner.slice(build, launch)
     expect(staging).toContain('Test-Path -LiteralPath $webdriverBinary -PathType Leaf')
-    const copy = staging.indexOf('Copy-Item -LiteralPath $webdriverBinary -Destination $appBinary -Force -ErrorAction Stop')
+    const copy = staging.indexOf('Copy-Item -LiteralPath $webdriverBinary -Destination $appLibrary -Force -ErrorAction Stop')
     expect(copy).toBeGreaterThan(0)
-    expect(staging.indexOf('webdriver-release-guard.mjs present `"$appBinary`"')).toBeGreaterThan(copy)
+    expect(staging.indexOf('webdriver-release-guard.mjs present `"$appLibrary`"')).toBeGreaterThan(copy)
     expect(staging).not.toMatch(/\$appBinary\s*=/)
+    expect(staging).not.toContain('-Destination $appBinary')
+    expect(lookup).toContain('webdriver-release-guard.mjs absent `"$appLibrary`"')
+    expect(runner).toContain('--release --locked --lib --features e2e-webdriver,tauri/custom-protocol')
+    expect(runner).toContain('$env:TAURI_CONFIG = $savedTauriConfig')
   })
 
   it.skipIf(!hasPowerShell).each([
-    ['desktop', ['muniment-desktop.exe', 'muniment-runtime.exe', 'product.ico'], 0],
+    ['desktop', ['muniment-desktop.exe', 'muniment-desktop.dll', 'muniment-runtime.exe', 'product.ico'], 0],
     ['wrong name', ['muniment.exe', 'muniment-runtime.exe', 'product.ico'], 1],
     ['nested desktop', ['nested/muniment-desktop.exe', 'muniment-runtime.exe'], 1],
     ['directory named executable', ['muniment-desktop.exe/child.txt'], 1],
