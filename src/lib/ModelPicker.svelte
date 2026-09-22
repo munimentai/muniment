@@ -1,4 +1,5 @@
 <script>
+  import PopupClose from './PopupClose.svelte'
   import { panelScroll } from './panel-scroll.js'
   // The composer's model picker: every shown model by provider, the model in
   // use marked, a search over the ids, and Manage models at its foot.
@@ -31,7 +32,7 @@
   <div class="picker-search">
     <LucideIcon name="search" variant="action" size={14} />
     <input type="search" aria-label="Search models" placeholder="Search models" bind:this={search} bind:value={query}>
-    <button type="button" class="quiet picker-close" aria-label="Close model selector" onclick={onclose}><LucideIcon name="x" variant="action" size={16} /></button>
+    <PopupClose label="Close model selector" onclick={onclose} />
   </div>
   <div class="picker-list" use:panelScroll>
     {#if groups.length === 0}
@@ -68,7 +69,6 @@
   .model-picker { width: min(380px, 100%); max-height: 60vh; display: flex; flex-direction: column; overflow: hidden;      }
   .picker-search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
   .picker-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
-  .picker-close { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; color: var(--muted); }
   .picker-list { flex: 1; min-height: 0; padding: 6px; overflow-y: auto; }
   .picker-group h4 { display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .tag { color: var(--muted); font: var(--text-12) var(--font-mono); }

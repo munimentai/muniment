@@ -1,8 +1,9 @@
 <script>
+  import PopupClose from './PopupClose.svelte'
+  import { dialogDismiss } from './dialog-dismiss.js'
   import { panelScroll } from './panel-scroll.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './composer-panels.js'
   import { onMount } from 'svelte'
-  import LucideIcon from './LucideIcon.svelte'
   let { payload, anchor, pending = false, error = '', onanswer } = $props()
   let dialog
   let index = $state(0)
@@ -43,17 +44,11 @@
       }
       frame = requestAnimationFrame(position)
     }
-    const dismiss = event => { if (event.detail !== 'questions') dialog.close() }
-    const outside = event => {
-      if (event.target !== dialog) return
-      const rect = dialog.getBoundingClientRect()
-      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close()
-    }
+    const dismiss = event => { if (!pending && event.detail !== 'questions') dialog.close() }
     window.addEventListener(COMPOSER_PANEL_EVENT, dismiss)
-    dialog.addEventListener('pointerdown', outside)
     open()
     position()
-    return () => { cancelAnimationFrame(frame); window.removeEventListener(COMPOSER_PANEL_EVENT, dismiss); dialog.removeEventListener('pointerdown', outside) }
+    return () => { cancelAnimationFrame(frame); window.removeEventListener(COMPOSER_PANEL_EVENT, dismiss) }
   })
 </script>
 
@@ -61,9 +56,9 @@
   <span>Waiting for your answers.</span>
   <button onclick={open}>Answer questions</button>
 </div>
-<dialog use:panelScroll data-panel="question" data-panel-variant="overlay" bind:this={dialog} aria-labelledby="question-title" oncancel={(event) => { event.preventDefault(); if (!pending) dialog.close() }}>
+<dialog use:panelScroll data-panel="question" data-panel-variant="overlay" bind:this={dialog} aria-labelledby="question-title" use:dialogDismiss={{onclose: () => dialog.close(), disabled: pending}}>
   <form onsubmit={submit}>
-    <header><h2 id="question-title">A few details</h2><button type="button" class="close" aria-label="Close" disabled={pending} onclick={() => dialog.close()}><LucideIcon name="x" variant="action" size={16} /></button></header>
+    <header><h2 id="question-title">A few details</h2><PopupClose disabled={pending} onclick={() => dialog.close()} /></header>
     {#if question}
       <p class="progress">Question {index + 1} of {questions.length}</p>
       <fieldset disabled={pending}>
@@ -107,7 +102,6 @@
   .custom { display: block; margin-top: 16px; font-size: var(--text-13); }
   textarea { display: block; box-sizing: border-box; width: 100%; resize: vertical; margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); color: var(--ink); font: inherit; }
   button { min-height: 36px; padding: 7px 14px; border: 1px solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
-  button.close { display: grid; place-items: center; flex: none; min-height: 28px; width: 28px; padding: 0; border: 0; color: var(--muted); }
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { opacity: .55; cursor: default; }
   .question-waiting { color: var(--muted); font-size: var(--text-13); }

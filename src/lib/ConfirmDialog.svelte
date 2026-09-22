@@ -1,4 +1,6 @@
 <script>
+  import { dialogDismiss } from './dialog-dismiss.js'
+  import PopupClose from './PopupClose.svelte'
   import { onMount, tick } from 'svelte'
 
   let { title, children, onDecision, cancelLabel = 'Deny', confirmLabel = 'Allow' } = $props()
@@ -13,6 +15,7 @@
     const onKeydown = (event) => {
       if (event.key === 'Escape' && !pending) {
         event.preventDefault()
+        event.stopPropagation()
         void decide(false)
         return
       }
@@ -49,9 +52,9 @@
   }
 </script>
 
-<div class="dialog-backdrop">
+<div class="dialog-backdrop" use:dialogDismiss={{onclose: () => decide(false), disabled: pending}}>
   <div data-panel="confirm" data-panel-variant="overlay" bind:this={dialogPanel} class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
-    <h2 id="confirm-dialog-title">{title}</h2>
+    <header><h2 id="confirm-dialog-title">{title}</h2><PopupClose label="Close confirmation" disabled={pending} onclick={() => decide(false)} /></header>
     <div class="dialog-copy">{@render children()}</div>
     <div class="dialog-actions">
       <button bind:this={denyButton} disabled={pending} onclick={() => decide(false)}>{cancelLabel}</button>
@@ -63,6 +66,7 @@
 <style>
   .dialog-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 24px; background: var(--overlay-backdrop); }
   .dialog-panel { width: min(440px, 100%); padding: 24px;      font-family: var(--font-human); }
+  header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
   h2 { margin: 0; font-size: var(--text-22); line-height: var(--leading-heading); letter-spacing: var(--tracking-heading); }
   .dialog-copy { margin-top: 12px; color: var(--muted); font-size: var(--text-15); line-height: var(--leading-body); overflow-wrap: anywhere; }
   .dialog-copy :global(p) { margin: 0; }

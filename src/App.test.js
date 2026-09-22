@@ -491,8 +491,8 @@ describe('pairing decisions', () => {
   })
 
   it.each([
-    ['forward', 'Allow', false, 'Deny'],
-    ['reverse', 'Deny', true, 'Allow'],
+    ['forward', 'Allow', false, 'Close confirmation'],
+    ['reverse', 'Close confirmation', true, 'Allow'],
   ])('keeps %s Tab movement inside the pairing dialog', async (_, start, shiftKey, destination) => {
     render(App)
     await waitFor(() => expect(pairingListener).toBeDefined())

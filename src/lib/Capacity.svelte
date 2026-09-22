@@ -1,6 +1,6 @@
 <script>
+  import PopupClose from './PopupClose.svelte'
   import { panelScroll } from './panel-scroll.js'
-  import LucideIcon from './LucideIcon.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import { familyName } from './provider-catalog.js'
   import AllowanceMeter from './AllowanceMeter.svelte'
@@ -21,7 +21,7 @@
   })
 </script>
 <div data-panel="capacity" use:panelScroll data-panel-variant="overlay" data-composer-panel class="capacity" role="dialog" aria-label="Account capacity">
-  <header><strong>Capacity</strong><button onclick={onclose} aria-label="Close capacity"><LucideIcon name="x" /></button></header>
+  <header><strong>Capacity</strong><PopupClose label="Close capacity" onclick={onclose} /></header>
   {#if error}<p role="alert">{error}</p>{:else if !settings}<p role="status">Reading account capacity…</p>{:else}
     {#if !settings.enabled}<p>Account balancing is off.</p>{:else if !settings.running}<p>The account router is not running.</p>{/if}
     <div class="accounts">

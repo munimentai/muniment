@@ -1,4 +1,6 @@
 <script>
+  import { dialogDismiss } from '../lib/dialog-dismiss.js'
+  import PopupClose from '../lib/PopupClose.svelte'
   import OverflowText from '../lib/OverflowText.svelte'
   import { floatingMenu } from '../lib/floating-menu.js'
   import { panelScroll } from '../lib/panel-scroll.js'
@@ -242,14 +244,15 @@
 {/if}
 {#if deleting}<ConfirmDialog title={`Delete ${deleting.length} ${deleting.length === 1 ? 'item' : 'items'}?`} cancelLabel="Cancel" confirmLabel="Move to Trash" onDecision={yes => yes ? run('trash',deleting) : deleting = null}><p>The selected items will move to the system Trash.</p>{#if error}<p role="alert">{error}</p>{/if}</ConfirmDialog>{/if}
 {#if naming}
-  <div class="name-backdrop"><form role="dialog" aria-modal="true" aria-label={naming.action === 'rename' ? 'Rename item' : naming.action === 'new-file' ? 'New file' : 'New folder'} onsubmit={e => { e.preventDefault(); void run(naming.action,naming.paths,proposedName,naming.target) }} onkeydown={e => { if (e.key === 'Escape' && !busy) naming = null; if (e.key === 'Tab') { const controls = [...e.currentTarget.querySelectorAll('input,button:not(:disabled)')]; const index = controls.indexOf(document.activeElement); e.preventDefault(); controls[(index+(e.shiftKey?-1:1)+controls.length)%controls.length]?.focus() } }}>
-    <label for="workspace-item-name">{naming.action === 'rename' ? 'Rename item' : naming.action === 'new-file' ? 'New file' : 'New folder'}</label>
+  <div class="name-backdrop" use:dialogDismiss={{onclose: () => naming = null, disabled: busy}}><form role="dialog" aria-modal="true" aria-label={naming.action === 'rename' ? 'Rename item' : naming.action === 'new-file' ? 'New file' : 'New folder'} onsubmit={e => { e.preventDefault(); void run(naming.action,naming.paths,proposedName,naming.target) }} onkeydown={e => { if (e.key === 'Escape' && !busy) naming = null; if (e.key === 'Tab') { const controls = [...e.currentTarget.querySelectorAll('input,button:not(:disabled)')]; const index = controls.indexOf(document.activeElement); e.preventDefault(); controls[(index+(e.shiftKey?-1:1)+controls.length)%controls.length]?.focus() } }}>
+    <header class="name-head"><label for="workspace-item-name">{naming.action === 'rename' ? 'Rename item' : naming.action === 'new-file' ? 'New file' : 'New folder'}</label><PopupClose label="Close file name" disabled={busy} onclick={() => naming = null} /></header>
     <input id="workspace-item-name" bind:this={nameInput} bind:value={proposedName} disabled={busy} autocomplete="off" />
     {#if error}<p role="alert">{error}</p>{/if}
-    <div class="name-actions"><button type="button" disabled={busy} onclick={() => naming = null}>Cancel</button><button type="submit" disabled={busy || !proposedName.trim()}>{naming.action === 'rename' ? 'Rename' : 'Create'}</button></div>
+    <div class="name-actions"><button type="submit" disabled={busy || !proposedName.trim()}>{naming.action === 'rename' ? 'Rename' : 'Create'}</button></div>
   </form></div>
 {/if}
 <style>
+  .name-head { display:flex; align-items:start; justify-content:space-between; gap:12px; }
   .filter-row { display:flex; align-items:center; gap:4px; margin-bottom:8px; } .filter-row input { min-width:0; flex:1; margin:0; } .filter-row button { padding:6px; }
   .file-menu { position:fixed; z-index:12; width:240px; max-height:calc(100vh - 16px); overflow:auto; background:var(--surface); padding:5px; border:1px solid var(--border); border-radius:var(--radius-panel); box-shadow:var(--shadow-overlay); }
   .file-menu button { border:0; width:100%; min-height:32px; font-family:var(--font-human); } .file-menu .delete { color:light-dark(#b42318,#ff7676); } hr { border:0; border-top:1px solid var(--border); margin:5px; }

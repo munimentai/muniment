@@ -1,4 +1,5 @@
 <script>
+  import PopupClose from './PopupClose.svelte'
   import LucideIcon from './LucideIcon.svelte'
   let { status = 'active', sort = 'recent', onchange } = $props()
   let open = $state(false)
@@ -16,7 +17,7 @@
   <h3>Threads</h3>
   <button aria-label="Filter threads" aria-haspopup="dialog" aria-expanded={open} onclick={() => open = !open}><LucideIcon name="sliders-vertical" /></button>
   {#if open}<div class="filter-popover" data-panel="thread-filter" data-panel-variant="overlay" role="dialog" aria-label="Thread filters">
-    <header><strong>Threads</strong><button aria-label="Close thread filters" onclick={() => open = false}><LucideIcon name="x" /></button></header>
+    <header><strong>Threads</strong><PopupClose label="Close thread filters" onclick={() => open = false} /></header>
     <label>Status<select value={status} onchange={event => onchange(event.currentTarget.value, sort)}><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label>
     <label>Sort by<select value={sort} onchange={event => onchange(status, event.currentTarget.value)}><option value="recent">Last activity</option><option value="title">Name</option></select></label>
     <button onclick={() => onchange('active', 'recent')}>Reset to defaults</button>

@@ -1,4 +1,5 @@
 <script>
+  import PopupClose from './PopupClose.svelte'
   import { floatingMenu } from './floating-menu.js'
   import { tick, onMount } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
@@ -45,11 +46,13 @@
       {#if allowArchive}<button role="menuitem" onclick={() => choose(archived ? 'restore' : 'archive')} disabled={busy}><LucideIcon name="archive" size={16}/>{archived ? 'Restore' : 'Archive'}</button>{/if}
       {#if allowDelete}<button role="menuitem" onclick={() => mode = 'delete'}><LucideIcon name="trash-2" size={16}/>Delete</button>{/if}
     {:else if mode === 'rename'}
+      <header><strong>Rename</strong><PopupClose label="Close rename" disabled={busy} onclick={close} /></header>
       <form onsubmit={event => { event.preventDefault(); void choose('rename') }}>
         <label>Name<input aria-label="Name" maxlength={maxNameLength} bind:value disabled={busy}/></label>
-        <div class="buttons"><button type="submit" disabled={busy || !value.trim()}>Save</button><button type="button" onclick={close} disabled={busy}>Cancel</button></div>
+        <div class="buttons"><button type="submit" disabled={busy || !value.trim()}>Save</button></div>
       </form>
     {:else}
+      <header><strong>Delete</strong><PopupClose label="Close delete" disabled={busy} onclick={close} /></header>
       <p>Delete “{name}”?</p><p class="muted">Saved files and chat history stay.</p>
       <div class="buttons"><button onclick={() => choose('delete')} disabled={busy}>Confirm delete</button><button onclick={close} disabled={busy}>Cancel</button></div>
     {/if}
@@ -57,6 +60,7 @@
   </div>
 {/if}
 <style>
+  header { display:flex; align-items:center; justify-content:space-between; padding:6px; font:var(--text-13) var(--font-human); }
   button { display:flex;align-items:center;gap:8px;border:0;border-radius:var(--radius-control);background:transparent;color:var(--ink);font:var(--text-13) var(--font-human);padding:7px 8px;cursor:pointer; }
   button:hover:not(:disabled), .opened {background:var(--faint)} button:disabled {opacity:.5;cursor:default}
   .catalog-actions {padding:4px;color:var(--muted);flex:none}

@@ -50,8 +50,7 @@ device beside the theme and the shipped pair stays the default.
 
 Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
 Shape: Settings tabs use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
-Settings tabs use pill shapes. Other controls use the radius scale. Hairline borders do the work, and `--shadow-window` and
-`--shadow-overlay` are the only two depth tokens. Motion is purposeful and
+Hairline borders do the work. `--shadow-window` and `--shadow-overlay` are the only depth tokens. Motion is purposeful and
 rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide. `prefers-reduced-motion` removes all of it.
 
 ## Laws
@@ -69,7 +68,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    Mono. Conversation renders in Schibsted Grotesk.
 3. **Anti-patterns are hard fails.** No surface gradients, no violet, no glassmorphism
    or backdrop blur on a surface, no orbs or ambient animation, no assistant
-   avatar, no typing dots, no sparkles or wand iconography, no emoji in UI
+   avatar, no typing dots, no decorative sparkles or wands, no emoji in UI
    copy, pill radius only on Settings tabs, no "AI", "magic", "supercharge" or "unlock" in copy.
    The one blur is the Settings scrim: the workspace under Settings blurs
    behind the theme's paper, dark in dark mode and light in light mode, while
@@ -137,7 +136,7 @@ section list on its left: Models & routing, Extend, Preferences, Profile & Memor
 The company-record flag adds Companies. The cloud flag adds Account. It shows the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
-open it, and Escape or its close control returns focus to the opener.
+open it. Dismissal returns focus to the opener.
 With the company-record flag enabled, Companies lists every company on the machine with Open, Rename and Delete,
 Delete asks once and names the company, and New company sits under the list.
 Models & routing has Accounts, Models, and Routing pill tabs. Account
@@ -153,10 +152,9 @@ on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
 the frame shows at every edge and between panels. The update control is a 20px
 ink glyph that widens on hover or focus to read `Update` in mono, and it
 appears only when a newer build is downloaded.
-The composer band is one mono row under the composer: an Add files plus at
-its left, then the model source chip,
-the Home path, the context meter and the running cost, with the scan chip
-beside them on the first run. The band's one action control sits at its right
+The composer band is one mono row under the composer. The horizontal ellipsis,
+model selector and capacity control share their height and spacing. Voice and
+the attachment paperclip sit beside the send control. The band's one action control sits at its right
 end: absent while the draft is empty, an ink up-arrow button once the draft has
 text, and a muted stop square while a reply is in flight. Enter sends. A
 message sent while a reply is in flight steers it: the reply picks it up at its
@@ -211,12 +209,19 @@ component. Hidden features leave no controls, Settings entries or empty space.
 ## Extend
 
 Extend uses the shared Settings panel. MCP servers, Skills and Plugins occupy
-three theme-colored pill tabs. Search, category, installation and sort filters
-narrow the remote-server catalog. Details open the provider site. Directory relays and example servers stay out. Popularity uses the source catalog score.
+three theme-colored pill tabs through `SettingsTabs`, shared with Models & routing.
+Tab icons stay neutral on selection. MCPs use the MCP mark, Skills use
+`pencil-sparkles`, and Plugins use `unplug`. Nonzero counts follow labels in smaller type. Search, category, installation and sort filters
+search names, descriptions, publishers and categories in the official remote-server catalog.
+Details open an in-app dialog with descriptions, connection details and provider links.
+Directory relays and example servers stay out. Popularity uses the source catalog score.
 Twelve popular entries precede the remaining catalog. Compact cards use three
 columns, two in narrower panels, and one when needed. Each card shows its
 provider logo with initials as a fallback. Pagination appears only for multiple pages.
-Installed entries expose availability, connection tests, source and update actions.
+Installed entries stay in catalog order and use the theme signal-soft surface.
+An unlabeled signal toggle controls availability, with an accessible name.
+The Show filter includes Installed. Connect starts provider authentication when available.
+A sliders icon reveals filters. Custom opens a dialog and attempts to load the service favicon.
 Package review separates instructions, MCP servers and executable code.
 Icon notices live in the bundled third-party notices, outside the catalog.
 
@@ -228,3 +233,18 @@ anchor above the full composer with an eight-pixel gap. Only one opens at a time
 Skill and plugin commands appear inline as slash commands in the reference color.
 MCP switches and optional classifier selection apply to one turn. The next turn
 starts without selected extensions. No extension chips sit below the message.
+
+## Popups and names
+
+Dialog headers use `PopupClose`: an X with an accessible name, a transparent
+background at rest, and a theme hover background. Escape, X and a click outside
+close the topmost popup. Clicking panel whitespace or dragging from inside to
+outside does not close it. Nested dismissal leaves the parent open. A pending
+operation blocks all dismissal paths together. Dismissal never approves an action.
+Confirmation dialogs keep explicit decision buttons and focus the safe choice.
+Menus close on selection, Escape or outside click without an extra close row.
+Dialogs fit their content, cap height to the viewport, and scroll only as needed.
+Preferences spaces Browse themes below the mode control. Skills and plugins use
+managed storage under `~/.muniment`, with Open folder in Extend.
+Threads, agent chats and artifact chats use one-to-three-word generated titles.
+Project cards keep their vertical ellipsis menu for actions, including Rename.

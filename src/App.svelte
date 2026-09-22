@@ -1,4 +1,5 @@
 <script>
+  import PopupClose from './lib/PopupClose.svelte'
   import { featureFlags } from './feature-flags.js'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
@@ -2415,7 +2416,7 @@
           <section data-composer-panel data-panel="speech" data-panel-variant="overlay" class="speech-install-popover" aria-labelledby="speech-install-title" onkeydown={speechInstallKeydown}>
             <header class="speech-install-head">
               <strong id="speech-install-title">Speech model install</strong>
-              <button type="button" class="quiet close-card" aria-label="Close speech model install" onclick={dismissSpeechInstall}><LucideIcon name="x" variant="action" size={14} /></button>
+              <PopupClose label="Close speech model install" onclick={dismissSpeechInstall} />
             </header>
             {#if speechInstallFacts}
               <p class="speech-install-lead">Dictation runs on this device. Voice needs one download.</p>
@@ -3047,8 +3048,6 @@
   .speech-install-popover button { margin-top: 7px; padding: 4px 8px; font: inherit; }
   .speech-install-popover .speech-install-error { color: var(--oxide); }
   .speech-install-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .speech-install-popover .close-card { min-width: 24px; min-height: 24px; margin: 0; padding: 0 5px; color: var(--muted); }
-  .speech-install-popover .close-card:hover { color: var(--ink); }
   .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   @keyframes capture { to { transform: scaleY(.55); } }
   @keyframes toast-enter { from { opacity: 0; transform: translate(-50%, 2px); } }

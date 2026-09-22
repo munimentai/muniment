@@ -1,4 +1,6 @@
 <script>
+  import PopupClose from '../lib/PopupClose.svelte'
+  import { dialogDismiss } from '../lib/dialog-dismiss.js'
   import SettingsTabs from '../lib/SettingsTabs.svelte'
   import Toggle from '../lib/Toggle.svelte'
   import { onMount, tick } from 'svelte'
@@ -62,6 +64,7 @@
   async function install() { await work(async () => { state = await call('install', { previewId: preview.id, skills: selected, replaceId }); preview = null; form = null; status = 'Installed. Use the composer to select it.' }) }
   async function mutate(action, data) { await work(async () => { state = await call(action, data) }) }
   async function connection(item, action) { await work(async () => { const result = await call(action, { id: item.id }); status = `${item.name}: ${result.status}. ${result.tools.length} tools available.`; await refresh() }) }
+  function closeForm() { if (!busy) { form = null; preview = null; token = '' } }
   function update(item) { form = {}; source = item.source; replaceId = item.id; preview = null; error = '' }
 </script>
 <section class="extend" aria-label="Extend">
@@ -80,8 +83,8 @@
   {#if error}<p role="alert">{error}</p>{/if}
   {#if status}<p role="status">{status}</p>{/if}
   {#if form}
-    <dialog class="form server-details" data-panel="extension-setup" data-panel-variant="overlay" bind:this={formDialog} oncancel={event => { if (busy) event.preventDefault(); else { form = null; preview = null; token = '' } }} aria-label={tab === 'mcp' ? 'Add MCP server' : 'Add extension source'}>
-      <div class="head"><h4>{tab === 'mcp' ? name || 'Add MCP server' : replaceId ? 'Review update' : 'Add source'}</h4><button type="button" disabled={busy} onclick={() => { form = null; preview = null; token = '' }}>Cancel</button></div>
+    <dialog class="form server-details" data-panel="extension-setup" data-panel-variant="overlay" bind:this={formDialog} use:dialogDismiss={{onclose: closeForm, disabled: busy}} aria-label={tab === 'mcp' ? 'Add MCP server' : 'Add extension source'}>
+      <div class="head"><h4>{tab === 'mcp' ? name || 'Add MCP server' : replaceId ? 'Review update' : 'Add source'}</h4><PopupClose label="Close extension setup" disabled={busy} onclick={closeForm} /></div>
       {#if tab === 'mcp'}
         {#if form.source && !form.url}<p>This entry needs a local command or a URL from your provider.</p>{#if form.website}<a href={form.website} target="_blank" rel="noreferrer">View setup instructions</a>{/if}{/if}
         <label>Name<input bind:value={name} /></label><label>Server URL<input type="url" bind:value={url} placeholder="https://example.com/mcp" /></label>
@@ -136,9 +139,9 @@
     {#if remaining.length > 30}<nav class="pages" aria-label="Catalog pages"><button type="button" disabled={page === 0} onclick={() => page--}>Previous</button><span>Page {page + 1} of {Math.ceil(remaining.length / 30)}</span><button type="button" disabled={(page + 1) * 30 >= remaining.length} onclick={() => page++}>Next</button></nav>{/if}
   {/if}
 </section>
-<dialog data-panel="mcp-details" data-panel-variant="overlay" class="server-details" bind:this={detailsDialog} aria-labelledby="server-details-title" onclose={() => details = null}>
+<dialog data-panel="mcp-details" data-panel-variant="overlay" class="server-details" bind:this={detailsDialog} use:dialogDismiss={{onclose: () => detailsDialog.close()}} aria-labelledby="server-details-title" onclose={() => details = null}>
   {#if details}
-    <div class="head"><div class="card-title"><ProviderIcon entry={details} /><h2 id="server-details-title">{details.name}</h2></div><button type="button" onclick={() => detailsDialog.close()}>Close</button></div>
+    <div class="head"><div class="card-title"><ProviderIcon entry={details} /><h2 id="server-details-title">{details.name}</h2></div><PopupClose label="Close server details" onclick={() => detailsDialog.close()} /></div>
     <p class="description">{details.description || 'The provider has not supplied a description.'}</p>
     <dl>
       {#if details.publisher}<dt>Publisher</dt><dd>{details.publisher}</dd>{/if}

@@ -1,4 +1,6 @@
 <script>
+  import { dialogDismiss } from './dialog-dismiss.js'
+  import PopupClose from './PopupClose.svelte'
   import SettingsSection from './SettingsSection.svelte'
   const ExtendSection = () => import('../extend/ExtendSection.svelte')
   import { featureFlags } from '../feature-flags.js'
@@ -6,7 +8,6 @@
   // Settings is one popup over the workspace: a section list on its left, the
   // section on its right, and the workspace darkened and blurred behind it.
   import { onMount, tick } from 'svelte'
-  import LucideIcon from './LucideIcon.svelte'
   const Appearance = () => import('./Appearance.svelte')
   const MemorySection = () => import('./MemorySection.svelte')
   const ModelsSection = () => import('./ModelsSection.svelte')
@@ -47,6 +48,8 @@
     const onKeydown = (event) => {
       // Native child dialogs own focus and Escape until they close.
       if (event.target?.closest?.('dialog[open]')) return
+      const activeDialog = event.target?.closest?.('[role="dialog"]')
+      if (activeDialog && activeDialog !== panel) return
       if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()
@@ -72,12 +75,9 @@
     }
   })
 
-  function scrimClick(event) {
-    if (event.target === event.currentTarget) onclose()
-  }
 </script>
 
-<div class="settings-scrim" data-testid="settings-scrim" onclick={scrimClick}>
+<div class="settings-scrim" data-testid="settings-scrim" use:dialogDismiss={{onclose}}>
   <div data-panel="settings" data-panel-variant="overlay" class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" bind:this={panel}>
     <nav class="settings-nav" aria-label="Settings sections">
       <h2 id="settings-title">Settings</h2>
@@ -90,7 +90,7 @@
     <div class="settings-body">
       <header data-panel-header class="settings-head">
         <h3 id="settings-section-title">{sectionLabel}</h3>
-        <button type="button" class="quiet close" aria-label="Close settings" onclick={onclose}><LucideIcon name="x" variant="action" size={16} /></button>
+        <PopupClose label="Close settings" onclick={onclose} />
       </header>
       <div class="settings-content" use:panelScroll>
         {#if section === 'extend'}
@@ -151,7 +151,6 @@
   .settings-body { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .settings-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: var(--panel-control-inset); }
   .settings-head h3 { margin: 0; font-size: var(--text-15); font-weight: 600; }
-  .close { min-width: 28px; min-height: 28px; padding: 5px; line-height: 0; }
   .settings-content { flex: 1; min-height: 0; padding: 16px 28px 28px; overflow-y: auto; }
   .settings-home, .settings-account { display: grid; gap: 8px; justify-items: start; }
   .settings-label { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
