@@ -14,7 +14,7 @@
 <div class="tabs" role="tablist" aria-label={label} onkeydown={keys}>
   {#each tabs as tab (tab.id)}
     <button type="button" role="tab" aria-label={`${tab.label}${tab.count ? ` (${tab.count})` : ''}`} aria-selected={value === tab.id} tabindex={value === tab.id ? 0 : -1} onclick={() => onchange(tab.id)}>
-      {#if tab.icon === 'mcp'}<McpIcon />{:else if tab.icon}<LucideIcon name={tab.icon} size={16} variant="action" />{/if}{tab.label}{#if tab.count} <span>({tab.count})</span>{/if}
+      {#if tab.icon}<span class="tab-icon">{#if tab.icon === 'mcp'}<McpIcon />{:else}<LucideIcon name={tab.icon} size={16} variant="action" />{/if}</span>{/if}{tab.label}{#if tab.count} <span>({tab.count})</span>{/if}
     </button>
   {/each}
 </div>
@@ -24,5 +24,6 @@
   button[aria-selected=true] { background: var(--signal-soft); color: var(--signal); }
   button:hover { background: var(--faint); }
   button:focus-visible { border-color: var(--ink); background: var(--faint); }
+  .tab-icon { display: inline-flex; flex: none; color: var(--muted); }
   span { font-size: var(--text-12); font-variant-numeric: tabular-nums; }
 </style>
