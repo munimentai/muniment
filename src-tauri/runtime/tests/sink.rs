@@ -233,7 +233,7 @@ fn drives_pi_launch_config_over_the_profile_directory() {
     let config = pi_launch_config_for_executable(&sink, "pi".into(), &grant(), None).unwrap();
     assert_eq!(
         config.working_directory,
-        Some(profile.root.join("home/sessions/thread-1"))
+        Some(profile.root.join("home/sessions/Untitled-thread1"))
     );
     assert!(config.args.windows(2).any(|args| {
         args == [
