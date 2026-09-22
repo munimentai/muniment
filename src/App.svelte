@@ -53,6 +53,8 @@
   import GraphMark from './lib/GraphMark.svelte'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
+  import AttachmentMenu from './lib/AttachmentMenu.svelte'
+  import AppUpdate from './lib/AppUpdate.svelte'
   import { createChatController } from './lib/chat-controller.js'
   import { listenForLauncher } from './lib/launcher-bridge.js'
   import { composerHeight } from './lib/composer-size.js'
@@ -1347,6 +1349,7 @@
     return voiceShortcutManager.change(next)
   }
 
+  let workspaceDirty = $state(false)
   let workspaceDirectory = $state('')
   $effect(() => { currentThreadId; selectedProject; workspaceDirectory = ''; untrack(closeMentions) })
   let mention = $state(null)
@@ -1891,12 +1894,12 @@
     }
   }
 
-  async function chooseFiles() {
+  async function chooseFiles(directory = false) {
     if (active) return
     submitError = ''
     let picked
     try {
-      picked = await open({ multiple: true, directory: false })
+      picked = await open({ multiple: true, directory })
     } catch (_) {
       submitError = 'Files could not be selected. Try again.'
       return
@@ -2087,7 +2090,7 @@
             {/if}
 
             <span class="title-spacer" data-tauri-drag-region></span>
-            <span class="update-slot" data-tauri-drag-region aria-hidden="true"></span>
+            <span class="update-slot"><AppUpdate {tauri} busy={workspaceDirty || !!active || threadSwitching || isDictationActive(dictation) || dictationFinishing} /></span>
             {#if featureFlags.companyRecord}<RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>{/if}
             <WorkspaceMenu selected={browserPanel} onselect={showBrowser} onopenchange={value => toolsMenuOpen = value} />
           </div>
@@ -2460,7 +2463,7 @@
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
-                <li><button type="button" class="file-reference" onclick={() => openFile({ path: file.path })}><LucideIcon name="file-text" /><span>{file.displayName}</span></button><span>{formatByteSize(file.byteLength)}</span><button type="button" aria-label={`Remove ${file.displayName}`} onclick={() => { selectedFiles = selectedFiles.filter(({ path }) => path !== file.path) }}>Remove</button></li>
+                <li><span title={file.path}>{#if file.isDirectory}<LucideIcon name="folder" />{file.displayName}{:else}<button type="button" class="file-reference" onclick={() => openFile({ path: file.path })}><LucideIcon name="file-text" /><span>{file.displayName}</span></button>{/if}</span><span>{file.isDirectory ? "Folder" : formatByteSize(file.byteLength)}</span><button type="button" aria-label={`Remove ${file.displayName}`} onclick={() => { selectedFiles = selectedFiles.filter(({ path }) => path !== file.path) }}>Remove</button></li>
               {/each}
             </ul>
           {/if}
@@ -2499,7 +2502,7 @@
             {/if}
             </div>
             <div class="composer-actions">
-            {#if !active}<button type="button" class="quiet attachment-trigger" aria-label="Add files" onclick={chooseFiles}><LucideIcon name="paperclip" size={16} /></button>{/if}
+            {#if !active}<AttachmentMenu onfiles={() => chooseFiles(false)} onfolder={() => chooseFiles(true)} />{/if}
               <button type="button" class="quiet composer-icon" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
               {#if active || draft.trim()}
                 <button type="button" class="composer-action" class:primary={!active} class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
@@ -2596,7 +2599,7 @@
         onopen={(id) => chatController.openThread(id, true)} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}></div>{/if}
-  <WorkspacePanel context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={settingsOpen || !!deletingThreadId} />
+  <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={settingsOpen || !!deletingThreadId} />
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} agents={agentListing.agents} isArchived={catalogArchived} onaction={catalogAction} projects={projectRows} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={()=>startCreation('agent')} onclose={() => { agentsOpen = false }} onselect={openAgent} onopen={openCreation} onchange={(next) => { agentListing = next }} />
   {/key}{/if}
@@ -2802,7 +2805,7 @@
   .titlebar button:hover:not(:disabled) { background: var(--faint); border-color: transparent; }
   /* A hairline edge keeps the chip legible over the control's --faint hover. */
   .titlebar kbd { margin-left: 2px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); }
-  .update-slot { flex: 0 0 24px; height: 24px; }
+  .update-slot { flex: 0 0 auto; }
   .thread-title-heading { display: flex; min-width: 24px; max-width: 100%; margin: 0; font: inherit; font-family: var(--font-heading); }
   /* The rename field keeps the title control's register while it shows. */
   /* Editing is the rename control's active state: the composer's muted hairline, no ring. */

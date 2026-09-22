@@ -12,7 +12,7 @@
   import WorkspaceFile from '../files/WorkspaceFile.svelte'
   import FileIcon from '../files/FileIcon.svelte'
   import ConfirmDialog from './ConfirmDialog.svelte'
-  let { context = null, tauri, selected = null, onselect, threadId = null, projectId = null, suspended = false, requestedFile = null, requestedArtifact = null, navigation = null, onnavigationhandled, onfolder } = $props()
+  let { context = null, tauri, selected = null, onselect, threadId = null, projectId = null, suspended = false, requestedFile = null, requestedArtifact = null, navigation = null, onnavigationhandled, onfolder, ondirty } = $props()
   let tabs = $state([])
   let browserUrl = $state('')
   let artifactName = $state('')
@@ -27,6 +27,7 @@
     return tab.name
   }
   let dirtyFiles = $state(new Set())
+  $effect(() => { ondirty?.(dirtyFiles.size > 0) })
   let closing = $state(null)
   function markDirty(id, dirty) { const next = new Set(dirtyFiles); if (dirty) next.add(id); else next.delete(id); dirtyFiles = next }
   const contextKey = $derived(JSON.stringify(context ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== 'threadTitle')) : {threadId, projectId}))

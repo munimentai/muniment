@@ -6,6 +6,7 @@ import path from 'node:path'
 // tokens. These named exceptions are the circular dots, square resets, and the
 // per-corner composition required by the segmented theme control.
 const RADIUS_EXCEPTIONS = {
+  'src/lib/AppUpdate.svelte': { 'button': ['var(--radius-pill)', 'Update control shares the settings pill shape.'] },
   'src/lib/SettingsTabs.svelte': { 'button': ['var(--radius-pill)', 'Shared settings pill tabs.'] },
   'src/App.svelte': {
     '.active-thread > span': ['50%', '§1.5 circular current-thread status dot'],

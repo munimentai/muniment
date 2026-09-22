@@ -139,6 +139,8 @@
   {:else if name === 'x'}
     <path d="M18 6 6 18" />
     <path d="m6 6 12 12" />
+  {:else if name === 'arrow-down'}
+    <path d="M12 5v14m-7-7 7 7 7-7" />
   {:else if name === 'arrow-up'}
     <path d="m5 12 7-7 7 7" />
     <path d="M12 19V5" />

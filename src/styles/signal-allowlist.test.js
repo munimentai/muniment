@@ -7,6 +7,7 @@ import path from 'node:path'
 // components on the allowed list". Every entry names the clause that permits it;
 // adding one is a spec decision, not a styling one.
 const ALLOWED = {
+  'src/lib/AppUpdate.svelte': { 'button': 'Verified update ready to install' },
   'src/lib/Toggle.svelte': {
     'button[aria-checked="true"]': 'Enabled switch track',
     'button[aria-checked="true"] span': 'Enabled switch knob',

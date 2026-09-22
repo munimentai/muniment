@@ -145,6 +145,23 @@ exact 40-character SHA and matching `vMAJOR.MINOR.PATCH`. Promotion requires
 green CI and the finalized seven-asset nightly, and copies those bytes without
 rebuilding or changing `nightly`.
 
+The desktop checks for updates on launch and hourly. Builds enable the updater with
+`MUNIMENT_UPDATER_PUBLIC_KEY` set to the Tauri public signing key at build time.
+`MUNIMENT_UPDATER_ENDPOINT` can override the default public GitHub release feed at
+`https://github.com/munimentai/muniment/releases/latest/download/latest.json`.
+An unconfigured build offers no update. The app verifies the download before it
+shows the green Update control. Click installs and restarts. Active replies,
+voice capture and unsaved file edits block that control.
+
+Publish `latest.json` only after the matching signed updater packages exist.
+Use a final signed macOS `.app.tar.gz`, a Linux `.AppImage` and a Windows NSIS
+installer, each with its Tauri `.sig`. Sign after all packaging and code signing.
+The manifest uses Tauri platform keys (`darwin-aarch64`, `darwin-x86_64`,
+`linux-x86_64`, `windows-x86_64`), each with an HTTPS `url` and `signature`,
+plus the matching SemVer `version`. Keep the private update signing key outside
+source control and provide it only to the release signing job. Package-manager
+installs on Linux use their package manager instead of the in-app updater.
+
 The owner assigns SemVer and promotes when a tested nightly is ready. Patches are
 compatible bug or security fixes, minors add backward-compatible functionality,
 and majors may break compatibility. A bad release is never overwritten: stop

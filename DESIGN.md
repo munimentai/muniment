@@ -49,7 +49,7 @@ The super key with `=`, `-` and `0` moves the same step. Both live on the
 device beside the theme and the shipped pair stays the default.
 
 Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
-Shape: Settings tabs use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
+Shape: Settings tabs and the update control use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
 Hairline borders do the work. `--shadow-window` and `--shadow-overlay` are the only depth tokens. Motion is purposeful and
 rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide. `prefers-reduced-motion` removes all of it.
 
@@ -60,7 +60,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    state, the streaming underscore and caret on
    the active line, the route segment of the provenance line, the live voice
    polish flash, the enabled state of the Models show switch, and workflow-run
-   indicators. Settings tabs and enabled extension switches use the theme signal.
+   indicators. Settings tabs, verified updates and enabled extension switches use the theme signal.
    Other buttons, links, selection, icons at rest and badges are ink on paper.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
@@ -149,9 +149,9 @@ sidebar is resizable by its divider and collapses to nothing: no rail.
 The mark appears on the launch screen and in the thinking state, never in
 the sidebar. Icons are Lucide, vendored as inline SVG at a 1.6px stroke. Sidebar, thread and rail sit
 on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
-the frame shows at every edge and between panels. The update control is a 20px
-ink glyph that widens on hover or focus to read `Update` in mono, and it
-appears only when a newer build is downloaded.
+the frame shows at every edge and between panels. The update control is a circular
+down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
+`Update` on hover or focus after a signed download. Click installs and restarts.
 The composer band is one mono row under the composer. The horizontal ellipsis,
 model selector and capacity control share their height and spacing. Voice and
 the attachment paperclip sit beside the send control. The band's one action control sits at its right
@@ -228,7 +228,7 @@ Icon notices live in the bundled third-party notices, outside the catalog.
 The horizontal composer ellipsis sits first at the left and matches the model and capacity controls.
 It has a background only on hover or keyboard focus.
 Its three branches are MCPs, Plugins and Skills, followed by Manage extensions.
-File attachments use a separate paperclip beside Voice. All composer panels share one
+The paperclip beside Voice offers files and folders. Folder paths reach local tools. All composer panels share one
 anchor above the full composer with an eight-pixel gap. Only one opens at a time.
 Skill and plugin commands appear inline as slash commands in the reference color.
 MCP switches and optional classifier selection apply to one turn. The next turn

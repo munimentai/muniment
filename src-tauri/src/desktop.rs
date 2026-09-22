@@ -1,4 +1,5 @@
 mod account_login;
+mod app_update;
 mod agents;
 mod attach_service;
 mod auth;
@@ -101,6 +102,8 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
     builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(app_update::AppUpdate::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -261,6 +264,8 @@ pub fn run() {
             record::reader_objects,
             record::reader_connect,
             restart_muniment,
+            app_update::app_update_prepare,
+            app_update::app_update_install,
             launcher::launcher_register,
             launcher::launcher_start_failed,
             launcher::launcher_open,

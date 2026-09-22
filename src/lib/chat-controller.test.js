@@ -2615,3 +2615,15 @@ describe('chat controller', () => {
     expect(context.active()).toBeNull()
   })
 })
+
+it('sends folder paths to local tools without ingesting directories as files', async () => {
+  const invoke = vi.fn().mockResolvedValue({ runId: 'folder-run' })
+  const ui = setup(invoke)
+  ui.setFiles([{ path: '/tmp/project folder', isDirectory: true }, { path: '/tmp/brief.txt' }])
+  await ui.controller.send()
+  expect(invoke).toHaveBeenCalledWith('chat_submit', {
+    prompt: expect.stringContaining('"/tmp/project folder"'),
+    files: [{ path: '/tmp/brief.txt' }],
+  })
+  expect(ui.files()).toEqual([])
+})
