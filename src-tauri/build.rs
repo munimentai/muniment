@@ -108,6 +108,7 @@ fn main() {
     }
     #[cfg(target_os = "macos")]
     {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
         let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let target = out.ancestors().nth(3).unwrap();
         let library = target.join("libmuniment_cef_keychain.dylib");

@@ -257,6 +257,8 @@ current_step=validate-environment
   exit
 }
 run_step install-dependencies log_command "$raw/installer.log" npm ci --no-audit --no-fund || exit
+run_step install-rust-targets log_command "$raw/installer.log" rustup target add aarch64-apple-darwin x86_64-apple-darwin || exit
+run_step build-runtime-resources log_command "$raw/installer.log" node .github/build-macos-runtime.mjs || exit
 run_step build-app log_command "$raw/installer.log" npm run tauri build -- --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json || exit
 app_binary="$PWD/src-tauri/target/release/muniment-desktop"
 current_step=validate-app
@@ -286,7 +288,7 @@ done
 run_step install-webdriver-app log_command "$raw/installer.log" install -m 0755 "$app_binary" "$installed_desktop" || exit
 run_step verify-webdriver-app cmp -s "$app_binary" "$installed_desktop" || exit
 # Sign only the WDIO bundle. Keep the nested Developer ID signatures and the pinned archive intact.
-run_step sign-webdriver-app log_command "$raw/installer.log" codesign --force --sign - "$installed_bundle" || exit
+run_step sign-webdriver-app log_command "$raw/installer.log" codesign --force --sign - --entitlements src-tauri/packaging/entitlements.plist "$installed_bundle" || exit
 run_step verify-webdriver-signature log_command "$raw/installer.log" codesign --verify --deep --strict "$installed_bundle" || exit
 unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
 

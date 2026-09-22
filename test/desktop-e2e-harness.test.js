@@ -801,7 +801,7 @@ codesign() {
   printf 'codesign: %s\\n' "$*"
   [[ \${@: -1} == "$installed_bundle" ]] || return 92
   if [[ $1 == --force ]]; then
-    [[ $# == 4 && $2 == --sign && $3 == - ]] || return 93
+    [[ $# == 6 && $2 == --sign && $3 == - && $4 == --entitlements && $5 == src-tauri/packaging/entitlements.plist ]] || return 93
     [[ $FIXTURE_MODE != signing-failure ]] || return 7
     cmp -s "$app_binary" "$installed_desktop" || return 94
     printf '# Ad-hoc signature fixture.\\n' >>"$installed_desktop"
@@ -846,7 +846,7 @@ run_step spec-local-mode-chat "$MUNIMENT_E2E_APP_BINARY"
     expect(result.status, result.stderr).toBe(0)
     const log = fs.readFileSync(path.join(artifacts, 'installer.log'), 'utf8')
     expect(log.split('\n').filter((line) => line.startsWith('codesign:'))).toEqual([
-      `codesign: --force --sign - ${installedBundle}`,
+      `codesign: --force --sign - --entitlements src-tauri/packaging/entitlements.plist ${installedBundle}`,
       `codesign: --verify --deep --strict ${installedBundle}`,
     ])
     expect(fs.readFileSync(path.join(bundle, 'Contents/MacOS/muniment-desktop'), 'utf8')).toBe('#!/bin/sh\nexit 99\n')

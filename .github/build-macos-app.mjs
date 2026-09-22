@@ -87,6 +87,7 @@ mustRun("build universal runtime", process.execPath, [join(".github", "build-mac
 tauri("build", "--target", "universal-apple-darwin", "--no-bundle", "--no-sign");
 mustRun("build universal CEF helper", process.execPath, [join(".github", "build-macos-cef-helper.mjs")]);
 tauri("bundle", "--target", "universal-apple-darwin", "--bundles", "app", "--no-sign");
+mustRun("package universal CEF", process.execPath, ["scripts/package-cef-macos.mjs", app, "--universal"]);
 
 if (!signing) {
   console.log("macOS signing SKIPPED: MACOS_SIGNING_ENABLED is false (unsigned build)");
@@ -175,11 +176,18 @@ const collectDylibs = async (dir) => {
 };
 await collectDylibs(app);
 for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArguments(identity.hash, file));
+// CEF contains extensionless Mach-O code and nested helper apps as well as dylibs.
+const cefFrameworks = join(app, "Contents", "Frameworks");
+mustRun("codesign CEF framework", "codesign", codesignArguments(identity.hash, join(cefFrameworks, "Chromium Embedded Framework.framework")));
+for (const suffix of ["", " (GPU)", " (Renderer)", " (Plugin)", " (Alerts)"]) {
+  const helperApp = join(cefFrameworks, `muniment CEF Helper${suffix}.app`);
+  mustRun("codesign nested CEF helper", "codesign", [...codesignArguments(identity.hash, helperApp), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
+}
 mustRun("codesign runtime", "codesign", codesignArguments(identity.hash, runtime));
 mustRun("codesign cli", "codesign", codesignArguments(identity.hash, cliBinary));
 mustRun("codesign reader", "codesign", codesignArguments(identity.hash, readerBinary));
-mustRun("codesign CEF helper", "codesign", codesignArguments(identity.hash, join(app, "Contents", "MacOS", "muniment-cef-helper")));
-mustRun("codesign app", "codesign", codesignArguments(identity.hash, app));
+mustRun("codesign CEF helper", "codesign", [...codesignArguments(identity.hash, join(app, "Contents", "MacOS", "muniment-cef-helper")), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
+mustRun("codesign app", "codesign", [...codesignArguments(identity.hash, app), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
 const mustNotarize = async (archive) => {
