@@ -3804,7 +3804,7 @@ describe('installed model settings controls', () => {
 describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
   const start = runner.lastIndexOf('\n  Install-Product') + '\n  Install-Product'.length
-  const lookup = runner.slice(start, runner.indexOf('\n  Write-ToolchainState "before-e2e-build"', start))
+  const lookup = runner.slice(start, runner.indexOf('\n  & (Join-Path $repoRoot "test/e2e/support/windows-installed-smoke.ps1")', start))
   const native = runner.slice(runner.indexOf('function Resolve-NativeCommand'), runner.indexOf('function Get-UninstallEntries'))
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
   const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
