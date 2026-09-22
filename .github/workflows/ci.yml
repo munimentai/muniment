@@ -495,7 +495,7 @@ jobs:
             cmd='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
           fi
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='. scripts/prepare-cef-macos.sh && npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin --no-bundle && node .github/build-macos-cef-helper.mjs && npm run tauri bundle -- --target universal-apple-darwin --bundles app'
+            cmd='. scripts/prepare-cef-macos.sh && npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin --no-bundle && node .github/build-macos-cef-helper.mjs && npm run tauri bundle -- --target universal-apple-darwin --bundles app && node scripts/package-cef-macos.mjs src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app --universal'
           fi
 
           repo_url="https://x-access-token:${REPO_TOKEN}@github.com/${REPOSITORY}"

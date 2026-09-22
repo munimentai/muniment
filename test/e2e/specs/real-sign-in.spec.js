@@ -103,7 +103,38 @@ async function activateHosted(driver, selector) {
   await control.click()
 }
 
-describe('installed nightly', () => {
+const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
+
+;(cloudEnabled ? describe.skip : describe)('installed local desktop', () => {
+  it('opens model settings without exposing cloud sign-in', async () => {
+    const location = await $('[data-testid="onboarding-home-path"]')
+    const localMode = await $('[data-testid="local-mode"]')
+    await browser.waitUntil(async () => await location.isDisplayed() || await localMode.isDisplayed(), {
+      timeout: 120000,
+      timeoutMsg: 'the local desktop did not appear without a Muniment account',
+    })
+    if (await location.isDisplayed()) {
+      await verifyInitialHome(location)
+      await (await $('textarea[placeholder="Ask anything"]')).setValue('Help me organize my notes.')
+      await openFirstRunModelSettings()
+    }
+    await localMode.waitForDisplayed({ timeout: 120000 })
+    const settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
+    if (!(await settings.isDisplayed())) {
+      await expandSidebar()
+      await (await $('button=Settings')).click()
+    }
+    await settings.waitForDisplayed()
+    const sections = await $('nav[aria-label="Settings sections"]')
+    expect(await (await sections.$('button=Account')).isExisting()).toBe(false)
+    expect(await (await $('button=Sign in for cloud features')).isExisting()).toBe(false)
+    await (await settings.$('button=Connect account')).waitForDisplayed()
+    await (await settings.$('button[aria-label="Close settings"]')).click()
+    expect(await (await $('textarea[placeholder="Ask anything"]')).isDisplayed()).toBe(true)
+  })
+})
+
+;(cloudEnabled ? describe : describe.skip)('installed nightly cloud features', () => {
   afterEach(async () => {
     await revokeFixtureSession(browser)
   })

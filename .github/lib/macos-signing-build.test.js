@@ -90,17 +90,33 @@ it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (se
   const preflight = calls.findIndex(([command, args]) => command === "security" && args.includes("codesigning"));
   const signing = calls.flatMap(([command, args], index) => command === "codesign" && args[0] === "--force" ? [index] : []);
   expect(registration).toBeLessThan(preflight);
-  // Sign each nested binary, including the CEF helper, before the app.
-  expect(signing).toHaveLength(6);
+  // Package CEF before signing, and seal each nested binary before the app.
+  const cefPackaging = calls.findIndex(([, args]) => args[0] === "scripts/package-cef-macos.mjs");
+  expect(cefPackaging).toBeGreaterThan(bundle);
+  expect(calls[cefPackaging][1]).toContain("--universal");
+  expect(cefPackaging).toBeLessThan(signing[0]);
+  expect(signing).toHaveLength(12);
   expect(preflight).toBeLessThan(signing[0]);
-  expect(calls[signing[0]][1].at(-1)).toMatch(/asr\.dylib$/);
-  expect(calls[signing[1]][1].at(-1)).toMatch(/LaunchServices\/muniment-runtime$/);
-  expect(calls[signing[2]][1].at(-1)).toMatch(/LaunchServices\/muniment-cli$/);
-  expect(calls[signing[3]][1].at(-1)).toMatch(/LaunchServices\/muniment-reader$/);
-  expect(calls[signing[4]][1].at(-1)).toMatch(/MacOS\/muniment-cef-helper$/);
-  expect(calls[signing[5]][1].at(-1)).toMatch(/muniment\.app$/);
+  const signedPaths = signing.map(index => {
+    const args = calls[index][1];
+    return args[args.indexOf("--sign") + 2];
+  });
+  expect(signedPaths[0]).toMatch(/asr\.dylib$/);
+  expect(signedPaths[1]).toMatch(/Chromium Embedded Framework\.framework$/);
+  for (const [offset, suffix] of ["", " (GPU)", " (Renderer)", " (Plugin)", " (Alerts)"].entries()) {
+    expect(signedPaths[offset + 2]).toContain(`muniment CEF Helper${suffix}.app`);
+  }
+  expect(signedPaths[7]).toMatch(/LaunchServices\/muniment-runtime$/);
+  expect(signedPaths[8]).toMatch(/LaunchServices\/muniment-cli$/);
+  expect(signedPaths[9]).toMatch(/LaunchServices\/muniment-reader$/);
+  expect(signedPaths[10]).toMatch(/MacOS\/muniment-cef-helper$/);
+  expect(signedPaths[11]).toMatch(/muniment\.app$/);
+  for (const index of [2, 3, 4, 5, 6, 10, 11]) {
+    const args = calls[signing[index]][1];
+    expect(args[args.indexOf("--entitlements") + 1]).toBe("src-tauri/packaging/entitlements.plist");
+  }
   const submission = calls.findIndex(([command, args]) => command === "xcrun" && args[0] === "notarytool" && args[1] === "submit");
-  expect(submission).toBeGreaterThan(signing[5]);
+  expect(submission).toBeGreaterThan(signing.at(-1));
   const packaging = calls.slice(submission).filter(([command]) => ["xcrun", "ditto", "productbuild"].includes(command));
   expect(packaging.map(([command, args]) => command === "xcrun" ? args.slice(0, 2).join(" ") : command)).toEqual([
     "notarytool submit", "notarytool info", "stapler staple", "stapler validate",

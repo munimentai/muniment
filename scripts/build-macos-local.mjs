@@ -79,12 +79,6 @@ mustRun("build browser helper", "cargo", ["build", "--manifest-path", "src-tauri
 mustRun("build app", "npm", ["run", "tauri", "build", "--", "--bundles", "app", "--features", "local-runtime", "--no-sign"]);
 mustRun("package direct CEF", process.execPath, ["scripts/package-cef-macos.mjs", app]);
 
-mustRun("link CEF private Keychain bridge", "install_name_tool", [
-  "-change", "/System/Library/Frameworks/Security.framework/Versions/A/Security",
-  "@loader_path/../libmuniment_cef_keychain.dylib",
-  join(app, "Contents", "Frameworks", "Chromium Embedded Framework.framework", "Chromium Embedded Framework"),
-]);
-
 // Everything secret-bearing lives in a throwaway directory removed on exit.
 const workDir = mkdtempSync(join(tmpdir(), "muniment-local-signing-"));
 const keychain = join(workDir, "muniment-local-signing.keychain-db");

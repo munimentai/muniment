@@ -626,6 +626,8 @@ try {
 
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs absent `"$appBinary`"" $installerLog "release WebDriver guard failed"
   Write-ToolchainState "before-e2e-build"
+  $readerOutput = Join-Path $repoRoot "src-tauri/target/release/muniment-reader.exe"
+  Invoke-NativeCommand "powershell.exe" "-NoProfile -ExecutionPolicy Bypass -File .github/build-reader.ps1 `"$readerOutput`"" $installerLog "E2E reader build failed"
   # Use the installed CLI entry without npm's bare-command PATH lookup.
   $tauriCli = Join-Path $repoRoot "node_modules/@tauri-apps/cli/tauri.js"
   if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) { throw "The local Tauri CLI entry is missing: $tauriCli" }
