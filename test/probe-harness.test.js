@@ -11,7 +11,7 @@ import { buildProbeCommandTable } from './probe/stub.js'
 
 const source = fs.readFileSync(path.join(process.cwd(), 'test/probe/stub.js'), 'utf8')
 const readyMarker = "document.body.dataset.probeReady = ''"
-let App
+import App from '../src/App.svelte'
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: vi.fn().mockResolvedValue(undefined),
@@ -56,7 +56,6 @@ function installTable(fixtureName) {
 
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
-  App = (await import('../src/App.svelte')).default
 })
 
 afterEach(() => {

@@ -45,7 +45,7 @@ const openDeleteMenu = async (title) => {
 }
 const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/code-diff/1/modified.json'), 'utf8'))
 
-let App
+import App from './App.svelte'
 let invoke
 let chatListener
 let launcherListener
@@ -227,7 +227,6 @@ beforeAll(async () => {
     invoke: (command) => command === 'plugin:dialog|open' ? Promise.resolve(dialogResult) : Promise.reject(new Error(`unexpected internal command: ${command}`)),
     transformCallback: vi.fn(),
   }
-  App = (await import('./App.svelte')).default
 })
 
 beforeEach(() => {

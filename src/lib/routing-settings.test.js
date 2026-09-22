@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
+// Compile the lazy section before the test measures UI readiness.
+import './ModelsSection.svelte'
 import Settings from './Settings.svelte'
 import ModelAccounts from './ModelAccounts.svelte'
 import RoutingTest from './RoutingTest.svelte'
