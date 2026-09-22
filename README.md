@@ -206,12 +206,11 @@ and majors may break compatibility. A bad release is never overwritten: stop
 package-manager publication, mark it yanked in the release title/body, and
 promote a new patch. Delete a tag/release only when nothing was distributed and
 the owner confirms it was accidental. WinGet and other stable package manifests
-are published only after stable promotion succeeds. The Homebrew tap tracks the
-nightly channel separately, and the nightly publish step skips cleanly while
-the tap is unseeded.
+are published only after stable promotion succeeds. Homebrew distribution uses a reviewed submission to the official `homebrew/cask`
+catalog after the public stable macOS archive passes installation and Gatekeeper checks.
 
 See [macOS packages](docs/macos-packages.md) for `.pkg` deployment and current signing status.
-See [Homebrew](docs/homebrew.md) to install the current macOS nightly from the Muniment tap.
+See [Homebrew](docs/homebrew.md) for official catalog submission requirements.
 
 ### macOS CI note
 

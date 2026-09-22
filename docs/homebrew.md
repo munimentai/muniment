@@ -1,37 +1,25 @@
 # Homebrew
 
-The Muniment tap ships the current macOS nightly as a universal app archive.
-The cask pins each archive by its source commit and SHA-256 digest.
+Muniment targets the official `homebrew/cask` catalog. The install command is
+`brew install --cask muniment` once Homebrew accepts the cask. Until acceptance,
+use the [install guide](https://muniment.ai/docs/install/) for direct downloads.
+Do not advertise the Homebrew command as available before the cask is merged.
 
-Install it with these commands:
+## Release requirements
 
-```sh
-brew tap mikeydiamonds/muniment
-brew install --cask mikeydiamonds/muniment/muniment-nightly
-```
+The cask uses the public stable macOS archive from `munimentai/muniment`.
+It pins the version and SHA-256 checksum. The app must pass Gatekeeper with
+its Developer ID signature and notarization intact. Installation must not
+remove quarantine attributes or require a security bypass.
 
-## Gatekeeper caveat
+Validate the downloaded archive, test installation and removal, and run
+Homebrew's cask audit before submitting a pull request to `Homebrew/homebrew-cask`.
+The cask must work on every architecture it declares.
 
-The app is unsigned until Apple completes the developer enrollment.
-macOS Gatekeeper will block the app after Homebrew installs it.
+Homebrew reviews public interest, maintenance and security as well as packaging.
+Owner submissions normally require 225 stars, 90 forks or 90 watchers.
+A maintainer can consider a documented exception. Submission does not guarantee acceptance.
 
-If you knowingly trust the downloaded app, remove its quarantine attribute:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/muniment.app
-```
-
-This command bypasses Gatekeeper for that app. Do not run it unless you trust the download.
-
-Signing and notarization will change only the nightly artifact.
-The cask URL, checksum update, and install commands will stay the same.
-
-## Later migration
-
-The Muniment tap is the shipping source now.
-Move the cask to `homebrew/cask` only after the app uses its default stable channel.
-The app must also meet Homebrew's current package acceptance and notability rules.
-The signed artifact must pass Gatekeeper without a bypass before migration.
-
-At migration time, review Homebrew's [cask requirements](https://docs.brew.sh/Acceptable-Casks) and [shared package policy](https://docs.brew.sh/Acceptable-Formulae).
-Submit the stable cask under Homebrew's current token rules, then remove the tap copy after users can migrate.
+See the [cask requirements](https://docs.brew.sh/Acceptable-Casks),
+[package acceptance policy](https://docs.brew.sh/Package-Acceptance-Policy), and
+[submission guide](https://docs.brew.sh/How-To-Open-a-Homebrew-Pull-Request).
