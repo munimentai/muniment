@@ -19,6 +19,8 @@ if [[ $artifact == *.deb ]]; then
   [[ -n $payload ]] || { echo "DEB data payload is unavailable: $artifact" >&2; exit 1; }
   mkdir "$work/payload"
   tar -xf "$payload" -C "$work/payload"
+elif [[ $artifact == *.app.tar.gz ]]; then
+  tar -xf "$artifact" -C "$work/outer"
 else
   7z x -y "-o$work/outer" "$artifact" >/dev/null
 fi

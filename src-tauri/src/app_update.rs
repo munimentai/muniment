@@ -23,14 +23,15 @@ pub async fn app_update_prepare(
     {
         return Ok(Some(update.version.clone()));
     }
-    let Some(key) = option_env!("MUNIMENT_UPDATER_PUBLIC_KEY").filter(|key| !key.trim().is_empty())
-    else {
-        return Ok(None);
-    };
+    let key = option_env!("MUNIMENT_UPDATER_PUBLIC_KEY")
+        .unwrap_or(include_str!("../updater.pub"))
+        .trim();
     let endpoint = option_env!("MUNIMENT_UPDATER_ENDPOINT")
         .unwrap_or("https://github.com/munimentai/muniment/releases/latest/download/latest.json");
-    let updater = app
-        .updater_builder()
+    let builder = app.updater_builder();
+    #[cfg(target_os = "windows")]
+    let builder = builder.target(windows_update_target()?);
+    let updater = builder
         .pubkey(key)
         .endpoints(vec![endpoint
             .parse()
@@ -82,6 +83,29 @@ pub async fn app_update_install(
     app.restart();
 }
 
+// The CEF sandbox bootstrap loads the application DLL, so Tauri's executable
+// bundle marker cannot reliably identify the installed Windows package format.
+#[cfg(target_os = "windows")]
+fn windows_update_target() -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    let exe = std::env::current_exe().map_err(|_| "The installed app path is unavailable.")?;
+    let directory = exe.parent().ok_or("The installed app path is unavailable.")?;
+    let script = include_str!("../../scripts/windows-update-target.ps1");
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .env("MUNIMENT_UPDATE_INSTALL_DIR", directory)
+        .creation_flags(0x08000000)
+        .output()
+        .map_err(|_| "The installed app package is unavailable.")?;
+    let target = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success()
+        || !matches!(target.as_str(), "windows-x86_64-msi-user" | "windows-x86_64-msi-machine" | "windows-x86_64-nsis")
+    {
+        return Err("The installed app package is unavailable.".into());
+    }
+    Ok(target)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -91,6 +115,7 @@ mod tests {
         let updater: tauri_plugin_updater::Config =
             serde_json::from_value(config["plugins"]["updater"].clone()).unwrap();
         assert!(updater.pubkey.is_empty());
+        assert!(updater.require_signed_version);
         assert!(updater.endpoints.is_empty());
     }
 }

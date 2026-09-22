@@ -122,10 +122,10 @@ for classifier_class in route.cloud route.local route.proxy; do
   grep -Fq "\`$classifier_class\`" "$classifier_adr"
   grep -Fq "\"$classifier_class\"" "$classifier_module"
 done
-# Release gate 7 defers the in-app updater until the first public release under FSL.
+# Release updates bind the announced version to the signed artifact.
 update_adr=docs/decisions/0029-update-path.md
 test -f "$update_adr"
-grep -Fq 'The first public release under FSL opens the in-app updater work.' \
+grep -Fq 'Each signature binds the artifact to the announced version.' \
   "$update_adr"
 # SPEC and ROADMAP name that one mode identically, and neither names it a chat.
 grep -Fq 'the thread surface' SPEC.md

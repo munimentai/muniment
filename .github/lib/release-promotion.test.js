@@ -11,6 +11,12 @@ const assetNames = [
   `nightly-${sha}-windows-muniment-nsis.exe`,
   `nightly-${sha}-macos-muniment.app.zip`,
   `nightly-${sha}-macos-muniment.pkg`,
+  `nightly-${sha}-macos-muniment.app.tar.gz`,
+  `nightly-${sha}-macos-muniment.app.tar.gz.sig`,
+  `nightly-${sha}-linux-muniment.AppImage.sig`,
+  `nightly-${sha}-windows-muniment.msi.sig`,
+  `nightly-${sha}-windows-muniment-machine.msi.sig`,
+  `nightly-${sha}-windows-muniment-nsis.exe.sig`,
 ];
 const assets = assetNames.map((name, id) => ({ id, name, url: `https://api.github.test/assets/${id}`, content_type: "application/octet-stream" }));
 const smoke = { name: "smoke", status: "completed", conclusion: "success" };
@@ -39,7 +45,7 @@ const promotionFetch = (overrides = {}) => {
       body: `Automated desktop build from ${sha}.\n\n${windowsSigningProvenance(sha)}${overrides.macosSigned !== false ? `\n\n${macosSigningProvenance(sha)}` : "\n\nmacOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."}`, assets,
     });
     if (url.endsWith("/releases") && method === "POST") return response({ id: 42 });
-    if (url.startsWith("https://api.github.test/assets/")) return response("asset bytes");
+    if (url.startsWith("https://api.github.test/assets/")) return response(assets[Number(url.split("/").at(-1))]?.name.endsWith(".sig") ? Buffer.from("signature fixture").toString("base64") : "asset bytes");
     if (url.startsWith("https://uploads.github.com/")) return response({});
     if (url.endsWith("/releases/42") && ["PATCH", "DELETE"].includes(method)) return response({});
     if (url.includes(`/git/refs/tags/${version}`) && method === "DELETE") return response({});
@@ -59,8 +65,8 @@ describe("stable release promotion", () => {
 
   it("requires exactly one of each finalized nightly artifact", () => {
     expect(expectedNightlyAssets(assets, sha)).toEqual(assets);
-    expect(() => expectedNightlyAssets(assets.slice(1), sha)).toThrow("exactly seven");
-    expect(() => expectedNightlyAssets([...assets.slice(0, 6), assets[0]], sha)).toThrow("Linux deb");
+    expect(() => expectedNightlyAssets(assets.slice(1), sha)).toThrow("exactly thirteen");
+    expect(() => expectedNightlyAssets([...assets.slice(0, 12), assets[0]], sha)).toThrow();
   });
 
   it("requires smoke and rejects pending or otherwise-named failed checks", () => {
@@ -97,13 +103,13 @@ describe("stable release promotion", () => {
     await expect(promote(fetchImpl)).rejects.toThrow("CI is not green");
   });
 
-  it("uses the nightly tag despite stale target_commitish and copies exactly seven assets without mutating nightly", async () => {
+  it("uses the nightly tag despite stale target_commitish and copies exactly thirteen assets without mutating nightly", async () => {
     const { calls, fetchImpl } = promotionFetch();
     await promote(fetchImpl);
     const create = calls.find(({ url, options }) => url.endsWith("/releases") && options.method === "POST");
     expect(JSON.parse(create.options.body)).toMatchObject({ tag_name: version, target_commitish: sha, draft: true, prerelease: false });
-    expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(7);
-    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(7);
+    expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(13);
+    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(14);
     expect(calls.some(({ url }) => url.endsWith("/git/ref/tags/nightly"))).toBe(false);
     expect(calls.some(({ url, options }) => url.includes("/releases/1") && options.method)).toBe(false);
     const publish = calls.find(({ url, options }) => url.endsWith("/releases/42") && options.method === "PATCH");

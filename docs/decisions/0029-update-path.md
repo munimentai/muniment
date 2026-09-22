@@ -1,38 +1,30 @@
-# 0029 — Use the per-platform package manager for updates
-
-- Status: accepted
-
-## Context
-
-The desktop ships a rolling nightly and owner-promoted stable releases.
-Stable promotion copies the exact bytes of a green nightly without a rebuild.
-The roadmap puts the first public release under FSL after the graph, the SQL
-tool, and the report. The desktop has no in-app updater.
+# 0029 — Sign desktop updates and preserve installer identity
 
 ## Decision
 
-The update path is the per-platform package manager until the first public release.
+The desktop reads the public stable release feed without identifying the user or
+machine. It downloads an update, verifies its signature and signed version, and
+shows an install control. Installation requires idle runtime activity.
 
-- macOS uses the Homebrew tap, `mikeydiamonds/muniment`, and its `muniment-nightly` cask.
-- Windows uses WinGet for stable releases.
-- Linux uses the deb package or AppImage from the release assets.
-  Users install the new deb through the system package manager or replace the AppImage.
+The public key is compiled into the app. The private signing key stays in release
+credentials. Packaging signs the finished artifacts, after platform signing and
+macOS notarization. Stable promotion copies those bytes and publishes their
+signatures and stable URLs in `latest.json`. A full installed nightly is required.
 
-The desktop checks for no update and phones no home.
-The first public release under FSL opens the in-app updater work.
+macOS updates use a tar archive of the signed application bundle. Linux in-app
+updates use AppImage. Debian packages use the system package manager. Windows
+reads the registration for its exact install directory and selects per-user MSI,
+machine MSI, or NSIS. Missing or ambiguous registration stops the update.
 
-## Consequences
+Each signature binds the artifact to the announced version. A signature failure
+never enables the install control. An installation failure retains the verified
+update for retry. The app restarts after installation.
 
-Users update outside the desktop. The desktop adds no update polling or update telemetry.
-Homebrew tap seeding and WinGet publication remain owner-gated.
-The package manager update path closes release gate 7 without updater code.
-The structure smoke asserts this ADR exists and carries the trigger sentence.
+Official Homebrew distribution uses `Homebrew/homebrew-cask`. There is no custom
+tap. Package manager updates remain available independently of the in-app updater.
 
 ## References
 
-- [Production-ready gates](../../SPEC.md#production-ready-gates-release-gate) define the update criterion.
-- [Roadmap](../../ROADMAP.md) defines the public core under FSL and the product outcomes.
-- [Stable promotion](../../.github/lib/release-promotion.mjs) verifies and copies the nightly artifacts.
-- [Homebrew](../homebrew.md) describes the macOS tap and cask.
-- [Windows installers](../windows-installers.md#winget-convenience-channel) describes WinGet publication.
-- [Structure smoke](../../test/smoke.sh) enforces the deferral trigger.
+- [Production-ready gates](../../SPEC.md#production-ready-gates-release-gate)
+- [Stable promotion](../../.github/lib/release-promotion.mjs)
+- [Homebrew](../homebrew.md)

@@ -1,4 +1,5 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { prepareUpdateArtifacts } from "./lib/update-artifacts.mjs";
 import { basename, join } from "node:path";
 
 const token = process.env.GH_TOKEN;
@@ -6,13 +7,6 @@ const [repository, sha, platform] = process.argv.slice(2);
 if (!token || !repository || !/^[0-9a-f]{40}$/.test(sha) || !platform) {
   throw new Error("usage: GH_TOKEN=<injected> upload-nightly-assets.mjs <owner/repo> <sha> <platform>");
 }
-
-const specs = {
-  linux: [["deb", ".deb"], ["appimage", ".AppImage"]],
-  windows: [["msi", ".msi", "-machine.msi"], ["msi", "-machine.msi"], ["nsis", "-setup.exe"]],
-  macos: [["macos", ".app.zip"], ["pkg", ".pkg"]],
-};
-if (!specs[platform]) throw new Error(`unsupported platform: ${platform}`);
 
 const api = async (url, options = {}) => {
   const response = await fetch(url, {
@@ -35,17 +29,8 @@ const bundleBase = platform === "macos"
   : join("src-tauri", "target", "release", "bundle");
 
 const release = await (await api(`https://api.github.com/repos/${repository}/releases/tags/nightly`)).json();
-for (const [directory, suffix, excludeSuffix] of specs[platform]) {
-  const bundleDirectory = join(bundleBase, directory);
-  const matches = (await readdir(bundleDirectory)).filter(
-    (name) => name.endsWith(suffix) && (!excludeSuffix || !name.endsWith(excludeSuffix)),
-  );
-  if (matches.length !== 1) {
-    throw new Error(`expected one ${suffix} in ${bundleDirectory}, found: ${matches.join(", ") || "none"}`);
-  }
-
-  const path = join(bundleDirectory, matches[0]);
-  const assetName = platform === "linux" && directory === "deb"
+for (const path of await prepareUpdateArtifacts(platform, bundleBase)) {
+  const assetName = platform === "linux" && path.endsWith(".deb")
     ? `nightly-${sha}-linux-muniment.deb`
     : `nightly-${sha}-${platform}-${basename(path).replace("-setup.exe", "-nsis.exe")}`;
   const old = release.assets.find((asset) => asset.name === assetName);

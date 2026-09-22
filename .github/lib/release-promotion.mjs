@@ -1,3 +1,4 @@
+import { createUpdateFeed } from "./update-feed.mjs";
 const API = "https://api.github.com";
 const request = async (fetchImpl, token, url, options = {}) => {
   const response = await fetchImpl(url, { ...options, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", ...options.headers } });
@@ -22,7 +23,10 @@ export const expectedNightlyAssets = (assets, sha) => {
     ["macOS app", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".app.zip")],
     ["macOS package", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".pkg")],
   ];
-  if (assets.length !== specs.length) throw new Error(`nightly release must contain exactly seven assets; found ${assets.length}`);
+  specs.push(["macOS updater", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".app.tar.gz")]);
+  const updateBinaries = assets.filter(({ name }) => name.endsWith('.AppImage') || name.endsWith('.app.tar.gz') || name.endsWith('-nsis.exe') || name.endsWith('.msi'));
+  for (const { name } of updateBinaries) specs.push([`${name} signature`, (n) => n === `${name}.sig`]);
+  if (assets.length !== 13 || specs.length !== 13) throw new Error(`nightly release must contain exactly thirteen assets; found ${assets.length}`);
   for (const [label, matches] of specs) if (assets.filter((asset) => matches(asset.name)).length !== 1) throw new Error(`expected exactly one ${label} asset`);
   return assets;
 };
@@ -92,10 +96,15 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
   let created;
   try {
     created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha), draft: true, prerelease: false }) })).json();
+    const signatures = new Map();
     for (const asset of assets) {
       const source = await request(fetchImpl, token, asset.url, { headers: { Accept: "application/octet-stream" } });
-      await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=${encodeURIComponent(asset.name)}`, { method: "POST", headers: { "Content-Type": asset.content_type || "application/octet-stream" }, body: await source.arrayBuffer() });
+      const bytes = await source.arrayBuffer();
+      if (asset.name.endsWith(".sig")) signatures.set(asset.name, Buffer.from(bytes).toString("utf8"));
+      await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=${encodeURIComponent(asset.name)}`, { method: "POST", headers: { "Content-Type": asset.content_type || "application/octet-stream" }, body: bytes });
     }
+    const feed = createUpdateFeed({ repository, version, assets, signatures });
+    await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=latest.json`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(feed) });
     await request(fetchImpl, token, `${repoApi}/releases/${created.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft: false, prerelease: false }) });
   } catch (error) {
     if (created) { await request(fetchImpl, token, `${repoApi}/releases/${created.id}`, { method: "DELETE" }).catch(() => {}); await request(fetchImpl, token, `${repoApi}/git/refs/tags/${encodeURIComponent(version)}`, { method: "DELETE" }).catch(() => {}); }
