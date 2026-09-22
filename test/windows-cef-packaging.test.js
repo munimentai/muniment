@@ -35,11 +35,15 @@ it('bundles the sandbox bootstrap, application DLL, browser data and credits wit
     expect(readFileSync(join(f.output, 'muniment-desktop.dll'), 'utf8')).toBe('muniment_desktop.dll')
     expect(existsSync(join(f.output, 'muniment_desktop.dll'))).toBe(false)
     const resources = JSON.parse(readFileSync(f.config, 'utf8')).bundle.resources
-    expect(resources['target/release/muniment_desktop.dll']).toBe('muniment-desktop.dll')
+    expect(resources['target/release/cef-app/muniment-desktop.dll']).toBe('muniment-desktop.dll')
+    expect(existsSync(join(f.target, 'muniment_desktop.dll'))).toBe(false)
     expect(Object.values(resources).filter(name => name === 'muniment-desktop.dll')).toHaveLength(1)
     for (const name of ['libcef.dll', 'chrome_elf.dll', 'icudtl.dat', 'v8_context_snapshot.bin', 'resources.pak', 'CEF-CREDITS.html', 'muniment-desktop.exe.manifest']) {
       expect(resources[`target/release/cef-app/${name}`]).toBe(name)
       expect(existsSync(join(f.root, 'src-tauri', `target/release/cef-app/${name}`))).toBe(true)
+    }
+    for (const [source, destination] of Object.entries(resources)) {
+      if (!destination.endsWith('/')) expect(source.split('/').at(-1)).toBe(destination)
     }
     expect(resources['target/release/cef-app/locales/']).toBe('locales/')
     expect(readFileSync(join(f.output, 'locales/en-US.pak'), 'utf8')).toBe('locales/en-US.pak')

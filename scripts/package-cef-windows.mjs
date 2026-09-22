@@ -1,4 +1,4 @@
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 const target = 'src-tauri/target/release'
 const output = process.argv[2] || join(target,'cef-app')
@@ -39,13 +39,15 @@ if (process.argv[3] === '--installer-config') {
   for (const name of readdirSync(output)) {
     if (existing.has(name) || name === 'muniment_desktop.dll') continue
     if (/\.(dll|pak|bin|dat|json|manifest)$/.test(name) || name === 'locales' || name === 'CEF-CREDITS.html') {
-      // Map the Cargo DLL directly so WiX does not auto-add a second copy.
-      const file = name === 'muniment-desktop.dll' ? join(target, 'muniment_desktop.dll') : join(output, name)
+      const file = join(output, name)
       const source = relative(realpathSync('src-tauri'), realpathSync(file)).replaceAll('\\', '/')
       resources[source + (name === 'locales' ? '/' : '')] = name + (name === 'locales' ? '/' : '')
     }
   }
   writeFileSync(configPath, JSON.stringify({ bundle: { resources } }, null, 2))
+  // WiX keeps the source basename. Stage the hyphenated DLL and remove the
+  // Cargo-named output from Tauri's automatic DLL collection.
+  renameSync(join(target, 'muniment_desktop.dll'), join(output, 'muniment-desktop.dll'))
   // Tauri bundles this executable without rebuilding the Rust entry point.
   copyFileSync(join(output, 'muniment-desktop.exe'), join(target, 'muniment-desktop.exe'))
 }
