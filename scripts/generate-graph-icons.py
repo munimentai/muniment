@@ -35,7 +35,7 @@ def png(pixels, logical):
     # Preserve the application's dark card and its established 72% mark size.
     mark = SVGS[str(logical)]
     body = mark[mark.index('<g '):mark.rindex('</svg>')]
-    source = f'<svg xmlns="http://www.w3.org/2000/svg" width="{pixels}" height="{pixels}" viewBox="0 0 48 48"><rect width="48" height="48" fill="#131816"/><g color="#58B39F" transform="translate(6.72 6.72) scale(.72)">{body}</g></svg>'
+    source = f'<svg xmlns="http://www.w3.org/2000/svg" width="{pixels}" height="{pixels}" viewBox="0 0 48 48"><rect width="48" height="48" fill="#131816"/><g color="#70D1B7" transform="translate(6.72 6.72) scale(.72)">{body}</g></svg>'
     raw = cairosvg.svg2png(bytestring=source.encode(), output_width=pixels * 4, output_height=pixels * 4)
     image = Image.open(io.BytesIO(raw)).convert('RGBA').resize((pixels, pixels), Image.Resampling.LANCZOS)
     output = io.BytesIO()
