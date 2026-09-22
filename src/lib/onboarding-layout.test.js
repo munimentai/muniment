@@ -25,7 +25,7 @@ describe('onboarding layout', () => {
 
   it('keeps the composer and chips above the scrollable panel', () => {
     expect(source.indexOf('<div class="composer">')).toBeLessThan(source.indexOf('<div class="chips"'))
-    expect(source.indexOf('<div class="chips"')).toBeLessThan(source.indexOf('<section class="panel"'))
+    expect(source.indexOf('<div class="chips"')).toBeLessThan(source.indexOf('<section data-panel="onboarding" class="panel"'))
     expect(rules.get('.composer')).toMatch(/flex:\s*none/)
     expect(rules.get('.chips')).toMatch(/flex:\s*none/)
     expect(rules.get('.chips')).toMatch(/flex-wrap:\s*wrap/)

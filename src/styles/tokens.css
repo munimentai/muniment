@@ -39,6 +39,7 @@
   color-scheme: light dark;
 
   /* §1.3 light color tokens */
+  --overlay-backdrop: color-mix(in srgb, var(--paper) 64%, transparent);
   --paper: #F6F7F6;
   --surface: #FFFFFF;
   --faint: #EDEFEE;
@@ -53,6 +54,7 @@
 
   /* §1.4 type: two families, two registers */
   --font-human: 'Schibsted Grotesk', system-ui, sans-serif;
+  --font-heading: 'Schibsted Grotesk', system-ui, sans-serif;
   --font-mono: 'Commit Mono', ui-monospace, monospace;
   --weight-regular: 400;
   --weight-semibold: 600;
@@ -75,7 +77,8 @@
   --motion-popover: 120ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
-  /* §1.5 radius scale. Nothing pill-shaped. */
+  /* §1.5 radius scale. Extend tabs use a pill shape. */
+  --radius-pill: 999px; /* Extend tabs */
   --radius-chip: 2px;    /* chips, kbd */
   --radius-control: 6px; /* buttons, tools, inputs */
   --radius-panel: 10px;  /* panels, composer, window */

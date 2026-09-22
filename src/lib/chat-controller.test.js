@@ -1141,6 +1141,7 @@ describe('chat controller', () => {
     const summaries = [{ threadId: 'thread-1' }]
     const onThreadSummaries = vi.fn()
     const onHistoryError = vi.fn()
+    const onThreadListError = vi.fn()
     const invoke = vi.fn()
       .mockResolvedValueOnce({ summaries, nextCursor: 'page-2' })
       .mockResolvedValueOnce({ entries: [], nextCursor: null })
@@ -1151,15 +1152,17 @@ describe('chat controller', () => {
       readAnnounced: () => null, readDraft: () => '', readFiles: () => [],
       readThreadSummaries: () => summaries, onMessages: vi.fn(), onActive: vi.fn(),
       onAnnounce: vi.fn(), onDraft: vi.fn(), onFiles: vi.fn(), onSubmitError: vi.fn(),
-      onCancelError: vi.fn(), onQueueError: vi.fn(), onHistoryError, onThreadSummaries,
+      onCancelError: vi.fn(), onQueueError: vi.fn(), onHistoryError, onThreadListError, onThreadSummaries,
     })
 
     await controller.loadHistory()
     onThreadSummaries.mockClear()
+    onHistoryError.mockClear()
     await expect(controller.loadOlderThreads()).resolves.toBeNull()
 
     expect(onThreadSummaries).not.toHaveBeenCalled()
-    const olderThreadsAction = onHistoryError.mock.lastCall[1]
+    expect(onHistoryError).not.toHaveBeenCalled()
+    const olderThreadsAction = onThreadListError.mock.lastCall[1]
     expect(olderThreadsAction.label).toBe('Load older threads')
     await expect(olderThreadsAction.run()).resolves.toBe('thread-2')
     expect(invoke).toHaveBeenLastCalledWith('chat_thread_summaries', { limit: 20, cursor: 'page-2' })
@@ -2611,4 +2614,16 @@ describe('chat controller', () => {
     expect(context.announced()).toMatchObject({ phase: 'failed', failureReason: 'latest failure' })
     expect(context.active()).toBeNull()
   })
+})
+
+it('sends folder paths to local tools without ingesting directories as files', async () => {
+  const invoke = vi.fn().mockResolvedValue({ runId: 'folder-run' })
+  const ui = setup(invoke)
+  ui.setFiles([{ path: '/tmp/project folder', isDirectory: true }, { path: '/tmp/brief.txt' }])
+  await ui.controller.send()
+  expect(invoke).toHaveBeenCalledWith('chat_submit', {
+    prompt: expect.stringContaining('"/tmp/project folder"'),
+    files: [{ path: '/tmp/brief.txt' }],
+  })
+  expect(ui.files()).toEqual([])
 })

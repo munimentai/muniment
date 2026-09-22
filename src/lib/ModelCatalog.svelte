@@ -46,7 +46,7 @@
           <div class="model-row">
             <div class="identity"><span class="model-id">{model.label}</span><span class="meta">{route ? `${model.accounts || 1} ${model.accounts > 1 ? 'accounts' : 'account'}` : 'Direct'}{#if model.context} · {model.context} context{/if}</span></div>
             {#if current?.provider === provider && current?.model === choice}<span class="meta">Selected</span>{:else}<button disabled={pending || !shown} onclick={() => run('local_mode_set_default_model', { provider, model: choice })}>Use</button>{/if}
-            <label class="show"><Toggle checked={shown} disabled={pending} aria-label={`Show ${model.id} in the selector`} onchange={() => run('local_mode_set_model_hidden', { provider: model.provider, model: model.choice, hidden: shown })} />Show</label>
+            <label class="show"><Toggle checked={shown} disabled={pending} aria-label={`Show ${model.label} in the selector`} onchange={() => run('local_mode_set_model_hidden', { provider: model.provider, model: model.choice, hidden: shown })} />Show</label>
           </div>
           {#if route}
             <details><summary>Routing statement</summary><p class="statement">{route.description}</p>

@@ -1,7 +1,9 @@
 <script>
+  import Toggle from './Toggle.svelte'
   // Routing settings: the router switch, the classifier
   // that picks a model per turn, and the statements it reads for every model
   // in the running. The accounts themselves sit under their providers above.
+  import { modelLabel } from './model-label.js'
   import LucideIcon from './LucideIcon.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import { pickerGroups, currentModel } from './provider-catalog.js'
@@ -46,7 +48,7 @@
     finally { pending = false }
   }
 
-  const rows = $derived(catalog(settings?.accounts ?? []))
+  const rows = $derived(catalog(settings?.accounts ?? [], settings?.options ?? []))
 
   // Every command answers with the whole settings, so one reply redraws the page.
   $effect(() => {
@@ -84,11 +86,13 @@
   // Picking a catalog row fills the form. Saving is still its own step, so a
   // pick never spends a key or an account before the user says so.
   function choose(row) {
+    const endpoint = classifierKind === 'endpoint' ? classifierUrl : ''
+    if (chosen !== row.id) classifierKey = ''
     chosen = row.id
     classifierKind = row.kind
     classifierModel = row.model
     classifierFamily = row.family ?? ''
-    classifierUrl = ''
+    classifierUrl = row.kind === 'endpoint' ? endpoint : ''
   }
 
   function chooseEndpoint() {
@@ -129,6 +133,17 @@
   }
 </script>
 
+{#snippet endpointFields()}
+  <div class="connection-fields" role="group" aria-label="Classifier connection">
+      <label for="classifier-model">Model ID</label>
+      <input id="classifier-model" type="text" bind:value={classifierModel} disabled={pending}>
+      <label for="classifier-url">Classifier URL</label>
+      <input id="classifier-url" type="url" placeholder="https://host/v1/systemone" bind:value={classifierUrl} disabled={pending}>
+      <label for="classifier-key">API key (optional)</label>
+      <input id="classifier-key" type="password" autocomplete="off" placeholder={settings.classifier.kind === 'endpoint' && settings.classifier.model === classifierModel && settings.classifier.configured ? 'Saved. Type a new key to replace it.' : ''} bind:value={classifierKey} disabled={pending}>
+  </div>
+{/snippet}
+
 <section class="routing" aria-labelledby="routing-title">
   <header class="routing-head"><div><h4 id="routing-title">Routing</h4></div></header>
   {#if status}<p class="support" role="status">{status}</p>{/if}
@@ -144,16 +159,16 @@
     </select>
   {/if}
   <dl class="routing-summary" aria-label="Saved routing settings">
-    <div><dt>Classifier</dt><dd>{settings.classifier.kind === 'none' ? 'No classifier' : settings.classifier.configured ? settings.classifier.model : 'Connection required'}</dd></div>
+    <div><dt>Classifier</dt><dd>{settings.classifier.kind === 'none' ? 'No classifier' : settings.classifier.configured ? modelLabel(settings.classifier.model) : 'Connection required'}</dd></div>
     <div><dt>Eligible models</dt><dd>{settings.options.length}</dd></div>
-    <div><dt>Fallback</dt><dd>{settings.options.length ? settings.fallback || 'Lowest known price' : 'No eligible model'}</dd></div>
+    <div><dt>Fallback</dt><dd>{settings.options.length ? modelLabel(settings.fallback) || 'Lowest known price' : 'No eligible model'}</dd></div>
   </dl>
   {#if !settings.options.length}<p class="support">Connect an account to choose models automatically.</p>{/if}
   <details class="configure">
     <summary>Classifier and fallback</summary>
     <div class="disclosure-body">
     <p class="support">Your last message goes to the classifier to choose a model.</p>
-    {#each ['Built to classify', 'On your accounts'] as group}
+    {#each ['Built to classify', 'Self-hosted', 'On your accounts'] as group}
       <h6 class="catalog-label">{group}</h6>
       <ul class="catalog">
         {#each rows.filter((row) => row.group === group) as row (row.id)}
@@ -161,16 +176,17 @@
             <button type="button" class="quiet catalog-row" aria-pressed={chosen === row.id} disabled={!row.ready} onclick={() => choose(row)}>
               {#if row.family || row.kind === 'typesafe'}<ProviderLogo provider={row.family || 'typesafe'} size={16} />{/if}
               <span class="catalog-name">{row.name}</span>
-              <span class="record">{row.model}</span>
-              <span class="tag">{priceLabel(row.price)}</span>
+              <span class="record">{modelLabel(row.model)}</span>
+              <span class="tag">{row.kind === 'endpoint' ? 'your server' : priceLabel(row.price)}</span>
               {#if !row.ready}<span class="tag">no account</span>{/if}
               {#if chosen === row.id}<LucideIcon name="check" variant="action" size={14} />{/if}
             </button>
             {#if row.note && chosen === row.id}<p class="support note">{row.note}</p>{/if}
+            {#if row.kind === 'endpoint' && chosen === row.id}{@render endpointFields()}{/if}
             {#if row.kind === 'typesafe' && chosen === row.id}
               <label for="classifier-key">TypeSafe API key</label>
               <input id="classifier-key" type="password" autocomplete="off" placeholder={settings.classifier.kind === 'typesafe' && settings.classifier.configured ? 'Saved. Type a new key to replace it.' : ''} bind:value={classifierKey} disabled={pending}>
-              <label for="classifier-model">Model</label>
+              <label for="classifier-model">Model ID</label>
               <input id="classifier-model" type="text" bind:value={classifierModel} disabled={pending}>
             {/if}
           </li>
@@ -179,17 +195,9 @@
     {/each}
     <h6 class="catalog-label">Your own</h6>
     <ul class="catalog">
-      <li><button type="button" class="quiet catalog-row" aria-pressed={chosen === 'endpoint'} onclick={chooseEndpoint}><span class="catalog-name">Another endpoint</span><span class="record">custom classifier</span>{#if chosen === 'endpoint'}<LucideIcon name="check" variant="action" size={14} />{/if}</button></li>
+      <li><button type="button" class="quiet catalog-row" aria-pressed={chosen === 'endpoint'} onclick={chooseEndpoint}><span class="catalog-name">Another endpoint</span><span class="record">custom classifier</span>{#if chosen === 'endpoint'}<LucideIcon name="check" variant="action" size={14} />{/if}</button>{#if chosen === 'endpoint'}{@render endpointFields()}{/if}</li>
       <li><button type="button" class="quiet catalog-row" aria-pressed={chosen === ''} onclick={chooseNone}><span class="catalog-name">No classifier</span><span class="record">always use the fallback</span>{#if chosen === ''}<LucideIcon name="check" variant="action" size={14} />{/if}</button></li>
     </ul>
-    {#if classifierKind === 'endpoint'}
-      <label for="classifier-url">Classifier URL</label>
-      <input id="classifier-url" type="url" placeholder="https://host/v1/systemone" bind:value={classifierUrl} disabled={pending}>
-    {/if}
-    {#if classifierKind === 'endpoint'}
-      <label for="classifier-key">API key (optional)</label>
-      <input id="classifier-key" type="password" autocomplete="off" placeholder={settings.classifier.configured ? 'Saved. Type a new key to replace it.' : ''} bind:value={classifierKey} disabled={pending}>
-    {/if}
     <div class="actions">
       <button type="button" disabled={pending} onclick={saveClassifier}>Save classifier</button>
       {#if settings.classifier.configured && settings.classifier.kind !== 'pooled'}<button type="button" class="quiet" onclick={testClassifier}>Test</button>{/if}
@@ -200,7 +208,7 @@
       <label for="router-fallback">Fallback</label>
       <select id="router-fallback" bind:value={fallback}>
         <option value="">Lowest known price</option>
-        {#each drafts as draft (draft.family + '/' + draft.model)}<option value={draft.draftKey}>{draft.draftKey}</option>{/each}
+        {#each drafts as draft (draft.family + '/' + draft.model)}<option value={draft.draftKey}>{modelLabel(draft.draftKey)}</option>{/each}
       </select>
       <label for="router-confidence">Confidence floor · {Number(confidence).toFixed(2)}</label>
       <input id="router-confidence" type="range" min="0" max="1" step="0.05" bind:value={confidence}>
@@ -211,7 +219,7 @@
   </details>
   <div class="configure balancing">
     <div><h5>Account balancing</h5><p class="support" id="balancing-help">Share requests across accounts and skip accounts at their limit.</p></div>
-    <button type="button" role="switch" class="switch" aria-checked={settings.enabled} aria-label="Use account balancing" aria-describedby="balancing-help" onclick={toggleRouter} disabled={pending}><span></span></button>
+    <Toggle checked={settings.enabled} label="Use account balancing" onchange={toggleRouter} disabled={pending} />
   </div>
 </section>
 
@@ -255,6 +263,7 @@
   .catalog-row .tag { margin-left: auto; }
   .catalog-row .tag + .tag, .catalog-row .tag + :global(svg) { margin-left: 0; }
   .note { padding: 0 8px 6px; }
+  .connection-fields { display: grid; gap: 10px; padding: 10px 8px 14px; }
   .actions { display: flex; gap: 6px; }
   .save { justify-self: start; min-height: 28px; padding: 4px 10px; }
   label { color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -262,9 +271,4 @@
   input[type="password"], input[type="url"], select { width: min(420px, 100%); }
   input:focus, select:focus { border-color: var(--muted); outline: 0; }
   input[type="range"] { width: min(300px, 100%); accent-color: var(--ink); }
-  .switch { position: relative; flex: none; width: 30px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
-  .switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: var(--radius-chip); background: var(--muted); transition: transform 120ms ease, background 120ms ease; }
-  .switch[aria-checked="true"] { border-color: var(--signal); background: var(--signal-soft); }
-  .switch[aria-checked="true"] span { transform: translateX(12px); background: var(--signal); }
-  .switch:hover:not(:disabled) { background: var(--faint); }
 </style>

@@ -8,7 +8,7 @@ const accountSettings = fs.readFileSync(path.join(process.cwd(), 'src/lib/Accoun
 const style = [app, accessPanel, accountSettings].map((source) => source.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? '').join('\n')
 const selectors = [
   '.thread-menu button',
-  '.thread-delete-confirm button',
+  '.selection-bar button',
   '.run-error button',
   '.provenance',
   '.companion-revoke',

@@ -8,6 +8,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { featureFlags } from './feature-flags.js'
+vi.mock('./feature-flags.js', () => ({featureFlags: {cloud: true, companyRecord: true}}))
+
 import { historyMessages } from './lib/chat-state.js'
 
 const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.svelte'), 'utf8')
@@ -27,6 +30,7 @@ const openSettings = async (section) => {
   await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
   const dialog = await screen.findByRole('dialog', { name: 'Settings' })
   if (section) await fireEvent.click(within(within(dialog).getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: section }))
+  await waitFor(() => expect(within(dialog).queryByText('Loading settings…')).not.toBeInTheDocument())
   return dialog
 }
 const rowControlRules = new Map([...rowControlStyles
@@ -41,7 +45,7 @@ const openDeleteMenu = async (title) => {
 }
 const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/code-diff/1/modified.json'), 'utf8'))
 
-let App
+import App from './App.svelte'
 let invoke
 let chatListener
 let launcherListener
@@ -92,8 +96,11 @@ vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: () => Promise.resolve(dialogResult) }))
 
 vi.mock('@tauri-apps/api/window', () => ({
+  Window: {getByLabel: async () => null},
   UserAttentionType: { Informational: 2 },
   getCurrentWindow: () => ({
+    onMoved: async () => () => {},
+    onResized: async () => () => {},
     isFocused: () => Promise.resolve(windowFocused),
     requestUserAttention: (...args) => requestUserAttention(...args),
   }),
@@ -220,10 +227,10 @@ beforeAll(async () => {
     invoke: (command) => command === 'plugin:dialog|open' ? Promise.resolve(dialogResult) : Promise.reject(new Error(`unexpected internal command: ${command}`)),
     transformCallback: vi.fn(),
   }
-  App = (await import('./App.svelte')).default
 })
 
 beforeEach(() => {
+  Object.assign(featureFlags, {cloud: true, companyRecord: true})
   localStorage.clear()
   recordQueryResult = { page: { kind: 'deal', total: 1, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [{ id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', created_at: '2026-09-15T10:00:00.000Z', body_text: 'Northwind renewal: won.', data: { name: 'Northwind renewal', stage: 'won' } }] } }
   recordEntityResult = { entity: { entity: { id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', body_text: 'Northwind renewal: won.', data: { name: 'Northwind renewal', stage: 'won' } }, kind: { name: 'deal', schema: { properties: { name: {}, stage: {} }, stateProperty: 'stage' }, states: ['discovery', 'won'], extension: null }, identities: [{ kind: 'external', value: 'hubspot:deal:1', entity_id: 'deal-1' }], edges: [{ id: 'edge-1', relation: 'concerns', src_id: 'deal-1', dst_id: 'org-1', dst_title: 'Northwind', dst_kind: 'org', src_title: 'Northwind renewal', src_kind: 'deal', valid_from: '2026-09-15T10:00:00.000Z', valid_to: null }], events: [{ id: 'ev-1', seq: 3, at: '2026-09-15T10:00:00.000Z', verb: 'created', actor_id: 'owner-1', on_behalf_of: null }] } }
@@ -273,12 +280,14 @@ beforeEach(() => {
   })
   unregisterGlobalShortcut = vi.fn(async (shortcut) => { registeredShortcuts.delete(shortcut) })
   invoke = vi.fn(async (command, payload) => {
+    if (command === 'extend_command') return { items: [], threads: {} }
     if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'onboarding_scan') return
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
     if (command === 'onboarding_model_settings_error') return
     if (command === 'chat_thread_open') return []
+    if (command === 'chat_pick_attachments') return dialogResult
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
@@ -482,8 +491,8 @@ describe('pairing decisions', () => {
   })
 
   it.each([
-    ['forward', 'Allow', false, 'Deny'],
-    ['reverse', 'Deny', true, 'Allow'],
+    ['forward', 'Allow', false, 'Close confirmation'],
+    ['reverse', 'Close confirmation', true, 'Allow'],
   ])('keeps %s Tab movement inside the pairing dialog', async (_, start, shiftKey, destination) => {
     render(App)
     await waitFor(() => expect(pairingListener).toBeDefined())
@@ -1174,11 +1183,12 @@ describe('workspace composer entry', () => {
       { threadId: 'thread-1', title: 'Current thread', updatedAt: '' },
       { threadId: 'thread-2', title: 'Other thread', updatedAt: '' },
     ]
+    let recovered = false
     let open = deferred()
     const fallback = invoke.getMockImplementation()
     invoke.mockImplementation((command, payload) => {
       if (command === 'chat_select_thread') {
-        if (outcome === 'rollback failure' && payload.threadId === 'thread-1') return Promise.reject(new Error('Thread selection failed.'))
+        if (outcome === 'rollback failure' && payload.threadId === 'thread-1' && !recovered) return Promise.reject(new Error('Thread selection failed.'))
         return undefined
       }
       if (command === 'chat_thread_open' && payload.threadId === 'thread-2') return open.promise
@@ -1216,9 +1226,15 @@ describe('workspace composer entry', () => {
         open.resolve([])
       }
     }
-    await waitFor(() => expect(send).toBeEnabled())
+    await waitFor(() => expect(composer).toBeEnabled())
+    recovered = true
+    if (outcome !== 'failure') {
+      expect(composer).toHaveValue('')
+      await fireEvent.click(screen.getByRole('button', { name: /^Current thread/ }))
+      await waitFor(() => expect(composer).toHaveValue('Keep this draft'))
+    }
     expect(composer).toHaveValue('Keep this draft')
-    await fireEvent.click(send)
+    await fireEvent.click(screen.getByRole('button', {name:'Send'}))
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_submit')).toEqual([
       ['chat_submit', { prompt: 'Keep this draft', files: [] }],
     ])
@@ -1304,15 +1320,15 @@ describe('workspace composer entry', () => {
     expect(screen.getByTestId('settings-scrim')).toContainElement(dialog)
     // The workspace under the popup blurs behind the theme's paper: dark in dark mode, light in light mode.
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
-    expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*color-mix\(in srgb, var\(--paper\)/)
+    expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*background:\s*var\(--overlay-backdrop\)/)
     const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & routing', 'Preferences', 'Profile & Memory', 'Home', 'Companies', 'Account'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & routing', 'Extend', 'Preferences', 'Profile & Memory', 'Storage', 'Companies', 'Account'])
     expect(within(nav).getByRole('button', { name: 'Models & routing' })).toHaveAttribute('aria-current', 'true')
-    expect(within(dialog).getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
+    expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Preferences' }))
-    expect(within(dialog).getByRole('group', { name: 'Mode' })).toBeInTheDocument()
-    await fireEvent.click(within(nav).getByRole('button', { name: 'Home' }))
-    expect(within(dialog).getByRole('button', { name: 'Change folder…' })).toBeInTheDocument()
+    expect(await within(dialog).findByRole('group', { name: 'Mode' })).toBeInTheDocument()
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Storage' }))
+    expect(within(dialog).getByRole('button', { name: 'Change workspace folder…' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
     expect(within(dialog).getByRole('button', { name: 'Sign in for cloud features' })).toBeInTheDocument()
 
@@ -1392,7 +1408,7 @@ describe('workspace composer entry', () => {
     expect(size.getByRole('status')).toHaveTextContent('16.5 px body')
     expect(document.documentElement.style.getPropertyValue('--text-15')).toBe('16.5px')
     expect(document.documentElement.style.getPropertyValue('--text-provenance')).toBe('12.7px')
-    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 1, human: null, mono: null })
+    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 1, human: null, mono: null, heading: null })
 
     await fireEvent.keyDown(document, { key: '=', metaKey: mac, ctrlKey: !mac })
     expect(size.getByRole('status')).toHaveTextContent('18 px body')
@@ -1411,7 +1427,7 @@ describe('workspace composer entry', () => {
     expect(human.getAllByRole('button').map((button) => button.querySelector('.font-name').textContent)).toEqual(['Schibsted Grotesk', 'Iosevka'])
     await fireEvent.click(human.getByRole('button', { name: 'Iosevka' }))
     expect(document.documentElement.style.getPropertyValue('--font-human')).toBe("'Iosevka', 'Schibsted Grotesk', system-ui, sans-serif")
-    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: 'Iosevka', mono: null })
+    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: 'Iosevka', mono: null, heading: null })
     const mono = within(screen.getByRole('group', { name: 'Records font' }))
     await fireEvent.click(mono.getByText('Records', { exact: true }))
     expect(mono.getByRole('button', { name: /Commit Mono/ })).toHaveAttribute('aria-pressed', 'true')
@@ -1419,7 +1435,7 @@ describe('workspace composer entry', () => {
 
     await fireEvent.click(human.getByRole('button', { name: /Schibsted Grotesk/ }))
     expect(document.documentElement.style.getPropertyValue('--font-human')).toBe('')
-    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: null, mono: null })
+    expect(JSON.parse(localStorage.getItem('muniment.type'))).toEqual({ step: 0, human: null, mono: null, heading: null })
   })
 
   it('offers each provider its methods and the form for the chosen one', async () => {
@@ -1500,10 +1516,11 @@ describe('workspace composer entry', () => {
     const dialog = await openSettings()
     // The startup read seeds the page, so the list shows while the fresh read runs.
     expect(within(dialog).getByRole('region', { name: 'Ollama' })).toBeInTheDocument()
-    expect(within(dialog).getByText('llama3.2:3b')).toBeInTheDocument()
+    await fireEvent.click(within(dialog).getByRole('tab', {name:'Models',exact:true}))
+    expect(within(dialog).getByText('Llama 3.2:3B')).toBeInTheDocument()
     expect(reads).toBe(2)
     fresh.resolve({ ...held, providers: [{ ...ollama, models: [...ollama.models, { id: 'granite4.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }] }] })
-    expect(await within(dialog).findByText('granite4.2:3b')).toBeInTheDocument()
+    expect(await within(dialog).findByText('Granite 4.2:3B')).toBeInTheDocument()
   })
 
   it.each([false, true])('disables the endpoint form until a save settles with failure %s', async (fails) => {
@@ -1532,7 +1549,7 @@ describe('workspace composer entry', () => {
       await waitFor(() => expect(url).toBeEnabled())
     } else {
       expect(await within(dialog).findByText('Muniment saved the Ollama server.')).toBeInTheDocument()
-      expect(within(dialog).getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
+      expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     }
   })
 
@@ -1826,8 +1843,8 @@ describe('workspace composer entry', () => {
     const composer = await findWorkspaceComposer()
     expect(composer).toHaveFocus()
 
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
@@ -1850,8 +1867,8 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
     const composer = await screen.findByRole('textbox', { name: 'Message' })
@@ -1885,6 +1902,8 @@ async function openKinds(panel) {
 
 describe('record panel', () => {
   it('opens the report with its shortcut and closes artifact creation', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command,payload)=>command==='creation_list'?Promise.resolve([{threadId:'artifact-thread',kind:'artifact',goal:'Report',output:'HTML'}]):original(command,payload))
     render(App)
     const record = await screen.findByRole('button', { name: 'Open record panel' })
     const artifacts = screen.getByRole('button', { name: 'Artifacts' })
@@ -1898,7 +1917,7 @@ describe('record panel', () => {
     expect(controls.at(-1)).toBe(record)
 
     await fireEvent.click(artifacts)
-    expect(screen.getByRole('region', { name: 'Artifacts' })).toBeInTheDocument()
+    expect(await screen.findByRole('region', { name: 'Artifacts' })).toBeInTheDocument()
     await fireEvent.click(record)
     expect(record).toHaveAttribute('aria-expanded', 'true')
     expect(record).toHaveAccessibleName('Close record panel')
@@ -2382,20 +2401,24 @@ describe('record panel', () => {
 })
 
 describe('artifact rail', () => {
+  beforeEach(() => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'creation_list' ? Promise.resolve([{threadId:'artifact-thread',kind:'artifact',goal:'Build a report',output:'HTML report',resultId:null}]) : command === 'artifact_list' ? Promise.resolve([]) : original(command,payload))
+  })
 
 
-  it('opens artifact creation from the sidebar below Agents', async () => {
+  it('opens chat artifacts from the sidebar below Agents', async () => {
     render(App)
     const toggle = await screen.findByRole('button', { name: 'Artifacts' })
     const sidebar = document.querySelector('#sidebar')
     expect(sidebar).toContainElement(toggle)
-    expect([...sidebar.querySelectorAll('.side-action')].map(b => b.textContent)).toEqual(expect.arrayContaining(['Agents', 'Artifacts', 'Browser']))
+    expect([...sidebar.querySelectorAll('.side-action, .project-title')].map(b => b.textContent)).toEqual(expect.arrayContaining(['Agents', 'Artifacts']))
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await fireEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByRole('heading', { name: 'Create an Artifact' })).toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: 'Artifact HTML' })).toBeInTheDocument()
-    await fireEvent.click(toggle)
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
+    expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Artifact HTML' })).not.toBeInTheDocument()
+    await fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('region', { name: 'Artifacts' })).not.toBeInTheDocument()
   })
 
@@ -2404,7 +2427,7 @@ describe('artifact rail', () => {
     const toggle = await screen.findByRole('button', { name: 'Artifacts' })
     const mac = navigator.platform.startsWith('Mac')
     await fireEvent.keyDown(document, { key: 'j', metaKey: mac, ctrlKey: !mac })
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
 
     await fireEvent.keyDown(document, { key: 'Escape' })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
@@ -2462,8 +2485,8 @@ describe('artifact rail', () => {
     expect(composer).toHaveFocus()
 
     await fireEvent.keyDown(composer, { key: 'j', metaKey: mac, ctrlKey: !mac })
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByRole('region', { name: 'Artifacts' })).toBeInTheDocument()
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
+    expect(await screen.findByRole('region', { name: 'Artifacts' })).toBeInTheDocument()
 
     expect(composer).toHaveFocus()
     await fireEvent.keyDown(composer, { key: '\\', metaKey: mac, ctrlKey: !mac })
@@ -2632,7 +2655,7 @@ describe('thread name', () => {
     const list = screen.getByRole('list', { name: 'Threads' })
 
     expect(heading).toContainElement(screen.getByRole('button', { name: 'Rename thread' }))
-    expect(listHeading).not.toBeInTheDocument()
+    expect(listHeading).toBeInTheDocument()
     expect(within(list).getAllByRole('listitem')).toHaveLength(2)
     expect(screen.getByRole('region', { name: 'Transcript: Lease renewal' })).toBeInTheDocument()
   })
@@ -2678,7 +2701,7 @@ describe('thread name', () => {
     expect(screen.queryByRole('list', { name: 'Research threads' })).not.toBeInTheDocument()
   })
 
-  it('creates and renames a project through folder commands and scopes new threads', async () => {
+  it.each([false, true])('creates and renames a project with the catalog open: %s', async (catalogOpen) => {
     const catalog = { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
     const baseInvoke = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, payload) => {
@@ -2698,14 +2721,16 @@ describe('thread name', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_new_thread', expect.anything())
     await fireEvent.click(screen.getByRole('button', { name: 'New thread in Contracts' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', { projectId: 'created' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Actions for project Contracts' })).toBeEnabled())
-    await fireEvent.click(screen.getByRole('button', { name: 'Actions for project Contracts' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New thread in Contracts' })).toBeEnabled())
+    if (catalogOpen) await fireEvent.click(screen.getByRole('button', { name: 'Projects', exact: true }))
+    await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Contracts' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename', exact: true }))
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Agreements' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByRole('button', { name: 'Project Agreements' })
     expect(invoke).toHaveBeenCalledWith('project_rename', { projectId: 'created', name: 'Agreements' })
-    await fireEvent.click(screen.getByRole('button', { name: 'Actions for project Agreements' }))
+    if (catalogOpen) await fireEvent.click(screen.getByRole('button', { name: 'Close projects' }))
+    await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Agreements' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Open folder' }))
     expect(invoke).toHaveBeenCalledWith('project_open', { projectId: 'created' })
     await fireEvent.click(screen.getByRole('button', { name: 'Project Agreements' }))
@@ -2735,6 +2760,8 @@ describe('thread name', () => {
     expect(screen.queryByRole('heading', { name: 'Pinned' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Vendor audit' })).not.toBeInTheDocument()
     await fireEvent.input(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'vendor' } })
+    await fireEvent.click(screen.getByRole('button', {name:'Filter threads'}))
+    await fireEvent.change(screen.getByRole('combobox', {name:'Status'}), {target:{value:'all'}})
     expect(screen.getByRole('heading', { name: 'Archived' })).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Actions for Vendor audit' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Restore' }))
@@ -2760,7 +2787,7 @@ describe('thread name', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_thread_select', { threadId: 'thread-2' })
   })
 
-  it('opens a menu on right-click with the delete action and cancels its inline confirmation', async () => {
+  it('opens a menu on right-click with the delete action and cancels its confirmation dialog', async () => {
     threadSummaryResult = [
       { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
       { threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' },
@@ -2774,7 +2801,7 @@ describe('thread name', () => {
     await waitFor(() => expect(hoverDelete).toBeEnabled())
     await fireEvent.click(hoverDelete)
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Vendor audit' }))
-    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete', 'Cancel'])
+    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete'])
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
     const menu = screen.getByRole('menu', { name: 'Vendor audit actions' })
@@ -2791,7 +2818,7 @@ describe('thread name', () => {
     expect(screen.getByRole('menu', { name: 'Vendor audit actions' })).toHaveStyle({ left: '8px', top: '8px' })
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Vendor audit' }))
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
-    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete', 'Cancel'])
+    expect(within(screen.getByLabelText('Delete Vendor audit?')).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete'])
 
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByLabelText('Delete Vendor audit?')).not.toBeInTheDocument()
@@ -2829,13 +2856,23 @@ describe('thread name', () => {
     await fireEvent.click(vendor, { metaKey: true })
     await fireEvent.click(archive, { shiftKey: true })
     expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(2)
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    for (const key of [{key:'Delete'},{key:'Backspace',metaKey:true}]) {
+      await fireEvent.keyDown(screen.getByRole('button',{name:'Actions for Archive review'}),key)
+      const dialog = screen.getByRole('dialog',{name:'Delete 2 threads?'})
+      await waitFor(() => expect(within(dialog).getByRole('button',{name:'Cancel'})).toHaveFocus())
+      expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(0)
+      await fireEvent.click(within(dialog).getByRole('button',{name:'Cancel'}))
+    }
+    await fireEvent.keyDown(screen.getByRole('textbox',{name:'Message'}),{key:'Backspace',metaKey:true})
+    expect(screen.queryByRole('dialog',{name:'Delete 2 threads?'})).not.toBeInTheDocument()
 
     await fireEvent.contextMenu(archive)
-    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete 2' }))
-    // Several rows confirm with two controls and no sentence.
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete 2 threads…' }))
+    // Several rows confirm with explicit actions and a close control.
     const confirm = screen.getByLabelText('Delete 2 threads?')
-    expect(within(confirm).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete 2', 'Cancel'])
-    await fireEvent.click(within(confirm).getByRole('button', { name: 'Delete 2' }))
+    expect(within(confirm).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete 2 threads'])
+    await fireEvent.click(within(confirm).getByRole('button', { name: 'Delete 2 threads' }))
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' })
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-3' })
@@ -2844,7 +2881,7 @@ describe('thread name', () => {
     // Delete on a focused row opens the confirm for that row alone.
     const budget = screen.getByRole('button', { name: 'Budget notes' })
     await fireEvent.keyDown(budget, { key: 'Delete' })
-    expect(within(screen.getByLabelText('Delete Budget notes?')).getAllByRole('button').map((button) => button.textContent)).toEqual(['Delete', 'Cancel'])
+    expect(within(screen.getByLabelText('Delete Budget notes?')).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete'])
   })
 
   it('deletes a selection that holds the open thread and lands on a fresh thread', async () => {
@@ -2879,8 +2916,8 @@ describe('thread name', () => {
     await fireEvent.click(current, { metaKey: true })
     await fireEvent.click(screen.getByRole('button', { name: 'Vendor audit' }), { metaKey: true })
     await fireEvent.contextMenu(current)
-    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete 2' }))
-    await fireEvent.click(within(screen.getByLabelText('Delete 2 threads?')).getByRole('button', { name: 'Delete 2' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete 2 threads…' }))
+    await fireEvent.click(within(screen.getByLabelText('Delete 2 threads?')).getByRole('button', { name: 'Delete 2 threads' }))
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
     await waitFor(() => expect(screen.queryByText('Answer')).not.toBeInTheDocument())
     expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument()
@@ -3141,10 +3178,11 @@ describe('window chrome', () => {
       expect(row).toHaveAttribute('data-tauri-drag-region')
       expect(row.closest('.workspace').classList.contains('macos')).toBe(platform.startsWith('Mac'))
       expect([...row.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
-        'Collapse sidebar', 'Rename thread', 'Thread actions', 'Open record panel',
+        'Collapse sidebar', 'Rename thread', 'Thread actions', 'Open record panel', 'Workspace tools',
       ])
       expect(row.querySelector('.title-spacer')).toHaveAttribute('data-tauri-drag-region')
-      expect(row.querySelector('.update-slot')).toBeEmptyDOMElement()
+      expect(row.querySelector('.update-slot')).not.toHaveTextContent(/Update|Installing/)
+      expect(row.querySelector('.update-slot button')).toBeNull()
       expect(row.querySelector('.record-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘ K' : 'Ctrl K')
       for (const control of row.querySelectorAll('button, input, button *')) {
         expect(control).not.toHaveAttribute('data-tauri-drag-region')
@@ -3179,11 +3217,11 @@ describe('window chrome', () => {
     await fireEvent.keyDown(input, { key: 'Escape' })
     await fireEvent.click(actions)
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Lease renewal' }))
-    const confirmation = screen.getByRole('group', { name: 'Delete Lease renewal?' })
-    expect(document.querySelector('.titlebar')).toContainElement(confirmation)
+    const confirmation = screen.getByRole('dialog', { name: 'Delete Lease renewal?' })
+    expect(confirmation).toHaveAttribute('aria-modal', 'true')
     await fireEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(actions).toHaveFocus())
-    expect(screen.queryByRole('group', { name: 'Delete Lease renewal?' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Delete Lease renewal?' })).not.toBeInTheDocument()
   })
 
   it('shows no tooltip on any element of the shell', () => {
@@ -3191,7 +3229,9 @@ describe('window chrome', () => {
     expect(files.length).toBeGreaterThan(5)
     for (const file of files) {
       // A lowercase tag is an HTML element, and a title attribute there is a hover tooltip. A component prop named title is a heading.
-      expect(fs.readFileSync(`src/${file}`, 'utf8'), file).not.toMatch(/<[a-z][^>]*\stitle=/)
+      const source = fs.readFileSync(`src/${file}`, 'utf8')
+      const checked = file === 'lib/WorkspacePanel.svelte' ? source.replace(/ title=\{tab\.file[^\n]+? aria-selected=/, ' aria-selected=') : source
+      expect(checked, file).not.toMatch(/<[a-z][^>]*\stitle=/)
     }
     expect(fs.readFileSync('src/lib/assistant-markdown.js', 'utf8')).not.toMatch(/title=/)
   })
@@ -3237,6 +3277,39 @@ describe('window chrome', () => {
 })
 
 describe('sidebar collapse', () => {
+  it('opens Files in the visible catalog, project, or agent context', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'agent_list') return {agents:[{id:'agent-1',name:'Scout',instructions:'Read sources.',projectId:null,schedule:null}],state:{runs:{},threads:{'agent-thread':'agent-1'}}}
+      if (command === 'project_list') return {projects:{research:'Research'},threads:{}}
+      if (command === 'workspace_folders') return [{label:'Context folder',path:'/context'}]
+      if (command === 'workspace_list') return {path:args.path,entries:[]}
+      if (command === 'chat_select_thread') return
+      return original(command,args)
+    })
+    render(App)
+    const openFiles = async () => {
+      await fireEvent.click(screen.getByRole('button',{name:'Workspace tools'}))
+      await fireEvent.click(screen.getByRole('menuitem',{name:'Files',exact:true}))
+    }
+    await fireEvent.click(await screen.findByRole('button',{name:'Projects',exact:true}))
+    const projects = await screen.findByRole('region',{name:'Projects catalog'})
+    await openFiles()
+    await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{catalog:'projects'}))
+    expect(projects).toBeInTheDocument()
+    await fireEvent.click(within(projects).getByRole('button',{name:/^Research/}))
+    await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{projectId:'research'}))
+    await fireEvent.click(screen.getByRole('button',{name:'Agents',exact:true}))
+    const agents=await screen.findByRole('region',{name:'Agents',exact:true})
+    expect(await screen.findByRole('tab',{name:'context'})).toHaveAttribute('aria-selected','true')
+    await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{catalog:'agents'}))
+    expect(agents).toBeInTheDocument()
+    await fireEvent.click(within(agents).getByRole('button',{name:/^Scout/}))
+    expect(screen.queryByRole('complementary',{name:'Agent profile'})).toBeNull()
+    expect(await screen.findByRole('tab',{name:'context'})).toHaveAttribute('aria-selected','true')
+    await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{agentId:'agent-1'}))
+  })
+
   it('keeps saved agents outside project thread lists', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => command === 'agent_list'
@@ -3246,8 +3319,9 @@ describe('sidebar collapse', () => {
     const manager = await screen.findByRole('button', { name: 'Agents', exact: true })
     await fireEvent.click(manager)
     const dialog = await screen.findByRole('region', { name: 'Agents', exact: true })
-    await within(dialog).findByRole('button', { name: /Scout/ })
+    await within(dialog).findByRole('button', { name: /^Scout/ })
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Close agents' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand Agents' }))
     const scout = screen.getByRole('button', { name: 'Scout', exact: true })
     expect(scout.closest('.agent-roster')).not.toBeNull()
     expect(scout.closest('.project-section')).toBeNull()
@@ -3264,20 +3338,26 @@ describe('sidebar collapse', () => {
     const agents = await screen.findByRole('button', { name: 'Agents', exact: true })
     await fireEvent.click(agents)
     const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
-    await fireEvent.click(await within(catalog).findByRole('button', { name: /Scout/ }))
+    await fireEvent.click(await within(catalog).findByRole('button', { name: /^Scout/ }))
     await screen.findByRole('complementary', { name: 'Agent profile' })
     expect(document.querySelector('.sidebar')?.textContent || document.querySelector('#sidebar').textContent).not.toContain('Hidden agent transcript')
     expect(screen.queryByRole('button', { name: 'Rename thread' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Thread actions' })).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand Agents' }))
     expect(screen.getByRole('button', { name: 'Scout', exact: true })).toHaveAttribute('aria-current', 'true')
     expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
     expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 })
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
     expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
-    expect(screen.getByRole('button', { name: 'Add files' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Extensions' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Voice' })).toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', { name: 'Close agent profile' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Scout', exact: true }))
+    const divider = screen.getByRole('separator', {name: 'Agent profile width'})
+    const width = Number(divider.getAttribute('aria-valuenow'))
+    await fireEvent.keyDown(divider, {key: 'ArrowLeft'})
+    expect(divider).toHaveAttribute('aria-valuenow', String(width + 20))
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse agent profile' }))
+    expect(screen.queryByRole('complementary', {name: 'Agent profile'})).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', {name: 'Reveal agent profile'}))
     await screen.findByRole('complementary', { name: 'Agent profile' })
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
     await fireEvent.click(document.querySelector('.new-thread'))
@@ -3296,12 +3376,18 @@ describe('sidebar collapse', () => {
       return original(command, args)
     })
     render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Expand Agents' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Scout', exact: true }))
     await screen.findByRole('complementary', { name: 'Agent profile' })
     expect(invoke).toHaveBeenCalledWith('chat_new_thread', { agentId: 'agent-1', projectId: 'project-1' })
     expect(document.querySelector('[data-fresh-thread]')).toBeNull()
-    await fireEvent.click(screen.getByRole('button', { name: 'Close agent profile' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Scout', exact: true }))
+    const divider = screen.getByRole('separator', {name: 'Agent profile width'})
+    const width = Number(divider.getAttribute('aria-valuenow'))
+    await fireEvent.keyDown(divider, {key: 'ArrowLeft'})
+    expect(divider).toHaveAttribute('aria-valuenow', String(width + 20))
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse agent profile' }))
+    expect(screen.queryByRole('complementary', {name: 'Agent profile'})).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', {name: 'Reveal agent profile'}))
     await screen.findByRole('complementary', { name: 'Agent profile' })
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(1)
     expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
@@ -3324,10 +3410,10 @@ describe('sidebar collapse', () => {
     const currentThread = document.querySelector('.thread-row')
     expect(currentThread).toHaveTextContent('New thread')
     expect(currentThread).toHaveAttribute('aria-current', 'true')
-    expect(currentThread).not.toHaveAttribute('tabindex')
+    expect(currentThread).toHaveAttribute('tabindex', '-1')
     expect(currentThread.tabIndex).toBe(-1)
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action')).toHaveLength(6)
+    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action, #sidebar .sidebar-collection > .project-row > .project-title')).toHaveLength(4)
     expect(screen.getByRole('button', { name: 'Settings' })).toHaveTextContent('Settings')
     expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(0)
     expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(1)
@@ -3672,8 +3758,8 @@ describe('Home onboarding', () => {
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('My early draft')
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })
 
@@ -4070,23 +4156,23 @@ describe('Home onboarding', () => {
 
   it('saves a changed Home from the existing settings control', async () => {
     render(App)
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     dialogResult = '/Other/Home'
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     await fireEvent.click(screen.getByRole('button', { name: 'Save Home' }))
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Home' })
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Other/Home')
   })
 
   it('keeps a configured Home and cancels settings back to the workspace', async () => {
     homeStatus = { configured: true, homePath: '/Saved/Home' }
     render(App)
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
     expect(screen.queryByText('Local AI')).not.toBeInTheDocument()
     expect(screen.queryByText('Starting setup')).not.toBeInTheDocument()
@@ -4095,8 +4181,8 @@ describe('Home onboarding', () => {
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-    await openSettings('Home')
-    await fireEvent.click(await screen.findByRole('button', { name: 'Change folder…' }))
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })
 })
@@ -4869,7 +4955,9 @@ describe('voice dictation', () => {
 
   it.each([
     ['its close control', async (card) => { await fireEvent.click(within(card).getByRole('button', { name: 'Close speech model install' })) }],
-    ['Escape', async (card) => { await fireEvent.keyDown(card, { key: 'Escape' }) }],
+    ['Escape', async () => { await fireEvent.keyDown(document, { key: 'Escape' }) }],
+    ['outside click', async () => { await fireEvent.pointerDown(screen.getByRole('button', {name:'Projects',exact:true})) }],
+    ['another composer panel', async () => { window.dispatchEvent(new CustomEvent('muniment:composer-panel',{detail:'capacity'})); await tick() }],
   ])('closes the speech model install card with %s and reopens it from Voice', async (_, close) => {
     invoke.mockImplementation(async (command) => {
       if (command === 'project_list') return { projects: {}, threads: {} }
@@ -5154,7 +5242,7 @@ describe('local file selection', () => {
   it('shows and clears the native drop affordance, then de-duplicates dropped files', async () => {
     dialogResult = ['/private/contracts/lease.pdf']
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
     await waitFor(() => expect(dragDropListener).toBeDefined())
 
     dragDropListener({ payload: { type: 'over', position: { x: 10, y: 10 } } })
@@ -5195,6 +5283,25 @@ describe('local file selection', () => {
     expect(dragDropUnlisten).toHaveBeenCalledOnce()
   })
 
+  it('searches the folder selected in Files for composer mentions', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'workspace_folders') return [{label:'Muniment folder',path:'/chosen'}]
+      if (command === 'workspace_list') return {path:'/chosen',parent:'/',entries:[]}
+      if (command === 'chat_search_files') return [{path:'/chosen/ONBOARDING.md',displayName:'ONBOARDING.md',relativePath:'ONBOARDING.md'}]
+      return original(command, payload)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', {name:'Workspace tools'}))
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Files'}))
+    await screen.findByText('/chosen')
+    const composer = await findWorkspaceComposer()
+    await fireEvent.input(composer, {target:{value:'@onbo',selectionStart:5}})
+    await screen.findByRole('option', {name:'ONBOARDING.md'})
+    expect(invoke).toHaveBeenCalledWith('chat_search_files', expect.objectContaining({query:'onbo',directory:'/chosen'}))
+    expect(screen.getByText('Files in /chosen')).toBeInTheDocument()
+  })
+
   it('selects an @ file with Enter without sending and closes suggestions with Escape', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, payload) => {
@@ -5204,7 +5311,7 @@ describe('local file selection', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: /New thread/ }))
     const composer = await findWorkspaceComposer()
-    await screen.findByRole('button', { name: 'Add files' })
+    await screen.findByRole('button', { name: 'Extensions' })
     await tick()
     await fireEvent.input(composer, { target: { value: 'Read @iss' } })
     composer.setSelectionRange(9, 9)
@@ -5222,12 +5329,14 @@ describe('local file selection', () => {
 
   it('treats picker cancel as a no-op and removes a selected file', async () => {
     render(App)
-    const add = await screen.findByRole('button', { name: 'Add files' })
-    await fireEvent.click(add)
+    const add = async () => {
+        await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
+    }
+    await add()
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
 
     dialogResult = ['/private/contracts/lease.pdf', 'C:\\notes\\brief.txt']
-    await fireEvent.click(add)
+    await add()
     expect(await screen.findByText('lease.pdf')).toBeInTheDocument()
     expect(screen.getByText('brief.txt')).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Remove lease.pdf' }))
@@ -5256,7 +5365,7 @@ describe('local file selection', () => {
       await fireEvent.scroll(thread)
     }
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Add files' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
     await screen.findByRole('list', { name: 'Selected files' })
     await waitFor(() => expect(thread.scrollTop).toBe(withFiles))
 
@@ -5272,7 +5381,8 @@ describe('local file selection', () => {
       if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
-      if (command === 'chat_file_metadata') return { displayName: 'evidence.pdf', byteLength: 2048 }
+      if (command === 'chat_pick_attachments') return dialogResult
+    if (command === 'chat_file_metadata') return { displayName: 'evidence.pdf', byteLength: 2048 }
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') throw 'One or more selected files could not be added. Check the files and try again.'
@@ -5280,7 +5390,7 @@ describe('local file selection', () => {
     })
     dialogResult = ['/secret/location/evidence.pdf']
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review this' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -5302,6 +5412,7 @@ describe('local file selection', () => {
       if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
+      if (command === 'chat_pick_attachments') return dialogResult
       if (command === 'chat_file_metadata') {
         return { displayName: payload.path.split('/').pop(), byteLength: 1024 }
       }
@@ -5312,7 +5423,7 @@ describe('local file selection', () => {
     })
     dialogResult = ['/private/contracts/lease.png', '/private/notes.txt']
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Add files' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review these' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -5766,6 +5877,17 @@ describe('permission gates', () => {
     expect(within(card).queryByLabelText('Code changes')).not.toBeInTheDocument()
   })
 
+  it('renders a structured question popup and answers its correlated gate', async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.open = true }
+    HTMLDialogElement.prototype.close = function () { this.open = false }
+    const answer = restoreGate({gateId:'question-1',kind:'editor',title:'muniment:ask_user_question',prefill:JSON.stringify({questions:[{id:'goal',question:'What should it do?'}]})})
+    const field = await screen.findByRole('textbox', {name:'Your answer'})
+    expect(screen.queryByRole('button',{name:'Deny'})).not.toBeInTheDocument()
+    await fireEvent.input(field,{target:{value:'Build a calculator'}})
+    await fireEvent.click(screen.getByRole('button',{name:'Submit answers'}))
+    expect(answer).toHaveBeenCalledWith({runId:'run-gated',gateId:'question-1',answer:{type:'editor',value:JSON.stringify({answers:[{id:'goal',question:'What should it do?',selected:[],text:'Build a calculator'}]})}})
+  })
+
   it.each([
     ['input', { placeholder: 'Type a folder name' }, '', 'Quarterly records'],
     ['editor', { prefill: 'rm old.csv\n' }, 'rm old.csv\n', 'archive old.csv\nremove temp.csv'],
@@ -5902,27 +6024,11 @@ describe('thread announcements', () => {
   }]
 
 
-it('prepares another-model retry without sending until the model choice is saved', async () => {
+it('does not offer another-model retry in a completed reply', async () => {
   localModeStatus = true
-  signedIn([{ runId: 'old', phase: 'complete', text: 'Earlier answer', prompt: 'Check the file', receipt: { model: 'ollama/first', tools: [{ name: 'write', calls: 1 }] } }], { runId: 'new', attachments: [] })
-  const base = invoke.getMockImplementation()
-  const saved = deferred()
-  invoke.mockImplementation((command, payload) => {
-    if (command === 'local_mode_provider_inventory') return Promise.resolve({ default_provider: 'ollama', default_model: 'first', hidden: [], providers: [{ id: 'ollama', source: 'local', models: [{ id: 'first' }, { id: 'second' }] }] })
-    if (command === 'local_mode_set_default_model') return saved.promise
-    return base(command, payload)
-  })
+  signedIn([{runId:'old',phase:'complete',text:'Earlier answer',prompt:'Check the file',receipt:{}}],{runId:'new',attachments:[]})
   await screen.findByText('Earlier answer')
-  await fireEvent.click(screen.getByRole('button', { name: 'Retry with another model' }))
-  expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
-  expect(screen.getByRole('region', { name: 'Review retry' })).toHaveTextContent('including earlier replies and tool results')
-  await fireEvent.click(within(screen.getByRole('dialog', { name: 'Model', exact: true })).getByRole('button', { name: 'second' }))
-  await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-  expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
-  saved.resolve()
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled', 'true'))
-  await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-  expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Check the file', files: [] })
+  expect(screen.queryByRole('button',{name:'Retry with another model'})).not.toBeInTheDocument()
 })
 
   function signedIn(history, submit) {
@@ -6022,7 +6128,8 @@ it('prepares another-model retry without sending until the model choice is saved
     }])
     const chip = await screen.findByText('Routing')
     const mark = screen.getByLabelText('Routing').querySelector('path')
-    expect(mark).toHaveAttribute('fill-rule', 'evenodd')
+    expect(mark.getAttribute('d').match(/M/g)).toHaveLength(44)
+    expect(mark).toHaveAttribute('stroke-width', '0.7')
     expect(mark).not.toHaveAttribute('stroke')
 
     chatListener({ payload: {
@@ -6656,8 +6763,8 @@ describe('provenance line', () => {
   it('renders route → model and the clock time with signal on the route segment', async () => {
     restore({ route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
-    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model glm 5.2, 6s' })
-    expect(line.textContent).toBe('analysis/high → glm 5.2')
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high to model GLM 5.2, 6s' })
+    expect(line.textContent).toBe('analysis/high → GLM 5.2')
     expect(line.closest('.receipt-line').querySelector('.response-meta .receipt-time [data-icon="clock"]')).toBeInTheDocument()
     expect(within(line).getByText('analysis/high')).toHaveClass('route-segment')
     expect(line.querySelectorAll('.route-segment')).toHaveLength(1)
@@ -6679,8 +6786,8 @@ describe('provenance line', () => {
   it('paints nothing green when the receipt records no route', async () => {
     restore({ model: 'glm-5.2', cost: '$0.0089', time: '6.2s' })
 
-    const line = await screen.findByRole('button', { name: 'Expand receipt: Model glm 5.2, 6s' })
-    expect(line.textContent).toBe('glm 5.2')
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Model GLM 5.2, 6s' })
+    expect(line.textContent).toBe('GLM 5.2')
     expect(line.querySelector('.route-segment')).toBeNull()
   })
 
@@ -6715,7 +6822,7 @@ describe('provenance line', () => {
 
     const line = await screen.findByRole('button', { name: /^Expand receipt:/ })
     const marker = line.querySelector('.receipt-marker')
-    expect(line.textContent).toBe('analysis/high → glm 5.2')
+    expect(line.textContent).toBe('analysis/high → GLM 5.2')
     expect(marker).toHaveAttribute('aria-hidden', 'true')
     expect(marker).not.toHaveClass('expanded')
     await fireEvent.click(line)
@@ -6724,7 +6831,7 @@ describe('provenance line', () => {
     // The rows carry what the line does not: nothing appears twice.
     expect(record.textContent).toBe('Cost$0.0089Capabilitysearch@2')
     expect(record.querySelectorAll('.route-value')).toHaveLength(0)
-    expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model glm 5.2, 6s' })).toBe(line)
+    expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model GLM 5.2, 6s' })).toBe(line)
     expect(marker).toHaveClass('expanded')
 
     await fireEvent.click(line)
@@ -7235,7 +7342,7 @@ describe('signed-in access popover', () => {
     const dialog = await openSettings('Account')
     const accessSection = dialog.querySelector('.entitlements-section')
     expect(within(dialog).getAllByRole('heading', { name: 'Your access' })).toHaveLength(1)
-    expect(accessSection).toHaveTextContent('Snapshot v2')
+    await waitFor(() => expect(accessSection).toHaveTextContent('Snapshot v2'))
     expect(dialog).not.toHaveTextContent('Your groups')
   })
 
@@ -7348,4 +7455,264 @@ describe('account display names', () => {
     expect(await view.findByRole('alert')).toHaveTextContent('Save failed')
     expect(view.getByLabelText('Account name')).toBeInTheDocument()
   })
+})
+
+
+describe('dedicated creation chats', () => {
+  it.each(['Artifacts','Agents'])('starts %s with a goal and draft, without sending or listing an ordinary thread', async (section) => {
+    const original=invoke.getMockImplementation()
+    const id='01900000-0000-7000-8000-000000000077'
+    let plans=[]
+    invoke.mockImplementation((command,payload)=>{
+      if(command==='creation_list') return Promise.resolve(plans)
+      if(command==='artifact_list') return Promise.resolve([])
+      if(command==='agent_list') return Promise.resolve({agents:[],state:{threads:{},runs:{}}})
+      if(command==='chat_new_thread') return Promise.resolve(id)
+      if(command==='creation_save') {plans=[payload.creation]; return Promise.resolve(payload.creation)}
+      return original(command,payload)
+    })
+    render(App)
+    const create = await screen.findByRole('button',{name:section==='Agents'?'New agent':'New artifact',exact:true})
+    await waitFor(() => expect(create).toBeEnabled())
+    await fireEvent.click(create)
+    expect(invoke.mock.calls.some(([name]) => name === 'creation_save')).toBe(false)
+    await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain('Expected output:'))
+    expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
+    expect(document.querySelector(`[data-thread-id="${id}"]`)).toBeNull()
+    if(section==='Artifacts') await fireEvent.click(screen.getByRole('button',{name:'Calculator'}))
+    else await fireEvent.click(screen.getByRole('button',{name:'Research assistant'}))
+    await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain(section==='Artifacts'?'calculator':'Research topics'))
+    await fireEvent.click(screen.getByRole('button', {name:'Cancel creation'}))
+    expect(screen.getByPlaceholderText('Ask anything')).toHaveValue('')
+    expect(invoke.mock.calls.some(([name]) => name === 'creation_save')).toBe(false)
+  })
+})
+
+it('gives an unlinked artifact one dedicated chat instead of using the current chat', async () => {
+  const original=invoke.getMockImplementation()
+  let plans=[]
+  const id='01900000-0000-7000-8000-000000000088'
+  invoke.mockImplementation((command,payload)=>{
+    if(command==='creation_list') return Promise.resolve(plans)
+    if(command==='artifact_list') return Promise.resolve([{id:'saved-artifact',name:'Existing report',threadId:null}])
+    if(command==='creation_save') {plans=[payload.creation];return Promise.resolve(payload.creation)}
+    if(command==='chat_new_thread') return Promise.resolve(id)
+    if(command==='browser_view') return Promise.resolve()
+    return original(command,payload)
+  })
+  const originalBridge=window.__TAURI__.core.invoke
+  vi.spyOn(window.__TAURI__.core,'invoke').mockImplementation((command,...args)=>command==='artifact_list'?invoke(command,...args):originalBridge(command,...args))
+  render(App)
+  await fireEvent.click(await screen.findByRole('button',{name:'Expand Artifacts'}))
+  await screen.findByRole('button',{name:'Existing report',exact:true})
+  await fireEvent.click(screen.getByRole('button',{name:'Artifacts',exact:true}))
+  const catalog=await screen.findByRole('region',{name:'Artifacts'})
+  await fireEvent.click(within(catalog).getByRole('button',{name:/^Existing report/}))
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('creation_save',{creation:{threadId:id,kind:'artifact',goal:'Maintain Existing report',output:'The saved artifact and its revisions',resultId:'saved-artifact'}}))
+  await fireEvent.click(screen.getByRole('button',{name:'Artifacts',exact:true}))
+  await waitFor(() => expect(document.querySelector('[data-panel=artifacts]')).not.toBeNull())
+  const reopened=document.querySelector('[data-panel=artifacts]')
+  await fireEvent.click(within(reopened).getByRole('button',{name:/^Existing report/}))
+  expect(invoke.mock.calls.filter(([command])=>command==='chat_new_thread')).toHaveLength(1)
+})
+
+it('opens the Projects catalog independently from the sidebar disclosure', async () => {
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command, args) => command === 'project_list'
+    ? Promise.resolve({projects:{research:'Research'},threads:{}}) : original(command,args))
+  render(App)
+  await screen.findByRole('button', {name:'Project Research'})
+  await fireEvent.click(screen.getByRole('button', {name:'Collapse Projects'}))
+  expect(screen.queryByRole('button', {name:'Project Research'})).not.toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', {name:'Projects',exact:true}))
+  const catalog = await screen.findByRole('region', {name:'Projects catalog'})
+  expect(within(catalog).getByRole('button', {name:'Research 0 threads'})).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', {name:'Expand Projects'}))
+  expect(screen.getByRole('button', {name:'Project Research'})).toBeInTheDocument()
+  expect(catalog).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', {name:'Agents',exact:true}))
+  await screen.findByRole('region', {name:'Agents',exact:true})
+  expect(screen.queryByRole('region', {name:'Projects catalog'})).not.toBeInTheDocument()
+})
+
+it('keeps one composer panel open and dismisses it with Escape or an outside click', async () => {
+  localModeStatus = true
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command,args) => command === 'model_router_settings' ? Promise.resolve({accounts:[{id:'subscription',source:'account',family:'anthropic',label:'Anthropic'}]}) : command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory) : original(command,args))
+  render(App)
+  await findWorkspaceComposer()
+  await fireEvent.click(await screen.findByRole('button',{name:'Capacity',exact:true}))
+  expect(screen.getByRole('dialog',{name:'Account capacity'})).toBeInTheDocument()
+  expect(document.querySelector('.model-chip [data-icon=chevron-right]')).not.toBeNull()
+  await fireEvent.click(document.querySelector('.model-chip'))
+  expect(document.querySelector('.model-chip [data-icon=chevron-up]')).not.toBeNull()
+  expect(screen.queryByRole('dialog',{name:'Account capacity'})).not.toBeInTheDocument()
+  expect(screen.getByRole('dialog',{name:'Model'})).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button',{name:'Capacity',exact:true}))
+  expect(screen.queryByRole('dialog',{name:'Model'})).not.toBeInTheDocument()
+  await fireEvent.keyDown(document,{key:'Escape'})
+  expect(screen.queryByRole('dialog',{name:'Account capacity'})).not.toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button',{name:'Capacity',exact:true}))
+  await fireEvent.pointerDown(screen.getByRole('button',{name:'Projects',exact:true}))
+  expect(screen.queryByRole('dialog',{name:'Account capacity'})).not.toBeInTheDocument()
+})
+
+
+it.each([[], [{id:'api',source:'key',family:'openai'}]])('hides composer capacity without subscriptions: %j', async (accounts) => {
+  localModeStatus = true
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command,args) => command === 'model_router_settings' ? Promise.resolve({accounts}) : command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory) : original(command,args))
+  render(App)
+  await findWorkspaceComposer()
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_settings'))
+  expect(screen.queryByRole('button',{name:'Capacity',exact:true})).not.toBeInTheDocument()
+})
+
+it('renames, archives, restores and deletes a pending artifact through its catalog menu',async()=>{
+ const original=invoke.getMockImplementation()
+ let plans=[{threadId:'01900000-0000-7000-8000-000000000099',kind:'artifact',goal:'Draft report',output:'A report',resultId:null}]
+ invoke.mockImplementation((command,payload)=>{
+  if(command==='creation_list') return Promise.resolve(plans)
+  if(command==='artifact_list') return Promise.resolve([])
+  if(command==='creation_save') {plans=[payload.creation];return Promise.resolve(payload.creation)}
+  if(command==='creation_delete') {plans=[];return Promise.resolve()}
+  return original(command,payload)
+ })
+ render(App)
+ await fireEvent.click(await screen.findByRole('button',{name:'Artifacts',exact:true}))
+ const catalog=await screen.findByRole('region',{name:'Artifacts'})
+ await fireEvent.click(within(catalog).getByRole('button',{name:'Actions for Draft report'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Rename'}))
+ await fireEvent.input(screen.getByRole('textbox',{name:'Name'}),{target:{value:'Renamed report'}})
+ await fireEvent.submit(screen.getByRole('textbox',{name:'Name'}).closest('form'))
+ await waitFor(()=>expect(within(catalog).getByRole('button',{name:'Actions for Renamed report'})).toBeInTheDocument())
+ await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Actions for Renamed report'})).not.toBeInTheDocument())
+ await fireEvent.click(within(catalog).getByRole('button',{name:'Actions for Renamed report'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Archive'}))
+ await waitFor(()=>expect(within(catalog).queryByRole('button',{name:'Actions for Renamed report'})).not.toBeInTheDocument())
+ await fireEvent.click(within(catalog).getByRole('button',{name:'Show archived'}))
+ await fireEvent.click(within(catalog).getByRole('button',{name:'Actions for Renamed report'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Restore'}))
+ await waitFor(()=>expect(screen.queryByRole('menu')).not.toBeInTheDocument())
+ await fireEvent.click(within(catalog).getByRole('button',{name:'Show active'}))
+ await fireEvent.click(within(catalog).getByRole('button',{name:'Actions for Renamed report'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
+ await fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('creation_delete',{threadId:'01900000-0000-7000-8000-000000000099'}))
+ await waitFor(()=>expect(within(catalog).queryByRole('button',{name:'Actions for Renamed report'})).not.toBeInTheDocument())
+})
+
+it.each(['Browser','Files'])('resizes the shared %s workspace panel with keyboard controls',async(name)=>{
+ render(App)
+ await fireEvent.click(await screen.findByRole('button',{name:'Workspace tools'}))
+ await fireEvent.click(await screen.findByRole('menuitem',{name,exact:true}))
+ const divider=await screen.findByRole('separator',{name:'Workspace panel width'})
+ const before=Number(divider.getAttribute('aria-valuenow'))
+ await fireEvent.keyDown(divider,{key:'ArrowRight'})
+ expect(Number(divider.getAttribute('aria-valuenow'))).toBe(before-20)
+ await fireEvent.keyDown(divider,{key:'Home'})
+ expect(divider).toHaveAttribute('aria-valuenow','340')
+ await fireEvent.keyDown(divider,{key:'End'})
+ expect(divider.getAttribute('aria-valuenow')).toBe(divider.getAttribute('aria-valuemax'))
+})
+
+
+describe('release feature flags', () => {
+  it.each([[false, false], [true, false], [false, true], [true, true]])('keeps cloud=%s and companyRecord=%s independent', async (cloud, companyRecord) => {
+    Object.assign(featureFlags, {cloud, companyRecord})
+    localModeStatus = true
+    render(App)
+    await screen.findByTestId('local-mode')
+    expect(Boolean(screen.queryByRole('button', {name: 'Sign in to cloud'}))).toBe(cloud)
+    expect(Boolean(screen.queryByRole('button', {name: 'Open record panel'}))).toBe(companyRecord)
+    const dialog = await openSettings()
+    const nav = within(dialog).getByRole('navigation', {name: 'Settings sections'})
+    expect(Boolean(within(nav).queryByRole('button', {name: 'Account', exact: true}))).toBe(cloud)
+    expect(Boolean(within(nav).queryByRole('button', {name: 'Companies', exact: true}))).toBe(companyRecord)
+    expect(within(nav).getByRole('button', {name: 'Models & routing'})).toBeInTheDocument()
+    await fireEvent.click(within(dialog).getByRole('button', {name: 'Close settings'}))
+    if (!companyRecord) {
+      await fireEvent.keyDown(window, {key: 'k', metaKey: true, ctrlKey: true})
+      expect(screen.queryByRole('button', {name: 'Close record panel'})).toBeNull()
+      expect(invoke.mock.calls.some(([command]) => command.startsWith('record_'))).toBe(false)
+    }
+    if (!cloud) expect(invoke).not.toHaveBeenCalledWith('auth_status')
+  })
+
+  it('uses local mode without reading a saved cloud session when cloud is hidden', async () => {
+    Object.assign(featureFlags, {cloud: false, companyRecord: false})
+    localModeStatus = false
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'local_mode_enter') return
+      if (command === 'local_mode_provider_inventory') return emptyInventory
+      return original(command, args)
+    })
+    render(App)
+    await screen.findByTestId('local-mode')
+    expect(invoke).toHaveBeenCalledWith('local_mode_enter')
+    expect(invoke).not.toHaveBeenCalledWith('auth_status')
+    expect(invoke).not.toHaveBeenCalledWith('auth_sign_out')
+    expect(screen.queryByRole('region', {name: 'Sign in'})).toBeNull()
+  })
+
+  it('rejects a hidden settings section before it mounts', async () => {
+    Object.assign(featureFlags, {cloud: false, companyRecord: false})
+    const Settings = (await import('./lib/Settings.svelte')).default
+    for (const section of ['account', 'companies']) {
+      const view = render(Settings, {tauri: {invoke}, section, onclose: vi.fn()})
+      await waitFor(() => expect(screen.getByRole('heading', {name: 'Models & routing'})).toBeInTheDocument())
+      expect(invoke).not.toHaveBeenCalledWith('auth_entitlement_snapshot')
+      expect(invoke.mock.calls.some(([command]) => command.startsWith('record_'))).toBe(false)
+      view.unmount()
+    }
+  })
+})
+
+it('inserts and colors skill commands in the message and prepares them for one turn', async () => {
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command, args) => {
+    if (command === 'extend_command') return Promise.resolve({items:[{id:'review',kind:'skill',skills:[{name:'review',path:'SKILL.md',description:'Review code'}]}]})
+    if (command === 'chat_current_thread') return Promise.resolve('thread-1')
+    if (command === 'chat_submit') return Promise.resolve({runId:'extension-turn',attachments:[]})
+    return original(command,args)
+  })
+  render(App)
+  const composer = await findWorkspaceComposer()
+  await fireEvent.input(composer,{target:{value:'/rev'}})
+  await screen.findByRole('button',{name:/\/review.*Review code/})
+  await fireEvent.keyDown(composer,{key:'Enter'})
+  await waitFor(()=>expect(composer).toHaveValue('/review '))
+  expect(document.querySelector('.reference-overlay .reference')?.textContent).toBe('/review')
+  expect(screen.queryByLabelText('Selected extensions')).not.toBeInTheDocument()
+  await fireEvent.input(composer,{target:{value:'/review Inspect this change'}})
+  await fireEvent.keyDown(composer,{key:'Enter'})
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('extend_command',{action:'turn',data:{threadId:'thread-1',selected:['review:SKILL.md'],disabled:[],automatic:false}}))
+  await waitFor(()=>expect(composer).toHaveValue(''))
+})
+
+
+it('attaches multiple files and folders directly with compact removable names', async () => {
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command, payload) => command === 'chat_file_metadata'
+    ? Promise.resolve({ displayName: payload.path.split('/').pop(), byteLength: 0, isDirectory: !payload.path.endsWith('.md') })
+    : command === 'chat_submit' ? Promise.resolve({ runId: 'folder-run', attachments: [] }) : original(command, payload))
+  dialogResult = ['/tmp/Research', '/tmp/Assets', '/tmp/brief.md', '/tmp/plan.md']
+  render(App)
+  await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
+  expect(invoke).toHaveBeenCalledWith('chat_pick_attachments')
+  const selected = await screen.findByRole('list', { name: 'Selected files' })
+  for (const name of ['Research', 'Assets', 'brief.md', 'plan.md']) {
+    expect(selected).toHaveTextContent(name)
+    expect(within(selected).getByRole('button', { name: `Remove ${name}` })).toBeInTheDocument()
+  }
+  expect(selected).not.toHaveTextContent('Folder')
+  expect(selected).not.toHaveTextContent('Remove')
+  await fireEvent.click(within(selected).getByRole('button', { name: 'Remove plan.md' }))
+  expect(selected).not.toHaveTextContent('plan.md')
+  await fireEvent.input(await findWorkspaceComposer(), { target: { value: 'Review these' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', {
+    prompt: expect.stringContaining('"/tmp/Research"\n"/tmp/Assets"'), files: [{ path: '/tmp/brief.md' }],
+  }))
 })

@@ -7,9 +7,10 @@ export function insertMention(text, mention, path) {
   const token = `@${path} `
   return { text: text.slice(0, mention.start) + token + text.slice(mention.end), cursor: mention.start + token.length }
 }
-export function composerParts(text, references = []) {
+export function composerParts(text, references = [], commands = []) {
   const escaped = references.filter(Boolean).sort((a, b) => b.length - a.length).map((name) => '@' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  const expression = new RegExp('https?:\\/\\/[^\\s<>]+|' + [...escaped, '@[^\\s<>]+'].join('|'), 'g')
+  const commandTokens = commands.map(name => '(?<!\\S)/' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=\\s|$)')
+  const expression = new RegExp('https?:\\/\\/[^\\s<>]+|' + [...escaped, ...commandTokens, '@[^\\s<>]+'].join('|'), 'g')
   const parts = []
   let start = 0
   for (const match of text.matchAll(expression)) {

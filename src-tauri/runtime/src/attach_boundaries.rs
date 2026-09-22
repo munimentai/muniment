@@ -499,6 +499,22 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         let pi_artifact = self.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT);
         let earlier_models = earlier_thread_models(&storage, &thread_id, &launch.run_id);
         std::thread::spawn(move || {
+            let project_context = {
+                muniment_core::journal::RunJournal::open(profile_directory.join("runs.sqlite3"))
+                    .ok()
+                    .and_then(|mut journal| {
+                        muniment_core::project_context::retrieve(
+                            &profile_directory,
+                            &mut journal,
+                            &thread_id,
+                            &launch.grant.workspace,
+                            launch.tokens.subject.as_deref(),
+                            &launch.prompt,
+                        )
+                        .ok()
+                    })
+                    .unwrap_or_default()
+            };
             muniment_core::chat_coordinate::coordinate(
                 RuntimeChatEventSink::new(
                     &profile_directory,
@@ -508,7 +524,8 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                     launch.grant.workspace.clone(),
                 )
                 .with_pi_artifact(pi_artifact)
-                .with_earlier_models(earlier_models),
+                .with_earlier_models(earlier_models)
+                .with_project_context(project_context),
                 storage,
                 runtime,
                 runtime_activity,

@@ -4,3 +4,5 @@ src-tauri/core/target/
 src-tauri/gen/
 dist/
 .DS_Store
+
+__pycache__/

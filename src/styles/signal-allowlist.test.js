@@ -7,11 +7,19 @@ import path from 'node:path'
 // components on the allowed list". Every entry names the clause that permits it;
 // adding one is a spec decision, not a styling one.
 const ALLOWED = {
+  'src/lib/AppUpdate.svelte': { 'button': 'Verified update ready to install' },
   'src/lib/Toggle.svelte': {
-    'input:checked + .track': 'The signature track for every enabled checkbox.',
-    'input:checked + .track .knob': 'The signature knob for every enabled checkbox.',
+    'button[aria-checked="true"]': 'Enabled switch track',
+    'button[aria-checked="true"] span': 'Enabled switch knob',
   },
+  'src/lib/SettingsTabs.svelte': { 'button[aria-selected=true]': 'Selected settings tab' },
+  'src/extend/ExtendSection.svelte': {
+    '.catalog-card.connected': 'Installed server card',
+    '.catalog-card.connected strong': 'Installed server name',
+  },
+
   'src/App.svelte': {
+    '.lockup': 'The static brand graph on setup and sign-in.',
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
   },
@@ -30,20 +38,11 @@ const ALLOWED = {
   // are all on §1.2's forbidden list.
   'src/lib/AccessPanel.svelte': {},
   // The show switch reads as on or off by signal, not by a shade of gray.
-  'src/lib/ModelsSection.svelte': {
-    '.switch[aria-checked="true"]': '§1.2 the track of an enabled model\'s show switch',
-    '.switch[aria-checked="true"] span': '§1.2 the knob of an enabled model\'s show switch',
-  },
+
   // The same switch turns an account in a pool on, and turns routing on.
-  'src/lib/ModelAccounts.svelte': {
-    '.window-bar[data-level="plenty"] span': 'Green marks plentiful remaining allowance.',
-    '.switch[aria-checked="true"]': '§1.2 the track of an enabled account\'s switch',
-    '.switch[aria-checked="true"] span': '§1.2 the knob of an enabled account\'s switch',
-  },
-  'src/lib/ModelRouterSection.svelte': {
-    '.switch[aria-checked="true"]': '§1.2 the track of the routing switch when routing is on',
-    '.switch[aria-checked="true"] span': '§1.2 the knob of the routing switch when routing is on',
-  },
+  'src/lib/AllowanceMeter.svelte': { '.window-bar[data-level="plenty"] span': 'Green marks plentiful remaining allowance.' },
+
+
 }
 
 // Repo root: `npm test` runs vitest with `--root .`, as test/desktop-e2e-harness.test.js assumes.

@@ -1,0 +1,10 @@
+/* One quiet scrollbar for every app panel and native preview. */
+::-webkit-scrollbar { width:3px; height:3px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background:transparent; }
+::-webkit-scrollbar-thumb { background:color-mix(in srgb, var(--ink,currentColor) 8%, transparent); border-radius:8px; }
+:hover::-webkit-scrollbar-thumb { background:color-mix(in srgb, var(--ink,currentColor) 15%, transparent); }
+::-webkit-scrollbar-thumb:hover { background:color-mix(in srgb, var(--ink,currentColor) 25%, transparent); }
+/* Xterm draws its own scrollbar. Keep its thumb on the same dimensions. */
+.xterm .xterm-scrollable-element > .scrollbar.vertical { width:3px !important; }
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider { width:3px !important; border-radius:8px; background:color-mix(in srgb, var(--ink,currentColor) 15%, transparent) !important; }
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider:hover { background:color-mix(in srgb, var(--ink,currentColor) 25%, transparent) !important; }

@@ -1,3 +1,4 @@
+import { modelLabel } from './model-label.js'
 // The provider catalog behind Settings → Models: Pi's built-in providers, the
 // method each one offers, and the helpers the section and the picker share.
 // `account` names the Pi provider that signs in with an account and the label
@@ -144,7 +145,7 @@ export function pickerGroups(inventory, query = '') {
       classifier: '',
       models: [...new Map((provider.models ?? []).map((model) => [model.id, model])).values()]
         .filter((model) => !hidden.has(modelKey(provider.id, model.id)))
-        .map((model) => ({ ...model, label: model.id, provider: provider.id, choice: model.id, accounts: 0 })),
+        .map((model) => ({ ...model, label: modelLabel(model.id), provider: provider.id, choice: model.id, accounts: 0 })),
     }))
   if (router) {
     for (const entry of inventory.router_models ?? []) {
@@ -166,7 +167,7 @@ export function pickerGroups(inventory, query = '') {
           existing.choice = entry.id
         }
       } else {
-        group.models.push({ id: entry.model, context: '', label: entry.model, provider: router.id, choice: entry.id, accounts: entry.accounts })
+        group.models.push({ id: entry.model, context: '', label: modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts })
       }
     }
     if (inventory.router_classifier || inventory.router_models?.length) {
@@ -175,7 +176,7 @@ export function pickerGroups(inventory, query = '') {
         name: router.name,
         source: 'router',
         classifier: inventory.router_classifier || 'Automatic',
-        models: [{ id: 'auto', context: '', label: inventory.router_classifier ? `${inventory.router_classifier} picks` : 'Automatic', provider: router.id, choice: 'auto', accounts: 0 }],
+        models: [{ id: 'auto', context: '', label: inventory.router_classifier ? `${modelLabel(inventory.router_classifier)} picks` : 'Automatic', provider: router.id, choice: 'auto', accounts: 0 }],
       })
     }
   }

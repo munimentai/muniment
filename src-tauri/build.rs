@@ -11,6 +11,8 @@ use asr_rpath::ExecutableLocation;
 const ROOT: &str = "third-party/sherpa-onnx-v1.13.2";
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=MUNIMENT_UPDATER_PUBLIC_KEY");
+    println!("cargo:rerun-if-env-changed=MUNIMENT_UPDATER_ENDPOINT");
     let os = std::env::var("CARGO_CFG_TARGET_OS").expect("target OS is set by Cargo");
     if os == "linux" {
         println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");

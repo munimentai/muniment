@@ -4,6 +4,7 @@
   // card, the provider's models once, the connector that adds a provider, and
   // routing controls and one shared model catalog.
   import { onDestroy, onMount } from 'svelte'
+  import SettingsTabs from './SettingsTabs.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
   import ModelRouterSection from './ModelRouterSection.svelte'
@@ -14,13 +15,15 @@
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
-  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null } = $props()
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, initialTab = 'accounts' } = $props()
 
   // svelte-ignore state_referenced_locally
   let inventory = $state(initial)
   let loadError = $state('')
   let status = $state('')
   let query = $state('')
+  // svelte-ignore state_referenced_locally
+  let tab = $state(initialTab)
   let view = $state('list')
   // The router's settings: the accounts in every pool, the models in the
   // running and the classifier. One read feeds every card and the Routing foot.
@@ -107,14 +110,17 @@
   }
   onDestroy(() => { stopListening() })
 
-  async function load() {
+  let discovering = $state(false)
+  async function load(force = false) {
+    discovering = true
     try {
-      inventory = await tauri.invoke('local_mode_provider_inventory')
+      inventory = await tauri.invoke('local_mode_provider_inventory', { force })
       loadError = ''
       oninventory?.(inventory)
+      await loadRouter()
     } catch (_) {
       loadError = 'Muniment cannot read provider settings. Restart the app to retry.'
-    }
+    } finally { discovering = false }
   }
 
   async function disconnect(entry) {
@@ -338,12 +344,17 @@
   {#if view === 'list'}
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
+    <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Routing',icon:'route'}]} onchange={value => tab = value} />
+    {#if tab === 'models'}<button type="button" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</button>{/if}
+    {#if tab === 'routing'}
     {#if routerError}
       <p class="support" role="alert">{routerError}</p>
       <button type="button" onclick={loadRouter}>Retry routing settings</button>
     {:else if router}
       <ModelRouterSection {tauri} settings={router} {inventory} onsettings={onRouterSettings} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
     {:else}<p class="support" role="status">Reading routing settings…</p>{/if}
+    <details class="routing-test"><summary>Test routing</summary><RoutingTest {tauri} settings={router} /></details>
+    {:else if tab === 'accounts'}
     <section class="accounts-section" aria-label="Accounts">
     {#if refreshingAccounts}<p class="support" role="status">Refreshing allowances…</p>{/if}
     {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
@@ -381,8 +392,9 @@
       </section>
     {/each}
     </section>
+    {:else if tab === 'models'}
     <ModelCatalog {tauri} {inventory} settings={router} onsettings={onRouterSettings} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
-    <RoutingTest {tauri} settings={router} />
+    {/if}
   {:else}
     <header class="connect-head">
       <button type="button" class="quiet back" aria-label="Back" onclick={back}><LucideIcon name="arrow-left" variant="action" size={16} /></button>
@@ -494,6 +506,8 @@
 </div>
 
 <style>
+  .routing-test { margin-top: 12px; }
+  .routing-test summary { cursor: pointer; color: var(--muted); }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }
@@ -524,11 +538,6 @@
   .model-list, .provider-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .use { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
   /* The show switch: a hairline track and a muted knob when the model is hidden, a signal track and knob at the right when it shows. §1.2 lists the switch. */
-  .switch { position: relative; flex: none; width: 30px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
-  .switch span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: var(--radius-chip); background: var(--muted); transition: transform 120ms ease, background 120ms ease; }
-  .switch[aria-checked="true"] { border-color: var(--signal); background: var(--signal-soft); }
-  .switch[aria-checked="true"] span { transform: translateX(12px); background: var(--signal); }
-  .switch:hover:not(:disabled) { background: var(--faint); }
   .group-label { margin: 6px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
   .provider-row { display: flex; width: 100%; align-items: center; gap: 10px; min-height: 36px; padding: 6px 8px; text-align: left; font-size: var(--text-13); }
   .provider-row .tag { margin-left: auto; text-align: right; }

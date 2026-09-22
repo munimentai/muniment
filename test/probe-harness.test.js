@@ -11,16 +11,19 @@ import { buildProbeCommandTable } from './probe/stub.js'
 
 const source = fs.readFileSync(path.join(process.cwd(), 'test/probe/stub.js'), 'utf8')
 const readyMarker = "document.body.dataset.probeReady = ''"
-let App
+import App from '../src/App.svelte'
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: vi.fn().mockResolvedValue(undefined),
   unregister: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn().mockResolvedValue(null) }))
+vi.mock('@tauri-apps/api/event', () => ({listen: vi.fn().mockResolvedValue(vi.fn())}))
 vi.mock('@tauri-apps/api/window', () => ({
   UserAttentionType: { Informational: 2 },
   getCurrentWindow: () => ({
+    onMoved: vi.fn().mockResolvedValue(vi.fn()),
+    onResized: vi.fn().mockResolvedValue(vi.fn()),
     isFocused: vi.fn().mockResolvedValue(true),
     requestUserAttention: vi.fn().mockResolvedValue(undefined),
   }),
@@ -53,7 +56,6 @@ function installTable(fixtureName) {
 
 beforeAll(async () => {
   HTMLElement.prototype.scrollTo = vi.fn()
-  App = (await import('../src/App.svelte')).default
 })
 
 afterEach(() => {

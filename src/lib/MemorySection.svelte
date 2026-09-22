@@ -87,7 +87,7 @@
   {:else}<p>Facts saved here belong to this agent. Its chat can create, correct, and remove them.</p>{/if}
   <h4>Saved memories</h4>
   <p>Save one fact and its source.</p>
-  <input aria-label="Search memories" placeholder="Search memories" bind:value={filter} />
+  {#if facts.length}<input aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{/if}
   {#each shown as fact (fact.id)}
     <article>
       <strong>{fact.title}</strong>

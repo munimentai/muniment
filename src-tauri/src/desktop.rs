@@ -1,4 +1,6 @@
 mod account_login;
+mod app_update;
+mod attachment_picker;
 mod agents;
 mod attach_service;
 mod auth;
@@ -13,6 +15,7 @@ mod dictation;
 mod e2e_folder_dialog;
 mod fonts;
 mod home;
+mod extend;
 mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_runtime_service;
@@ -32,6 +35,10 @@ mod onboarding_scan;
 mod personal_memory;
 mod pool_login;
 mod projects;
+mod workspace_tools;
+mod workspace_actions;
+mod creations;
+mod terminal;
 mod record;
 mod runtime_owner;
 #[cfg(test)]
@@ -96,6 +103,8 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
     builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(app_update::AppUpdate::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -106,6 +115,7 @@ pub fn run() {
                 .build(),
         )
         .manage(auth::AuthState::new(runtime_activity.clone()))
+        .manage(terminal::TerminalState::default())
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(attach_service::AttachApprovalState::default())
         .on_page_load(|webview, payload| {
@@ -156,10 +166,29 @@ pub fn run() {
         })
         .on_window_event(launcher::window_event)
         .invoke_handler(tauri::generate_handler![
+            extend::extend_command,
+            creations::creation_list,
+            creations::creation_save,
+            creations::creation_delete,
+            creations::artifact_edit,
+            workspace_actions::workspace_file_action,
+            workspace_actions::workspace_reveal,
+            workspace_tools::workspace_folders,
+            workspace_tools::workspace_list,
+            workspace_tools::workspace_open,
+            workspace_tools::workspace_image,
+            workspace_tools::workspace_save_link,
+            workspace_tools::workspace_read_text,
+            workspace_tools::workspace_save_text,
+            terminal::terminal_start,
+            terminal::terminal_read,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_close,
             cef_browser::browser_command,
             cef_browser::browser_view,
             cef_browser::artifact_list,
-            cef_browser::artifact_save,
+            cef_browser::artifact_from_file,
             cef_browser::artifact_read,
             onboarding_diagnostics::onboarding_model_settings_error,
             fonts::installed_fonts,
@@ -236,6 +265,9 @@ pub fn run() {
             record::reader_objects,
             record::reader_connect,
             restart_muniment,
+            attachment_picker::chat_pick_attachments,
+            app_update::app_update_prepare,
+            app_update::app_update_install,
             launcher::launcher_register,
             launcher::launcher_start_failed,
             launcher::launcher_open,

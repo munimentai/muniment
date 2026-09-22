@@ -1,11 +1,15 @@
 use super::*;
 
 #[tauri::command]
-pub fn chat_file_metadata(path: PathBuf) -> Result<ChatAttachment, String> {
-    let file = std::fs::File::open(&path).map_err(|_| attachment_error())?;
-    let metadata = file.metadata().map_err(|_| attachment_error())?;
-    if !metadata.is_file() {
+pub fn chat_file_metadata(path: PathBuf) -> Result<serde_json::Value, String> {
+    let metadata = std::fs::metadata(&path).map_err(|_| attachment_error())?;
+    if !metadata.is_file() && !metadata.is_dir() {
         return Err(attachment_error());
+    }
+    if metadata.is_dir() {
+        std::fs::read_dir(&path).map_err(|_| attachment_error())?;
+    } else {
+        std::fs::File::open(&path).map_err(|_| attachment_error())?;
     }
     let display_name = path
         .file_name()
@@ -13,11 +17,12 @@ pub fn chat_file_metadata(path: PathBuf) -> Result<ChatAttachment, String> {
         .filter(|name| !name.is_empty())
         .ok_or_else(attachment_error)?
         .to_owned();
-    Ok(ChatAttachment {
-        display_name,
-        byte_length: metadata.len(),
-        media_type: None,
-    })
+    Ok(serde_json::json!({
+        "displayName": display_name,
+        "byteLength": if metadata.is_dir() { 0 } else { metadata.len() },
+        "mediaType": null,
+        "isDirectory": metadata.is_dir(),
+    }))
 }
 
 /// Reads a user-selected local text file for the file panel. Relative tool paths
@@ -73,11 +78,15 @@ pub struct ComposerFile {
 
 /// Searches names only. Hidden folders, build output and symlinks are excluded.
 #[tauri::command]
-pub async fn chat_search_files(query: String, thread_id: Option<String>) -> Result<Vec<ComposerFile>, String> {
+pub async fn chat_search_files(query: String, thread_id: Option<String>, project_id: Option<String>, directory: Option<PathBuf>) -> Result<Vec<ComposerFile>, String> {
     if query.chars().count() > 256 { return Ok(Vec::new()); }
     tauri::async_runtime::spawn_blocking(move || {
         let profile = muniment_runtime::profile_directory().map_err(|_| "The Home folder is unavailable.")?;
-        let root = project_working_directory(&profile, thread_id.as_deref())?;
+        let root = if let Some(path) = directory {
+            crate::workspace_tools::directory(&path)?
+        } else if let Some(id) = project_id {
+            muniment_core::projects::folder(&profile, &id)?
+        } else { project_working_directory(&profile, thread_id.as_deref())? };
         Ok(search_home_files(&root, &query))
     }).await.map_err(|_| "File search could not finish.".to_owned())?
 }
@@ -332,4 +341,21 @@ pub(super) fn fetch_grant(_access_token: &str) -> Result<ChatGrant, FetchGrantEr
 
 pub(super) fn validate_grant(grant: &ChatGrant) -> Result<(), String> {
     core_validate_grant(grant).map_err(fetch_grant_error_message)
+}
+
+#[cfg(test)]
+mod folder_selection_tests {
+    #[test]
+    fn metadata_distinguishes_readable_folders_from_files() {
+        let root = std::env::temp_dir().join(format!("muniment-folder-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let file = root.join("brief.txt");
+        std::fs::write(&file, "brief").unwrap();
+        let folder = super::chat_file_metadata(root.clone()).unwrap();
+        assert_eq!(folder["isDirectory"], true);
+        assert_eq!(folder["byteLength"], 0);
+        assert_eq!(super::chat_file_metadata(file).unwrap()["isDirectory"], false);
+        assert!(super::chat_file_metadata(root.join("missing")).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
+// Compile the lazy section before the test measures UI readiness.
+import './ModelsSection.svelte'
 import Settings from './Settings.svelte'
 import ModelAccounts from './ModelAccounts.svelte'
 import RoutingTest from './RoutingTest.svelte'
@@ -15,15 +17,24 @@ const routing = () => ({
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('Routing settings', () => {
-  it('combines routing, accounts, models and testing on one page', async () => {
+  it('separates accounts, models and routing on one settings screen', async () => {
     const tauri = { invoke: vi.fn(async (command) => command === 'model_router_settings' ? routing() : inventory) }
     render(Settings, { tauri, inventory, section: 'models', onclose: vi.fn() })
-    await screen.findByLabelText('Saved routing settings')
-    expect(screen.getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Choose automatically/ })).toBeDisabled()
+    await screen.findByRole('button', { name: 'Connect account' })
+    expect(screen.queryByRole('searchbox', { name: 'Search models' })).toBeNull()
+    await fireEvent.click(screen.getByRole('tab', { name: 'Models', exact: true }))
     expect(screen.getByRole('searchbox', { name: 'Search models' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Sample request')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Routing', exact: true })).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh models' })).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh models' }))
+    await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_provider_inventory', { force: true }))
+    expect(screen.queryByRole('button', { name: 'Connect account' })).toBeNull()
+    await fireEvent.click(screen.getByRole('tab', { name: 'Routing', exact: true }))
+    await screen.findByLabelText('Saved routing settings')
+    expect(screen.getByRole('button', { name: /Choose automatically/ })).toBeDisabled()
+    const advanced = screen.getByText('Test routing', {selector:'summary'})
+    expect(advanced.closest('details')).not.toHaveAttribute('open')
+    await fireEvent.click(advanced)
+    expect(screen.getByLabelText('Sample request')).toBeVisible()
   })
 
   it('retries failed reads without displaying an empty pool as fact', async () => {
@@ -54,8 +65,8 @@ describe('Routing settings', () => {
     }) }
     render(Settings, { tauri, inventory, section: 'routing', oninventory, onclose: vi.fn() })
     const summary = await screen.findByLabelText('Saved routing settings')
-    expect(within(summary).getByText('jev-latest')).toBeInTheDocument()
-    expect(within(summary).getByText('openai/example')).toBeInTheDocument()
+    expect(within(summary).getByText('Jev Latest')).toBeInTheDocument()
+    expect(within(summary).getByText('OpenAI · Example')).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: 'Use account balancing' }).closest('details')).toBeNull()
     await fireEvent.click(screen.getByRole('switch', { name: 'Use account balancing' }))
     await waitFor(() => expect(screen.getByRole('switch', { name: 'Use account balancing' })).toHaveAttribute('aria-checked', 'false'))
@@ -109,7 +120,7 @@ it('shows runtime routing eligibility and fallback evidence without starting a c
   await fireEvent.input(screen.getByLabelText('Sample request'), { target: { value: 'Summarize my file' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Test routing' }))
   await screen.findByText('The classifier did not return a valid choice.')
-  expect(screen.getByText('anthropic/cooling')).toBeInTheDocument()
+  expect(screen.getByText('Anthropic · Cooling')).toBeInTheDocument()
   expect(screen.getByText('Every account for this provider is temporarily unavailable.')).toBeInTheDocument()
   expect(screen.getByText('35 ms')).toBeInTheDocument()
   expect(tauri.invoke.mock.calls).toEqual([['model_router_test_route', { sample: 'Summarize my file' }]])

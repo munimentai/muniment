@@ -11,6 +11,8 @@ export const RECORD_PANEL_MAX_WIDTH = 960
 export const ARTIFACT_RAIL_KEYBOARD_STEP = 20
 
 export const RAIL_OCCUPANTS = Object.freeze({
+  workspace: Object.freeze({ min: 340, max: 1200, share: 0.5 }),
+  agent: Object.freeze({ min: 240, max: 560, share: 0.28 }),
   artifacts: Object.freeze({ min: ARTIFACT_RAIL_MIN_WIDTH, max: ARTIFACT_RAIL_MAX_WIDTH, share: 0.34 }),
   files: Object.freeze({ min: RECORD_PANEL_MIN_WIDTH, max: RECORD_PANEL_MAX_WIDTH, share: 0.5 }),
   record: Object.freeze({ min: RECORD_PANEL_MIN_WIDTH, max: RECORD_PANEL_MAX_WIDTH, share: 0.5 }),

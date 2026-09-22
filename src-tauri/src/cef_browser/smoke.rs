@@ -49,7 +49,6 @@ fn check(app: &tauri::AppHandle, phase: &str) -> Result<(), String> {
     let control = app.state::<Arc<Control>>().inner().clone();
     *control.active.lock().unwrap() = "browser".into();
     let pending = control.clone();
-    let grants = control.clone();
     let allowed_origin = site.clone();
     cef_native::layout(
         app,
@@ -72,7 +71,6 @@ fn check(app: &tauri::AppHandle, phase: &str) -> Result<(), String> {
             }
         },
         move |url| {
-            grants.grants.lock().unwrap().clear();
             origin(&url).ok().as_deref() == Some(&allowed_origin)
         },
     )?;
@@ -93,10 +91,8 @@ fn check(app: &tauri::AppHandle, phase: &str) -> Result<(), String> {
     };
     if phase == "write" {
         wait("document.title", "Login required")?;
-        operate(app, request("browser", "grant", "", ""), false)?;
         operate(app, request("browser", "click", "", "#login"), true)?;
         wait("document.title", "Login complete")?;
-        operate(app, request("browser", "grant", "", ""), false)?;
         operate(app, request("browser", "click", "", "#protected"), true)?;
     }
     wait("document.title", "Protected page")?;
@@ -104,7 +100,6 @@ fn check(app: &tauri::AppHandle, phase: &str) -> Result<(), String> {
         "document.querySelector('#bridge')?.textContent",
         "undefined",
     )?;
-    operate(app, request("browser", "grant", "", ""), false)?;
     operate(app, request("browser", "click", "", "#counter"), true)?;
     wait("document.querySelector('#counter')?.textContent", "1")?;
     operate(

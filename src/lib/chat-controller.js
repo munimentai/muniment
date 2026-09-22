@@ -34,6 +34,7 @@ export function createChatController({
   onHistoryStart = () => {},
   onThreadSummaries = () => {},
   onMoreThreads = () => {},
+  onThreadListError = () => {},
   readProject = () => null,
   readAgent = () => null,
   onThreadSelected = () => {},
@@ -321,10 +322,10 @@ export function createChatController({
       threadPageCount += 1
       nextThreadCursor = result.nextCursor
       onMoreThreads(nextThreadCursor != null)
-      onHistoryError('')
+      onThreadListError('')
       return firstThreadId
     } catch (_) {
-      if (!destroyed && sequence === threadRefreshSequence) onHistoryError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
+      if (!destroyed && sequence === threadRefreshSequence) onThreadListError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
       return null
     } finally {
       loadingOlderThreads = false
@@ -664,7 +665,10 @@ export function createChatController({
   async function send() {
     const prompt = readDraft().trim()
     if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
-    return submitPrompt(prompt, readFiles().map(({ path }) => ({ path })))
+    const selected = readFiles()
+    const folders = selected.filter(file => file.isDirectory).map(file => file.path)
+    const context = folders.length ? `${prompt}\n\nAttached folders (local paths):\n${folders.map(path => JSON.stringify(path)).join('\n')}\nUse the local file tools to inspect these folders and their subfolders as needed. Folder contents are not embedded in this message.` : prompt
+    return submitPrompt(context, selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })))
   }
 
   async function submitPrompt(prompt, files, preserveDraft = false) {

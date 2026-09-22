@@ -38,6 +38,13 @@ impl<R: tauri::Runtime> ChatEventSink for TauriChatEventSink<R> {
 }
 
 impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
+    fn extension_thread_id(&self) -> Option<String> {
+        let state = self.app.state::<ChatState>();
+        let storage = state.storage().ok()?;
+        let storage = storage.lock().ok()?;
+        storage.journal.run_thread_id(&self.run_id).ok().flatten()
+    }
+
     fn renew_chat_grant(&self, _access_token: &str) -> Result<ChatGrant, FetchGrantError> {
         Err(FetchGrantError::Unavailable)
     }

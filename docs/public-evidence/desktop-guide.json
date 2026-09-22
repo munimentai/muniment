@@ -1,0 +1,221 @@
+{
+  "product": "Muniment Desktop",
+  "guides": [
+    {
+      "slug": "start",
+      "title": "Start here",
+      "description": "Set up your workspace, connect an account, and send your first message.",
+      "sections": [
+        {
+          "id": "workspace",
+          "title": "Choose a workspace",
+          "body": "Open muniment and choose a workspace folder. The local desktop needs no Muniment account. Keep project files in folders you control. Settings \u2192 Storage shows your workspace and opens managed extension storage."
+        },
+        {
+          "id": "account",
+          "title": "Connect your first account",
+          "body": "Open Settings \u2192 Models & routing \u2192 Accounts. Choose Connect account and a provider. Use a supported subscription sign-in, an API key, or a local model endpoint. Credentials stay on your device. Your provider sets access and usage limits."
+        },
+        {
+          "id": "first-message",
+          "title": "Send your first message",
+          "body": "Choose a model in the composer, type a request, and press Enter. Shift+Enter inserts a new line. The reply shows its actions and model receipt. Use Stop to end a reply. Review a failed request before retrying because earlier actions can run again."
+        },
+        {
+          "id": "next",
+          "title": "Make it your workspace",
+          "body": "Open the files, terminal, or browser panel beside the chat. Add tools in Settings \u2192 Extend. Use Preferences to choose a theme, text size, and separate fonts for headers, prose, and records."
+        }
+      ]
+    },
+    {
+      "slug": "models",
+      "title": "Accounts, models, and routing",
+      "description": "Connect providers, choose models, and set routing preferences.",
+      "sections": [
+        {
+          "id": "accounts",
+          "title": "Accounts",
+          "body": "The Accounts tab groups connections by provider. Connect a supported subscription or API key. Name accounts so you can tell work and personal usage apart. Expand Usage and settings for account controls. A chat subscription does not automatically include API credit."
+        },
+        {
+          "id": "models",
+          "title": "Models",
+          "body": "The Models tab shows the shared model list from connected providers. Choose a model in the composer for a specific request. Local endpoints such as Ollama and LM Studio need a running server. Check the endpoint and model name if no models appear."
+        },
+        {
+          "id": "routing",
+          "title": "Routing",
+          "body": "The Routing tab controls account balancing, candidate models, and the classifier. Use Test routing to inspect a choice before relying on it. Routing can use only the accounts and models you configure. Disabled accounts stay excluded."
+        },
+        {
+          "id": "capacity",
+          "title": "Capacity",
+          "body": "Open Capacity beside the model picker to see each subscription account and its remaining allowance. Reset times appear when the provider supplies them. An unavailable allowance is unknown, not zero. API charges follow your provider account."
+        }
+      ]
+    },
+    {
+      "slug": "chat",
+      "title": "Chats and projects",
+      "description": "Use task drafts, attachments, projects, and reply controls.",
+      "sections": [
+        {
+          "id": "drafts",
+          "title": "Task drafts",
+          "body": "Each task keeps its unsent text, selected files, and per-turn extension choices while you move between tasks. Drafts stay in the open app session. Send clears the submitted draft. Closing the app can discard an unsent draft."
+        },
+        {
+          "id": "files",
+          "title": "File context",
+          "body": "Attach files from the composer or reference workspace files with @. Review the selected files before sending. Supported images can accompany a prompt. File access and model requests follow the tools and provider you choose."
+        },
+        {
+          "id": "projects",
+          "title": "Projects",
+          "body": "Group tasks under a project and choose its working folder. The files and terminal panels use the selected context. Rename and archive entries through their action menus. Archive keeps the task available without placing it in the main list."
+        },
+        {
+          "id": "replies",
+          "title": "Replies and actions",
+          "body": "Expand actions to inspect tool activity. Check changed files before keeping edits. A retry prepares a request for review and does not undo earlier actions. Stop ends the active reply, but cannot undo completed tool calls."
+        }
+      ]
+    },
+    {
+      "slug": "extensions",
+      "title": "MCP servers, skills, and plugins",
+      "description": "Connect MCP servers and install or create skills and plugins.",
+      "sections": [
+        {
+          "id": "mcp",
+          "title": "Connect an MCP server",
+          "body": "Open Settings \u2192 Extend \u2192 MCP servers. Search names, descriptions, publishers, or categories. Use the sliders button for category, installed, and sort filters. Details opens an in-app description. Connect starts provider authentication for supported servers. Complete consent in your browser."
+        },
+        {
+          "id": "custom",
+          "title": "Custom servers",
+          "body": "Use Custom to enter a server URL or advanced local command configuration. Providers can require account access or a registered OAuth client. A directory entry does not guarantee access. Check the provider\u2019s own instructions if connection fails. Test the connection from Details."
+        },
+        {
+          "id": "packages",
+          "title": "Install a skill or plugin",
+          "body": "Choose Skills or Plugins, then Install. Enter a GitHub repository, local folder, or archive. Review the package and selected skills before installation. Prefer publisher-owned repositories, inspect instructions and code, and pin a reviewed revision where possible. Installed code and tools can access resources you allow."
+        },
+        {
+          "id": "create",
+          "title": "Create from chat",
+          "body": "Choose Create from chat or ask a task to make a workflow into a skill or plugin. Describe when it should run, its inputs, and its expected output. Review the result before use. Managed packages live under ~/.muniment. Open folder reveals their files."
+        },
+        {
+          "id": "turn",
+          "title": "Use extensions for one turn",
+          "body": "Open the composer\u2019s ellipsis menu. Enable the MCP servers needed for this turn. Choose a skill or plugin to insert its /command into the message. Auto-select uses your configured classifier. Selections reset after submission and remain with an unsent task draft."
+        }
+      ]
+    },
+    {
+      "slug": "workspace",
+      "title": "Files, terminal, and browser",
+      "description": "Work with files, commands, web pages, and artifacts beside a chat.",
+      "sections": [
+        {
+          "id": "files",
+          "title": "Files",
+          "body": "Open the file browser to inspect the task or project workspace. The full path stays on one line and scrolls without a visible scrollbar. Click a file to open its editor. Unsaved edits require a choice before closing."
+        },
+        {
+          "id": "terminal",
+          "title": "Terminal",
+          "body": "The terminal runs in the selected workspace. Its tab identifies the folder, and its path row shows the full path. Check the path before running commands. Closing a terminal tab ends that panel session."
+        },
+        {
+          "id": "browser",
+          "title": "Browser",
+          "body": "The browser starts with the desktop docs. Use the address bar to visit a site. The tab shows the domain and path. Browser settings let you choose another homepage. Hiding the panel keeps the page available. Closing the tab releases its browser view."
+        },
+        {
+          "id": "artifacts",
+          "title": "Artifacts",
+          "body": "Ask a chat to create an interactive report, calculator, or dashboard. Saved artifacts appear in the artifact list. Open one beside the chat and use its name to distinguish the tab. Review the content and sources before sharing."
+        }
+      ]
+    },
+    {
+      "slug": "agents",
+      "title": "Agents and artifacts",
+      "description": "Create reusable agents and interactive artifacts from chat.",
+      "sections": [
+        {
+          "id": "agents",
+          "title": "Create an agent",
+          "body": "Open Agents and choose New agent. Describe its purpose and expected output. The initial creation prompt stays a draft until you send it. Cancel creation clears that draft without adding a saved creation."
+        },
+        {
+          "id": "artifact",
+          "title": "Create an artifact",
+          "body": "Open Artifacts and choose a starting suggestion or describe your own output. A dedicated chat keeps the creation and later revisions together. Send the prompt to start. Keep sensitive data out of artifacts intended for sharing."
+        },
+        {
+          "id": "memory",
+          "title": "Agent memory",
+          "body": "Each agent has its own profile and saved facts. Review its instructions before use. Add, correct, or remove facts through its memory controls. Task context still comes from the files and tools used in that conversation."
+        }
+      ]
+    },
+    {
+      "slug": "preferences",
+      "title": "Preferences, memory, and storage",
+      "description": "Choose themes and fonts, edit memory, and locate your files.",
+      "sections": [
+        {
+          "id": "appearance",
+          "title": "Preferences",
+          "body": "Select light, dark, or system mode. Browse themes to view the full gallery. Adjust text size and choose fonts separately for headers, prose, and records. Keyboard focus and enabled switches use the current theme."
+        },
+        {
+          "id": "memory",
+          "title": "Profile and memory",
+          "body": "Edit your name, work, and response instructions in Profile & Memory. Save the profile to use it in new replies. Add facts with a source. Search appears when memories exist. Deleted memories can be restored."
+        },
+        {
+          "id": "storage",
+          "title": "Storage",
+          "body": "The workspace folder holds memory, agents, projects, and session files. Managed skills and plugins live under ~/.muniment. Use Open extension folder to inspect installed packages. Changing the workspace folder does not move managed packages."
+        },
+        {
+          "id": "voice",
+          "title": "Voice",
+          "body": "The desktop voice stack runs on the device. Install the voice resources from the speech controls, choose the microphone, and use the configured shortcut. Dictation inserts text into the composer. Read the text before sending it."
+        }
+      ]
+    },
+    {
+      "slug": "troubleshooting",
+      "title": "Troubleshooting",
+      "description": "Resolve provider, extension, browser, and workspace problems.",
+      "sections": [
+        {
+          "id": "models",
+          "title": "No models or a failed reply",
+          "body": "Check Accounts for a valid connection. Make sure a local endpoint is running. Choose an available model and review provider limits. If a reply fails, inspect its message and actions before using Try again."
+        },
+        {
+          "id": "mcp",
+          "title": "An MCP cannot connect",
+          "body": "Open its Details and test the connection. Check that your provider account can use the service. Sign in again if consent expired. Some custom servers require a client registered by the provider. Do not substitute another app\u2019s client credentials."
+        },
+        {
+          "id": "files",
+          "title": "A file or folder is missing",
+          "body": "Check the active task or project and its full workspace path. Use Storage to confirm the workspace root. Skills and plugins use managed storage. Open their folder through Extend to inspect the installed files."
+        },
+        {
+          "id": "browser",
+          "title": "A page will not load",
+          "body": "Check the URL and network connection. Reload the page or close and reopen its tab. The bundled desktop docs work offline. External sites and provider authentication need network access."
+        }
+      ]
+    }
+  ]
+}

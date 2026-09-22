@@ -4,6 +4,7 @@ import { mount } from 'svelte'
 vi.mock('svelte', () => ({ mount: vi.fn() }))
 vi.mock('./App.svelte', () => ({ default: {} }))
 vi.mock('./Launcher.svelte', () => ({ default: {} }))
+vi.mock('./lib/WorkspacePopup.svelte', () => ({ default: {} }))
 
 afterEach(() => {
   history.replaceState({}, '', '/')

@@ -67,7 +67,7 @@ function variedAvatarSvg(avatar) {
     neutral: '<path d="M45 67h10" stroke-width="3"/>',
     smile: '<path d="M40 64q10 13 20 0" stroke-width="3"/>',
     smirk: '<path d="M43 69q12 2 16-7" stroke-width="3"/>',
-    teeth: '<path d="M37 63q13 4 26 0c-1 17-25 17-26 0Z" fill="#FFF8E8" stroke-width="2.5"/><path d="M39 68h22m-13-4v5m6-5v5" stroke-width="1.5"/>',
+    teeth: '<path d="M37 63q13 4 26 0c-1 17-25 17-26 0Z" fill="#FFF8E8" stroke-width="2.5"/>',
     laugh: '<path d="M40 63h20c0 18-20 18-20 0Z" fill="#243330" stroke-width="2"/><path d="M44 72q6-5 12 0" stroke="#EAA1A0" stroke-width="4"/>',
     frown: '<path d="M41 71q9-10 18 0" stroke-width="3"/>',
     kiss: '<path d="M47 62q13 2 3 6 10 5-3 7" stroke-width="3"/>',

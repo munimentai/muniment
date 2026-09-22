@@ -1,0 +1,42 @@
+import { cleanup, render, fireEvent, screen, waitFor } from '@testing-library/svelte'
+import '@testing-library/jest-dom/vitest'
+import { afterEach, expect, it, vi } from 'vitest'
+const { menu, popup, openUrl, save } = vi.hoisted(() => ({menu:vi.fn(),popup:vi.fn(),openUrl:vi.fn(),save:vi.fn()}))
+vi.mock('@tauri-apps/api/menu',() => ({Menu:{new:menu}}))
+vi.mock('@tauri-apps/plugin-opener',() => ({openUrl}))
+vi.mock('@tauri-apps/plugin-dialog',() => ({save}))
+import AssistantMarkdown from './AssistantMarkdown.svelte'
+afterEach(() => {cleanup();vi.clearAllMocks()})
+it('opens a chat web link in the app and offers native link actions', async () => {
+  const onopenlink = vi.fn()
+  const invoke = vi.fn()
+  const writeText = vi.fn()
+  Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText}})
+  menu.mockResolvedValue({popup,close:vi.fn(async () => {})})
+  render(AssistantMarkdown,{text:'See [xterm](https://xtermjs.org/).',onopenlink,tauri:{invoke}})
+  const link = screen.getByRole('link',{name:'xterm'})
+  await fireEvent.click(link)
+  expect(onopenlink).toHaveBeenCalledWith('https://xtermjs.org/')
+  expect(openUrl).not.toHaveBeenCalled()
+  await fireEvent.contextMenu(link,{clientX:10,clientY:20})
+  await waitFor(() => expect(popup).toHaveBeenCalled())
+  const items=menu.mock.calls[0][0].items
+  expect(items.map(i=>i.text || i.item)).toEqual(['Open in browser','Open in external browser','Separator','Copy link','Save link as…'])
+  await items[1].action()
+  expect(openUrl).toHaveBeenCalledWith('https://xtermjs.org/')
+  await items[3].action()
+  expect(writeText).toHaveBeenCalledWith('https://xtermjs.org/')
+  save.mockResolvedValueOnce(null)
+  await items[4].action()
+  expect(invoke).not.toHaveBeenCalled()
+  save.mockResolvedValueOnce('/tmp/saved.html')
+  await items[4].action()
+  expect(invoke).toHaveBeenCalledWith('workspace_save_link',{url:'https://xtermjs.org/',path:'/tmp/saved.html'})
+})
+it('keeps email links in the system mail handler', async () => {
+  const onopenlink = vi.fn()
+  render(AssistantMarkdown,{text:'[Email](mailto:test@example.com)',onopenlink})
+  await fireEvent.click(screen.getByRole('link',{name:'Email'}))
+  expect(openUrl).toHaveBeenCalledWith('mailto:test@example.com')
+  expect(onopenlink).not.toHaveBeenCalled()
+})

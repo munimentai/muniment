@@ -6,7 +6,7 @@
 // fast in either direction, with still weighted heaviest. A trace runs the
 // band's centreline once every 5 to 10 beats. Reduced motion never starts the
 // loop, so a subscriber keeps the still pose it drew at mount.
-import { sealBandPath, sealTracePath } from './mark.js'
+import { graphPaths } from './graph-mark.js'
 
 const rand = (a, b) => a + Math.random() * (b - a)
 const pick = (list) => list[Math.floor(Math.random() * list.length)]
@@ -95,17 +95,20 @@ export function subscribe(subscriber) {
   return () => { subscribers.delete(subscriber) }
 }
 
-// Apply a pose to a mark's group, body and accent paths at a base band width.
-export function paint(pose, { group, body, accent, width }) {
-  const w = width * pose.widthMul
-  body.setAttribute('d', sealBandPath(pose.ampMul, pose.scale, w))
+// Apply the shared pulse to the chat graph, including its center opening.
+export function paint(pose, { group, body, outline, accent }) {
+  const graph = graphPaths(20, pose)
+  body.setAttribute('d', graph.edges)
+  body.setAttribute('stroke-width', graph.width)
+  outline.setAttribute('d', graph.outline)
+  outline.setAttribute('stroke-width', graph.outlineWidth)
   group.setAttribute('transform', `rotate(${pose.angle.toFixed(2)} 24 24)`)
   if (pose.trace === null) {
     accent.style.opacity = 0
     return
   }
-  accent.setAttribute('d', sealTracePath(pose.ampMul, pose.scale))
-  accent.setAttribute('stroke-width', (w * 1.15).toFixed(2))
+  accent.setAttribute('d', graph.outline)
+  accent.setAttribute('stroke-width', (graph.outlineWidth * 1.5).toFixed(2))
   const length = accent.getTotalLength?.() ?? 0
   const segment = length * 0.16
   accent.style.strokeDasharray = `${segment} ${length}`

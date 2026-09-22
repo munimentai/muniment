@@ -21,7 +21,7 @@ function serveRepository() {
   const server = http.createServer(async (request, response) => {
     try {
       const pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname)
-      const relativePath = pathname.replace(/^\/+/, '')
+      const relativePath = pathname.startsWith('/assets/') ? `dist${pathname}` : pathname.replace(/^\/+/, '')
       const filePath = path.resolve(repositoryRoot, relativePath)
       const relativeToRoot = path.relative(repositoryRoot, filePath)
       if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
@@ -111,7 +111,7 @@ async function checkWindowChrome(browser, baseUrl) {
         assert.equal(row.top, 0)
         if (platform.startsWith('Mac')) assert.equal(row.clearance, 78)
         else assert.equal(row.padding, '12px')
-        assert.equal(row.controls.length, 4)
+        assert.equal(row.controls.length, 5)
         for (const control of row.controls) {
           assert.ok(control.width >= 24 && control.height >= 24, JSON.stringify(control))
           assert.ok(control.visible && control.inside && control.flush, JSON.stringify(control))
@@ -133,7 +133,6 @@ async function checkWindowChrome(browser, baseUrl) {
       await page.getByRole('button', { name: 'Artifacts', exact: true }).click()
       await checkArtifactCreation(page)
       await checkRow()
-      await page.getByRole('button', { name: 'Close browser panel', exact: true }).click()
       await page.getByRole('button', { name: 'New thread', exact: true }).click()
       await page.waitForFunction(() => document.querySelector('button.thread-title')?.textContent === 'New thread')
       await checkRow()
@@ -152,10 +151,14 @@ async function checkWindowChrome(browser, baseUrl) {
 
 async function checkArtifactCreation(page) {
   const panel = page.getByRole('region', { name: 'Artifacts', exact: true })
-  assert.equal(await panel.getByRole('heading', { name: 'Create an Artifact' }).count(), 1)
-  assert.equal(await panel.getByRole('textbox', { name: 'Name', exact: true }).count(), 1)
-  assert.equal(await panel.getByRole('textbox', { name: 'Artifact HTML' }).count(), 1)
-  assert.equal(await panel.getByRole('button', { name: 'Save and preview' }).isEnabled(), true)
+  await panel.getByRole('button', { name: 'New artifact', exact: true }).click()
+  const goal = page.getByRole('region', { name: 'Creation goal', exact: true })
+  await goal.waitFor()
+  assert.match(await page.locator('#composer-message').inputValue(), /artifact/i)
+  assert.equal(await page.evaluate(() => window.__PROBE__.invokedCommands.filter(item => item.command === 'creation_save').length), 0)
+  await goal.getByRole('button', { name: 'Cancel creation', exact: true }).click()
+  assert.equal(await goal.count(), 0)
+  assert.equal(await page.locator('#composer-message').inputValue(), '')
 }
 
 async function checkPaperFrame(browser, baseUrl) {
@@ -223,7 +226,9 @@ async function checkPaperFrame(browser, baseUrl) {
                 const rect = (selector) => workspace.querySelector(selector).getBoundingClientRect()
                 const record = rect('.record-toggle')
                 const update = rect('.update-slot')
-                fail(near(record.right, innerWidth - 12), 'Record does not sit flush right in the title row.')
+                const tools = rect('.workspace-menu')
+                fail(near(tools.right, innerWidth - 12), 'Workspace tools do not sit flush right in the title row.')
+                fail(record.right <= tools.left, 'Record overlaps workspace tools.')
                 fail(update.right <= record.left, 'The update slot extends past Record.')
                 const controlsEnd = parseFloat(style.getPropertyValue('--titlebar-controls-end'))
                 const titleLeft = Math.max(threadBox.left - parseFloat(getComputedStyle(workspace.querySelector('.thread-panel')).marginLeft), controlsEnd)
@@ -363,10 +368,10 @@ async function checkComposerActions(browser, baseUrl) {
             }
           })
           const context = JSON.stringify({ fixture, rail, width, layout })
-          // Add files leads the row at its left; the actions hold the microphone, and a stop square in flight.
+          // The actions hold file attachment, voice, and a stop button during a turn.
           assert.deepEqual(layout.buttons.map(({ label }) => label), fixture === 'in-flight.html'
             ? ['Voice', 'Stop']
-            : ['Voice'], context)
+            : ['Add files or folders', 'Voice'], context)
           for (const button of layout.buttons) {
             assert.equal(button.lines, 1, context)
             assert.ok(button.width >= 24 && button.height >= 24, context)

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/svelte'
 
 import RunMark from './RunMark.svelte'
-import { sealBandPath } from './mark.js'
+import { graphPaths } from './graph-mark.js'
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
@@ -26,14 +26,16 @@ describe('RunMark', () => {
     expect(container.textContent).toBe('Writing')
   })
 
-  it('draws the seal band at 20px with a body and a trace accent in one rotating group', () => {
+  it('draws the reduced graph at 20px with an outline and trace in one rotating group', () => {
     const { container } = render(RunMark, { props: { stage: 'routing' } })
     const svg = container.querySelector('svg')
     expect(svg.getAttribute('width')).toBe('20')
     expect(svg.getAttribute('viewBox')).toBe('0 0 48 48')
     const group = svg.querySelector('g')
     expect(group.getAttribute('transform')).toBe('rotate(0.00 24 24)')
-    expect(group.querySelector('path.body').getAttribute('d')).toBe(sealBandPath(1, 1, 5.8))
+    expect(group.querySelector('path.body').getAttribute('d')).toBe(graphPaths(20).edges)
+    expect(group.querySelectorAll('path.body')).toHaveLength(2)
+    expect(group.querySelectorAll('path.body')[1].getAttribute('d')).toBe(graphPaths(20).outline)
     expect(group.querySelector('path.accent').style.opacity).toBe('0')
   })
 })

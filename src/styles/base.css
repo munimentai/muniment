@@ -34,6 +34,7 @@ h2,
 h3,
 h4 {
   margin: 0;
+  font-family: var(--font-heading);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-heading);
   letter-spacing: var(--tracking-heading);
@@ -58,11 +59,6 @@ a:hover {
   outline: 0;
 }
 
-/* Selected text reads in both themes: ink at a fifth over the paper, never signal. */
-::selection {
-  background: color-mix(in srgb, var(--ink) 24%, var(--paper));
-  color: var(--ink);
-}
 
 code,
 kbd,
@@ -70,31 +66,6 @@ samp,
 pre {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums lining-nums;
-}
-
-/* Scroll bars are thin and faint. The thumb shows while the pointer rests on
-   the scrolling region or while it scrolls, and hides otherwise, on every
-   platform's webview. */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: var(--radius-chip);
-}
-
-:hover::-webkit-scrollbar-thumb {
-  background: var(--border);
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
 }
 
 /* Read by assistive tech only: no visual footprint, no effect on layout. */
@@ -119,3 +90,6 @@ pre {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* All composer panels anchor to the full composer, above its top edge. */
+[data-composer-panel] { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); max-height: 60vh; }

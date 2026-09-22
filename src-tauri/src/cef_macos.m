@@ -45,6 +45,10 @@ void muniment_cef_install_app_protocol(void) {
 void *muniment_cef_parent(void *window) {
     return (__bridge void *)[(__bridge NSWindow *)window contentView];
 }
+void muniment_cef_remove_view(void *handle) {
+    NSView *view = (__bridge NSView *)handle;
+    [view removeFromSuperview];
+}
 void muniment_cef_bounds(void *handle, double x, double y, double width, double height, BOOL hidden) {
     NSView *view = (__bridge NSView *)handle;
     NSView *parent = view.superview;

@@ -222,16 +222,16 @@ describe('chat composer and projection', () => {
       route: 'analysis/high', model: 'glm-5.2', cost: '$0.0041', time: '3.8s',
       capabilities: [{ name: 'search', version: '2' }],
       tools: [{ name: 'read', calls: 2, failed: 0 }],
-    })).toEqual({ route: 'analysis/high', model: 'glm 5.2', time: '4s' })
-    expect(receiptSummary({ model: 'openai-codex/gpt-5.5', time: '12.6s' })).toEqual({ route: null, model: 'openai codex/gpt 5.5', time: '13s' })
-    expect(modelLabel('hf.co/lmstudio-community/Qwen3.5-4B-GGUF:Q4_K_M')).toBe('hf.co/lmstudio community/Qwen3.5 4B GGUF:Q4_K_M')
+    })).toEqual({ route: 'analysis/high', model: 'GLM 5.2', time: '4s' })
+    expect(receiptSummary({ model: 'openai-codex/gpt-5.5', time: '12.6s' })).toEqual({ route: null, model: 'OpenAI Codex · GPT 5.5', time: '13s' })
+    expect(modelLabel('hf.co/lmstudio-community/Qwen3.5-4B-GGUF:Q4_K_M')).toBe('Hf.co · LM Studio Community · Qwen 3.5 4B GGUF:Q4 K M')
     expect(modelLabel('')).toBe(null)
   })
 
   it('names the route field so signal never lands on another segment', () => {
     // design-spec §1.2: --signal is the route segment's alone.
-    expect(receiptSummary({ model: 'glm-5.2', cost: '$0.0041' })).toEqual({ route: null, model: 'glm 5.2', time: null })
-    expect(receiptSummary({ route: '', model: 'glm-5.2', cost: '', time: '3.8s' })).toEqual({ route: null, model: 'glm 5.2', time: '4s' })
+    expect(receiptSummary({ model: 'glm-5.2', cost: '$0.0041' })).toEqual({ route: null, model: 'GLM 5.2', time: null })
+    expect(receiptSummary({ route: '', model: 'glm-5.2', cost: '', time: '3.8s' })).toEqual({ route: null, model: 'GLM 5.2', time: '4s' })
   })
 
   it('summarizes partial receipts without inventing a field', () => {
@@ -246,12 +246,12 @@ describe('chat composer and projection', () => {
     expect(receiptLabel({
       route: 'analysis/high', model: 'glm-5.2', cost: '$0.0041', time: '3.8s',
       capabilities: [{ name: 'search', version: '2' }],
-    })).toBe('Routed via analysis/high to model glm 5.2, 4s')
+    })).toBe('Routed via analysis/high to model GLM 5.2, 4s')
   })
 
   it('labels partial receipts without naming a field the receipt lacks', () => {
     expect(receiptLabel({ route: 'analysis/high', time: '3.8s' })).toBe('Routed via analysis/high, 4s')
-    expect(receiptLabel({ model: 'glm-5.2' })).toBe('Model glm 5.2')
+    expect(receiptLabel({ model: 'glm-5.2' })).toBe('Model GLM 5.2')
     expect(receiptLabel({ cost: '$0.0041' })).toBe('')
     expect(receiptLabel({})).toBe('')
     expect(receiptLabel(null)).toBe('')
@@ -439,11 +439,11 @@ it('keeps a saved partial reply and calls a generic start failure an interruptio
 it('compares model and classifier usage in separate columns', () => {
   const receipt = { model: 'openai/gpt-5.6-luna', cost: '$0.002 est.', tokens: { input: 11736, output: 5 }, turns: 1, classifiers: [{ model: 'typesafe/jev-latest', cost: 0.000040, tokens: { input: 942, output: 151 } }] }
   expect(receiptUsageColumns(receipt)).toEqual([
-    { model: 'openai/gpt 5.6 luna', cost: '$0.002 est.', tokens: '11,736 in, 5 out' },
-    { model: 'typesafe/jev latest', cost: '$0.000040 est.', tokens: '942 in, 151 out' },
+    { model: 'OpenAI · GPT 5.6 Luna', cost: '$0.002 est.', tokens: '11,736 in, 5 out' },
+    { model: 'TypeSafe · Jev Latest', cost: '$0.000040 est.', tokens: '942 in, 151 out' },
   ])
   expect(receiptRows(receipt)).toEqual([{ label: 'Turns', value: '1', route: false }])
-  expect(receiptUsageColumns({ classifiers: [{ model: 'private', cost: null, tokens: null }] })[1]).toEqual({ model: 'private', cost: 'Unavailable', tokens: 'Unavailable' })
+  expect(receiptUsageColumns({ classifiers: [{ model: 'private', cost: null, tokens: null }] })[1]).toEqual({ model: 'Private', cost: 'Unavailable', tokens: 'Unavailable' })
   expect(receiptUsageColumns(null)).toEqual([])
 })
 
@@ -453,7 +453,7 @@ it('shows restored routing evidence without treating model confidence as answer 
   expect(rows).toContainEqual({ label: 'Account', value: 'Work', route: false })
   expect(rows).toContainEqual({ label: 'Routing confidence', value: '80% · Model selection, not answer quality', route: false })
   expect(rows).toContainEqual({ label: 'Classification time', value: '42 ms', route: false })
-  expect(rows).toContainEqual({ label: 'Excluded model', value: 'anthropic/model: Account is turned off.', route: false })
+  expect(rows).toContainEqual({ label: 'Excluded model', value: 'Anthropic · Model: Account is turned off.', route: false })
   expect(rows).toContainEqual({ label: 'Fallback cause', value: 'Personal answered 429.', route: false })
   expect(receiptRows({})).toEqual([])
 })

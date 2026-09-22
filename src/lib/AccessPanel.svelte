@@ -1,4 +1,5 @@
 <script>
+  import { floatingMenu } from './floating-menu.js'
   // The signed-in person at the foot of the sidebar. Their name opens one menu
   // item, Sign out. Everything else about the account lives in Settings.
   import { onMount } from 'svelte'
@@ -64,7 +65,7 @@
 <div class="profile-block">
   <button bind:this={profileButton} class="profile-button" aria-haspopup="menu" aria-expanded={menuOpen} onclick={() => menuOpen ? closeMenu() : openMenu()}><span><strong>{profileName}</strong><small>{profileDetails}</small></span></button>
   {#if menuOpen}
-    <div bind:this={profileMenu} class="profile-menu" role="menu" aria-label="Account">
+    <div bind:this={profileMenu} class="profile-menu" use:floatingMenu role="menu" aria-label="Account">
       <button type="button" role="menuitem" onclick={() => { closeMenu(); onSignOut() }}>Sign out</button>
     </div>
   {/if}

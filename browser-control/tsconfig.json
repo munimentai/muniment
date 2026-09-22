@@ -9,7 +9,8 @@
     "declaration": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
-    "noEmitOnError": true
+    "noEmitOnError": true,
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"]
 }

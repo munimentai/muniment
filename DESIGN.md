@@ -1,11 +1,9 @@
 # muniment-desktop — Design standard
 
-muniment desktop is the local app for muniment, the company system of record.
-The interface is the user's territory and the model is a visitor. The design
-language comes from institutions that hold things in trust: registries,
-standards bodies, ledgers. Calm, permanent, meticulous about records. The
-thread surface, the provenance line, the receipt and the local report all
-render the same graph, and nothing in the shell is decoration.
+Muniment desktop is a local harness for models, tools and work. Phase one puts
+chat, projects, agents, artifacts and workspace tools first. Paid cloud follows
+in phase two. Cloud and the company record have independent flags, both off by
+default. The interface is the user's territory and the model is a visitor.
 
 ## Tokens
 
@@ -46,32 +44,32 @@ display serif. No italic except semantic emphasis in user content.
 Preferences moves two things and nothing else: a size step scales every
 `--text-*` token and `--text-provenance` together by a tenth per step, from
 two steps down to four up, and a family picked from the device's installed
-fonts sits in front of the shipped stack in `--font-human` or `--font-mono`.
+fonts sits in front of the shipped stack in `--font-human`, `--font-heading` or `--font-mono`. Headers have a separate picker.
 The super key with `=`, `-` and `0` moves the same step. Both live on the
 device beside the theme and the shipped pair stays the default.
 
-Shape: radius `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
-Nothing pill-shaped. Hairline borders do the work, and `--shadow-window` and
-`--shadow-overlay` are the only two depth tokens. Motion is purposeful and
-rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the
-panel slide. `prefers-reduced-motion` removes all of it.
+Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
+Shape: Settings tabs and the update control use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
+Hairline borders do the work. `--shadow-window` and `--shadow-overlay` are the only depth tokens. Motion is purposeful and
+rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide. `prefers-reduced-motion` removes all of it.
 
 ## Laws
 
-1. **Color means computation.** `--signal` appears only on the mark's thinking
+1. **Color means computation.** The static setup brand graph also uses
+   `--signal`. Otherwise `--signal` appears only on the mark's thinking
    state, the streaming underscore and caret on
    the active line, the route segment of the provenance line, the live voice
    polish flash, the enabled state of the Models show switch, and workflow-run
-   indicators. Buttons, links,
-   selection, icons at rest, badges and the mark at rest are ink on paper.
+   indicators. Settings tabs, verified updates and enabled extension switches use the theme signal.
+   Other buttons, links, selection, icons at rest and badges are ink on paper.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
    entries, costs, model names, file paths and keyboard chips render in Commit
    Mono. Conversation renders in Schibsted Grotesk.
 3. **Anti-patterns are hard fails.** No surface gradients, no violet, no glassmorphism
    or backdrop blur on a surface, no orbs or ambient animation, no assistant
-   avatar, no typing dots, no sparkles or wand iconography, no emoji in UI
-   copy, no pill radius, no "AI", "magic", "supercharge" or "unlock" in copy.
+   avatar, no typing dots, no decorative sparkles or wands, no emoji in UI
+   copy, pill radius only on Settings tabs, no "AI", "magic", "supercharge" or "unlock" in copy.
    The one blur is the Settings scrim: the workspace under Settings blurs
    behind the theme's paper, dark in dark mode and light in light mode, while
    the popup covers most of it.
@@ -88,23 +86,22 @@ panel slide. `prefers-reduced-motion` removes all of it.
 
 ## The ring
 
-The mark is a ring with a milled edge: a circle whose radius is modulated by a
-uniform 22-tooth wave, `r(t) = 16.5 + 1.6·sin(22t)` in a 48-unit viewBox,
-monoline stroke, round caps. At rest it is static ink. Thinking, it is
-verdigris and animated: an irregular breath that flexes scale, stroke and
-milling depth together, a spin that eases toward a new random target and often
-stops, and a rare trace that runs the outline once. All visible instances
-animate in sync as one organism. At 20px and below it renders as a solid
-two-edge reduction. That reduction is the seal: the application icon is the
-seal in verdigris on the dark brand card, and the lockup on the launch
-screen renders the seal in ink at 34px so the mark there matches the icon.
-[docs/design-reference/ring/muniment-ring-pulse-spin.html](docs/design-reference/ring/muniment-ring-pulse-spin.html)
-is the reference geometry and animation engine.
+The mark is the woven graph ring. Its canonical vertices and size reductions
+live in `src/lib/graph-mark.js`. The 20px, 32px and 56px variants use 22, 33
+and 55 nodes with two connections per node and thicker lines at small sizes.
+At 96px and above the full graph has 110 nodes, 220 connections and node dots.
+The setup lockup shows the static 160px graph with the wordmark in its center.
+Static marks retain the original proportions. Native icons use size reductions
+in verdigris on the dark brand card. Provider callbacks use the static 56px graph.
+Only the 20px chat mark moves: irregular pulse, eased random rotation, and
+an occasional outline trace. The inner graph contracts during the pulse so
+the center opening shrinks. Visible chat marks share one clock. Reduced
+motion keeps the original static pose. No light balls traverse the graph.
 
 ## Grammar
 
-Layout is sidebar, thread, and one rail column that the artifact rail (⌘J)
-or the record panel (⌘K) fills, both closed by default. User
+Layout is sidebar, thread, and one rail column for workspace tabs or the optional Record panel (⌘K).
+Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
 messages sit right in `faint` bubbles at radius 10. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
 36px gutter, and render as Markdown from the first token. The composer keeps
@@ -121,8 +118,8 @@ Platform chrome follows the OS and brand tokens stay identical across platforms.
 On macOS the app row sits in the 36px band above the panels beside the native
 traffic lights, and the row's controls and the lights center on that band. The
 row is the drag region and holds the sidebar toggle, the thread
-title with its actions menu, and Artifacts then Record with the update control beside
-them. The thread title, Artifacts and Record are one quiet row
+title with its actions menu, optional Record, then the vertical ellipsis for workspace tools.
+Seti icons identify file types. Scrollbars share a faint 3px thumb. The title and Record use a quiet row
 control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
@@ -131,17 +128,18 @@ controls and Linux keeps its decorations. The sidebar is dense: 28px rows,
 New thread leads the sidebar, followed by Agents and title search, with no static Threads heading.
 Pinned threads precede recent threads, with a heading only when pins exist.
 Search loads older titles and includes archives. Archived threads has Restore.
-Pins and archives persist on the device. Projects lists folders and scopes threads. The Settings and account footer has one hairline.
+Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. The cloud flag adds the account controls.
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
-in one compact menu shared with the title. Shift and Command select rows. Delete asks once.
+in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings is a popup over the workspace with a
-section list on its left, Models & routing, Preferences, Profile & Memory, Home, Companies and Account, and the
+section list on its left: Models & routing, Extend, Preferences, Profile & Memory and Storage.
+The company-record flag adds Companies. The cloud flag adds Account. It shows the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
-open it, and Escape or its close control returns focus to the opener.
-Companies lists every company on the machine with Open, Rename and Delete,
+open it. Dismissal returns focus to the opener.
+With the company-record flag enabled, Companies lists every company on the machine with Open, Rename and Delete,
 Delete asks once and names the company, and New company sits under the list.
-Models & routing leads with automatic or specific model selection. Account
+Models & routing has Accounts, Models, and Routing pill tabs. Account
 rows span the page, with allowances visible and usage and weight in details.
 A searchable model list holds visibility and routing statements. Connect
 account opens the provider catalog and its connection methods. The model
@@ -151,13 +149,12 @@ sidebar is resizable by its divider and collapses to nothing: no rail.
 The mark appears on the launch screen and in the thinking state, never in
 the sidebar. Icons are Lucide, vendored as inline SVG at a 1.6px stroke. Sidebar, thread and rail sit
 on `surface` inside a `paper` frame at `--radius-panel` with a hairline, and
-the frame shows at every edge and between panels. The update control is a 20px
-ink glyph that widens on hover or focus to read `Update` in mono, and it
-appears only when a newer build is downloaded.
-The composer band is one mono row under the composer: an Add files plus at
-its left, then the model source chip,
-the Home path, the context meter and the running cost, with the scan chip
-beside them on the first run. The band's one action control sits at its right
+the frame shows at every edge and between panels. The update control is a circular
+down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
+`Update` on hover or focus after a signed download. Click installs and restarts.
+The composer band is one mono row under the composer. The horizontal ellipsis,
+model selector and capacity control share their height and spacing. Voice and
+the attachment paperclip sit beside the send control. The band's one action control sits at its right
 end: absent while the draft is empty, an ink up-arrow button once the draft has
 text, and a muted stop square while a reply is in flight. Enter sends. A
 message sent while a reply is in flight steers it: the reply picks it up at its
@@ -172,66 +169,20 @@ composer line, nothing else. A global shortcut opens it above every app,
 centered in the upper third of the screen. Enter sends the line as the first
 message of a new thread and brings the shell forward. Escape closes it. A microphone closes the row at its right, and a missing speech model opens a popover over the composer like the model picker: one sentence, the download size, the free disk required and one Install control, with the source and licenses one Details disclosure away. An attached file sits above the text under a hairline the composer's full inner width.
 
-The record panel takes the rail column at a 480px minimum and its own
-remembered width, and one control maximizes it over the sidebar and the
-thread until ⌘K or Escape restores them. Its header is one mono row: the
-company name as a picker, the kind list, a search field and Maximize. The
-table view sets column headers, identifiers, dates, amounts, states and
-sources in Commit Mono and the title and prose fields in Schibsted Grotesk,
-with 28px hairline rows and no zebra fill. A cell in edit shows the
-composer's muted hairline. A proposed change renders its diff in mono under
-the row with Commit and Discard, and a warning from propose sits in ochre
-text above them. The board's columns are the kind's states, its cards are
-`surface` on `paper` at `--radius-control`, and a card in flight shows no
-color. A workflow run in progress is the one place the panel shows signal.
-A company with no records opens on Connect your data: one paragraph that
-says what the company record is, then the sources as tiles, each under the
-company's own mark with CSV file among them, and a tile opens the import on
-that source with the kind chosen from the object. A kind list row reads the
-kind's record count, or `none yet`. The kind toolbar is one mono row: the layout switch, Table or Board, is two
-quiet controls with `aria-pressed`, the state filter and the saved-view
-picker are 24px native selects, and Import, Save view and Ask are quiet
-controls. A saved view is a `view` record and Save view proposes it like any
-change. Ask sends the open view's SQL to the composer as a fenced block. The
-empty state of a kind is one line. Under a table that holds more rows than it
-shows, Show more is one quiet mono control that appends the next page. An
-open record carries Link, Merge and Delete as quiet controls at the header's
-right, each opening one form in the record's place: a relation and target
-kind as 24px selects, a search field with a list of matches by title, the
-diff, and Commit and Discard. On the kind list, Rename beside the company
-picker turns the picker into one text field with Save. Import first lists
-the sources as one quiet list, CSV file and every network source the sidecar
-reads, with a mono note beside each. A file opens the file dialog. A network
-source not yet connected shows one sentence and one field per credential it
-asks for, a password field for a secret, then its objects as
-the same list. The object then fills the kind body with one mono table of its
-columns: the column name,
-what its samples read as with three examples, and a 24px select of the
-property it fills, with `skip` first. One select under it names the column
-that keys each row. Propose mapping shows the mapping record's diff, Commit
-and run applies it, and the run reports `n of total rows` as one mono status
-line. The result is three mono lines, rows, counts and rows not placed, then
-one mono table of row, title and reason for every row the mapping could not
-place, with Done and Run again. A mapping record's view carries Run at the
-header's right, where New sits for a kind.
+The optional Record panel uses the shared rail. Tables, boards and saved views
+follow the company kinds. Records, amounts and evidence use mono. Proposed
+changes show their diff before Commit. Companies settings and every record
+entry point disappear together when the company-record flag is off.
+File previews, code diffs and permission gates remain part of the local harness.
+A diff uses the stored change and stacks its sides below 480 pixels.
 
-Conversation, tool, permission, and receipt state is rebuilt from the
-append-only local run journal. Reopen reduces committed events; snapshots are
-disposable, and uncertain external effects require explicit attention rather
-than silent replay.
-A memory recall renders as one row with its query inside the expanded receipt and nowhere else.
-Each saved attachment shows its media type when the record provides one. The image delivery rule appears once under the attachment list.
-A code-diff gate renders the stored diff. It never re-reads the workspace for display.
-A card that renders code sizes its layout from its own width rather than the window width. It stacks diff sides below 480 pixels.
-A card that cannot show a stored change says whether Muniment applied the change.
-
-The signed-in shell has one workspace `h1`, a headed thread list, and a transcript region named for the open thread.
+The workspace has one `h1`, a headed thread list, and a transcript region named for the open thread.
 An error message names the failure. The control beside it names and repeats the action that failed.
 The background service notice reuses the auth error state's mono record register.
 One owner starts, watches and stops the runtime for every window. When the runtime exits, every window shows the same one-sentence notice and one control that starts it again.
 The notice waits out a two second dwell, so a drop shorter than that leaves the workspace on screen. A first status that already reports the service unreachable shows the notice at once.
 An error that rejects one item from a set names that item.
-A surface that renders model or user text wraps an unbreakable string.
+Prose wraps unbreakable strings. Tab labels and path headers stay on one line.
 A control renders as a control at rest.
 A control presents a hit area of at least 24 by 24 CSS pixels.
 The first run is the composer with three mono chips under it, the model source, the Home path and the scan result. A chip is a control at rest, opens its own panel, and never blocks Send. A scan row reads `Name: N files` in mono with a checkbox at rest.
@@ -243,8 +194,57 @@ lists every control and surface, its states, and the token each state reads.
 
 The file panel shares the record panel rail, resize and maximize behavior.
 The changed-files chip sits above the composer and opens its list on hover or click.
-File links open current text. Only actions with more details use disclosure arrows.
+File links open an editable Monaco tab with syntax highlighting. Only actions with more details use disclosure arrows.
 The account name shows a pencil on hover or focus and edits inline.
 
 Composer URLs and file references use the theme-aware reference color.
 The `@` file list supports arrows, Enter, Tab and Escape.
+
+Workspace tabs keep a fixed width. Their scroll area hides its scrollbar and
+fades clipped tabs without covering panel controls. Browser labels preserve the
+host and URL path, query and fragment, with a right fade. Folder labels use the
+last folder with a left fade. Terminal and Files share the full-path scroll
+component. Hidden features leave no controls, Settings entries or empty space.
+
+## Extend
+
+Extend uses the shared Settings panel. MCP servers, Skills and Plugins occupy
+three theme-colored pill tabs through `SettingsTabs`, shared with Models & routing.
+Tab icons stay neutral on selection. MCPs use the MCP mark, Skills use
+`pencil-sparkles`, and Plugins use `unplug`. Nonzero counts follow labels in smaller type. Search, category, installation and sort filters
+search names, descriptions, publishers and categories in the official remote-server catalog.
+Details open an in-app dialog with descriptions, connection details and provider links.
+Directory relays and example servers stay out. Popularity uses the source catalog score.
+Twelve popular entries precede the remaining catalog. Compact cards use three
+columns, two in narrower panels, and one when needed. Each card shows its
+provider logo with initials as a fallback. Pagination appears only for multiple pages.
+Installed entries stay in catalog order and use the theme signal-soft surface.
+An unlabeled signal toggle controls availability, with an accessible name.
+The Show filter includes Installed. Connect starts provider authentication when available.
+A sliders icon reveals filters. Custom opens a dialog and attempts to load the service favicon.
+Package review separates instructions, MCP servers and executable code.
+Icon notices live in the bundled third-party notices, outside the catalog.
+
+The horizontal composer ellipsis sits first at the left and matches the model and capacity controls.
+It has a background only on hover or keyboard focus.
+Its three branches are MCPs, Plugins and Skills, followed by Manage extensions.
+The paperclip opens the OS picker directly. macOS accepts multiple files and folders together. Attachment chips are one 28px row: icon, name with extension, hover-only X. Folder paths reach local tools. All composer panels share one
+anchor above the full composer with an eight-pixel gap. Only one opens at a time.
+Skill and plugin commands appear inline as slash commands in the reference color.
+MCP switches and optional classifier selection apply to one turn. The next turn
+starts without selected extensions. No extension chips sit below the message.
+
+## Popups and names
+
+Dialog headers use `PopupClose`: an X with an accessible name, a transparent
+background at rest, and a theme hover background. Escape, X and a click outside
+close the topmost popup. Clicking panel whitespace or dragging from inside to
+outside does not close it. Nested dismissal leaves the parent open. A pending
+operation blocks all dismissal paths together. Dismissal never approves an action.
+Confirmation dialogs keep explicit decision buttons and focus the safe choice.
+Menus close on selection, Escape or outside click without an extra close row.
+Dialogs fit their content, cap height to the viewport, and scroll only as needed.
+Preferences spaces Browse themes below the mode control. Skills and plugins use
+managed storage under `~/.muniment`, with Open folder in Extend.
+Threads, agent chats and artifact chats use one-to-three-word generated titles.
+Project cards keep their vertical ellipsis menu for actions, including Rename.
