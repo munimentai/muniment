@@ -2701,7 +2701,7 @@ describe('thread name', () => {
     expect(screen.queryByRole('list', { name: 'Research threads' })).not.toBeInTheDocument()
   })
 
-  it('creates and renames a project through folder commands and scopes new threads', async () => {
+  it.each([false, true])('creates and renames a project with the catalog open: %s', async (catalogOpen) => {
     const catalog = { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
     const baseInvoke = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, payload) => {
@@ -2722,12 +2722,14 @@ describe('thread name', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'New thread in Contracts' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', { projectId: 'created' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'New thread in Contracts' })).toBeEnabled())
+    if (catalogOpen) await fireEvent.click(screen.getByRole('button', { name: 'Projects', exact: true }))
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Contracts' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename', exact: true }))
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Agreements' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByRole('button', { name: 'Project Agreements' })
     expect(invoke).toHaveBeenCalledWith('project_rename', { projectId: 'created', name: 'Agreements' })
+    if (catalogOpen) await fireEvent.click(screen.getByRole('button', { name: 'Close projects' }))
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Agreements' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Open folder' }))
     expect(invoke).toHaveBeenCalledWith('project_open', { projectId: 'created' })
