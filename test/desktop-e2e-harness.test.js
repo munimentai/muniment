@@ -3337,7 +3337,8 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
   const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
   const registration = fs.readFileSync(path.join(root, 'test/windows-msi-registration.ps1'), 'utf8')
-  const helpers = registration + '\n' + script.slice(script.indexOf('function Write-MsiScopeLog'), script.indexOf('\n$machineKey ='))
+  const cefCheck = script.slice(script.indexOf('function Assert-CefInstallation'), script.indexOf('\nfunction Write-MsiProperties'))
+  const helpers = registration + '\n' + cefCheck + '\n' + script.slice(script.indexOf('function Write-MsiScopeLog'), script.indexOf('\n$machineKey ='))
   const invoke = (body, args = []) => {
     const file = path.join(temp(), 'diagnostics.ps1')
     // Replace COM identity and release calls. The fixture runs the registration helper and its property getters.
@@ -3543,6 +3544,11 @@ $argsPath = $args[0]
     const runtime = path.join(path.dirname(msi), 'muniment', 'muniment-runtime.exe')
     fs.mkdirSync(path.dirname(runtime))
     fs.writeFileSync(runtime, '')
+    for (const name of ['muniment-desktop.exe', 'muniment-desktop.dll', 'libcef.dll', 'chrome_elf.dll', 'icudtl.dat', 'v8_context_snapshot.bin', 'resources.pak', 'locales/en-US.pak', 'CEF-CREDITS.html']) {
+      const resource = path.join(path.dirname(runtime), name)
+      fs.mkdirSync(path.dirname(resource), { recursive: true })
+      fs.writeFileSync(resource, 'CEF fixture')
+    }
     // Replace the Windows identity boundary while the fixture runs both per-user installer cycles.
     const sequence = script.slice(script.indexOf('\n', script.indexOf('Remove-Item $upgradeBaseMsi -Force'))).replace(
       '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', '"S-1-5-21-123"',
