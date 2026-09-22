@@ -110,14 +110,17 @@
   }
   onDestroy(() => { stopListening() })
 
-  async function load() {
+  let discovering = $state(false)
+  async function load(force = false) {
+    discovering = true
     try {
-      inventory = await tauri.invoke('local_mode_provider_inventory')
+      inventory = await tauri.invoke('local_mode_provider_inventory', { force })
       loadError = ''
       oninventory?.(inventory)
+      await loadRouter()
     } catch (_) {
       loadError = 'Muniment cannot read provider settings. Restart the app to retry.'
-    }
+    } finally { discovering = false }
   }
 
   async function disconnect(entry) {
@@ -342,6 +345,7 @@
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
     <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Routing',icon:'route'}]} onchange={value => tab = value} />
+    {#if tab === 'models'}<button type="button" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</button>{/if}
     {#if tab === 'routing'}
     {#if routerError}
       <p class="support" role="alert">{routerError}</p>

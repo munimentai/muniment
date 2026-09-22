@@ -624,6 +624,183 @@ fn list_pi_models(agent: &Path) -> Vec<(String, InventoryModel)> {
         .unwrap_or_default()
 }
 
+/// Refresh provider catalogs under the same locks used for settings. Network
+/// failures leave both the last catalog and explicit model overrides intact.
+fn refresh_provider_models(
+    agent: &Path,
+    known: &[(String, InventoryModel)],
+    force: bool,
+) -> Result<bool, String> {
+    use muniment_core::{
+        model_router::{config::Credential, native_auth},
+        provider_models,
+    };
+    static REFRESH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _held = REFRESH.lock().unwrap_or_else(|error| error.into_inner());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let mut cache = provider_models::load(agent);
+    let auth_file = pi_auth_file(agent);
+    let auth = read_json_store(&auth_file)?.unwrap_or_default();
+    let mut discovered = Vec::new();
+    for (provider, entry) in &auth {
+        let oauth = entry["type"] == "oauth";
+        if provider_models::endpoint(provider, oauth).is_none() {
+            continue;
+        }
+        let cache_key = format!("provider:{provider}");
+        let fresh = cache
+            .get(&cache_key)
+            .is_some_and(|c| now >= c.checked_ms && now - c.checked_ms < provider_models::TTL_MS);
+        if force || !fresh {
+            // Refresh a supported subscription before listing models. Re-read
+            // and compare under the auth lock so a concurrent sign-in survives.
+            let mut current = entry.clone();
+            if let Some(credential) = Credential::from_pi_auth(provider, entry) {
+                // A subscription copied into the pool shares its refresh token.
+                // Let the pool rotate it once, then mirror it to the provider slot.
+                let pooled = muniment_core::model_router::config::load(agent).ok().and_then(|config| {
+                    config.accounts.into_iter().find(|account| matches!(&account.credential,
+                        Credential::Subscription { provider: p, access, refresh, .. }
+                        if p == provider && (entry["access"] == *access || refresh.as_deref().is_some_and(|r| entry["refresh"] == r))))
+                });
+                let refreshed = if let Some(account) = pooled {
+                    Some(
+                        native_auth::refresh_account(agent, &account.id, now, DISCOVERY_TIMEOUT)
+                            .map(|a| a.credential),
+                    )
+                } else {
+                    native_auth::refresh_if_expiring(&credential, now, DISCOVERY_TIMEOUT)
+                };
+                if let Some(Ok(Credential::Subscription {
+                    access,
+                    refresh,
+                    expires_ms,
+                    ..
+                })) = refreshed
+                {
+                    let _lock = lock_pi_auth_file(&auth_file)?;
+                    let mut latest = read_json_for_update(&auth_file)?;
+                    if latest.get(provider) == Some(entry) {
+                        current["access"] = access.into();
+                        if let Some(refresh) = refresh {
+                            current["refresh"] = refresh.into();
+                        }
+                        if let Some(expires) = expires_ms {
+                            current["expires"] = expires.into();
+                        }
+                        latest.insert(provider.clone(), current.clone());
+                        write_json_for_update(&auth_file, &latest)?;
+                    } else {
+                        current = latest.get(provider).cloned().unwrap_or_default();
+                    }
+                }
+            }
+            if let Some(token) = current
+                .get(if oauth { "access" } else { "key" })
+                .and_then(serde_json::Value::as_str)
+                .filter(|v| !v.is_empty())
+            {
+                if let Some(models) =
+                    provider_models::discover(provider, oauth, token, DISCOVERY_TIMEOUT)
+                {
+                    cache.insert(
+                        cache_key.clone(),
+                        provider_models::Catalog {
+                            checked_ms: now,
+                            models,
+                        },
+                    );
+                }
+            }
+        }
+        if let Some(catalog) = cache.get(&cache_key) {
+            let models: Vec<_> = catalog
+                .models
+                .iter()
+                .filter(|model| {
+                    !known
+                        .iter()
+                        .any(|(p, m)| p == provider && model["id"] == m.id)
+                })
+                .cloned()
+                .collect();
+            discovered.push((provider.clone(), models));
+        }
+    }
+    // Pool accounts can use a different credential from the provider slot.
+    if let Ok(config) = muniment_core::model_router::config::load(agent) {
+        for account in config
+            .accounts
+            .iter()
+            .filter(|a| a.enabled && a.base_url.is_none())
+        {
+            let oauth = matches!(account.credential, Credential::Subscription { .. });
+            if provider_models::endpoint(&account.family, oauth).is_none() {
+                continue;
+            }
+            let key = format!("account:{}", account.id);
+            if !force
+                && cache.get(&key).is_some_and(|c| {
+                    now >= c.checked_ms && now - c.checked_ms < provider_models::TTL_MS
+                })
+            {
+                continue;
+            }
+            let Ok(account) =
+                native_auth::refresh_account(agent, &account.id, now, DISCOVERY_TIMEOUT)
+            else {
+                continue;
+            };
+            let token = match &account.credential {
+                Credential::ApiKey { key } => key,
+                Credential::Subscription { access, .. } => access,
+            };
+            if let Some(models) =
+                provider_models::discover(&account.family, oauth, token, DISCOVERY_TIMEOUT)
+            {
+                cache.insert(
+                    key,
+                    provider_models::Catalog {
+                        checked_ms: now,
+                        models,
+                    },
+                );
+            }
+        }
+    }
+    provider_models::save(agent, &cache).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let models_file = pi_models_file(agent);
+    let _lock = lock_pi_auth_file(&models_file)?;
+    let mut root = read_json_for_update(&models_file)?;
+    let mut changed = false;
+    for (provider, models) in discovered {
+        if !models.is_empty() {
+            changed |= provider_models::merge_models(&mut root, &provider, &models);
+        }
+    }
+    if let (Some(endpoint), Ok(config)) = (
+        muniment_core::model_router::server::read_endpoint(agent),
+        muniment_core::model_router::config::load(agent),
+    ) {
+        if config.enabled {
+            let before = root
+                .get("providers")
+                .and_then(|p| p.get(ROUTER_PROVIDER))
+                .cloned();
+            muniment_core::model_router::pi_provider::register(&mut root, &endpoint, &config);
+            changed |=
+                before.as_ref() != root.get("providers").and_then(|p| p.get(ROUTER_PROVIDER));
+        }
+    }
+    if changed {
+        write_json_for_update(&models_file, &root)?;
+    }
+    Ok(changed)
+}
+
 /// Rewrites each endpoint's model list from what its server serves now, and
 /// answers whether any list changed.
 fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
@@ -638,9 +815,13 @@ fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
         .get_mut("providers")
         .and_then(serde_json::Value::as_object_mut)
     {
-        for entry in providers
-            .values_mut()
-            .filter_map(serde_json::Value::as_object_mut)
+        for (_, entry) in providers
+            .iter_mut()
+            .filter(|(id, _)| {
+                id.as_str() != ROUTER_PROVIDER
+                    && !KEY_PROVIDERS.iter().any(|(known, _)| known == id)
+            })
+            .filter_map(|(id, value)| value.as_object_mut().map(|entry| (id, entry)))
         {
             let Some(base_url) = entry.get("baseUrl").and_then(serde_json::Value::as_str) else {
                 continue;
@@ -866,16 +1047,26 @@ pub(crate) fn context_settings() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub(crate) fn context_settings_save(enabled: bool, reserve_tokens: u64, keep_recent_tokens: u64) -> Result<serde_json::Value, String> {
-    if !(4096..=131072).contains(&reserve_tokens) || !(4096..=131072).contains(&keep_recent_tokens) {
+pub(crate) fn context_settings_save(
+    enabled: bool,
+    reserve_tokens: u64,
+    keep_recent_tokens: u64,
+) -> Result<serde_json::Value, String> {
+    if !(4096..=131072).contains(&reserve_tokens) || !(4096..=131072).contains(&keep_recent_tokens)
+    {
         return Err("Choose token counts between 4,096 and 131,072.".into());
     }
     let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
     let path = agent.join("settings.json");
-    let lock = muniment_core::pi_settings::lock_settings(&path).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    let lock = muniment_core::pi_settings::lock_settings(&path)
+        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let mut settings = read_json_for_update(&path)?;
-    let compact = settings.entry("compaction").or_insert_with(|| serde_json::json!({}));
-    let object = compact.as_object_mut().ok_or("The compaction settings are invalid.")?;
+    let compact = settings
+        .entry("compaction")
+        .or_insert_with(|| serde_json::json!({}));
+    let object = compact
+        .as_object_mut()
+        .ok_or("The compaction settings are invalid.")?;
     object.insert("enabled".into(), enabled.into());
     object.insert("reserveTokens".into(), reserve_tokens.into());
     object.insert("keepRecentTokens".into(), keep_recent_tokens.into());
@@ -1205,6 +1396,7 @@ fn connect_claude_code(agent: &Path, executable: &str) -> Result<(), String> {
 #[tauri::command]
 pub(crate) async fn local_mode_provider_inventory(
     _app: tauri::AppHandle,
+    force: Option<bool>,
 ) -> Result<ProviderInventory, String> {
     let agent = harness_agent_directory(READ_SETTINGS_ERROR)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1214,7 +1406,9 @@ pub(crate) async fn local_mode_provider_inventory(
         let discovery_agent = agent.clone();
         let discovery = std::thread::spawn(move || refresh_endpoint_models(&discovery_agent));
         let mut models = list_pi_models(&agent);
-        if discovery.join().ok().and_then(Result::ok) == Some(true) {
+        let provider_changed =
+            refresh_provider_models(&agent, &models, force.unwrap_or(false)).unwrap_or(false);
+        if discovery.join().ok().and_then(Result::ok) == Some(true) || provider_changed {
             models = list_pi_models(&agent);
         }
         let mut inventory = provider_inventory(&agent, models)?;

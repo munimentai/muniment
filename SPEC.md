@@ -172,7 +172,7 @@ generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the desktop owns
 and lands in the same file, or in the router's pool when the router pools
 its family, and a local or custom endpoint goes into Pi's `models.json`, so Pi uses each at once and nothing leaves the machine except
-to that provider. The catalog is Pi's built-in provider table. The section
+to that provider. Startup and Settings supplement bundled models through xAI key or subscription discovery and OpenAI, Anthropic and Google key discovery. Unsupported sign-ins keep bundled models. Refresh models bypasses the ten-minute cache. Failed requests preserve saved models, overrides and defaults. Discoveries feed the picker, routing and classifier choices. The section
 lists connected providers with their source and Disconnect. Connect account
 opens the provider catalog and searches its connection methods. A provider opens on one view with its first
 method, an account where Pi signs in, Claude Code for Anthropic through
@@ -237,8 +237,8 @@ provider, the turns each account has in flight, and that thirty-day bar.
 **Every active model is in the running.** The options the classifier chooses
 between are the pool itself: each model an enabled account serves, keyed
 `family/model`. An account that names no model serves every model the catalog
-describes for its family, and an account that names models serves those. The
-router serves `auto` and every option by name and nothing else, so a model it
+describes for its family, using its discovered catalog when available. An
+account that names models serves those. The router serves `auto` and every option by name and nothing else, so a model it
 does not list is not found rather than found and then unservable. Connect an
 account and its models enter the running with no other step.
 

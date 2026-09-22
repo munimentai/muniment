@@ -48,7 +48,7 @@
     finally { pending = false }
   }
 
-  const rows = $derived(catalog(settings?.accounts ?? []))
+  const rows = $derived(catalog(settings?.accounts ?? [], settings?.options ?? []))
 
   // Every command answers with the whole settings, so one reply redraws the page.
   $effect(() => {

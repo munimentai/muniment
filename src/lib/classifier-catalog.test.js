@@ -26,7 +26,7 @@ describe('classifier catalog', () => {
     expect(priceLabel(0.2)).toBe('$0.2/M in')
     expect(priceLabel(1)).toBe('$1/M in')
     expect(priceLabel(0)).toBe('free')
-    expect(priceLabel(undefined)).toBe('free')
+    expect(priceLabel(undefined)).toBe('Price unavailable')
   })
 
   it('marks the row a saved classifier came from', () => {
@@ -38,4 +38,12 @@ describe('classifier catalog', () => {
     expect(matchSaved({ kind: 'none' })).toBe('')
     expect(matchSaved(null)).toBe('')
   })
+})
+
+it('includes discovered routing models without duplicates or invented prices', () => {
+  const rows = catalog([{ family: 'xai', enabled: true, servable: true }], [{ family: 'xai', model: 'grok-4.7', name: 'Grok 4.7' }, { family: 'xai', model: 'grok-4.6' }])
+  expect(rows.filter(row => row.model === 'grok-4.6')).toHaveLength(1)
+  const fresh = rows.find(row => row.model === 'grok-4.7')
+  expect(fresh.ready).toBe(true)
+  expect(priceLabel(fresh.price)).toBe('Price unavailable')
 })

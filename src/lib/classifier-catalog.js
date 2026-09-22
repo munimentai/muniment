@@ -45,7 +45,8 @@ export const POOLED = [
 
 // The price line one catalog row shows.
 export function priceLabel(price) {
-  if (!Number.isFinite(price) || price <= 0) return 'free'
+  if (!Number.isFinite(price)) return 'Price unavailable'
+  if (price <= 0) return 'free'
   if (price < 1) return `$${price.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}/M in`
   return `$${price}/M in`
 }
@@ -66,10 +67,13 @@ export function matchSaved(classifier) {
 }
 
 // Every catalog row in the order the screen lists them.
-export function catalog(accounts = []) {
+export function catalog(accounts = [], options = []) {
+  const discovered = options.filter(option => !POOLED.some(entry => entry.family === option.family && entry.model === option.model))
+    .map(option => ({ id: `${option.family}/${option.model}`, family: option.family, model: option.model, name: option.name || option.model, kind: 'pooled', ready: pooledReady(option, accounts), group: 'On your accounts' }))
   return [
     ...DEDICATED.map((entry) => ({ ...entry, ready: true, group: 'Built to classify' })),
     ...SELF_HOSTED.map(entry => ({ ...entry, ready: true, group: 'Self-hosted' })),
+    ...discovered,
     ...POOLED.map((entry) => ({ ...entry, kind: 'pooled', ready: pooledReady(entry, accounts), group: 'On your accounts' })),
   ]
 }
