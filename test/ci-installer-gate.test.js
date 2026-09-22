@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
+import { tmpdir } from 'node:os'
 
 const root = process.cwd()
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8')
@@ -111,4 +112,39 @@ describe('PR gate shape', () => {
     expect(desktopBuild).toContain('needs: [changes, desktop-compile]')
     expect(desktopBuild).toContain('platform: [linux, windows, macos]')
   })
+})
+
+const remoteSteps = workflow.split('        run: |\n').slice(1)
+  .map(block => block.split(/\n {0,8}\S/)[0].replace(/^ {10}/gm, ''))
+  .filter(block => block.includes('sudo desktop-ci'))
+
+it.each(remoteSteps.map((script, index) => [index, script]))('keeps clone credentials on stdin and preserves SSH failures in step %s', (_, script) => {
+  expect(script).not.toContain('https://x-access-token:')
+  for (const status of [0, 37]) {
+    const directory = fs.mkdtempSync(path.join(tmpdir(), 'muniment-ci-auth-'))
+    try {
+      let actual = 0
+      try {
+        execFileSync('bash', ['-c', `
+          ssh() {
+            for arg in "$@"; do
+              [[ $arg != *"$REPO_TOKEN"* ]] || exit 91
+            done
+            [[ "$*" == *--env-stdin* ]] || exit 92
+            IFS= read -r credential
+            [[ $credential == "GH_TOKEN=$REPO_TOKEN" ]] || exit 93
+            return ${status}
+          }
+          ${script}
+        `], { env: { ...process.env, REPO_TOKEN: 'fixture-only-secret', REPOSITORY: 'owner/repo',
+          REF: 'test-branch', PLATFORM: 'linux', RUNNER_TEMP: directory, DESKTOP_CI_SSH_KEY: 'fixture-key' },
+        stdio: 'pipe', timeout: 10000 })
+      } catch (error) { actual = error.status }
+      expect(actual).toBe(status)
+    } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+  }
+})
+
+it('covers all three remote CI command steps', () => {
+  expect(remoteSteps).toHaveLength(3)
 })

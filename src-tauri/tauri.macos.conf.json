@@ -1,6 +1,7 @@
 {
   "bundle": {
     "macOS": {
+      "minimumSystemVersion": "13.0",
       "files": {
         "Library/LaunchServices/muniment-runtime": "target/universal-apple-darwin/release/muniment-runtime",
         "Library/LaunchServices/muniment-cli": "target/universal-apple-darwin/release/muniment-cli",

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ALLOWED = {
+  'test/macos-wdio-tools.test.js:23:22': "describe.skipIf(process.platform === 'win32')('macOS WDIO build tools')",
   'test/macos-keychain-session.test.js:27:22': "describe.skipIf(process.platform === 'win32')('macOS CI keychain session')",
   'test/desktop-e2e-harness.test.js:1327:22': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/ci-artifacts.test.js:27:27': "it.skipIf(process.platform === 'win32') on the artifact publisher test",
@@ -23,7 +24,7 @@ const ALLOWED = {
   'test/desktop-e2e-harness.test.js:1361:20': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/desktop-e2e-harness.test.js:1446:19': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/desktop-e2e-harness.test.js:2200:20': "describe.skipIf(process.platform === 'win32')('Linux early abort reporting')",
-  'test/desktop-e2e-harness.test.js:4177:20': "describe.skipIf(process.platform === 'win32')('macOS WDIO spec homes')",
+  'test/desktop-e2e-harness.test.js:4183:20': "describe.skipIf(process.platform === 'win32')('macOS WDIO spec homes')",
   'test/desktop-e2e-harness.test.js:2209:19': "describe.skipIf(process.platform === 'win32')('Linux early abort reporting')",
   'test/desktop-e2e-harness.test.js:2243:20': "describe.skipIf(process.platform === 'win32')('runner setup causes')",
   'test/desktop-e2e-harness.test.js:2254:19': "describe.skipIf(process.platform === 'win32')('runner setup causes')",
@@ -43,7 +44,7 @@ const ALLOWED = {
   'test/desktop-e2e-harness.test.js:2666:20': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/desktop-e2e-harness.test.js:2692:19': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/desktop-e2e-harness.test.js:2719:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
-  'test/desktop-e2e-harness.test.js:4177:20': "describe.skipIf(process.platform === 'win32')('macOS WDIO runtime endpoint')",
+  'test/desktop-e2e-harness.test.js:4183:20': "describe.skipIf(process.platform === 'win32')('macOS WDIO runtime endpoint')",
   'test/nightly-workflow.test.js:13:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
   'test/nightly-workflow.test.js:48:20': "it.skipIf(process.platform === 'win32')('passes the remaining full build budget after Git and dependency setup')",
 }

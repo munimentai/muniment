@@ -1,8 +1,9 @@
 import { createWingetManifest, machineMsiAsset } from "./winget-manifest.mjs";
 
-const [token, repository, tag, outputRoot] = process.argv.slice(2);
+const [repository, tag, outputRoot] = process.argv.slice(2);
+const token = process.env.GH_TOKEN;
 if (!token || !/^[^/]+\/[^/]+$/.test(repository) || !tag || !outputRoot) {
-  throw new Error("usage: winget-release.mjs TOKEN OWNER/REPO TAG OUTPUT_ROOT");
+  throw new Error("Set GH_TOKEN and use: winget-release.mjs OWNER/REPO TAG OUTPUT_ROOT");
 }
 const headers = {
   Accept: "application/vnd.github+json",

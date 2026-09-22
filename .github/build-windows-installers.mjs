@@ -154,9 +154,25 @@ const restoreRuntime = () => {
   for (const file of runtimeFiles) copyFileSync(join(pristineRuntime, file), join(runtimeDirectory, file));
 };
 
+// The Chromium bootstrap loads the application DLL with its sandbox broker.
+// Build once, stage that layout, then bundle without replacing the bootstrap.
+run("build", "desktop application", "--verbose", "--no-bundle");
+const libraryBuild = spawnSync("cargo", [
+  "build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-desktop",
+  "--release", "--locked", "--lib", "--features", "tauri/custom-protocol",
+], { stdio: "inherit" });
+if (libraryBuild.error) throw libraryBuild.error;
+if (libraryBuild.status !== 0) process.exit(libraryBuild.status ?? 1);
+const cefConfig = join(tmpdir(), `muniment-cef-bundle-${process.pid}.json`);
+const cefPackaging = spawnSync(process.execPath, [
+  "scripts/package-cef-windows.mjs", "src-tauri/target/release/cef-app", "--installer-config", cefConfig,
+], { stdio: "inherit" });
+if (cefPackaging.error) throw cefPackaging.error;
+if (cefPackaging.status !== 0) process.exit(cefPackaging.status ?? 1);
+
 // Preserve the normal MSI while the second bundling pass writes the fleet variant.
-// signArgs makes tauri sign the app .exe (before packaging) and the NSIS installer.
-run("build", "per-user installer", "--verbose", ...signArgs);
+// signArgs signs the bootstrap, bundled DLL resources and NSIS installer.
+run("bundle", "per-user installer", "--verbose", "--config", cefConfig, ...signArgs);
 restoreRuntime();
 const userMsi = await soleMsi();
 const savedUserMsi = join(dirname(userMsi), `.${basename(userMsi)}.per-user`);
@@ -167,11 +183,12 @@ await rename(userMsi, savedUserMsi);
 // release artifact and is the only machine MSI uploaded.
 const upgradeBaseMsi = join(dirname(msiDirectory), "machine-upgrade-base.msi");
 // The upgrade-base is a throwaway fixture for the in-place-upgrade test — unsigned.
-run("build", "machine upgrade-base MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json");
+run("bundle", "machine upgrade-base MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", "--config", cefConfig);
 await rename(await soleMsi(), upgradeBaseMsi);
-run("build", "machine MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", ...signArgs);
+run("bundle", "machine MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", "--config", cefConfig, ...signArgs);
 restoreRuntime();
 rmSync(pristineRuntime, { recursive: true });
+rmSync(cefConfig);
 const generatedMachineMsi = await soleMsi();
 const machineMsi = generatedMachineMsi.replace(/\.msi$/, "-machine.msi");
 await rename(generatedMachineMsi, machineMsi);

@@ -257,6 +257,9 @@ current_step=validate-environment
   exit
 }
 run_step install-dependencies log_command "$raw/installer.log" npm ci --no-audit --no-fund || exit
+run_step prepare-cef-tools log_command "$raw/installer.log" source scripts/prepare-cef-macos.sh || exit
+# Keep explicit failure reporting and cleanup after the sourced tool setup.
+set +e
 run_step install-rust-targets log_command "$raw/installer.log" rustup target add aarch64-apple-darwin x86_64-apple-darwin || exit
 run_step build-runtime-resources log_command "$raw/installer.log" node .github/build-macos-runtime.mjs || exit
 run_step build-app log_command "$raw/installer.log" npm run tauri build -- --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json || exit

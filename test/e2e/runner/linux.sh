@@ -292,6 +292,11 @@ installed=1
 run_setup sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin libasound2-dev "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
 [[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] || { runner_failure 'FUSE device is unavailable to the runner user'; exit; }
 run_setup npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
+appimage="$state_root/muniment.AppImage"
+appimage_id=$(run_setup node test/e2e/support/asset-identity.mjs "$sha" linux-appimage <<<"$release") || { status=1; exit; }
+run_setup gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${appimage_id}" >"$appimage" || { status=1; exit; }
+run_setup chmod 755 "$appimage" || { status=1; exit; }
+run_setup dbus-run-session -- xvfb-run -a node test/e2e/support/linux-installed-smoke.mjs "$appimage" "$raw" >>"$installer_log" 2>&1 || { status=1; exit; }
 release_binary=$(command -v muniment-desktop || command -v muniment) || { runner_failure 'installed application binary is unavailable'; exit; }
 run_setup node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
 # Build both bundle resources declared in tauri.linux.conf.json before the Tauri bundle.

@@ -1,11 +1,14 @@
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
 const target = 'src-tauri/target/release'
 const output = process.argv[2] || join(target,'cef-app')
+for (const name of ['bootstrap.exe', 'muniment_desktop.dll', 'libcef.dll', 'chrome_elf.dll', 'icudtl.dat', 'v8_context_snapshot.bin', 'resources.pak', 'locales']) {
+  if (!existsSync(join(target, name))) throw new Error(`Missing CEF Windows resource: ${name}`)
+}
 mkdirSync(output,{recursive:true})
 for (const name of ['LICENSE.md','THIRD_PARTY_NOTICES.md','THIRD_PARTY_RUST_NOTICES.md']) copyFileSync(name,join(output,name))
 for (const entry of readdirSync(target)) {
-  if (/\.(dll|pak|bin|dat|json)$/.test(entry)) copyFileSync(join(target,entry),join(output,entry))
+  if (/\.(dll|pak|bin|dat|json)$/.test(entry) && entry !== 'muniment_desktop.dll') copyFileSync(join(target,entry),join(output,entry))
 }
 cpSync(join(target,'locales'),join(output,'locales'),{recursive:true})
 copyFileSync(join(target,'bootstrap.exe'),join(output,'muniment-desktop.exe'))
@@ -28,4 +31,24 @@ const cefSource = readdirSync(cefBuild).filter(n => n.startsWith('cef-dll-sys-')
 })[0]
 if (!cefSource) throw new Error('CEF third-party credits are missing')
 copyFileSync(cefSource,join(output,'CEF-CREDITS.html'))
+if (process.argv[3] === '--installer-config') {
+  const configPath = process.argv[4]
+  if (!configPath) throw new Error('An installer config path is required')
+  const existing = new Set(Object.values(JSON.parse(readFileSync('src-tauri/tauri.windows.conf.json', 'utf8')).bundle.resources))
+  const resources = {}
+  for (const name of readdirSync(output)) {
+    if (existing.has(name) || name === 'muniment_desktop.dll') continue
+    if (/\.(dll|pak|bin|dat|json|manifest)$/.test(name) || name === 'locales' || name === 'CEF-CREDITS.html') {
+      const file = join(output, name)
+      const source = relative(realpathSync('src-tauri'), realpathSync(file)).replaceAll('\\', '/')
+      resources[source + (name === 'locales' ? '/' : '')] = name + (name === 'locales' ? '/' : '')
+    }
+  }
+  writeFileSync(configPath, JSON.stringify({ bundle: { resources } }, null, 2))
+  // WiX keeps the source basename. Stage the hyphenated DLL and remove the
+  // Cargo-named output from Tauri's automatic DLL collection.
+  renameSync(join(target, 'muniment_desktop.dll'), join(output, 'muniment-desktop.dll'))
+  // Tauri bundles this executable without rebuilding the Rust entry point.
+  copyFileSync(join(output, 'muniment-desktop.exe'), join(target, 'muniment-desktop.exe'))
+}
 console.log(output)
