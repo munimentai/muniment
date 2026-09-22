@@ -27,7 +27,7 @@ export const expectedNightlyAssets = (assets, sha) => {
   return assets;
 };
 
-export const releaseBody = (sha, macosSigned) => `Stable desktop release promoted from nightly source \`${sha}\`.\n\nWindows installers are signed. ${macosSigned ? macosSigningProvenance(sha) : "macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."} Model weights are not included.`;
+export const releaseBody = (sha) => `Stable desktop release promoted from nightly source \`${sha}\`.\n\nWindows installers are signed. ${macosSigningProvenance(sha)} Model weights are not included.`;
 
 export const windowsSigningProvenance = (sha) => `Windows installers for \`${sha}\` were signed by the nightly workflow.`;
 export const macosSigningProvenance = (sha) => `macOS artifacts for \`${sha}\` were signed and notarized by the nightly workflow.`;
@@ -52,6 +52,25 @@ const getAllCheckRuns = async (fetchImpl, token, repoApi, sha) => {
   }
 };
 
+// A compile check or a targeted nightly cannot establish all-platform runtime proof.
+export async function assertInstalledNightly(fetchImpl, token, repoApi, sha) {
+  const response = await request(fetchImpl, token, `${repoApi}/actions/workflows/nightly.yml/runs?head_sha=${sha}&status=success&per_page=100`);
+  const runs = (await response.json()).workflow_runs;
+  const required = ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"];
+  for (const run of runs) {
+    if (run.head_sha !== sha || run.status !== "completed" || run.conclusion !== "success") continue;
+    const jobs = [];
+    for (let page = 1; ; page += 1) {
+      const result = await request(fetchImpl, token, `${repoApi}/actions/runs/${run.id}/jobs?filter=latest&per_page=100&page=${page}`);
+      const batch = (await result.json()).jobs;
+      jobs.push(...batch);
+      if (batch.length < 100) break;
+    }
+    if (required.every((name) => jobs.some((job) => job.name === name && job.status === "completed" && job.conclusion === "success"))) return;
+  }
+  throw new Error(`No successful full installed nightly for ${sha}`);
+}
+
 export async function promoteRelease({ token, repository, sha, version, fetchImpl = fetch }) {
   validatePromotionInputs(sha, version);
   if (!token || !/^[^/]+\/[^/]+$/.test(repository)) throw new Error("token and owner/repository are required");
@@ -63,14 +82,16 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
   if (packageJson.version !== version.slice(1)) throw new Error(`package.json version ${packageJson.version ?? "missing"} does not match ${version}`);
   const checkRuns = await getAllCheckRuns(fetchImpl, token, repoApi, sha);
   assertGreenCi(checkRuns, sha);
+  await assertInstalledNightly(fetchImpl, token, repoApi, sha);
   const nightly = await (await request(fetchImpl, token, `${repoApi}/releases/tags/nightly`)).json();
   if (nightly.draft || !nightly.prerelease || !nightly.body?.includes(sha)) throw new Error(`nightly release is not finalized at ${sha}`);
   if (!nightly.body.includes(windowsSigningProvenance(sha))) throw new Error(`nightly Windows installers are not verified as signed for ${sha}`);
   const macosSigned = nightly.body.includes(macosSigningProvenance(sha));
+  if (!macosSigned) throw new Error(`nightly macOS artifacts are not verified as signed and notarized for ${sha}`);
   const assets = expectedNightlyAssets(nightly.assets, sha);
   let created;
   try {
-    created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha, macosSigned), draft: true, prerelease: false }) })).json();
+    created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha), draft: true, prerelease: false }) })).json();
     for (const asset of assets) {
       const source = await request(fetchImpl, token, asset.url, { headers: { Accept: "application/octet-stream" } });
       await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=${encodeURIComponent(asset.name)}`, { method: "POST", headers: { "Content-Type": asset.content_type || "application/octet-stream" }, body: await source.arrayBuffer() });

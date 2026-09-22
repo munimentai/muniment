@@ -31,10 +31,12 @@ const promotionFetch = (overrides = {}) => {
     }
     if (url.includes(`/git/ref/tags/${version}`) || url.includes(`/releases/tags/${version}`)) return response("missing", 404);
     if (url.includes("/contents/package.json")) return response({ content: Buffer.from(JSON.stringify({ version: version.slice(1) })).toString("base64") });
+    if (url.includes("/actions/workflows/nightly.yml/runs")) return response({ workflow_runs: [{ id: 99, head_sha: sha, status: "completed", conclusion: "success" }] });
+    if (url.includes("/actions/runs/99/jobs")) return response({ jobs: ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"].map((name) => ({ ...smoke, name })) });
     if (url.includes("/check-runs")) return response({ check_runs: [smoke] });
     if (url.endsWith("/releases/tags/nightly")) return response({
       id: 1, draft: false, prerelease: true, target_commitish: overrides.targetCommitish ?? "stale-branch-value",
-      body: `Automated desktop build from ${sha}.\n\n${windowsSigningProvenance(sha)}${overrides.macosSigned ? `\n\n${macosSigningProvenance(sha)}` : "\n\nmacOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."}`, assets,
+      body: `Automated desktop build from ${sha}.\n\n${windowsSigningProvenance(sha)}${overrides.macosSigned !== false ? `\n\n${macosSigningProvenance(sha)}` : "\n\nmacOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."}`, assets,
     });
     if (url.endsWith("/releases") && method === "POST") return response({ id: 42 });
     if (url.startsWith("https://api.github.test/assets/")) return response("asset bytes");
@@ -69,15 +71,12 @@ describe("stable release promotion", () => {
     expect(() => assertGreenCi([smoke, { name: "security", status: "completed", conclusion: "failure" }], sha)).toThrow("CI is not green");
   });
 
-  it.each([
-    [true, macosSigningProvenance(sha)],
-    [false, "macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."],
-  ])("publishes the required provenance when macOS signed is %s", (macosSigned, macosProvenance) => {
-    const body = releaseBody(sha, macosSigned);
+  it("publishes signing provenance for both platforms", () => {
+    const body = releaseBody(sha);
     expect(body).toContain(sha);
     expect(body).toContain("Windows installers are signed");
-    expect(body).toContain(macosProvenance);
-    expect(body).not.toContain(macosSigned ? "macOS artifacts are unsigned" : "signed and notarized");
+    expect(body).toContain(macosSigningProvenance(sha));
+    expect(body).not.toContain("unsigned");
     expect(body).toContain("Model weights are not included");
   });
 
@@ -111,16 +110,26 @@ describe("stable release promotion", () => {
     expect(JSON.parse(publish.options.body)).toEqual({ draft: false, prerelease: false });
   });
 
-  it.each([
-    [true, macosSigningProvenance(sha)],
-    [false, "macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."],
-  ])("copies the macOS signing state when signed is %s", async (macosSigned, macosProvenance) => {
-    const { calls, fetchImpl } = promotionFetch({ macosSigned });
-    await promote(fetchImpl);
-    const create = calls.find(({ url, options }) => url.endsWith("/releases") && options.method === "POST");
-    const body = JSON.parse(create.options.body).body;
-    expect(body).toContain(macosProvenance);
-    expect(body).not.toContain(macosSigned ? "macOS artifacts are unsigned" : "signed and notarized");
+  it("rejects unsigned macOS artifacts before creating a release", async () => {
+    const { calls, fetchImpl } = promotionFetch({ macosSigned: false });
+    await expect(promote(fetchImpl)).rejects.toThrow("macOS artifacts are not verified as signed and notarized");
+    expect(calls.some(({ options }) => options.method === "POST")).toBe(false);
+  });
+
+  it.each(["linux-e2e", "windows-e2e", "macos-e2e", "publish"])("rejects a nightly missing %s", async (missing) => {
+    const { calls, fetchImpl } = promotionFetch({ route: (url) => url.includes("/actions/runs/99/jobs") ? response({ jobs: ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"].filter((name) => name !== missing).map((name) => ({ ...smoke, name })) }) : null });
+    await expect(promote(fetchImpl)).rejects.toThrow("No successful full installed nightly");
+    expect(calls.some(({ options }) => options.method === "POST")).toBe(false);
+  });
+
+  it.each(["failure", "skipped"])("rejects an installed check with conclusion %s", async (conclusion) => {
+    const { fetchImpl } = promotionFetch({ route: (url) => url.includes("/actions/runs/99/jobs") ? response({ jobs: ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"].map((name) => ({ ...smoke, name, conclusion: name === "macos-e2e" ? conclusion : "success" })) }) : null });
+    await expect(promote(fetchImpl)).rejects.toThrow("No successful full installed nightly");
+  });
+
+  it("rejects a successful nightly for another revision", async () => {
+    const { fetchImpl } = promotionFetch({ route: (url) => url.includes("/actions/workflows/nightly.yml/runs") ? response({ workflow_runs: [{ id: 99, head_sha: "b".repeat(40), status: "completed", conclusion: "success" }] }) : null });
+    await expect(promote(fetchImpl)).rejects.toThrow("No successful full installed nightly");
   });
 
   it("fails closed when finalized nightly signing provenance is absent", async () => {
