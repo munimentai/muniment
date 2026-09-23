@@ -245,7 +245,8 @@ jobs:
 
       - name: Core and ACP unit tests
         if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --package muniment-acp --locked
+        # Match the serial core run above so deadline tests do not starve each other.
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --package muniment-acp --locked -- --test-threads=1
 
       - name: Companion formatting
         if: needs.changes.outputs.companion == 'true'

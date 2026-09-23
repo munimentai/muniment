@@ -132,4 +132,28 @@ restore_macos_spec_config
     expect(result.status, result.stderr).toBe(0)
     expect(fs.readFileSync(path.join(loginState, 'local-mode'), 'utf8')).toBe('original')
   })
+  it.skipIf(process.platform === 'win32')('isolates default Home for each spec and restores the signed-smoke Home', () => {
+    const { directory, loginHome, shell } = fixture()
+    const home = path.join(loginHome, 'Documents', 'muniment')
+    fs.mkdirSync(home, { recursive: true })
+    fs.writeFileSync(path.join(home, 'preserved.txt'), 'signed smoke')
+    const result = shell(`
+save_macos_spec_config
+for spec in first second; do
+  HOME="$ROOT/$spec"
+  set_macos_spec_config
+  [[ ! -e $macos_default_home ]]
+  mkdir -p "$macos_default_home"
+  printf '%s' "$spec" > "$macos_default_home/output.txt"
+done
+restore_macos_spec_config
+`)
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(home, 'preserved.txt'), 'utf8')).toBe('signed smoke')
+    expect(fs.readdirSync(home)).toEqual(['preserved.txt'])
+    for (const [index, spec] of ['first', 'second'].entries()) {
+      expect(fs.readFileSync(path.join(directory, spec, '.muniment', `default-home-${index + 1}`, 'output.txt'), 'utf8')).toBe(spec)
+    }
+  })
+
 })

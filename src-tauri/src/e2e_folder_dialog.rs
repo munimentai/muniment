@@ -28,6 +28,7 @@ struct Drive {
     home: String,
     step: u8,
     next: Instant,
+    focus_deadline: Instant,
 }
 
 thread_local! {
@@ -94,7 +95,8 @@ fn poll(home: String) -> Result<bool, String> {
                 panel,
                 home: home.clone(),
                 step: 0,
-                next: Instant::now(),
+                next: Instant::now() + Duration::from_millis(100),
+                focus_deadline: Instant::now() + Duration::from_secs(5),
             });
         }
         let drive = slot
@@ -129,9 +131,13 @@ fn poll(home: String) -> Result<bool, String> {
         if !drive.panel.isVisible() {
             return Err("The NSOpenPanel closed before the picker drive finished.".into());
         }
-        let window = app
-            .keyWindow()
-            .ok_or("The Home picker has no key window.")?;
+        let Some(window) = app.keyWindow() else {
+            // Activation is asynchronous. Never send keys until AppKit assigns focus.
+            if drive.step == 0 && Instant::now() < drive.focus_deadline {
+                return Ok(false);
+            }
+            return Err("The Home picker has no key window.".into());
+        };
         // Accept only this panel or its sheet. Never type into the composer.
         if window.windowNumber() != drive.panel.windowNumber()
             && window
