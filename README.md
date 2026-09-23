@@ -39,61 +39,37 @@ The [install guide](https://muniment.ai/docs/install/) lists release availabilit
 
 ## Built for the desktop
 
-Phase one is the desktop harness. Phase two adds cloud availability with paid
-accounts while the desktop remains useful on its own. Independent build flags
-hide the cloud account and optional company record by default.
-
-The app combines a Tauri v2 shell, Rust runtime, Pi sidecar, CEF browser,
-and on-device voice stack. See [SPEC.md](SPEC.md) for behavior,
-[DESIGN.md](DESIGN.md) for interface rules, and [ROADMAP.md](ROADMAP.md) for direction.
-[THREAT_MODEL.md](THREAT_MODEL.md) explains the desktop runtime trust boundary.
+Muniment runs locally on macOS, Windows, and Linux. Use your own provider accounts
+without a Muniment account. Cloud services are optional future features.
 
 ## Issues and source
 
 Bug reports and feature requests are welcome. The project does not accept outside
 code contributions. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the issue guide
 and [SECURITY.md](SECURITY.md) to report a vulnerability privately.
+See the [test architecture](docs/decisions/0013-desktop-e2e-harness.md) for verification details.
 
 Muniment uses [FSL-1.1-ALv2](LICENSE.md), a Fair Source license. Each version
 converts to Apache 2.0 after two years. Third-party components retain their own licenses.
 
-## Build
+## Download
 
-Use Node.js 24, Rust 1.96, Go, and the native build tools for your platform.
-macOS requires Xcode Command Line Tools. Windows requires MSVC and the Windows SDK.
-Linux requires the Tauri WebKitGTK development libraries and the CEF dependencies
-listed in `scripts/test-cef-linux.sh`.
+- [macOS — Apple silicon and Intel](https://github.com/munimentai/muniment/releases/download/v0.0.1/nightly-84e8c1b74dc2030449dc91de890691627f659ce9-macos-muniment.pkg)
+- [Windows — x64 installer](https://github.com/munimentai/muniment/releases/download/v0.0.1/nightly-84e8c1b74dc2030449dc91de890691627f659ce9-windows-muniment_0.0.1_x64_en-US.msi)
+- [Ubuntu / Debian — x64](https://github.com/munimentai/muniment/releases/download/v0.0.1/nightly-84e8c1b74dc2030449dc91de890691627f659ce9-linux-muniment.deb)
+- [Linux — x64 AppImage](https://github.com/munimentai/muniment/releases/download/v0.0.1/nightly-84e8c1b74dc2030449dc91de890691627f659ce9-linux-muniment_0.0.1_amd64.AppImage)
 
-```sh
-npm ci
-npm run dev                               # frontend preview
-npm run build                             # frontend production assets
-npm test                                  # unit and browser tests
-```
+See the [install guide](https://muniment.ai/docs/install/) for platform requirements
+and [all downloads](https://github.com/munimentai/muniment/releases/latest) for alternate installers.
 
-Native packaging includes a Rust runtime, Go reader, Pi sidecar and CEF helpers.
-The scripts under `scripts/` and `.github/` define each platform's packaging.
-`scripts/build-macos-local.mjs` is a maintainer signing tool that requires private
-signing infrastructure. It is not required for frontend work or Rust unit tests.
-Use a disposable machine for the Linux and Windows packaging test scripts.
-They install dependencies and configure browser sandbox permissions.
+### Homebrew
 
-## Feature flags
-
-The default build hides Muniment cloud and the company record. Set either
-flag independently before `npm run dev`, `npm run build` or the local build:
+The official Homebrew cask is not available yet. Use the macOS download above.
+Once Homebrew accepts the cask, install with:
 
 ```sh
-VITE_MUNIMENT_CLOUD=true node scripts/build-macos-local.mjs
-VITE_MUNIMENT_COMPANY_RECORD=true node scripts/build-macos-local.mjs
+brew install --cask muniment
 ```
-
-Only `true` enables a flag. Omit both for the phase-one desktop. Flags take
-effect at build time and have no user Settings switch. Cloud controls sign-in
-and Account settings. Company record controls Record, its shortcut, and
-Companies settings. Hidden Settings sections return to Models & routing.
-Provider account connections and local routing remain available in every build.
-These flags control UI availability, not backend authorization or data deletion.
 
 ## Extend
 
@@ -148,81 +124,3 @@ and license notices. Windows external agent IPC, Wayland, popups,
 and downloads are not implemented. Native macOS page accessibility needs a fix.
 The `cef-smoke` feature runs browser checks in a disposable profile. Do not use
 its state override with a personal profile.
-
-## Test
-
-```sh
-npm test                                   # frontend unit tests
-cargo test --manifest-path src-tauri/core/Cargo.toml --locked
-test/smoke.sh                              # structure smoke
-scripts/check-steering.sh .                # steering files
-```
-
-## CI
-
-Native CI uses disposable platform machines through the `desktop-ci` driver.
-Maintainers provide the runner and release credentials. Contributor checks use
-repository-local commands and do not require access to that infrastructure.
-Pull requests run smoke checks, unit tests and applicable native build checks.
-Nightly builds also test the installed app on Linux, Windows and macOS.
-A successful installer build alone does not prove the app works.
-
-The [installed-nightly desktop E2E architecture](docs/decisions/0013-desktop-e2e-harness.md)
-defines pinned artifact installation plus WDIO chat, real sign-in, onboarding,
-and cleanup on Linux, Windows, and macOS.
-The macOS lane runs `macos.sh` for the pinned `.app` smoke and Proxmox
-screendump, then `macos-wdio.sh` for the specs.
-Cloud sign-in checks require a build with the cloud flag enabled. The default
-build must prove local chat with both optional features hidden.
-WDIO uses the embedded provider with separate E2E builds from the pinned
-source, not the released artifacts.
-
-## Stable releases
-
-`package.json` is the single source of truth for the desktop version; Tauri reads
-it through `src-tauri/tauri.conf.json`. The owner updates it before the nightly
-build, then manually runs **Promote stable desktop release** with that nightly's
-exact 40-character SHA and matching `vMAJOR.MINOR.PATCH`. Promotion requires
-green CI and all three installed E2E checks. It copies the thirteen finalized
-nightly assets without rebuilding or changing `nightly`, then adds the
-update manifest for the signed packages.
-
-The desktop checks for updates on launch and hourly. Release builds use the
-public signing key in `src-tauri/updater.pub`. `MUNIMENT_UPDATER_PUBLIC_KEY`
-can override that key at build time.
-`MUNIMENT_UPDATER_ENDPOINT` can override the default public GitHub release feed at
-`https://github.com/munimentai/muniment/releases/latest/download/latest.json`.
-An unconfigured build offers no update. The app verifies the download before it
-shows the green Update control. Click installs and restarts. Active replies,
-voice capture and unsaved file edits block that control.
-
-Publish `latest.json` only after the matching signed updater packages exist.
-Use a final signed macOS `.app.tar.gz`, a Linux `.AppImage`, Windows NSIS, and
-both per-user and per-machine MSI installers, each with its Tauri `.sig`.
-Sign after all packaging and code signing.
-The manifest uses Tauri platform keys (`darwin-aarch64`, `darwin-x86_64`,
-`linux-x86_64`, `windows-x86_64`), each with an HTTPS `url` and `signature`,
-plus the matching SemVer `version`. Windows also uses `windows-x86_64-nsis`,
-`windows-x86_64-msi-user` and `windows-x86_64-msi-machine` targets to preserve
-the installation type. Keep the private update signing key outside
-source control and provide it only to the release signing job. Package-manager
-installs on Linux use their package manager instead of the in-app updater.
-
-The owner assigns SemVer and promotes when a tested nightly is ready. Patches are
-compatible bug or security fixes, minors add backward-compatible functionality,
-and majors may break compatibility. A bad release is never overwritten: stop
-package-manager publication, mark it yanked in the release title/body, and
-promote a new patch. Delete a tag/release only when nothing was distributed and
-the owner confirms it was accidental. WinGet and other stable package manifests
-are published only after stable promotion succeeds. Homebrew distribution uses a reviewed submission to the official `homebrew/cask`
-catalog after the public stable macOS archive passes installation and Gatekeeper checks.
-
-See [macOS packages](docs/macos-packages.md) for `.pkg` deployment and current signing status.
-See [Homebrew](docs/homebrew.md) for official catalog submission requirements.
-
-### macOS CI note
-
-`.dmg` bundling is excluded from CI targets: Tauri's `bundle_dmg.sh` drives
-Finder via AppleScript and needs a GUI session, which the SSH-only CI VMs do
-not have. The release provides a signed, notarized `.app` archive and `.pkg`.
-A DMG is not required for installation or stable promotion.
