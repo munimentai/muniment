@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { revokeFixtureSession } from './e2e/support/session-cleanup.mjs'
+import { revokeFixtureSession, waitForFixtureService } from './e2e/support/session-cleanup.mjs'
 
 afterEach(() => { vi.unstubAllGlobals() })
 
@@ -27,4 +27,26 @@ it('confirms an already signed-out fixture without requesting another sign-out',
   vi.stubGlobal('window', { __TAURI__: { core: { invoke } } })
   await revokeFixtureSession({ execute: (callback) => callback() })
   expect(invoke.mock.calls).toEqual([['auth_status'], ['auth_status']])
+})
+
+
+it('waits for the desktop connection before fixture cleanup', async () => {
+  const invoke = vi.fn()
+    .mockResolvedValueOnce({ supervisor_running: false, connected: false })
+    .mockResolvedValueOnce({ supervisor_running: true, connected: false })
+    .mockResolvedValueOnce({ supervisor_running: true, connected: true })
+  vi.stubGlobal('window', { __TAURI__: { core: { invoke } } })
+  const waitUntil = vi.fn(async (poll, options) => {
+    expect(options.timeout).toBe(60000)
+    expect(await poll()).toBe(false)
+    expect(await poll()).toBe(false)
+    expect(await poll()).toBe(true)
+  })
+  await waitForFixtureService({ execute: (callback) => callback(), waitUntil })
+  expect(invoke.mock.calls).toEqual(Array(3).fill(['attach_listener_status']))
+})
+
+it('fails when the desktop does not connect within the cleanup budget', async () => {
+  const waitUntil = vi.fn(async (_poll, options) => { throw new Error(options.timeoutMsg) })
+  await expect(waitForFixtureService({ waitUntil })).rejects.toThrow('did not connect before fixture cleanup')
 })

@@ -1,3 +1,15 @@
+export async function waitForFixtureService(driver) {
+  await driver.waitUntil(async () => {
+    const status = await driver.execute(async () => (
+      window.__TAURI__.core.invoke('attach_listener_status')
+    ))
+    return status.supervisor_running === true && status.connected === true
+  }, {
+    timeout: 60000,
+    timeoutMsg: 'The desktop client did not connect before fixture cleanup.',
+  })
+}
+
 export async function revokeFixtureSession(driver) {
   const result = await driver.execute(async () => {
     const invoke = window.__TAURI__.core.invoke

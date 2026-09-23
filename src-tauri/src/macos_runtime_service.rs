@@ -372,7 +372,10 @@ pub(crate) fn start() -> crate::runtime_owner::RuntimeEvent {
     }
     // launchd would keep respawning an inactive job. Unregister it, so the
     // child runtime runs alone until the next start registers again.
-    if outcome == RuntimeStartOutcome::JobInactive {
+    if matches!(
+        outcome,
+        RuntimeStartOutcome::JobInactive | RuntimeStartOutcome::RequestFailed
+    ) {
         let unregistered = MacosRuntimeServiceAdapter::new().unregister().is_ok();
         if let Some(directory) = &log_directory {
             let _ = write_child_diagnostic(
@@ -383,7 +386,9 @@ pub(crate) fn start() -> crate::runtime_owner::RuntimeEvent {
     }
     match outcome {
         RuntimeStartOutcome::Requested => RuntimeEvent::Starting,
-        RuntimeStartOutcome::JobInactive => RuntimeEvent::ServiceInactive,
+        RuntimeStartOutcome::JobInactive | RuntimeStartOutcome::RequestFailed => {
+            RuntimeEvent::ServiceInactive
+        }
         _ => RuntimeEvent::StartFailed,
     }
 }
@@ -475,6 +480,38 @@ pub(crate) fn stop() -> Result<(), ()> {
     unsafe { adapter.service.unregisterAndReturnError() }.map_err(|_| ())
 }
 
+// launchctl can wait indefinitely when a registered job cannot spawn.
+fn wait_for_start_command(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+) -> io::Result<std::process::Output> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output(),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            outcome => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return match outcome {
+                    Err(error) => Err(error),
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "The runtime start request timed out.",
+                    )),
+                };
+            }
+        }
+    }
+}
+
+// A socket file can remain after a killed runtime. Only a listener proves activity.
+fn runtime_endpoint_accepts_connections(endpoint: &Path) -> bool {
+    std::os::unix::net::UnixStream::connect(endpoint).is_ok()
+}
+
 struct MacosRuntimeStartAdapter {
     endpoint: PathBuf,
     force_request: bool,
@@ -510,14 +547,18 @@ impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
         // SAFETY: geteuid reads the effective user ID without dereferencing memory.
         let effective_uid = unsafe { libc::geteuid() };
         let target = format!("gui/{effective_uid}/ai.muniment.runtime");
-        let output = Command::new("/bin/launchctl")
+        let child = Command::new("/bin/launchctl")
             .args(["kickstart", target.as_str()])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .output()
+            .spawn()
             .map_err(|error| {
                 *self.failure.borrow_mut() = Some(format!("launchctl did not run: {error}"));
+            })?;
+        let output =
+            wait_for_start_command(child, std::time::Duration::from_secs(5)).map_err(|error| {
+                *self.failure.borrow_mut() = Some(format!("launchctl kickstart {target}: {error}"));
             })?;
         if output.status.success() {
             return Ok(());
@@ -541,7 +582,7 @@ impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
         // The endpoint is the proof of a running job. Wait two seconds for it.
         for _ in 0..10 {
             std::thread::sleep(std::time::Duration::from_millis(200));
-            if std::fs::symlink_metadata(&self.endpoint).is_ok() {
+            if runtime_endpoint_accepts_connections(&self.endpoint) {
                 return Ok(true);
             }
         }
@@ -656,6 +697,46 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn start_command_timeout_reaps_the_child() {
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let started = std::time::Instant::now();
+        let error =
+            wait_for_start_command(child, std::time::Duration::from_millis(40)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        // SAFETY: signal zero checks this test's child without sending a signal.
+        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
+    }
+
+    #[test]
+    fn start_command_preserves_success_and_failure() {
+        for (program, success) in [("/usr/bin/true", true), ("/usr/bin/false", false)] {
+            let child = std::process::Command::new(program).spawn().unwrap();
+            let output = wait_for_start_command(child, std::time::Duration::from_secs(2)).unwrap();
+            assert_eq!(output.status.success(), success);
+        }
+    }
+
+    #[test]
+    fn runtime_activity_requires_a_listener_not_a_stale_socket() {
+        use std::os::unix::net::UnixListener;
+        let directory = directory();
+        fs::create_dir_all(&directory).unwrap();
+        let endpoint = directory.join("runtime.sock");
+        assert!(!runtime_endpoint_accepts_connections(&endpoint));
+        let listener = UnixListener::bind(&endpoint).unwrap();
+        assert!(runtime_endpoint_accepts_connections(&endpoint));
+        drop(listener);
+        assert!(endpoint.exists());
+        assert!(!runtime_endpoint_accepts_connections(&endpoint));
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     struct FakeAdapter {
         statuses: RefCell<VecDeque<Result<ServiceStatus, ()>>>,
