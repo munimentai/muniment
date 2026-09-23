@@ -35,8 +35,10 @@ pub(crate) fn runtime_notice_observed(
     if !std::env::args_os().any(|arg| arg == PROBE_FLAG) {
         return Err("The runtime notice probe is inactive.");
     }
-    if !matches!(text.as_str(), "The runtime connection closed." | "The runtime exited.")
-        || control != "Start runtime"
+    if !matches!(
+        text.as_str(),
+        "The runtime connection closed." | "The runtime exited."
+    ) || control != "Start runtime"
         || controls != 1
     {
         return Err("The runtime notice probe found unexpected content.");
