@@ -345,7 +345,10 @@ pub fn initialize(_app: Option<&tauri::AppHandle>, root: &Path) -> Result<(), St
     #[cfg(target_os = "linux")]
     let helper = cef_directory.join("muniment-cef-helper");
     #[cfg(target_os = "linux")]
-    std::env::set_var("CHROME_DEVEL_SANDBOX", cef_directory.join("chrome-sandbox"));
+    std::env::set_var(
+        "CHROME_DEVEL_SANDBOX",
+        crate::cef_linux_sandbox::select(&cef_directory.join("chrome-sandbox")),
+    );
     #[cfg(windows)]
     let sandbox = crate::cef_windows::broker();
     #[cfg(not(windows))]

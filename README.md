@@ -135,7 +135,11 @@ The Unix agent endpoint is `~/.muniment/browser/agent.sock`.
 
 CEF uses its platform sandbox. Windows starts through the CEF bootstrap and
 loads the app DLL. Linux requires X11 and the packaged `chrome-sandbox` helper
-with root ownership and mode 4755. The macOS signed bundle uses a private
+with root ownership and mode 4755 when the host restricts user namespaces.
+On Ubuntu, install the DEB first. Its installer configures the helper. The
+AppImage uses that installed helper. Chromium checks its sandbox API version.
+On hosts such as Omarchy that allow user namespaces, the AppImage runs directly.
+The app keeps Chromium sandboxing enabled. The macOS signed bundle uses a private
 Keychain bridge for its own cookie key. Key access fails without prompting
 when the app cannot access that key.
 
