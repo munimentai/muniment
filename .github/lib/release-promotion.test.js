@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertGreenCi, expectedNightlyAssets, macosSigningProvenance, promoteRelease, releaseBody, validatePromotionInputs, windowsSigningProvenance } from "./release-promotion.mjs";
+import { assertGreenCi, expectedNightlyAssets, macosSigningProvenance, promoteRelease, releaseBody, stableAssetName, validatePromotionInputs, windowsSigningProvenance } from "./release-promotion.mjs";
 
 const sha = "a".repeat(40);
 const version = "v0.0.1";
@@ -82,7 +82,7 @@ describe("stable release promotion", () => {
   });
 
   it("publishes signing provenance for both platforms", () => {
-    const body = releaseBody(sha);
+    const body = releaseBody(sha, version);
     expect(body).toContain(sha);
     expect(body).toContain("Windows installers are signed");
     expect(body).toContain(macosSigningProvenance(sha));
@@ -116,6 +116,19 @@ describe("stable release promotion", () => {
     expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(14);
     expect(calls.some(({ url }) => url.endsWith("/git/ref/tags/nightly"))).toBe(false);
     expect(calls.some(({ url, options }) => url.includes("/releases/1") && options.method)).toBe(false);
+    const uploads = calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"));
+    const names = uploads.map(({ url }) => new URL(url).searchParams.get("name"));
+    expect(names).not.toEqual(expect.arrayContaining([expect.stringContaining("nightly-")]));
+    expect(names).toContain("muniment-0.0.1-macos.pkg");
+    const feed = JSON.parse(uploads.find(({ url }) => url.endsWith("name=latest.json")).options.body);
+    for (const platform of Object.values(feed.platforms)) {
+      expect(names).toContain(decodeURIComponent(platform.url.split("/").at(-1)));
+      expect(platform.signature).toBe(Buffer.from("signature fixture").toString("base64"));
+    }
+    for (const upload of uploads.filter(({ url }) => !url.endsWith("name=latest.json"))) {
+      const name = new URL(upload.url).searchParams.get("name");
+      expect(Buffer.from(upload.options.body).toString()).toBe(name.endsWith(".sig") ? Buffer.from("signature fixture").toString("base64") : "asset bytes");
+    }
     const publish = calls.find(({ url, options }) => url.endsWith("/releases/42") && options.method === "PATCH");
     expect(JSON.parse(publish.options.body)).toEqual({ draft: false, prerelease: false });
   });
@@ -180,4 +193,11 @@ it.each([
       env: { ...process.env, GH_TOKEN: "fixture-only-release-token" }, stdio: "pipe", timeout: 10000,
     })).toThrow(/AUTH_CHECK_PASSED/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+it("names versioned installers and their signatures consistently", () => {
+  const name = `nightly-${sha}-windows-muniment_0.0.1_x64_en-US-machine.msi`;
+  expect(stableAssetName(name, sha, version)).toBe("muniment-0.0.1-windows_x64_en-US-machine.msi");
+  expect(stableAssetName(`${name}.sig`, sha, version)).toBe(`${stableAssetName(name, sha, version)}.sig`);
+  expect(() => stableAssetName(name, "b".repeat(40), version)).toThrow("Unexpected");
 });

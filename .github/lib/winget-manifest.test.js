@@ -41,3 +41,9 @@ describe("WinGet stable manifest", () => {
     await expect(createWingetManifest({ release: { ...release, published_at: null }, installerBytes: new Uint8Array([1]), outputRoot: tmpdir() })).rejects.toThrow("publication date");
   });
 });
+
+it("selects the versioned MSI when legacy download aliases remain", () => {
+  const stable = { ...asset, name: "muniment-1.2.3-windows_x64_en-US-machine.msi" };
+  expect(machineMsiAsset({ ...release, assets: [asset, stable] })).toBe(stable);
+  expect(() => machineMsiAsset({ ...release, assets: [asset, stable, stable] })).toThrow("found 2");
+});

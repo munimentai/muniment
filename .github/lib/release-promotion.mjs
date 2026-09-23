@@ -31,7 +31,51 @@ export const expectedNightlyAssets = (assets, sha) => {
   return assets;
 };
 
-export const releaseBody = (sha) => `Stable desktop release promoted from nightly source \`${sha}\`.\n\nWindows installers are signed. ${macosSigningProvenance(sha)} Model weights are not included.`;
+export const stableAssetName = (name, sha, version) => {
+  validatePromotionInputs(sha, version);
+  const match = name.match(new RegExp(`^nightly-${sha}-(linux|windows|macos)-muniment(.*)$`));
+  if (!match) throw new Error(`Unexpected nightly asset name: ${name}`);
+  return `muniment-${version.slice(1)}-${match[1]}${match[2].replace(/^_[0-9]+\.[0-9]+\.[0-9]+/, "")}`;
+};
+
+export const releaseBody = (sha, version) => `A free desktop app for your models, tools, and files. No Muniment account required.
+
+## Features
+
+- Connect provider accounts, API keys, or local models.
+- Work with projects, chats, files, a terminal, and a browser.
+- Add MCP tools, skills, and plugins.
+- Use reusable agents, artifacts, memory, and on-device voice.
+
+## Install
+
+Download the package for your platform, then connect a provider and start a thread.
+
+| Platform | Download |
+| --- | --- |
+| macOS | [Installer (.pkg)](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-macos.pkg) |
+| Windows x64 | [Installer (.msi)](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-windows_x64_en-US.msi) |
+| Ubuntu / Debian x64 | [Package (.deb)](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-linux.deb) |
+| Linux x64 | [AppImage](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-linux_amd64.AppImage) |
+
+- macOS: use the .pkg on macOS 13 or later, on Apple silicon or Intel.
+- Windows: use the x64 .msi, or the -nsis.exe installer. The -machine.msi installs for all users.
+- Linux: use the amd64 .deb on Ubuntu or Debian, or the .AppImage on an x86_64 desktop with X11 or XWayland.
+
+Read the [installation guide](https://muniment.ai/docs/install/) and [getting started guide](https://muniment.ai/docs/start/).
+
+## Release limits
+
+Model weights are not included. Connect a provider or configure a local model server. Provider charges may apply.
+The Linux AppImage requires FUSE 2. On Ubuntu, install the .deb first to configure the Chromium sandbox helper.
+Paid cloud services, mobile, and the optional company record are outside this desktop release.
+
+## Verification
+
+These binaries passed installed-app checks on macOS, Windows, and Linux at source commit \`${sha}\`.
+Windows installers are signed. ${macosSigningProvenance(sha)}
+The versioned files preserve the tested binary bytes. Existing download URLs remain available.
+`;
 
 export const windowsSigningProvenance = (sha) => `Windows installers for \`${sha}\` were signed by the nightly workflow.`;
 export const macosSigningProvenance = (sha) => `macOS artifacts for \`${sha}\` were signed and notarized by the nightly workflow.`;
@@ -95,15 +139,18 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
   const assets = expectedNightlyAssets(nightly.assets, sha);
   let created;
   try {
-    created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha), draft: true, prerelease: false }) })).json();
+    created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha, version), draft: true, prerelease: false }) })).json();
     const signatures = new Map();
+    const stableAssets = [];
     for (const asset of assets) {
       const source = await request(fetchImpl, token, asset.url, { headers: { Accept: "application/octet-stream" } });
       const bytes = await source.arrayBuffer();
-      if (asset.name.endsWith(".sig")) signatures.set(asset.name, Buffer.from(bytes).toString("utf8"));
-      await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=${encodeURIComponent(asset.name)}`, { method: "POST", headers: { "Content-Type": asset.content_type || "application/octet-stream" }, body: bytes });
+      const name = stableAssetName(asset.name, sha, version);
+      stableAssets.push({ ...asset, name });
+      if (name.endsWith(".sig")) signatures.set(name, Buffer.from(bytes).toString("utf8"));
+      await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=${encodeURIComponent(name)}`, { method: "POST", headers: { "Content-Type": asset.content_type || "application/octet-stream" }, body: bytes });
     }
-    const feed = createUpdateFeed({ repository, version, assets, signatures });
+    const feed = createUpdateFeed({ repository, version, assets: stableAssets, signatures });
     await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=latest.json`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(feed) });
     await request(fetchImpl, token, `${repoApi}/releases/${created.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft: false, prerelease: false }) });
   } catch (error) {
