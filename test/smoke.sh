@@ -15,8 +15,8 @@ test -f vite.config.js
 test -f src/fonts/SchibstedGrotesk-latin.woff2
 test -f src/fonts/CommitMono-VF.woff2
 # desktop CI: a changes job classifies the diff, the native preflights gate
-# every code PR beside smoke, the installer builds run only for installer
-# paths, and docs-only PRs and main pushes remain smoke-only
+# native code PRs beside smoke, packaging shares each preflight VM, and
+# release-only helpers, docs-only PRs and main pushes remain smoke-only
 ci=.github/workflows/ci.yml
 grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
 grep -Fq "if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'" "$ci"
@@ -247,7 +247,7 @@ grep -Fq '<Directory Id="CommonProgramsFolder"' src-tauri/windows/per-machine.wx
 grep -Fq 'build-windows-installers.mjs' .github/workflows/nightly.yml
 grep -Fq 'windows-installers.ps1' .github/workflows/nightly.yml
 test -f docs/windows-installers.md
-grep -Fq 'needs: [changes, desktop-compile]' "$ci"
-test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'" "$ci")" -eq 2
+grep -Fq 'cmd="$preflight_cmd && $cmd"' "$ci"
+test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'" "$ci")" -eq 1
 test -z "$(git ls-files 'protocol-fixtures/muniment.attach/**' | grep -v '^protocol-fixtures/muniment.attach/1/')"
 echo "smoke OK"

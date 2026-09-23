@@ -1,19 +1,10 @@
 name: CI
 
-# Desktop builds run through the pve01 desktop-ci driver (SSH-driven VM
-# clones; see homelab docs/infra-notes.md "Desktop-CI GLUE built"). The
-# runner container carries DESKTOP_CI_SSH_KEY, a restricted key whose only
-# capability on pve01 is `sudo desktop-ci`. The driver runs two VM slots.
-# The PR gate: `changes` classifies the diff in about a minute, then smoke
-# (structure check + unit tests) and the three native compile preflights run
-# in parallel off it. The three-platform desktop-build matrix runs only when
-# the diff touches installer, packaging, workflow or e2e paths; the nightly
-# builds and proves every merge on all three platforms. Markdown-only PRs
-# also run the public core boundary.
-# Push-to-main runs smoke only — merges are already PR-gated.
-# NOTE: the driver clones `--branch <ref>`, so we pass the branch NAME (the
-# PR head ref), which builds the branch TIP, not necessarily the triggering
-# SHA — fine for the merge gate, do not use for release artifact provenance.
+# Native checks use disposable Proxmox VMs. Each platform runs its preflight
+# and, for packaging changes, its installer build in the same VM and checkout.
+# Release-only helpers run their JavaScript tests without native compilation.
+# Push-to-main runs smoke. The nightly proves installed apps on all platforms.
+# The driver clones the branch tip, so these jobs are PR checks, not release proof.
 
 on:
   pull_request:
@@ -40,6 +31,8 @@ jobs:
       code_diff_fixtures: ${{ steps.changes.outputs.code_diff_fixtures }}
       desktop: ${{ steps.changes.outputs.desktop }}
       installer: ${{ steps.changes.outputs.installer }}
+      release_tooling: ${{ steps.changes.outputs.release_tooling }}
+      release_only: ${{ steps.changes.outputs.release_only }}
       resident_model_adr: ${{ steps.changes.outputs.resident_model_adr }}
     steps:
       - name: Checkout
@@ -60,8 +53,20 @@ jobs:
           code_diff_fixtures=false
           desktop=false
           installer=false
+          release_tooling=false
+          release_only=true
           resident_model_adr=false
           while IFS= read -r path; do
+            # Only these standalone helpers bypass native checks. Unknown files
+            # and signing or packaging helpers keep the full native gate.
+            case "$path" in
+              .github/lib/release-promotion.mjs|.github/lib/release-promotion.test.js|.github/lib/update-feed.mjs|.github/lib/update-feed.test.js|.github/lib/winget-manifest.mjs|.github/lib/winget-manifest.test.js|.github/lib/winget-release.mjs)
+                docs_only=false
+                release_tooling=true
+                continue
+                ;;
+            esac
+            release_only=false
             case "$path" in
               docs/decisions/0017-*.md)
                 # Markdown, so this stays a docs-only PR for the native build
@@ -131,6 +136,9 @@ jobs:
                 ;;
             esac
           done < <(git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA")
+          [ "$release_tooling" = true ] || release_only=false
+          echo "release_tooling=$release_tooling" >> "$GITHUB_OUTPUT"
+          echo "release_only=$release_only" >> "$GITHUB_OUTPUT"
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
           echo "companion=$companion" >> "$GITHUB_OUTPUT"
           echo "attach_fixtures=$attach_fixtures" >> "$GITHUB_OUTPUT"
@@ -150,7 +158,7 @@ jobs:
           fetch-depth: 0
 
       - name: Node 24 (bootstrap if missing)
-        if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
+        if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.release_tooling == 'true' || github.event_name != 'pull_request'
         run: |
           node_dir="$HOME/.local/node-24"
           if { ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null)" != 24 ]; } \
@@ -166,6 +174,12 @@ jobs:
               | tar -xJ --strip-components=1 -C "$node_dir"
           fi
           echo "$HOME/.local/node-24/bin" >> "$GITHUB_PATH"
+
+      - name: Release tooling tests
+        if: needs.changes.outputs.release_tooling == 'true' && needs.changes.outputs.desktop != 'true'
+        run: |
+          npm ci --no-audit --no-fund
+          npx vitest run --root . .github/lib/release-promotion.test.js .github/lib/update-feed.test.js .github/lib/winget-manifest.test.js
 
       - name: Frontend unit tests
         if: needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request'
@@ -220,6 +234,7 @@ jobs:
         run: scripts/check-steering.sh .
 
       - name: Public core boundary
+        if: needs.changes.outputs.release_only != 'true'
         env:
           CARGO_INCREMENTAL: "0"
         run: scripts/check-core-boundary.sh
@@ -376,9 +391,8 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'
     needs: changes
     runs-on: self-hosted
-    # The lane also builds the Go reader sidecar, and a fresh clone installs the
-    # toolchain first, so the Windows tests and that install share the budget.
-    timeout-minutes: 45
+    # Packaging shares the preflight VM, including its dependency and build cache.
+    timeout-minutes: ${{ needs.changes.outputs.installer == 'true' && 120 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -387,11 +401,12 @@ jobs:
       - name: Check (${{ matrix.platform }}) via desktop-ci
         env:
           PLATFORM: ${{ matrix.platform }}
+          INSTALLER: ${{ needs.changes.outputs.installer }}
           REPO_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           REF: ${{ github.head_ref }}
         run: |
-          set -u
+          set -uo pipefail
           case "$REF" in
             ''|*[!A-Za-z0-9._/-]*)
               printf 'error: unsafe branch ref for desktop-ci: %s\n' "$REF" >&2
@@ -418,98 +433,31 @@ jobs:
           if [ "$PLATFORM" = "macos" ]; then
             cmd='. scripts/prepare-cef-macos.sh && rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --features e2e-webdriver --target aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --locked --bins --target aarch64-apple-darwin && clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations -framework CoreFoundation -framework CoreGraphics -o /tmp/macos-window-count test/e2e/support/macos-window-count.c'
           fi
+          build_timeout=3600
+          if [ "$INSTALLER" = true ]; then
+            preflight_cmd=$cmd
+            cmd='CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && npm run tauri build'
+            if [ "$PLATFORM" = "linux" ]; then
+              cmd='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev cmake ninja-build zlib1g-dev libzstd-dev -o DPkg::Lock::Timeout=900 && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --release --locked && bash .github/build-reader.sh src-tauri/target/release/muniment-reader && CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && bash .github/build-linux.sh'
+            fi
+            if [ "$PLATFORM" = "windows" ]; then
+              cmd='node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
+            fi
+            if [ "$PLATFORM" = "macos" ]; then
+              cmd='. scripts/prepare-cef-macos.sh && npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin --no-bundle && node .github/build-macos-cef-helper.mjs && npm run tauri bundle -- --target universal-apple-darwin --bundles app && node scripts/package-cef-macos.mjs src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app --universal'
+            fi
+            cmd="$preflight_cmd && $cmd"
+            build_timeout=5400
+          fi
           repo_url="https://github.com/${REPOSITORY}"
 
-          # Keep credentials on the SSH input stream, outside process arguments.
-          attempt=1
-          while true; do
-            if ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-                 desktopci@10.1.10.10 \
-                 "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd' --env-stdin" <<<"GH_TOKEN=$REPO_TOKEN"; then
-              status=0
-            else
-              status=$?
-            fi
-            # desktop-ci infrastructure failures return status 3, while an SSH
-            # connection lost before or during driver startup returns 255.
-            # Either gets one bounded retry on every platform; command/test
-            # failures remain non-retryable.
-            if { [ "$status" -ne 3 ] && [ "$status" -ne 255 ]; } || \
-               [ "$attempt" -ge 2 ]; then
-              exit "$status"
-            fi
-            echo "desktop-ci infrastructure setup failed; retrying once"
-            attempt=$((attempt + 1))
-          done
-
-  desktop-build:
-    if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true' && needs.changes.outputs.installer == 'true'
-    needs: [changes, desktop-compile]
-    runs-on: self-hosted
-    timeout-minutes: 75
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [linux, windows, macos]
-    steps:
-      - name: Build (${{ matrix.platform }}) via desktop-ci
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          REPO_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          REF: ${{ github.head_ref }}
-        run: |
-          set -uo pipefail
-          case "$REF" in
-            ''|*[!A-Za-z0-9._/-]*)
-              printf 'error: unsafe branch ref for desktop-ci: %s\n' "$REF" >&2
-              exit 1
-              ;;
-          esac
-
-          umask 077
-          key="$RUNNER_TEMP/desktop_ci_key"
-          printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
-          trap 'rm -f "$key"' EXIT
-
-          # macOS: .app only — dmg bundling needs a GUI session (release-time step)
-          # --test-threads=1: the linux desktop-ci VM has few cores; the chat
-          # coordinator/receipt tests spawn a stub subprocess that must connect
-          # back within a deadline, and default (num_cpus) test parallelism starves
-          # it under load → intermittent "coordinator did not request its receipt".
-          # Serialize the test run so the spawned process always gets a core.
-          # CARGO_INCREMENTAL=0: the desktop-ci VM builds from a throwaway clone,
-          # so test-profile incremental artifacts are never reused — they only add
-          # disk writes (the same target/debug/incremental dep-graph writes that hit
-          # ENOSPC on the sibling smoke job) and bookkeeping overhead to an already
-          # disk-pressured, few-core VM. The release tauri build is non-incremental
-          # by default, so this only affects the debug `cargo test` compile.
-          # The coordinator tests execute the example stub; `cargo test` does not
-          # build examples marked `test = false`, so build its current source first.
-          cmd='CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && npm run tauri build'
-          if [ "$PLATFORM" = "linux" ]; then
-            cmd='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev cmake ninja-build zlib1g-dev libzstd-dev -o DPkg::Lock::Timeout=900 && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --release --locked && bash .github/build-reader.sh src-tauri/target/release/muniment-reader && CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && bash .github/build-linux.sh'
-          fi
-          if [ "$PLATFORM" = "windows" ]; then
-            cmd='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
-          fi
-          if [ "$PLATFORM" = "macos" ]; then
-            cmd='. scripts/prepare-cef-macos.sh && npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin --no-bundle && node .github/build-macos-cef-helper.mjs && npm run tauri bundle -- --target universal-apple-darwin --bundles app && node scripts/package-cef-macos.mjs src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app --universal'
-          fi
-
-          repo_url="https://github.com/${REPOSITORY}"
-
-          # Remote args are single-quoted so the build command's && stays
-          # inside --cmd instead of being parsed by the pve01 shell.
-          # The private environment file supplies clone credentials inside the VM.
           attempt=1
           while true; do
             attempt_log="$RUNNER_TEMP/desktop-ci-$PLATFORM-$attempt.log"
             if ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                    -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
                    desktopci@10.1.10.10 \
-                   "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd' --env-stdin" <<<"GH_TOKEN=$REPO_TOKEN" \
+                   "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd' --build-timeout '$build_timeout' --env-stdin" <<<"GH_TOKEN=$REPO_TOKEN" \
                    2>&1 | tee "$attempt_log"; then
               status=0
             else

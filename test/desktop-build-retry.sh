@@ -9,7 +9,7 @@ cleanup() {
 trap cleanup EXIT
 
 awk '
-  index($0, "- name: Build (${{ matrix.platform }}) via desktop-ci") { build = 1 }
+  index($0, "- name: Check (${{ matrix.platform }}) via desktop-ci") { build = 1 }
   build && !settings && /^          set / {
     sub(/^          /, ""); print; settings = 1
   }
@@ -40,7 +40,7 @@ export PATH="$fixture:$PATH"
 export SSH_ATTEMPTS="$fixture/attempts"
 export RUNNER_TEMP="$fixture"
 export PLATFORM=windows
-export key=unused repo_url=unused REF=unused cmd=unused REPO_TOKEN=fixture-only-token
+export key=unused repo_url=unused REF=unused cmd=unused build_timeout=5400 REPO_TOKEN=fixture-only-token
 
 export SSH_STATUS=1
 export SSH_FAIL_ONCE=true
