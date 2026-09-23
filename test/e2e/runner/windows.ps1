@@ -650,8 +650,11 @@ try {
   }
   $webdriverBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment_desktop.dll"))
   if (-not (Test-Path -LiteralPath $webdriverBinary -PathType Leaf)) { throw "E2E application binary is unavailable" }
-  # Preserve the installed sandbox bootstrap and replace only its application DLL.
+  # The test DLL and CEF bootstrap must have matching signing status. Release smoke runs before this replacement.
   Copy-Item -LiteralPath $webdriverBinary -Destination $appLibrary -Force -ErrorAction Stop
+  $webdriverDirectory = Split-Path -Parent $webdriverBinary
+  Copy-Item -LiteralPath (Join-Path $webdriverDirectory "bootstrap.exe") -Destination $appBinary -Force -ErrorAction Stop
+  foreach ($library in @('chrome_elf.dll', 'libcef.dll')) { Copy-Item -LiteralPath (Join-Path $webdriverDirectory $library) -Destination (Join-Path $installDirectory $library) -Force -ErrorAction Stop }
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs present `"$appLibrary`"" $installerLog "E2E WebDriver guard failed"
 
   New-Item -Path $handlerKey -Force | Out-Null
