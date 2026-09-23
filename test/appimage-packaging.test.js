@@ -2,7 +2,7 @@ import { it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { packageAppImage, prepareAppDir, verifyTree } from '../scripts/package-appimage-linux.mjs'
 
 function fixture() {
@@ -76,6 +76,11 @@ it.skipIf(process.platform === 'win32')('keeps the original archive when extract
   try {
     let failExtraction = true
     const run = (command, args, options) => {
+      if (command === 'bash') {
+        expect(args[0]).toMatch(/prepare-appimage-tool-linux\.sh$/)
+        expect(args[1]).toBe(f.directory)
+        return { status: 0 }
+      }
       if (args.includes('--appdir')) {
         expect(options.env.LDAI_OUTPUT).toContain(join(f.directory, '.muniment-appimage-'))
         writeFileSync(options.env.LDAI_OUTPUT, 'verified replacement')
@@ -104,4 +109,18 @@ it('selects only the exact nightly AppImage and rejects missing or duplicate ass
     [{ ...asset, name: asset.name.replace('amd64', 'arm64') }]]) {
     expect(select(assets).status).not.toBe(0)
   }
+})
+
+it('skips AppImage tools when a build produces only a DEB', () => {
+  const root = mkdtempSync(join(tmpdir(), 'deb-only-test-'))
+  try {
+    const bundle = join(root, 'src-tauri/target/release/bundle/deb')
+    mkdirSync(bundle, { recursive: true })
+    writeFileSync(join(bundle, 'muniment.deb'), 'deb fixture')
+    const result = spawnSync(process.execPath, [resolve('scripts/package-appimage-linux.mjs')], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, PATH: '' },
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(readFileSync(join(bundle, 'muniment.deb'), 'utf8')).toBe('deb fixture')
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

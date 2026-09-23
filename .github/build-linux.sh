@@ -45,5 +45,4 @@ bash "$repo_root/.github/build-reader.sh" src-tauri/target/release/muniment-read
 npm run tauri build -- --verbose --no-bundle "$@"
 node "$repo_root/scripts/stage-cef-linux.mjs"
 npm run tauri bundle -- --verbose "$@" --config '{"bundle":{"resources":{"target/release/cef-resources/":"cef/"}}}'
-bash scripts/prepare-appimage-tool-linux.sh "$tauri_cache"
 node scripts/package-appimage-linux.mjs

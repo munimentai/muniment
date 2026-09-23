@@ -1,6 +1,6 @@
 import { cpSync, createReadStream, existsSync, lstatSync, mkdtempSync, readdirSync, readlinkSync, rmSync, symlinkSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
@@ -74,6 +74,7 @@ export async function packageAppImage(bundleDir, cacheDir, run = spawnSync) {
     if (result.error || result.status !== 0) throw new Error(`AppImage command failed: ${command}`)
   }
   try {
+    execute('bash', [join(dirname(fileURLToPath(import.meta.url)), 'prepare-appimage-tool-linux.sh'), cacheDir])
     execute(join(cacheDir, 'muniment-appimage-tools-4.7.5/usr/bin/linuxdeploy-plugin-appimage'), ['--appdir', appDir], {
       env: { ...process.env, LDAI_OUTPUT: image },
     })
