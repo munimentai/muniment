@@ -894,7 +894,7 @@ kill -ABRT "$$"
       encoding: 'utf8', cwd: directory, timeout: 10_000,
       env: {
         ...process.env, MUNIMENT_E2E_REAL_APP_BINARY: app, MUNIMENT_E2E_DRIVER_APP_LOG: log,
-        TAURI_WEBDRIVER_PORT: '4445', WDIO_EMBEDDED_SERVER: 'true', HOME: directory,
+        TAURI_WEBDRIVER_PORT: '4445', WDIO_EMBEDDED_SERVER: 'true', HOME: directory, MUNIMENT_E2E_LOGIN_HOME: directory,
       },
     })
     expect(result.status).toBeNull()
