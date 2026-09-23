@@ -213,6 +213,16 @@ jobs:
             apt-get install -y -qq --no-install-recommends gcc libc6-dev
           fi
 
+      - name: Linux sandbox selection
+        run: |
+          python3 - <<'PYTHON'
+          import pathlib, subprocess, tempfile
+          with tempfile.TemporaryDirectory(prefix="muniment-sandbox-test-") as directory:
+              executable = str(pathlib.Path(directory) / "sandbox-test")
+              subprocess.run(["rustc", "--edition", "2021", "--test", "src-tauri/src/cef_linux_sandbox.rs", "-o", executable], check=True)
+              subprocess.run([executable], check=True)
+          PYTHON
+
       - name: Structure smoke
         run: test/smoke.sh
 
