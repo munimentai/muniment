@@ -6,6 +6,8 @@ mod attach_service;
 mod auth;
 mod cef_browser;
 mod cef_native;
+#[cfg(target_os = "linux")]
+mod cef_linux_sandbox;
 #[cfg(windows)]
 mod cef_windows;
 mod chat;
