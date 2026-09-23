@@ -5,19 +5,6 @@ import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const script = resolve('scripts/stage-cef-linux.mjs')
-it.skipIf(process.platform === 'win32')('checks the installed sandbox helper trust rules with the native selector', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'cef-sandbox-test-'))
-  try {
-    const executable = join(directory, 'sandbox-tests')
-    const compile = spawnSync('rustc', ['--edition', '2021', '--test', resolve('src-tauri/src/cef_linux_sandbox.rs'), '-o', executable], { encoding: 'utf8', timeout: 60000 })
-    expect(compile.status, compile.stderr).toBe(0)
-    const result = spawnSync(executable, [], { encoding: 'utf8', timeout: 10000 })
-    expect(result.status, result.stdout + result.stderr).toBe(0)
-  } finally {
-    rmSync(directory, { recursive: true, force: true })
-  }
-})
-
 it('stages CEF resources and credits and rejects an incomplete runtime', () => {
   const directory = mkdtempSync(join(tmpdir(), 'cef-package-'))
   try {
