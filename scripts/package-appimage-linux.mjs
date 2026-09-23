@@ -1,4 +1,4 @@
-import { cpSync, createReadStream, existsSync, lstatSync, mkdtempSync, readdirSync, readlinkSync, rmSync, symlinkSync } from 'node:fs'
+import { cpSync, createReadStream, existsSync, lstatSync, mkdtempSync, readdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,7 +26,7 @@ export function prepareAppDir(appDir) {
   // cannot supply setuid permissions on its FUSE mount. Use the DEB-installed
   // helper on hosts that restrict user namespaces. Chromium validates it.
   const sandbox = join(libraryDir, 'chrome-sandbox')
-  rmSync(sandbox, { force: true })
+  try { unlinkSync(sandbox) } catch (error) { if (error.code !== 'ENOENT') throw error }
   symlinkSync('/usr/lib/muniment/cef/chrome-sandbox', sandbox)
   for (const name of readdirSync(libraryDir)) {
     if (hostLibrary(name)) rmSync(join(libraryDir, name))

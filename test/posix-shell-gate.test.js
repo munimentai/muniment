@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ALLOWED = {
+  'test/macos-wdio-tools.test.js:53:20': "it.skipIf(process.platform === 'win32')('launches the app with its login home and isolated state')",
   'test/macos-wdio-tools.test.js:23:22': "describe.skipIf(process.platform === 'win32')('macOS WDIO build tools')",
   'test/macos-keychain-session.test.js:27:22': "describe.skipIf(process.platform === 'win32')('macOS CI keychain session')",
   'test/desktop-e2e-harness.test.js:1327:22': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",

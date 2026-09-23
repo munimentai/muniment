@@ -141,7 +141,7 @@ describe('nightly Linux E2E workflow', () => {
   it('pins every installed-E2E lane to the source SHA at --ref', () => {
     expect(workflow.match(/--ref '\$SOURCE_SHA'/g)).toHaveLength(3)
     for (const lane of ['linux', 'windows', 'macos']) {
-      expect(workflow).toContain(`sudo desktop-ci ${lane} --repo 'https://github.com/\${REPOSITORY}.git' --ref '$SOURCE_SHA'`)
+      expect(workflow).toContain(`sudo desktop-ci ${lane}${lane === 'windows' ? ' --console-user' : ''} --repo 'https://github.com/\${REPOSITORY}.git' --ref '$SOURCE_SHA'`)
     }
   })
 
