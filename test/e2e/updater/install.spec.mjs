@@ -76,6 +76,9 @@ describe('real signed application update', () => {
       sentinelHash, threadId, title, beforePid, restartLogOffset, storedThreadVerifiedAfterRestart: false, installedBytesMatch: true, sentinelPreserved: true,
       restartVerified: false, runtimeConnectionVerified: false, clickError }, null, 2), { mode: 0o600 })
     execFileSync('python3', ['/tmp/muniment-updater-install-proof/verify-macos.py'], { stdio: 'inherit', timeout: 240000 })
+    // The verified production app has no embedded WebDriver server. Its
+    // predecessor and session ended during the update, so do not DELETE it.
+    browser.sessionId = undefined
     // The external runner must independently verify the restarted production
     // process, its connected runtime, its version and the profile's stored data.
     // This file alone does not declare the full updater acceptance test passed.
