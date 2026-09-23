@@ -1,6 +1,6 @@
 import { it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { packageAppImage, prepareAppDir, verifyTree } from '../scripts/package-appimage-linux.mjs'
@@ -19,12 +19,14 @@ function fixture() {
   return { directory, appDir, lib, cef }
 }
 
-it('puts Chromium data beside libcef and uses complete host NSS and Wayland stacks', () => {
+it.skipIf(process.platform === 'win32')('puts Chromium data beside libcef and uses complete host NSS and Wayland stacks', () => {
   const f = fixture()
   try {
     for (const name of ['libnss3.so', 'libnssutil3.so', 'libwayland-client.so.0', 'libwayland-egl.so.1', 'libcrypto.so.3']) writeFileSync(join(f.lib, name), name)
     writeFileSync(join(f.lib, 'libcef.so'), 'linuxdeploy patched library')
     prepareAppDir(f.appDir)
+    expect(readlinkSync(join(f.lib, 'chrome-sandbox'))).toBe('/usr/lib/muniment/cef/chrome-sandbox')
+    prepareAppDir(f.appDir) // Repackaging preserves the fixed host link.
     expect(readFileSync(join(f.lib, 'libcef.so'), 'utf8')).toBe('linuxdeploy patched library')
     expect(readFileSync(join(f.lib, 'icudtl.dat'), 'utf8')).toBe('icudtl.dat')
     expect(readFileSync(join(f.lib, 'v8_context_snapshot.bin'), 'utf8')).toBe('v8_context_snapshot.bin')
@@ -69,7 +71,7 @@ it.skipIf(process.platform === 'win32')('rejects a changed symbolic link', async
   } finally { rmSync(f.directory, { recursive: true, force: true }) }
 })
 
-it('keeps the original archive when extraction fails and publishes only verified bytes', async () => {
+it.skipIf(process.platform === 'win32')('keeps the original archive when extraction fails and publishes only verified bytes', async () => {
   const f = fixture()
   try {
     let failExtraction = true

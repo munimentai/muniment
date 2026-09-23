@@ -1,4 +1,4 @@
-import { cpSync, createReadStream, existsSync, lstatSync, mkdtempSync, readdirSync, readlinkSync, rmSync } from 'node:fs'
+import { cpSync, createReadStream, existsSync, lstatSync, mkdtempSync, readdirSync, readlinkSync, rmSync, symlinkSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,6 +22,12 @@ export function prepareAppDir(appDir) {
       cpSync(join(cef, name), join(libraryDir, name), { recursive: true })
     }
   }
+  // CEF resolves the SUID helper beside libcef (DIR_ASSETS). An AppImage
+  // cannot supply setuid permissions on its FUSE mount. Use the DEB-installed
+  // helper on hosts that restrict user namespaces. Chromium validates it.
+  const sandbox = join(libraryDir, 'chrome-sandbox')
+  rmSync(sandbox, { force: true })
+  symlinkSync('/usr/lib/muniment/cef/chrome-sandbox', sandbox)
   for (const name of readdirSync(libraryDir)) {
     if (hostLibrary(name)) rmSync(join(libraryDir, name))
   }
