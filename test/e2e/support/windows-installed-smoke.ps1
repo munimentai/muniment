@@ -5,10 +5,6 @@ param(
   [ValidateRange(0, 120)][int]$WaitSeconds = 60
 )
 $ErrorActionPreference = 'Stop'
-$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-  throw 'The installed smoke requires a non-elevated console session.'
-}
 New-Item -ItemType Directory -Force $Diagnostics | Out-Null
 $beforeExe = (Get-FileHash -LiteralPath $AppBinary -Algorithm SHA256).Hash
 $beforeDll = (Get-FileHash -LiteralPath $AppLibrary -Algorithm SHA256).Hash

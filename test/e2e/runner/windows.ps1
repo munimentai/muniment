@@ -565,6 +565,11 @@ try {
     return
   }
 
+  $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+  if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'The installed smoke requires a non-elevated console session.'
+  }
+
   $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../.."))
   Set-Location -LiteralPath $repoRoot
   $imageFixture = Join-Path $stateRoot "image-token.png"
