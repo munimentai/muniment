@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://muniment.ai"><img src="docs/assets/muniment.svg" width="128" height="128" alt="Muniment" /></a>
+  <a href="https://muniment.ai"><img src="docs/assets/ring-graph.svg" width="128" height="128" alt="Muniment" /></a>
 </p>
 
 <h1 align="center">Your models. Working together.</h1>
