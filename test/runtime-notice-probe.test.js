@@ -18,14 +18,14 @@ afterEach(() => {
   delete window.__TAURI__
 })
 
-it('reads the installed notice text and its one control from the rendered webview', async () => {
-  document.body.innerHTML = '<section data-testid="runtime-notice"><p>The runtime connection closed.</p><button>Start runtime</button></section>'
+it.each(['The runtime connection closed.', 'The runtime exited.'])('reads the installed loss notice: %s', async (text) => {
+  document.body.innerHTML = `<section data-testid="runtime-notice"><p>${text}</p><button>Start runtime</button></section>`
   const notice = document.querySelector('section')
   vi.spyOn(notice, 'getClientRects').mockReturnValue([{}])
   window.eval(probe)
   await vi.advanceTimersByTimeAsync(250)
   expect(window.__TAURI__.core.invoke).toHaveBeenCalledExactlyOnceWith('runtime_notice_observed', {
-    text: 'The runtime connection closed.', control: 'Start runtime', controls: 1,
+    text, control: 'Start runtime', controls: 1,
   })
   await vi.advanceTimersByTimeAsync(1000)
   expect(window.__TAURI__.core.invoke).toHaveBeenCalledTimes(5)
@@ -50,7 +50,8 @@ it('does not count the initial start notice as the service absence probe', async
 it('checks the installed webview after it removes the service from launchd', () => {
   expect(runner).toContain('"$installed_bundle/Contents/MacOS/$process_name" --probe-runtime-notice')
   expect(runner.indexOf('launchctl bootout "$runtime_target"')).toBeLessThan(runner.indexOf('notice_deadline='))
-  expect(runner).toContain("grep -Fx 'runtime_notice=The runtime connection closed. control=Start runtime controls=1'")
+  expect(runner).toContain("grep -Ex 'runtime_notice=The runtime (connection closed|exited)[.] control=Start runtime controls=1'")
   expect(runner).toContain('tail -n "+$((notice_offset + 1))"')
   expect(runner).toContain('if (( notice_read == 0 )); then')
+  expect(runner).toContain(`printf '%s\\n' "$notice_line"`)
 })
