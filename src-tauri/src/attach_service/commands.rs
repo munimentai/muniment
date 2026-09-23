@@ -68,7 +68,7 @@ pub(super) fn observe_desktop_client_connection<R: tauri::Runtime>(
 ) {
     app.state::<AttachCompanionState>()
         .record_connected(connected);
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     eprintln!("desktop runtime client connected={connected}");
     #[cfg(target_os = "linux")]
     eprintln!("Desktop client connected: {connected}.");

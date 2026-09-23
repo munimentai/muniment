@@ -21,6 +21,7 @@ cleanup_status_entries=
 first_failed_step=none
 current_step=prepare-state
 # Keep the login home before a spec changes HOME.
+export MUNIMENT_E2E_LOGIN_HOME="$HOME"
 diagnostic_reports="$HOME/Library/Logs/DiagnosticReports"
 runtime_log="$HOME/Library/Logs/Muniment/runtime.log"
 crash_start="$run_root/crash-start"

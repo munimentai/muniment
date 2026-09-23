@@ -42,3 +42,22 @@ ${setup}
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 })
+
+// The child keeps isolated app state but uses the login keychain preferences.
+it.skipIf(process.platform === 'win32')('launches the app with its login home and isolated state', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'macos-wdio-home-'))
+  try {
+    const app = path.join(root, 'app')
+    const log = path.join(root, 'app.log')
+    fs.writeFileSync(app, '#!/bin/sh\nprintf "%s\\n" "$HOME" "$MUNIMENT_STATE_DIR" "$MUNIMENT_E2E_HOME_PATH"\n', { mode: 0o755 })
+    const result = spawnSync('bash', ['test/e2e/support/macos-wdio-app.sh'], {
+      encoding: 'utf8', env: { ...process.env, HOME: '/isolated/spec-home',
+        MUNIMENT_E2E_LOGIN_HOME: '/login/home', MUNIMENT_STATE_DIR: '/login/home/.muniment',
+        MUNIMENT_E2E_HOME_PATH: '/isolated/workspace', MUNIMENT_E2E_REAL_APP_BINARY: app,
+        MUNIMENT_E2E_DRIVER_APP_LOG: log },
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(fs.readFileSync(log, 'utf8')).toBe('/login/home\n/login/home/.muniment\n/isolated/workspace\n')
+    expect(runner.indexOf('export MUNIMENT_E2E_LOGIN_HOME="$HOME"')).toBeLessThan(runner.indexOf('export HOME="$state_root/degraded"'))
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})

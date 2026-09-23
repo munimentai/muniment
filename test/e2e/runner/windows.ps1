@@ -307,7 +307,7 @@ function Invoke-E2e(
   Add-Content $cleanupLog "start-spec: $([IO.Path]::GetFileName($Log))"
   $arguments = "run test:e2e"
   if ($Spec) { $arguments += " -- --spec $Spec" }
-  if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js') {
+  if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js' -and $env:MUNIMENT_E2E_CLOUD -eq 'true') {
     Sync-SignInClock (Join-Path $raw 'clock.log')
   }
   Invoke-NativeCommand "npm.cmd" $arguments $Log $FailureMessage $null (Join-Path $raw "driver-app.log")
@@ -565,6 +565,11 @@ try {
     return
   }
 
+  $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+  if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'The installed smoke requires a non-elevated console session.'
+  }
+
   $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../.."))
   Set-Location -LiteralPath $repoRoot
   $imageFixture = Join-Path $stateRoot "image-token.png"
@@ -645,8 +650,11 @@ try {
   }
   $webdriverBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../src-tauri/target/release/muniment_desktop.dll"))
   if (-not (Test-Path -LiteralPath $webdriverBinary -PathType Leaf)) { throw "E2E application binary is unavailable" }
-  # Preserve the installed sandbox bootstrap and replace only its application DLL.
+  # The test DLL and CEF bootstrap must have matching signing status. Release smoke runs before this replacement.
   Copy-Item -LiteralPath $webdriverBinary -Destination $appLibrary -Force -ErrorAction Stop
+  $webdriverDirectory = Split-Path -Parent $webdriverBinary
+  Copy-Item -LiteralPath (Join-Path $webdriverDirectory "bootstrap.exe") -Destination $appBinary -Force -ErrorAction Stop
+  foreach ($library in @('chrome_elf.dll', 'libcef.dll')) { Copy-Item -LiteralPath (Join-Path $webdriverDirectory $library) -Destination (Join-Path $installDirectory $library) -Force -ErrorAction Stop }
   Invoke-NativeCommand "node" "test/e2e/support/webdriver-release-guard.mjs present `"$appLibrary`"" $installerLog "E2E WebDriver guard failed"
 
   New-Item -Path $handlerKey -Force | Out-Null

@@ -300,9 +300,9 @@ if stop_notice_runtime >>"$raw/runtime-connection.log" 2>&1; then
   notice_read=0
   while (( SECONDS < notice_deadline )); do
     if runtime_process_absent && runtime_job_stopped &&
-      tail -n "+$((notice_offset + 1))" "$raw/driver-app.log" | grep -Fx 'runtime_notice=The runtime connection closed. control=Start runtime controls=1' >/dev/null; then
+      notice_line=$(tail -n "+$((notice_offset + 1))" "$raw/driver-app.log" | grep -Ex 'runtime_notice=The runtime (connection closed|exited)[.] control=Start runtime controls=1' | tail -n 1); then
       notice_read=1
-      printf 'The runtime connection closed.\nStart runtime\n' >"$raw/runtime-notice.log"
+      printf '%s\n' "$notice_line" >"$raw/runtime-notice.log"
       break
     fi
     kill -0 "$app_pid" 2>/dev/null || break

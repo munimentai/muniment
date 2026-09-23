@@ -1,6 +1,6 @@
-import { cpSync, createReadStream, existsSync, lstatSync, mkdtempSync, readdirSync, readlinkSync, rmSync } from 'node:fs'
+import { cpSync, createReadStream, existsSync, lstatSync, mkdtempSync, readdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
@@ -22,6 +22,12 @@ export function prepareAppDir(appDir) {
       cpSync(join(cef, name), join(libraryDir, name), { recursive: true })
     }
   }
+  // CEF resolves the SUID helper beside libcef (DIR_ASSETS). An AppImage
+  // cannot supply setuid permissions on its FUSE mount. Use the DEB-installed
+  // helper on hosts that restrict user namespaces. Chromium validates it.
+  const sandbox = join(libraryDir, 'chrome-sandbox')
+  try { unlinkSync(sandbox) } catch (error) { if (error.code !== 'ENOENT') throw error }
+  symlinkSync('/usr/lib/muniment/cef/chrome-sandbox', sandbox)
   for (const name of readdirSync(libraryDir)) {
     if (hostLibrary(name)) rmSync(join(libraryDir, name))
   }
@@ -68,6 +74,7 @@ export async function packageAppImage(bundleDir, cacheDir, run = spawnSync) {
     if (result.error || result.status !== 0) throw new Error(`AppImage command failed: ${command}`)
   }
   try {
+    execute('bash', [join(dirname(fileURLToPath(import.meta.url)), 'prepare-appimage-tool-linux.sh'), cacheDir])
     execute(join(cacheDir, 'muniment-appimage-tools-4.7.5/usr/bin/linuxdeploy-plugin-appimage'), ['--appdir', appDir], {
       env: { ...process.env, LDAI_OUTPUT: image },
     })

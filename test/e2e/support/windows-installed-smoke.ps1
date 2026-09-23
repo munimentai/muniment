@@ -13,6 +13,8 @@ $stderr = Join-Path $Diagnostics 'installed-app.stderr.log'
 $app = $null
 try {
   $app = Start-Process -FilePath $AppBinary -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+  # Hold the process handle so an early exit preserves its exit code.
+  $null = $app.Handle
   $deadline = (Get-Date).AddSeconds($WaitSeconds)
   $ready = $false
   do {

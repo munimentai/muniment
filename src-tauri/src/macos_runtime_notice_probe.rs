@@ -11,7 +11,7 @@ pub(crate) fn install<R: tauri::Runtime>(webview: &tauri::Webview<R>) {
                 const notice = document.querySelector('[data-testid="runtime-notice"]');
                 if (!notice || !notice.getClientRects().length) return;
                 const text = notice.querySelector('p')?.textContent;
-                if (text !== 'The runtime connection closed.') return;
+                if (!['The runtime connection closed.', 'The runtime exited.'].includes(text)) return;
                 const controls = [...notice.querySelectorAll('button')];
                 window.__TAURI__.core.invoke('runtime_notice_observed', {
                     text,
@@ -35,7 +35,12 @@ pub(crate) fn runtime_notice_observed(
     if !std::env::args_os().any(|arg| arg == PROBE_FLAG) {
         return Err("The runtime notice probe is inactive.");
     }
-    if text != "The runtime connection closed." || control != "Start runtime" || controls != 1 {
+    if !matches!(
+        text.as_str(),
+        "The runtime connection closed." | "The runtime exited."
+    ) || control != "Start runtime"
+        || controls != 1
+    {
         return Err("The runtime notice probe found unexpected content.");
     }
     println!("runtime_notice={text} control={control} controls={controls}");

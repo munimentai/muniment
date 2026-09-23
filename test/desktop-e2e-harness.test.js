@@ -894,7 +894,7 @@ kill -ABRT "$$"
       encoding: 'utf8', cwd: directory, timeout: 10_000,
       env: {
         ...process.env, MUNIMENT_E2E_REAL_APP_BINARY: app, MUNIMENT_E2E_DRIVER_APP_LOG: log,
-        TAURI_WEBDRIVER_PORT: '4445', WDIO_EMBEDDED_SERVER: 'true', HOME: directory,
+        TAURI_WEBDRIVER_PORT: '4445', WDIO_EMBEDDED_SERVER: 'true', HOME: directory, MUNIMENT_E2E_LOGIN_HOME: directory,
       },
     })
     expect(result.status).toBeNull()
@@ -3844,8 +3844,8 @@ describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
     const copy = staging.indexOf('Copy-Item -LiteralPath $webdriverBinary -Destination $appLibrary -Force -ErrorAction Stop')
     expect(copy).toBeGreaterThan(0)
     expect(staging.indexOf('webdriver-release-guard.mjs present `"$appLibrary`"')).toBeGreaterThan(copy)
-    expect(staging).not.toMatch(/\$appBinary\s*=/)
-    expect(staging).not.toContain('-Destination $appBinary')
+    expect(staging).toContain("@('chrome_elf.dll', 'libcef.dll')")
+    expect(staging).toContain('Copy-Item -LiteralPath (Join-Path $webdriverDirectory "bootstrap.exe") -Destination $appBinary')
     expect(lookup).toContain('webdriver-release-guard.mjs absent `"$appLibrary`"')
     expect(runner).toContain('--release --locked --lib --features e2e-webdriver,tauri/custom-protocol')
     expect(runner).toContain('$env:TAURI_CONFIG = $savedTauriConfig')
@@ -4117,7 +4117,7 @@ describe('Windows sign-in clock', () => {
   it('checks the clock after process cleanup and before the sign-in spec', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
     const invoke = runner.slice(runner.indexOf('function Invoke-E2e('), runner.indexOf('function Invoke-Cleanup('))
-    expect(invoke).toContain("if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js')")
+    expect(invoke).toContain("if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js' -and $env:MUNIMENT_E2E_CLOUD -eq 'true')")
     expect(invoke.indexOf('Stop-HarnessProcesses')).toBeLessThan(invoke.indexOf('Sync-SignInClock'))
     expect(invoke.indexOf('Sync-SignInClock')).toBeLessThan(invoke.indexOf('Invoke-NativeCommand'))
     const clock = fs.readFileSync(helper, 'utf8')
