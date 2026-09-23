@@ -31,10 +31,10 @@
 
 Download Muniment for your platform:
 
-- [macOS — Apple silicon and Intel](https://github.com/munimentai/muniment/releases/download/v0.0.1/nightly-84e8c1b74dc2030449dc91de890691627f659ce9-macos-muniment.pkg)
-- [Windows — x64 installer](https://github.com/munimentai/muniment/releases/download/v0.0.1/nightly-84e8c1b74dc2030449dc91de890691627f659ce9-windows-muniment_0.0.1_x64_en-US.msi)
-- [Ubuntu / Debian — x64](https://github.com/munimentai/muniment/releases/download/v0.0.1/nightly-84e8c1b74dc2030449dc91de890691627f659ce9-linux-muniment.deb)
-- [Linux — x64 AppImage](https://github.com/munimentai/muniment/releases/download/v0.0.1/nightly-84e8c1b74dc2030449dc91de890691627f659ce9-linux-muniment_0.0.1_amd64.AppImage)
+- [macOS — Apple silicon and Intel](https://github.com/munimentai/muniment/releases/download/v0.0.1/muniment-0.0.1-macos.pkg)
+- [Windows — x64 installer](https://github.com/munimentai/muniment/releases/download/v0.0.1/muniment-0.0.1-windows_x64_en-US.msi)
+- [Ubuntu / Debian — x64](https://github.com/munimentai/muniment/releases/download/v0.0.1/muniment-0.0.1-linux.deb)
+- [Linux — x64 AppImage](https://github.com/munimentai/muniment/releases/download/v0.0.1/muniment-0.0.1-linux_amd64.AppImage)
 
 See the [install guide](https://muniment.ai/docs/install/) for platform requirements
 and [all downloads](https://github.com/munimentai/muniment/releases/latest) for alternate installers.
