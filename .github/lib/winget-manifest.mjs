@@ -13,7 +13,9 @@ export const stableVersion = (tag) => {
 
 export const machineMsiAsset = (release) => {
   if (release.draft || release.prerelease) throw new Error("WinGet requires a published stable release");
-  const matches = (release.assets ?? []).filter((asset) => asset.name.endsWith("-machine.msi"));
+  const candidates = (release.assets ?? []).filter((asset) => asset.name.endsWith("-machine.msi"));
+  const stable = candidates.filter((asset) => asset.name.startsWith(`muniment-${stableVersion(release.tag_name)}-`));
+  const matches = stable.length ? stable : candidates;
   if (matches.length !== 1) throw new Error(`expected exactly one per-machine MSI asset; found ${matches.length}`);
   if (!matches[0].browser_download_url?.startsWith("https://github.com/")) {
     throw new Error("per-machine MSI must have a public GitHub release URL");
