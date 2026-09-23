@@ -1,0 +1,38 @@
+name: Signed macOS updater proof
+on:
+  push:
+    branches: [test/signed-updater-proof]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: signed-macos-updater-proof
+  cancel-in-progress: false
+jobs:
+  update:
+    if: github.repository == 'munimentai/muniment' && github.actor == 'mikeydiamonds'
+    runs-on: self-hosted
+    timeout-minutes: 75
+    steps:
+      - name: Verify signed update in a disposable Mac
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          MUNIMENT_BASELINE_URL: ${{ secrets.UPDATER_TEST_BASELINE_URL }}
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          test -n "$MUNIMENT_BASELINE_URL"
+          key="$RUNNER_TEMP/updater_ci_key"
+          printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
+          trap 'rm -f "$key"' EXIT
+          cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && bash test/e2e/updater/prepare-macos.sh"
+          printf '%s\n' "APPLE_CERTIFICATE=$APPLE_CERTIFICATE" "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD" "APPLE_TEAM_ID=$APPLE_TEAM_ID" "APPLE_API_KEY=$APPLE_API_KEY" "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" "APPLE_API_ISSUER=$APPLE_API_ISSUER" "MUNIMENT_BASELINE_URL=$MUNIMENT_BASELINE_URL" \
+            | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 desktopci@10.1.10.10 \
+              "sudo desktop-ci macos --repo https://github.com/munimentai/muniment.git --ref test/signed-updater-proof --cmd '$cmd' --env-stdin --collect-artifacts --build-timeout 3600"
