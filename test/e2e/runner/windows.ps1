@@ -307,7 +307,7 @@ function Invoke-E2e(
   Add-Content $cleanupLog "start-spec: $([IO.Path]::GetFileName($Log))"
   $arguments = "run test:e2e"
   if ($Spec) { $arguments += " -- --spec $Spec" }
-  if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js') {
+  if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js' -and $env:MUNIMENT_E2E_CLOUD -eq 'true') {
     Sync-SignInClock (Join-Path $raw 'clock.log')
   }
   Invoke-NativeCommand "npm.cmd" $arguments $Log $FailureMessage $null (Join-Path $raw "driver-app.log")

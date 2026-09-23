@@ -4117,7 +4117,7 @@ describe('Windows sign-in clock', () => {
   it('checks the clock after process cleanup and before the sign-in spec', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
     const invoke = runner.slice(runner.indexOf('function Invoke-E2e('), runner.indexOf('function Invoke-Cleanup('))
-    expect(invoke).toContain("if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js')")
+    expect(invoke).toContain("if ($Spec -eq 'test/e2e/specs/real-sign-in.spec.js' -and $env:MUNIMENT_E2E_CLOUD -eq 'true')")
     expect(invoke.indexOf('Stop-HarnessProcesses')).toBeLessThan(invoke.indexOf('Sync-SignInClock'))
     expect(invoke.indexOf('Sync-SignInClock')).toBeLessThan(invoke.indexOf('Invoke-NativeCommand'))
     const clock = fs.readFileSync(helper, 'utf8')
