@@ -39,11 +39,16 @@ if ! command -v go >/dev/null 2>&1; then
     trap 'rm -f "$tarball"' EXIT
     curl --proto '=https' --tlsv1.2 -fsSL \
       "https://go.dev/dl/${go_version}.${host_os}-${host_arch}.tar.gz" -o "$tarball"
-    # macOS carries shasum and no sha256sum.
-    if command -v sha256sum >/dev/null 2>&1; then
-      printf '%s  %s\n' "$go_sha256" "$tarball" | sha256sum --check --quiet
+    # GNU sha256sum answers --version. A BSD sha256sum on macOS does not, so
+    # macOS uses shasum.
+    if sha256sum --version >/dev/null 2>&1; then
+      actual=$(sha256sum "$tarball" | awk '{print $1}')
     else
-      printf '%s  %s\n' "$go_sha256" "$tarball" | shasum -a 256 --check --quiet
+      actual=$(shasum -a 256 "$tarball" | awk '{print $1}')
+    fi
+    if [ "$actual" != "$go_sha256" ]; then
+      printf 'build-reader: %s has SHA-256 %s, expected %s\n' "$go_version" "$actual" "$go_sha256" >&2
+      exit 1
     fi
     rm -rf "$root"
     mkdir -p "$root"
