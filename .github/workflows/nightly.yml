@@ -43,7 +43,7 @@ jobs:
         with:
           ref: ${{ steps.source.outputs.sha }}
 
-      - name: Reuse unchanged installed nightly
+      - name: Reuse unchanged nightly builds
         id: proof
         uses: actions/github-script@v8
         env:
@@ -52,9 +52,9 @@ jobs:
           MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED || 'false' }}
         with:
           script: |
-            const { reuseNightly } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);
+            const { reuseNightlyBuild } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);
             const settings = { windowsSigning: process.env.WINDOWS_SIGNING_ENABLED, macosSigning: process.env.MACOS_SIGNING_ENABLED };
-            core.setOutput('reuse', await reuseNightly({ github, context, core, sha: process.env.SOURCE_SHA, settings }));
+            core.setOutput('reuse', await reuseNightlyBuild({ github, context, core, sha: process.env.SOURCE_SHA, settings }));
 
       - name: Ensure rolling pre-release exists
         uses: actions/github-script@v8
@@ -256,7 +256,7 @@ jobs:
     # when another platform fails. The runner reports a missing Linux package.
     needs: [prepare, build, publish]
     if: >-
-      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.reuse != 'true' &&
+      !cancelled() && needs.prepare.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'linux')
     runs-on: self-hosted
@@ -336,7 +336,7 @@ jobs:
     # The shared real-auth fixture is exclusive: Windows starts only after the
     # Linux case has completely finished, including its finalizer.
     if: >-
-      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.reuse != 'true' &&
+      !cancelled() && needs.prepare.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'windows') &&
       (github.event.inputs.platform == 'windows' || needs.linux-e2e.result != 'skipped')
@@ -415,7 +415,7 @@ jobs:
     # pve01 permits one desktop VM at a time. macOS starts only after the
     # Windows case has completely finished, including its finalizer.
     if: >-
-      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.reuse != 'true' &&
+      !cancelled() && needs.prepare.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'macos') &&
       (github.event.inputs.platform == 'macos' || needs.windows-e2e.result != 'skipped')

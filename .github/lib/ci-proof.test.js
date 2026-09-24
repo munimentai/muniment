@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readProof, reusePullRequest, reuseNightly } from './ci-proof.mjs'
+import { readProof, reusePullRequest, reuseNightlyBuild } from './ci-proof.mjs'
 
 function fixture() {
   const context = { repo: { owner: 'owner', repo: 'repo' }, sha: 'merge', ref: 'refs/heads/main', eventName: 'push', runId: 2 }
@@ -72,9 +72,9 @@ function nightlyFixture() {
   return f
 }
 
-describe('unchanged nightly reuse', () => {
-  it('reuses only a full installed run with unchanged asset identities and bytes', async () => {
-    expect(await reuseNightly(nightlyFixture())).toBe(true)
+describe('unchanged nightly build reuse', () => {
+  it('reuses builds only from a full installed run with unchanged asset identities and bytes', async () => {
+    expect(await reuseNightlyBuild(nightlyFixture())).toBe(true)
   })
   it.each([
     ['manual dispatch', f => { f.context.eventName = 'workflow_dispatch' }],
@@ -90,7 +90,7 @@ describe('unchanged nightly reuse', () => {
   ])('executes the nightly for %s', async (_, change) => {
     const f = nightlyFixture()
     change(f)
-    expect(await reuseNightly(f)).toBe(false)
+    expect(await reuseNightlyBuild(f)).toBe(false)
   })
 })
 

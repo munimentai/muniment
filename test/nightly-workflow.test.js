@@ -366,9 +366,9 @@ describe('nightly failure reporting', () => {
   })
 })
 
-it('skips every installed lane when the scheduled nightly has matching proof', () => {
+it('runs every installed lane even when the scheduled nightly reuses builds', () => {
   for (const platform of ['linux', 'windows', 'macos']) {
     const condition = conditionFor(job(`${platform}-e2e`, platform === 'linux' ? 'windows-e2e' : platform === 'windows' ? 'macos-e2e' : 'verify-requested-e2e'))
-    expect(evaluateCondition(condition, { eventName: 'schedule', platform: '', reuse: 'true' })).toBe(false)
+    expect(evaluateCondition(condition, { eventName: 'schedule', platform: '', reuse: 'true', previous: { linux: 'success', windows: 'success' } })).toBe(true)
   }
 })
