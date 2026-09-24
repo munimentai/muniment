@@ -21,22 +21,24 @@ const job = (name, nextName) => workflow.slice(
   nextName ? workflow.indexOf(`  ${nextName}:`) : workflow.length,
 )
 const conditionFor = (jobText) => jobText.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
-const evaluateCondition = (condition, { eventName, platform, cancelled = false, prepare = 'success', previous = {} }) => Function(
+const evaluateCondition = (condition, { eventName, platform, cancelled = false, prepare = 'success', reuse = 'false', previous = {} }) => Function(
   `"use strict"; return (${condition
     .replace('cancelled()', JSON.stringify(cancelled))
     .replace('always()', 'true')
     .replaceAll('needs.prepare.result', JSON.stringify(prepare))
+    .replaceAll('needs.prepare.outputs.reuse', JSON.stringify(reuse))
     .replaceAll('needs.linux-e2e.result', JSON.stringify(previous.linux))
     .replaceAll('needs.windows-e2e.result', JSON.stringify(previous.windows))
     .replaceAll('github.event_name', JSON.stringify(eventName))
     .replaceAll('github.event.inputs.platform', JSON.stringify(platform))})`,
 )()
 const jobCondition = linuxE2e.match(/    if: >-\n((?:      .+\n)+)/)[1].trim().replace(/\n\s*/g, ' ')
-const conditionResult = ({ eventName, platform, cancelled = false, prepare = 'success' }) => {
+const conditionResult = ({ eventName, platform, cancelled = false, prepare = 'success', reuse = 'false' }) => {
   const expression = jobCondition
     .replace('cancelled()', JSON.stringify(cancelled))
     .replace('always()', 'true')
     .replaceAll('needs.prepare.result', JSON.stringify(prepare))
+    .replaceAll('needs.prepare.outputs.reuse', JSON.stringify(reuse))
     .replaceAll('github.event_name', JSON.stringify(eventName))
     .replaceAll('github.event.inputs.platform', JSON.stringify(platform))
   return Function(`"use strict"; return (${expression})`)()
@@ -115,10 +117,11 @@ describe('nightly Linux E2E workflow', () => {
     expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', prepare: 'failure' })).toBe(false)
   })
 
-  it('requires verified MinIO evidence for every platform without GitHub artifact storage', () => {
-    expect(workflow).not.toMatch(/actions\/(?:upload|download)-artifact|actions\/artifacts/)
+  it('stores platform diagnostics in MinIO and only the small reuse proof in GitHub', () => {
+    expect(job('proof')).toContain('name: nightly.yml-proof')
     for (const platform of ['linux', 'windows', 'macos']) {
       const lane = job(`${platform}-e2e`, platform === 'linux' ? 'windows-e2e' : platform === 'windows' ? 'macos-e2e' : 'verify-requested-e2e')
+      expect(lane).not.toMatch(/actions\/(?:upload|download)-artifact|actions\/artifacts/)
       const step = lane.slice(lane.indexOf('      - name: Publish diagnostics and JUnit to MinIO'), lane.indexOf('      - name: Preserve E2E result'))
       expect(step).toContain('if: always()')
       expect(step).not.toContain('continue-on-error')
@@ -147,7 +150,7 @@ describe('nightly Linux E2E workflow', () => {
 
   it('checks out the pinned E2E harness in every installed lane', () => {
     expect(workflow.match(/- name: Check out E2E harness/g)).toHaveLength(3)
-    expect(workflow.match(/ref: \$\{\{ needs\.prepare\.outputs\.source_sha \}\}/g)).toHaveLength(3)
+    expect(workflow.match(/ref: \$\{\{ needs\.prepare\.outputs\.source_sha \}\}/g)).toHaveLength(4)
   })
 
   it('uses the SSH key provided by the self-hosted runner for every E2E lane', () => {
@@ -361,4 +364,11 @@ describe('nightly failure reporting', () => {
     expect(workflow).not.toContain('github.rest.issues')
     expect(workflow).not.toContain('[nightly-e2e]')
   })
+})
+
+it('runs every installed lane even when the scheduled nightly reuses builds', () => {
+  for (const platform of ['linux', 'windows', 'macos']) {
+    const condition = conditionFor(job(`${platform}-e2e`, platform === 'linux' ? 'windows-e2e' : platform === 'windows' ? 'macos-e2e' : 'verify-requested-e2e'))
+    expect(evaluateCondition(condition, { eventName: 'schedule', platform: '', reuse: 'true', previous: { linux: 'success', windows: 'success' } })).toBe(true)
+  }
 })

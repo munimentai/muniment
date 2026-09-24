@@ -21,15 +21,16 @@ Test all four flag combinations and the default local startup path.
 
 ## Verification loop
 
-Run these commands in order from the repository root before every push:
+CI owns the full test suite, Rust formatting and lint checks, and UI copy checks.
+Use focused local checks to develop and debug the changed code. Do not run the
+full suite locally as a mandatory step before each push. Wait for the required
+CI checks and each applicable native platform check before merging.
 
-1. `cargo fmt --manifest-path src-tauri/core/Cargo.toml --check`
-2. `cargo clippy --manifest-path src-tauri/core/Cargo.toml --all-targets --locked -- -D warnings`
-3. `cargo test --manifest-path src-tauri/core/Cargo.toml --locked --features network-tests`
-4. `npm run lint:copy`, which reads every string in `src` and `src-tauri` as UI copy
-5. `scripts/check-steering.sh .`
+CI reuses a successful PR result on main only when the tested Git tree matches.
+Missing proof or a different tree runs the checks. Platform and feature variants
+keep separate coverage. The steering check remains the local file hygiene check.
 
-The format check fails CI when formatting would create any diff. For other Rust crates, use `src-tauri/Cargo.toml` and each changed package name.
+The format check fails CI when formatting would create any diff. For focused Rust checks, use `src-tauri/Cargo.toml` and each changed package name.
 
 ## Windows code
 

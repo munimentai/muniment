@@ -37,10 +37,12 @@ fetch_tool \
   "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/master/linuxdeploy-plugin-gstreamer.sh" \
   "$tauri_cache/linuxdeploy-plugin-gstreamer.sh"
 
-cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment-acp --release --locked
-cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment-runtime --package muniment-cli --release --locked
-# The reader sidecar is Go, static, and lands beside the Rust binaries.
-bash "$repo_root/.github/build-reader.sh" src-tauri/target/release/muniment-reader
+if [ "${MUNIMENT_SIDECARS_BUILT:-0}" != 1 ]; then
+  cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment-acp --release --locked
+  cargo build --manifest-path "$repo_root/src-tauri/Cargo.toml" --package muniment-runtime --package muniment-cli --release --locked
+  # The reader sidecar is Go, static, and lands beside the Rust binaries.
+  bash "$repo_root/.github/build-reader.sh" src-tauri/target/release/muniment-reader
+fi
 
 npm run tauri build -- --verbose --no-bundle "$@"
 node "$repo_root/scripts/stage-cef-linux.mjs"

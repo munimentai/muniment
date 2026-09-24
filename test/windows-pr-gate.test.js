@@ -23,7 +23,7 @@ describe('Windows-only PR test gate', () => {
     const windowsCommand = desktopCompile.match(/if \[ "\$PLATFORM" = "windows" \]; then\n\s+cmd='([^']+)'/)?.[1]
 
     expect(windowsCommand).toContain('npx vitest run --root . test/desktop-e2e-harness.test.js')
-    expect(desktopCompile).toContain("if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'")
+    expect(desktopCompile).toContain("if: needs.changes.outputs.desktop == 'true'")
     expect(desktopCompile).toContain('platform: [linux, windows, macos]')
   })
 

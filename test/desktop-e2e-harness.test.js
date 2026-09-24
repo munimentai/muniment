@@ -2152,7 +2152,7 @@ describe('Windows nightly workflow gate', () => {
   const evaluate = ({ eventName, platform, cancelled = false, prepare = 'success', linux = 'success' }) => Function(
     'always', 'cancelled', 'needs', 'github',
     `return ${condition.replaceAll('needs.linux-e2e', 'needs.linuxE2e')}`,
-  )(() => true, () => cancelled, { prepare: { result: prepare }, linuxE2e: { result: linux } }, { event_name: eventName, event: { inputs: { platform } } })
+  )(() => true, () => cancelled, { prepare: { result: prepare, outputs: { reuse: 'false' } }, linuxE2e: { result: linux } }, { event_name: eventName, event: { inputs: { platform } } })
 
   it.each([
     ['schedule', undefined],

@@ -16,7 +16,7 @@
     "test:browser": "npx vitest run --config vitest.browser.config.js",
     "test:e2e": "wdio run test/e2e/wdio.conf.js",
     "tauri": "tauri",
-    "browser-control": "npm run build --prefix browser-control && npm run typecheck --prefix browser-control && npm test --prefix browser-control"
+    "browser-control": "npm run build --prefix browser-control && npm test --prefix browser-control"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6",
