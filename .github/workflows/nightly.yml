@@ -79,7 +79,7 @@ jobs:
   build:
     if: needs.prepare.outputs.reuse != 'true'
     needs: prepare
-    runs-on: self-hosted
+    runs-on: muniment-release
     timeout-minutes: 90
     strategy:
       fail-fast: false
