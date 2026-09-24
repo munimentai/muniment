@@ -2,7 +2,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
-// This matches normalizePath in Pi v0.85.1 utils/paths.ts with its default options.
+// This matches normalizePath in Pi v0.87.1 utils/paths.ts with its default options.
 // Without an override the runtime hands Pi the `agent` directory under the one
 // state root, `MUNIMENT_STATE_DIR` or `~/.muniment`, so the default follows it.
 export function piAgentDirectory(configured = process.env.PI_CODING_AGENT_DIR, home = homedir(), windows = process.platform === 'win32', stateDirectory = process.env.MUNIMENT_STATE_DIR) {

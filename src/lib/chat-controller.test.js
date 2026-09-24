@@ -2627,3 +2627,119 @@ it('sends folder paths to local tools without ingesting directories as files', a
   })
   expect(ui.files()).toEqual([])
 })
+
+describe('text deltas', () => {
+  const whole = (text, extra = {}) => ({ runId: 'run-1', threadId: 'thread-1', phase: 'streaming', text, turnStarted: true, toolActivity: [], attachments: [], recalls: [], appliedDiffs: [], ...extra })
+  const delta = (textStart, text) => ({ runId: 'run-1', threadId: 'thread-1', phase: 'streaming', text, textStart })
+
+  function deepFreeze(value) {
+    if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+      Object.freeze(value)
+      for (const child of Object.values(value)) deepFreeze(child)
+    }
+    return value
+  }
+
+  async function liveRun() {
+    const context = setup(vi.fn(async () => undefined), { threadId: 'thread-1' })
+    await context.start()
+    const run = { id: 'run-1', phase: 'thinking', text: '', receipt: null, toolActivity: [] }
+    context.setMessages([{ role: 'user', text: 'Hi' }, { role: 'assistant', run }])
+    context.setActive(run)
+    return context
+  }
+
+  it('appends a delta to the text of the last whole state and keeps its other fields', async () => {
+    const context = await liveRun()
+    const tool = { effectId: 'effect-1', displayName: 'read', status: 'completed', textOffset: 0 }
+    context.event(whole('Hel', { toolActivity: [tool] }))
+
+    context.event(delta(3, 'lo'))
+    context.event(delta(5, ', wörld'))
+
+    expect(context.messages()[1].run).toMatchObject({ id: 'run-1', phase: 'streaming', stage: 'writing', text: 'Hello, wörld', turnStarted: true, toolActivity: [tool] })
+    expect(context.active()).toMatchObject({ id: 'run-1', text: 'Hello, wörld' })
+  })
+
+  it('drops a delta that skips text and applies the next whole state', async () => {
+    const context = await liveRun()
+    context.event(whole('Hel'))
+    const published = context.onMessages.mock.calls.length
+
+    context.event(delta(5, 'xx'))
+
+    expect(context.onMessages).toHaveBeenCalledTimes(published)
+    expect(context.messages()[1].run.text).toBe('Hel')
+
+    context.event(whole('Hello wo'))
+    context.event(delta(8, 'rld'))
+
+    expect(context.messages()[1].run.text).toBe('Hello world')
+  })
+
+  it('waits for a whole state before it extends a run restored from pages', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_open') return { entries: [{ runId: 'run-1', phase: 'streaming', text: 'Half an ans', prompt: 'Question', receipt: null, toolActivity: [] }], nextCursor: null }
+      return undefined
+    })
+    const context = setup(invoke)
+    await context.start()
+    await context.controller.openThread('thread-1')
+
+    context.event(delta(11, 'wer'))
+    expect(context.messages().at(-1).run.text).toBe('Half an ans')
+
+    context.event(whole('Half an answer'))
+    context.event(delta(14, ' here'))
+
+    expect(context.messages().at(-1).run.text).toBe('Half an answer here')
+  })
+
+  it('applies deltas that arrive while a submission waits for its run id', async () => {
+    const submit = deferred()
+    const invoke = vi.fn(async (command) => command === 'chat_submit' ? submit.promise : undefined)
+    const context = setup(invoke)
+    await context.start()
+
+    const sending = context.controller.send()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', expect.anything()))
+    context.event({ ...whole(''), phase: 'thinking' })
+    context.event(delta(0, 'Hi'))
+    context.event(delta(2, ' there'))
+    submit.resolve({ runId: 'run-1', attachments: [] })
+    await sending
+
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-1', phase: 'streaming', text: 'Hi there' })
+  })
+
+  it('publishes a new transcript and a new run for every event, never changing them in place', async () => {
+    const context = await liveRun()
+    deepFreeze(context.messages())
+    context.event(whole('Hel'))
+    const afterWhole = context.messages()
+    deepFreeze(afterWhole)
+
+    context.event(delta(3, 'lo'))
+    const afterDelta = context.messages()
+
+    expect(afterDelta).not.toBe(afterWhole)
+    expect(afterDelta[1]).not.toBe(afterWhole[1])
+    expect(afterDelta[1].run).not.toBe(afterWhole[1].run)
+    expect(afterDelta[0]).toBe(afterWhole[0])
+    expect(afterWhole[1].run.text).toBe('Hel')
+    expect(afterDelta[1].run.text).toBe('Hello')
+  })
+
+  it('finds a streamed run after the transcript changes its layout', async () => {
+    const context = await liveRun()
+    context.event(whole('One'))
+    context.setMessages([{ role: 'user', text: 'Queued' }, ...context.messages()])
+
+    context.event(delta(3, ' two'))
+
+    expect(context.messages()[2].run.text).toBe('One two')
+    const published = context.onMessages.mock.calls.length
+    context.event({ ...delta(0, 'x'), runId: 'run-other' })
+    expect(context.onMessages).toHaveBeenCalledTimes(published)
+  })
+})

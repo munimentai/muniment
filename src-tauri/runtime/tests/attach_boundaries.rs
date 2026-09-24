@@ -298,10 +298,11 @@ fn desktop_starts_runtime_in_layout(resources: &str, bin: &str, deb_alias: bool)
         let mut client = client.unwrap();
         let events = events.unwrap();
         assert_eq!(client.runtime_version(), env!("CARGO_PKG_VERSION"));
-        assert!(client.thread_summaries(20, None).unwrap()["summaries"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        let summaries = client.thread_summaries(20, None).unwrap();
+        assert!(
+            summaries["summaries"].as_array().unwrap().is_empty(),
+            "a new profile lists {summaries}"
+        );
         client.recheck_retention().unwrap();
         desktop_activation::activate_runtime(
             &filesystem,

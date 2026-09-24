@@ -90,7 +90,7 @@ canonicalized, verified as a regular file, and proven to remain beneath that
 root. Journal values are root-relative JSONL filenames, never arbitrary paths.
 
 After Pi accepts the prompt, the desktop reads `data.sessionFile` from the
-pinned 0.73.1 `get_state` response, validates it against the owned root, and
+pinned 0.87.1 `get_state` response, validates it against the owned root, and
 appends one `runtime.pi_session.bound` event containing the local run id and
 non-secret filename locator. Reducer replay rejects malformed, duplicate, or
 conflicting bindings. Pi JSONL and its contents never cross Tauri and never

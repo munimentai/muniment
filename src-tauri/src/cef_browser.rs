@@ -13,12 +13,23 @@ use tauri::{Emitter, Manager};
 static NEXT_ID: AtomicI32 = AtomicI32::new(1);
 
 type Reply = mpsc::Sender<Result<Value, String>>;
-#[derive(Default)]
 struct Control {
     pending: Mutex<HashMap<i32, Reply>>,
+    /// Agent control starts stopped and stays stopped until the main window
+    /// sends an explicit grant for the active view.
     stopped: Mutex<bool>,
     serial: Mutex<()>,
     active: Mutex<String>,
+}
+impl Default for Control {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::default(),
+            stopped: Mutex::new(true),
+            serial: Mutex::default(),
+            active: Mutex::default(),
+        }
+    }
 }
 #[derive(Deserialize, Serialize, Clone)]
 pub struct Request {
@@ -162,7 +173,9 @@ pub async fn browser_command(
         .await
         .map_err(err)?
 }
-#[cfg(unix)]
+/// Serves the prototype agent socket. Only builds with the `browser-agent`
+/// feature carry it, and it acts only after the main window grants control.
+#[cfg(all(unix, feature = "browser-agent"))]
 fn serve_agent(app: tauri::AppHandle, root: &std::path::Path) -> Result<(), String> {
     use std::{
         io::{BufRead, BufReader, Read, Write},
@@ -299,7 +312,7 @@ pub async fn browser_view(
             return Err("Unknown browser view.".into());
         }
         if *control.active.lock().unwrap() != label {
-            *control.stopped.lock().unwrap() = false;
+            *control.stopped.lock().unwrap() = true;
         }
         *control.active.lock().unwrap() = label.clone();
         cef_native::hide_all(&app)?;
@@ -432,13 +445,17 @@ pub fn setup(app: &mut tauri::App, root: &std::path::Path) -> Result<(), String>
         token,
     });
     app.manage(Arc::new(Control::default()));
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "browser-agent"))]
     serve_agent(app.handle().clone(), root)?;
     Ok(())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn agent_control_starts_stopped() {
+        assert!(*Control::default().stopped.lock().unwrap());
+    }
     #[test]
     fn navigation_rejects_privileged_schemes_and_credentials() {
         for url in [

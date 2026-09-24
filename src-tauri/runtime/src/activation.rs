@@ -26,48 +26,77 @@ pub enum RuntimeActivationExit {
     UpgradeRefresh,
 }
 
+/// How often a pending refresh reads runtime activity. No event announces
+/// the end of the last blocking activity, so only this wait polls.
+const QUIESCE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// The events that wake the activation coordinator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ActivationWake {
+    ManagerStop,
+    ListenerFinished,
+    RefreshDetected,
+}
+
+/// Forwards the manager's stop into the coordinator's wake channel. A closed
+/// stop channel is a stop.
+fn forward_manager_stop(stop: Receiver<()>, wake: Sender<ActivationWake>) {
+    match stop.try_recv() {
+        Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {
+            let _ = wake.send(ActivationWake::ManagerStop);
+        }
+        Err(mpsc::TryRecvError::Empty) => {
+            std::thread::spawn(move || {
+                let _ = stop.recv();
+                let _ = wake.send(ActivationWake::ManagerStop);
+            });
+        }
+    }
+}
+
 fn coordinate_activation(
-    stop: Receiver<()>,
-    listener_finished: Receiver<()>,
+    wake: Receiver<ActivationWake>,
     stopped: Arc<AtomicBool>,
     refresh_pending: Arc<AtomicBool>,
     activity: RuntimeActivityRegistry,
     commands: Sender<RetentionScheduleCommand>,
     listener_stop: Sender<()>,
 ) -> RuntimeActivationExit {
+    let finish = |exit| {
+        stopped.store(true, Ordering::Release);
+        let _ = commands.send(RetentionScheduleCommand::Stop);
+        let _ = listener_stop.send(());
+        exit
+    };
+    let stops = |event: Result<ActivationWake, mpsc::RecvTimeoutError>| {
+        matches!(
+            event,
+            Ok(ActivationWake::ManagerStop | ActivationWake::ListenerFinished)
+                | Err(mpsc::RecvTimeoutError::Disconnected)
+        )
+    };
     loop {
-        if !matches!(listener_finished.try_recv(), Err(mpsc::TryRecvError::Empty)) {
-            stopped.store(true, Ordering::Release);
-            let _ = commands.send(RetentionScheduleCommand::Stop);
-            let _ = listener_stop.send(());
-            return RuntimeActivationExit::ManagerStop;
-        }
-        match stop.try_recv() {
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {
-                stopped.store(true, Ordering::Release);
-                let _ = commands.send(RetentionScheduleCommand::Stop);
-                let _ = listener_stop.send(());
-                return RuntimeActivationExit::ManagerStop;
-            }
-            Err(mpsc::TryRecvError::Empty) => {}
+        let event = if refresh_pending.load(Ordering::Acquire) {
+            wake.recv_timeout(QUIESCE_POLL_INTERVAL)
+        } else {
+            wake.recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        };
+        if stops(event) {
+            return finish(RuntimeActivationExit::ManagerStop);
         }
         if refresh_pending.load(Ordering::Acquire) && evaluate_quiesce(activity.snapshot()).is_ok()
         {
-            if !matches!(stop.try_recv(), Err(mpsc::TryRecvError::Empty)) {
-                stopped.store(true, Ordering::Release);
-                let _ = commands.send(RetentionScheduleCommand::Stop);
-                let _ = listener_stop.send(());
-                return RuntimeActivationExit::ManagerStop;
+            // A manager stop sent before the quiesce can still be on its way
+            // through the forwarder. One more short wait lets it win.
+            if stops(wake.recv_timeout(QUIESCE_POLL_INTERVAL)) {
+                return finish(RuntimeActivationExit::ManagerStop);
             }
-            stopped.store(true, Ordering::Release);
-            let _ = commands.send(RetentionScheduleCommand::Stop);
-            let _ = listener_stop.send(());
-            return RuntimeActivationExit::UpgradeRefresh;
+            return finish(RuntimeActivationExit::UpgradeRefresh);
         }
         if stopped.load(Ordering::Acquire) {
             return RuntimeActivationExit::ManagerStop;
         }
-        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -236,7 +265,8 @@ fn run_runtime_activation_inner(
         .map_err(|_| RuntimeActivationError::Filesystem)?;
     let (command_tx, command_rx) = mpsc::channel();
     let (listener_stop_tx, listener_stop_rx) = mpsc::channel();
-    let (listener_finished_tx, listener_finished_rx) = mpsc::channel();
+    let (wake_tx, wake_rx) = mpsc::channel();
+    forward_manager_stop(stop, wake_tx.clone());
     let watch_stopped = Arc::new(AtomicBool::new(false));
     let refresh_pending = Arc::new(AtomicBool::new(false));
     let expected_desktop_executable = match &executable_config {
@@ -253,10 +283,14 @@ fn run_runtime_activation_inner(
             ExecutableConfig::Admission(_) => None,
         })
         .map(|watch| {
+            let refresh_wake = wake_tx.clone();
             watch.start(
                 state.drain_state(),
                 Arc::clone(&watch_stopped),
                 Arc::clone(&refresh_pending),
+                move || {
+                    let _ = refresh_wake.send(ActivationWake::RefreshDetected);
+                },
             )
         })
         .transpose()
@@ -267,8 +301,7 @@ fn run_runtime_activation_inner(
     let coordinator_activity = state.runtime_activity();
     let coordinator = std::thread::spawn(move || {
         coordinate_activation(
-            stop,
-            listener_finished_rx,
+            wake_rx,
             coordinator_stopped,
             coordinator_pending,
             coordinator_activity,
@@ -298,7 +331,7 @@ fn run_runtime_activation_inner(
             let transport = match AttachTransport::bind(&filesystem) {
                 Ok(transport) => transport,
                 Err(_) => {
-                    let _ = listener_finished_tx.send(());
+                    let _ = wake_tx.send(ActivationWake::ListenerFinished);
                     watch_stopped.store(true, Ordering::Release);
                     if let Some(watch_thread) = watch_thread {
                         watch_thread.join().expect("upgrade watch does not panic");
@@ -355,7 +388,7 @@ fn run_runtime_activation_inner(
         }
         Err(_) => Err(RuntimeActivationError::InstanceLock),
     };
-    let _ = listener_finished_tx.send(());
+    let _ = wake_tx.send(ActivationWake::ListenerFinished);
     let _ = command_tx.send(RetentionScheduleCommand::Stop);
     if let Some(retention_thread) = retention_thread {
         retention_thread
@@ -385,25 +418,77 @@ mod tests {
         let stopped = Arc::new(AtomicBool::new(false));
         let pending = Arc::new(AtomicBool::new(true));
         let (stop_tx, stop_rx) = mpsc::channel();
-        let (_finished_tx, finished_rx) = mpsc::channel();
+        let (wake_tx, wake_rx) = mpsc::channel();
         let (command_tx, _command_rx) = mpsc::channel();
         let (listener_tx, _listener_rx) = mpsc::channel();
 
         drain.set();
+        forward_manager_stop(stop_rx, wake_tx.clone());
+        let coordinator = std::thread::spawn(move || {
+            coordinate_activation(wake_rx, stopped, pending, activity, command_tx, listener_tx)
+        });
+        stop_tx.send(()).unwrap();
+        drop(blocker);
+
+        assert_eq!(
+            coordinator.join().unwrap(),
+            RuntimeActivationExit::ManagerStop
+        );
+        drop(wake_tx);
+    }
+
+    #[test]
+    fn an_idle_coordinator_blocks_until_an_event_arrives() {
+        let activity = RuntimeActivityRegistry::new();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let pending = Arc::new(AtomicBool::new(false));
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let (command_tx, command_rx) = mpsc::channel();
+        let (listener_tx, listener_rx) = mpsc::channel();
+        let coordinator_pending = Arc::clone(&pending);
         let coordinator = std::thread::spawn(move || {
             coordinate_activation(
-                stop_rx,
-                finished_rx,
+                wake_rx,
                 stopped,
-                pending,
+                coordinator_pending,
                 activity,
                 command_tx,
                 listener_tx,
             )
         });
-        stop_tx.send(()).unwrap();
-        drop(blocker);
 
+        // An idle coordinator sends nothing until an event wakes it.
+        assert!(listener_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        pending.store(true, Ordering::Release);
+        wake_tx.send(ActivationWake::RefreshDetected).unwrap();
+
+        assert_eq!(
+            coordinator.join().unwrap(),
+            RuntimeActivationExit::UpgradeRefresh
+        );
+        assert!(listener_rx.try_recv().is_ok());
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(RetentionScheduleCommand::Stop)
+        ));
+    }
+
+    #[test]
+    fn a_finished_listener_ends_an_idle_coordinator() {
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let (command_tx, _command_rx) = mpsc::channel();
+        let (listener_tx, _listener_rx) = mpsc::channel();
+        let coordinator = std::thread::spawn(move || {
+            coordinate_activation(
+                wake_rx,
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+                RuntimeActivityRegistry::new(),
+                command_tx,
+                listener_tx,
+            )
+        });
+        wake_tx.send(ActivationWake::ListenerFinished).unwrap();
         assert_eq!(
             coordinator.join().unwrap(),
             RuntimeActivationExit::ManagerStop

@@ -112,9 +112,11 @@ describe('code diff view', () => {
   it('makes overflowing diff panels keyboard accessible', async () => {
     let scrollWidth = 500
     let resize
+    let observers = 0
     class ResizeObserver {
       constructor(callback) {
         resize = callback
+        observers += 1
       }
       observe() {}
       disconnect() {}
@@ -125,10 +127,12 @@ describe('code diff view', () => {
     })
     globalThis.ResizeObserver = ResizeObserver
 
-    const { container } = render(CodeDiff, {
+    const { container, rerender } = render(CodeDiff, {
       props: { codeDiff: value([textFile('src/file.js')]) },
     })
     const panels = [...container.querySelectorAll('.d2h-file-side-diff')]
+    await rerender({ codeDiff: value([textFile('src/file.js')]) })
+    expect(observers).toBe(1)
 
     expect(panels).toHaveLength(2)
     await waitFor(() => expect(panels[0]).toHaveAttribute('tabindex', '0'))
@@ -139,7 +143,9 @@ describe('code diff view', () => {
 
     scrollWidth = 400
     resize()
+    resize()
 
+    await waitFor(() => expect(panels[0]).not.toHaveAttribute('tabindex'))
     for (const panel of panels) {
       expect(panel).not.toHaveAttribute('tabindex')
       expect(panel).not.toHaveAttribute('role')

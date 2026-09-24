@@ -118,14 +118,17 @@ describe('Windows runtime bundle paths', () => {
     expect(windowsInstallerTest).toContain('throw "Machine MSI runtime not found at $machineRuntime"')
   })
 
-  it('builds and signs the runtime before the first installer pass', () => {
+  // Signing waits for the signing phase, after the unsigned upgrade-base
+  // fixture, and precedes every installer pass that ships.
+  it('builds the runtime and signs it before the first signed installer pass', () => {
     const runtimeBuild = windowsBuild.indexOf('"--package", "muniment-runtime"')
     const runtimeSigning = windowsBuild.indexOf('signFile(runtime)')
-    const installerBuild = windowsBuild.indexOf('run("build"')
+    const signedInstaller = windowsBuild.indexOf('run("bundle", "per-user installer"')
 
     expect(runtimeBuild).toBeGreaterThan(-1)
     expect(runtimeSigning).toBeGreaterThan(runtimeBuild)
-    expect(installerBuild).toBeGreaterThan(runtimeSigning)
+    expect(signedInstaller).toBeGreaterThan(runtimeSigning)
+    expect(windowsBuild.indexOf('run("bundle", "machine MSI"')).toBeGreaterThan(runtimeSigning)
   })
 })
 

@@ -1,14 +1,30 @@
 import { readdir, rename } from "node:fs/promises";
-import { existsSync, readFileSync, copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, copyFileSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { takeSigningEnvironment } from "./lib/signing-env.mjs";
 import {
+  DOTNET_SDK,
   resolveSigningConfiguration,
   signArguments,
   signToolInstallArgs,
   tauriSignCommand,
 } from "./lib/windows-signing.mjs";
+
+// Azure Artifact Signing credentials arrive as the one signing line the
+// desktop-ci preamble skips (see lib/signing-env.mjs). Take it out of the file
+// before anything else runs, and hold it in this process alone. Dependency
+// installation, compilation and the unsigned bundling pass run with an
+// environment that carries no signing secret. Windows lets a process of the
+// same user read another's memory, so this keeps the secret out of the
+// environment and the disk, not out of reach of a hostile build step. When the
+// line is absent the build proceeds UNSIGNED.
+const signingEnvironment = takeSigningEnvironment();
+const signingConfig = resolveSigningConfiguration(signingEnvironment);
+const signing = signingConfig !== null;
+// Every child starts with this environment. The signing phase below widens it.
+let phaseEnvironment = { ...process.env };
 
 // Installer jobs use fresh VMs, independently of the compile preflight.
 if (process.platform === "win32") {
@@ -21,12 +37,21 @@ if (process.platform === "win32") {
     process.exit(tools.status || 1);
   }
   process.env.PATH = tools.stdout.trim();
+  phaseEnvironment.PATH = process.env.PATH;
+}
+
+// Release VMs install dependencies here, after the signing line is gone, and
+// without package install scripts: the build needs none of them.
+if (process.argv.includes("--install-dependencies")) {
+  const install = spawnSync("npm ci --ignore-scripts --no-audit --no-fund", { stdio: "inherit", env: phaseEnvironment, shell: true });
+  if (install.error) throw install.error;
+  if (install.status !== 0) process.exit(install.status ?? 1);
 }
 
 const run = (command, pass, ...args) => {
   const cli = join("node_modules", "@tauri-apps", "cli", "tauri.js");
   console.log(`Starting the ${pass} bundling pass.`);
-  const result = spawnSync(process.execPath, [cli, command, ...args], { stdio: "inherit" });
+  const result = spawnSync(process.execPath, [cli, command, ...args], { stdio: "inherit", env: phaseEnvironment });
   const status = result.status ?? 1;
   if (result.error) {
     console.error(`The ${pass} bundling pass failed with exit status ${status}.`);
@@ -45,81 +70,47 @@ const soleMsi = async () => {
   return join(msiDirectory, matches[0]);
 };
 
-// Azure Artifact Signing credentials arrive as a file the desktop-ci driver
-// writes into the VM over the SSH data channel (never on argv). Load them so
-// tauri's signCommand and the explicit MSI signing below can authenticate. When
-// the file or any variable is absent the build proceeds UNSIGNED — the nightly
-// keeps shipping and signing turns on the moment the six repo secrets exist.
-const credFile = join(tmpdir(), "dci_env");
-if (existsSync(credFile)) {
-  for (const line of readFileSync(credFile, "utf8").split(/\r?\n/)) {
-    const eq = line.indexOf("=");
-    if (eq > 0) process.env[line.slice(0, eq).trim()] = line.slice(eq + 1);
-  }
-}
-// Signing config comes from the unit-tested windows-signing module: null when no
-// AZURE_* creds are present (unsigned build), or a resolved config (throws if the
-// set is partial). Microsoft's `sign` dotnet tool signs on its own (no signtool)
-// and authenticates the service principal via Azure.Identity DefaultAzureCredential
-// reading AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET from the env (no az login).
-const signingConfig = resolveSigningConfiguration(process.env);
-const signing = signingConfig !== null;
-
 let signArgs = [];
 if (signing) {
-  // Ensure the signing toolchain (.NET SDK + `sign`). Self-provisioning keeps the
-  // build working even without the baked template; on template 9950 (which bakes
-  // .NET + `sign`) these installs are fast no-ops.
-  const onPath = (exe) => spawnSync("where", [exe], { encoding: "utf8" }).status === 0;
+  // Provision the signing toolchain (.NET SDK + `sign`) now, before any secret
+  // reaches a child, so the signing phase makes no download. A template that
+  // bakes both skips these installs.
+  const onPath = (exe) => spawnSync("where", [exe], { encoding: "utf8", env: phaseEnvironment }).status === 0;
   if (!onPath("dotnet")) {
-    console.log("installing .NET SDK (build-time; template 9950 bakes it to skip)...");
+    console.log(`installing .NET SDK ${DOTNET_SDK.version} (build-time; a baked template skips this)...`);
     const dotnetDir = join(tmpdir(), "dotnet");
+    const archive = join(tmpdir(), `dotnet-sdk-${DOTNET_SDK.version}-win-x64.zip`);
     const r = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-      `Invoke-WebRequest -UseBasicParsing https://dot.net/v1/dotnet-install.ps1 -OutFile $env:TEMP\\di.ps1; `
-      + `& $env:TEMP\\di.ps1 -Channel 8.0 -InstallDir '${dotnetDir}' -NoPath`], { stdio: "inherit" });
+      `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; `
+      + `Invoke-WebRequest -UseBasicParsing -Uri '${DOTNET_SDK.url}' -OutFile '${archive}'; `
+      + `if ((Get-FileHash '${archive}' -Algorithm SHA512).Hash.ToLowerInvariant() -ne '${DOTNET_SDK.sha512}') { throw '.NET SDK checksum does not match' }; `
+      + `if (Test-Path '${dotnetDir}') { Remove-Item -Recurse -Force '${dotnetDir}' }; `
+      + `Add-Type -AssemblyName System.IO.Compression.FileSystem; `
+      + `[System.IO.Compression.ZipFile]::ExtractToDirectory('${archive}', '${dotnetDir}'); Remove-Item -Force '${archive}'`],
+      { stdio: "inherit", env: phaseEnvironment });
     if (r.status !== 0) process.exit(r.status ?? 1);
-    process.env.DOTNET_ROOT = dotnetDir;
-    process.env.PATH = `${dotnetDir};${process.env.PATH}`;
+    phaseEnvironment.DOTNET_ROOT = dotnetDir;
+    phaseEnvironment.PATH = `${dotnetDir};${phaseEnvironment.PATH}`;
   }
   if (!onPath("sign")) {
     console.log("installing dotnet `sign` tool (build-time)...");
     const signDir = join(tmpdir(), "signtools");
-    const r = spawnSync("dotnet", signToolInstallArgs(signDir), { stdio: "inherit" });
+    const r = spawnSync("dotnet", signToolInstallArgs(signDir), { stdio: "inherit", env: phaseEnvironment });
     if (r.status !== 0) process.exit(r.status ?? 1);
-    process.env.PATH = `${signDir};${process.env.PATH}`;
+    phaseEnvironment.PATH = `${signDir};${phaseEnvironment.PATH}`;
   }
 
   // Tauri signs the app .exe (before packaging) and the NSIS installer with this
   // custom command; %1 is each file path.
   signArgs = ["--config", JSON.stringify({ bundle: { windows: { signCommand: tauriSignCommand(signingConfig) } } })];
   console.log("windows signing ENABLED (Azure Artifact Signing via dotnet `sign`)");
-
-  // Preflight: confirm the toolchain and do ONE real test-sign on a throwaway
-  // copy with output inherited, so the real `sign` error surfaces (tauri's
-  // signCommand only reports "failed to run …") and we fail before the ~5-min
-  // app compile.
-  for (const [cmd, cmdArgs] of [["where", ["dotnet"]], ["dotnet", ["--version"]],
-      ["where", ["sign"]]]) {
-    const r = spawnSync(cmd, cmdArgs, { encoding: "utf8" });
-    console.log(`preflight: ${cmd} ${cmdArgs.join(" ")} -> rc=${r.status} `
-      + `${((r.stdout || "") + (r.stderr || "")).replace(/\s+/g, " ").trim()}`);
-  }
-  const probeTarget = join(tmpdir(), "signprobe.exe");
-  copyFileSync(process.execPath, probeTarget);
-  console.log("preflight: test-signing a throwaway copy to surface the real error...");
-  const probe = spawnSync("sign", signArguments(signingConfig, probeTarget), { stdio: "inherit" });
-  if (probe.status !== 0) {
-    console.error(`signing preflight FAILED (sign rc=${probe.status}) — see output above`);
-    process.exit(probe.status ?? 1);
-  }
-  console.log("signing preflight OK");
 } else {
   console.log("windows signing SKIPPED: Azure credentials absent (unsigned build)");
 }
 
 const signFile = (file) => {
   if (!signing) return;
-  const result = spawnSync("sign", signArguments(signingConfig, file), { stdio: "inherit" });
+  const result = spawnSync("sign", signArguments(signingConfig, file), { stdio: "inherit", env: phaseEnvironment });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
@@ -130,18 +121,16 @@ const runtime = join("src-tauri", "target", "release", "muniment-runtime.exe");
 const runtimeBuild = spawnSync("cargo", [
   "build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-runtime",
   "--release", "--locked",
-], { stdio: "inherit" });
+], { stdio: "inherit", env: phaseEnvironment });
 if (runtimeBuild.error) throw runtimeBuild.error;
 if (runtimeBuild.status !== 0) process.exit(runtimeBuild.status ?? 1);
-signFile(runtime);
 // The reader sidecar is Go with CGO off, a resource beside the runtime.
 const reader = join("src-tauri", "target", "release", "muniment-reader.exe");
 const readerBuild = spawnSync("powershell.exe", [
   "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(".github", "build-reader.ps1"), reader,
-], { stdio: "inherit", env: { ...process.env, GOOS: "windows", GOARCH: "amd64" } });
+], { stdio: "inherit", env: { ...phaseEnvironment, GOOS: "windows", GOARCH: "amd64" } });
 if (readerBuild.error) throw readerBuild.error;
 if (readerBuild.status !== 0) process.exit(readerBuild.status ?? 1);
-signFile(reader);
 
 // Tauri signs bundled DLL resources in place. Keep the pinned, hash-checked
 // inputs so later bundling passes validate and package the same upstream bits.
@@ -160,31 +149,60 @@ run("build", "desktop application", "--verbose", "--no-bundle");
 const libraryBuild = spawnSync("cargo", [
   "build", "--manifest-path", "src-tauri/Cargo.toml", "--package", "muniment-desktop",
   "--release", "--locked", "--lib", "--features", "tauri/custom-protocol",
-], { stdio: "inherit" });
+], { stdio: "inherit", env: phaseEnvironment });
 if (libraryBuild.error) throw libraryBuild.error;
 if (libraryBuild.status !== 0) process.exit(libraryBuild.status ?? 1);
 const cefConfig = join(tmpdir(), `muniment-cef-bundle-${process.pid}.json`);
 const cefPackaging = spawnSync(process.execPath, [
   "scripts/package-cef-windows.mjs", "src-tauri/target/release/cef-app", "--installer-config", cefConfig,
-], { stdio: "inherit" });
+], { stdio: "inherit", env: phaseEnvironment });
 if (cefPackaging.error) throw cefPackaging.error;
 if (cefPackaging.status !== 0) process.exit(cefPackaging.status ?? 1);
 
-// Preserve the normal MSI while the second bundling pass writes the fleet variant.
+// Keep a distinct build for the Windows VM's same-version major-upgrade verification.
+// The WiX template enables AllowSameVersionUpgrades; the current build remains the
+// release artifact and is the only machine MSI uploaded.
+const upgradeBaseMsi = join(dirname(msiDirectory), "machine-upgrade-base.msi");
+// The upgrade-base is a throwaway fixture for the in-place-upgrade test —
+// unsigned, so it runs before the signing phase and fetches the WiX toolset
+// there when the template cache lacks it.
+run("bundle", "machine upgrade-base MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", "--config", cefConfig);
+await rename(await soleMsi(), upgradeBaseMsi);
+// Tauri fetches NSIS on its first NSIS bundle. When the tool cache lacks it, an
+// unsigned NSIS pass fetches it here; the signed pass below overwrites the file.
+const nsisTool = join(process.env.LOCALAPPDATA ?? tmpdir(), "tauri", "NSIS", "makensis.exe");
+if (signing && !existsSync(nsisTool)) {
+  run("bundle", "NSIS toolset", "--verbose", "--bundles", "nsis", "--config", cefConfig);
+  restoreRuntime();
+}
+
+// Signing phase: only the bundler, restores and the `sign` tool run from here,
+// with the Azure credentials in their environment.
+if (signing) {
+  phaseEnvironment = { ...phaseEnvironment, ...signingEnvironment };
+  // Do ONE real test-sign on a throwaway copy with output inherited, so the
+  // real `sign` error surfaces (tauri's signCommand only reports "failed to
+  // run …") before the bundling passes.
+  const probeTarget = join(tmpdir(), "signprobe.exe");
+  copyFileSync(process.execPath, probeTarget);
+  console.log("preflight: test-signing a throwaway copy to surface the real error...");
+  const probe = spawnSync("sign", signArguments(signingConfig, probeTarget), { stdio: "inherit", env: phaseEnvironment });
+  if (probe.status !== 0) {
+    console.error(`signing preflight FAILED (sign rc=${probe.status}) — see output above`);
+    process.exit(probe.status ?? 1);
+  }
+  console.log("signing preflight OK");
+}
+signFile(runtime);
+signFile(reader);
+
+// Preserve the normal MSI while the machine bundling pass writes the fleet variant.
 // signArgs signs the bootstrap, bundled DLL resources and NSIS installer.
 run("bundle", "per-user installer", "--verbose", "--config", cefConfig, ...signArgs);
 restoreRuntime();
 const userMsi = await soleMsi();
 const savedUserMsi = join(dirname(userMsi), `.${basename(userMsi)}.per-user`);
 await rename(userMsi, savedUserMsi);
-
-// Keep a distinct build for the Windows VM's same-version major-upgrade verification.
-// The WiX template enables AllowSameVersionUpgrades; the current build remains the
-// release artifact and is the only machine MSI uploaded.
-const upgradeBaseMsi = join(dirname(msiDirectory), "machine-upgrade-base.msi");
-// The upgrade-base is a throwaway fixture for the in-place-upgrade test — unsigned.
-run("bundle", "machine upgrade-base MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", "--config", cefConfig);
-await rename(await soleMsi(), upgradeBaseMsi);
 run("bundle", "machine MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", "--config", cefConfig, ...signArgs);
 restoreRuntime();
 rmSync(pristineRuntime, { recursive: true });

@@ -457,9 +457,9 @@ ahead of production, and only passing nightly evidence on Linux, macOS and
 Windows qualifies it for promotion. Neither track follows npm `latest`, a
 semver range, or a mutable release manifest. The pin moves to the version the
 factory runs and keeps one verified predecessor for rollback. The production
-executable pin is 0.73.1. The candidate is 0.85.1 with 0.73.1 as its verified
-predecessor. The nightly and the local build select the candidate with the
-build-time switch `MUNIMENT_PI_CANDIDATE=1`.
+executable pin and the candidate are both 0.87.1, with 0.85.1 as the verified
+predecessor. Each run passes `--approve`, so Pi loads a project's `.pi` files.
+The nightly and local builds select the candidate with `MUNIMENT_PI_CANDIDATE=1`.
 
 The harness installs only packages listed on [pi.dev/packages](https://pi.dev/packages)
 and executables from the official [earendil-works/pi repository](https://github.com/earendil-works/pi)

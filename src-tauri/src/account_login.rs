@@ -665,43 +665,42 @@ pub(crate) fn local_mode_account_login_cancel(app: AppHandle) {
     cancel(&app)
 }
 
-/// Opens a provider's sign-in page in the default browser.
-#[tauri::command]
-pub(crate) fn local_mode_open_url(url: String) -> Result<(), String> {
-    let parsed = url::Url::parse(&url).map_err(|_| "The sign-in link is invalid.".to_string())?;
+fn sign_in_url(url: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(url).map_err(|_| "The sign-in link is invalid.".to_string())?;
     if parsed.scheme() != "https" || parsed.host().is_none() {
         return Err("The sign-in link is invalid.".into());
     }
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(parsed.as_str());
-        command
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", parsed.as_str()]);
-        command
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(parsed.as_str());
-        command
-    };
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
+    Ok(parsed)
+}
+
+/// Opens a provider's sign-in page in the default browser. The opener hands
+/// the URL to the OS as one argument, so no shell reads its query.
+#[tauri::command]
+pub(crate) fn local_mode_open_url(app: AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let parsed = sign_in_url(&url)?;
+    app.opener()
+        .open_url(parsed.as_str(), None::<String>)
         .map_err(|_| "The browser could not open. Copy the link instead.".into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sign_in_links_accept_only_https_with_a_host() {
+        let url = "https://example.com/login?a=1&b=2|calc";
+        assert_eq!(sign_in_url(url).unwrap().as_str(), url);
+        for bad in [
+            "http://example.com",
+            "file:///etc/passwd",
+            "https://",
+            "calc.exe",
+        ] {
+            assert!(sign_in_url(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn notify_frames_carry_the_login_stage_and_prompts_carry_their_id() {

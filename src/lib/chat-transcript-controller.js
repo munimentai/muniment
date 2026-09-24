@@ -1,6 +1,24 @@
 import { COPY_CONFIRMATION_MS, copyResult } from './message-actions.js'
 import { scrollFollowState } from './scroll-follow.js'
 
+// Each transcript entry's key. A user message keys on its run id or its
+// submission, and a reply on its submission or its run id, so a pending reply
+// keeps its key when the runtime names the run. A repeated key gains its position.
+export function transcriptKeys(messages = []) {
+  const keys = new Map()
+  const seen = new Set()
+  messages.forEach((message, index) => {
+    const run = message.run
+    let key = message.role === 'user'
+      ? `user:${message.id ?? (message.submissionId != null ? `s${message.submissionId}` : `i${index}`)}`
+      : `run:${run?.submissionId != null ? `s${run.submissionId}` : run?.id ?? `i${index}`}`
+    if (seen.has(key)) key = `${key}:${index}`
+    seen.add(key)
+    keys.set(message, key)
+  })
+  return keys
+}
+
 export function createChatTranscriptController({
   tick,
   clipboard,
@@ -14,8 +32,10 @@ export function createChatTranscriptController({
   onExpandedReceipts,
   readParallelTools,
   onParallelTools,
+  frame = (callback) => typeof requestAnimationFrame === 'function' ? requestAnimationFrame(callback) : setTimeout(callback, 16),
 }) {
   let lastScrollTop = 0
+  let following = null
   let copyEpoch = 0
   let copyTimer
 
@@ -29,15 +49,21 @@ export function createChatTranscriptController({
     onContentBelow(false)
   }
 
+  // Streamed text calls this for every token. The calls in one frame share one
+  // scroll, so the thread lays out once per frame and not once per token.
   function followNewContent() {
     if (!readPinned()) return
-    tick().then(() => {
+    following ??= tick().then(() => new Promise((resolve) => frame(() => {
+      following = null
       const thread = readThread()
-      if (!readPinned() || !thread) return
-      thread.scrollTo({ top: thread.scrollHeight, behavior: 'auto' })
-      lastScrollTop = thread.scrollHeight - thread.clientHeight
-      onContentBelow(false)
-    })
+      if (readPinned() && thread && !readDestroyed()) {
+        thread.scrollTo({ top: thread.scrollHeight, behavior: 'auto' })
+        lastScrollTop = thread.scrollHeight - thread.clientHeight
+        onContentBelow(false)
+      }
+      resolve()
+    })))
+    return following
   }
 
   function handleScroll() {

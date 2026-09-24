@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createChatTranscriptController } from './chat-transcript-controller.js'
+import { createChatTranscriptController, transcriptKeys } from './chat-transcript-controller.js'
 import { COPY_CONFIRMATION_MS } from './message-actions.js'
 
 function deferred() {
@@ -44,6 +44,7 @@ function setup(overrides = {}) {
     onExpandedReceipts,
     readParallelTools: () => parallelTools,
     onParallelTools,
+    ...(overrides.frame ? { frame: overrides.frame } : {}),
   })
   return {
     controller,
@@ -190,6 +191,45 @@ describe('chat transcript controller', () => {
     context.setPinned(false)
     await context.controller.followNewContent()
     expect(context.thread.scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('scrolls once per frame however many updates arrive in it', async () => {
+    const frames = []
+    const context = setup({ frame: (callback) => frames.push(callback) })
+    const first = context.controller.followNewContent()
+    const second = context.controller.followNewContent()
+    expect(second).toBe(first)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(context.controller.followNewContent()).toBe(first)
+    expect(frames).toHaveLength(1)
+    expect(context.thread.scrollTo).not.toHaveBeenCalled()
+
+    frames[0]()
+    await first
+    expect(context.thread.scrollTo).toHaveBeenCalledOnce()
+
+    const next = context.controller.followNewContent()
+    expect(next).not.toBe(first)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(frames).toHaveLength(2)
+  })
+
+  it('keys each transcript entry once and keeps a reply key when its run is named', () => {
+    const user = { role: 'user', submissionId: 1, text: 'Hi' }
+    const pending = { role: 'assistant', run: { id: 'pending', submissionId: 1 } }
+    const named = { role: 'assistant', run: { id: 'run-1', submissionId: 1 } }
+    const history = [{ role: 'user', id: 'run-0' }, { role: 'assistant', run: { id: 'run-0' } }]
+    const queued = [{ role: 'user', text: 'one' }, { role: 'user', text: 'two' }]
+
+    expect(transcriptKeys([user, pending]).get(pending)).toBe(transcriptKeys([user, named]).get(named))
+    const repeated = { role: 'assistant', run: { id: 'run-0' } }
+    const keys = transcriptKeys([...history, user, named, ...queued, repeated])
+    expect(keys.size).toBe(7)
+    expect(new Set(keys.values()).size).toBe(7)
+    expect(keys.get(history[0])).not.toBe(keys.get(history[1]))
+    expect(keys.get(queued[0])).not.toBe(keys.get(queued[1]))
   })
 
   it('scrolls to the latest content with the user motion preference', () => {

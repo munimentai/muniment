@@ -39,10 +39,13 @@
   import LucideIcon from './lib/LucideIcon.svelte'
   import RowControl from './lib/RowControl.svelte'
   import AssistantMarkdown from './lib/AssistantMarkdown.svelte'
-  import FilePanel from './files/FilePanel.svelte'
+  // The file panel and the diff view pull highlight.js and diff2html, so each loads on first use.
+  let filePanelModule
+  const loadFilePanel = () => filePanelModule ??= import('./files/FilePanel.svelte')
+  let codeDiffModule
+  const loadCodeDiff = () => codeDiffModule ??= import('./lib/CodeDiff.svelte')
   import FileChanges from './files/FileChanges.svelte'
-  import { changedFiles, fileName } from './files/file-changes.js'
-  import CodeDiff from './lib/CodeDiff.svelte'
+  import { createChangedFiles, fileName } from './files/file-changes.js'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
   import { commitType, readStoredType, stepType, typeSizeShortcutStep } from './lib/type-state.js'
@@ -60,7 +63,7 @@
   import { createDictationController } from './lib/dictation-controller.js'
   import { ariaKeyShortcut, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { createEntitlementToast } from './lib/entitlement-toast.js'
-  import { createChatTranscriptController } from './lib/chat-transcript-controller.js'
+  import { createChatTranscriptController, transcriptKeys } from './lib/chat-transcript-controller.js'
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { firstRunError } from './lib/onboarding-diagnostics.js'
@@ -428,7 +431,9 @@
   let draft = $state('')
   let selectedFiles = $state([])
   let submitError = $state('')
-  let messages = $state([])
+  // Every writer replaces the array, and a changed message or run is a new object.
+  let messages = $state.raw([])
+  const messageKeys = $derived(transcriptKeys(messages))
   let active = $state(null)
   // The transcript is not a live region. Only the run the user is waiting on is
   // announced, and only when its phase changes. Restored history announces the
@@ -532,7 +537,8 @@
   let artifactRailOpen = $derived(railOccupant === 'artifacts')
   let viewedFile = $state(null)
   let filePanelOpen = $derived(railOccupant === 'files')
-  const changed = $derived(changedFiles(messages))
+  const readChangedFiles = createChangedFiles()
+  const changed = $derived(readChangedFiles(messages))
   $effect(() => {
     const files = changed.filter(file => !file.deleted && /\.html?$/i.test(file.path))
     const threadId = currentThreadId
@@ -1656,9 +1662,12 @@
     })
   }
 
+  // A hidden window skips the poll and refreshes once when it shows again.
   onMount(() => {
-    const agentTimer = setInterval(() => { if (auth.name === 'local' || auth.name === 'signed-in') { void refreshAgents(); void refreshCreations() } }, 15000)
-    return () => clearInterval(agentTimer)
+    const refresh = () => { if (!document.hidden && (auth.name === 'local' || auth.name === 'signed-in')) { void refreshAgents(); void refreshCreations() } }
+    const agentTimer = setInterval(refresh, 15000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => { clearInterval(agentTimer); document.removeEventListener('visibilitychange', refresh) }
   })
 
   onMount(() => {
@@ -2215,7 +2224,7 @@
             <section class="creation-goal" aria-label="Creation goal"><strong>{currentCreation.kind === 'agent' ? 'Agent' : 'Artifact'}</strong><p>Goal: {currentCreation.goal}</p><p>Output: {currentCreation.output}</p>{#if pendingCreation}<button type="button" onclick={cancelCreation}>Cancel creation</button>{/if}</section>
             {#if !messages.length}<div class="creation-suggestions" aria-label="Creation suggestions">{#each creationOptions[currentCreation.kind] as option}<button onclick={()=>useCreationSuggestion(option)}>{option.name}</button>{/each}</div>{/if}
           {/if}
-          {#each messages as message}
+          {#each messages as message (messageKeys.get(message))}
             {#if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
               <div class="user-turn">
@@ -2237,6 +2246,7 @@
                 {#if copyFailure(copy, userCopyId, modifierLabel)}<p class="copy-failure">{copyFailure(copy, userCopyId, modifierLabel)}</p>{/if}
               </div>
             {:else}
+            {@const parts = responseParts(message.run)}
             <div class="response">
               {#if message.run.promptStorageNotice}
                 <details class="prompt-storage-notice">
@@ -2247,18 +2257,18 @@
               {#if message.run.phase === 'acquiring-pi'}
                 <p class="thinking">{runAnnouncement(message.run)}</p>
               {/if}
-              {#each responseParts(message.run) as part, index}
+              {#each parts as part, index}
                 {#if part.type === 'actions'}
                   <ActionFeedback onopenfile={openFile} activities={part.activities} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
                 {:else if message.run.phase === 'streaming'}
-                  <div class="streaming"><AssistantMarkdown {tauri} onopenlink={openChatLink} text={part.text} caret={index === responseParts(message.run).length - 1} /></div>
+                  <div class="streaming"><AssistantMarkdown {tauri} onopenlink={openChatLink} text={part.text} caret={index === parts.length - 1} /></div>
                 {:else}<AssistantMarkdown {tauri} onopenlink={openChatLink} text={part.text} />{/if}
               {/each}
               {#if message.run.phase === 'recovering'}<p class="thinking">Restoring reply…</p>{/if}
               {#each message.run.appliedDiffs ?? [] as appliedDiff}
                 <div class="applied-diff tool-card">
                   <strong>Applied file changes</strong>
-                  {#if appliedDiff.diff}<CodeDiff codeDiff={appliedDiff.diff} />
+                  {#if appliedDiff.diff}{#await loadCodeDiff() then module}{@const CodeDiff = module.default}<CodeDiff codeDiff={appliedDiff.diff} />{/await}
                   {:else}<p>The changes were applied, but their record is no longer stored.</p>{/if}
                 </div>
               {/each}
@@ -2274,7 +2284,7 @@
                 <div class="permission-card tool-card">
                   <strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>
                   {#if gate.kind === 'confirm' && gate.message}<p>{gate.message}</p>{/if}
-                  {#if gate.kind === 'code_diff' && gate.diff}<CodeDiff codeDiff={gate.diff} />
+                  {#if gate.kind === 'code_diff' && gate.diff}{#await loadCodeDiff() then module}{@const CodeDiff = module.default}<CodeDiff codeDiff={gate.diff} />{/await}
                   {:else if gate.kind === 'code_diff'}<p>Muniment will not apply a change it cannot show. Deny is the only choice.</p>{/if}
                   {#if gate.kind === 'input'}
                     <input
@@ -2592,7 +2602,7 @@
               onkeydown={artifactRailKeydown}
             ></div>
           {/if}
-          <FilePanel file={viewedFile} {tauri} threadId={currentThreadId} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onclose={closeRail} />
+          {#await loadFilePanel() then module}{@const FilePanel = module.default}<FilePanel file={viewedFile} {tauri} threadId={currentThreadId} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onclose={closeRail} />{/await}
         {/if}
     {#if agentProfileOpen && profileAgent && !agentsOpen}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->

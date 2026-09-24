@@ -5,11 +5,18 @@
       "capabilities": [
         "default",
         "launcher",
+        "workspace-menu",
         {
           "identifier": "e2e-webdriver",
-          "description": "Embedded WebDriver access for E2E builds.",
+          "description": "Embedded WebDriver access and the test-only app commands for E2E builds.",
           "windows": ["main", "launcher"],
-          "permissions": ["wdio-webdriver:default"]
+          "permissions": [
+            "wdio-webdriver:default",
+            "allow-launcher-open",
+            "allow-launcher-is-visible",
+            "allow-e2e-drive-folder-dialog",
+            "allow-e2e-folder-dialog-snapshot"
+          ]
         }
       ]
     }

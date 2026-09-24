@@ -64,9 +64,11 @@
     void layout().then(() => action('navigate',request.url)).finally(() => onnavigationhandled?.(request))
   })
   onMount(() => {
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(layout)
+    // A resize reports many sizes in one frame. The view moves once per frame.
+    let resizeFrame = 0
+    const resized = () => { resizeFrame ||= requestAnimationFrame(() => { resizeFrame = 0; void layout() }) }
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resized)
     if (host) observer?.observe(host)
-    const resized = () => { void layout() }
     window.addEventListener('resize', resized)
     const cleanups = []
     for (const [name, listener] of [
@@ -77,6 +79,7 @@
     else void layout().then(() => { if (active) return action('status') })
     return () => {
       active = false
+      cancelAnimationFrame(resizeFrame)
       observer?.disconnect()
       window.removeEventListener('resize', resized)
       cleanups.forEach(fn => fn())

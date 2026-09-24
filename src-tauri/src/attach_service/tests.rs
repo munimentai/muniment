@@ -1059,6 +1059,7 @@ mod cases {
             pid: 42,
             uid: 1001,
             gid: 1001,
+            accept_image: None,
         };
         let cases = [
             (AttachAcceptError::Closed, false),
@@ -1377,6 +1378,7 @@ mod cases {
                 claimed_kind: "cli".into(),
                 claimed_version: "1.2.3".into(),
                 approved_at: Some(approved_at.into()),
+                subject: None,
             },
         )]);
         persist_client_credentials(&credential_path, &credentials).unwrap();
@@ -1893,6 +1895,7 @@ mod cases {
                     claimed_kind: "cli".into(),
                     claimed_version: "1.2.3".into(),
                     approved_at: Some("2026-08-04T00:00:00Z".into()),
+                    subject: None,
                 },
             )]),
         )
@@ -1959,6 +1962,7 @@ mod cases {
                     claimed_kind: "unknown".into(),
                     claimed_version: "unknown".into(),
                     approved_at: Some("2026-08-04T00:00:00Z".into()),
+                    subject: None,
                 },
             )]),
         )
@@ -1989,6 +1993,7 @@ mod cases {
                         pid: std::process::id() as i32,
                         uid: unsafe { libc::geteuid() },
                         gid: unsafe { libc::getegid() },
+                        accept_image: None,
                     },
                     "0.0.1",
                     &mut service,
@@ -2054,6 +2059,7 @@ mod cases {
                 claimed_kind: "unknown".into(),
                 claimed_version: "unknown".into(),
                 approved_at: Some("2026-08-04T00:00:00Z".into()),
+                subject: None,
             },
         );
         persist_client_credentials(&credential_path, &state.client_credentials.lock().unwrap())

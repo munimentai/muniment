@@ -131,6 +131,10 @@ impl FakeRunStartBoundaries {
 }
 
 impl RunAttachBoundaries for FakeRunStartBoundaries {
+    fn approval_subject(&self) -> Option<String> {
+        Some(muniment_core::attach::LOCAL_APPROVAL_SUBJECT.to_owned())
+    }
+
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn list_threads(
         &self,

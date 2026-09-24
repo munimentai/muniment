@@ -7,7 +7,9 @@
   import { workspaceLabel, browserLabel } from './workspace-labels.js'
   import { overflowFade } from './overflow-fade.js'
   import BrowserWorkspace from './BrowserWorkspace.svelte'
-  import TerminalWorkspace from './TerminalWorkspace.svelte'
+  // The terminal pulls xterm, so it loads when the first terminal opens.
+  let terminalModule
+  const loadTerminal = () => terminalModule ??= import('./TerminalWorkspace.svelte')
   import FilesWorkspace from '../files/FilesWorkspace.svelte'
   import WorkspaceFile from '../files/WorkspaceFile.svelte'
   import FileIcon from '../files/FileIcon.svelte'
@@ -110,7 +112,7 @@
     <BrowserWorkspace onartifact={name => artifactName = name} onurl={url => browserUrl = url} {tauri} {requestedArtifact} {navigation} {onnavigationhandled} artifacts={selected === 'artifacts'} suspended={suspended || !!closing} />
   {/key}{/if}
   {#if tabs.some(t => t.id === 'files')}{#key contextKey}<FilesWorkspace {context} onwillchange={canChange} onchanged={filesChanged} hidden={selected !== 'files'} {tauri} {threadId} {projectId} initialPath="" onfolder={path => { folderPaths = {...folderPaths, [contextKey]: path}; onfolder?.(path) }} onfile={openFile} />{/key}{/if}
-  {#each terminalSessions as session (session.key)}<TerminalWorkspace oncwd={path => terminalPaths = {...terminalPaths, [session.key]: path}} {tauri} context={session.context} hidden={selected !== 'terminal' || session.key !== contextKey} />{/each}
+  {#each terminalSessions as session (session.key)}{#await loadTerminal() then module}{@const TerminalWorkspace = module.default}<TerminalWorkspace oncwd={path => terminalPaths = {...terminalPaths, [session.key]: path}} {tauri} context={session.context} hidden={selected !== 'terminal' || session.key !== contextKey} />{/await}{/each}
   {#each tabs.filter(t => t.file) as tab (tab.id)}
     <div class="file-view" class:hidden={selected !== tab.id}><WorkspaceFile {tauri} file={tab.file} {threadId} ondirty={dirty => markDirty(tab.id, dirty)} /></div>
   {/each}

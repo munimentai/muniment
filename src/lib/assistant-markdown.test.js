@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { renderAssistantMarkdown } from './assistant-markdown.js'
+import DOMPurify from 'dompurify'
+
+import { renderAssistantMarkdown, renderAssistantMarkdownBlocks } from './assistant-markdown.js'
 
 function html(markdown) {
   const result = renderAssistantMarkdown(markdown)
@@ -177,5 +179,61 @@ describe('assistant Markdown', () => {
     })
     expect(reportDiagnostic).toHaveBeenCalledOnce()
     expect(reportDiagnostic.mock.calls.flat().join(' ')).not.toContain(reply)
+  })
+
+  it('renders a reply as blocks that the whole-reply sanitizer leaves unchanged', () => {
+    const reply = '## Title\n\nA [link](https://example.com).\n\n- one\n- two\n\n```js\ncode\n```\n\n| A |\n| - |\n| b |'
+    const result = renderAssistantMarkdownBlocks(reply)
+    const joined = result.blocks.map(({ html }) => html).join('')
+
+    expect(result.kind).toBe('blocks')
+    expect(result.blocks.map(({ raw }) => raw).join('')).toBe(reply)
+    expect(DOMPurify.sanitize(joined, {
+      ALLOWED_ATTR: ['class', 'href', 'rel', 'target', 'title'],
+      ALLOWED_TAGS: ['a', 'code', 'h3', 'li', 'p', 'pre', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'],
+      ALLOW_DATA_ATTR: false,
+      ALLOW_ARIA_ATTR: false,
+    })).toBe(joined)
+  })
+
+  it('reuses the finished blocks of a growing reply and sanitizes only the rest', () => {
+    const purifier = {
+      get removed() { return DOMPurify.removed },
+      sanitize: vi.fn((html, options) => DOMPurify.sanitize(html, options)),
+    }
+    const first = renderAssistantMarkdownBlocks('One.\n\nTwo', { purifier })
+    purifier.sanitize.mockClear()
+
+    const next = renderAssistantMarkdownBlocks('One.\n\nTwo and more', { purifier, previous: first })
+
+    expect(next.blocks[0]).toBe(first.blocks[0])
+    expect(next.blocks[1]).toBe(first.blocks[1])
+    expect(next.blocks[2]).not.toBe(first.blocks[2])
+    expect(next.blocks[2].html).toBe('<p>Two and more</p>')
+    expect(purifier.sanitize).toHaveBeenCalledOnce()
+    expect(purifier.sanitize).toHaveBeenCalledWith('<p>Two and more</p>', expect.any(Object))
+  })
+
+  it('renders every block again when a reference definition changes', () => {
+    const first = renderAssistantMarkdownBlocks('See [docs].\n\nMore')
+    const next = renderAssistantMarkdownBlocks('See [docs].\n\nMore\n\n[docs]: https://example.com', { previous: first })
+
+    expect(next.blocks[0]).not.toBe(first.blocks[0])
+    expect(next.blocks[0].html).toContain('<a href="https://example.com/"')
+  })
+
+  it('uses plain text for the whole reply when a new block fails the sanitizer check', () => {
+    const reportDiagnostic = vi.fn()
+    const first = renderAssistantMarkdownBlocks('One.\n\nTwo')
+    const purifier = {
+      removed: [],
+      sanitize: vi.fn(() => '<p class="language-js">changed</p>'),
+    }
+
+    expect(renderAssistantMarkdownBlocks('One.\n\nTwo more', { purifier, reportDiagnostic, previous: first })).toEqual({
+      kind: 'text',
+      text: 'One.\n\nTwo more',
+    })
+    expect(reportDiagnostic).toHaveBeenCalledOnce()
   })
 })

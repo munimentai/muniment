@@ -499,6 +499,9 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         let pi_artifact = self.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT);
         let earlier_models = earlier_thread_models(&storage, &thread_id, &launch.run_id);
         std::thread::spawn(move || {
+            // The runtime's storage handle keeps this journal's coordination
+            // live and validated, so this open skips the full validation scan
+            // and costs one connection. Retrieval then runs off the storage lock.
             let project_context = {
                 muniment_core::journal::RunJournal::open(profile_directory.join("runs.sqlite3"))
                     .ok()
@@ -561,31 +564,10 @@ fn earlier_thread_models(
     let Ok(mut storage) = storage.lock() else {
         return Vec::new();
     };
-    let Ok(page) = storage.journal.thread_run_ids(thread_id, RUNS_READ, None) else {
-        return Vec::new();
-    };
-    let mut models = Vec::new();
-    for run_id in page.run_ids {
-        if run_id == current_run_id {
-            continue;
-        }
-        let Ok(events) = storage.journal.events(&run_id) else {
-            continue;
-        };
-        let Ok((projection, _)) = muniment_core::journal::reducer::project_chat_with_state(&events)
-        else {
-            continue;
-        };
-        if let Some(model) = projection
-            .receipt
-            .as_ref()
-            .and_then(|receipt| receipt.get("model"))
-            .and_then(|model| model.as_str())
-        {
-            models.push(model.to_owned());
-        }
-    }
-    models
+    storage
+        .journal
+        .thread_receipt_models(thread_id, current_run_id, RUNS_READ)
+        .unwrap_or_default()
 }
 
 fn open_selected_files(files: Vec<SelectedFile>) -> Result<Vec<OpenSelectedFile>, RunStartError> {
@@ -829,8 +811,24 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         _provenance: Provenance,
     ) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
         self.clear_workspace();
+        // A companion approved under this account keeps no live connection past sign-out.
+        let revoked = self.companion_registry.revoke_live_connections();
+        muniment_core::runtime_eprintln!(
+            "muniment-runtime: sign-out revoked live attach connections count={revoked}"
+        );
         service::sign_out(&self.entitlement_tracker, &self.runtime_activity)
             .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn approval_subject(&self) -> Option<String> {
+        if self.local_mode() {
+            return Some(muniment_core::attach::LOCAL_APPROVAL_SUBJECT.to_owned());
+        }
+        // The session read names the account and organization that approve now.
+        let snapshot = service::ensure_native_session(&self.runtime_activity)
+            .ok()?
+            .entitlement_snapshot?;
+        muniment_core::attach::account_approval_subject(&snapshot.org_id, &snapshot.user_id)
     }
 
     fn list_devices(&self) -> Result<muniment_core::auth::NativeDeviceList, ProtocolError> {
@@ -1264,6 +1262,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 recalls: Vec::new(),
                 applied_diffs: Vec::new(),
                 pending_permission: None,
+                delta: None,
             },
         );
     }
@@ -1351,6 +1350,7 @@ fn sign_in_link_event(url: &str) -> muniment_core::run_events::ChatEvent {
         recalls: Vec::new(),
         applied_diffs: Vec::new(),
         pending_permission: None,
+        delta: None,
     }
 }
 

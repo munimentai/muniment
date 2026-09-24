@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use muniment_core::attach::{decode_frame, windows_attach_pipe_path, Welcome};
+use muniment_core::attach::{decode_frame, load_windows_attach_pipe_path, Welcome};
 use muniment_core::windows_sid::current_process_user_sid;
 use muniment_runtime::{
     WindowsAttachAcceptBoundary, WindowsAttachAcceptOutcome, WindowsAttachAcceptor,
@@ -66,7 +66,7 @@ fn binds_and_serves_with_the_runtime_version() {
     let state_directory = state_directory();
     let mut acceptor = WindowsAttachAcceptor::bind(&state_directory, Duration::ZERO).unwrap();
 
-    let path = windows_attach_pipe_path(current_process_user_sid().unwrap().as_str()).unwrap();
+    let path = load_windows_attach_pipe_path(current_process_user_sid().unwrap().as_str()).unwrap();
     let client = thread::spawn(move || {
         OpenOptions::new()
             .read(true)

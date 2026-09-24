@@ -110,6 +110,102 @@ pub async fn workspace_list(webview: tauri::Webview, path: PathBuf) -> Result<Li
         .await
         .map_err(|e| e.to_string())?
 }
+#[cfg(target_os = "macos")]
+const REVEAL: &str = "Reveal in Finder";
+#[cfg(windows)]
+const REVEAL: &str = "Reveal in File Explorer";
+#[cfg(not(any(target_os = "macos", windows)))]
+const REVEAL: &str = "Reveal in File Manager";
+
+/// Extensions the OS default handler runs as a program or installer.
+#[cfg(target_os = "macos")]
+fn runnable_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        "app"
+            | "command"
+            | "tool"
+            | "sh"
+            | "pkg"
+            | "mpkg"
+            | "dmg"
+            | "terminal"
+            | "workflow"
+            | "jar"
+            | "scpt"
+            | "applescript"
+            | "fileloc"
+            | "inetloc"
+            | "py"
+    )
+}
+#[cfg(windows)]
+fn runnable_extension(extension: &str) -> bool {
+    let pathext = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC".into());
+    pathext
+        .split(';')
+        .filter_map(|entry| entry.trim().strip_prefix('.'))
+        .any(|entry| entry.eq_ignore_ascii_case(extension))
+        || matches!(
+            extension,
+            "com"
+                | "exe"
+                | "bat"
+                | "cmd"
+                | "lnk"
+                | "url"
+                | "msi"
+                | "msp"
+                | "scr"
+                | "hta"
+                | "jar"
+                | "pif"
+                | "cpl"
+                | "reg"
+                | "appref-ms"
+                | "application"
+                | "ps1"
+                | "py"
+                | "pyw"
+        )
+}
+#[cfg(not(any(target_os = "macos", windows)))]
+fn runnable_extension(extension: &str) -> bool {
+    matches!(extension, "desktop" | "sh" | "appimage" | "run")
+}
+
+/// Refuses a path the OS default handler would run instead of display: a
+/// program, script, installer, shortcut or app bundle, by name or execute bit.
+/// The execute bit counts only without an extension, because the handler picks
+/// an app by extension, and FAT and exFAT volumes set the bit on every file.
+fn launchable(path: &Path, metadata: &std::fs::Metadata) -> bool {
+    let extension = path.extension().and_then(|e| e.to_str());
+    let runnable = extension.is_some_and(|e| runnable_extension(&e.to_ascii_lowercase()));
+    #[cfg(unix)]
+    let executable = {
+        use std::os::unix::fs::PermissionsExt;
+        extension.is_none() && metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    };
+    #[cfg(not(unix))]
+    let executable = {
+        let _ = metadata;
+        false
+    };
+    runnable || executable
+}
+fn openable(path: &Path) -> Result<PathBuf, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| "This file is unavailable.")?;
+    let metadata = std::fs::metadata(&canonical).map_err(|_| "This file is unavailable.")?;
+    if launchable(path, &metadata) || launchable(&canonical, &metadata) {
+        return Err(format!(
+            "This file can run programs, so Muniment does not open it. Use {REVEAL} to show it in its folder."
+        ));
+    }
+    Ok(canonical)
+}
 #[tauri::command]
 pub fn workspace_open(
     app: tauri::AppHandle,
@@ -117,9 +213,7 @@ pub fn workspace_open(
     path: PathBuf,
 ) -> Result<(), String> {
     shell(&webview)?;
-    let path = path
-        .canonicalize()
-        .map_err(|_| "This file is unavailable.")?;
+    let path = openable(&path)?;
     app.opener()
         .open_path(path.to_string_lossy(), None::<String>)
         .map_err(|e| e.to_string())
@@ -261,6 +355,65 @@ pub async fn workspace_save_link(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn default_app_opens_refuse_programs_and_bundles() {
+        let root = std::env::temp_dir().join(format!("muniment-open-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let document = root.join("notes.txt");
+        std::fs::write(&document, "notes").unwrap();
+        assert_eq!(
+            openable(&document).unwrap(),
+            document.canonicalize().unwrap()
+        );
+        #[cfg(target_os = "macos")]
+        let refused = [
+            "Tool.APP",
+            "run.command",
+            "setup.pkg",
+            "disk.dmg",
+            "build.sh",
+        ];
+        #[cfg(windows)]
+        let refused = [
+            "setup.EXE",
+            "run.bat",
+            "link.lnk",
+            "site.url",
+            "setup.msi",
+            "page.hta",
+        ];
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let refused = ["app.desktop", "build.sh", "Tool.AppImage"];
+        for name in refused {
+            let path = root.join(name);
+            if name.to_ascii_lowercase().ends_with(".app") {
+                std::fs::create_dir(&path).unwrap();
+            } else {
+                std::fs::write(&path, "").unwrap();
+            }
+            let error = openable(&path).unwrap_err();
+            assert!(error.contains(REVEAL), "{name}: {error}");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = root.join("script");
+            std::fs::write(&script, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(openable(&script).is_err());
+            let alias = root.join("alias.txt");
+            std::os::unix::fs::symlink(&script, &alias).unwrap();
+            assert!(openable(&alias).is_err());
+            let report = root.join("report.pdf");
+            std::fs::write(&report, "%PDF").unwrap();
+            std::fs::set_permissions(&report, std::fs::Permissions::from_mode(0o777)).unwrap();
+            assert!(openable(&report).is_ok());
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(openable(&script).is_ok());
+            assert!(openable(&root).is_ok());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn text_saves_preserve_edits_and_reject_stale_revisions() {
         let root = std::env::temp_dir().join(format!("muniment-editor-{}", uuid::Uuid::new_v4()));

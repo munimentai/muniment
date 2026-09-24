@@ -137,7 +137,13 @@ the runtime then reads the kernel-supplied peer process ID through
 `LOCAL_PEERPID` and reads that process image path through `proc_pidpath`. A
 peer whose absolute path differs from the installed desktop payload takes the
 companion route without a frame read. A failed process ID or image path read
-also takes that route.
+also takes that route. The runtime also reads the peer audit token through
+`LOCAL_PEERTOKEN`, which the kernel records at connect. A desktop-image peer
+takes a desktop route only when the process that token names satisfies the
+designated code requirement of the installed desktop payload, checked through
+`SecCodeCopyGuestWithAttributes`. The token carries the process ID version,
+which changes on exec, so a process that connects and then execs the desktop
+binary takes the companion route.
 
 For a verified desktop-image peer, the runtime refines the route from the first
 Hello frame. A `desktop` kind takes the approval-presenter route. A
@@ -158,7 +164,11 @@ pairing writes a `welcome` challenge and asks the user through the visible
 approval-presentation session. Approval produces an authorized grant and a
 registered connection that serves companion requests. A valid reconnect uses
 `reconnect_welcome` and its stored client credential. With no signed workspace,
-the approval waiter denies the request and pairing fails closed.
+the approval waiter denies the request and pairing fails closed. Each stored
+credential records the subject that approved it: the signed-in organization and
+user, or local mode. A reconnect under another subject, or with a credential
+that records no subject, requires a fresh visible approval. Sign-out revokes
+every live companion connection.
 
 The OS-supplied path proves which installed path served the connection at the
 check. It does not prove binary integrity or defend against compromise under
@@ -174,9 +184,12 @@ or shell command. It uses either
 `%LocalAppData%\muniment\muniment-runtime.exe` for the per-user installation.
 A Windows runtime start with invalid arguments exits before it opens the
 instance lock, journal, CAS, Pi, or attach endpoint. The served Windows attach
-endpoint is `\\.\pipe\Muniment\attach-v1-<user-hash>`. The listener holds the
-per-profile instance lock and reads back each pipe instance's owner and
-owner-only DACL.
+endpoint is `\\.\pipe\Muniment\attach-v1-<user-hash>-<suffix>`. The runtime
+generates the random suffix once and stores the full pipe path in an owner-only
+file, `%LocalAppData%\ai.muniment.desktop\attach-pipe-name`. The desktop and
+every client read the path from that file, so another OS user cannot create the
+pipe first. The listener holds the per-profile instance lock and reads back
+each pipe instance's owner and owner-only DACL.
 For each connection, it reads the four-byte length prefix and verifies the peer
 through impersonation. It then gets the peer process ID with
 `GetNamedPipeClientProcessId` and gets that process's image path with
@@ -223,6 +236,14 @@ defines a model-context boundary.
 - **Runtime service extraction remains open.** The desktop still owns the
   runtime. [ADR 0012](docs/decisions/0012-user-level-runtime-service.md)
   defines the target boundary.
+- **A same-user process can take the desktop-client and presenter routes on
+  Linux and Windows.** On Linux, the runtime reads the peer executable and start
+  time at accept, before any frame, and again when the hello arrives, and
+  requires both reads to match the installed desktop payload. Linux has no
+  process identity that survives exec, so a process that execs the desktop
+  binary before the first read passes both reads. The Windows image path check
+  has the same limit. The boundary excludes a compromised process running as
+  the current OS user, so these routes carry no defense against one.
 - **Default permission gates are not isolation.** Windows has no claimed
   native full-auto sandbox.
   [ADR 0009](docs/decisions/0009-companion-attach-protocol.md) records

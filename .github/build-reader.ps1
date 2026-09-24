@@ -11,6 +11,8 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $goVersion = "go1.24.13"
+# The SHA-256 go.dev/dl publishes for the Windows amd64 archive.
+$goSha256 = "40b16bc8f00540a2cb02dff4de72b73e966fdd8d65f95e33d8e4080b48a2459a"
 
 $env:PATH = "$env:PATH;C:\Program Files\Go\bin;$env:LOCALAPPDATA\Go\bin"
 
@@ -21,6 +23,10 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
     $archive = Join-Path $env:TEMP "$goVersion.windows-amd64.zip"
     Invoke-WebRequest -UseBasicParsing `
       -Uri "https://go.dev/dl/$goVersion.windows-amd64.zip" -OutFile $archive
+    if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $goSha256) {
+      Remove-Item -Force $archive
+      throw "$goVersion checksum does not match"
+    }
     if (Test-Path $root) { Remove-Item -Recurse -Force $root }
     # Expand-Archive takes minutes on the toolchain, and this takes seconds.
     Add-Type -AssemblyName System.IO.Compression.FileSystem

@@ -26,12 +26,30 @@ if ! command -v go >/dev/null 2>&1; then
   esac
   # The macOS clone has no passwordless sudo, so the toolchain lands in the
   # caller's own directory on every platform.
+  # The SHA-256 values are the ones go.dev/dl publishes for each archive.
+  case "$host_os-$host_arch" in
+    linux-amd64) go_sha256=1fc94b57134d51669c72173ad5d49fd62afb0f1db9bf3f798fd98ee423f8d730 ;;
+    linux-arm64) go_sha256=74d97be1cc3a474129590c67ebf748a96e72d9f3a2b6fef3ed3275de591d49b3 ;;
+    darwin-amd64) go_sha256=6cc6549b06725220b342b740497ffd24e0ebdcef75781a77931ca199f46ad781 ;;
+    darwin-arm64) go_sha256=f282d882c3353485e2fc6c634606d85caf36e855167d59b996dbeae19fa7629a ;;
+  esac
   root=${XDG_CACHE_HOME:-$HOME/.cache}/muniment-go/$go_version
   if [ ! -x "$root/go/bin/go" ]; then
     tarball=$(mktemp -t go-toolchain-XXXXXX.tar.gz)
     trap 'rm -f "$tarball"' EXIT
     curl --proto '=https' --tlsv1.2 -fsSL \
       "https://go.dev/dl/${go_version}.${host_os}-${host_arch}.tar.gz" -o "$tarball"
+    # GNU sha256sum answers --version. A BSD sha256sum on macOS does not, so
+    # macOS uses shasum.
+    if sha256sum --version >/dev/null 2>&1; then
+      actual=$(sha256sum "$tarball" | awk '{print $1}')
+    else
+      actual=$(shasum -a 256 "$tarball" | awk '{print $1}')
+    fi
+    if [ "$actual" != "$go_sha256" ]; then
+      printf 'build-reader: %s has SHA-256 %s, expected %s\n' "$go_version" "$actual" "$go_sha256" >&2
+      exit 1
+    fi
     rm -rf "$root"
     mkdir -p "$root"
     tar -C "$root" -xzf "$tarball"

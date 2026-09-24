@@ -178,6 +178,10 @@ impl MacosAttachRouteReader for CompanionRoute {
     fn peer_process(&self) -> Result<(u32, PathBuf), MacosPeerReadError> {
         Ok((42, PathBuf::from("/Applications/Other.app/other")))
     }
+
+    fn peer_code_matches(&self, _: &std::path::Path) -> bool {
+        false
+    }
 }
 
 struct SessionBoundary {
@@ -303,6 +307,14 @@ impl MacosAttachServeBoundary for PairingBoundary {
 #[test]
 fn companion_pairing_uses_the_activation_presenter_and_live_registry() {
     let profile = TemporaryProfile::new("macos-acceptor-pairing", true);
+    // Local mode gives the approval a subject without a signed-in session.
+    std::fs::write(
+        profile
+            .config
+            .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+        [],
+    )
+    .unwrap();
     let (mut client, server) = UnixStream::pair().unwrap();
     client
         .set_read_timeout(Some(Duration::from_secs(2)))

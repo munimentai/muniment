@@ -15,9 +15,12 @@
         if (!disposed) { settings = next; error = '' }
       } catch (_) { if (!disposed) error = 'Account capacity could not be read.' }
     }
+    // A hidden window skips the poll and refreshes once when it shows again.
+    const poll = () => { if (!document.hidden) void refresh() }
     void refresh()
-    const timer = setInterval(refresh, 15000)
-    return () => { disposed = true; clearInterval(timer) }
+    const timer = setInterval(poll, 15000)
+    document.addEventListener('visibilitychange', poll)
+    return () => { disposed = true; clearInterval(timer); document.removeEventListener('visibilitychange', poll) }
   })
 </script>
 <div data-panel="capacity" use:panelScroll data-panel-variant="overlay" data-composer-panel class="capacity" role="dialog" aria-label="Account capacity">

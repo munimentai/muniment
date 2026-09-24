@@ -3276,6 +3276,32 @@ describe('window chrome', () => {
   })
 })
 
+describe('agent poll', () => {
+  it('skips the agent poll while the window is hidden and refreshes once when it shows', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let hidden = false
+    const visibility = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden)
+    const agentLists = () => invoke.mock.calls.filter(([command]) => command === 'agent_list').length
+    try {
+      render(App)
+      await screen.findByRole('button', { name: 'Agents', exact: true })
+      await waitFor(() => expect(agentLists()).toBeGreaterThan(0))
+      await vi.advanceTimersByTimeAsync(15000)
+      await waitFor(() => expect(agentLists()).toBeGreaterThan(1))
+      const shown = agentLists()
+      hidden = true
+      await vi.advanceTimersByTimeAsync(45000)
+      expect(agentLists()).toBe(shown)
+      hidden = false
+      document.dispatchEvent(new Event('visibilitychange'))
+      await waitFor(() => expect(agentLists()).toBe(shown + 1))
+    } finally {
+      visibility.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('sidebar collapse', () => {
   it('opens Files in the visible catalog, project, or agent context', async () => {
     const original = invoke.getMockImplementation()
@@ -5547,7 +5573,7 @@ describe('history hydration', () => {
 
     const headings = await screen.findAllByText('Applied file changes')
     expect(headings).toHaveLength(2)
-    expect(screen.getByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
+    expect(await screen.findByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
     expect(screen.getByText('The changes were applied, but their record is no longer stored.')).toBeInTheDocument()
   })
 })
@@ -5835,7 +5861,7 @@ describe('permission gates', () => {
 
     const title = await screen.findByText('Proposed file changes')
     const card = title.closest('.permission-card')
-    expect(within(card).getByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
+    expect(await within(card).findByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
     expect(within(card).getByText((_, element) => element.classList.contains('d2h-code-line-ctn')
       && element.textContent === 'Hello Muniment')).toBeInTheDocument()
     const approve = within(card).getByRole('button', { name: 'Apply' })

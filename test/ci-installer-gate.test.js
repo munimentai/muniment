@@ -169,7 +169,8 @@ it.each(remoteSteps.map((script, index) => [index, script]))('keeps clone creden
           }
           ${script}
         `], { env: { ...process.env, REPO_TOKEN: 'fixture-only-secret', REPOSITORY: 'owner/repo',
-          SOURCE_SHA: 'a'.repeat(40), REF: 'test-branch', PLATFORM: 'linux', INSTALLER: 'false', RUNNER_TEMP: directory, DESKTOP_CI_SSH_KEY: 'fixture-key' },
+          SOURCE_SHA: 'a'.repeat(40), REF: 'test-branch', PLATFORM: 'linux', INSTALLER: 'false', RUNNER_TEMP: directory, DESKTOP_CI_SSH_KEY: 'fixture-key',
+          DESKTOP_CI_KNOWN_HOSTS: '10.1.10.10 ssh-ed25519 fixture' },
         stdio: 'pipe', timeout: 10000 })
       } catch (error) { actual = error.status }
       expect(actual).toBe(status)
@@ -188,7 +189,7 @@ it.each(['linux', 'windows', 'macos'])('uses one VM and gates packaging on prefl
     const capture = path.join(directory, 'remote-command')
     const env = { ...process.env, PLATFORM: platform, REPO_TOKEN: 'fixture-token',
       REPOSITORY: 'owner/repo', SOURCE_SHA: 'a'.repeat(40), REF: 'fixture-branch', RUNNER_TEMP: directory,
-      DESKTOP_CI_SSH_KEY: 'fixture-key', CAPTURE: capture }
+      DESKTOP_CI_SSH_KEY: 'fixture-key', DESKTOP_CI_KNOWN_HOSTS: '10.1.10.10 ssh-ed25519 fixture', CAPTURE: capture }
     const commands = {}
     for (const installer of ['false', 'true']) {
       fs.writeFileSync(capture, '')

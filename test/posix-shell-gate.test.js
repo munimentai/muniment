@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ALLOWED = {
+  '.github/lib/signing-env.test.js:33:22': "it.skipIf(process.platform === 'win32')('keeps the line out of the POSIX preamble's environment')",
+  '.github/lib/signing-env.test.js:42:20': "it.skipIf(process.platform === 'win32')('matches the runner's od encoding')",
   'test/macos-wdio-tools.test.js:53:20': "it.skipIf(process.platform === 'win32')('launches the app with its login home and isolated state')",
   'test/macos-wdio-tools.test.js:23:22': "describe.skipIf(process.platform === 'win32')('macOS WDIO build tools')",
   'test/macos-keychain-session.test.js:27:22': "describe.skipIf(process.platform === 'win32')('macOS CI keychain session')",

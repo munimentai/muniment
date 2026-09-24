@@ -1,9 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { assertGreenCi, expectedNightlyAssets, macosSigningProvenance, promoteRelease, releaseBody, stableAssetName, validatePromotionInputs, windowsSigningProvenance } from "./release-promotion.mjs";
+import { describe, expect, it, vi } from "vitest";
+import {
+  APPLE_TEAM_ID, assertGreenCi, expectedNightlyAssets, macosSigningProvenance, microsoftRootPem, promoteRelease, releaseBody,
+  sha256Sums, stableAssetName, validatePromotionInputs, verifyAuthenticode, verifyMacosApp, verifyMacosPackage,
+  verifyNightlyArtifacts, WINDOWS_PUBLISHER, windowsSigningProvenance,
+} from "./release-promotion.mjs";
+import { signUpdaterBytes } from "./updater-signature.mjs";
 
 const sha = "a".repeat(40);
 const version = "v0.0.1";
@@ -58,7 +64,9 @@ const promotionFetch = (overrides = {}) => {
   return { calls, fetchImpl };
 };
 
-const promote = (fetchImpl) => promoteRelease({ token: "token", repository: "owner/repo", sha, version, fetchImpl });
+// The promotion flow tests inject the artifact verifier; the verifier's own
+// checks are covered below against tool output fixtures.
+const promote = (fetchImpl, verify = async () => {}) => promoteRelease({ token: "token", repository: "owner/repo", sha, version, fetchImpl, verify });
 
 describe("stable release promotion", () => {
   it("accepts only exact lowercase SHAs and strict stable SemVer tags", () => {
@@ -113,7 +121,7 @@ describe("stable release promotion", () => {
     const create = calls.find(({ url, options }) => url.endsWith("/releases") && options.method === "POST");
     expect(JSON.parse(create.options.body)).toMatchObject({ tag_name: version, target_commitish: sha, draft: true, prerelease: false });
     expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(13);
-    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(14);
+    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(15);
     expect(calls.some(({ url }) => url.endsWith("/git/ref/tags/nightly"))).toBe(false);
     expect(calls.some(({ url, options }) => url.includes("/releases/1") && options.method)).toBe(false);
     const uploads = calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"));
@@ -125,7 +133,13 @@ describe("stable release promotion", () => {
       expect(names).toContain(decodeURIComponent(platform.url.split("/").at(-1)));
       expect(platform.signature).toBe(Buffer.from("signature fixture").toString("base64"));
     }
-    for (const upload of uploads.filter(({ url }) => !url.endsWith("name=latest.json"))) {
+    const sums = Buffer.from(uploads.find(({ url }) => url.endsWith("name=SHA256SUMS")).options.body).toString();
+    const digest = (text) => createHash("sha256").update(text).digest("hex");
+    const feedBody = uploads.find(({ url }) => url.endsWith("name=latest.json")).options.body;
+    expect(sums.trim().split("\n")).toHaveLength(14);
+    expect(sums).toContain(`${digest("asset bytes")}  muniment-0.0.1-macos.pkg\n`);
+    expect(sums).toContain(`${digest(feedBody)}  latest.json\n`);
+    for (const upload of uploads.filter(({ url }) => !url.endsWith("name=latest.json") && !url.endsWith("name=SHA256SUMS"))) {
       const name = new URL(upload.url).searchParams.get("name");
       expect(Buffer.from(upload.options.body).toString()).toBe(name.endsWith(".sig") ? Buffer.from("signature fixture").toString("base64") : "asset bytes");
     }
@@ -133,9 +147,28 @@ describe("stable release promotion", () => {
     expect(JSON.parse(publish.options.body)).toEqual({ draft: false, prerelease: false });
   });
 
-  it("rejects unsigned macOS artifacts before creating a release", async () => {
+  it("verifies every downloaded asset before creating a release, whatever the release text claims", async () => {
     const { calls, fetchImpl } = promotionFetch({ macosSigned: false });
-    await expect(promote(fetchImpl)).rejects.toThrow("macOS artifacts are not verified as signed and notarized");
+    const verify = vi.fn(async ({ files }) => {
+      expect([...files.keys()]).toEqual(assetNames);
+      for (const file of files.values()) expect(readFileSync(file).length).toBeGreaterThan(0);
+      expect(calls.some(({ options }) => options.method === "POST")).toBe(false);
+    });
+    await promote(fetchImpl, verify);
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an asset that fails verification before creating a release", async () => {
+    const { calls, fetchImpl } = promotionFetch();
+    await expect(promote(fetchImpl, async () => { throw new Error("muniment.pkg is not signed"); })).rejects.toThrow("not signed");
+    expect(calls.some(({ options }) => options.method === "POST")).toBe(false);
+  });
+
+  it("rejects downloaded bytes that differ from the release digest", async () => {
+    const { calls, fetchImpl } = promotionFetch({ route: (url) => url.endsWith("/releases/tags/nightly") ? response({
+      draft: false, prerelease: true, body: `Built from ${sha}`, assets: assets.map((asset) => ({ ...asset, digest: `sha256:${"0".repeat(64)}` })),
+    }) : null });
+    await expect(promote(fetchImpl)).rejects.toThrow("does not match its release digest");
     expect(calls.some(({ options }) => options.method === "POST")).toBe(false);
   });
 
@@ -155,9 +188,9 @@ describe("stable release promotion", () => {
     await expect(promote(fetchImpl)).rejects.toThrow("No successful full installed nightly");
   });
 
-  it("fails closed when finalized nightly signing provenance is absent", async () => {
-    const { calls, fetchImpl } = promotionFetch({ route: (url) => url.endsWith("/releases/tags/nightly") ? response({ draft: false, prerelease: true, body: `Built from ${sha}`, assets }) : null });
-    await expect(promote(fetchImpl)).rejects.toThrow("not verified as signed");
+  it("fails closed when the nightly release is not finalized at the source commit", async () => {
+    const { calls, fetchImpl } = promotionFetch({ route: (url) => url.endsWith("/releases/tags/nightly") ? response({ draft: false, prerelease: true, body: "Built from another commit", assets }) : null });
+    await expect(promote(fetchImpl)).rejects.toThrow("not finalized");
     expect(calls.some(({ url, options }) => url.endsWith("/releases") && options.method === "POST")).toBe(false);
   });
 
@@ -200,4 +233,71 @@ it("names versioned installers and their signatures consistently", () => {
   expect(stableAssetName(name, sha, version)).toBe("muniment-0.0.1-windows_x64_en-US-machine.msi");
   expect(stableAssetName(`${name}.sig`, sha, version)).toBe(`${stableAssetName(name, sha, version)}.sig`);
   expect(() => stableAssetName(name, "b".repeat(40), version)).toThrow("Unexpected");
+});
+
+describe("nightly artifact verification", () => {
+  const withDirectory = (test) => {
+    const directory = mkdtempSync(path.join(tmpdir(), "muniment-verify-"));
+    try { return test(directory); } finally { rmSync(directory, { recursive: true, force: true }); }
+  };
+  const result = (stdout, status = 0) => ({ status, stdout, stderr: "" });
+  const authenticode = (subject) => `Signature Index: 0  (Primary Signature)\n\nSigner's certificate:\n\t------------------\n\tSigner #0:\n\t\tSubject: ${subject}\n\t\tIssuer : CN=Microsoft ID Verified CS EOC CA 04\n\nSignature verification: ok\n\nNumber of verified signatures: 1\nSucceeded\n`;
+  const appleInfo = (kind, team = APPLE_TEAM_ID, extra = "") => `- path: file\n  entity:\n    cms:\n      certificates:\n      - subject: 'CN=Developer ID ${kind}: Green Kangaroo, LLC (${team}), OU=${team}'\n        chains_to_apple_root_ca: true\n      signers:\n      - issuer: CN=Developer ID Certification Authority\n        signature_verifies: true\n${extra}`;
+
+  it("pins the Microsoft root that Azure Artifact Signing chains to", () => {
+    expect(microsoftRootPem()).toContain("-----BEGIN CERTIFICATE-----");
+    expect(() => microsoftRootPem(Buffer.from("other"))).toThrow("pinned SHA-256");
+  });
+
+  it("accepts Authenticode only from the publisher", () => {
+    const run = vi.fn(() => result(authenticode(WINDOWS_PUBLISHER)));
+    verifyAuthenticode("/tmp/muniment.msi", "/tmp/ca.pem", run);
+    expect(run.mock.calls[0].slice(0, 2)).toEqual(["osslsigncode", ["verify", "-CAfile", "/tmp/ca.pem", "-TSA-CAfile", "/tmp/ca.pem", "-in", "/tmp/muniment.msi"]]);
+    expect(() => verifyAuthenticode("/tmp/muniment.msi", "/tmp/ca.pem", () => result(authenticode("CN=Someone Else")))).toThrow("signed by CN=Someone Else");
+    expect(() => verifyAuthenticode("/tmp/muniment.msi", "/tmp/ca.pem", () => result("Failed\n", 1))).toThrow("Authenticode verification failed");
+  });
+
+  it("checks every Mach-O file and the stapled ticket in an app", () => withDirectory((directory) => {
+    const app = path.join(directory, "muniment.app");
+    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+    writeFileSync(path.join(app, "Contents", "MacOS", "muniment-desktop"), Buffer.from("cffaedfe00", "hex"));
+    writeFileSync(path.join(app, "Contents", "Info.plist"), "<plist/>");
+    expect(() => verifyMacosApp(app, () => result(appleInfo("Application")))).toThrow("no stapled notarization ticket");
+    writeFileSync(path.join(app, "Contents", "CodeResources"), "ticket");
+    const run = vi.fn((command, args) => result(args[0] === "verify" ? "no problems detected!" : appleInfo("Application")));
+    verifyMacosApp(app, run);
+    expect(run.mock.calls.map(([, args]) => args[0])).toEqual(["verify", "print-signature-info"]);
+    expect(() => verifyMacosApp(app, (command, args) => result("", args[0] === "verify" ? 1 : 0))).toThrow("rcodesign rejects");
+    expect(() => verifyMacosApp(app, () => result(appleInfo("Application", "Y0THERTEAM")))).toThrow(`team ${APPLE_TEAM_ID}`);
+    expect(() => verifyMacosApp(app, () => result(appleInfo("Application").replace("chains_to_apple_root_ca: true", "chains_to_apple_root_ca: false")))).toThrow("Apple root");
+    expect(() => verifyMacosApp(app, () => result(appleInfo("Application").replace("  signature_verifies: true", "  signature_verifies: false")))).toThrow("does not verify");
+  }));
+
+  it("checks the installer package signature", () => {
+    const valid = appleInfo("Installer", APPLE_TEAM_ID, "      checksum_verifies: true\n      rsa_signature_verifies: false\n      cms_signature_verifies: true\n");
+    verifyMacosPackage("/tmp/muniment.pkg", () => result(valid));
+    expect(() => verifyMacosPackage("/tmp/muniment.pkg", () => result(valid.replace("cms_signature_verifies: true", "cms_signature_verifies: false")))).toThrow("does not verify");
+    expect(() => verifyMacosPackage("/tmp/muniment.pkg", () => result(appleInfo("Application", APPLE_TEAM_ID, "      checksum_verifies: true\n      cms_signature_verifies: true\n")))).toThrow("Developer ID Installer");
+  });
+
+  it("checks each updater signature against the committed public key", () => withDirectory((directory) => {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const keyId = Buffer.from("0102030405060708", "hex");
+    const pk = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
+    const publicText = Buffer.from(`untrusted comment: minisign public key\n${Buffer.concat([Buffer.from("Ed"), keyId, pk]).toString("base64")}\n`).toString("base64");
+    const name = `nightly-${sha}-linux-muniment.AppImage`;
+    const file = path.join(directory, name);
+    writeFileSync(file, "appimage bytes");
+    writeFileSync(`${file}.sig`, signUpdaterBytes(Buffer.from("appimage bytes"), { keyId, privateKey }, { fileName: "muniment.AppImage", version: "0.0.1" }));
+    const files = new Map([[name, file], [`${name}.sig`, `${file}.sig`]]);
+    verifyNightlyArtifacts({ files, workDir: directory, publicKey: publicText, run: vi.fn(), caPem: "pem" });
+    writeFileSync(file, "tampered bytes");
+    expect(() => verifyNightlyArtifacts({ files, workDir: directory, publicKey: publicText, run: vi.fn(), caPem: "pem" })).toThrow(`${name} updater signature`);
+    files.delete(`${name}.sig`);
+    expect(() => verifyNightlyArtifacts({ files, workDir: directory, publicKey: publicText, run: vi.fn(), caPem: "pem" })).toThrow("no updater signature");
+  }));
+
+  it("writes SHA256SUMS in the sha256sum check format", () => {
+    expect(sha256Sums([["a.msi", "0".repeat(64)], ["latest.json", "f".repeat(64)]])).toBe(`${"0".repeat(64)}  a.msi\n${"f".repeat(64)}  latest.json\n`);
+  });
 });

@@ -2,7 +2,7 @@
 # M0 structure smoke (runs on the shared runners — no GUI/build here).
 set -eu
 grep -q '"identifier": "ai.muniment.desktop"' src-tauri/tauri.conf.json
-grep -q 'tauri_build::build' src-tauri/build.rs
+grep -q 'tauri_build::try_build' src-tauri/build.rs
 grep -q 'generate_context' src-tauri/src/desktop.rs
 test -f src-tauri/icons/icon.ico
 test -f src-tauri/icons/icon.icns
@@ -59,10 +59,10 @@ grep -Fq '[ "$status" -ne 3 ] && [ "$status" -ne 255 ]' "$ci"
 test "$(grep -Fc '[ "$PLATFORM" != "windows" ]' "$ci")" -eq 0
 test/desktop-build-retry.sh
 test -f src-tauri/Cargo.lock
-# The candidate switch leaves every production descriptor at 0.73.1.
+# The candidate switch leaves every production descriptor at 0.87.1.
 pi_install=src-tauri/core/src/sidecar/pi_install.rs
-test "$(awk '/pub const PI_ARTIFACT: / { pin = 1; next } pin && /version: "0.73.1"/ { count++; pin = 0 } END { print count }' "$pi_install")" -eq 5
-grep -Fq 'https://github.com/earendil-works/pi/releases/download/v0.73.1' "$pi_install"
+test "$(awk '/pub const PI_ARTIFACT: / { pin = 1; next } pin && /version: "0.87.1"/ { count++; pin = 0 } END { print count }' "$pi_install")" -eq 5
+grep -Fq 'https://github.com/earendil-works/pi/releases/download/v0.87.1' "$pi_install"
 for lane in build linux-e2e windows-e2e macos-e2e; do
   awk -v lane="$lane" '
     /^  [a-z0-9-]+:$/ { selected = ($0 == "  " lane ":") }
