@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Generate desktop graph icons. Requires Node, Pillow and CairoSVG."""
+"""Generate desktop graph icons on macOS. Requires Node, Pillow and CairoSVG."""
 import io
 import json
 from pathlib import Path
+import shutil
 import struct
 import subprocess
+import tempfile
 import cairosvg
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 ICONS = ROOT / 'src-tauri' / 'icons'
+ICONUTIL = shutil.which('iconutil')
+if ICONUTIL is None:
+    raise SystemExit('Run on macOS with iconutil to generate the desktop icons.')
 # Physical density does not change the geometry selected for a logical icon size.
 PNG_SIZES = {
     '32x32.png': (32, 32), '64x64.png': (64, 64),
@@ -56,16 +61,16 @@ for size, data in zip(ico_sizes, payloads):
     offset += len(data)
 (ICONS / 'icon.ico').write_bytes(struct.pack('<HHH', 0, 1, len(payloads)) + b''.join(entries) + b''.join(payloads))
 
-# macOS 1x and 2x representations select geometry by logical size.
-chunks = []
-for kind, pixels, logical in (
-    ('icp4', 16, 16), ('icp5', 32, 32), ('icp6', 64, 64),
-    ('ic07', 128, 128), ('ic08', 256, 256), ('ic09', 512, 512),
-    ('ic10', 1024, 512), ('ic11', 32, 16), ('ic12', 64, 32),
-    ('ic13', 256, 128), ('ic14', 512, 256),
-):
-    data = png(pixels, logical)
-    chunks.append(kind.encode() + struct.pack('>I', len(data) + 8) + data)
-body = b''.join(chunks)
-(ICONS / 'icon.icns').write_bytes(b'icns' + struct.pack('>I', len(body) + 8) + body)
+# Let Apple's compiler encode the small representations for native icon readers.
+# Each 1x and 2x representation still selects geometry by logical size.
+with tempfile.TemporaryDirectory() as temporary:
+    iconset = Path(temporary) / 'muniment.iconset'
+    iconset.mkdir()
+    for logical in (16, 32, 128, 256, 512):
+        for scale in (1, 2):
+            suffix = '@2x' if scale == 2 else ''
+            name = f'icon_{logical}x{logical}{suffix}.png'
+            (iconset / name).write_bytes(png(logical * scale, logical))
+    subprocess.run([ICONUTIL, '--convert', 'icns', str(iconset),
+                    '--output', str(ICONS / 'icon.icns')], check=True)
 print('Generated desktop PNG, ICO, ICNS, and authentication SVG assets.')
