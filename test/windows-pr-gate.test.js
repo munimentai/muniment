@@ -4,7 +4,7 @@ import path from 'node:path'
 
 const root = process.cwd()
 const workflow = fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8')
-const desktopCompile = workflow.slice(workflow.indexOf('  desktop-compile:'), workflow.indexOf('  desktop-build:'))
+const desktopCompile = workflow.slice(workflow.indexOf('  desktop-compile:'))
 const guardedPattern = /it\.skipIf\(process\.platform !== 'win32'\)/
 
 describe('Windows-only PR test gate', () => {
