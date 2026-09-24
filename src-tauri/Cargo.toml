@@ -86,8 +86,6 @@ test = false
 
 [profile.release]
 strip = true
-lto = "thin"
-codegen-units = 1
 
 [[bin]]
 name = "muniment-cef-helper"
