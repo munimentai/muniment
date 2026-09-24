@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: nightly-desktop-release
@@ -22,6 +23,7 @@ jobs:
   prepare:
     runs-on: self-hosted
     outputs:
+      reuse: ${{ steps.proof.outputs.reuse }}
       source_sha: ${{ steps.source.outputs.sha }}
     steps:
       - name: Resolve main revision
@@ -35,6 +37,24 @@ jobs:
               ref: "main",
             });
             core.setOutput("sha", data.sha);
+
+      - name: Check out proof helper
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+
+      - name: Reuse unchanged installed nightly
+        id: proof
+        uses: actions/github-script@v8
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          WINDOWS_SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED || 'false' }}
+        with:
+          script: |
+            const { reuseNightly } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);
+            const settings = { windowsSigning: process.env.WINDOWS_SIGNING_ENABLED, macosSigning: process.env.MACOS_SIGNING_ENABLED };
+            core.setOutput('reuse', await reuseNightly({ github, context, core, sha: process.env.SOURCE_SHA, settings }));
 
       - name: Ensure rolling pre-release exists
         uses: actions/github-script@v8
@@ -57,6 +77,7 @@ jobs:
             }
 
   build:
+    if: needs.prepare.outputs.reuse != 'true'
     needs: prepare
     runs-on: self-hosted
     timeout-minutes: 75
@@ -161,7 +182,7 @@ jobs:
   publish:
     needs: [prepare, build]
     # Skip on a single-platform targeted run — the release asset-set check needs all platforms.
-    if: github.event.inputs.platform == '' || github.event.inputs.platform == 'all'
+    if: needs.prepare.outputs.reuse != 'true' && (github.event.inputs.platform == '' || github.event.inputs.platform == 'all')
     runs-on: self-hosted
     permissions:
       contents: write
@@ -235,7 +256,7 @@ jobs:
     # when another platform fails. The runner reports a missing Linux package.
     needs: [prepare, build, publish]
     if: >-
-      !cancelled() && needs.prepare.result == 'success' &&
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.reuse != 'true' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'linux')
     runs-on: self-hosted
@@ -315,7 +336,7 @@ jobs:
     # The shared real-auth fixture is exclusive: Windows starts only after the
     # Linux case has completely finished, including its finalizer.
     if: >-
-      !cancelled() && needs.prepare.result == 'success' &&
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.reuse != 'true' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'windows') &&
       (github.event.inputs.platform == 'windows' || needs.linux-e2e.result != 'skipped')
@@ -394,7 +415,7 @@ jobs:
     # pve01 permits one desktop VM at a time. macOS starts only after the
     # Windows case has completely finished, including its finalizer.
     if: >-
-      !cancelled() && needs.prepare.result == 'success' &&
+      !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.reuse != 'true' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'macos') &&
       (github.event.inputs.platform == 'macos' || needs.windows-e2e.result != 'skipped')
@@ -491,3 +512,36 @@ jobs:
             exit 1
           fi
 
+
+  proof:
+    needs: [prepare, build, publish, linux-e2e, windows-e2e, macos-e2e]
+    if: >-
+      !cancelled() && needs.prepare.outputs.reuse != 'true' &&
+      needs.build.result == 'success' && needs.publish.result == 'success' &&
+      needs.linux-e2e.result == 'success' && needs.windows-e2e.result == 'success' &&
+      needs.macos-e2e.result == 'success'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+      - name: Record installed artifact proof
+        uses: actions/github-script@v8
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          WINDOWS_SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED || 'false' }}
+        with:
+          script: |
+            const { writeProof, nightlyAssets } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);
+            const head = process.env.SOURCE_SHA;
+            const assets = await nightlyAssets(github, context.repo, head);
+            const settings = { windowsSigning: process.env.WINDOWS_SIGNING_ENABLED, macosSigning: process.env.MACOS_SIGNING_ENABLED };
+            writeProof(context, 'nightly.yml', { head, assets, settings });
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nightly.yml-proof
+          path: ${{ runner.temp }}/proof.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90

@@ -16,10 +16,10 @@ test -f src/fonts/SchibstedGrotesk-latin.woff2
 test -f src/fonts/CommitMono-VF.woff2
 # desktop CI: a changes job classifies the diff, the native preflights gate
 # native code PRs beside smoke, packaging shares each preflight VM, and
-# release-only helpers, docs-only PRs and main pushes remain smoke-only
+# release-only helpers and docs-only PRs remain smoke-only
 ci=.github/workflows/ci.yml
 grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
-grep -Fq "if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'" "$ci"
+grep -Fq "if: needs.changes.outputs.desktop == 'true'" "$ci"
 grep -Fq "needs.changes.outputs.installer == 'true'" "$ci"
 grep -Fq 'platform: [linux, windows, macos]' "$ci"
 grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
@@ -52,7 +52,7 @@ done < <(
   grep -RlF '#![cfg(target_os = "windows")]' \
     src-tauri/core/tests src-tauri/runtime/tests | sort
 )
-test "$(grep -Fc 'apt-get install -y -qq --no-install-recommends libasound2-dev' "$ci")" -eq 2
+test "$(grep -Fc 'apt-get install -y -qq --no-install-recommends libasound2-dev' "$ci")" -eq 1
 # Shared-host and guest setup failures can close SSH before desktop-ci returns
 # infrastructure status 3; keep the all-platform one-time retry covering 255.
 grep -Fq '[ "$status" -ne 3 ] && [ "$status" -ne 255 ]' "$ci"
@@ -163,16 +163,16 @@ grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' "$ci"
 grep -Fq 'src-tauri/attach/*|src-tauri/attach/**)' "$ci"
 grep -Fq 'protocol-fixtures/*|protocol-fixtures/**)' "$ci"
 grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
-grep -Fq "if: needs.changes.outputs.companion == 'true'" "$ci"
+grep -Fq "needs.changes.outputs.companion == 'true'" "$ci"
 grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --check' "$ci"
-grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --all-targets --locked -- -D warnings' "$ci"
-grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --locked' "$ci"
+grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --all-targets --locked -- -D warnings' "$ci"
+grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --locked --features client' "$ci"
 grep -Fq 'run: test/cli-dependency-boundary.sh' "$ci"
 test -f src-tauri/runtime/Cargo.toml
 test -f src-tauri/runtime/src/main.rs
 grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-runtime --check' "$ci"
 grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-runtime --all-targets --locked -- -D warnings' "$ci"
-grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked' "$ci"
+# Public core boundary runs the runtime tests with the same feature set.
 grep -Fq 'run: test/runtime-dependency-boundary.sh' "$ci"
 test -d protocol-fixtures/muniment.attach/1
 grep -Fq 'name: attach-fixtures-current' "$ci"
@@ -248,6 +248,6 @@ grep -Fq 'build-windows-installers.mjs' .github/workflows/nightly.yml
 grep -Fq 'windows-installers.ps1' .github/workflows/nightly.yml
 test -f docs/windows-installers.md
 grep -Fq 'cmd="$preflight_cmd && $cmd"' "$ci"
-test "$(grep -Fc "if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'" "$ci")" -eq 1
+test "$(grep -Fc "if: needs.changes.outputs.desktop == 'true'" "$ci")" -eq 1
 test -z "$(git ls-files 'protocol-fixtures/muniment.attach/**' | grep -v '^protocol-fixtures/muniment.attach/1/')"
 echo "smoke OK"

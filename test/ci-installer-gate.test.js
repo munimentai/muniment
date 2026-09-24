@@ -26,7 +26,7 @@ const installerPaths = [
   'test/windows-installers.ps1',
 ]
 
-function classify(paths) {
+function classify(paths, event = 'pull_request') {
   const script = changes.split('        run: |\n')[1].replace(/^ {10}/gm, '')
   const output = execFileSync('bash', ['-eu', '-c', `
     git() { printf '%s' "$CHANGED_PATHS"; }
@@ -39,6 +39,7 @@ function classify(paths) {
     timeout: 10000,
     env: {
       ...process.env,
+      GITHUB_EVENT_NAME: event,
       BASE_SHA: 'base',
       HEAD_SHA: 'head',
       CHANGED_PATHS: paths.length ? `${paths.join('\n')}\n` : '',
@@ -53,7 +54,7 @@ describe('PR gate shape', () => {
     expect(changes).toContain('desktop: ${{ steps.changes.outputs.desktop }}')
     expect(changes).toContain('echo "installer=$installer" >> "$GITHUB_OUTPUT"')
     const lines = changes.split('\n')
-    const flag = lines.findIndex((line) => line.trim() === 'installer=true')
+    const flag = lines.findLastIndex((line) => line.trim() === 'installer=true')
     expect(flag).toBeGreaterThan(0)
     let patternLine = flag - 1
     while (lines[patternLine].trim().startsWith('#')) patternLine -= 1
@@ -102,7 +103,7 @@ describe('PR gate shape', () => {
     expect(smoke).toContain('    needs: changes\n')
     expect(smoke).not.toContain('Classify PR changes')
     expect(desktopCompile).toContain('    needs: changes\n')
-    expect(desktopCompile).toContain("if: github.event_name == 'pull_request' && needs.changes.outputs.desktop == 'true'")
+    expect(desktopCompile).toContain("if: needs.changes.outputs.desktop == 'true'")
     expect(workflow).not.toContain('needs.smoke.outputs')
   })
 
@@ -125,6 +126,11 @@ describe('PR gate shape', () => {
       desktop: 'false', installer: 'false', docs_only: 'false' })
   })
 
+  it('runs every lane for an unproven direct push', () => {
+    expect(classify([], 'push')).toMatchObject({ desktop: 'true', installer: 'true',
+      companion: 'true', attach_fixtures: 'true', code_diff_fixtures: 'true', release_only: 'false' })
+  })
+
   it('preserves native and documentation gates in mixed changes', () => {
     const release = '.github/lib/release-promotion.mjs'
     for (const file of ['src/App.svelte', '.github/lib/windows-signing.mjs', '.github/workflows/ci.yml']) {
@@ -134,9 +140,9 @@ describe('PR gate shape', () => {
     }
     expect(classify([release, 'README.md'])).toMatchObject({ release_only: 'false', release_tooling: 'true' })
     expect(classify([])).toMatchObject({ release_only: 'false', release_tooling: 'false' })
-    expect(smoke).toContain("if: needs.changes.outputs.release_tooling == 'true' && needs.changes.outputs.desktop != 'true'")
-    expect(smoke).toContain('- name: Rust toolchain (bootstrap if missing)\n        run: |')
-    expect(smoke).toContain("- name: Public core boundary\n        if: needs.changes.outputs.release_only != 'true'")
+    expect(smoke).toContain("if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.release_tooling == 'true' && needs.changes.outputs.desktop != 'true')")
+    expect(smoke).toContain('- name: Rust toolchain (bootstrap if missing)\n        if: needs.changes.outputs.reuse != \'true\'\n        run: |')
+    expect(smoke).toContain("- name: Public core boundary\n        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.release_only != 'true')")
   })
 })
 
@@ -163,7 +169,7 @@ it.each(remoteSteps.map((script, index) => [index, script]))('keeps clone creden
           }
           ${script}
         `], { env: { ...process.env, REPO_TOKEN: 'fixture-only-secret', REPOSITORY: 'owner/repo',
-          REF: 'test-branch', PLATFORM: 'linux', INSTALLER: 'false', RUNNER_TEMP: directory, DESKTOP_CI_SSH_KEY: 'fixture-key' },
+          SOURCE_SHA: 'a'.repeat(40), REF: 'test-branch', PLATFORM: 'linux', INSTALLER: 'false', RUNNER_TEMP: directory, DESKTOP_CI_SSH_KEY: 'fixture-key' },
         stdio: 'pipe', timeout: 10000 })
       } catch (error) { actual = error.status }
       expect(actual).toBe(status)
@@ -181,7 +187,7 @@ it.each(['linux', 'windows', 'macos'])('uses one VM and gates packaging on prefl
   try {
     const capture = path.join(directory, 'remote-command')
     const env = { ...process.env, PLATFORM: platform, REPO_TOKEN: 'fixture-token',
-      REPOSITORY: 'owner/repo', REF: 'fixture-branch', RUNNER_TEMP: directory,
+      REPOSITORY: 'owner/repo', SOURCE_SHA: 'a'.repeat(40), REF: 'fixture-branch', RUNNER_TEMP: directory,
       DESKTOP_CI_SSH_KEY: 'fixture-key', CAPTURE: capture }
     const commands = {}
     for (const installer of ['false', 'true']) {
@@ -203,7 +209,7 @@ it.each(['linux', 'windows', 'macos'])('uses one VM and gates packaging on prefl
     }
     const bin = path.join(directory, 'bin')
     fs.mkdirSync(bin)
-    for (const command of ['cargo', 'npm', 'sudo', 'bash', 'node', 'rustup', 'clang', 'powershell.exe']) {
+    for (const command of ['git', 'cargo', 'npm', 'sudo', 'bash', 'node', 'rustup', 'clang', 'powershell.exe']) {
       const file = path.join(bin, command)
       fs.writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' "$0 $*" >> "$COMMAND_LOG"\ncase "$0" in */cargo) [ "$FAIL_PREFLIGHT" = true ] && exit 29 ;; esac\nexit 0\n`)
       fs.chmodSync(file, 0o755)
