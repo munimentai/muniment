@@ -1101,11 +1101,13 @@ slice and changes no runtime code.
 ### Endpoint ownership and discovery
 
 The per-user pipe path is
-`\\.\pipe\Muniment\attach-v1-<user-hash>`. `user-hash` is the first 128 bits
-of SHA-256 over the current user SID's canonical bytes, hex encoded. The hashed
-input is the uppercase canonical SID string encoded as UTF-8. Each surface reads
-its own process token user SID and derives the path directly. The
-hash supports discovery and grants no authority.
+`\\.\pipe\Muniment\attach-v1-<user-hash>-<suffix>`. `user-hash` is the first
+128 bits of SHA-256 over the current user SID's canonical bytes, hex encoded.
+The hashed input is the uppercase canonical SID string encoded as UTF-8.
+`suffix` is 128 random bits. The runtime writes the full path once to the
+owner-only file `%LocalAppData%\ai.muniment.desktop\attach-pipe-name`, and each
+surface reads it from there and checks it against its own token user SID. The
+name supports discovery and grants no authority.
 
 The listener acquires the existing profile instance lock before it creates the
 pipe. That lock remains the final authority against a second listener. The

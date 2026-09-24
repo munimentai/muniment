@@ -89,6 +89,7 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
         assert!(delivered.iter().any(|event| !event.text.is_empty()));
         assert!(delivered
             .iter()
+            .filter(|event| event.delta.is_none())
             .all(|event| event.prompt_storage_notice.as_deref() == Some(&notice)));
         assert_eq!(delivered.last().unwrap().phase, "complete");
         assert!(active.lock().unwrap().is_none());
@@ -160,10 +161,14 @@ fn attach_submit_sends_without_a_default_keychain() {
     loop {
         let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(event.run_id, accepted.run_id);
+        saw_reply |= !event.text.is_empty();
+        // A text delta carries only the appended text. Every whole state carries the notice.
+        if event.delta.is_some() {
+            continue;
+        }
         let notice = event.prompt_storage_notice.unwrap();
         assert!(notice.contains("-25307"));
         assert!(notice.contains("A default keychain could not be found."));
-        saw_reply |= !event.text.is_empty();
         assert_ne!(event.phase, "failed");
         if event.phase == "complete" {
             break;

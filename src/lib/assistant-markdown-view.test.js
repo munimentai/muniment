@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import AssistantMarkdown from './AssistantMarkdown.svelte'
 
@@ -22,6 +22,8 @@ function restoreProperty(target, name, descriptor) {
   else delete target[name]
 }
 
+const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+
 describe('assistant Markdown view', () => {
   it('places the caret at the end of the last text block and moves it as the text grows', async () => {
     const { container, rerender } = render(AssistantMarkdown, {
@@ -32,10 +34,12 @@ describe('assistant Markdown view', () => {
     expect(caret().parentElement).toHaveTextContent('two')
 
     await rerender({ text: '## Heading\n\n- one\n- two\n\n```js\nconst a = 1\n```', caret: true })
+    await frame()
     expect(caret().parentElement).toHaveClass('assistant-markdown')
     expect(caret().previousElementSibling).toHaveProperty('tagName', 'PRE')
 
     await rerender({ text: '## Heading\n\nDone.', caret: true })
+    await frame()
     expect(caret().parentElement).toHaveProperty('tagName', 'P')
     expect(container.querySelectorAll('.caret')).toHaveLength(1)
 
@@ -101,11 +105,59 @@ describe('assistant Markdown view', () => {
     scrollWidth = 400
     resize()
 
-    expect(codeBlock).not.toHaveAttribute('tabindex')
+    await waitFor(() => expect(codeBlock).not.toHaveAttribute('tabindex'))
     expect(codeBlock).not.toHaveAttribute('role')
     expect(codeBlock).not.toHaveAttribute('aria-label')
     expect(table).not.toHaveAttribute('tabindex')
     expect(table).not.toHaveAttribute('role')
     expect(table).not.toHaveAttribute('aria-label')
+  })
+
+  it('draws streamed text once per frame and keeps the DOM of finished blocks', async () => {
+    const { container, rerender } = render(AssistantMarkdown, {
+      props: { text: 'First paragraph.\n\nSecond', caret: true },
+    })
+    const first = container.querySelector('p')
+    const firstText = first.firstChild
+
+    await rerender({ text: 'First paragraph.\n\nSecond par', caret: true })
+    await rerender({ text: 'First paragraph.\n\nSecond paragraph', caret: true })
+    expect(container.querySelectorAll('p')[1]).toHaveTextContent('Second')
+    expect(container.querySelectorAll('p')[1]).not.toHaveTextContent('Second par')
+
+    await frame()
+    const paragraphs = container.querySelectorAll('p')
+    expect(paragraphs).toHaveLength(2)
+    expect(paragraphs[0]).toBe(first)
+    expect(paragraphs[0].firstChild).toBe(firstText)
+    expect(paragraphs[1]).toHaveTextContent('Second paragraph')
+    expect(paragraphs[1].querySelector('.caret')).not.toBeNull()
+
+    await rerender({ text: 'First paragraph.\n\nSecond paragraph.\n\n- item', caret: true })
+    await frame()
+    expect(container.querySelectorAll('p')[0]).toBe(first)
+    expect(container.querySelector('li .caret')).not.toBeNull()
+    expect(container.querySelectorAll('.caret')).toHaveLength(1)
+  })
+
+  it('opens a model link on a middle click and leaves other buttons to the link menu', async () => {
+    const onopenlink = vi.fn()
+    const { container } = render(AssistantMarkdown, {
+      props: { text: '[Docs](https://example.com/docs)', onopenlink },
+    })
+    const link = container.querySelector('a')
+
+    const middle = new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 })
+    link.dispatchEvent(middle)
+    expect(middle.defaultPrevented).toBe(true)
+    await waitFor(() => expect(onopenlink).toHaveBeenCalledWith('https://example.com/docs'))
+
+    const right = new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 2 })
+    link.dispatchEvent(right)
+    expect(right.defaultPrevented).toBe(false)
+    expect(onopenlink).toHaveBeenCalledOnce()
+
+    await fireEvent.click(link)
+    await waitFor(() => expect(onopenlink).toHaveBeenCalledTimes(2))
   })
 })

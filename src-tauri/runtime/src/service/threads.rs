@@ -14,7 +14,9 @@ use muniment_core::journal::thread_mutation::{
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 use muniment_core::owned_threads::chat_thread_summaries_page;
 use muniment_core::run_events::{ChatStorage, SharedStorage};
-use muniment_core::thread_history::{chat_thread_open_page, ChatThreadOpenPage};
+use muniment_core::thread_history::{
+    chat_thread_open_page_without_prompts, load_page_prompts, ChatThreadOpenPage,
+};
 use muniment_core::thread_ownership::subject_owns_first_run;
 use std::path::Path;
 
@@ -159,16 +161,22 @@ pub fn thread_page(
 ) -> Result<ChatThreadOpenPage, String> {
     let profile_directory = profile_directory.as_ref();
     let profile = ChatProfile::new(profile_directory);
-    let mut storage = storage.lock().map_err(lock_error)?;
-    let ChatStorage { journal, cas } = &mut *storage;
-    chat_thread_open_page(
-        journal,
-        Some(cas),
-        subject.as_deref(),
-        &profile.pi_session_root(),
-        &thread_id,
-        limit,
-        cursor.as_deref(),
-    )
-    .map_err(journal_error)
+    let mut page = {
+        let mut storage = storage.lock().map_err(lock_error)?;
+        let ChatStorage { journal, cas } = &mut *storage;
+        chat_thread_open_page_without_prompts(
+            journal,
+            Some(cas),
+            subject.as_deref(),
+            &profile.pi_session_root(),
+            &thread_id,
+            limit,
+            cursor.as_deref(),
+        )
+        .map_err(journal_error)?
+    };
+    // Each prompt is one keychain read. The journal lock is released first,
+    // so a slow keychain never holds up a run's appends.
+    load_page_prompts(&mut page, subject.as_deref()).map_err(journal_error)?;
+    Ok(page)
 }

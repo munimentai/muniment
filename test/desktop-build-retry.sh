@@ -40,7 +40,7 @@ export PATH="$fixture:$PATH"
 export SSH_ATTEMPTS="$fixture/attempts"
 export RUNNER_TEMP="$fixture"
 export PLATFORM=windows
-export key=unused repo_url=unused REF=unused cmd=unused build_timeout=5400 REPO_TOKEN=fixture-only-token
+export key=unused known_hosts=unused repo_url=unused REF=unused cmd=unused build_timeout=5400 REPO_TOKEN=fixture-only-token
 
 export SSH_STATUS=1
 export SSH_FAIL_ONCE=true

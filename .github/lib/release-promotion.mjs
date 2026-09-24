@@ -1,4 +1,10 @@
+import { spawnSync } from "node:child_process";
+import { createHash, X509Certificate } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { createUpdateFeed } from "./update-feed.mjs";
+import { verifyUpdaterSignature } from "./updater-signature.mjs";
 const API = "https://api.github.com";
 const request = async (fetchImpl, token, url, options = {}) => {
   const response = await fetchImpl(url, { ...options, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", ...options.headers } });
@@ -77,6 +83,118 @@ Windows installers are signed. ${macosSigningProvenance(sha)}
 The versioned files preserve the tested binary bytes. Existing download URLs remain available.
 `;
 
+// The signers a stable release accepts. A change of signing identity is a
+// reviewed change to these constants.
+export const WINDOWS_PUBLISHER = "CN=Green Kangaroo\\, LLC,O=Green Kangaroo\\, LLC,L=Murrells Inlet,ST=South Carolina,C=US";
+export const APPLE_TEAM_ID = "VF895CP335";
+// Azure Artifact Signing chains to this Microsoft root, which the system CA
+// bundle does not carry. The file is pinned by its SHA-256.
+export const MICROSOFT_ROOT = ".github/certs/MicrosoftIdentityVerificationRootCA2020.cer";
+export const MICROSOFT_ROOT_SHA256 = "5367f20c7ade0e2bca790915056d086b720c33c1fa2a2661acf787e3292e1270";
+
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const updateBinary = (name) => name.endsWith(".AppImage") || name.endsWith(".app.tar.gz") || name.endsWith("-nsis.exe") || name.endsWith(".msi");
+const tool = (run, command, args) => {
+  const result = run(command, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  return { ok: !result.error && result.status === 0, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}` };
+};
+
+export const microsoftRootPem = (der = readFileSync(MICROSOFT_ROOT)) => {
+  if (sha256(der) !== MICROSOFT_ROOT_SHA256) throw new Error(`${MICROSOFT_ROOT} does not match its pinned SHA-256`);
+  return new X509Certificate(der).toString();
+};
+
+// osslsigncode checks the Authenticode digest, the chain to the pinned root at
+// the timestamp time, and the timestamp chain. The signer must be the publisher.
+export const verifyAuthenticode = (file, caFile, run = spawnSync) => {
+  const { ok, output } = tool(run, "osslsigncode", ["verify", "-CAfile", caFile, "-TSA-CAfile", caFile, "-in", file]);
+  if (!ok || !/^Succeeded\s*$/m.test(output)) throw new Error(`Authenticode verification failed for ${basename(file)}`);
+  const signer = output.slice(output.indexOf("Signer's certificate:")).match(/Subject: ?([^\r\n]+)/)?.[1]?.trim();
+  if (output.indexOf("Signer's certificate:") < 0 || signer !== WINDOWS_PUBLISHER) {
+    throw new Error(`${basename(file)} is signed by ${signer ?? "an unknown signer"}, not ${WINDOWS_PUBLISHER}`);
+  }
+};
+
+// rcodesign reports each signature's CMS check and certificate chain. Require a
+// valid signature, a chain to the Apple root, and the Developer ID of the team.
+const requireAppleSignature = (output, kind, label) => {
+  const identity = new RegExp(`CN=Developer ID ${kind}: [^\\r\\n]*\\(${APPLE_TEAM_ID}\\)`);
+  if (!identity.test(output)) throw new Error(`${label} is not signed with the Developer ID ${kind} identity of team ${APPLE_TEAM_ID}`);
+  if (/chains_to_apple_root_ca: false/.test(output) || !/chains_to_apple_root_ca: true/.test(output)) throw new Error(`${label} does not chain to the Apple root`);
+  if (/^\s*signature_verifies: false/m.test(output) || !/^\s*signature_verifies: true/m.test(output)) throw new Error(`${label} carries a signature that does not verify`);
+};
+
+const MACHO_MAGIC = new Set(["cffaedfe", "feedfacf", "cefaedfe", "feedface", "cafebabe", "bebafeca"]);
+const machOFiles = (directory) => readdirSync(directory, { withFileTypes: true, recursive: true })
+  .filter((entry) => entry.isFile())
+  .map((entry) => join(entry.parentPath ?? entry.path, entry.name))
+  .filter((file) => {
+    const descriptor = openSync(file, "r");
+    const magic = Buffer.alloc(4);
+    try { readSync(descriptor, magic, 0, 4, 0); } finally { closeSync(descriptor); }
+    return MACHO_MAGIC.has(magic.toString("hex"));
+  });
+
+// Check every Mach-O file in an extracted app, and the stapled ticket. The
+// Linux runner has no Gatekeeper, so this checks what rcodesign can check: code
+// directory digests, CMS signatures, the certificate chain and the team.
+export const verifyMacosApp = (app, run = spawnSync) => {
+  if (!existsSync(join(app, "Contents", "CodeResources"))) throw new Error(`${basename(app)} carries no stapled notarization ticket`);
+  const files = machOFiles(app);
+  if (files.length === 0) throw new Error(`${basename(app)} holds no Mach-O code`);
+  for (const file of files) {
+    const label = file.slice(app.length - basename(app).length);
+    if (!tool(run, "rcodesign", ["verify", file]).ok) throw new Error(`rcodesign rejects the signature of ${label}`);
+    const info = tool(run, "rcodesign", ["print-signature-info", file]);
+    if (!info.ok) throw new Error(`rcodesign cannot read the signature of ${label}`);
+    requireAppleSignature(info.output, "Application", label);
+  }
+};
+
+export const verifyMacosPackage = (pkg, run = spawnSync) => {
+  const info = tool(run, "rcodesign", ["print-signature-info", pkg]);
+  if (!info.ok) throw new Error(`rcodesign cannot read the signature of ${basename(pkg)}`);
+  // A flat package carries a legacy RSA signature and a CMS signature over its
+  // table of contents. Installer validates the CMS one, and rcodesign reports
+  // the legacy RSA check as false on packages Apple accepts, so require the
+  // table-of-contents checksum and the CMS signature.
+  if (!/checksum_verifies: true/.test(info.output) || !/cms_signature_verifies: true/.test(info.output)) {
+    throw new Error(`${basename(pkg)} carries a package signature that does not verify`);
+  }
+  requireAppleSignature(info.output, "Installer", basename(pkg));
+};
+
+// Verify the downloaded nightly bytes themselves, not the release text: every
+// updater signature against the committed key, Authenticode on the Windows
+// installers, and the Apple signatures in both app archives and the package.
+export const verifyNightlyArtifacts = ({ files, workDir, publicKey = readFileSync(join("src-tauri", "updater.pub"), "utf8"), run = spawnSync, caPem = microsoftRootPem() }) => {
+  const caFile = join(workDir, "microsoft-root.pem");
+  writeFileSync(caFile, caPem);
+  for (const [name, file] of files) {
+    if (updateBinary(name)) {
+      const signature = files.get(`${name}.sig`);
+      if (!signature) throw new Error(`${name} has no updater signature`);
+      try {
+        verifyUpdaterSignature(readFileSync(file), readFileSync(signature, "utf8"), publicKey);
+      } catch (error) {
+        throw new Error(`${name} updater signature: ${error.message}`);
+      }
+    }
+    if (name.endsWith(".msi") || name.endsWith("-nsis.exe")) verifyAuthenticode(file, caFile, run);
+    if (name.endsWith(".pkg")) verifyMacosPackage(file, run);
+    if (name.endsWith(".app.zip") || name.endsWith(".app.tar.gz")) {
+      const target = join(workDir, `extracted-${basename(name)}`);
+      mkdirSync(target);
+      const extracted = name.endsWith(".zip") ? tool(run, "unzip", ["-q", file, "-d", target]) : tool(run, "tar", ["-xzf", file, "-C", target]);
+      if (!extracted.ok) throw new Error(`cannot extract ${name}`);
+      verifyMacosApp(join(target, "muniment.app"), run);
+      rmSync(target, { recursive: true, force: true });
+    }
+  }
+};
+
+export const sha256Sums = (entries) => entries.map(([name, digest]) => `${digest}  ${name}\n`).join("");
+
 export const windowsSigningProvenance = (sha) => `Windows installers for \`${sha}\` were signed by the nightly workflow.`;
 export const macosSigningProvenance = (sha) => `macOS artifacts for \`${sha}\` were signed and notarized by the nightly workflow.`;
 
@@ -119,7 +237,7 @@ export async function assertInstalledNightly(fetchImpl, token, repoApi, sha) {
   throw new Error(`No successful full installed nightly for ${sha}`);
 }
 
-export async function promoteRelease({ token, repository, sha, version, fetchImpl = fetch }) {
+export async function promoteRelease({ token, repository, sha, version, fetchImpl = fetch, verify = verifyNightlyArtifacts }) {
   validatePromotionInputs(sha, version);
   if (!token || !/^[^/]+\/[^/]+$/.test(repository)) throw new Error("token and owner/repository are required");
   const repoApi = `${API}/repos/${repository}`;
@@ -133,29 +251,47 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
   await assertInstalledNightly(fetchImpl, token, repoApi, sha);
   const nightly = await (await request(fetchImpl, token, `${repoApi}/releases/tags/nightly`)).json();
   if (nightly.draft || !nightly.prerelease || !nightly.body?.includes(sha)) throw new Error(`nightly release is not finalized at ${sha}`);
-  if (!nightly.body.includes(windowsSigningProvenance(sha))) throw new Error(`nightly Windows installers are not verified as signed for ${sha}`);
-  const macosSigned = nightly.body.includes(macosSigningProvenance(sha));
-  if (!macosSigned) throw new Error(`nightly macOS artifacts are not verified as signed and notarized for ${sha}`);
   const assets = expectedNightlyAssets(nightly.assets, sha);
+  const workDir = mkdtempSync(join(tmpdir(), "muniment-promotion-"));
   let created;
   try {
-    created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha, version), draft: true, prerelease: false }) })).json();
-    const signatures = new Map();
-    const stableAssets = [];
+    // Download and verify every asset before anything is created.
+    const files = new Map();
+    const digests = new Map();
     for (const asset of assets) {
       const source = await request(fetchImpl, token, asset.url, { headers: { Accept: "application/octet-stream" } });
-      const bytes = await source.arrayBuffer();
+      const bytes = Buffer.from(await source.arrayBuffer());
+      const digest = sha256(bytes);
+      if (asset.digest && asset.digest !== `sha256:${digest}`) throw new Error(`downloaded ${asset.name} does not match its release digest`);
+      const file = join(workDir, asset.name);
+      writeFileSync(file, bytes);
+      files.set(asset.name, file);
+      digests.set(asset.name, digest);
+    }
+    await verify({ files, workDir });
+    created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha, version), draft: true, prerelease: false }) })).json();
+    const upload = (name, contentType, body) => request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=${encodeURIComponent(name)}`, { method: "POST", headers: { "Content-Type": contentType }, body });
+    const signatures = new Map();
+    const stableAssets = [];
+    const sums = [];
+    for (const asset of assets) {
+      const bytes = readFileSync(files.get(asset.name));
       const name = stableAssetName(asset.name, sha, version);
       stableAssets.push({ ...asset, name });
-      if (name.endsWith(".sig")) signatures.set(name, Buffer.from(bytes).toString("utf8"));
-      await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=${encodeURIComponent(name)}`, { method: "POST", headers: { "Content-Type": asset.content_type || "application/octet-stream" }, body: bytes });
+      sums.push([name, digests.get(asset.name)]);
+      if (name.endsWith(".sig")) signatures.set(name, bytes.toString("utf8"));
+      await upload(name, asset.content_type || "application/octet-stream", bytes);
     }
-    const feed = createUpdateFeed({ repository, version, assets: stableAssets, signatures });
-    await request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=latest.json`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(feed) });
+    const feed = JSON.stringify(createUpdateFeed({ repository, version, assets: stableAssets, signatures }));
+    await upload("latest.json", "application/json", feed);
+    sums.push(["latest.json", sha256(feed)]);
+    await upload("SHA256SUMS", "text/plain", sha256Sums(sums.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
     await request(fetchImpl, token, `${repoApi}/releases/${created.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft: false, prerelease: false }) });
   } catch (error) {
     if (created) { await request(fetchImpl, token, `${repoApi}/releases/${created.id}`, { method: "DELETE" }).catch(() => {}); await request(fetchImpl, token, `${repoApi}/git/refs/tags/${encodeURIComponent(version)}`, { method: "DELETE" }).catch(() => {}); }
     throw error;
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
   }
 }
 

@@ -28,7 +28,7 @@ jobs:
     steps:
       - name: Resolve main revision
         id: source
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const { data } = await github.rest.repos.getCommit({
@@ -39,13 +39,13 @@ jobs:
             core.setOutput("sha", data.sha);
 
       - name: Check out proof helper
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ steps.source.outputs.sha }}
 
       - name: Reuse unchanged nightly builds
         id: proof
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
           WINDOWS_SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
@@ -57,7 +57,7 @@ jobs:
             core.setOutput('reuse', await reuseNightlyBuild({ github, context, core, sha: process.env.SOURCE_SHA, settings }));
 
       - name: Ensure rolling pre-release exists
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         with:
@@ -80,7 +80,7 @@ jobs:
     if: needs.prepare.outputs.reuse != 'true'
     needs: prepare
     runs-on: self-hosted
-    timeout-minutes: 75
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -88,14 +88,18 @@ jobs:
         # Full matrix on schedule / platform=all; a single platform on a targeted dispatch.
         platform: ${{ fromJSON((github.event.inputs.platform == '' || github.event.inputs.platform == 'all') && '["linux","windows","macos"]' || format('["{0}"]', github.event.inputs.platform)) }}
     steps:
+      - name: Check out updater signing helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+
       - name: Build and upload (${{ matrix.platform }}) via desktop-ci
         env:
           PLATFORM: ${{ matrix.platform }}
           REPO_TOKEN: ${{ github.token }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           REPOSITORY: ${{ github.repository }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
           # Azure Artifact Signing (Windows). Empty until the six repo secrets
           # exist => unsigned build. TENANT/CLIENT/SECRET authenticate the
           # service principal; ENDPOINT/ACCOUNT/PROFILE address the cert profile.
@@ -108,8 +112,7 @@ jobs:
           # Apple Developer ID signing + notarization (macOS). Empty until the
           # six repo secrets exist => unsigned build. CERTIFICATE/PASSWORD import
           # the Developer ID Application cert; API_KEY/API_KEY_ID/API_ISSUER
-          # authenticate notarytool; TEAM_ID identifies the account. Enrollment
-          # Y5DUNHQA74 is in review; fill the vault keys the day it clears.
+          # authenticate notarytool; TEAM_ID identifies the account.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -121,15 +124,22 @@ jobs:
           set -u
           umask 077
           key="$RUNNER_TEMP/desktop_ci_key"
+          known_hosts="$RUNNER_TEMP/desktop_ci_known_hosts"
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
-          trap 'rm -f "$key"' EXIT
+          trap 'rm -f "$key" "$known_hosts"' EXIT
+          printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" > "$known_hosts"
 
-          build='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev cmake ninja-build zlib1g-dev libzstd-dev && npm ci --no-audit --no-fund && bash .github/build-linux.sh'
+          # Build VMs install packages without install scripts, and no step
+          # before signing sees a signing secret. The updater key never enters
+          # a VM: the next step signs the uploaded update bundles on the runner.
+          build='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev cmake ninja-build zlib1g-dev libzstd-dev && npm ci --ignore-scripts --no-audit --no-fund && bash .github/build-linux.sh'
           if [ "$PLATFORM" = "windows" ]; then
-            build='npm ci --no-audit --no-fund && node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
+            build='node .github/build-windows-installers.mjs --install-dependencies && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
           fi
           if [ "$PLATFORM" = "macos" ]; then
-            build='. scripts/prepare-cef-macos.sh && npm ci --no-audit --no-fund && rustup target add aarch64-apple-darwin && MACOS_BUILD_REMAINING_SECONDS=$((3600 - $(date +%s) + macos_build_started)) node .github/build-macos-app.mjs'
+            # The first step takes the signing line out of /tmp/dci_env into an
+            # unexported shell variable, and the package step reads it on stdin.
+            build='signing_env=$(node .github/lib/signing-env.mjs) && . scripts/prepare-cef-macos.sh && npm ci --ignore-scripts --no-audit --no-fund && rustup target add aarch64-apple-darwin && printf %s "$signing_env" | MACOS_BUILD_REMAINING_SECONDS=$((3600 - $(date +%s) + macos_build_started)) node .github/build-macos-app.mjs'
           fi
 
           # The VM is destroyed when desktop-ci exits, so completed bundles are
@@ -147,12 +157,14 @@ jobs:
           repo_url="https://github.com/${REPOSITORY}.git"
           ssh_cmd="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd'"
 
-          # Windows code signing: when the Azure Artifact Signing secrets exist,
-          # hand the service-principal creds to desktop-ci on stdin (never argv,
-          # so they stay out of pve01's sudo log and process list) and it injects
-          # them into the ephemeral build VM. Absent secret => unchanged unsigned build.
+          # Signing secrets travel as one hex line that the desktop-ci preamble
+          # skips, so they never enter the build environment. The first build
+          # process takes the line out of the VM's dci_env. printf is a shell
+          # builtin, so the values stay out of every process argument list.
+          signing_line() { printf '#muniment-signing-env:'; printf '%s\n' "$@" | od -An -v -tx1 | tr -d ' \n'; printf '\n'; }
+          signing_env=""
           if [ "$PLATFORM" = "windows" ] && [ -n "${AZURE_CLIENT_SECRET:-}" ]; then
-            signing_env=$(printf '%s\n' \
+            signing_env=$(signing_line \
               "AZURE_TENANT_ID=$AZURE_TENANT_ID" \
               "AZURE_CLIENT_ID=$AZURE_CLIENT_ID" \
               "AZURE_CLIENT_SECRET=$AZURE_CLIENT_SECRET" \
@@ -160,12 +172,11 @@ jobs:
               "AZURE_SIGNING_ACCOUNT=$AZURE_SIGNING_ACCOUNT" \
               "AZURE_SIGNING_PROFILE=$AZURE_SIGNING_PROFILE")
           fi
-          # macOS Developer ID signing: same seam. The .p12 and .p8 arrive
-          # base64-encoded (single-line, so they survive the KEY=VALUE contract);
-          # build-macos-app.mjs decodes them after the config flag enables signing.
+          # The .p12 and .p8 arrive base64-encoded (single-line, so they survive
+          # the KEY=VALUE contract); build-macos-app.mjs decodes them after the
+          # config flag enables signing.
           if [ "$PLATFORM" = "macos" ] && [ "$MACOS_SIGNING_ENABLED" = "true" ]; then
-            signing_env=$(printf '%s\n' \
-              "MACOS_SIGNING_ENABLED=$MACOS_SIGNING_ENABLED" \
+            signing_env=$(printf '%s\n' "MACOS_SIGNING_ENABLED=$MACOS_SIGNING_ENABLED"; signing_line \
               "APPLE_CERTIFICATE=$APPLE_CERTIFICATE" \
               "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD" \
               "APPLE_TEAM_ID=$APPLE_TEAM_ID" \
@@ -174,10 +185,33 @@ jobs:
               "APPLE_API_ISSUER=$APPLE_API_ISSUER")
           fi
           # Compile the candidate into the app and runtime for installed E2E.
-          { printf '%s\n' "GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1" "TAURI_SIGNING_PRIVATE_KEY=$TAURI_SIGNING_PRIVATE_KEY" "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"; if [ -n "${signing_env:-}" ]; then printf '%s\n' "$signing_env"; fi; } \
-          | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          { printf '%s\n' "GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1"; if [ -n "$signing_env" ]; then printf '%s\n' "$signing_env"; fi; } \
+          | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
                 desktopci@10.1.10.10 "$ssh_cmd --env-stdin"
+
+      # The updater key stays on the runner in this one step, which runs only
+      # this repository's code and Node's crypto, makes no tool download, and
+      # checks each signature against src-tauri/updater.pub before upload.
+      - name: Sign update bundles (${{ matrix.platform }})
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          script: |
+            const { readFileSync } = await import('node:fs');
+            const root = process.env.GITHUB_WORKSPACE;
+            const { signNightlyUpdateAssets } = await import(`${root}/.github/lib/update-artifacts.mjs`);
+            const { decodeSecretKey } = await import(`${root}/.github/lib/updater-signature.mjs`);
+            const key = decodeSecretKey(process.env.TAURI_SIGNING_PRIVATE_KEY, process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD);
+            await signNightlyUpdateAssets({
+              github, ...context.repo, sha: process.env.SOURCE_SHA, platform: process.env.PLATFORM,
+              version: JSON.parse(readFileSync(`${root}/package.json`, 'utf8')).version,
+              key, publicKey: readFileSync(`${root}/src-tauri/updater.pub`, 'utf8'), log: core.info,
+            });
 
   publish:
     needs: [prepare, build]
@@ -191,7 +225,7 @@ jobs:
       MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED || 'false' }}
     steps:
       - name: Finalize rolling pre-release
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
         with:
@@ -267,9 +301,10 @@ jobs:
       RELEASE_TOKEN: ${{ github.token }}
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
+      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
     steps:
       - name: Check out E2E harness
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
 
@@ -285,8 +320,10 @@ jobs:
           umask 077
           key="$RUNNER_TEMP/desktop_ci_key"
           output="$RUNNER_TEMP/desktop_ci_output"
+          known_hosts="$RUNNER_TEMP/desktop_ci_known_hosts"
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
-          trap 'rm -f "$key" "$output"' EXIT
+          trap 'rm -f "$key" "$output" "$known_hosts"' EXIT
+          printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" >"$known_hosts"
 
           cmd='bash test/e2e/runner/linux.sh'
           remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
@@ -298,7 +335,7 @@ jobs:
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
             "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
             "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
-          | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 "$remote" >"$output" 2>&1
           run_status=$?
@@ -348,9 +385,10 @@ jobs:
       RELEASE_TOKEN: ${{ github.token }}
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
+      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
     steps:
       - name: Check out E2E harness
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
 
@@ -366,8 +404,10 @@ jobs:
           umask 077
           key="$RUNNER_TEMP/desktop_ci_key"
           output="$RUNNER_TEMP/desktop_ci_output"
+          known_hosts="$RUNNER_TEMP/desktop_ci_known_hosts"
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
-          trap 'rm -f "$key" "$output"' EXIT
+          trap 'rm -f "$key" "$output" "$known_hosts"' EXIT
+          printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" >"$known_hosts"
 
           cmd='powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/e2e/runner/windows.ps1'
           remote="sudo desktop-ci windows --console-user --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
@@ -379,7 +419,7 @@ jobs:
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
             "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
             "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
-          | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 "$remote" >"$output" 2>&1
           run_status=$?
@@ -427,9 +467,10 @@ jobs:
       RELEASE_TOKEN: ${{ github.token }}
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
+      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
     steps:
       - name: Check out E2E harness
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
 
@@ -445,8 +486,10 @@ jobs:
           umask 077
           key="$RUNNER_TEMP/desktop_ci_key"
           output="$RUNNER_TEMP/desktop_ci_output"
+          known_hosts="$RUNNER_TEMP/desktop_ci_known_hosts"
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
-          trap 'rm -f "$key" "$output"' EXIT
+          trap 'rm -f "$key" "$output" "$known_hosts"' EXIT
+          printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" >"$known_hosts"
 
           cmd='bash test/e2e/support/macos-keychain-session.sh bash test/e2e/runner/macos.sh >/tmp/muniment-macos-smoke-artifacts && bash test/e2e/support/macos-keychain-session.sh bash test/e2e/runner/macos-wdio.sh'
           remote="sudo desktop-ci macos --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts --screendump"
@@ -458,7 +501,7 @@ jobs:
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
             "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
             "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
-          | ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 "$remote" >"$output" 2>&1
           run_status=$?
@@ -522,11 +565,11 @@ jobs:
       needs.macos-e2e.result == 'success'
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
       - name: Record installed artifact proof
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           WINDOWS_SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
@@ -538,7 +581,7 @@ jobs:
             const assets = await nightlyAssets(github, context.repo, head);
             const settings = { windowsSigning: process.env.WINDOWS_SIGNING_ENABLED, macosSigning: process.env.MACOS_SIGNING_ENABLED };
             writeProof(context, 'nightly.yml', { head, assets, settings });
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nightly.yml-proof
           path: ${{ runner.temp }}/proof.json

@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 default = []
 local-runtime = []
 cef-smoke = ["local-runtime"]
+browser-agent = []
 e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver", "objc2-app-kit/NSOpenPanel", "objc2-app-kit/NSSavePanel", "objc2-app-kit/NSGraphicsContext"]
 
 [workspace]
@@ -85,6 +86,8 @@ test = false
 
 [profile.release]
 strip = true
+lto = "thin"
+codegen-units = 1
 
 [[bin]]
 name = "muniment-cef-helper"

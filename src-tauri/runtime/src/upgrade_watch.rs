@@ -38,6 +38,7 @@ impl UpgradeWatch {
         drain_state: DrainState,
         stopped: Arc<AtomicBool>,
         refresh_pending: Arc<AtomicBool>,
+        refresh_detected: impl Fn() + Send + 'static,
     ) -> io::Result<std::thread::JoinHandle<()>> {
         let initial_identity = ExecutableIdentity::read(&self.path)?;
         Ok(std::thread::spawn(move || loop {
@@ -52,6 +53,7 @@ impl UpgradeWatch {
                 if replaced {
                     drain_state.set();
                     refresh_pending.store(true, Ordering::Release);
+                    refresh_detected();
                 }
             }
         }))
@@ -121,7 +123,12 @@ mod tests {
             path: watched.clone(),
             poll_interval: Duration::from_millis(5),
         }
-        .start(drain.clone(), Arc::clone(&stopped), Arc::clone(&pending))
+        .start(
+            drain.clone(),
+            Arc::clone(&stopped),
+            Arc::clone(&pending),
+            || {},
+        )
         .unwrap();
 
         let replacement = directory.join("replacement");

@@ -104,14 +104,37 @@ pub struct ParakeetInstallState {
 }
 
 impl ParakeetInstallState {
+    /// Creates the state without reading the model. A background thread runs
+    /// the first full verification so app setup never hashes the model.
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("staging"))?;
-        let status = inspect_parakeet(&root);
-        Ok(Self::with_runner(
+        let state = Self::with_runner(
             root,
-            status,
+            ParakeetInstallStatus::NotInstalled,
             Arc::new(run_native_parakeet_install),
-        ))
+        );
+        state.inspect_in_background()?;
+        Ok(state)
+    }
+
+    fn inspect_in_background(&self) -> std::io::Result<()> {
+        let root = self.root.clone();
+        let inner = Arc::clone(&self.inner);
+        let state_version = inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .state_version;
+        std::thread::Builder::new()
+            .name("parakeet-inspect".into())
+            .spawn(move || {
+                let inspected = inspect_parakeet(&root);
+                let mut inner = inner.lock().unwrap_or_else(|error| error.into_inner());
+                if inner.active.is_none() && inner.state_version == state_version {
+                    inner.state_version = inner.state_version.wrapping_add(1);
+                    inner.status = inspected;
+                }
+            })
+            .map(|_| ())
     }
 
     fn with_runner(
@@ -427,6 +450,20 @@ mod tests {
                 total_bytes: 100,
             }
         );
+    }
+
+    #[test]
+    fn background_inspection_reports_the_installed_state() {
+        let root = std::env::temp_dir().join(format!("muniment-parakeet-{}", uuid::Uuid::new_v4()));
+        let state = ParakeetInstallState::new(root.clone()).unwrap();
+        assert!(root.join("staging").is_dir());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while state.inner.lock().unwrap().state_version == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(state.cancel(), ParakeetInstallStatus::NotInstalled);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

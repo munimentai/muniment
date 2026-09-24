@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use muniment_core::asr::utterance::{Utterance, UtteranceConfig};
 use muniment_core::asr::{
-    AsrLifecycleError, DictationPipeline, OfflineParakeetRecognizer, SileroVoiceActivityDetector,
-    VadDecisionSource, PARAKEET_MODEL_MANIFEST, VAD_SAMPLE_RATE,
+    AsrLifecycleError, AsrModelSetStamp, DictationPipeline, OfflineParakeetRecognizer,
+    SileroVoiceActivityDetector, VadDecisionSource, PARAKEET_MODEL_MANIFEST, VAD_SAMPLE_RATE,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State};
@@ -64,9 +64,75 @@ pub struct DictationState {
     runner: Arc<Runner>,
 }
 
+/// Tells whether two stamps name the same unchanged model files.
+trait ModelStamp {
+    fn matches(&self, other: &Self) -> bool;
+}
+
+impl ModelStamp for AsrModelSetStamp {
+    fn matches(&self, other: &Self) -> bool {
+        AsrModelSetStamp::matches(self, other)
+    }
+}
+
+/// The loaded recognizer of the last session and the model files it read.
+struct LoadedRecognizer<R, S> {
+    directory: PathBuf,
+    stamp: S,
+    recognizer: Arc<R>,
+}
+
+/// Keeps one recognizer across dictation sessions. A session reuses it only
+/// while the verified current revision has the same directory and file stamps.
+struct RecognizerCache<R, S = AsrModelSetStamp>(Mutex<Option<LoadedRecognizer<R, S>>>);
+
+impl<R, S> Default for RecognizerCache<R, S> {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
+impl<R, S: ModelStamp> RecognizerCache<R, S> {
+    fn get<E>(
+        &self,
+        current: Result<(PathBuf, S), E>,
+        load: impl FnOnce() -> Result<R, E>,
+    ) -> Result<Arc<R>, E> {
+        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let (directory, stamp) = match current {
+            Ok(current) => current,
+            Err(error) => {
+                // A removed or failed model drops the loaded recognizer.
+                *slot = None;
+                return Err(error);
+            }
+        };
+        if let Some(loaded) = slot
+            .as_ref()
+            .filter(|loaded| loaded.directory == directory && loaded.stamp.matches(&stamp))
+        {
+            return Ok(Arc::clone(&loaded.recognizer));
+        }
+        *slot = None;
+        let recognizer = Arc::new(load()?);
+        *slot = Some(LoadedRecognizer {
+            directory,
+            stamp,
+            recognizer: Arc::clone(&recognizer),
+        });
+        Ok(recognizer)
+    }
+}
+
 impl DictationState {
     pub fn new(root: PathBuf) -> Self {
-        Self::with_runner(root, Arc::new(run_native))
+        let recognizers = Arc::new(RecognizerCache::default());
+        Self::with_runner(
+            root,
+            Arc::new(move |root, capture, stop, running, emit| {
+                run_native(root, &recognizers, capture, stop, running, emit)
+            }),
+        )
     }
 
     fn with_runner(root: PathBuf, runner: Arc<Runner>) -> Self {
@@ -153,32 +219,47 @@ fn config() -> UtteranceConfig {
     }
 }
 
+fn installed_failure(root: &Path, error: AsrLifecycleError) -> DictationFailure {
+    match error {
+        AsrLifecycleError::RevisionMissing
+            if matches!(root.join("current").try_exists(), Ok(false)) =>
+        {
+            DictationFailure {
+                model_not_installed: true,
+                category: "modelNotInstalled",
+                message: "The speech model is not installed.",
+            }
+        }
+        _ => failure(
+            "invalidInstall",
+            "The installed speech model could not be verified.",
+        ),
+    }
+}
+
 fn run_native(
     root: &Path,
+    recognizers: &RecognizerCache<OfflineParakeetRecognizer>,
     capture: &VoiceCaptureState,
     stop: &AtomicBool,
     running: &Running,
     emit: &Emit,
 ) -> Result<(), DictationFailure> {
     let lifecycle = parakeet_lifecycle(root);
-    let installed = match lifecycle.resolve_current() {
-        Ok(installed) => installed,
-        Err(AsrLifecycleError::RevisionMissing)
-            if matches!(root.join("current").try_exists(), Ok(false)) =>
-        {
-            return Err(DictationFailure {
-                model_not_installed: true,
-                category: "modelNotInstalled",
-                message: "The speech model is not installed.",
-            });
-        }
-        Err(_) => {
-            return Err(failure(
-                "invalidInstall",
-                "The installed speech model could not be verified.",
-            ));
-        }
-    };
+    // Verification reuses the recorded digest of each unchanged file, so a
+    // session start hashes the model only after its files change.
+    let current = lifecycle
+        .resolve_current_stamped()
+        .map_err(|error| installed_failure(root, error));
+    let installed = current
+        .as_ref()
+        .map(|(directory, _)| directory.clone())
+        .map_err(|error| *error);
+    let recognizer = recognizers.get(current, || {
+        OfflineParakeetRecognizer::from_verified_current(&lifecycle)
+            .map_err(|_| failure("modelUnavailable", "The speech model could not be loaded."))
+    })?;
+    let installed = installed?;
     let vad_artifact = PARAKEET_MODEL_MANIFEST
         .additional_artifact
         .expect("the installed manifest includes Silero VAD")
@@ -186,11 +267,9 @@ fn run_native(
     let vad =
         SileroVoiceActivityDetector::from_installed_path(installed.join(vad_artifact.filename))
             .map_err(|_| failure("modelUnavailable", "The speech model could not be loaded."))?;
-    let recognizer = OfflineParakeetRecognizer::from_verified_current(&lifecycle)
-        .map_err(|_| failure("modelUnavailable", "The speech model could not be loaded."))?;
     let pipeline = DictationPipeline::new(vad, config())
         .map_err(|_| failure("pipelineUnavailable", "Dictation could not be started."))?;
-    run_coordinator(capture, pipeline, &recognizer, stop, running, emit)
+    run_coordinator(capture, pipeline, recognizer.as_ref(), stop, running, emit)
 }
 
 trait CaptureSource {
@@ -346,6 +425,43 @@ pub fn dictation_status(state: State<'_, DictationState>) -> DictationStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, Copy, PartialEq)]
+    struct TestStamp(Option<u8>);
+
+    impl ModelStamp for TestStamp {
+        fn matches(&self, other: &Self) -> bool {
+            self.0.is_some() && self == other
+        }
+    }
+
+    #[test]
+    fn recognizers_are_reused_until_the_model_changes_or_fails() {
+        let cache = RecognizerCache::<u32, TestStamp>::default();
+        let loads = std::cell::Cell::new(0);
+        let load = || {
+            loads.set(loads.get() + 1);
+            Ok::<u32, ()>(loads.get())
+        };
+        let current = |stamp| Ok((PathBuf::from("rev"), TestStamp(stamp)));
+
+        assert_eq!(*cache.get(current(Some(1)), load).unwrap(), 1);
+        assert_eq!(*cache.get(current(Some(1)), load).unwrap(), 1);
+        assert_eq!(*cache.get(current(Some(2)), load).unwrap(), 2);
+        assert_eq!(
+            *cache
+                .get(Ok((PathBuf::from("other"), TestStamp(Some(2)))), load)
+                .unwrap(),
+            3
+        );
+        assert_eq!(*cache.get(current(None), load).unwrap(), 4);
+        assert_eq!(*cache.get(current(None), load).unwrap(), 5);
+        assert!(cache.get(Err(()), load).is_err());
+        assert!(cache.0.lock().unwrap().is_none());
+        assert!(cache.get(current(Some(3)), || Err(())).is_err());
+        assert!(cache.0.lock().unwrap().is_none());
+        assert_eq!(*cache.get(current(Some(3)), load).unwrap(), 6);
+    }
     use muniment_core::asr::utterance::VoiceActivity;
     use muniment_core::asr::{VadError, VAD_FRAME_SIZE};
     use std::collections::VecDeque;

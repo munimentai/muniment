@@ -150,7 +150,8 @@ describe('nightly Linux E2E workflow', () => {
 
   it('checks out the pinned E2E harness in every installed lane', () => {
     expect(workflow.match(/- name: Check out E2E harness/g)).toHaveLength(3)
-    expect(workflow.match(/ref: \$\{\{ needs\.prepare\.outputs\.source_sha \}\}/g)).toHaveLength(4)
+    // Three E2E lanes, the proof job, and the build job's updater signing step.
+    expect(workflow.match(/ref: \$\{\{ needs\.prepare\.outputs\.source_sha \}\}/g)).toHaveLength(5)
   })
 
   it('uses the SSH key provided by the self-hosted runner for every E2E lane', () => {

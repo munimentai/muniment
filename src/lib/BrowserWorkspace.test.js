@@ -30,6 +30,22 @@ describe('shared browser', () => {
     view.unmount()
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('browser_view', { label: null, bounds: null, artifactId: null }))
   })
+  it('moves the native page once per frame for a burst of resizes', async () => {
+    let resize
+    globalThis.ResizeObserver = class { constructor(callback) { resize = callback } observe() {} disconnect() {} }
+    render(BrowserWorkspace, { tauri: { invoke }, onclose: vi.fn() })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_view', expect.objectContaining({ label: 'browser' })))
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    const views = () => invoke.mock.calls.filter(([name]) => name === 'browser_view').length
+    const before = views()
+    resize()
+    window.dispatchEvent(new Event('resize'))
+    resize()
+    expect(views()).toBe(before)
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(views()).toBe(before + 1)
+  })
   it('loads a requested chat link after positioning the native browser', async () => {
     const request = {url:'https://xtermjs.org/'}
     const onnavigationhandled = vi.fn()

@@ -168,6 +168,26 @@ impl<R: tauri::Runtime> TauriRunStartBoundaries<R> {
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 impl<R: tauri::Runtime> RunAttachBoundaries for TauriRunStartBoundaries<R> {
+    fn approval_subject(&self) -> Option<String> {
+        if crate::local_mode::is_active(&self.app).ok()? {
+            return Some(muniment_core::attach::LOCAL_APPROVAL_SUBJECT.to_owned());
+        }
+        // The runtime holds the session, so its snapshot names the account that approves now.
+        let crate::attach_service::DesktopClientSession::Connected(client) = self
+            .app
+            .state::<crate::attach_service::AttachCompanionState>()
+            .desktop_client_session()
+        else {
+            return None;
+        };
+        let response = client.entitlement_snapshot().ok()?;
+        let snapshot = response.get("snapshot")?;
+        muniment_core::attach::account_approval_subject(
+            snapshot.get("org_id")?.as_str()?,
+            snapshot.get("user_id")?.as_str()?,
+        )
+    }
+
     #[cfg(target_os = "linux")]
     fn queue_attach_message(
         &self,

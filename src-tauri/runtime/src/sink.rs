@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use muniment_core::attach::SignedWorkspaceApproval;
 use muniment_core::chat_profile::ChatProfile;
@@ -14,6 +15,11 @@ use muniment_core::runtime_eprintln as eprintln;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 
 pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
+
+/// How long a streaming text event may reuse the last read of the local-mode
+/// marker. Every other phase reads the marker, so a run's start, gates and end
+/// always see the current mode.
+const LOCAL_MODE_STREAMING_REUSE: Duration = Duration::from_secs(1);
 
 /// Fans each chat event out to every live subscriber without blocking a run.
 #[derive(Clone, Default)]
@@ -28,6 +34,7 @@ struct RuntimeChatEventBroadcastShared {
     next_id: AtomicU64,
     full_queue_drops: AtomicU64,
     subscribers: Mutex<Vec<RuntimeChatEventSubscriber>>,
+    local_mode: Mutex<Option<(PathBuf, bool, Instant)>>,
     #[cfg(target_os = "linux")]
     delivery_failures: Mutex<std::collections::BTreeMap<(String, String), ChatEvent>>,
 }
@@ -52,15 +59,42 @@ impl RuntimeChatEventBroadcast {
         self
     }
 
+    #[cfg(target_os = "linux")]
     fn allows_workspace(&self, workspace: &str) -> bool {
-        if let Some(directory) = &self.config_directory {
-            if muniment_core::local_mode::is_local_mode(directory) {
-                return workspace == "local";
-            }
+        self.allows_workspace_with(workspace, false)
+    }
+
+    fn allows_workspace_with(&self, workspace: &str, streaming: bool) -> bool {
+        if self.local_mode(streaming) {
+            return workspace == "local";
         }
         self.approval
             .approval()
             .is_some_and(|approval| approval.workspace == workspace)
+    }
+
+    /// Reads the local-mode marker. A streaming event reuses a read younger
+    /// than one second, so a text stream costs at most one marker read a second.
+    fn local_mode(&self, streaming: bool) -> bool {
+        let Some(directory) = &self.config_directory else {
+            return false;
+        };
+        let mut cached = self
+            .shared
+            .local_mode
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((read_directory, local, read_at)) = &*cached {
+            if streaming
+                && read_directory == directory
+                && read_at.elapsed() < LOCAL_MODE_STREAMING_REUSE
+            {
+                return *local;
+            }
+        }
+        let local = muniment_core::local_mode::is_local_mode(directory);
+        *cached = Some((directory.clone(), local, Instant::now()));
+        local
     }
 
     #[cfg(target_os = "linux")]
@@ -124,7 +158,7 @@ impl RuntimeChatEventBroadcast {
     }
 
     fn deliver(&self, workspace: &str, event: ChatEvent) {
-        if !self.allows_workspace(workspace) {
+        if !self.allows_workspace_with(workspace, event.phase == "streaming") {
             return;
         }
         self.fan_out(event);
@@ -343,5 +377,65 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
 
     fn earlier_models(&self) -> Vec<String> {
         self.earlier_models.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(phase: &str) -> ChatEvent {
+        ChatEvent {
+            run_id: "run-1".into(),
+            thread_id: None,
+            phase: phase.into(),
+            text: "hello".into(),
+            prompt_accepted: false,
+            turn_started: false,
+            routing_stage: None,
+            prompt_storage_notice: None,
+            failure_reason: None,
+            receipt: None,
+            tool_activity: Vec::new(),
+            attachments: Vec::new(),
+            recalls: Vec::new(),
+            applied_diffs: Vec::new(),
+            pending_permission: None,
+            delta: None,
+        }
+    }
+
+    #[test]
+    fn streaming_events_reuse_the_marker_read_and_other_phases_read_it_again() {
+        let config = std::env::temp_dir().join(format!(
+            "muniment-sink-local-mode-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&config).unwrap();
+        let marker = config.join(muniment_core::local_mode::LOCAL_MODE_MARKER);
+        let broadcast = RuntimeChatEventBroadcast::new(SignedWorkspaceApproval::default())
+            .with_config_directory(config.clone());
+        let subscriber = broadcast.subscribe();
+
+        broadcast.deliver("local", event("thinking"));
+        assert!(subscriber.try_recv().is_err());
+        std::fs::write(&marker, "1").unwrap();
+        // The streaming event reuses the read that found no marker.
+        broadcast.deliver("local", event("streaming"));
+        assert!(subscriber.try_recv().is_err());
+        // A phase change reads the marker at once.
+        broadcast.deliver("local", event("pending-permission"));
+        assert_eq!(subscriber.try_recv().unwrap().phase, "pending-permission");
+        broadcast.deliver("local", event("streaming"));
+        assert_eq!(subscriber.try_recv().unwrap().phase, "streaming");
+
+        std::fs::remove_file(&marker).unwrap();
+        broadcast.deliver("local", event("complete"));
+        assert!(subscriber.try_recv().is_err());
+        std::fs::remove_dir_all(config).unwrap();
     }
 }

@@ -608,7 +608,8 @@ function markReadyAfterFixtureRender() {
     observer.disconnect()
     void markProbeReady()
   })
-  observer.observe(document.getElementById('app'), { childList: true, subtree: true })
+  // A fixture can finish on a text change, such as a path or a scan count.
+  observer.observe(document.getElementById('app'), { childList: true, subtree: true, characterData: true })
 }
 
 window.__PROBE__ = {

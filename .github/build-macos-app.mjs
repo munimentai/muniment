@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -20,6 +20,7 @@ import {
   signingKeyPartitionListArguments,
   stapleArguments,
 } from "./lib/macos-signing.mjs";
+import { readSigningEnvironment } from "./lib/signing-env.mjs";
 
 const remainingBuildBudget = process.env.MACOS_BUILD_REMAINING_SECONDS ?? "3600";
 const remainingBuildSeconds = Number(remainingBuildBudget);
@@ -63,21 +64,15 @@ const mustRun = (label, cmd, args) => {
 const packageApp = () =>
   mustRun("bundle archive", "ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", app, appZip]);
 
-// Apple Developer ID credentials arrive as a file the desktop-ci driver writes
-// into the VM over the SSH data channel (never on argv) — the SAME env-injection
-// seam Windows signing uses. Load them so the signing config below can resolve.
-// The config flag controls signing. The nightly keeps shipping unsigned while
-// enrollment Y5DUNHQA74 remains in review.
-const credFile = join(tmpdir(), "dci_env");
-if (existsSync(credFile)) {
-  for (const line of readFileSync(credFile, "utf8").split(/\r?\n/)) {
-    const eq = line.indexOf("=");
-    if (eq > 0) process.env[line.slice(0, eq).trim()] = line.slice(eq + 1);
-  }
-}
-// Resolve credentials only when the flag enables signing.
+// Apple Developer ID credentials arrive on stdin: the nightly's first step
+// takes the signing line out of dci_env (see lib/signing-env.mjs) and pipes it
+// here, so the dependency and compile steps before this process never see it.
+// This process reads stdin to its end before it starts a child, and keeps the
+// credentials out of process.env, so the build children below inherit neither.
+// macOS denies a same-user process access to this process's memory. The
+// config flag controls signing.
 const signing = signingEnabled(process.env);
-const signingConfig = signing ? resolveSigningConfiguration(process.env) : null;
+const signingConfig = signing ? resolveSigningConfiguration(readSigningEnvironment()) : null;
 if (signing && signingConfig === null) {
   throw new Error("MACOS_SIGNING_ENABLED is true but Apple credentials are absent");
 }
@@ -100,6 +95,9 @@ if (!signing) {
 }
 
 console.log("macOS signing ENABLED (Developer ID codesign + notarytool notarization + staple)");
+// The signing tools resolve from the system directories alone, so nothing a
+// build step wrote into a user-owned PATH entry runs with the credentials.
+process.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 // Everything secret-bearing lives in a throwaway directory removed on exit.
 const workDir = mkdtempSync(join(tmpdir(), "muniment-macos-signing-"));

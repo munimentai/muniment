@@ -259,11 +259,15 @@ function rewriteMalformedLinks(tokens) {
   return tokens
 }
 
-function hasForbiddenAttributes(html) {
-  const template = document.createElement('template')
-  template.innerHTML = html
+const SANITIZE = {
+  ALLOWED_ATTR,
+  ALLOWED_TAGS,
+  ALLOW_DATA_ATTR: false,
+  ALLOW_ARIA_ATTR: false,
+}
 
-  return [...template.content.querySelectorAll('*')].some((element) =>
+function hasForbiddenAttributes(content) {
+  return [...content.querySelectorAll('*')].some((element) =>
     [...element.attributes].some(({ name, value }) => {
       if (element.localName === 'a') {
         return !['href', 'rel', 'target', 'title'].includes(name)
@@ -276,27 +280,61 @@ function hasForbiddenAttributes(html) {
   )
 }
 
-export function renderAssistantMarkdown(reply, {
+// One top-level block through the renderer, the sanitizer and the attribute
+// check. It answers null when the sanitizer changed the renderer's output.
+function renderBlock(token, purifier) {
+  const parsed = markdown.parser([token])
+  if (!parsed) return { raw: token.raw, html: '', fragment: null }
+  const html = purifier.sanitize(parsed, SANITIZE)
+
+  // DOMPurify reports its internal fragment body, which did not come from the renderer.
+  const removals = purifier.removed.filter(({ element }) => element?.nodeName !== 'BODY')
+  if (removals.length > 0) return null
+  const template = document.createElement('template')
+  template.innerHTML = html
+  if (hasForbiddenAttributes(template.content)) return null
+  return { raw: token.raw, html, fragment: template.content }
+}
+
+// A reply renders as its top-level blocks. A block whose source and every
+// block before it match `previous` keeps the earlier result, so a streamed
+// reply renders only the blocks that changed. Reference definitions reach
+// every block, so a change to them renders every block again. Any block the
+// sanitizer changes turns the whole reply into plain text.
+export function renderAssistantMarkdownBlocks(reply, {
   purifier = DOMPurify,
   reportDiagnostic = (message) => console.warn(message),
+  previous = null,
 } = {}) {
   const text = typeof reply === 'string' ? reply : String(reply ?? '')
   if (!text) return { kind: 'text', text: '' }
 
-  const parsed = markdown.parser(rewriteMalformedLinks(markdown.lexer(text)))
-  const html = purifier.sanitize(parsed, {
-    ALLOWED_ATTR,
-    ALLOWED_TAGS,
-    ALLOW_DATA_ATTR: false,
-    ALLOW_ARIA_ATTR: false,
-  })
-
-  // DOMPurify reports its internal fragment body, which did not come from the renderer.
-  const removals = purifier.removed.filter(({ element }) => element?.nodeName !== 'BODY')
-  if (removals.length > 0 || hasForbiddenAttributes(html)) {
-    reportDiagnostic('Assistant Markdown sanitizer removed generated content.')
-    return { kind: 'text', text }
+  const tokens = markdown.lexer(text)
+  const links = JSON.stringify(tokens.links ?? {})
+  rewriteMalformedLinks(tokens)
+  const reusable = previous?.kind === 'blocks' && previous.links === links ? previous.blocks : []
+  const blocks = []
+  let matching = true
+  for (const token of tokens) {
+    const prior = matching ? reusable[blocks.length] : undefined
+    if (prior && prior.raw === token.raw) {
+      blocks.push(prior)
+      continue
+    }
+    matching = false
+    const block = renderBlock(token, purifier)
+    if (!block) {
+      reportDiagnostic('Assistant Markdown sanitizer removed generated content.')
+      return { kind: 'text', text }
+    }
+    blocks.push(block)
   }
 
-  return { kind: 'html', html }
+  return { kind: 'blocks', blocks, links }
+}
+
+export function renderAssistantMarkdown(reply, options) {
+  const result = renderAssistantMarkdownBlocks(reply, options)
+  if (result.kind === 'text') return result
+  return { kind: 'html', html: result.blocks.map(({ html }) => html).join('') }
 }

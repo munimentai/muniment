@@ -1,23 +1,24 @@
 <script>
-  import { onDestroy } from 'svelte'
+  import { onDestroy, onMount, untrack } from 'svelte'
   import { Menu } from '@tauri-apps/api/menu'
   import { LogicalPosition } from '@tauri-apps/api/dpi'
   import { save } from '@tauri-apps/plugin-dialog'
   import { openUrl } from '@tauri-apps/plugin-opener'
-  import { renderAssistantMarkdown } from './assistant-markdown.js'
+  import { renderAssistantMarkdownBlocks } from './assistant-markdown.js'
   import { createExternalLinkHandler } from './external-link.js'
   import { scrollRegionOverflows } from './scroll-region.js'
 
   // `caret` draws the active-line caret at the end of the last text block, so a
   // reply renders as Markdown from its first token with the caret inside it.
   let { text = '', caret = false, onopenlink, tauri } = $props()
-  let rendered = $derived(renderAssistantMarkdown(text))
   let container
   let caretElement
   let linkStatus = $state('')
   let linkMenu
   const openInBrowser = address => /^https?:/i.test(address) && onopenlink ? onopenlink(address) : openUrl(address)
   const handleExternalLink = createExternalLinkHandler(openInBrowser)
+  // A middle click opens the link like a click. A right click opens the link menu.
+  const handleAuxLink = event => { if (event.button === 1) return handleExternalLink(event) }
   async function linkAction(action) {
     linkStatus = ''
     try { await action() } catch (error) { linkStatus = String(error?.message ?? error) }
@@ -55,7 +56,15 @@
       await linkMenu.popup(position)
     })
   }
-  onDestroy(() => { void linkMenu?.close().catch(() => {}) })
+  const nextFrame = callback => typeof requestAnimationFrame === 'function' ? requestAnimationFrame(callback) : setTimeout(callback, 16)
+  const cancelFrame = id => typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame(id) : clearTimeout(id)
+  let drawFrame = 0
+  let regionFrame = 0
+  onDestroy(() => {
+    void linkMenu?.close().catch(() => {})
+    if (drawFrame) cancelFrame(drawFrame)
+    if (regionFrame) cancelFrame(regionFrame)
+  })
 
   // The block that holds the reply's last text: descend through the last child
   // while it is a block that takes inline content, and stop above a code block,
@@ -91,45 +100,119 @@
     caretHost(container).appendChild(caretElement)
   }
 
-  function updateScrollRegions() {
-    for (const element of container?.querySelectorAll('pre, table') ?? []) {
-      const overflows = scrollRegionOverflows({
-        scrollWidth: element.scrollWidth,
-        clientWidth: element.clientWidth,
-      })
+  function updateScrollRegion(element) {
+    const overflows = scrollRegionOverflows({
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    })
 
-      if (overflows) {
-        element.setAttribute('tabindex', '0')
-        element.setAttribute('role', 'group')
-        element.setAttribute('aria-label', element.tagName === 'PRE' ? 'Code block' : 'Table')
-      } else {
-        element.removeAttribute('tabindex')
-        element.removeAttribute('role')
-        element.removeAttribute('aria-label')
-      }
+    if (overflows) {
+      element.setAttribute('tabindex', '0')
+      element.setAttribute('role', 'group')
+      element.setAttribute('aria-label', element.tagName === 'PRE' ? 'Code block' : 'Table')
+    } else {
+      element.removeAttribute('tabindex')
+      element.removeAttribute('role')
+      element.removeAttribute('aria-label')
     }
   }
 
-  $effect(() => {
-    void rendered
-    void caret
+  // The overflow check reads layout, so it waits for the next frame. A width
+  // change checks every code block and table. New blocks check only their own.
+  let pendingRegions = new Set()
+  let allRegions = false
+  function queueScrollRegions(nodes) {
+    if (nodes) {
+      for (const node of nodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue
+        if (node.matches('pre, table')) pendingRegions.add(node)
+        for (const element of node.querySelectorAll('pre, table')) pendingRegions.add(element)
+      }
+      if (!pendingRegions.size) return
+    } else {
+      allRegions = true
+    }
+    regionFrame ||= nextFrame(checkScrollRegions)
+  }
+  function checkScrollRegions() {
+    regionFrame = 0
+    const elements = allRegions ? container?.querySelectorAll('pre, table') ?? [] : [...pendingRegions]
+    allRegions = false
+    pendingRegions = new Set()
+    for (const element of elements) if (element.isConnected) updateScrollRegion(element)
+  }
+
+  // Each top-level block keeps the DOM nodes it inserted. A redraw keeps every
+  // leading block the renderer reused and replaces the blocks after it, so text
+  // selected in a finished block stays selected while the reply streams.
+  let result = null
+  let mounted = []
+  let plainText = null
+  let drawnText
+  function draw() {
+    drawFrame = 0
+    if (!container) return
+    const next = renderAssistantMarkdownBlocks(text, { previous: result })
+    drawnText = text
+    caretElement?.remove()
+    if (next.kind === 'text') {
+      for (const { nodes } of mounted) for (const node of nodes) node.remove()
+      mounted = []
+      plainText ??= container.appendChild(document.createTextNode(''))
+      plainText.data = next.text
+    } else {
+      plainText?.remove()
+      plainText = null
+      let kept = 0
+      while (kept < mounted.length && mounted[kept].block === next.blocks[kept]) kept += 1
+      for (const { nodes } of mounted.splice(kept)) for (const node of nodes) node.remove()
+      const inserted = []
+      for (const block of next.blocks.slice(kept)) {
+        const fragment = block.fragment ?? blockFragment(block.html)
+        block.fragment = null
+        const nodes = [...fragment.childNodes]
+        container.appendChild(fragment)
+        mounted.push({ block, nodes })
+        inserted.push(...nodes)
+      }
+      queueScrollRegions(inserted)
+    }
+    result = next
     placeCaret()
-    updateScrollRegions()
+  }
+  function blockFragment(html) {
+    const template = document.createElement('template')
+    template.innerHTML = html
+    return template.content
+  }
 
-    if (!container || typeof ResizeObserver === 'undefined') return
+  // The first draw is immediate. Later text draws once per animation frame.
+  $effect(() => {
+    const current = text
+    void caret
+    untrack(() => {
+      if (drawnText === undefined) draw()
+      else if (current === drawnText && !drawFrame) placeCaret()
+      else drawFrame ||= nextFrame(draw)
+    })
+  })
 
-    const observer = new ResizeObserver(updateScrollRegions)
+  onMount(() => {
+    if (typeof ResizeObserver === 'undefined') return
+    let width
+    const observer = new ResizeObserver(entries => {
+      const next = entries?.[0]?.contentRect?.width
+      if (next !== undefined && next === width) return
+      width = next
+      queueScrollRegions(null)
+    })
     observer.observe(container)
     return () => observer.disconnect()
   })
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (The handler delegates native link activation.) -->
-<div class="assistant-markdown" onclick={handleExternalLink} oncontextmenu={linkContextMenu} bind:this={container}>
-  {#if rendered.kind === 'html'}
-    {@html rendered.html}
-  {:else}{rendered.text}{/if}
-</div>
+<div class="assistant-markdown" onclick={handleExternalLink} onauxclick={handleAuxLink} oncontextmenu={linkContextMenu} bind:this={container}></div>
 {#if linkStatus}<p class="link-status" role="status">{linkStatus}</p>{/if}
 
 <style>

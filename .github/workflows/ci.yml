@@ -39,14 +39,14 @@ jobs:
       resident_model_adr: ${{ steps.changes.outputs.resident_model_adr }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Reuse tested PR tree
         id: proof
         if: github.event_name == 'push'
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const { reusePullRequest } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);
@@ -174,7 +174,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -184,15 +184,19 @@ jobs:
           node_dir="$HOME/.local/node-24"
           if { ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null)" != 24 ]; } \
               && [ ! -x "$node_dir/bin/node" ]; then
+            # The SHA-256 values are the ones in the release's SHASUMS256.txt.
             case "$(uname -m)" in
-              x86_64) node_arch=x64 ;;
-              aarch64|arm64) node_arch=arm64 ;;
+              x86_64) node_arch=x64; node_sha256=7e067b13cd0dc7ee8b239f4ebe1ae54f3bba3a6e904553fcb5f581530eb8306d ;;
+              aarch64|arm64) node_arch=arm64; node_sha256=555659c36fc72d0617e278b5d26ffcaebc3760a3de354926b1e5f1b0bfd66083 ;;
               *) printf 'unsupported Node architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
             esac
+            node_archive="$RUNNER_TEMP/node-v24.4.1-linux-${node_arch}.tar.xz"
+            curl --proto '=https' --tlsv1.2 -sSfL -o "$node_archive" \
+              "https://nodejs.org/dist/v24.4.1/node-v24.4.1-linux-${node_arch}.tar.xz"
+            printf '%s  %s\n' "$node_sha256" "$node_archive" | sha256sum --check --quiet
             mkdir -p "$node_dir"
-            curl --proto '=https' --tlsv1.2 -sSfL \
-              "https://nodejs.org/dist/v24.4.1/node-v24.4.1-linux-${node_arch}.tar.xz" \
-              | tar -xJ --strip-components=1 -C "$node_dir"
+            tar -xJf "$node_archive" --strip-components=1 -C "$node_dir"
+            rm -f "$node_archive"
           fi
           echo "$HOME/.local/node-24/bin" >> "$GITHUB_PATH"
 
@@ -230,8 +234,7 @@ jobs:
         if: needs.changes.outputs.reuse != 'true'
         run: |
           if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --profile minimal --default-toolchain stable
+            bash .github/bootstrap-rustup.sh
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           "$HOME/.cargo/bin/rustup" component add rustfmt clippy
@@ -303,7 +306,7 @@ jobs:
 
       - name: Go toolchain for the reader sidecar
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.companion == 'true')
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: src-tauri/reader/go.mod
 
@@ -320,7 +323,7 @@ jobs:
 
       - name: Record tested PR tree
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const { writeProof } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);
@@ -328,7 +331,7 @@ jobs:
 
       - name: Save tested PR tree
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ci.yml-proof
           path: ${{ runner.temp }}/proof.json
@@ -343,13 +346,12 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Rust toolchain (bootstrap if missing)
         run: |
           if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --profile minimal --default-toolchain stable
+            bash .github/bootstrap-rustup.sh
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
@@ -363,6 +365,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           REF: ${{ github.head_ref || github.ref_name }}
           SOURCE_SHA: ${{ github.sha }}
+          DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
         run: |
           set -u
           case "$REF" in
@@ -374,8 +377,10 @@ jobs:
 
           umask 077
           key="$RUNNER_TEMP/desktop_ci_key"
+          known_hosts="$RUNNER_TEMP/desktop_ci_known_hosts"
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
-          trap 'rm -f "$key"' EXIT
+          trap 'rm -f "$key" "$known_hosts"' EXIT
+          printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" > "$known_hosts"
 
           case "$SOURCE_SHA" in
             *[!0-9a-f]*|'') echo 'Invalid source SHA' >&2; exit 1 ;;
@@ -383,7 +388,7 @@ jobs:
           repo_url="https://github.com/${REPOSITORY}"
           cmd='cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --locked && cargo run --manifest-path src-tauri/Cargo.toml --package muniment-attach --bin export-attach-fixtures -- protocol-fixtures --check'
           cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && $cmd"
-          ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
               desktopci@10.1.10.10 \
               "sudo desktop-ci windows --repo '$repo_url' --ref '$REF' --cmd '$cmd' --env-stdin" <<<"GH_TOKEN=$REPO_TOKEN"
@@ -395,13 +400,12 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Rust toolchain (bootstrap if missing)
         run: |
           if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --profile minimal --default-toolchain stable
+            bash .github/bootstrap-rustup.sh
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
@@ -429,6 +433,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           REF: ${{ github.head_ref || github.ref_name }}
           SOURCE_SHA: ${{ github.sha }}
+          DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
         run: |
           set -uo pipefail
           case "$REF" in
@@ -440,15 +445,17 @@ jobs:
 
           umask 077
           key="$RUNNER_TEMP/desktop_ci_key"
+          known_hosts="$RUNNER_TEMP/desktop_ci_known_hosts"
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
-          trap 'rm -f "$key"' EXIT
+          trap 'rm -f "$key" "$known_hosts"' EXIT
+          printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" > "$known_hosts"
 
           cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           if [ "$PLATFORM" = "linux" ]; then
             cmd='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev cmake ninja-build zlib1g-dev libzstd-dev -o DPkg::Lock::Timeout=300 && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --release --locked && bash .github/build-reader.sh src-tauri/target/release/muniment-reader && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           fi
           if [ "$PLATFORM" = "windows" ]; then
-            cmd='npm ci --no-audit --no-fund && npx vitest run --root . test/desktop-e2e-harness.test.js .github/lib/windows-update-target.test.js .github/lib/windows-installed-smoke.test.js && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_identity && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_transport && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test windows_known_folders && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test windows_sid && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test windows_task_service && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --lib windows_task_service && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_listener && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_instance_lock && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_connect && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_credential && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_stream && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_peer_native && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_route_native && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_session && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --lib windows_user_diagnostics && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --lib && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --test windows_acl && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --test windows_attach_acceptor && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --release --locked && powershell.exe -NoProfile -ExecutionPolicy Bypass -File .github/build-reader.ps1 src-tauri/target/release/muniment-reader.exe && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check-cef-windows.ps1'
+            cmd='npm ci --ignore-scripts --no-audit --no-fund && npx vitest run --root . test/desktop-e2e-harness.test.js .github/lib/windows-update-target.test.js .github/lib/windows-installed-smoke.test.js && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_identity && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_transport && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test windows_known_folders && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test windows_sid && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test windows_task_service && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --lib windows_task_service && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_listener && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_instance_lock && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_connect && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_credential && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_stream && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_peer_native && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_route_native && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_session && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --lib windows_user_diagnostics && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --lib && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --test windows_acl && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --test windows_attach_acceptor && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --release --locked && powershell.exe -NoProfile -ExecutionPolicy Bypass -File .github/build-reader.ps1 src-tauri/target/release/muniment-reader.exe && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check-cef-windows.ps1'
           fi
           # macOS ships a universal app — preflight the arm64 cross slice too.
           # The E2E window probe is C that only the macOS SDK can build, and the
@@ -460,15 +467,15 @@ jobs:
           build_timeout=3600
           if [ "$INSTALLER" = true ]; then
             preflight_cmd=$cmd
-            cmd='CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && npm run tauri build'
+            cmd='CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --ignore-scripts --no-audit --no-fund && npm run tauri build'
             if [ "$PLATFORM" = "linux" ]; then
-              cmd='CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --no-audit --no-fund && MUNIMENT_SIDECARS_BUILT=1 bash .github/build-linux.sh'
+              cmd='CARGO_INCREMENTAL=0 cargo build --manifest-path src-tauri/Cargo.toml --locked --profile test --example sidecar-test-stub && CARGO_INCREMENTAL=0 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1 && npm ci --ignore-scripts --no-audit --no-fund && MUNIMENT_SIDECARS_BUILT=1 bash .github/build-linux.sh'
             fi
             if [ "$PLATFORM" = "windows" ]; then
               cmd='node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
             fi
             if [ "$PLATFORM" = "macos" ]; then
-              cmd='npm ci --no-audit --no-fund && node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin --no-bundle && node .github/build-macos-cef-helper.mjs && npm run tauri bundle -- --target universal-apple-darwin --bundles app && node scripts/package-cef-macos.mjs src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app --universal'
+              cmd='npm ci --ignore-scripts --no-audit --no-fund && node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin --no-bundle && node .github/build-macos-cef-helper.mjs && npm run tauri bundle -- --target universal-apple-darwin --bundles app && node scripts/package-cef-macos.mjs src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app --universal'
             fi
             cmd="$preflight_cmd && $cmd"
             build_timeout=5400
@@ -483,7 +490,7 @@ jobs:
           attempt=1
           while true; do
             attempt_log="$RUNNER_TEMP/desktop-ci-$PLATFORM-$attempt.log"
-            if ssh -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            if ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
                    -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
                    desktopci@10.1.10.10 \
                    "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd' --build-timeout '$build_timeout' --env-stdin" <<<"GH_TOKEN=$REPO_TOKEN" \

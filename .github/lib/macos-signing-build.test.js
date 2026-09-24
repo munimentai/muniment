@@ -8,12 +8,15 @@ let searchListResult;
 let exitListeners;
 let clock;
 let notaryResult;
+let originalPath;
 const submissionId = "103b0143-92d9-42a1-82e1-b05b8b7da7db";
 const installerId = "203b0143-92d9-42a1-82e1-b05b8b7da7db";
 const jsonResult = (value) => ({ status: 0, stdout: JSON.stringify(value) });
 
 beforeEach(() => {
   vi.resetModules();
+  // The signing phase narrows PATH to the system directories.
+  originalPath = process.env.PATH;
   clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   vi.doMock("node:timers/promises", () => {
@@ -25,10 +28,13 @@ beforeEach(() => {
     ...(args[1] === "info" ? { status: "Accepted" } : {}),
   });
   exitListeners = process.listeners("exit");
-  for (const name of [
+  // The credentials arrive on stdin through the signing-env reader, never in
+  // the process environment.
+  const credentials = Object.fromEntries([
     "APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_TEAM_ID",
     "APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER",
-  ]) vi.stubEnv(name, "test-value");
+  ].map((name) => [name, "test-value"]));
+  vi.doMock("./signing-env.mjs", () => ({ readSigningEnvironment: vi.fn(() => credentials) }));
   vi.stubEnv("MACOS_SIGNING_ENABLED", "true");
   vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", "3600");
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -64,12 +70,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  process.env.PATH = originalPath;
   for (const listener of process.listeners("exit")) {
     if (!exitListeners.includes(listener)) process.removeListener("exit", listener);
   }
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  for (const module of ["node:fs", "node:fs/promises", "node:child_process", "node:timers/promises"]) vi.doUnmock(module);
+  for (const module of ["node:fs", "node:fs/promises", "node:child_process", "node:timers/promises", "./signing-env.mjs"]) vi.doUnmock(module);
 });
 
 it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (setupSeconds) => {
@@ -127,6 +134,22 @@ it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (se
   expect(packaging[8][1].at(-1)).toMatch(/muniment\.pkg$/);
   expect(console.error).not.toHaveBeenCalled();
   expect(process.exit).not.toHaveBeenCalled();
+});
+
+it("keeps the Apple credentials out of the build environment and runs signing tools from system directories", async () => {
+  const path = process.env.PATH;
+  const paths = [];
+  const defaultSpawn = spawn.getMockImplementation();
+  spawn.mockImplementation((command, args, options) => {
+    paths.push([command, process.env.PATH]);
+    return defaultSpawn(command, args, options);
+  });
+  await import("../build-macos-app.mjs");
+  expect(process.env.APPLE_CERTIFICATE).toBeUndefined();
+  for (const [, , options] of spawn.mock.calls) expect(options?.env?.APPLE_CERTIFICATE).toBeUndefined();
+  const firstSigningTool = paths.findIndex(([command]) => command === "security");
+  expect(paths.slice(0, firstSigningTool).every(([, value]) => value === path)).toBe(true);
+  expect(paths.slice(firstSigningTool).every(([, value]) => value === "/usr/bin:/bin:/usr/sbin:/sbin")).toBe(true);
 });
 
 it("authorizes every signing tool before it uses the imported keys", async () => {

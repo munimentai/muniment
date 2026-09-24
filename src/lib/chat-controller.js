@@ -1,9 +1,10 @@
-import { applyBufferedChatEvents, applyChatEvent, historyMessages, settledPhases, unsettledRun } from './chat-state.js'
+import { applyChatEvent, historyMessages, settledPhases, unsettledRun } from './chat-state.js'
 
 const historyPageCap = 100
 const historyPageLimit = 100
 const signaledThreadCap = 256
 const signaledRunCap = 256
+const liveTextCap = 256
 
 function historyReadError(error) {
   const cause = typeof error === 'string' ? error : error?.message
@@ -90,6 +91,16 @@ export function createChatController({
   const signaledRuns = new Set()
   let signaledRunRefreshInFlight = false
   let signaledRunRefreshFollowUp = false
+  // The runtime streams text as deltas: the appended text and textStart, its
+  // UTF-16 offset in the run's text. A delta extends only the text that the
+  // last live event of its run left, so this map holds that text by run id.
+  // A run restored from pages has no entry, and it waits for the next whole
+  // state, which the runtime sends at least once a second.
+  const liveText = new Map()
+  // The run-index map finds a streamed run without a scan. A lookup checks the
+  // index against the transcript and rebuilds the map when the layout changed.
+  let indexedMessages = null
+  let runIndexes = new Map()
 
   function onHistoryError(message, action, isHistoryRead = false) {
     historyReadFailed = isHistoryRead
@@ -107,6 +118,76 @@ export function createChatController({
   }
 
   const messages = () => readMessages()
+
+  function runIndex(runId) {
+    const list = messages()
+    const index = runIndexes.get(runId)
+    if (index !== undefined && list[index]?.run?.id === runId) return index
+    if (index === undefined && list === indexedMessages) return -1
+    runIndexes = new Map()
+    list.forEach((message, position) => {
+      if (message.run?.id != null) runIndexes.set(message.run.id, position)
+    })
+    indexedMessages = list
+    return runIndexes.get(runId) ?? -1
+  }
+
+  // Publishes a copy of the transcript with one run replaced. The shell holds
+  // the transcript as raw state, so every change is a new array and new objects.
+  function replaceRun(index, run) {
+    const next = messages().slice()
+    next[index] = { ...next[index], run }
+    publishMessages(next)
+    // The layout is unchanged, so the map stays valid for the new array.
+    if (runIndexes.get(run.id) === index) indexedMessages = messages()
+  }
+
+  function rememberLiveText(run) {
+    if (settledPhases.has(run.phase)) {
+      liveText.delete(run.id)
+      return
+    }
+    liveText.delete(run.id)
+    if (liveText.size >= liveTextCap) liveText.delete(liveText.keys().next().value)
+    liveText.set(run.id, run.text ?? '')
+  }
+
+  // Expands a text delta into the whole event it stands for. It returns null
+  // when the run's text is not the text the delta extends.
+  function wholeEvent(run, event) {
+    if (event.textStart == null) return event
+    const base = liveText.get(event.runId)
+    if (base === undefined || base !== run.text || event.textStart > base.length) return null
+    const text = event.textStart === base.length ? base + event.text : base.slice(0, event.textStart) + event.text
+    return {
+      runId: event.runId,
+      threadId: event.threadId,
+      phase: event.phase,
+      text,
+      promptStorageNotice: run.promptStorageNotice,
+      turnStarted: run.turnStarted,
+      failureReason: run.failureReason,
+      receipt: run.receipt,
+      recalls: run.recalls,
+      toolActivity: run.toolActivity,
+      attachments: run.attachments,
+      appliedDiffs: run.appliedDiffs,
+      pendingPermission: run.pendingPermission,
+    }
+  }
+
+  // Applies one live event, a whole state or a delta, and returns the run
+  // unchanged when a delta does not extend it.
+  function applyLiveEvent(run, event) {
+    if (!run || event.runId !== run.id) return run
+    const whole = wholeEvent(run, event)
+    if (!whole) return run
+    const projected = applyChatEvent(run, whole)
+    if (projected !== run) rememberLiveText(projected)
+    return projected
+  }
+
+  const applyLiveEvents = (run, events) => events.reduce(applyLiveEvent, run)
   const active = () => readActive()
   const publishMessages = (next) => {
     if (!destroyed) onMessages(next)
@@ -185,7 +266,7 @@ export function createChatController({
   function signalRun(runId, threadId) {
     if (!runId || !threadId || destroyed) return false
     if (threadId !== readThreadId()) return false
-    if (messages().some((message) => message.run?.id === runId)) return false
+    if (runIndex(runId) >= 0) return false
     if (signaledRuns.has(runId)) return false
     if (signaledRuns.size >= signaledRunCap) {
       signaledRuns.delete(signaledRuns.values().next().value)
@@ -216,7 +297,8 @@ export function createChatController({
     // A thread load replaces the whole transcript, so no published run describes
     // this event yet. openThread and refreshOpenThread drain the buffer onto the
     // loaded pages.
-    const current = historyLoads ? null : messages().find((message) => message.run?.id === payload.runId)?.run
+    const index = historyLoads ? -1 : runIndex(payload.runId)
+    const current = index < 0 ? null : messages()[index].run
     if (!current) {
       // The runtime broadcasts every attach run, so most unknown run ids belong
       // to another surface. Hold the event only while a call waits for its run
@@ -228,8 +310,10 @@ export function createChatController({
       return
     }
     if (payload.turnStarted && !current.turnStarted) void refreshThreads()
-    const projected = applyChatEvent(current, payload)
-    if (projected) publishMessages(messages().map((message) => message.run?.id === projected.id ? { ...message, run: projected } : message))
+    const projected = applyLiveEvent(current, payload)
+    // A delta that does not extend the shown text waits for the next whole state.
+    if (projected === current) return
+    if (projected) replaceRun(index, projected)
     if (projected && (!settledPhases.has(current.phase) || readAnnounced()?.id === payload.runId)) onAnnounce(projected)
     if (active()?.id === payload.runId) {
       const settled = projected && settledPhases.has(projected.phase)
@@ -367,7 +451,7 @@ export function createChatController({
       // handleEvent buffered every event that landed during the load, so the
       // pages loaded over a growing buffer. The recorded state is stale by
       // exactly those events, and only this site can apply them.
-      const rejoined = recorded && applyBufferedChatEvents(recorded, buffered.get(recorded.id) ?? [])
+      const rejoined = recorded && applyLiveEvents(recorded, buffered.get(recorded.id) ?? [])
       if (recorded) buffered.delete(recorded.id)
       const settled = !!rejoined && settledPhases.has(rejoined.phase)
       onHistoryStart()
@@ -428,7 +512,7 @@ export function createChatController({
     const run = destroyed ? null : active()
     const held = run && buffered.get(run.id)
     if (!held?.length) return
-    const projected = applyBufferedChatEvents(run, held)
+    const projected = applyLiveEvents(run, held)
     buffered.delete(run.id)
     publishMessages(messages().map((message) => message.run?.id === run.id ? { ...message, run: projected } : message))
     onAnnounce(projected)
@@ -481,7 +565,7 @@ export function createChatController({
       const recorded = unsettledRun(published)
       // handleEvent buffered every event that landed during the re-read, and the
       // pages are stale by exactly those events. Only this site can apply them.
-      const rejoined = recorded && applyBufferedChatEvents(recorded, buffered.get(recorded.id) ?? [])
+      const rejoined = recorded && applyLiveEvents(recorded, buffered.get(recorded.id) ?? [])
       if (recorded) buffered.delete(recorded.id)
       const settled = !!rejoined && settledPhases.has(rejoined.phase)
       const republished = rejoined
@@ -694,7 +778,7 @@ export function createChatController({
       }
       publishMessages(messages().map((message) => message.submissionId === submissionId ? { ...message, attachments: run.attachments ?? [] } : message))
       const identified = { ...pending, id: run.runId }
-      const projected = applyBufferedChatEvents(identified, buffered.get(run.runId) ?? [])
+      const projected = applyLiveEvents(identified, buffered.get(run.runId) ?? [])
       buffered.delete(run.runId)
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: projected } : message))
       onAnnounce(projected)
@@ -747,7 +831,7 @@ export function createChatController({
       await invoke('chat_resume', { runId: run.id })
       if (destroyed) return
       const current = messages().find((message) => message.run?.id === run.id)?.run ?? resuming
-      const projected = applyBufferedChatEvents(current, buffered.get(run.id) ?? [])
+      const projected = applyLiveEvents(current, buffered.get(run.id) ?? [])
       buffered.delete(run.id)
       publishMessages(messages().map((message) => message.run?.id === run.id ? { ...message, run: projected } : message))
       onAnnounce(projected)
@@ -788,6 +872,7 @@ export function createChatController({
     unlisten?.()
     unlisten = undefined
     buffered.clear()
+    liveText.clear()
   }
 
   return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, recoverChatEvents, historyReadFailed: () => historyLoadFailed, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }

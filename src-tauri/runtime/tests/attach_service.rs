@@ -297,6 +297,7 @@ fn service_credential_map_sees_a_registry_revoke() {
         claimed_kind: "cli".into(),
         claimed_version: "1.0.0".into(),
         approved_at: Some("2026-08-12T00:00:00Z".into()),
+        subject: None,
     };
     save_client_credentials(
         &profile.profile.join(COMPANION_CREDENTIAL_FILE_NAME),
@@ -334,6 +335,7 @@ fn service_lists_and_idempotently_revokes_companions() {
         claimed_kind: "cli".into(),
         claimed_version: "1.0.0".into(),
         approved_at: Some("2026-08-12T00:00:00Z".into()),
+        subject: None,
     };
     save_client_credentials(
         &profile.profile.join(COMPANION_CREDENTIAL_FILE_NAME),

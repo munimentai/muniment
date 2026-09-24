@@ -14,6 +14,10 @@ use std::path::{Path, PathBuf};
 
 /// The largest file the reader opens. A larger export is split first.
 pub const CSV_BYTE_CAP: u64 = 64 * 1024 * 1024;
+/// The most cells the reader holds for one file, counting the cells a short
+/// row gains when it is padded to the header's width. A file of delimiters
+/// alone would otherwise build one string per byte.
+pub const CSV_CELL_CAP: usize = 4_000_000;
 /// How many rows Describe samples for types and examples.
 const SAMPLE_ROWS: usize = 200;
 /// How many distinct examples a field carries.
@@ -23,6 +27,7 @@ const SAMPLE_CHARS: usize = 80;
 
 pub struct CsvReader {
     path: PathBuf,
+    cell_cap: usize,
 }
 
 struct Parsed {
@@ -36,6 +41,16 @@ impl CsvReader {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self {
             path: path.as_ref().to_path_buf(),
+            cell_cap: CSV_CELL_CAP,
+        }
+    }
+
+    /// A reader with a smaller cell cap, so a test reaches the cap with a small file.
+    #[cfg(test)]
+    fn with_cell_cap(path: impl AsRef<Path>, cell_cap: usize) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            cell_cap,
         }
     }
 
@@ -76,22 +91,29 @@ impl CsvReader {
         let hash = hex_lower(&Sha256::digest(&bytes));
         let text = String::from_utf8_lossy(&bytes);
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-        let mut records = parse_csv(text, sniff_delimiter(text))?;
+        let mut records = parse_csv(text, sniff_delimiter(text), self.cell_cap)?;
         if records.is_empty() {
             return Err(ReaderError::Malformed(
                 "the file has no header row".to_owned(),
             ));
         }
-        let header = header_names(records.remove(0));
+        let header = records.remove(0);
         let width = header.len();
-        let rows = records
+        let mut rows: Vec<Vec<String>> = records
             .into_iter()
             .filter(|record| record.iter().any(|cell| !cell.trim().is_empty()))
-            .map(|mut record| {
-                record.resize(width, String::new());
-                record
-            })
             .collect();
+        let padded_cells = rows
+            .len()
+            .checked_add(1)
+            .and_then(|records| records.checked_mul(width));
+        if !matches!(padded_cells, Some(cells) if cells <= self.cell_cap) {
+            return Err(too_many_cells(self.cell_cap));
+        }
+        let header = header_names(header);
+        for record in &mut rows {
+            record.resize(width, String::new());
+        }
         Ok(Parsed {
             header,
             rows,
@@ -224,6 +246,10 @@ fn sniff_delimiter(text: &str) -> char {
 /// gains a suffix, so every field has one name a mapping can point at.
 fn header_names(header: Vec<String>) -> Vec<String> {
     let mut names: Vec<String> = Vec::with_capacity(header.len());
+    let mut taken = std::collections::HashSet::with_capacity(header.len());
+    // The next suffix to try for each base. A taken name never frees, so the search
+    // resumes where it stopped, and a header of one repeated name stays linear.
+    let mut next_suffix = std::collections::HashMap::new();
     for (index, cell) in header.into_iter().enumerate() {
         let base = cell.trim().to_owned();
         let base = if base.is_empty() {
@@ -232,20 +258,41 @@ fn header_names(header: Vec<String>) -> Vec<String> {
             base
         };
         let mut name = base.clone();
-        let mut suffix = 2;
-        while names.contains(&name) {
-            name = format!("{base}_{suffix}");
-            suffix += 1;
+        if taken.contains(&name) {
+            let suffix = next_suffix.entry(base.clone()).or_insert(2_usize);
+            loop {
+                name = format!("{base}_{suffix}");
+                *suffix += 1;
+                if !taken.contains(&name) {
+                    break;
+                }
+            }
         }
+        taken.insert(name.clone());
         names.push(name);
     }
     names
 }
 
+fn too_many_cells(cell_cap: usize) -> ReaderError {
+    ReaderError::Source {
+        code: "too_large".to_owned(),
+        message: format!(
+            "The file holds more than {cell_cap} cells and the reader stops there. Split the export first."
+        ),
+    }
+}
+
 /// RFC 4180: fields split on the delimiter, a quoted field keeps delimiters
 /// and line breaks, and a doubled quote inside it is one quote. A record ends
 /// at a line feed outside quotes, with or without a carriage return.
-pub fn parse_csv(text: &str, delimiter: char) -> Result<Vec<Vec<String>>, ReaderError> {
+/// The parse fails once it holds more than `cell_cap` cells.
+pub fn parse_csv(
+    text: &str,
+    delimiter: char,
+    cell_cap: usize,
+) -> Result<Vec<Vec<String>>, ReaderError> {
+    let mut cells = 0_usize;
     let mut records = Vec::new();
     let mut record = Vec::new();
     let mut field = String::new();
@@ -281,11 +328,19 @@ pub fn parse_csv(text: &str, delimiter: char) -> Result<Vec<Vec<String>>, Reader
             }
             '\r' if chars.peek() == Some(&'\n') => {}
             character if character == delimiter => {
+                cells += 1;
+                if cells > cell_cap {
+                    return Err(too_many_cells(cell_cap));
+                }
                 record.push(std::mem::take(&mut field));
                 after_closing_quote = false;
             }
             '\n' => {
                 line += 1;
+                cells += 1;
+                if cells > cell_cap {
+                    return Err(too_many_cells(cell_cap));
+                }
                 record.push(std::mem::take(&mut field));
                 records.push(std::mem::take(&mut record));
                 after_closing_quote = false;
@@ -305,6 +360,9 @@ pub fn parse_csv(text: &str, delimiter: char) -> Result<Vec<Vec<String>>, Reader
         )));
     }
     if !field.is_empty() || !record.is_empty() {
+        if cells >= cell_cap {
+            return Err(too_many_cells(cell_cap));
+        }
         record.push(field);
         records.push(record);
     }
@@ -338,6 +396,7 @@ mod tests {
         let records = parse_csv(
             "name,domain,\"note, long\"\r\n\"Northwind, Inc.\",northwind.example,\"line one\nline two\"\nContoso,contoso.example,\"say \"\"hi\"\"\"\n",
             ',',
+            CSV_CELL_CAP,
         )
         .unwrap();
         assert_eq!(records.len(), 3);
@@ -353,12 +412,57 @@ mod tests {
             header_names(vec!["a".into(), "".into(), "a".into(), " b ".into()]),
             vec!["a", "column_2", "a_2", "b"]
         );
-        assert!(parse_csv("a,b\n\"open,1\n", ',')
+        assert!(parse_csv("a,b\n\"open,1\n", ',', CSV_CELL_CAP)
             .unwrap_err()
             .to_string()
             .contains("never closes"));
-        assert!(parse_csv("a,b\nx\"y,1\n", ',').is_err());
-        assert!(parse_csv("a,b\n\"x\"y,1\n", ',').is_err());
+        assert!(parse_csv("a,b\nx\"y,1\n", ',', CSV_CELL_CAP).is_err());
+        assert!(parse_csv("a,b\n\"x\"y,1\n", ',', CSV_CELL_CAP).is_err());
+    }
+
+    #[test]
+    fn stops_at_the_cell_cap() {
+        assert_eq!(parse_csv("a,b\n1,2\n", ',', 4).unwrap().len(), 2);
+        for text in ["a,b\n1,2\n3", "a,b\n1,2,3\n", ",,,,,"] {
+            let error = parse_csv(text, ',', 4).unwrap_err();
+            assert_eq!(error.code(), "too_large");
+            assert!(error.to_string().contains("more than 4 cells"));
+        }
+
+        const CAP: usize = 1_000;
+        let commas = temporary("commas", &",".repeat(CAP + 1));
+        let object = commas.to_string_lossy().into_owned();
+        let error = CsvReader::with_cell_cap(&commas, CAP)
+            .describe(&object)
+            .unwrap_err();
+        assert_eq!(error.code(), "too_large");
+
+        // A wide header pads every short row to its width, and the padding counts.
+        let wide = temporary("wide", &format!("{}\nx\ny\n", ",".repeat(CAP / 2)));
+        let object = wide.to_string_lossy().into_owned();
+        let error = CsvReader::with_cell_cap(&wide, CAP)
+            .describe(&object)
+            .unwrap_err();
+        assert_eq!(error.code(), "too_large");
+        assert!(CsvReader::with_cell_cap(&wide, CAP * 2)
+            .describe(&object)
+            .is_ok());
+
+        // The public reader and parse use the production cap.
+        assert_eq!(CsvReader::new(&wide).cell_cap, CSV_CELL_CAP);
+        assert!(parse_csv(&",".repeat(CAP), ',', CSV_CELL_CAP).is_ok());
+    }
+
+    #[test]
+    fn names_a_header_of_one_repeated_name_in_linear_time() {
+        let names = header_names(vec!["a".into(); 20_000]);
+        assert_eq!(names[0], "a");
+        assert_eq!(names[1], "a_2");
+        assert_eq!(names[19_999], "a_20000");
+        assert_eq!(
+            header_names(vec!["a".into(), "a_3".into(), "a".into(), "a".into()]),
+            ["a", "a_3", "a_2", "a_4"]
+        );
     }
 
     #[test]

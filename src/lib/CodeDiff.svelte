@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte'
   import DOMPurify from 'dompurify'
   import { html } from 'diff2html'
   import { codeDiffPresentation } from './code-diff.js'
@@ -46,15 +47,27 @@
     }
   }
 
+  // The overflow check reads layout, so it runs once in the next frame.
+  let regionFrame = 0
+  function queueScrollRegions() {
+    regionFrame ||= requestAnimationFrame(() => {
+      regionFrame = 0
+      updateScrollRegions()
+    })
+  }
+
   $effect(() => {
     void records
-    updateScrollRegions()
+    queueScrollRegions()
+  })
 
-    if (!container || typeof ResizeObserver === 'undefined') return
-
-    const observer = new ResizeObserver(updateScrollRegions)
-    observer.observe(container)
-    return () => observer.disconnect()
+  onMount(() => {
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(queueScrollRegions)
+    observer?.observe(container)
+    return () => {
+      observer?.disconnect()
+      cancelAnimationFrame(regionFrame)
+    }
   })
 </script>
 

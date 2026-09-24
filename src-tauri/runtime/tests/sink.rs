@@ -34,6 +34,7 @@ fn event() -> ChatEvent {
         recalls: Vec::new(),
         applied_diffs: Vec::new(),
         pending_permission: None,
+        delta: None,
     }
 }
 

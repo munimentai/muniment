@@ -706,7 +706,8 @@ try {
   try {
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $pipeHelper = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../support/windows-attach-pipe.mjs"))
-    $pipePath = (Invoke-NativeCommand "node" "`"$pipeHelper`" $sid" $runtimeConnectionLog "Windows attach pipe derivation failed").Trim()
+    # The runtime stores the pipe path, with its random suffix, when it binds the pipe.
+    $pipeNameFile = Join-Path $runtimeLocalAppData "ai.muniment.desktop\attach-pipe-name"
     $runtimeTask = Get-ScheduledTask -TaskPath "\Muniment\" -TaskName "Runtime-$sid" -ErrorAction SilentlyContinue
     if ($runtimeTask) { $runtimeTaskState = $runtimeTask.State.ToString() }
 
@@ -727,8 +728,13 @@ namespace MunimentE2e {
       $remainingMilliseconds = [Math]::Ceiling(($waitDeadline - [DateTime]::UtcNow).TotalMilliseconds)
       if ($remainingMilliseconds -le 0) { break }
       $waitMilliseconds = [uint32][Math]::Min(1000, $remainingMilliseconds)
-      $pipePresent = [MunimentE2e.NamedPipe]::WaitNamedPipe($pipePath, $waitMilliseconds)
-      if ($pipePresent) { break }
+      if (-not $pipePath -and (Test-Path -LiteralPath $pipeNameFile)) {
+        $pipePath = (Invoke-NativeCommand "node" "`"$pipeHelper`" $sid `"$runtimeLocalAppData`"" $runtimeConnectionLog "Windows attach pipe name read failed").Trim()
+      }
+      if ($pipePath) {
+        $pipePresent = [MunimentE2e.NamedPipe]::WaitNamedPipe($pipePath, $waitMilliseconds)
+        if ($pipePresent) { break }
+      }
       $remainingMilliseconds = [Math]::Ceiling(($waitDeadline - [DateTime]::UtcNow).TotalMilliseconds)
       if ($remainingMilliseconds -le 0) { break }
       Start-Sleep -Milliseconds ([Math]::Min(100, $remainingMilliseconds))

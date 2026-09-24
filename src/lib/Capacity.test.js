@@ -24,3 +24,25 @@ it('shows when balancing is disabled', async () => {
   render(Capacity,{tauri:{invoke:vi.fn(async()=>({enabled:false,accounts:[]}))},onclose:vi.fn(),onmanage:vi.fn()})
   expect(await screen.findByText('Account balancing is off.')).toBeInTheDocument()
 })
+it('skips the poll while the window is hidden and refreshes once when it shows', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  let hidden = false
+  const visibility = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden)
+  try {
+    const invoke = vi.fn(async () => ({enabled:false,accounts:[]}))
+    render(Capacity,{tauri:{invoke},onclose:vi.fn(),onmanage:vi.fn()})
+    await screen.findByText('Account balancing is off.')
+    expect(invoke).toHaveBeenCalledTimes(1)
+    hidden = true
+    await vi.advanceTimersByTimeAsync(45000)
+    expect(invoke).toHaveBeenCalledTimes(1)
+    hidden = false
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(invoke).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(invoke).toHaveBeenCalledTimes(3)
+  } finally {
+    visibility.mockRestore()
+    vi.useRealTimers()
+  }
+})

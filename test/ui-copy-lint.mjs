@@ -145,6 +145,12 @@ const DIAGNOSTICS = new Map([
     "'.pi'", "parts[0] === '.pi'", "['.pi', '.muniment'].includes(parts[0])",
     "join(ctx.cwd, '.pi', 'tasks', runId); join('.pi', 'tasks', runId);", 'Output is written to .pi/tasks',
   ]],
+  // The test stub writes the same upstream source lines, so branding finds them.
+  ['bin/sidecar-test-stub.rs', [
+    'You can close this page and return to Pi.',
+    String.raw`export function getAppName(): string {\n  const name = readPiConfig()?.name\n  return typeof name === \"string\" && name.trim() ? name.trim() : \"pi\"\n}`,
+    "'.pi'", "parts[0] === '.pi'",
+  ]],
   ['pi_settings.rs', ['The Pi directory URL is invalid.', 'Cannot locate the Pi home directory.', 'Pi settings lock changed owners.']],
   ['sidecar/io.rs', ['timed out writing Pi RPC stdin', 'Pi stderr {index}', 'Pi stderr 5']],
   ['sidecar/pi.rs', [

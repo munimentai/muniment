@@ -42,6 +42,7 @@ fn credential(kind: &str, version: &str, secret: &str) -> ClientCredential {
         claimed_kind: kind.into(),
         claimed_version: version.into(),
         approved_at: Some("2026-08-12T00:00:00Z".into()),
+        subject: None,
     }
 }
 

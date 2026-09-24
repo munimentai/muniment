@@ -25,6 +25,14 @@ const home = homedir();
 // ~/.vault_pass opens. See ~/gk/homelab/docs/services/openbao.md.
 const homelab = process.env.MUNIMENT_HOMELAB_DIR ?? join(home, "gk", "homelab");
 const openbao = "https://10.1.10.107:50080";
+// OpenBao serves a self-signed certificate, so curl trusts that certificate
+// alone instead of skipping verification. It is /etc/openbao/tls/openbao.crt
+// on openbao-01; copy it to this machine and name the copy here.
+const openbaoCa = process.env.MUNIMENT_OPENBAO_CA;
+if (!openbaoCa || !existsSync(openbaoCa)) {
+  console.error("Set MUNIMENT_OPENBAO_CA to a local copy of /etc/openbao/tls/openbao.crt from openbao-01 (10.1.10.107).");
+  process.exit(1);
+}
 // The Developer ID Application certificate sits with the company's other Apple
 // credentials under the greenkangaroo group, base64 of the .p12.
 const secretPath = "homelab/data/greenkangaroo";
@@ -96,7 +104,7 @@ const intermediateCertificate = join(".github", "certs", "DeveloperIDG2CA.cer");
 const intermediateSha1 = capture("read intermediate fingerprint", "openssl", ["x509", "-inform", "der", "-in", intermediateCertificate, "-noout", "-fingerprint", "-sha1"]).replace(/^.*=/s, "").replace(/:/g, "").trim();
 let intermediatePlaced = false;
 process.on("exit", () => {
-  if (tokenIssued) spawnSync("curl", ["-sk", "-X", "POST", "-H", `@${headerFile}`, `${openbao}/v1/auth/token/revoke-self`]);
+  if (tokenIssued) spawnSync("curl", ["-s", "--cacert", openbaoCa, "-X", "POST", "-H", `@${headerFile}`, `${openbao}/v1/auth/token/revoke-self`]);
   if (keychainCreated) {
     spawnSync("security", keychainSearchListArguments("", priorKeychains).filter((arg) => arg !== ""));
     spawnSync("security", ["delete-keychain", keychain]);
@@ -112,7 +120,7 @@ if (!roleId || !secretId) {
   console.error("vault.yml carries no openbao_ansible_role_id and openbao_ansible_secret_id");
   process.exit(1);
 }
-const login = capture("OpenBao login", "curl", ["-sk", "-X", "POST", "--data-binary", "@-", `${openbao}/v1/auth/approle/login`], { input: JSON.stringify({ role_id: roleId, secret_id: secretId }) });
+const login = capture("OpenBao login", "curl", ["-s", "--cacert", openbaoCa, "-X", "POST", "--data-binary", "@-", `${openbao}/v1/auth/approle/login`], { input: JSON.stringify({ role_id: roleId, secret_id: secretId }) });
 const token = JSON.parse(login)?.auth?.client_token;
 if (!token) {
   console.error("OpenBao login answered no client token");
@@ -120,7 +128,7 @@ if (!token) {
 }
 writeFileSync(headerFile, `X-Vault-Token: ${token}\n`, { mode: 0o600 });
 tokenIssued = true;
-const secret = JSON.parse(capture("read signing certificate", "curl", ["-sk", "-H", `@${headerFile}`, `${openbao}/v1/${secretPath}`]))?.data?.data ?? {};
+const secret = JSON.parse(capture("read signing certificate", "curl", ["-s", "--cacert", openbaoCa, "-H", `@${headerFile}`, `${openbao}/v1/${secretPath}`]))?.data?.data ?? {};
 for (const field of [certificateField, passwordField]) {
   if (!secret[field]) {
     console.error(`OpenBao ${secretPath} has no field ${field}. An admin writes it with: bao kv patch homelab/greenkangaroo ${field}=<value>`);
