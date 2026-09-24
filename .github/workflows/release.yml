@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   promote:
-    runs-on: self-hosted
+    runs-on: muniment-release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -75,7 +75,7 @@ jobs:
   draft-winget-pr:
     name: Draft WinGet manifest PR
     needs: promote
-    runs-on: self-hosted
+    runs-on: muniment-release
     steps:
       - name: Check out release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
