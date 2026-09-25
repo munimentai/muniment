@@ -1,4 +1,5 @@
 <script>
+  import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import SearchToolbar from './ui/SearchToolbar.svelte'
   import ChoiceField from './ui/ChoiceField.svelte'
   import Button from './ui/Button.svelte'
@@ -70,11 +71,12 @@
   {#if filtersOpen}
       <div class="filter-fields" id="model-filters">
         <ChoiceField label="Minimum context" value={minContext} inline={false} options={[{value:'0',label:'Any size'},{value:'32000',label:'32K+'},{value:'128000',label:'128K+'},{value:'200000',label:'200K+'},{value:'1000000',label:'1M+'}]} onchange={value => minContext = value} />
-        <label><input type="checkbox" bind:checked={vision}>Image input / vision</label>
-        <label><input type="checkbox" bind:checked={reasoning}>Reasoning</label>
-        <label><input type="checkbox" bind:checked={shownOnly}>Shown in composer</label>
-        <p>Capability filters include only models with reported support.</p>
-        <Button onclick={() => { minContext = '0'; vision = false; reasoning = false; shownOnly = false }}>Clear filters</Button>
+        <ChoiceField label="Visibility" value={shownOnly ? 'shown' : 'all'} inline={false} options={[{value:'all',label:'All models'},{value:'shown',label:'Shown in composer'}]} onchange={value => shownOnly = value === 'shown'} />
+        <div class="capability-filter"><span title="Only models with reported support match these filters.">Capabilities</span><div class="capability-options">
+          <Button icon="eye" variant="outline" aria-pressed={vision} onclick={() => vision = !vision}>Vision</Button>
+          <Button icon="brain" variant="outline" aria-pressed={reasoning} onclick={() => reasoning = !reasoning}>Reasoning</Button>
+        </div></div>
+        <div class="clear-filters"><Button aria-label="Clear filters" onclick={() => { minContext = '0'; vision = false; reasoning = false; shownOnly = false }}>Clear</Button></div>
       </div>
   {/if}
   {#if error}<p role="alert">{error}</p>{/if}
@@ -95,7 +97,7 @@
             <label class="show"><Toggle checked={shown} disabled={pending || key in visibility} aria-label={`Show ${model.label} in the selector`} onchange={shown => setShown(model, shown)} />Show</label>
           </div>
           {#if route}
-            <details><summary>Routing statement</summary><p class="statement">{route.description}</p>
+            <details><DisclosureSummary>Routing statement</DisclosureSummary><p class="statement">{route.description}</p>
               {#if editing === route.key}
                 <label for="model-statement">When should this model answer?</label><textarea id="model-statement" rows="3" bind:value={statement}></textarea>
                 <div class="actions"><button disabled={pending} onclick={() => saveStatement(route)}>Save statement</button><button onclick={() => { editing = '' }}>Cancel</button></div>
@@ -109,9 +111,12 @@
 </section>
 <style>
   .catalog { display: grid; gap: 14px; min-width: 0; }
-  .filter-fields { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font-size: var(--text-13); }
-  .filter-fields label { display: flex; align-items: center; gap: 6px; }
-  .filter-fields p { flex-basis: 100%; }
+  .filter-fields { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) auto auto; align-items: end; gap: 12px 16px; font-size: var(--text-13); }
+  .capability-filter { display: grid; gap: 6px; }
+  .capability-filter > span { color: var(--muted); }
+  .capability-options { display: flex; gap: 8px; }
+  @media (max-width: 1050px) { .filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .clear-filters { justify-self: end; } }
+  @media (max-width: 600px) { .filter-fields { grid-template-columns: 1fr; } .clear-filters { justify-self: start; } }
   h5 { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); margin: 8px 0; }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
   .model { padding: 10px 0; border-bottom: 1px solid var(--border); }

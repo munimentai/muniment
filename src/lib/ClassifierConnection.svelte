@@ -70,7 +70,7 @@
   @media (max-width: 600px) { .fields { grid-template-columns: 1fr; } }
   .methods { display: flex; flex-wrap: wrap; gap: 8px; }
   button, input { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 7px 10px; }
-  button { cursor: pointer; justify-self: start; } button[aria-pressed="true"] { border-color: var(--signal); background: var(--signal-soft); }
+  button { cursor: pointer; justify-self: start; } button[aria-pressed="true"] { border-color: var(--muted); background: var(--faint); }
   button:disabled { opacity: .5; cursor: default; } .support, label { color: var(--muted); font-size: var(--text-13); }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 12px; background: var(--faint); font: var(--text-12) var(--font-mono); }
   p { margin: 0; line-height: 1.5; } input { width: 100%; box-sizing: border-box; }

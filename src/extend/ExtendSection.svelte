@@ -1,4 +1,5 @@
 <script>
+  import DisclosureSummary from '../lib/ui/DisclosureSummary.svelte'
   import ChoiceField from '../lib/ui/ChoiceField.svelte'
   import SearchToolbar from '../lib/ui/SearchToolbar.svelte'
   import Button from '../lib/ui/Button.svelte'
@@ -95,7 +96,7 @@
         <label>Name<input bind:value={name} /></label><label>Server URL<input type="url" bind:value={url} placeholder="https://example.com/mcp" /></label>
         <label>Authentication<select bind:value={authentication}><option value="none">None or token</option><option value="oauth">Sign in with OAuth</option></select></label>
         <label>Bearer token<input type="password" bind:value={token} autocomplete="off" placeholder="Optional. Stored in the system credential store." /></label>
-        <details><summary>Local command or advanced configuration</summary><p>Use a command and argument list for local servers. Use environment variable references for secrets.</p><textarea aria-label="Server configuration" bind:value={config} rows="5" placeholder={'{"command":"npx","args":["-y","server-package"]}'}></textarea></details>
+        <details><DisclosureSummary>Local command or advanced configuration</DisclosureSummary><p>Use a command and argument list for local servers. Use environment variable references for secrets.</p><textarea aria-label="Server configuration" bind:value={config} rows="5" placeholder={'{"command":"npx","args":["-y","server-package"]}'}></textarea></details>
         <button type="button" disabled={busy || !name.trim() || (!url.trim() && !config.trim())} onclick={saveServer}>{authentication === 'oauth' ? 'Save and sign in' : 'Save server'}</button>
       {:else}
         <label>GitHub repository, local folder, or archive<input bind:value={source} placeholder="https://github.com/owner/repository" /></label>

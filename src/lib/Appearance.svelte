@@ -1,4 +1,5 @@
 <script>
+  import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import ContextSettings from '../activity/ContextSettings.svelte'
   import { onMount } from 'svelte'
   import { DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
@@ -70,7 +71,7 @@
       <button type="button" aria-pressed={theme.mode === option[1]} onclick={() => chooseMode(option[1])}>{option[0]}</button>
     {/each}
   </div>
-  <details class="theme-browser"><summary>Browse themes</summary>
+  <details class="theme-browser"><DisclosureSummary>Browse themes</DisclosureSummary>
   <div class="themes" role="group" aria-labelledby="appearance-heading">
     {#each themeGroups as [label, row]}
       <p class="group-label">{label}</p>
@@ -97,7 +98,7 @@
   {#each registers as [register, label] (register)}
     <div class="type-font" role="group" aria-label="{label} font">
       <details class="font-picker">
-      <summary><span>{label}</span><span class="font-current">{type[register] || SHIPPED_FONTS[register]}</span></summary>
+      <DisclosureSummary><span>{label}</span><span class="font-current">{type[register] || SHIPPED_FONTS[register]}</span></DisclosureSummary>
       <input type="search" class="font-search" aria-label="Search {label.toLowerCase()} fonts" placeholder="Search installed fonts" bind:value={query[register]}>
       <div class="font-list">
         <button type="button" class="font-pick" aria-pressed={type[register] === null} onclick={() => chooseFont(register, null)}><span class="font-name">{SHIPPED_FONTS[register]}</span><span class="font-note">Default</span></button>

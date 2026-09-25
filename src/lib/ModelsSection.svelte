@@ -1,4 +1,6 @@
 <script>
+  import './ui/settings-controls.css'
+  import SearchToolbar from './ui/SearchToolbar.svelte'
   import Button from './ui/Button.svelte'
   // Settings → Models, one screen: every connection is a named account under
   // its provider, key or subscription, with its allowance and usage on the
@@ -353,7 +355,7 @@
   }
 </script>
 
-<div class="models" use:resetPageScroll={[view, tab, providerId, classifierId].join(':')} class:connecting={view !== 'list'}>
+<div class="models" data-settings-controls use:resetPageScroll={[view, tab, providerId, classifierId].join(':')} class:connecting={view !== 'list'}>
   {#if view === 'list'}
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
@@ -431,10 +433,7 @@
       {/if}
     </header>
     {#if view === 'connect'}
-      <div class="search">
-        <LucideIcon name="search" variant="action" size={14} />
-        <input type="search" aria-label="Search providers" placeholder="Search providers" bind:value={providerQuery}>
-      </div>
+      <SearchToolbar label="Search providers" placeholder="Search providers" bind:value={providerQuery} />
       {#each [['Popular & Subscriptions', catalog.popular], ['Classifiers', searchClassifiers(providerQuery)], ['All Pi providers', catalog.other]] as [group, entries]}
         {#if entries.length}
           <h5 class="group-label">{group}</h5>
@@ -449,28 +448,22 @@
       <ClassifierConnection entry={classifierEntry} {tauri} onconnected={next => { router = next; status = 'Classifier connected. Select it in Routing.'; view = 'list'; tab = 'accounts' }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
-      <label for="provider-key">{provider.name} API key</label>
-      <input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}>
+      <div class="connection-field"><label for="provider-key">{provider.name} API key</label><input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" disabled={pending || !key.trim()} onclick={saveKey}>Save key</button>
     {:else if method === 'ollama'}
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
-      <label for="provider-base-url">Ollama server URL</label>
-      <input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={baseUrl} disabled={pending}>
+      <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
     {:else if method === 'endpoint'}
       <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : provider.id === 'vllm' ? 'a running vLLM server.' : 'a LiteLLM proxy or another gateway.'}</p>
       {#if provider.id === 'custom'}
-        <label for="endpoint-name">Name</label>
-        <input id="endpoint-name" type="text" bind:value={endpointName} disabled={pending}>
+        <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" bind:value={endpointName} disabled={pending}></div>
       {/if}
-      <label for="provider-base-url">Server URL</label>
-      <input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" bind:value={baseUrl} disabled={pending}>
-      <label for="endpoint-key">API key (optional)</label>
-      <input id="endpoint-key" type="password" autocomplete="off" bind:value={key} disabled={pending}>
-      <label for="endpoint-models">Models, one per line</label>
-      <textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea>
+      <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
+      <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
+      <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea></div>
       <p class="support">Leave the list empty and Muniment asks the server for its models.</p>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
@@ -509,8 +502,7 @@
               {/each}
             </div>
           {:else if login.prompt?.kind === 'input'}
-            <label for="login-answer">{login.prompt.title}</label>
-            <input id="login-answer" type="text" placeholder={login.prompt.placeholder ?? ''} bind:value={loginAnswer}>
+            <div class="connection-field"><label for="login-answer">{login.prompt.title}</label><input id="login-answer" type="text" placeholder={login.prompt.placeholder ?? ''} bind:value={loginAnswer}></div>
             <button type="button" disabled={!loginAnswer.trim()} onclick={() => answerPrompt(loginAnswer.trim())}>Continue</button>
           {/if}
           {#if login.stage === 'failed' || login.stage === 'cancelled'}
@@ -539,6 +531,7 @@
   .quiet { background: transparent; border-color: transparent; }
   .models { display: grid; gap: 28px; align-content: start; }
   .models.connecting { gap: 16px; }
+  .connection-field { display: grid; gap: 6px; }
   .account-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 28px; padding: 3px 4px; }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

@@ -1,0 +1,43 @@
+/* Shared appearance for native controls in settings views. Layout stays local.
+   Tabs and switches retain their dedicated component treatment. */
+[data-settings-controls] {
+  --control-height: 32px;
+  --control-padding: 7px 10px;
+}
+[data-settings-controls] :is(input:not([type="checkbox"]), textarea, select) {
+  min-height: var(--control-height);
+  box-sizing: border-box;
+  padding: var(--control-padding);
+  font: var(--text-13) var(--font-human);
+  line-height: 1.4;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+[data-settings-controls] textarea { font-family: var(--font-mono); }
+[data-settings-controls] button:not([role="tab"]):not([role="switch"]):not([data-ui-button]):not([data-ui-choice]) {
+  min-height: var(--control-height);
+  min-width: var(--control-height);
+  box-sizing: border-box;
+  padding: 6px 10px;
+  font: var(--text-13) var(--font-human);
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--faint);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+[data-settings-controls] button.quiet:not([role]) { background: transparent; }
+[data-settings-controls] button:not([role="tab"]):not([role="switch"]):hover:not(:disabled) { border-color: var(--muted); }
+[data-settings-controls] button[aria-pressed="true"]:not([role]) { color: var(--ink); border-color: var(--muted); background: var(--faint); }
+[data-settings-controls] :is(button, input, textarea, select):disabled { opacity: .5; cursor: default; }
+[data-settings-controls] :is(button, input, textarea, select):focus-visible { background: var(--faint); color: var(--ink); }
+[data-settings-controls] label:not(.show) { font: var(--text-13) var(--font-human); color: var(--muted); }
+[data-settings-controls] input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--muted); }
+
+[data-settings-controls] :is(.actions, .methods, .sign-ins) { gap: 8px; }
+[data-settings-controls] :is(.field, .connection-field) { gap: 6px; }
+[data-settings-controls] .fields { gap: 12px 16px; }
+[data-settings-controls] :is(.connect-head, .model-row, .tabs-row) { column-gap: 12px; }

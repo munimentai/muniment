@@ -1,4 +1,5 @@
 <script>
+  import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import Toggle from '../lib/Toggle.svelte'
   import AllowanceMeter from './AllowanceMeter.svelte'
   // One provider's accounts in the router's pool: each a named card with what
@@ -236,7 +237,7 @@
             {/each}
             {#if account.banked_resets}<p class="record">{account.banked_resets} banked {account.banked_resets === 1 ? 'reset' : 'resets'}</p>{/if}
           {/if}
-          <details class="account-details"><summary>Usage and settings</summary>
+          <details class="account-details"><DisclosureSummary>Usage and settings</DisclosureSummary>
           {#if account.source === 'key' || (account.email && account.email !== account.label) || account.models.length}
           <p class="record tier">{[account.source === 'key' ? account.base_url ?? familyRow?.base_url : null, account.email !== account.label ? account.email : null, ...account.models].filter(Boolean).join(' · ')}</p>
           {/if}
