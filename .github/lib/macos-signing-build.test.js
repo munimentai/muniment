@@ -9,12 +9,21 @@ let exitListeners;
 let clock;
 let notaryResult;
 let originalPath;
+let variantCount;
 const submissionId = "103b0143-92d9-42a1-82e1-b05b8b7da7db";
 const installerId = "203b0143-92d9-42a1-82e1-b05b8b7da7db";
 const jsonResult = (value) => ({ status: 0, stdout: JSON.stringify(value) });
 
 beforeEach(() => {
   vi.resetModules();
+  variantCount = 1;
+  vi.doMock("./macos-variants.mjs", () => ({
+    prepareMacosVariants: base => ["", "-arm64", "-x64"].slice(0, variantCount).map(suffix => ({
+      suffix, app: `${base}/macos/${suffix ? `${suffix.slice(1)}/` : ""}muniment.app`,
+      zip: `${base}/macos/muniment${suffix}.app.zip`, pkg: `${base}/pkg/muniment${suffix}.pkg`, dmg: `${base}/dmg/muniment${suffix}.dmg`,
+    })),
+    packageMacosDmg: vi.fn(),
+  }));
   // The signing phase narrows PATH to the system directories.
   originalPath = process.env.PATH;
   clock = 0;
@@ -76,7 +85,7 @@ afterEach(() => {
   }
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  for (const module of ["node:fs", "node:fs/promises", "node:child_process", "node:timers/promises", "./signing-env.mjs"]) vi.doUnmock(module);
+  for (const module of ["node:fs", "node:fs/promises", "node:child_process", "node:timers/promises", "./signing-env.mjs", "./macos-variants.mjs"]) vi.doUnmock(module);
 });
 
 it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (setupSeconds) => {
@@ -102,7 +111,7 @@ it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (se
   expect(cefPackaging).toBeGreaterThan(bundle);
   expect(calls[cefPackaging][1]).toContain("--universal");
   expect(cefPackaging).toBeLessThan(signing[0]);
-  expect(signing).toHaveLength(12);
+  expect(signing).toHaveLength(13);
   expect(preflight).toBeLessThan(signing[0]);
   const signedPaths = signing.map(index => {
     const args = calls[index][1];
@@ -123,15 +132,16 @@ it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (se
     expect(args[args.indexOf("--entitlements") + 1]).toBe("src-tauri/packaging/entitlements.plist");
   }
   const submission = calls.findIndex(([command, args]) => command === "xcrun" && args[0] === "notarytool" && args[1] === "submit");
-  expect(submission).toBeGreaterThan(signing.at(-1));
+  expect(submission).toBeGreaterThan(signing[11]);
   const packaging = calls.slice(submission).filter(([command]) => ["xcrun", "ditto", "productbuild"].includes(command));
   expect(packaging.map(([command, args]) => command === "xcrun" ? args.slice(0, 2).join(" ") : command)).toEqual([
     "notarytool submit", "notarytool info", "stapler staple", "stapler validate",
-    "ditto", "productbuild", "notarytool submit", "notarytool info", "stapler staple", "stapler validate",
+    "ditto", "productbuild", "notarytool submit", "notarytool info", "notarytool submit", "notarytool info",
+    "stapler staple", "stapler validate", "stapler staple", "stapler validate",
   ]);
   expect(packaging[2][1].at(-1)).toMatch(/muniment\.app$/);
   expect(packaging[5][1]).toContain("--sign");
-  expect(packaging[8][1].at(-1)).toMatch(/muniment\.pkg$/);
+  expect(packaging[10][1].at(-1)).toMatch(/muniment\.pkg$/);
   expect(console.error).not.toHaveBeenCalled();
   expect(process.exit).not.toHaveBeenCalled();
 });
@@ -231,7 +241,7 @@ it.each([
   vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", String(3600 - setupSeconds));
   const waitSeconds = 2400 - setupSeconds;
   notaryResult = (args) => {
-    const id = args[1] === "submit" ? (args[2].endsWith(".pkg") ? installerId : submissionId) : args[2];
+    const id = args[1] === "submit" ? (args[2].endsWith(".pkg") || args[2].endsWith(".dmg") ? installerId : submissionId) : args[2];
     return jsonResult({ id, status: installer && id === submissionId ? "Accepted" : "In Progress" });
   };
   await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
@@ -261,7 +271,7 @@ it.each([0, 700])("shares the installer deadline with compilation and %s seconds
     return defaultSpawn(command, args, options);
   });
   notaryResult = (args) => {
-    const id = args[1] === "submit" ? (args[2].endsWith(".pkg") ? installerId : submissionId) : args[2];
+    const id = args[1] === "submit" ? (args[2].endsWith(".pkg") || args[2].endsWith(".dmg") ? installerId : submissionId) : args[2];
     return jsonResult({ id, status: id === submissionId && clock >= (setupSeconds + 1200) * 1000 ? "Accepted" : "In Progress" });
   };
   await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
@@ -357,7 +367,7 @@ it.each([2399_999, 2400_000])("accepts only a status inside the deadline at %s m
   });
   notaryResult = (args) => {
     if (args[1] === "info") clock = acceptedAt;
-    const id = args[1] === "submit" ? (args[2].endsWith(".pkg") ? installerId : submissionId) : args[2];
+    const id = args[1] === "submit" ? (args[2].endsWith(".pkg") || args[2].endsWith(".dmg") ? installerId : submissionId) : args[2];
     return jsonResult({ id, status: "Accepted" });
   };
   if (acceptedAt < 2400_000) {
@@ -381,4 +391,19 @@ it("stops before replacing the search list when the list command fails", async (
   expect(process.stderr.write).toHaveBeenCalledWith("Cannot read keychains");
   expect(spawn.mock.calls.some(([command, args]) => command === "security" && args[0] === "list-keychains" && args.includes("-s"))).toBe(false);
   expect(spawn.mock.calls.some(([command]) => command === "codesign")).toBe(false);
+});
+
+
+it("signs all three app variants and their disk images before publication", async () => {
+  variantCount = 3;
+  await import("../build-macos-app.mjs");
+  const calls = spawn.mock.calls;
+  for (const suffix of ["", "-arm64", "-x64"]) {
+    for (const format of [".pkg", ".dmg"]) {
+      const file = `muniment${suffix}${format}`;
+      expect(calls.some(([cmd, args]) => cmd === "xcrun" && args[0] === "stapler" && args[1] === "validate" && args.at(-1).endsWith(file))).toBe(true);
+    }
+  }
+  expect(calls.filter(([cmd, args]) => cmd === "productbuild" && args.includes("--sign"))).toHaveLength(3);
+  expect(calls.filter(([cmd, args]) => cmd === "codesign" && args.includes("--deep") && args.includes("--verify"))).toHaveLength(3);
 });

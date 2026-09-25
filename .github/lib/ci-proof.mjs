@@ -90,8 +90,8 @@ export async function reuseNightlyBuild({ github, context, core, sha, settings =
       const { data: { jobs } } = await github.rest.actions.listJobsForWorkflowRun({ ...context.repo, run_id: run.id, filter: 'latest', per_page: 100 })
       const required = ['build (linux)', 'build (windows)', 'build (macos)', 'publish', 'linux-e2e', 'windows-e2e', 'macos-e2e']
       if (!required.every(name => jobs.some(job => job.name === name && job.status === 'completed' && job.conclusion === 'success'))) continue
-      core.notice(`Reuse nightly builds from ${run.html_url}: source and all thirteen assets match. Installed tests still run.`)
-      await core.summary.addRaw(`Reused [verified nightly builds](${run.html_url}). Source \`${sha}\` and all thirteen asset IDs and SHA-256 digests match. Installed tests run against the current environment.`).write()
+      core.notice(`Reuse nightly builds from ${run.html_url}: source and all 24 assets match. Installed tests still run.`)
+      await core.summary.addRaw(`Reused [verified nightly builds](${run.html_url}). Source \`${sha}\` and all 24 asset IDs and SHA-256 digests match. Installed tests run against the current environment.`).write()
       return true
     }
   } catch (error) {

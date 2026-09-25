@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createUpdateFeed } from "./update-feed.mjs";
 import { verifyUpdaterSignature } from "./updater-signature.mjs";
+import { macosArchitectures, macosFormats } from "./macos-variants.mjs";
 const API = "https://api.github.com";
 const request = async (fetchImpl, token, url, options = {}) => {
   const response = await fetchImpl(url, { ...options, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", ...options.headers } });
@@ -26,13 +27,13 @@ export const expectedNightlyAssets = (assets, sha) => {
     ["Windows per-user MSI", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith(".msi") && !n.endsWith("-machine.msi")],
     ["Windows machine MSI", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith("-machine.msi")],
     ["Windows NSIS", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith("-nsis.exe")],
-    ["macOS app", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".app.zip")],
-    ["macOS package", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".pkg")],
+    ...macosArchitectures.flatMap(suffix => macosFormats.map(format => [
+      `macOS ${suffix || 'universal'} ${format}`, n => n === `${prefix}macos-muniment${suffix}${format}`,
+    ])),
   ];
-  specs.push(["macOS updater", (n) => n.startsWith(`${prefix}macos-`) && n.endsWith(".app.tar.gz")]);
   const updateBinaries = assets.filter(({ name }) => name.endsWith('.AppImage') || name.endsWith('.app.tar.gz') || name.endsWith('-nsis.exe') || name.endsWith('.msi'));
   for (const { name } of updateBinaries) specs.push([`${name} signature`, (n) => n === `${name}.sig`]);
-  if (assets.length !== 13 || specs.length !== 13) throw new Error(`nightly release must contain exactly thirteen assets; found ${assets.length}`);
+  if (assets.length !== 24 || specs.length !== 24) throw new Error(`nightly release must contain exactly 24 assets; found ${assets.length}`);
   for (const [label, matches] of specs) if (assets.filter((asset) => matches(asset.name)).length !== 1) throw new Error(`expected exactly one ${label} asset`);
   return assets;
 };
@@ -59,12 +60,14 @@ Download the package for your platform, then connect a provider and start a thre
 
 | Platform | Download |
 | --- | --- |
-| macOS | [Installer (.pkg)](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-macos.pkg) |
+| macOS Apple silicon | [Disk image (.dmg)](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-macos-arm64.dmg) |
+| macOS Intel | [Disk image (.dmg)](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-macos-x64.dmg) |
+| macOS Universal | [Disk image (.dmg)](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-macos.dmg) |
 | Windows x64 | [Installer (.msi)](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-windows_x64_en-US.msi) |
 | Ubuntu / Debian x64 | [Package (.deb)](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-linux.deb) |
 | Linux x64 | [AppImage](https://github.com/munimentai/muniment/releases/download/${version}/muniment-${version.slice(1)}-linux_amd64.AppImage) |
 
-- macOS: use the .pkg on macOS 13 or later, on Apple silicon or Intel.
+- macOS: open the .dmg and drag muniment to Applications. Choose Universal if you are unsure of your Mac chip. Signed .pkg installers remain available for managed installs. macOS 13 or later is required.
 - Windows: use the x64 .msi, or the -nsis.exe installer. The -machine.msi installs for all users.
 - Linux: use the amd64 .deb on Ubuntu or Debian, or the .AppImage on an x86_64 desktop with X11 or XWayland.
 
@@ -164,6 +167,12 @@ export const verifyMacosPackage = (pkg, run = spawnSync) => {
   requireAppleSignature(info.output, "Installer", basename(pkg));
 };
 
+export const verifyMacosDmg = (dmg, run = spawnSync) => {
+  const info = tool(run, "rcodesign", ["print-signature-info", dmg]);
+  if (!info.ok) throw new Error(`rcodesign cannot read the signature of ${basename(dmg)}`);
+  requireAppleSignature(info.output, "Application", basename(dmg));
+};
+
 // Verify the downloaded nightly bytes themselves, not the release text: every
 // updater signature against the committed key, Authenticode on the Windows
 // installers, and the Apple signatures in both app archives and the package.
@@ -182,12 +191,18 @@ export const verifyNightlyArtifacts = ({ files, workDir, publicKey = readFileSyn
     }
     if (name.endsWith(".msi") || name.endsWith("-nsis.exe")) verifyAuthenticode(file, caFile, run);
     if (name.endsWith(".pkg")) verifyMacosPackage(file, run);
-    if (name.endsWith(".app.zip") || name.endsWith(".app.tar.gz")) {
+    if (name.endsWith(".dmg")) verifyMacosDmg(file, run);
+    if (name.endsWith(".app.zip") || name.endsWith(".app.tar.gz") || name.endsWith(".dmg")) {
       const target = join(workDir, `extracted-${basename(name)}`);
       mkdirSync(target);
-      const extracted = name.endsWith(".zip") ? tool(run, "unzip", ["-q", file, "-d", target]) : tool(run, "tar", ["-xzf", file, "-C", target]);
+      const extracted = name.endsWith(".dmg") ? tool(run, "7z", ["x", "-y", `-o${target}`, file])
+        : name.endsWith(".zip") ? tool(run, "unzip", ["-q", file, "-d", target]) : tool(run, "tar", ["-xzf", file, "-C", target]);
       if (!extracted.ok) throw new Error(`cannot extract ${name}`);
-      verifyMacosApp(join(target, "muniment.app"), run);
+      const apps = name.endsWith(".dmg")
+        ? readdirSync(target, { recursive: true, withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name === 'muniment.app').map(entry => join(entry.parentPath ?? entry.path, entry.name))
+        : [join(target, "muniment.app")];
+      if (apps.length !== 1) throw new Error(`Expected one app in ${name}`);
+      verifyMacosApp(apps[0], run);
       rmSync(target, { recursive: true, force: true });
     }
   }

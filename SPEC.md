@@ -540,9 +540,9 @@ is open work: closing it is a gate change first and a symptom ticket second.
    setup are the default download, need no administration and register for the
    user. The `-machine.msi` registers for the machine, the managed install for
    MDM and RMM. Enforcer: `test/windows-installers.ps1` in the desktop-build job.
-4. macOS release builds are signed, notarized and stapled. The local build
-   script signs and verifies the app but does not establish notarization. Enforcer: `docs/macos-signing.md` plus the
-   fail-fast behavior in `.github/lib/macos-signing.mjs`.
+4. macOS ships signed, notarized universal, Apple silicon and Intel DMGs and PKGs.
+   DMGs are the default. Updates select the native architecture. Local builds
+   verify signing only. Enforcer: `.github/lib/macos-signing.mjs` and `docs/macos-signing.md`.
 5. A release promotes only the exact bytes of a green nightly SHA. Enforcer:
    `.github/lib/release-promotion.mjs`.
 6. UI copy obeys the vocabulary law, records render in mono, and the provenance

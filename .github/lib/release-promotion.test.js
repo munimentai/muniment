@@ -6,7 +6,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   APPLE_TEAM_ID, assertGreenCi, expectedNightlyAssets, macosSigningProvenance, microsoftRootPem, promoteRelease, releaseBody,
-  sha256Sums, stableAssetName, validatePromotionInputs, verifyAuthenticode, verifyMacosApp, verifyMacosPackage,
+  sha256Sums, stableAssetName, validatePromotionInputs, verifyAuthenticode, verifyMacosApp, verifyMacosPackage, verifyMacosDmg,
   verifyNightlyArtifacts, WINDOWS_PUBLISHER, windowsSigningProvenance,
 } from "./release-promotion.mjs";
 import { signUpdaterBytes } from "./updater-signature.mjs";
@@ -19,10 +19,7 @@ const assetNames = [
   `nightly-${sha}-windows-muniment.msi`,
   `nightly-${sha}-windows-muniment-machine.msi`,
   `nightly-${sha}-windows-muniment-nsis.exe`,
-  `nightly-${sha}-macos-muniment.app.zip`,
-  `nightly-${sha}-macos-muniment.pkg`,
-  `nightly-${sha}-macos-muniment.app.tar.gz`,
-  `nightly-${sha}-macos-muniment.app.tar.gz.sig`,
+  ...['', '-arm64', '-x64'].flatMap(arch => ['.app.zip', '.app.tar.gz', '.app.tar.gz.sig', '.pkg', '.dmg'].map(format => `nightly-${sha}-macos-muniment${arch}${format}`)),
   `nightly-${sha}-linux-muniment.AppImage.sig`,
   `nightly-${sha}-windows-muniment.msi.sig`,
   `nightly-${sha}-windows-muniment-machine.msi.sig`,
@@ -77,7 +74,7 @@ describe("stable release promotion", () => {
 
   it("requires exactly one of each finalized nightly artifact", () => {
     expect(expectedNightlyAssets(assets, sha)).toEqual(assets);
-    expect(() => expectedNightlyAssets(assets.slice(1), sha)).toThrow("exactly thirteen");
+    expect(() => expectedNightlyAssets(assets.slice(1), sha)).toThrow("exactly 24");
     expect(() => expectedNightlyAssets([...assets.slice(0, 12), assets[0]], sha)).toThrow();
   });
 
@@ -115,13 +112,13 @@ describe("stable release promotion", () => {
     await expect(promote(fetchImpl)).rejects.toThrow("CI is not green");
   });
 
-  it("uses the nightly tag despite stale target_commitish and copies exactly thirteen assets without mutating nightly", async () => {
+  it("uses the nightly tag despite stale target_commitish and copies exactly 24 assets without mutating nightly", async () => {
     const { calls, fetchImpl } = promotionFetch();
     await promote(fetchImpl);
     const create = calls.find(({ url, options }) => url.endsWith("/releases") && options.method === "POST");
     expect(JSON.parse(create.options.body)).toMatchObject({ tag_name: version, target_commitish: sha, draft: true, prerelease: false });
-    expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(13);
-    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(15);
+    expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(24);
+    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(26);
     expect(calls.some(({ url }) => url.endsWith("/git/ref/tags/nightly"))).toBe(false);
     expect(calls.some(({ url, options }) => url.includes("/releases/1") && options.method)).toBe(false);
     const uploads = calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"));
@@ -136,7 +133,7 @@ describe("stable release promotion", () => {
     const sums = Buffer.from(uploads.find(({ url }) => url.endsWith("name=SHA256SUMS")).options.body).toString();
     const digest = (text) => createHash("sha256").update(text).digest("hex");
     const feedBody = uploads.find(({ url }) => url.endsWith("name=latest.json")).options.body;
-    expect(sums.trim().split("\n")).toHaveLength(14);
+    expect(sums.trim().split("\n")).toHaveLength(25);
     expect(sums).toContain(`${digest("asset bytes")}  muniment-0.0.1-macos.pkg\n`);
     expect(sums).toContain(`${digest(feedBody)}  latest.json\n`);
     for (const upload of uploads.filter(({ url }) => !url.endsWith("name=latest.json") && !url.endsWith("name=SHA256SUMS"))) {
@@ -271,6 +268,30 @@ describe("nightly artifact verification", () => {
     expect(() => verifyMacosApp(app, () => result(appleInfo("Application", "Y0THERTEAM")))).toThrow(`team ${APPLE_TEAM_ID}`);
     expect(() => verifyMacosApp(app, () => result(appleInfo("Application").replace("chains_to_apple_root_ca: true", "chains_to_apple_root_ca: false")))).toThrow("Apple root");
     expect(() => verifyMacosApp(app, () => result(appleInfo("Application").replace("  signature_verifies: true", "  signature_verifies: false")))).toThrow("does not verify");
+  }));
+
+  it("requires a valid Application identity for disk images", () => {
+    const valid = appleInfo("Application");
+    verifyMacosDmg("/tmp/muniment.dmg", () => result(valid));
+    expect(() => verifyMacosDmg("/tmp/muniment.dmg", () => result("", 1))).toThrow("cannot read");
+    expect(() => verifyMacosDmg("/tmp/muniment.dmg", () => result(appleInfo("Installer")))).toThrow("Developer ID Application");
+    expect(() => verifyMacosDmg("/tmp/muniment.dmg", () => result(valid.replace("signature_verifies: true", "signature_verifies: false")))).toThrow("does not verify");
+  });
+
+  it("extracts disk images and verifies the contained app", () => withDirectory(directory => {
+    const file = path.join(directory, "muniment.dmg");
+    const run = vi.fn((command, args) => {
+      if (command === "7z") {
+        const target = args.find(arg => arg.startsWith("-o")).slice(2);
+        const app = path.join(target, "Muniment", "muniment.app", "Contents");
+        mkdirSync(path.join(app, "MacOS"), { recursive: true });
+        writeFileSync(path.join(app, "CodeResources"), "ticket");
+        writeFileSync(path.join(app, "MacOS", "muniment"), Buffer.from("cffaedfe00", "hex"));
+      }
+      return result(appleInfo("Application"));
+    });
+    verifyNightlyArtifacts({ files: new Map([["muniment.dmg", file]]), workDir: directory, run, caPem: "pem" });
+    expect(run.mock.calls.some(([command, args]) => command === "rcodesign" && args[0] === "verify" && args[1].endsWith("Contents/MacOS/muniment"))).toBe(true);
   }));
 
   it("checks the installer package signature", () => {

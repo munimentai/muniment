@@ -149,7 +149,7 @@ describe('macOS runtime bundle paths', () => {
     expect(macosBuild).toContain('if (!existsSync(output))')
     expect(macosAppBuild.indexOf('build-macos-runtime.mjs'))
       .toBeLessThan(macosAppBuild.indexOf('tauri("build"'))
-    expect(ci).toContain('node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin')
+    expect(ci).toContain('MACOS_SIGNING_ENABLED=false node .github/build-macos-app.mjs')
   })
 
   it('signs the bundled runtime before the app', () => {

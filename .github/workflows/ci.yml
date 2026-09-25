@@ -475,7 +475,7 @@ jobs:
               cmd='node .github/build-windows-installers.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
             fi
             if [ "$PLATFORM" = "macos" ]; then
-              cmd='npm ci --ignore-scripts --no-audit --no-fund && node .github/build-macos-runtime.mjs && npm run tauri build -- --target universal-apple-darwin --no-bundle && node .github/build-macos-cef-helper.mjs && npm run tauri bundle -- --target universal-apple-darwin --bundles app && node scripts/package-cef-macos.mjs src-tauri/target/universal-apple-darwin/release/bundle/macos/muniment.app --universal'
+              cmd='npm ci --ignore-scripts --no-audit --no-fund && MACOS_SIGNING_ENABLED=false node .github/build-macos-app.mjs'
             fi
             cmd="$preflight_cmd && $cmd"
             build_timeout=5400
