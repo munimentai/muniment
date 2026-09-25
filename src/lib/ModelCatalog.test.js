@@ -67,3 +67,25 @@ it('does not rediscover models when the parent receives a visibility update', as
   await new Promise(resolve => setTimeout(resolve, 20))
   expect(tauri.invoke.mock.calls.filter(([command]) => command === 'local_mode_provider_inventory')).toHaveLength(1)
 })
+
+
+it('combines reported capabilities and context filters without changing saved visibility', async () => {
+  const data = inventory()
+  data.providers[0].models = [
+    { id: 'vision-small', context: '32K', images: true, thinking: false },
+    { id: 'vision-large', context: '1M', images: true, thinking: true },
+    { id: 'unknown' },
+  ]
+  const tauri = { invoke: vi.fn() }
+  render(ModelCatalog, { tauri, inventory: data })
+  await fireEvent.click(screen.getByText('Filters'))
+  await fireEvent.click(screen.getByLabelText('Image input / vision'))
+  expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+  await fireEvent.change(screen.getByLabelText('Minimum context'), { target: { value: '128000' } })
+  expect(screen.getAllByRole('switch')).toHaveLength(1)
+  await fireEvent.click(screen.getByLabelText('Reasoning'))
+  expect(screen.getAllByRole('switch')).toHaveLength(1)
+  await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+  expect(screen.getAllByRole('switch')).toHaveLength(3)
+  expect(tauri.invoke).not.toHaveBeenCalled()
+})

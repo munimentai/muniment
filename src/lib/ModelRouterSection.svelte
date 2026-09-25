@@ -1,4 +1,7 @@
 <script>
+  import ProviderLogo from './ProviderLogo.svelte'
+  import LucideIcon from './LucideIcon.svelte'
+  let picker = $state()
   import Toggle from './Toggle.svelte'
   import { pickerGroups } from './provider-catalog.js'
   let { tauri, settings, onsettings, inventory, oninventory, onconnect } = $props()
@@ -34,14 +37,19 @@
     finally { pending = false }
   }
 </script>
+<svelte:window onkeydown={event => { if (event.key === 'Escape' && picker?.open) { event.stopPropagation(); picker.open = false; picker.querySelector('summary')?.focus() } }} />
 <section aria-label="Routing" class="routing">
-  <div class="heading"><div><h4>Routing</h4><p>Let a classifier choose the model for each message.</p></div><Toggle checked={automatic} label="Use routing" disabled={pending || (!automatic && (!connections.length || !settings.options.length))} onchange={toggle} /></div>
+  <div class="heading"><div><p>Let a classifier choose the model for each message.</p></div><Toggle checked={automatic} label="Use routing" disabled={pending || (!automatic && (!connections.length || !settings.options.length))} onchange={toggle} /></div>
   {#if automatic}
-    <label for="connected-classifier">Classifier model</label>
-    <select id="connected-classifier" value={active} disabled={pending || !connections.length} onchange={event => select(event.currentTarget.value)}>
-      {#if !active}<option value="" disabled>Choose a connected classifier</option>{/if}
-      {#each connections as entry (entry.id)}<option value={entry.id}>{entry.name}</option>{/each}
-    </select>
+    <div class="classifier-row">
+      <span id="classifier-label">Classifier model</span>
+      <details class="classifier-picker" bind:this={picker}>
+        <summary aria-labelledby="classifier-label classifier-value"><ProviderLogo provider={connections.find(entry => entry.id === active)?.catalog_id ?? 'jev'} size={18} /><span id="classifier-value">{connections.find(entry => entry.id === active)?.name ?? 'Choose a connected classifier'}</span><LucideIcon name="chevron-down" size={14} variant="action" /></summary>
+        <div class="choices" aria-label="Connected classifiers">
+          {#each connections as entry (entry.id)}<button type="button" disabled={pending} aria-pressed={entry.id === active} onclick={() => { picker.open = false; picker.querySelector('summary')?.focus(); select(entry.id) }}><ProviderLogo provider={entry.catalog_id ?? 'jev'} size={18} /><span>{entry.name}</span>{#if entry.id === active}<LucideIcon name="check" size={14} variant="action" />{/if}</button>{/each}
+        </div>
+      </details>
+    </div>
     <p>Account balancing stays on. Your message goes to the selected classifier to choose an answer model.</p>
   {/if}
   {#if !connections.length}<p>Connect a classifier in Accounts to use routing.</p><button type="button" onclick={onconnect}>Connect classifier</button>{/if}
@@ -51,7 +59,14 @@
 <style>
   .routing { display: grid; gap: 14px; }
   .heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-  h4 { margin: 0 0 8px; font-size: var(--text-17); } p { margin: 0; color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
-  label { font-size: var(--text-13); } select, button { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 9px 12px; }
-  button { justify-self: start; cursor: pointer; } select { width: 100%; }
+  p { margin: 0; color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
+  button { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 9px 12px; }
+  .classifier-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; font-size: var(--text-13); }
+  .classifier-picker { position: relative; width: min(360px, 100%); }
+  summary { display: flex; align-items: center; gap: 8px; list-style: none; cursor: pointer; padding: 8px 12px; background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); }
+  summary::-webkit-details-marker { display: none; } summary span { flex: 1; }
+  .choices { position: absolute; left: 0; right: 0; z-index: 2; box-shadow: 0 8px 24px #0003; display: grid; gap: 2px; padding: 4px; margin-top: 4px; max-height: 240px; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .choices button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; font-size: var(--text-13); }
+  .choices button span { flex: 1; } .choices button:hover, .choices button[aria-pressed="true"] { background: var(--faint); }
+  button { justify-self: start; cursor: pointer; }
 </style>

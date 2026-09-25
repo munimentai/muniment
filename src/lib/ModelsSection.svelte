@@ -356,8 +356,11 @@
   {#if view === 'list'}
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
-    <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Routing',icon:'route'}]} onchange={value => tab = value} />
-    {#if tab === 'models'}<button type="button" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</button>{/if}
+    <div class="tabs-row">
+      <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Routing',icon:'route'}]} onchange={value => tab = value} />
+      {#if tab === 'accounts'}<button type="button" class="tab-action" onclick={openConnector}><LucideIcon name="plus" variant="action" size={14} />Connect account</button>{/if}
+      {#if tab === 'models'}<button type="button" class="tab-action" disabled={discovering} onclick={() => load(true)}><LucideIcon name="refresh-cw" variant="action" size={14} />{discovering ? 'Refreshing models…' : 'Refresh models'}</button>{/if}
+    </div>
     {#if tab === 'routing'}
     {#if routerError}
       <p class="support" role="alert">{routerError}</p>
@@ -370,10 +373,6 @@
     <section class="accounts-section" aria-label="Accounts">
     {#if refreshingAccounts}<p class="support" role="status">Refreshing allowances…</p>{/if}
     {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
-    <header class="models-head">
-      <div><h4 class="models-label">Accounts</h4></div>
-      <button type="button" class="connect" onclick={openConnector}><LucideIcon name="plus" variant="action" size={14} />Connect account</button>
-    </header>
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
     {#if router?.classifier_connections?.length}
       <section class="provider-group" aria-label="Connected classifiers">
@@ -545,7 +544,7 @@
   .connect-head { justify-content: flex-start; }
   .connect-head h4, .models-head h4 { margin: 0; }
   .models-label { color: var(--ink); font-size: var(--text-17); font-weight: 600; }
-  .accounts-section { display: grid; gap: 12px; border-top: 1px solid var(--border); padding-top: 22px; }
+  .accounts-section { display: grid; gap: 12px; }
   .connect-head h4 { font-size: var(--text-15); font-weight: 600; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .support code { font: var(--text-12) var(--font-mono); }
@@ -556,6 +555,9 @@
   .search:focus-within { border-color: var(--muted); }
   .search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
   .provider-group { display: grid; gap: 4px; padding: 10px 0 6px; border-top: 1px solid var(--border); }
+  .provider-group:first-of-type { border-top: 0; padding-top: 0; }
+  .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .tab-action { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
   .provider-group header { display: flex; align-items: center; gap: 8px; min-height: 28px; }
   .provider-group h5 { margin: 0; font-size: var(--text-13); font-weight: 600; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
