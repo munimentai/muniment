@@ -254,6 +254,14 @@ describe("nightly artifact verification", () => {
     expect(() => verifyAuthenticode("/tmp/muniment.msi", "/tmp/ca.pem", () => result("Failed\n", 1))).toThrow("Authenticode verification failed");
   });
 
+  it("accepts OpenSSL's exact publisher rendering and rejects changed identity fields", () => {
+    const subject = "/C=US/ST=South Carolina/L=Murrells Inlet/O=Green Kangaroo, LLC/CN=Green Kangaroo, LLC";
+    verifyAuthenticode("/tmp/muniment.exe", "/tmp/ca.pem", () => result(authenticode(subject)));
+    for (const changed of [subject.replace("/C=US", "/C=CA"), subject.replace("/O=Green Kangaroo, LLC", "/O=Someone Else"), `${subject}/OU=Other`]) {
+      expect(() => verifyAuthenticode("/tmp/muniment.exe", "/tmp/ca.pem", () => result(authenticode(changed)))).toThrow("signed by");
+    }
+  });
+
   it("checks every Mach-O file and the stapled ticket in an app", () => withDirectory((directory) => {
     const app = path.join(directory, "muniment.app");
     mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
@@ -282,6 +290,7 @@ describe("nightly artifact verification", () => {
     const file = path.join(directory, "muniment.dmg");
     const run = vi.fn((command, args) => {
       if (command === "7z") {
+        if (!args.includes("-x!Muniment/Applications")) return result("Dangerous link path: /Applications", 2);
         const target = args.find(arg => arg.startsWith("-o")).slice(2);
         const app = path.join(target, "Muniment", "muniment.app", "Contents");
         mkdirSync(path.join(app, "MacOS"), { recursive: true });
