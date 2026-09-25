@@ -1,15 +1,20 @@
 <script>
+  import './ui/settings-controls.css'
+  import { accountCache } from './account-cache.js'
+  import SearchToolbar from './ui/SearchToolbar.svelte'
+  import Button from './ui/Button.svelte'
   // Settings → Models, one screen: every connection is a named account under
   // its provider, key or subscription, with its allowance and usage on the
   // card, the provider's models once, the connector that adds a provider, and
   // routing controls and one shared model catalog.
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import SettingsTabs from './SettingsTabs.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
   import ModelRouterSection from './ModelRouterSection.svelte'
   import ModelCatalog from './ModelCatalog.svelte'
-  import RoutingTest from './RoutingTest.svelte'
+  import ClassifierConnection from './ClassifierConnection.svelte'
+  import { CLASSIFIERS, searchClassifiers } from './classifier-connections.js'
   import ProviderLogo from './ProviderLogo.svelte'
   import { catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
@@ -27,10 +32,13 @@
   let view = $state('list')
   // The router's settings: the accounts in every pool, the models in the
   // running and the classifier. One read feeds every card and the Routing foot.
-  let router = $state(null)
+  const accounts = accountCache(tauri)
+  let router = $state(accounts.current.settings)
   let routerError = $state('')
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
+  let classifierId = $state('')
+  const classifierEntry = $derived(CLASSIFIERS.find(entry => entry.id === classifierId))
   let providerId = $state('')
   let method = $state('')
   let providerQuery = $state('')
@@ -69,55 +77,37 @@
       .filter((family) => !needle || familyName(family).toLowerCase().includes(needle))
   })
 
-  $effect(() => { void load() })
-  let refreshingAccounts = $state(false)
   let refreshError = $state('')
-  let closed = false
-  async function refreshAccounts() {
-    if (closed || refreshingAccounts || document.hidden || !router?.accounts?.some((account) => account.allowance_readable)) return
-    refreshingAccounts = true
-    try {
-      const fresh = await tauri.invoke('model_router_refresh_quota', { id: null })
-      if (!closed && router) { router = { ...router, accounts: fresh.accounts }; refreshError = '' }
-    } catch (_) {
-      if (!closed) refreshError = 'Account allowances could not refresh. The last values remain visible.'
-    } finally { refreshingAccounts = false }
-  }
   onMount(() => {
-    closed = false
-    void loadRouter().then(refreshAccounts)
-    const timer = setInterval(() => { void refreshAccounts() }, 120_000)
-    const resume = () => { if (!document.hidden) void refreshAccounts() }
-    document.addEventListener('visibilitychange', resume)
-    return () => { closed = true; clearInterval(timer); document.removeEventListener('visibilitychange', resume) }
+    const unsubscribe = accounts.subscribe(value => {
+      router = value.settings
+      routerError = value.error
+      refreshError = value.refreshError
+    })
+    const stop = accounts.start()
+    void load()
+    return () => { unsubscribe(); stop() }
   })
 
-  async function loadRouter() {
-    try {
-      router = await tauri.invoke('model_router_settings')
-      routerError = ''
-    } catch (_) {
-      router = null
-      routerError = 'Muniment could not read routing settings. Try again.'
-    }
-  }
+  async function loadRouter() { await accounts.read() }
 
   // Every router command answers with the whole settings, so one reply
   // redraws every card, and the inventory rereads so the picker follows.
   function onRouterSettings(next) {
-    router = next
+    accounts.set(next)
     void load()
   }
   onDestroy(() => { stopListening() })
 
   let discovering = $state(false)
   async function load(force = false) {
+    void loadRouter()
     discovering = true
     try {
       inventory = await tauri.invoke('local_mode_provider_inventory', { force })
       loadError = ''
       oninventory?.(inventory)
-      await loadRouter()
+
     } catch (_) {
       loadError = 'Muniment cannot read provider settings. Restart the app to retry.'
     } finally { discovering = false }
@@ -131,6 +121,16 @@
     } catch (error) {
       status = String(error?.message ?? error)
     }
+  }
+
+  // Each settings subpage starts at its heading, independent of catalog scroll.
+  function resetPageScroll(node) {
+    const reset = () => {
+      const scroll = node.closest('[data-panel-scroll]')
+      if (scroll) scroll.scrollTop = 0
+    }
+    void tick().then(reset)
+    return { update() { void tick().then(reset) } }
   }
 
   function openConnector() {
@@ -161,7 +161,7 @@
     if (login?.stage && login.stage !== 'done' && login.stage !== 'failed' && login.stage !== 'cancelled') void cancelLogin()
     login = null
     formError = ''
-    view = view === 'method' ? origin : 'list'
+    view = view === 'classifier' ? 'connect' : view === 'method' ? origin : 'list'
   }
 
   async function finishConnect(message) {
@@ -176,7 +176,7 @@
     pending = true
     formError = ''
     try {
-      await tauri.invoke('local_mode_store_provider_key', { provider: providerId, key })
+      await tauri.invoke('local_mode_store_provider_key', { provider: provider.keyProvider ?? providerId, key })
       key = ''
       await finishConnect(`Muniment saved the ${provider.name} key.`)
     } catch (error) {
@@ -208,7 +208,7 @@
     try {
       await tauri.invoke('local_mode_store_endpoint', {
         kind: providerId === 'lmstudio' ? 'lmstudio' : 'custom',
-        name: providerId === 'lmstudio' ? 'LM Studio' : endpointName.trim(),
+        name: providerId === 'custom' ? endpointName.trim() : provider.name,
         baseUrl,
         key,
         models,
@@ -340,29 +340,38 @@
   }
 </script>
 
-<div class="models">
+<div class="models" data-settings-controls use:resetPageScroll={[view, tab, providerId, classifierId].join(':')} class:connecting={view !== 'list'}>
   {#if view === 'list'}
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
-    <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Routing',icon:'route'}]} onchange={value => tab = value} />
-    {#if tab === 'models'}<button type="button" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</button>{/if}
+    <div class="tabs-row">
+      <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Routing',icon:'route'}]} onchange={value => tab = value} />
+      {#if tab === 'accounts'}<div class="tab-action"><Button icon="plus" variant="primary" onclick={openConnector}>Connect account</Button></div>{/if}
+      {#if tab === 'models'}<div class="tab-action"><Button icon="refresh-cw" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</Button></div>{/if}
+    </div>
     {#if tab === 'routing'}
     {#if routerError}
       <p class="support" role="alert">{routerError}</p>
       <button type="button" onclick={loadRouter}>Retry routing settings</button>
     {:else if router}
-      <ModelRouterSection {tauri} settings={router} {inventory} onsettings={onRouterSettings} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
+      <ModelRouterSection onconnect={() => { tab = 'accounts'; openConnector() }} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
     {:else}<p class="support" role="status">Reading routing settings…</p>{/if}
-    <details class="routing-test"><summary>Test routing</summary><RoutingTest {tauri} settings={router} /></details>
+
     {:else if tab === 'accounts'}
     <section class="accounts-section" aria-label="Accounts">
-    {#if refreshingAccounts}<p class="support" role="status">Refreshing allowances…</p>{/if}
+    
     {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
-    <header class="models-head">
-      <div><h4 class="models-label">Accounts</h4></div>
-      <button type="button" class="connect" onclick={openConnector}><LucideIcon name="plus" variant="action" size={14} />Connect account</button>
-    </header>
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
+    {#if router?.classifier_connections?.length}
+      <section class="provider-group" aria-label="Connected classifiers">
+        <header><h5>Classifiers</h5></header>
+        {#each router.classifier_connections as connection (connection.id)}
+          <div class="account-row"><strong>{connection.name}</strong><span class="tag">{connection.active ? 'Selected for routing' : 'Connected'}</span>
+            <button type="button" class="quiet" onclick={async () => { try { router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }) } catch (error) { status = String(error?.message ?? error) } }}>Disconnect {connection.name}</button>
+          </div>
+        {/each}
+      </section>
+    {/if}
     {#each shownProviders as entry (entry.id)}
       <section class="provider-group" aria-label={entry.name}>
         <header>
@@ -400,50 +409,46 @@
       <button type="button" class="quiet back" aria-label="Back" onclick={back}><LucideIcon name="arrow-left" variant="action" size={16} /></button>
       {#if view === 'connect'}
         <h4>Connect account</h4>
+      {:else if view === 'classifier'}
+        <ProviderLogo provider={classifierId} size={20} />
+        <h4>Connect {classifierEntry?.name}</h4>
       {:else}
         <ProviderLogo provider={providerId} size={18} />
         <h4>Connect {provider?.name}</h4>
       {/if}
     </header>
     {#if view === 'connect'}
-      <div class="search">
-        <LucideIcon name="search" variant="action" size={14} />
-        <input type="search" aria-label="Search providers" placeholder="Search providers" bind:value={providerQuery}>
-      </div>
-      {#each [['Popular', catalog.popular], ['Other', catalog.other]] as [group, entries]}
+      <SearchToolbar label="Search providers" placeholder="Search providers" bind:value={providerQuery} />
+      {#each [['Popular & Subscriptions', catalog.popular], ['Classifiers', searchClassifiers(providerQuery)], ['All providers', catalog.other]] as [group, entries]}
         {#if entries.length}
           <h5 class="group-label">{group}</h5>
           <ul class="provider-list">
             {#each entries as entry (entry.id)}
-              <li><button type="button" class="quiet provider-row" onclick={() => chooseProvider(entry.id)}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span><span class="tag">{entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
+              <li><button type="button" class="quiet provider-row" onclick={() => { if (group === 'Classifiers') { classifierId = entry.id; view = 'classifier' } else chooseProvider(entry.id) }}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span> <span class="tag">{group === 'Classifiers' ? (entry.id === 'jev' ? 'Hosted API' : entry.compatible ? 'Local or hosted server · Download' : 'Adapter required · Download') : entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
             {/each}
           </ul>
         {/if}
       {/each}
+    {:else if view === 'classifier' && classifierEntry}
+      <ClassifierConnection entry={classifierEntry} {tauri} onconnected={next => { accounts.set(next); status = 'Classifier connected. Select it in Routing.'; view = 'list'; tab = 'accounts' }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
-      <label for="provider-key">{provider.name} API key</label>
-      <input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}>
+      <div class="connection-field"><label for="provider-key">{provider.name} API key</label><input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" disabled={pending || !key.trim()} onclick={saveKey}>Save key</button>
     {:else if method === 'ollama'}
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
-      <label for="provider-base-url">Ollama server URL</label>
-      <input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={baseUrl} disabled={pending}>
+      <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
     {:else if method === 'endpoint'}
-      <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : 'a LiteLLM proxy or another gateway.'}</p>
+      <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : provider.id === 'vllm' ? 'a running vLLM server.' : 'a LiteLLM proxy or another gateway.'}</p>
       {#if provider.id === 'custom'}
-        <label for="endpoint-name">Name</label>
-        <input id="endpoint-name" type="text" bind:value={endpointName} disabled={pending}>
+        <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" bind:value={endpointName} disabled={pending}></div>
       {/if}
-      <label for="provider-base-url">Server URL</label>
-      <input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" bind:value={baseUrl} disabled={pending}>
-      <label for="endpoint-key">API key (optional)</label>
-      <input id="endpoint-key" type="password" autocomplete="off" bind:value={key} disabled={pending}>
-      <label for="endpoint-models">Models, one per line</label>
-      <textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea>
+      <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
+      <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
+      <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea></div>
       <p class="support">Leave the list empty and Muniment asks the server for its models.</p>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
@@ -482,8 +487,7 @@
               {/each}
             </div>
           {:else if login.prompt?.kind === 'input'}
-            <label for="login-answer">{login.prompt.title}</label>
-            <input id="login-answer" type="text" placeholder={login.prompt.placeholder ?? ''} bind:value={loginAnswer}>
+            <div class="connection-field"><label for="login-answer">{login.prompt.title}</label><input id="login-answer" type="text" placeholder={login.prompt.placeholder ?? ''} bind:value={loginAnswer}></div>
             <button type="button" disabled={!loginAnswer.trim()} onclick={() => answerPrompt(loginAnswer.trim())}>Continue</button>
           {/if}
           {#if login.stage === 'failed' || login.stage === 'cancelled'}
@@ -506,20 +510,20 @@
 </div>
 
 <style>
-  .routing-test { margin-top: 12px; }
-  .routing-test summary { cursor: pointer; color: var(--muted); }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
   .models { display: grid; gap: 28px; align-content: start; }
+  .models.connecting { gap: 16px; }
+  .connection-field { display: grid; gap: 6px; }
   .account-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 28px; padding: 3px 4px; }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
   .connect-head h4, .models-head h4 { margin: 0; }
   .models-label { color: var(--ink); font-size: var(--text-17); font-weight: 600; }
-  .accounts-section { display: grid; gap: 12px; border-top: 1px solid var(--border); padding-top: 22px; }
+  .accounts-section { display: grid; gap: 12px; }
   .connect-head h4 { font-size: var(--text-15); font-weight: 600; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .support code { font: var(--text-12) var(--font-mono); }
@@ -530,6 +534,9 @@
   .search:focus-within { border-color: var(--muted); }
   .search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
   .provider-group { display: grid; gap: 4px; padding: 10px 0 6px; border-top: 1px solid var(--border); }
+  .provider-group:first-of-type { border-top: 0; padding-top: 0; }
+  .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .tab-action { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
   .provider-group header { display: flex; align-items: center; gap: 8px; min-height: 28px; }
   .provider-group h5 { margin: 0; font-size: var(--text-13); font-weight: 600; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }

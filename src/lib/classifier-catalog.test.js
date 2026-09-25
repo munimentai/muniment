@@ -1,24 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { DEDICATED, SELF_HOSTED, POOLED, catalog, matchSaved, pooledReady, priceLabel } from './classifier-catalog.js'
+import { DEDICATED, SELF_HOSTED, catalog, matchSaved, priceLabel } from './classifier-catalog.js'
 
 describe('classifier catalog', () => {
-  it('lists a model built to classify before the models on your own accounts', () => {
-    const rows = catalog([])
+  it('suggests only dedicated classifiers and compatible endpoints', () => {
+    const rows = catalog([{ family: 'openai', enabled: true }], [{ family: 'openai', model: 'gpt-6-sol' }, { family: 'anthropic', model: 'claude-opus-5-5' }])
     expect(rows[0].id).toBe('typesafe/jev-latest')
-    expect(rows[0].group).toBe('Built to classify')
-    expect(rows.slice(DEDICATED.length + SELF_HOSTED.length).every((row) => row.group === 'On your accounts')).toBe(true)
-    expect(rows.length).toBe(DEDICATED.length + SELF_HOSTED.length + POOLED.length)
-  })
-
-  it('offers a pooled classifier only while its provider holds an enabled account', () => {
-    const accounts = [{ family: 'openai', enabled: true }, { family: 'xai', enabled: false }]
-    expect(pooledReady(POOLED[0], accounts)).toBe(true)
-    expect(pooledReady(POOLED.find((entry) => entry.family === 'xai'), accounts)).toBe(false)
-    expect(pooledReady(POOLED[0], [])).toBe(false)
-    const rows = catalog(accounts)
-    expect(rows.find((row) => row.id === 'openai/gpt-5.6-luna').ready).toBe(true)
-    expect(rows.find((row) => row.id === 'kimi/kimi-k3').ready).toBe(false)
-    expect(rows[0].ready).toBe(true)
+    expect(rows.length).toBe(DEDICATED.length + SELF_HOSTED.length)
+    expect(rows.some(row => row.kind === 'pooled' || row.group === 'On your accounts')).toBe(false)
+    expect(rows.map(row => row.model)).not.toContain('gpt-6-sol')
   })
 
   it('reads a price per million input tokens and calls a free one free', () => {
@@ -38,12 +27,4 @@ describe('classifier catalog', () => {
     expect(matchSaved({ kind: 'none' })).toBe('')
     expect(matchSaved(null)).toBe('')
   })
-})
-
-it('includes discovered routing models without duplicates or invented prices', () => {
-  const rows = catalog([{ family: 'xai', enabled: true, servable: true }], [{ family: 'xai', model: 'grok-4.7', name: 'Grok 4.7' }, { family: 'xai', model: 'grok-4.6' }])
-  expect(rows.filter(row => row.model === 'grok-4.6')).toHaveLength(1)
-  const fresh = rows.find(row => row.model === 'grok-4.7')
-  expect(fresh.ready).toBe(true)
-  expect(priceLabel(fresh.price)).toBe('Price unavailable')
 })

@@ -29,12 +29,10 @@ describe('Routing settings', () => {
     await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_provider_inventory', { force: true }))
     expect(screen.queryByRole('button', { name: 'Connect account' })).toBeNull()
     await fireEvent.click(screen.getByRole('tab', { name: 'Routing', exact: true }))
-    await screen.findByLabelText('Saved routing settings')
-    expect(screen.getByRole('button', { name: /Choose automatically/ })).toBeDisabled()
-    const advanced = screen.getByText('Test routing', {selector:'summary'})
-    expect(advanced.closest('details')).not.toHaveAttribute('open')
-    await fireEvent.click(advanced)
-    expect(screen.getByLabelText('Sample request')).toBeVisible()
+    expect(await screen.findByRole('switch', { name: 'Use routing' })).toBeDisabled()
+    expect(screen.queryByText('Classifier and fallback')).toBeNull()
+    expect(screen.queryByText('Test routing', { selector: 'summary' })).toBeNull()
+
   })
 
   it('retries failed reads without displaying an empty pool as fact', async () => {
@@ -52,27 +50,29 @@ describe('Routing settings', () => {
     await screen.findByText('Connect an account to choose models automatically.')
   })
 
-  it('shows saved state after mutations and refreshes the composer inventory', async () => {
+  it('enables routing with a connected classifier and keeps balancing on', async () => {
     const settings = routing()
-    settings.options = [{ key: 'openai/example', family: 'openai', model: 'example', description: 'General requests' }]
-    settings.classifier = { kind: 'typesafe', configured: true, model: 'jev-latest' }
-    settings.fallback = 'openai/example'
-    const oninventory = vi.fn()
+    settings.enabled = false
+    settings.options = [{ key: 'openai/example', family: 'openai', model: 'example' }]
+    settings.classifier_connections = [{ id: 'jev', name: 'Jev via TypeSafe', active: false }]
+    let fresh = { ...inventory, default_provider: 'openai', default_model: 'example' }
     const tauri = { invoke: vi.fn(async (command, payload) => {
-      if (command === 'local_mode_provider_inventory') return inventory
+      if (command === 'local_mode_provider_inventory') return fresh
       if (command === 'model_router_set_enabled') settings.enabled = payload.enabled
+      if (command === 'model_router_select_classifier') settings.classifier_connections[0].active = true
+      if (command === 'local_mode_set_default_model') fresh = { ...fresh, default_provider: payload.provider, default_model: payload.model }
       return { ...settings }
     }) }
-    render(Settings, { tauri, inventory, section: 'routing', oninventory, onclose: vi.fn() })
-    const summary = await screen.findByLabelText('Saved routing settings')
-    expect(within(summary).getByText('Jev Latest')).toBeInTheDocument()
-    expect(within(summary).getByText('OpenAI · Example')).toBeInTheDocument()
-    expect(screen.getByRole('switch', { name: 'Use account balancing' }).closest('details')).toBeNull()
-    await fireEvent.click(screen.getByRole('switch', { name: 'Use account balancing' }))
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'Use account balancing' })).toHaveAttribute('aria-checked', 'false'))
-    expect(tauri.invoke).toHaveBeenCalledWith('model_router_set_enabled', { enabled: false })
-    expect(oninventory.mock.calls.length).toBeGreaterThan(1)
+    render(Settings, { tauri, inventory: fresh, section: 'routing', onclose: vi.fn() })
+    const toggle = await screen.findByRole('switch', { name: 'Use routing' })
+    expect(screen.queryByRole('button', { name: /^Classifier model:/ })).toBeNull()
+    await fireEvent.click(toggle)
+    await screen.findByRole('button', { name: /^Classifier model:/ })
+    expect(tauri.invoke).toHaveBeenCalledWith('model_router_select_classifier', { id: 'jev' })
+    expect(tauri.invoke).toHaveBeenCalledWith('model_router_set_enabled', { enabled: true })
+    expect(tauri.invoke).toHaveBeenCalledWith('local_mode_set_default_model', { provider: 'muniment-router', model: 'auto' })
   })
+
 })
 
 it('does not present connected subscriptions or zero-weight keys as ready', () => {
@@ -124,4 +124,11 @@ it('shows runtime routing eligibility and fallback evidence without starting a c
   expect(screen.getByText('Every account for this provider is temporarily unavailable.')).toBeInTheDocument()
   expect(screen.getByText('35 ms')).toBeInTheDocument()
   expect(tauri.invoke.mock.calls).toEqual([['model_router_test_route', { sample: 'Summarize my file' }]])
+})
+
+it('shows accounts without waiting for model discovery', async () => {
+  const settings = { ...routing(), accounts: [{ id: 'fast', family: 'openai', label: 'Instant account', source: 'account', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [] }] }
+  const tauri = { invoke: vi.fn(command => command === 'local_mode_provider_inventory' ? new Promise(() => {}) : Promise.resolve(settings)) }
+  render(Settings, { tauri, inventory, section: 'models', onclose: vi.fn() })
+  expect(await screen.findByText('Instant account')).toBeInTheDocument()
 })

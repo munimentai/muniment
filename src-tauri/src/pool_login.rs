@@ -66,6 +66,7 @@ pub(crate) fn start(app: &AppHandle, provider: &str) -> Result<(), String> {
         .spawn(move || {
             let outcome = match provider.as_str() {
                 "kimi" => kimi(&app, &flag),
+                "meta" => muse(&app, &flag),
                 "antigravity" => antigravity(&app, &flag),
                 "devin" => devin(&app, &flag),
                 _ => Err("This provider has no subscription the router can pool.".into()),
@@ -150,6 +151,26 @@ fn kimi(app: &AppHandle, flag: &AtomicBool) -> Result<(Credential, Option<String
         }
     }
     Err("The Kimi code expired before the sign-in finished. Start again.".into())
+}
+
+fn muse(app: &AppHandle, flag: &AtomicBool) -> Result<(Credential, Option<String>), String> {
+    let code = native_auth::muse_device_code(native_auth::MUSE_DEVICE_URL, CALL_TIMEOUT)?;
+    emit(app, "meta", json!({"stage":"event", "event": {
+        "type":"device_code", "userCode":code.user_code,
+        "verificationUri":code.verification_uri,
+        "verificationUriComplete":code.verification_uri_complete,
+    }}));
+    let deadline = Instant::now() + SIGN_IN_TIMEOUT.min(Duration::from_secs(code.expires_in));
+    let mut interval = Duration::from_secs(code.interval);
+    while Instant::now() < deadline {
+        if !wait(flag, interval) { return Err("The sign-in was cancelled.".into()); }
+        match native_auth::muse_poll(native_auth::MUSE_TOKEN_URL, native_auth::MUSE_MINT_URL, &code.device_code, CALL_TIMEOUT)? {
+            native_auth::MusePoll::Pending => {},
+            native_auth::MusePoll::SlowDown => interval += Duration::from_secs(5),
+            native_auth::MusePoll::Granted(credential) => return Ok((credential, None)),
+        }
+    }
+    Err("The Muse Code sign-in code expired. Start again.".into())
 }
 
 /// The code a browser redirect carried, once it lands on the listener with

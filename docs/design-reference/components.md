@@ -9,6 +9,28 @@ holds the token values. Every value below comes from a `<style>` rule in
 marked "raw". A value with no token, such as an opacity or a pixel gap, is
 listed as written.
 
+## Shared component library
+
+`src/lib/ui/` owns reusable settings controls. Models and Extend share
+`SearchToolbar`: the filter icon comes first, search fills the row, and actions
+sit at the right. Filters expand below the toolbar. `Button` supplies compact
+32px controls, icon-only accessible names, disabled states and focus backgrounds.
+Its primary variant uses the optional accent and accent-soft tokens. Daybreak and
+Afterglow use orange actions and teal selection. Other themes keep their neutral actions.
+`SegmentedField` supplies square, two-sided choices with pointer and arrow-key selection.
+`ChoiceField` supplies labeled choices with optional provider marks, keyboard
+navigation, Escape dismissal and focus return. It uses the overlay shadow token.
+`DisclosureSummary` supplies Lucide chevrons for collapsed and expanded sections.
+Field label gaps are 6px, action gaps are 8px, field rows are 12px apart, and
+connection sections use 16px gaps. `SettingsTabs`, `Toggle` and `ProviderLogo` remain the shared tabs, switches and marks.
+
+Screens own layout and data. They import these controls instead of copying their
+CSS. Colors, fonts, radii and shadows come from `src/styles/tokens.css`.
+`settings-controls.css` applies the same native field and button treatment to
+all Models & routing subpages, including account cards and connection forms.
+Tabs and switches keep their dedicated states. New settings controls extend this library. Native selects and custom dropdowns
+do not coexist for the same choice pattern. Capability filters use reported data.
+
 ## Shared defaults
 
 These rules apply to every control in a group unless a row below overrides
@@ -19,7 +41,7 @@ them.
 | Body text | `body` in `base.css` | `--paper` background, `--ink` color, `--font-human`, `--text-15`, `--weight-regular`, `--leading-body`, `--tracking-body` |
 | Headings | `h1, h2, h3, h4` in `base.css` | `--weight-semibold`, `--leading-heading`, `--tracking-heading` |
 | Link | `a` in `base.css` | `--ink` color, 1px `--border` bottom border, hover `--muted`, transition `--motion-popover --ease-out` |
-| Focus ring | `:focus-visible` in `base.css` | `2px solid var(--ink)`, offset 2px. Component rules restate this ring or set `outline-color: var(--ink)`. Two exceptions: `.artifact-divider:focus-visible` and `.sidebar-divider:focus-visible` use offset -2px |
+| Focus | `:focus-visible` in `base.css` | No outline. Shared controls show a `--faint` background and `--ink` text on keyboard focus. |
 | Selection | `::selection` in `base.css` | `--faint` background, `--ink` color |
 | Record fonts | `code, kbd, samp, pre` in `base.css` | `--font-mono`, tabular lining figures |
 | Scroll bar | `::-webkit-scrollbar-thumb` in `base.css` | 10px, transparent at rest, `--border` while the region is hovered, `--muted` on thumb hover, `--radius-chip` |

@@ -19,13 +19,13 @@ describe('Appearance', () => {
     const modes = screen.getByRole('group', { name: 'Mode' })
     expect(within(modes).getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     const themes = screen.getByRole('group', { name: 'Themes' })
-    expect(within(themes).getAllByRole('button').map((button) => button.textContent.trim())).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon']])
-    expect([...themes.querySelectorAll('[data-swatch]')].map((swatch) => swatch.dataset.theme)).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon']].map((name) => name.toLowerCase()))
-    expect([...themes.querySelectorAll('p')].map((label) => label.textContent)).toEqual(['Light', 'Dark'])
+    expect(within(themes).getAllByRole('button').map((button) => button.textContent.trim())).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon', 'Daybreak', 'Afterglow', 'Canopy', 'Coral']])
+    expect([...themes.querySelectorAll('[data-swatch]')].map((swatch) => swatch.dataset.theme)).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon', 'Daybreak', 'Afterglow', 'Canopy', 'Coral']].map((name) => name.toLowerCase()))
+    expect([...themes.querySelectorAll('p')].map((label) => label.textContent)).toEqual(['Light', 'Dark', 'Vibrant'])
     // Every tile shows the six tokens that differ between themes.
     for (const swatch of themes.querySelectorAll('[data-swatch]')) {
       expect(swatch.querySelector('.swatch-card')).not.toBeNull()
-      expect([...swatch.querySelectorAll('i')].map((bar) => bar.classList[0])).toEqual(['swatch-ink', 'swatch-muted', 'swatch-signal'])
+      expect([...swatch.querySelectorAll('i')].map((bar) => bar.classList[0])).toEqual(['swatch-ink', 'swatch-muted', 'swatch-signal', ...(['daybreak', 'afterglow', 'canopy', 'coral'].includes(swatch.dataset.theme) ? ['swatch-accent'] : [])])
     }
     expect(pressed(modes)).toEqual(['System'])
     expect(pressed(themes)).toEqual(['Paper', 'Vault'])

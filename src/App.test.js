@@ -230,6 +230,8 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  // Each test represents a fresh app, including its bridge-scoped account cache.
+  window.__TAURI__.core = { ...window.__TAURI__.core }
   Object.assign(featureFlags, {cloud: true, companyRecord: true})
   localStorage.clear()
   recordQueryResult = { page: { kind: 'deal', total: 1, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [{ id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', created_at: '2026-09-15T10:00:00.000Z', body_text: 'Northwind renewal: won.', data: { name: 'Northwind renewal', stage: 'won' } }] } }
@@ -1443,11 +1445,11 @@ describe('workspace composer entry', () => {
     render(App)
     const dialog = await openSettings()
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect account' }))
-    expect(within(dialog).getByRole('heading', { name: 'Popular' })).toBeInTheDocument()
-    expect(within(dialog).getByRole('heading', { name: 'Other' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: 'Popular & Subscriptions' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: 'All providers' })).toBeInTheDocument()
     // The featured eight lead, in the SPEC order.
-    const popular = within(dialog).getByRole('heading', { name: 'Popular' }).nextElementSibling
-    expect([...popular.querySelectorAll('button')].map((button) => button.querySelector('span:not(.logo)').textContent)).toEqual(['Anthropic', 'OpenAI', 'xAI', 'Google', 'OpenRouter', 'Ollama', 'LM Studio', 'Custom OpenAI-compatible endpoint'])
+    const popular = within(dialog).getByRole('heading', { name: 'Popular & Subscriptions' }).nextElementSibling
+    expect([...popular.querySelectorAll('button')].map((button) => button.querySelector('span:not(.logo)').textContent)).toEqual(['Anthropic', 'OpenAI', 'xAI', 'Google', 'OpenRouter', 'Ollama', 'LM Studio', 'Custom OpenAI-compatible endpoint', 'Meta Muse', 'Devin', 'Kimi', 'vLLM'])
 
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Ollama/ }))
     expect(within(dialog).getByLabelText('Ollama server URL')).toHaveValue('http://localhost:11434/v1')
@@ -1467,11 +1469,32 @@ describe('workspace composer entry', () => {
 
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^xAI/ }))
-    expect(within(dialog).getByText(/Sign in with your SuperGrok or X Premium account\./)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Sign in with your Grok Build account\./)).toBeInTheDocument()
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Anthropic/ }))
     expect(within(dialog).getByText(/Anthropic through your Claude Code sign-in\./)).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Use an API key instead' })).toBeInTheDocument()
+  })
+
+  it('shows all six subscription options and Muse Code in Connect account', async () => {
+    localModeStatus = true
+    render(App)
+    const dialog = await openSettings()
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect account' }))
+    for (const name of [/^Anthropic.*Claude Code/, /^OpenAI.*ChatGPT/, /^xAI.*Grok Build/,
+      /^Google.*Antigravity/, /^Devin.*Devin account/, /^Kimi.*Kimi Code account/, /^Meta.*Muse Code/]) {
+      expect(within(dialog).getByRole('button', { name })).toBeVisible()
+    }
+    for (const [query, row, signIn] of [
+      ['Antigravity', /^Google/, 'antigravity'], ['Devin', /^Devin/, 'devin'],
+      ['Kimi Code', /^Kimi/, 'kimi'], ['Muse Code', /^Meta/, 'meta'],
+    ]) {
+      await fireEvent.input(within(dialog).getByRole('searchbox'), { target: { value: query } })
+      await fireEvent.click(within(dialog).getByRole('button', { name: row }))
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Sign in' }))
+      expect(invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: signIn })
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    }
   })
 
   it('opens provider sign-in from the account connector', async () => {

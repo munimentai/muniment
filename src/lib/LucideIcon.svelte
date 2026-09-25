@@ -13,6 +13,18 @@
     <path d="M12 3v18" /><path d="m19 8 3 8a5 5 0 0 1-6 0zV7" /><path d="M3 7h1a17 17 0 0 0 8-2 17 17 0 0 0 8 2h1" /><path d="m5 8 3 8a5 5 0 0 1-6 0zV7" /><path d="M7 21h10" />
   {:else if name === 'user'}
     <circle cx="12" cy="8" r="5" /><path d="M20 21a8 8 0 0 0-16 0" />
+  {:else if name === 'eye'}
+    <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+  <circle cx="12" cy="12" r="3" />
+  {:else if name === 'brain'}
+    <path d="M12 18V5" />
+  <path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4" />
+  <path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5" />
+  <path d="M17.997 5.125a4 4 0 0 1 2.526 5.77" />
+  <path d="M18 18a4 4 0 0 0 2-7.464" />
+  <path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517" />
+  <path d="M6 18a4 4 0 0 1-2-7.464" />
+  <path d="M6.003 5.125a4 4 0 0 0-2.526 5.77" />
   {:else if name === 'cpu'}
     <rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
   {:else if name === 'route'}

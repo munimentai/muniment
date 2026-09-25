@@ -1,4 +1,5 @@
 <script>
+  import { accountCache } from './lib/account-cache.js'
   import PopupClose from './lib/PopupClose.svelte'
   import { featureFlags } from './feature-flags.js'
   import { floatingMenu } from './lib/floating-menu.js'
@@ -100,6 +101,7 @@
   }
 
   const tauri = window.__TAURI__?.core
+  onMount(() => tauri ? accountCache(tauri).start() : undefined)
   let auth = $state(bootState)
   let localEntryError = $state('')
   let accountStatus = $state('')
@@ -109,7 +111,7 @@
   $effect(() => {
     if (!inventory) { hasSubscriptions = false; return }
     let disposed = false
-    void tauri.invoke('model_router_settings').then(settings => {
+    void accountCache(tauri).read().then(settings => {
       if (!disposed) {
         hasSubscriptions = (settings?.accounts ?? []).some(account => account.source === 'account')
         if (!hasSubscriptions) capacityOpen = false
@@ -2717,6 +2719,7 @@
   .auth-actions { display: flex; gap: 8px; }
   .sign-in-link { justify-self: start; color: var(--ink); font-size: var(--text-12); text-decoration: underline; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .composer-action.primary { background: var(--accent, var(--ink)); border-color: var(--accent, var(--ink)); color: var(--on-accent, var(--paper)); }
   .composer-actions .primary[aria-disabled="true"] { background: var(--faint); border-color: var(--border); color: var(--muted); }
 
   button {
@@ -2736,7 +2739,7 @@
   }
 
   .primary:hover:not(:disabled):not([aria-disabled="true"]) {
-    background: var(--ink);
+    background: var(--accent, var(--ink));
   }
 
   button:disabled {

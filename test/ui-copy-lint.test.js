@@ -214,3 +214,9 @@ describe('UI copy lint', () => {
     }
   })
 })
+
+it('permits official provider names and protocol paths but still rejects adjacent marketing copy', () => {
+  const names = 'Cloudflare Workers AI, Moonshot AI, Google Vertex AI, Vercel AI Gateway, https://api.typesafe.ai/v1/systemone, /ai/run'
+  expect(forbiddenUiCopy(names)).toEqual([])
+  expect(forbiddenUiCopy(`${names} magic AI` ).map(item => item.word)).toEqual(['magic', 'AI'])
+})

@@ -452,3 +452,83 @@
 :root { --code-added: light-dark(#276349, #8DC7A5); --code-name: light-dark(#62518E, #C1B0E2); }
 
 :root { --reference: light-dark(#285C9E, #86B8F4); }
+
+/* Vibrant themes add an orange action accent to teal selection and activity. */
+:root[data-theme="daybreak"], [data-swatch][data-theme="daybreak"] {
+  --paper: #EAF5FA;
+  --surface: #FFFFFF;
+  --faint: #DCEEF5;
+  --ink: #142E38;
+  --muted: #435F69;
+  --border: #B7D4DF;
+  --signal: #006D6D;
+  --signal-opacity: .10;
+  --signal-soft: rgba(0, 109, 109, var(--signal-opacity));
+  --oxide: #B13D42;
+  --ochre: #805A00;
+  --accent: #A94700;
+  --accent-soft: #FFE8D5;
+  --on-accent: #FFFFFF;
+  color-scheme: light;
+}
+:root[data-theme="afterglow"], [data-swatch][data-theme="afterglow"] {
+  --paper: #10242D;
+  --surface: #17333D;
+  --faint: #20414A;
+  --ink: #EDF8FC;
+  --muted: #AAC8D4;
+  --border: #3D626C;
+  --signal: #51D6C6;
+  --signal-opacity: .12;
+  --signal-soft: rgba(81, 214, 198, var(--signal-opacity));
+  --oxide: #FF9B9B;
+  --ochre: #EFCA08;
+  --accent: #FFA64D;
+  --accent-soft: #433324;
+  --on-accent: #10242D;
+  color-scheme: dark;
+}
+/* Optional accent roles must reset when leaving a vibrant theme. */
+:root:not([data-theme="daybreak"]):not([data-theme="afterglow"]):not([data-theme="canopy"]):not([data-theme="coral"]),
+[data-swatch]:not([data-theme="daybreak"]):not([data-theme="afterglow"]):not([data-theme="canopy"]):not([data-theme="coral"]) {
+  --accent: initial;
+  --accent-soft: initial;
+  --on-accent: initial;
+}
+
+/* Navy, green and mint from the Canopy source palette. */
+:root[data-theme="canopy"], [data-swatch][data-theme="canopy"] {
+  --paper: #1D263B;
+  --surface: #243047;
+  --faint: #2C3A50;
+  --ink: #EAF8F4;
+  --muted: #B3C2D3;
+  --border: #5C6784;
+  --signal: #4CB963;
+  --signal-opacity: .12;
+  --signal-soft: rgba(76, 185, 99, var(--signal-opacity));
+  --oxide: #FFAAA2;
+  --ochre: #E8C978;
+  --accent: #A0EADE;
+  --accent-soft: #173B36;
+  --on-accent: #1D263B;
+  color-scheme: dark;
+}
+/* Blush and peach surfaces, with teal selection and coral actions. */
+:root[data-theme="coral"], [data-swatch][data-theme="coral"] {
+  --paper: #FAD8D6;
+  --surface: #FFF5F0;
+  --faint: #F3D7C1;
+  --ink: #2E282A;
+  --muted: #70514F;
+  --border: #D3ABA3;
+  --signal: #006764;
+  --signal-opacity: .10;
+  --signal-soft: rgba(0, 103, 100, var(--signal-opacity));
+  --oxide: #9A2731;
+  --ochre: #785000;
+  --accent: #B92D27;
+  --accent-soft: #FDE4E1;
+  --on-accent: #FFFFFF;
+  color-scheme: light;
+}

@@ -1,4 +1,8 @@
 <script>
+  import DisclosureSummary from '../lib/ui/DisclosureSummary.svelte'
+  import ChoiceField from '../lib/ui/ChoiceField.svelte'
+  import SearchToolbar from '../lib/ui/SearchToolbar.svelte'
+  import Button from '../lib/ui/Button.svelte'
   import PopupClose from '../lib/PopupClose.svelte'
   import { dialogDismiss } from '../lib/dialog-dismiss.js'
   import SettingsTabs from '../lib/SettingsTabs.svelte'
@@ -70,13 +74,15 @@
 <section class="extend" aria-label="Extend">
   <p class="intro">Add tools and instructions to your local workspace.</p>
   <SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'unplug',count:counts.plugin}]} onchange={id => { tab = id; resetSearch(); form = null; preview = null }} />
-  <div class="toolbar">{#if tab === 'mcp'}<button type="button" class="filter-toggle" aria-label="Filters" aria-expanded={filtersOpen} aria-controls="mcp-filters" onclick={() => filtersOpen = !filtersOpen}><LucideIcon name="sliders-vertical" size={18} /></button>{/if}{#if tab === 'mcp' || counts[tab]}<input type="search" aria-label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" bind:value={query} oninput={() => page = 0} />{/if}<button type="button" disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Install'}</button>{#if tab !== 'mcp'}{#if oncreate}<button type="button" onclick={() => oncreate(tab)}>Create from chat</button>{/if}<button type="button" disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</button>{/if}</div>
+  <SearchToolbar bind:value={query} label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" filters={tab === 'mcp'} expanded={filtersOpen} controls="mcp-filters" ontoggle={() => filtersOpen = !filtersOpen} oninput={() => page = 0}>
+    {#snippet actions()}<Button disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Install'}</Button>{#if tab !== 'mcp'}{#if oncreate}<Button onclick={() => oncreate(tab)}>Create from chat</Button>{/if}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}{/snippet}
+  </SearchToolbar>
   {#if tab === 'mcp' && filtersOpen}
     <div class="filters" id="mcp-filters">
-      <label>Category<select bind:value={category} onchange={() => page = 0}><option value="">All categories</option>{#each categories as value}<option value={value}>{categoryLabel(value)}</option>{/each}</select></label>
-      <label>Show<select bind:value={scope} onchange={() => page = 0}><option value="all">All servers</option><option value="installed">Installed</option><option value="setup">Setup required</option></select></label>
-      <label>Sort<select bind:value={sort} onchange={() => page = 0}><option value="popular">Popularity</option><option value="name">Name A–Z</option><option value="name-desc">Name Z–A</option></select></label>
-      <button type="button" onclick={resetSearch}>Clear filters</button>
+      <ChoiceField label="Category" inline={false} value={category} options={[{value:'',label:'All categories'}, ...categories.map(value => ({value,label:categoryLabel(value)}))]} onchange={value => { category = value; page = 0 }} />
+      <ChoiceField label="Show" inline={false} value={scope} options={[{value:'all',label:'All servers'},{value:'installed',label:'Installed'},{value:'setup',label:'Setup required'}]} onchange={value => { scope = value; page = 0 }} />
+      <ChoiceField label="Sort" inline={false} value={sort} options={[{value:'popular',label:'Popularity'},{value:'name',label:'Name A–Z'},{value:'name-desc',label:'Name Z–A'}]} onchange={value => { sort = value; page = 0 }} />
+      <Button onclick={resetSearch}>Clear filters</Button>
     </div>
   {/if}
   {#if busy}<p role="status">{form && preview ? 'Installing package…' : 'Working…'}</p>{/if}
@@ -90,7 +96,7 @@
         <label>Name<input bind:value={name} /></label><label>Server URL<input type="url" bind:value={url} placeholder="https://example.com/mcp" /></label>
         <label>Authentication<select bind:value={authentication}><option value="none">None or token</option><option value="oauth">Sign in with OAuth</option></select></label>
         <label>Bearer token<input type="password" bind:value={token} autocomplete="off" placeholder="Optional. Stored in the system credential store." /></label>
-        <details><summary>Local command or advanced configuration</summary><p>Use a command and argument list for local servers. Use environment variable references for secrets.</p><textarea aria-label="Server configuration" bind:value={config} rows="5" placeholder={'{"command":"npx","args":["-y","server-package"]}'}></textarea></details>
+        <details><DisclosureSummary>Local command or advanced configuration</DisclosureSummary><p>Use a command and argument list for local servers. Use environment variable references for secrets.</p><textarea aria-label="Server configuration" bind:value={config} rows="5" placeholder={'{"command":"npx","args":["-y","server-package"]}'}></textarea></details>
         <button type="button" disabled={busy || !name.trim() || (!url.trim() && !config.trim())} onclick={saveServer}>{authentication === 'oauth' ? 'Save and sign in' : 'Save server'}</button>
       {:else}
         <label>GitHub repository, local folder, or archive<input bind:value={source} placeholder="https://github.com/owner/repository" /></label>
@@ -174,8 +180,6 @@
 
 <style>
   .tab-count { font-size: var(--text-12); font-variant-numeric: tabular-nums; }
-  .filter-toggle { display: grid; place-items: center; flex: none; }
-  .filter-toggle[aria-expanded="true"] { color: var(--accent); }
   .server-details { position: fixed; inset: 0; margin: auto; width: min(560px, calc(100vw - 48px)); height: fit-content; max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--paper); color: var(--ink); font-family: var(--font-human); }
   .server-details::backdrop { background: var(--overlay-backdrop); }
   .server-details h2 { margin: 0; font-size: var(--text-22); overflow-wrap: anywhere; }
@@ -188,7 +192,7 @@
   .detail-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
   button.details-link { padding: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px; }
 
-  .extend { display: grid; gap: 14px; min-width: 0; } .intro { color: var(--muted); } p, h4 { margin: 0; } .toolbar, .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; }     .toolbar input { flex: 1; min-width: 150px; } label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); } .list { display: grid; gap: 8px; } .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
+  .extend { display: grid; gap: 14px; min-width: 0; } .intro { color: var(--muted); } p, h4 { margin: 0; } .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; }  label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); } .list { display: grid; gap: 8px; } .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
   .extend { container-type: inline-size; }
   button { font-family: var(--font-human); border: 0; border-radius: var(--radius-control); padding: 5px 9px; color: var(--ink); background: var(--faint); cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }

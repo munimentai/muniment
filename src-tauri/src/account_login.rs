@@ -401,7 +401,11 @@ pub(crate) enum Target {
 }
 
 pub(crate) fn start(app: &AppHandle, provider: &str) -> Result<(), String> {
-    start_with(app, provider, target_for(provider))
+    if target_for(provider) == Target::Pool {
+        start_into_pool(app, provider)
+    } else {
+        start_with(app, provider, Target::Pi)
+    }
 }
 
 /// Where the Connect list's sign-in lands: the pool for a family the router

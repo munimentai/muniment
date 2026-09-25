@@ -8,13 +8,16 @@ import { modelLabel } from './model-label.js'
 export const PROVIDERS = [
   { id: 'anthropic', name: 'Anthropic', popular: true, methods: ['claude-code', 'key'] },
   { id: 'openai', name: 'OpenAI', popular: true, methods: ['account', 'key'], account: { provider: 'openai-codex', label: 'ChatGPT Plus or Pro account' } },
-  { id: 'xai', name: 'xAI', popular: true, methods: ['account', 'key'], account: { provider: 'xai', label: 'SuperGrok or X Premium account' } },
-  { id: 'google', name: 'Google', popular: true, methods: ['key'] },
+  { id: 'xai', name: 'xAI', popular: true, methods: ['account', 'key'], account: { provider: 'xai', label: 'Grok Build account' } },
+  { id: 'google', name: 'Google', popular: true, methods: ['account', 'key'], account: { provider: 'antigravity', label: 'Antigravity account' } },
   { id: 'openrouter', name: 'OpenRouter', popular: true, methods: ['account', 'key'], account: { provider: 'openrouter', label: 'OpenRouter account' } },
   { id: 'ollama', name: 'Ollama', popular: true, methods: ['ollama'], baseUrl: 'http://localhost:11434/v1' },
   { id: 'lmstudio', name: 'LM Studio', popular: true, methods: ['endpoint'], baseUrl: 'http://localhost:1234/v1' },
   { id: 'custom', name: 'Custom OpenAI-compatible endpoint', popular: true, methods: ['endpoint'] },
   { id: 'github-copilot', name: 'GitHub Copilot', methods: ['account'], account: { provider: 'github-copilot', label: 'GitHub Copilot account' } },
+  { id: 'meta', name: 'Meta Muse', popular: true, methods: ['account'], account: { provider: 'meta', label: 'Muse Code account' } },
+  { id: 'devin', name: 'Devin', popular: true, methods: ['account'], account: { provider: 'devin', label: 'Devin account' } },
+  { id: 'kimi', name: 'Kimi', popular: true, keyProvider: 'kimi-coding', methods: ['account', 'key'], account: { provider: 'kimi', label: 'Kimi Code account' } },
   { id: 'deepseek', name: 'DeepSeek', methods: ['key'] },
   { id: 'mistral', name: 'Mistral', methods: ['key'] },
   { id: 'groq', name: 'Groq', methods: ['key'] },
@@ -29,10 +32,26 @@ export const PROVIDERS = [
   { id: 'fireworks', name: 'Fireworks', methods: ['key'] },
   { id: 'together', name: 'Together', methods: ['key'] },
   { id: 'baseten', name: 'Baseten', methods: ['key'] },
-  { id: 'kimi-coding', name: 'Kimi For Coding', methods: ['key'] },
+  { id: 'vllm', name: 'vLLM', popular: true, methods: ['endpoint'], baseUrl: 'http://localhost:8000/v1' },
   { id: 'minimax', name: 'MiniMax', methods: ['key'] },
   { id: 'qwen-token-plan', name: 'Qwen Token Plan', methods: ['key'] },
   { id: 'radius', name: 'Radius', methods: ['key'] },
+  { id: 'xiaomi', name: 'Xiaomi', methods: ['key'] },
+  { id: 'moonshotai', name: 'Moonshot AI', methods: ['key'] },
+  { id: 'zai-coding-cn', name: 'ZAI Coding China', methods: ['key'] },
+  { id: 'xiaomi-token-plan-sgp', name: 'Xiaomi Token Plan Singapore', methods: ['key'] },
+  { id: 'qwen-token-plan-individual', name: 'Qwen Token Plan Individual', methods: ['key'] },
+  { id: 'moonshotai-cn', name: 'Moonshot AI China', methods: ['key'] },
+  { id: 'xiaomi-token-plan-cn', name: 'Xiaomi Token Plan China', methods: ['key'] },
+  { id: 'cloudflare-ai-gateway', name: 'Cloudflare AI Gateway', methods: ['key'] },
+  { id: 'xiaomi-token-plan-ams', name: 'Xiaomi Token Plan Amsterdam', methods: ['key'] },
+  { id: 'typesafe', name: 'TypeSafe', methods: ['key'] },
+  { id: 'qwen-token-plan-cn', name: 'Qwen Token Plan China', methods: ['key'] },
+  { id: 'google-vertex', name: 'Google Vertex AI', methods: ['key'] },
+  { id: 'ant-ling', name: 'Ant Ling', methods: ['key'] },
+  { id: 'cloudflare-workers-ai', name: 'Cloudflare Workers AI', methods: ['key'] },
+  { id: 'vercel-ai-gateway', name: 'Vercel AI Gateway', methods: ['key'] },
+  { id: 'minimax-cn', name: 'MiniMax China', methods: ['key'] },
 ]
 
 const METHOD_LABELS = {
@@ -45,7 +64,7 @@ const METHOD_LABELS = {
 
 // Pi ids that reach the shell under another provider's name: the Codex account
 // is OpenAI, the bridge is Anthropic.
-const PROVIDER_ALIASES = { 'openai-codex': 'openai', 'claude-bridge': 'anthropic' }
+const PROVIDER_ALIASES = { 'openai-codex': 'openai', 'claude-bridge': 'anthropic', antigravity: 'google', 'kimi-coding': 'kimi' }
 
 export function catalogProvider(id) {
   return PROVIDERS.find((provider) => provider.id === id) ?? null
@@ -62,13 +81,15 @@ export function methodLabel(provider, method) {
   return METHOD_LABELS[method] ?? method
 }
 
-// The catalog split the connector shows: the popular eight first, then the rest
+// The catalog split the connector shows: the featured providers first, then the rest
 // by name. A query narrows both by name or id.
 export function searchProviders(query = '') {
   const needle = query.trim().toLowerCase()
   const matches = PROVIDERS.filter((provider) => !needle
     || provider.name.toLowerCase().includes(needle)
-    || provider.id.includes(needle))
+    || provider.id.includes(needle)
+    || provider.methods.some((method) => methodLabel(provider, method).toLowerCase().includes(needle))
+    || (provider.account?.provider ?? '').includes(needle))
   return {
     popular: matches.filter((provider) => provider.popular),
     other: matches.filter((provider) => !provider.popular).sort((a, b) => a.name.localeCompare(b.name)),
@@ -101,8 +122,8 @@ export function modelKey(provider, model) {
 
 // The router's families under the catalog provider each one is, and the name
 // a family group takes when no provider of its own is connected.
-const FAMILY_CATALOG = { openai: 'openai', anthropic: 'anthropic', google: 'google', xai: 'xai', kimi: 'kimi-coding', devin: 'devin' }
-const FAMILY_NAMES = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', xai: 'xAI', kimi: 'Kimi', devin: 'Devin' }
+const FAMILY_CATALOG = { openai: 'openai', anthropic: 'anthropic', google: 'google', xai: 'xai', kimi: 'kimi', devin: 'devin' }
+const FAMILY_NAMES = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', xai: 'xAI', kimi: 'Kimi', devin: 'Devin', meta: 'Meta' }
 
 // The router family a connected provider pools into, none for a provider the
 // router does not pool, and the catalog provider a family shows as.

@@ -151,6 +151,7 @@ const DIAGNOSTICS = new Map([
     String.raw`export function getAppName(): string {\n  const name = readPiConfig()?.name\n  return typeof name === \"string\" && name.trim() ? name.trim() : \"pi\"\n}`,
     "'.pi'", "parts[0] === '.pi'",
   ]],
+  ['provider_models.rs', ['{url}?types=chat&pi-version={}', 'pi-version=']],
   ['pi_settings.rs', ['The Pi directory URL is invalid.', 'Cannot locate the Pi home directory.', 'Pi settings lock changed owners.']],
   ['sidecar/io.rs', ['timed out writing Pi RPC stdin', 'Pi stderr {index}', 'Pi stderr 5']],
   ['sidecar/pi.rs', [
@@ -203,7 +204,8 @@ const EXCLUDED_DIRECTORIES = new Set(['node_modules', 'target', 'third-party', '
 
 export function forbiddenUiCopy(source, file = '<fixture>') {
   // Official product and provider hosts are domains, not promotional copy.
-  const prose = source.replace(/\b(?:x|muniment|claude)\.ai\b/g, (host) => " ".repeat(host.length))
+  const officialNames = /\b(?:Moonshot AI(?: China)?|Cloudflare AI Gateway|Cloudflare Workers AI|Google Vertex AI|Vercel AI Gateway|cloudflare-ai-gateway|cloudflare-workers-ai|vercel-ai-gateway|Rizzo-AI-Academy|typesafe\.ai|openrouter\.ai)\b|\/ai\/(?:run|models)\b/g
+  const prose = source.replace(officialNames, name => ' '.repeat(name.length)).replace(/\b(?:x|muniment|claude)\.ai\b/g, (host) => " ".repeat(host.length))
   return [...prose.matchAll(FORBIDDEN)].map((match) => ({
     file,
     line: source.slice(0, match.index).split('\n').length,

@@ -9,7 +9,7 @@ default. The interface is the user's territory and the model is a visitor.
 
 `src/styles/tokens.css` is the token source. Code has theme-aware syntax tokens. Light and dark are both
 first-class, the OS picks the default, and a user override persists per device.
-Every theme carries the same ten color tokens in one `:root[data-theme]`
+Every theme carries ten core color tokens in one `:root[data-theme]`
 block. The house sets are Paper, Vellum, Ledger and Foolscap in light and
 Moss, Vault, Graphite and Inkwell in dark. Parchment, Manila and Linen carry
 the light neutrals of Solarized, Gruvbox and Catppuccin, and Lagoon, Umber,
@@ -32,7 +32,7 @@ below.
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
 
-Every neutral carries a faint green cast that ties it to signal. The one
+Vibrant themes add paired accents: Daybreak and Afterglow use teal and orange, Canopy green and mint, Coral teal and red. House neutrals carry a faint green cast. The one
 exception is Vault's black paper: its surface and faint keep the cast, so the
 frame is black and every panel on it still ties to signal.
 
@@ -60,7 +60,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    state, the streaming underscore and caret on
    the active line, the route segment of the provenance line, the live voice
    polish flash, the enabled state of the Models show switch, and workflow-run
-   indicators. Settings tabs, verified updates and enabled extension switches use the theme signal.
+   indicators. Settings tabs, selected capability filters, verified updates and enabled extension switches use the theme signal.
    Other buttons, links, selection, icons at rest and badges are ink on paper.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit

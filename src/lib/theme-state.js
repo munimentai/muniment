@@ -8,11 +8,14 @@ export const THEME_DARK = 'dark'
 // the house sets, the next ones carry the neutrals of a well-known editor
 // theme, and the last one of each is the high contrast set. System follows the
 // OS and uses the default of each scheme.
-export const LIGHT_THEMES = ['paper', 'vellum', 'ledger', 'foolscap', 'parchment', 'manila', 'linen', 'broadsheet']
-export const DARK_THEMES = ['moss', 'vault', 'graphite', 'inkwell', 'lagoon', 'umber', 'fjord', 'plum', 'nocturne', 'nightshade', 'basalt', 'obsidian', 'carbon']
+export const LIGHT_THEMES = ['paper', 'vellum', 'ledger', 'foolscap', 'parchment', 'manila', 'linen', 'broadsheet', 'daybreak', 'coral']
+export const DARK_THEMES = ['moss', 'vault', 'graphite', 'inkwell', 'lagoon', 'umber', 'fjord', 'plum', 'nocturne', 'nightshade', 'basalt', 'obsidian', 'carbon', 'afterglow', 'canopy']
+export const VIBRANT_THEMES = ['daybreak', 'afterglow', 'canopy', 'coral']
 export const DEFAULT_LIGHT_THEME = 'paper'
 export const DEFAULT_DARK_THEME = 'vault'
 export const THEME_NAMES = {
+  canopy: 'Canopy', coral: 'Coral',
+  daybreak: 'Daybreak', afterglow: 'Afterglow',
   paper: 'Paper', vellum: 'Vellum', ledger: 'Ledger', foolscap: 'Foolscap',
   parchment: 'Parchment', manila: 'Manila', linen: 'Linen', broadsheet: 'Broadsheet',
   moss: 'Moss', vault: 'Vault', graphite: 'Graphite', inkwell: 'Inkwell',

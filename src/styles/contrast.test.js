@@ -19,7 +19,7 @@ const block = (pattern) => {
 
 const themes = [
   'paper', 'vellum', 'ledger', 'foolscap', 'parchment', 'manila', 'linen', 'broadsheet',
-  'moss', 'vault', 'graphite', 'inkwell', 'lagoon', 'umber', 'fjord', 'plum', 'nocturne', 'nightshade', 'basalt', 'obsidian', 'carbon',
+  'moss', 'vault', 'graphite', 'inkwell', 'lagoon', 'umber', 'fjord', 'plum', 'nocturne', 'nightshade', 'basalt', 'obsidian', 'carbon', 'daybreak', 'afterglow', 'canopy', 'coral',
 ]
 const themeBlock = (name) => new RegExp(`:root\\[data-theme="${name}"\\][^{]*\\{([^}]*)\\}`)
 
@@ -77,4 +77,12 @@ describe('§1.3 text token contrast', () => {
     expect(contrastRatio('#777777', '#FFFFFF')).toBeLessThan(4.5)
     expect(contrastRatio('#000000', '#FFFFFF')).toBe(21)
   })
+})
+
+it('keeps vibrant accents readable on action surfaces and filled buttons', () => {
+  for (const name of ['daybreak', 'afterglow', 'canopy', 'coral']) {
+    const palette = palettes[name]
+    expect(contrastRatio(palette.accent, palette['accent-soft'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(palette.accent, palette['on-accent'])).toBeGreaterThanOrEqual(4.5)
+  }
 })
