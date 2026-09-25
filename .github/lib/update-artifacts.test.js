@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { isUpdateArtifact, prepareUpdateArtifacts, signNightlyUpdateAssets } from './update-artifacts.mjs';
+import { macosVariants } from './macos-variants.mjs';
 import { verifyUpdaterSignature } from './updater-signature.mjs';
 afterEach(() => vi.unstubAllEnvs());
 describe('update artifact preparation', () => {
@@ -28,19 +29,21 @@ describe('update artifact preparation', () => {
   it.skipIf(process.platform === 'win32')('archives the signed app with links and signs nothing in the build VM', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-update-artifacts-'));
     const macos = path.join(root, 'macos');
-    fs.mkdirSync(path.join(macos, 'muniment.app/Contents/Frameworks'), { recursive: true });
-    fs.writeFileSync(path.join(macos, 'muniment.app/Contents/Frameworks/library'), 'signed fixture bytes');
-    fs.symlinkSync('library', path.join(macos, 'muniment.app/Contents/Frameworks/current'));
-    fs.writeFileSync(path.join(macos, 'muniment.app.zip'), 'zip');
-    fs.mkdirSync(path.join(root, 'pkg'));
-    fs.writeFileSync(path.join(root, 'pkg/muniment.pkg'), 'pkg');
+    for (const variant of macosVariants(root)) {
+      fs.mkdirSync(path.join(variant.app, 'Contents/Frameworks'), { recursive: true });
+      fs.writeFileSync(path.join(variant.app, 'Contents/Frameworks/library'), 'signed fixture bytes');
+      fs.symlinkSync('library', path.join(variant.app, 'Contents/Frameworks/current'));
+      for (const file of [variant.zip, variant.pkg, variant.dmg]) {
+        fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'fixture');
+      }
+    }
     const calls = [];
     try {
       const files = await prepareUpdateArtifacts('macos', root, (command, args, options) => {
         calls.push([command, args]);
         return spawnSync(command, args, options);
       });
-      expect(files).toHaveLength(3);
+      expect(files).toHaveLength(12);
       expect(files.some((file) => file.endsWith('.sig'))).toBe(false);
       const archive = path.join(macos, 'muniment.app.tar.gz');
       const unpacked = path.join(root, 'unpacked'); fs.mkdirSync(unpacked);
@@ -48,7 +51,7 @@ describe('update artifact preparation', () => {
       const framework = path.join(unpacked, 'muniment.app/Contents/Frameworks');
       expect(fs.lstatSync(path.join(framework, 'current')).isSymbolicLink()).toBe(true);
       expect(fs.readFileSync(path.join(framework, 'current'), 'utf8')).toBe('signed fixture bytes');
-      expect(calls.map(([command]) => command)).toEqual(['tar']);
+      expect(calls.map(([command]) => command)).toEqual(['tar', 'tar', 'tar']);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });

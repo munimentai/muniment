@@ -62,7 +62,7 @@ function nightlyFixture() {
   f.context.eventName = 'schedule'
   f.sha = 'a'.repeat(40)
   Object.assign(f.run, { head_sha: f.sha, path: '.github/workflows/nightly.yml', event: 'schedule' })
-  const binaries = ['linux-app.deb', 'linux-app.AppImage', 'windows-app.msi', 'windows-app-machine.msi', 'windows-app-nsis.exe', 'macos-app.app.zip', 'macos-app.pkg', 'macos-app.app.tar.gz']
+  const binaries = ['linux-app.deb', 'linux-app.AppImage', 'windows-app.msi', 'windows-app-machine.msi', 'windows-app-nsis.exe', ...['', '-arm64', '-x64'].flatMap(arch => ['.app.zip', '.pkg', '.dmg', '.app.tar.gz'].map(format => `macos-muniment${arch}${format}`))]
   const names = [...binaries, ...binaries.filter(n => /(?:AppImage|msi|exe|tar.gz)$/.test(n)).map(n => `${n}.sig`)]
   f.assets = names.map((n, i) => ({ id: i + 1, name: `nightly-${f.sha}-${n}`, size: 100, digest: `sha256:${'b'.repeat(64)}` }))
   f.github.rest.repos.getReleaseByTag.mockImplementation(async () => ({ data: { assets: f.assets } }))

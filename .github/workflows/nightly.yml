@@ -242,10 +242,8 @@ jobs:
               [".msi", "-machine.msi"],
               ["-machine.msi"],
               ["-nsis.exe"],
-              [".app.zip"],
-              [".pkg"],
-              [".app.tar.gz"],
-              [".app.tar.gz.sig"],
+              ...["", "-arm64", "-x64"].flatMap(arch =>
+                [".app.zip", ".pkg", ".dmg", ".app.tar.gz", ".app.tar.gz.sig"].map(format => [`macos-muniment${arch}${format}`])),
               [".AppImage.sig"],
               [".msi.sig", "-machine.msi.sig"],
               ["-machine.msi.sig"],

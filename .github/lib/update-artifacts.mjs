@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { macosVariants, macosArchitectures, macosFormats } from './macos-variants.mjs';
+import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { signUpdaterBytes, verifyUpdaterSignature } from './updater-signature.mjs';
@@ -7,7 +8,7 @@ import { signUpdaterBytes, verifyUpdaterSignature } from './updater-signature.mj
 export const artifactSpecs = {
   linux: [['deb', '.deb'], ['appimage', '.AppImage']],
   windows: [['msi', '.msi', '-machine.msi'], ['msi', '-machine.msi'], ['nsis', '-setup.exe']],
-  macos: [['macos', '.app.zip'], ['pkg', '.pkg'], ['macos', '.app.tar.gz']],
+  macos: macosArchitectures.flatMap(suffix => macosFormats.map(format => [format === '.pkg' ? 'pkg' : format === '.dmg' ? 'dmg' : 'macos', `muniment${suffix}${format}`])),
 };
 export const isUpdateArtifact = (name) => name.endsWith('.AppImage') || name.endsWith('.app.tar.gz') ||
   name.endsWith('.msi') || name.endsWith('-setup.exe') || name.endsWith('-nsis.exe');
@@ -21,14 +22,13 @@ export async function prepareUpdateArtifacts(platform, base, run = spawnSync) {
     if (result.error || result.status !== 0) throw new Error(`Update artifact command failed: ${command}`);
   };
   if (platform === 'macos') {
-    const directory = join(base, 'macos');
-    const apps = (await readdir(directory)).filter((name) => name.endsWith('.app'));
-    if (apps.length !== 1) throw new Error('Expected one signed macOS application');
-    execute('tar', ['-czf', join(directory, `${apps[0]}.tar.gz`), '-C', directory, apps[0]]);
+    for (const variant of macosVariants(base)) {
+      execute('tar', ['-czf', variant.tar, '-C', dirname(variant.app), 'muniment.app']);
+    }
   }
   const files = [];
   for (const [directory, suffix, exclude] of artifactSpecs[platform] ?? []) {
-    const matches = (await readdir(join(base, directory))).filter((name) => name.endsWith(suffix) && (!exclude || !name.endsWith(exclude)));
+    const matches = (await readdir(join(base, directory))).filter((name) => (platform === 'macos' ? name === suffix : name.endsWith(suffix)) && (!exclude || !name.endsWith(exclude)));
     if (matches.length !== 1) throw new Error(`Expected one ${suffix} artifact`);
     files.push(join(base, directory, matches[0]));
   }
@@ -36,7 +36,7 @@ export async function prepareUpdateArtifacts(platform, base, run = spawnSync) {
   return files;
 }
 
-const updateBundleCount = { linux: 1, windows: 3, macos: 1 };
+const updateBundleCount = { linux: 1, windows: 3, macos: 3 };
 
 // Sign one platform's update bundles on the nightly release. This runs on the
 // runner in a step that holds the updater key and nothing else, after the build

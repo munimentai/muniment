@@ -20,6 +20,7 @@ import {
   signingKeyPartitionListArguments,
   stapleArguments,
 } from "./lib/macos-signing.mjs";
+import { prepareMacosVariants, packageMacosDmg } from "./lib/macos-variants.mjs";
 import { readSigningEnvironment } from "./lib/signing-env.mjs";
 
 const remainingBuildBudget = process.env.MACOS_BUILD_REMAINING_SECONDS ?? "3600";
@@ -32,14 +33,10 @@ const notarizationDeadline = performance.now() + (
   remainingBuildSeconds - (3600 - NOTARIZATION_DEADLINE_SECONDS)
 ) * 1000;
 
-const bundleDir = join("src-tauri", "target", "universal-apple-darwin", "release", "bundle", "macos");
+const bundleBase = join("src-tauri", "target", "universal-apple-darwin", "release", "bundle");
+const bundleDir = join(bundleBase, "macos");
 const app = join(bundleDir, "muniment.app");
-const runtime = join(app, "Contents", "Library", "LaunchServices", "muniment-runtime");
-const cliBinary = join(app, "Contents", "Library", "LaunchServices", "muniment-cli");
-const readerBinary = join(app, "Contents", "Library", "LaunchServices", "muniment-reader");
-const appZip = `${app}.zip`;
 const pkgDir = join(bundleDir, "..", "pkg");
-const pkg = join(pkgDir, "muniment.pkg");
 
 const tauri = (...args) => {
   const cli = join("node_modules", "@tauri-apps", "cli", "tauri.js");
@@ -61,7 +58,7 @@ const mustRun = (label, cmd, args) => {
 // Package the .app into the .app.zip release asset. macOS-specific ditto flags
 // preserve the bundle's symlinks and resource forks so the archive extracts to a
 // launchable (and, when signed, still-notarized) bundle.
-const packageApp = () =>
+const packageApp = (app, appZip) =>
   mustRun("bundle archive", "ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", app, appZip]);
 
 // Apple Developer ID credentials arrive on stdin: the nightly's first step
@@ -83,14 +80,16 @@ tauri("build", "--target", "universal-apple-darwin", "--no-bundle", "--no-sign")
 mustRun("build universal CEF helper", process.execPath, [join(".github", "build-macos-cef-helper.mjs")]);
 tauri("bundle", "--target", "universal-apple-darwin", "--bundles", "app", "--no-sign");
 mustRun("package universal CEF", process.execPath, ["scripts/package-cef-macos.mjs", app, "--universal"]);
+const variants = prepareMacosVariants(bundleBase);
 
 if (!signing) {
   console.log("macOS signing SKIPPED: MACOS_SIGNING_ENABLED is false (unsigned build)");
-  packageApp();
   mustRun("make package directory", "mkdir", ["-p", pkgDir]);
-  mustRun("build installer", "productbuild", productbuildArguments(app, pkg));
-  console.log(`kept ${appZip} (unsigned)`);
-  console.log(`kept ${pkg} (unsigned)`);
+  for (const variant of variants) {
+    packageApp(variant.app, variant.zip);
+    mustRun("build installer", "productbuild", productbuildArguments(variant.app, variant.pkg));
+    packageMacosDmg(variant.app, variant.dmg);
+  }
   process.exit(0);
 }
 
@@ -164,29 +163,35 @@ console.log(`signing identity: ${identity.name}`);
 // Sign nested Mach-O resources (the ASR runtime dylibs) leaf-first, then seal
 // the app bundle. Signing inner code before the outer bundle is the order Apple
 // requires; --deep is avoided because it cannot apply per-file requirements.
-const nested = [];
-const collectDylibs = async (dir) => {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) await collectDylibs(full);
-    else if (entry.isFile() && entry.name.endsWith(".dylib")) nested.push(full);
+for (const variant of variants) {
+  const { app } = variant;
+  const runtime = join(app, "Contents", "Library", "LaunchServices", "muniment-runtime");
+  const cliBinary = join(app, "Contents", "Library", "LaunchServices", "muniment-cli");
+  const readerBinary = join(app, "Contents", "Library", "LaunchServices", "muniment-reader");
+  const nested = [];
+  const collectDylibs = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) await collectDylibs(full);
+      else if (entry.isFile() && entry.name.endsWith(".dylib")) nested.push(full);
+    }
+  };
+  await collectDylibs(app);
+  for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArguments(identity.hash, file));
+  // CEF contains extensionless Mach-O code and nested helper apps as well as dylibs.
+  const cefFrameworks = join(app, "Contents", "Frameworks");
+  mustRun("codesign CEF framework", "codesign", codesignArguments(identity.hash, join(cefFrameworks, "Chromium Embedded Framework.framework")));
+  for (const suffix of ["", " (GPU)", " (Renderer)", " (Plugin)", " (Alerts)"]) {
+    const helperApp = join(cefFrameworks, `muniment CEF Helper${suffix}.app`);
+    mustRun("codesign nested CEF helper", "codesign", [...codesignArguments(identity.hash, helperApp), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
   }
-};
-await collectDylibs(app);
-for (const file of nested) mustRun(`codesign ${file}`, "codesign", codesignArguments(identity.hash, file));
-// CEF contains extensionless Mach-O code and nested helper apps as well as dylibs.
-const cefFrameworks = join(app, "Contents", "Frameworks");
-mustRun("codesign CEF framework", "codesign", codesignArguments(identity.hash, join(cefFrameworks, "Chromium Embedded Framework.framework")));
-for (const suffix of ["", " (GPU)", " (Renderer)", " (Plugin)", " (Alerts)"]) {
-  const helperApp = join(cefFrameworks, `muniment CEF Helper${suffix}.app`);
-  mustRun("codesign nested CEF helper", "codesign", [...codesignArguments(identity.hash, helperApp), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
+  mustRun("codesign runtime", "codesign", codesignArguments(identity.hash, runtime));
+  mustRun("codesign cli", "codesign", codesignArguments(identity.hash, cliBinary));
+  mustRun("codesign reader", "codesign", codesignArguments(identity.hash, readerBinary));
+  mustRun("codesign CEF helper", "codesign", [...codesignArguments(identity.hash, join(app, "Contents", "MacOS", "muniment-cef-helper")), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
+  mustRun("codesign app", "codesign", [...codesignArguments(identity.hash, app), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
+  mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 }
-mustRun("codesign runtime", "codesign", codesignArguments(identity.hash, runtime));
-mustRun("codesign cli", "codesign", codesignArguments(identity.hash, cliBinary));
-mustRun("codesign reader", "codesign", codesignArguments(identity.hash, readerBinary));
-mustRun("codesign CEF helper", "codesign", [...codesignArguments(identity.hash, join(app, "Contents", "MacOS", "muniment-cef-helper")), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
-mustRun("codesign app", "codesign", [...codesignArguments(identity.hash, app), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
-mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
 const mustNotarize = async (archive) => {
   try {
@@ -197,22 +202,27 @@ const mustNotarize = async (archive) => {
   }
 };
 
-// Notarize both artifacts within the shared deadline. Only Accepted status permits stapling.
-const submissionZip = join(workDir, "muniment-notarize.zip");
-mustRun("zip for notarization", "ditto", ["-c", "-k", "--keepParent", app, submissionZip]);
-await mustNotarize(submissionZip);
-
-// Staple the ticket into the bundle so Gatekeeper validates offline, then
-// verify the staple before packaging the release archive.
-mustRun("staple", "xcrun", stapleArguments(app));
-mustRun("validate staple", "xcrun", ["stapler", "validate", app]);
-
-packageApp();
+// All submissions share the remaining build deadline. Submit app variants
+// together, then staple before creating their final download containers.
+await Promise.all(variants.map(async variant => {
+  const submissionZip = join(workDir, `muniment${variant.suffix}-notarize.zip`);
+  mustRun("zip for notarization", "ditto", ["-c", "-k", "--keepParent", variant.app, submissionZip]);
+  await mustNotarize(submissionZip);
+  mustRun("staple", "xcrun", stapleArguments(variant.app));
+  mustRun("validate staple", "xcrun", ["stapler", "validate", variant.app]);
+}));
 mustRun("make package directory", "mkdir", ["-p", pkgDir]);
-mustRun("build signed installer", "productbuild",
-  productbuildArguments(app, pkg, installerIdentity.hash, keychain));
-await mustNotarize(pkg);
-mustRun("staple installer", "xcrun", stapleArguments(pkg));
-mustRun("validate installer staple", "xcrun", ["stapler", "validate", pkg]);
-console.log(`kept ${appZip} (signed + notarized + stapled)`);
-console.log(`kept ${pkg} (signed + notarized + stapled)`);
+for (const variant of variants) {
+  packageApp(variant.app, variant.zip);
+  mustRun("build signed installer", "productbuild",
+    productbuildArguments(variant.app, variant.pkg, installerIdentity.hash, keychain));
+  packageMacosDmg(variant.app, variant.dmg);
+  mustRun("sign disk image", "codesign", codesignArguments(identity.hash, variant.dmg));
+}
+await Promise.all(variants.flatMap(variant => [variant.pkg, variant.dmg]).map(async file => {
+  if (file.endsWith(".dmg")) mustRun("verify disk image signature", "codesign", ["--verify", "--strict", file]);
+  await mustNotarize(file);
+  mustRun("staple download", "xcrun", stapleArguments(file));
+  mustRun("validate download staple", "xcrun", ["stapler", "validate", file]);
+  console.log(`kept ${file} (signed + notarized + stapled)`);
+}));

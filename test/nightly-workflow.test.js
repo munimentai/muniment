@@ -77,7 +77,7 @@ describe('nightly macOS package build', () => {
 
   it('builds and publishes the package while signing stays disabled', () => {
     expect(workflow).toContain('node .github/build-macos-app.mjs')
-    expect(workflow).toContain('[".pkg"]')
+    expect(workflow).toContain('[".app.zip", ".pkg", ".dmg", ".app.tar.gz", ".app.tar.gz.sig"]')
     expect(workflow).toContain("MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED || 'false' }}")
     expect(workflow).toContain(macosSigningProvenance('${sha}').replaceAll('`', '\\`'))
     expect(workflow).toContain('macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74.')
