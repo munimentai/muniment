@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -66,6 +67,30 @@ const promotionFetch = (overrides = {}) => {
 const promote = (fetchImpl, verify = async () => {}) => promoteRelease({ token: "token", repository: "owner/repo", sha, version, fetchImpl, verify });
 
 describe("stable release promotion", () => {
+  it("uses fresh connections across verification and release writes", async () => {
+    const fixture = promotionFetch();
+    const sockets = new Set();
+    const server = createServer(async (req, res) => {
+      sockets.add(req.socket);
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const result = await fixture.fetchImpl(new URL(req.url, "http://localhost").searchParams.get("url"), {
+        method: req.method, headers: req.headers, body: Buffer.concat(chunks),
+      });
+      res.writeHead(result.status);
+      res.end(Buffer.from(await result.arrayBuffer()));
+    });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      await promote((url, options) => fetch(`http://127.0.0.1:${server.address().port}/?url=${encodeURIComponent(url)}`, options));
+      expect(fixture.calls.some(({ options }) => options.method === "POST")).toBe(true);
+      expect(sockets.size).toBe(fixture.calls.length);
+    } finally {
+      server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
   it("accepts only exact lowercase SHAs and strict stable SemVer tags", () => {
     expect(() => validatePromotionInputs(sha, "v1.2.3")).not.toThrow();
     for (const invalid of ["1.2.3", "v1.2", "v01.2.3", "v1.2.3-beta", "v1.2.3 "]) expect(() => validatePromotionInputs(sha, invalid)).toThrow("strict SemVer");
