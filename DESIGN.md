@@ -32,7 +32,7 @@ below.
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
 
-Daybreak and Afterglow add teal-blue neutrals and orange action accents. House neutrals carry a faint green cast. The one
+Vibrant themes add paired accents: Daybreak and Afterglow use teal and orange, Canopy green and mint, Coral teal and red. House neutrals carry a faint green cast. The one
 exception is Vault's black paper: its surface and faint keep the cast, so the
 frame is black and every panel on it still ties to signal.
 

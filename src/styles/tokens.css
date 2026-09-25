@@ -489,9 +489,46 @@
   color-scheme: dark;
 }
 /* Optional accent roles must reset when leaving a vibrant theme. */
-:root:not([data-theme="daybreak"]):not([data-theme="afterglow"]),
-[data-swatch]:not([data-theme="daybreak"]):not([data-theme="afterglow"]) {
+:root:not([data-theme="daybreak"]):not([data-theme="afterglow"]):not([data-theme="canopy"]):not([data-theme="coral"]),
+[data-swatch]:not([data-theme="daybreak"]):not([data-theme="afterglow"]):not([data-theme="canopy"]):not([data-theme="coral"]) {
   --accent: initial;
   --accent-soft: initial;
   --on-accent: initial;
+}
+
+/* Navy, green and mint from the Canopy source palette. */
+:root[data-theme="canopy"], [data-swatch][data-theme="canopy"] {
+  --paper: #1D263B;
+  --surface: #243047;
+  --faint: #2C3A50;
+  --ink: #EAF8F4;
+  --muted: #B3C2D3;
+  --border: #5C6784;
+  --signal: #4CB963;
+  --signal-opacity: .12;
+  --signal-soft: rgba(76, 185, 99, var(--signal-opacity));
+  --oxide: #FFAAA2;
+  --ochre: #E8C978;
+  --accent: #A0EADE;
+  --accent-soft: #173B36;
+  --on-accent: #1D263B;
+  color-scheme: dark;
+}
+/* Blush and peach surfaces, with teal selection and coral actions. */
+:root[data-theme="coral"], [data-swatch][data-theme="coral"] {
+  --paper: #FAD8D6;
+  --surface: #FFF5F0;
+  --faint: #F3D7C1;
+  --ink: #2E282A;
+  --muted: #70514F;
+  --border: #D3ABA3;
+  --signal: #006764;
+  --signal-opacity: .10;
+  --signal-soft: rgba(0, 103, 100, var(--signal-opacity));
+  --oxide: #9A2731;
+  --ochre: #785000;
+  --accent: #B92D27;
+  --accent-soft: #FDE4E1;
+  --on-accent: #FFFFFF;
+  color-scheme: light;
 }
