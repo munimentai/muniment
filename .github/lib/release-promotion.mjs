@@ -89,6 +89,9 @@ The versioned files preserve the tested binary bytes. Existing download URLs rem
 // The signers a stable release accepts. A change of signing identity is a
 // reviewed change to these constants.
 export const WINDOWS_PUBLISHER = "CN=Green Kangaroo\\, LLC,O=Green Kangaroo\\, LLC,L=Murrells Inlet,ST=South Carolina,C=US";
+// OpenSSL's legacy display reverses the RDN order and separates fields with
+// slashes. Accept only these two exact renderings of the pinned identity.
+const WINDOWS_PUBLISHER_OPENSSL = "/C=US/ST=South Carolina/L=Murrells Inlet/O=Green Kangaroo, LLC/CN=Green Kangaroo, LLC";
 export const APPLE_TEAM_ID = "VF895CP335";
 // Azure Artifact Signing chains to this Microsoft root, which the system CA
 // bundle does not carry. The file is pinned by its SHA-256.
@@ -113,7 +116,7 @@ export const verifyAuthenticode = (file, caFile, run = spawnSync) => {
   const { ok, output } = tool(run, "osslsigncode", ["verify", "-CAfile", caFile, "-TSA-CAfile", caFile, "-in", file]);
   if (!ok || !/^Succeeded\s*$/m.test(output)) throw new Error(`Authenticode verification failed for ${basename(file)}`);
   const signer = output.slice(output.indexOf("Signer's certificate:")).match(/Subject: ?([^\r\n]+)/)?.[1]?.trim();
-  if (output.indexOf("Signer's certificate:") < 0 || signer !== WINDOWS_PUBLISHER) {
+  if (output.indexOf("Signer's certificate:") < 0 || ![WINDOWS_PUBLISHER, WINDOWS_PUBLISHER_OPENSSL].includes(signer)) {
     throw new Error(`${basename(file)} is signed by ${signer ?? "an unknown signer"}, not ${WINDOWS_PUBLISHER}`);
   }
 };
@@ -195,7 +198,7 @@ export const verifyNightlyArtifacts = ({ files, workDir, publicKey = readFileSyn
     if (name.endsWith(".app.zip") || name.endsWith(".app.tar.gz") || name.endsWith(".dmg")) {
       const target = join(workDir, `extracted-${basename(name)}`);
       mkdirSync(target);
-      const extracted = name.endsWith(".dmg") ? tool(run, "7z", ["x", "-y", `-o${target}`, file])
+      const extracted = name.endsWith(".dmg") ? tool(run, "7z", ["x", "-y", "-x!Muniment/Applications", `-o${target}`, file])
         : name.endsWith(".zip") ? tool(run, "unzip", ["-q", file, "-d", target]) : tool(run, "tar", ["-xzf", file, "-C", target]);
       if (!extracted.ok) throw new Error(`cannot extract ${name}`);
       const apps = name.endsWith(".dmg")
