@@ -1,0 +1,36 @@
+import { afterEach, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
+import '@testing-library/jest-dom/vitest'
+import ChoiceField from './ChoiceField.svelte'
+afterEach(cleanup)
+const props = () => ({ label: 'Classifier', value: 'jev', options: [{value:'jev',label:'Jev',provider:'jev'},{value:'laya',label:'Laya',provider:'laya'}], onchange: vi.fn() })
+it('supports keyboard choices and returns focus to the field', async () => {
+  const data = props()
+  render(ChoiceField, data)
+  const trigger = screen.getByRole('button', {name:'Classifier: Jev'})
+  await fireEvent.click(trigger)
+  expect(screen.getByRole('menuitemradio', {name:'Jev'})).toHaveFocus()
+  await fireEvent.keyDown(window, {key:'ArrowDown'})
+  const next = screen.getByRole('menuitemradio', {name:'Laya'})
+  expect(next).toHaveFocus()
+  await fireEvent.click(next)
+  expect(data.onchange).toHaveBeenCalledWith('laya')
+  expect(trigger).toHaveFocus()
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+})
+it('dismisses with Escape or an outside pointer without selecting', async () => {
+  const data = props()
+  render(ChoiceField, data)
+  const trigger = screen.getByRole('button', {name:'Classifier: Jev'})
+  await fireEvent.click(trigger)
+  const closeSettings = vi.fn()
+  window.addEventListener('keydown', closeSettings)
+  await fireEvent.keyDown(window, {key:'Escape'})
+  window.removeEventListener('keydown', closeSettings)
+  expect(closeSettings).not.toHaveBeenCalled()
+  expect(trigger).toHaveFocus()
+  await fireEvent.click(trigger)
+  await fireEvent.pointerDown(document.body)
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+  expect(data.onchange).not.toHaveBeenCalled()
+})

@@ -78,10 +78,11 @@ it('combines reported capabilities and context filters without changing saved vi
   ]
   const tauri = { invoke: vi.fn() }
   render(ModelCatalog, { tauri, inventory: data })
-  await fireEvent.click(screen.getByText('Filters'))
+  await fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
   await fireEvent.click(screen.getByLabelText('Image input / vision'))
   expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
-  await fireEvent.change(screen.getByLabelText('Minimum context'), { target: { value: '128000' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Minimum context: Any size' }))
+  await fireEvent.click(screen.getByRole('menuitemradio', { name: '128K+' }))
   expect(screen.getAllByRole('switch')).toHaveLength(1)
   await fireEvent.click(screen.getByLabelText('Reasoning'))
   expect(screen.getAllByRole('switch')).toHaveLength(1)

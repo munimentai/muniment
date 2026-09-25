@@ -1,4 +1,5 @@
 <script>
+  import Button from './ui/Button.svelte'
   // Settings → Models, one screen: every connection is a named account under
   // its provider, key or subscription, with its allowance and usage on the
   // card, the provider's models once, the connector that adds a provider, and
@@ -358,8 +359,8 @@
     {#if status}<p class="support" role="status">{status}</p>{/if}
     <div class="tabs-row">
       <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Routing',icon:'route'}]} onchange={value => tab = value} />
-      {#if tab === 'accounts'}<button type="button" class="tab-action" onclick={openConnector}><LucideIcon name="plus" variant="action" size={14} />Connect account</button>{/if}
-      {#if tab === 'models'}<button type="button" class="tab-action" disabled={discovering} onclick={() => load(true)}><LucideIcon name="refresh-cw" variant="action" size={14} />{discovering ? 'Refreshing models…' : 'Refresh models'}</button>{/if}
+      {#if tab === 'accounts'}<div class="tab-action"><Button icon="plus" onclick={openConnector}>Connect account</Button></div>{/if}
+      {#if tab === 'models'}<div class="tab-action"><Button icon="refresh-cw" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</Button></div>{/if}
     </div>
     {#if tab === 'routing'}
     {#if routerError}

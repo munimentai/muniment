@@ -65,9 +65,9 @@ describe('Routing settings', () => {
     }) }
     render(Settings, { tauri, inventory: fresh, section: 'routing', onclose: vi.fn() })
     const toggle = await screen.findByRole('switch', { name: 'Use routing' })
-    expect(screen.queryByLabelText('Classifier model')).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Classifier model:/ })).toBeNull()
     await fireEvent.click(toggle)
-    await screen.findByLabelText('Classifier model')
+    await screen.findByRole('button', { name: /^Classifier model:/ })
     expect(tauri.invoke).toHaveBeenCalledWith('model_router_select_classifier', { id: 'jev' })
     expect(tauri.invoke).toHaveBeenCalledWith('model_router_set_enabled', { enabled: true })
     expect(tauri.invoke).toHaveBeenCalledWith('local_mode_set_default_model', { provider: 'muniment-router', model: 'auto' })

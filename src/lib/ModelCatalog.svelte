@@ -1,5 +1,8 @@
 <script>
-  import LucideIcon from './LucideIcon.svelte'
+  import SearchToolbar from './ui/SearchToolbar.svelte'
+  import ChoiceField from './ui/ChoiceField.svelte'
+  import Button from './ui/Button.svelte'
+  let filtersOpen = $state(false)
   import Toggle from './Toggle.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import { pickerGroups, modelKey, currentModel } from './provider-catalog.js'
@@ -63,19 +66,17 @@
   }
 </script>
 <section class="catalog" aria-label="Models">
-  <div class="search-row">
-    <input type="search" aria-label="Search models" placeholder="Search models or providers" bind:value={query}>
-    <details class="filters"><summary><LucideIcon name="sliders-horizontal" size={16} variant="action" />Filters{#if Number(minContext) || vision || reasoning || shownOnly}<span class="count">{Number(!!Number(minContext)) + Number(vision) + Number(reasoning) + Number(shownOnly)}</span>{/if}</summary>
-      <div class="filter-fields">
-        <label>Minimum context<select bind:value={minContext}><option value="0">Any size</option><option value="32000">32K+</option><option value="128000">128K+</option><option value="200000">200K+</option><option value="1000000">1M+</option></select></label>
+  <SearchToolbar label="Search models" placeholder="Search models or providers" bind:value={query} filters expanded={filtersOpen} controls="model-filters" count={Number(!!Number(minContext)) + Number(vision) + Number(reasoning) + Number(shownOnly)} ontoggle={() => filtersOpen = !filtersOpen} />
+  {#if filtersOpen}
+      <div class="filter-fields" id="model-filters">
+        <ChoiceField label="Minimum context" value={minContext} inline={false} options={[{value:'0',label:'Any size'},{value:'32000',label:'32K+'},{value:'128000',label:'128K+'},{value:'200000',label:'200K+'},{value:'1000000',label:'1M+'}]} onchange={value => minContext = value} />
         <label><input type="checkbox" bind:checked={vision}>Image input / vision</label>
         <label><input type="checkbox" bind:checked={reasoning}>Reasoning</label>
         <label><input type="checkbox" bind:checked={shownOnly}>Shown in composer</label>
         <p>Capability filters include only models with reported support.</p>
-        <button type="button" onclick={() => { minContext = '0'; vision = false; reasoning = false; shownOnly = false }}>Clear filters</button>
+        <Button onclick={() => { minContext = '0'; vision = false; reasoning = false; shownOnly = false }}>Clear filters</Button>
       </div>
-    </details>
-  </div>
+  {/if}
   {#if error}<p role="alert">{error}</p>{/if}
   {#if !groups.length}<p>No models match.</p>{/if}
   {#each groups as group (group.id)}
@@ -108,14 +109,9 @@
 </section>
 <style>
   .catalog { display: grid; gap: 14px; min-width: 0; }
-  .search-row { display: flex; gap: 10px; align-items: start; }
-  .filters { position: relative; margin-top: 0; }
-  .filters summary { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); list-style: none; color: var(--ink); }
-  .filters summary::-webkit-details-marker { display: none; }
-  .filter-fields { position: absolute; right: 0; z-index: 2; width: min(280px, 65vw); display: grid; gap: 12px; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: 0 8px 24px #0003; }
-  .filter-fields label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .filter-fields select { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px; }
-  .count { color: var(--signal); }
+  .filter-fields { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font-size: var(--text-13); }
+  .filter-fields label { display: flex; align-items: center; gap: 6px; }
+  .filter-fields p { flex-basis: 100%; }
   h5 { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); margin: 8px 0; }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
   .model { padding: 10px 0; border-bottom: 1px solid var(--border); }
@@ -126,7 +122,7 @@
   .show { display: flex; gap: 6px; align-items: center; font-size: var(--text-12); }
   button { color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; font-size: var(--text-13); padding: 5px 10px; cursor: pointer; }
   button:hover { background: var(--faint); } button:disabled { color: var(--muted); cursor: default; }
-  input[type="search"], textarea { width: 100%; box-sizing: border-box; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 10px; font: inherit; font-size: var(--text-13); }
+  textarea { width: 100%; box-sizing: border-box; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 10px; font: inherit; font-size: var(--text-13); }
   textarea { resize: vertical; }
   details { margin-top: 8px; font-size: var(--text-13); } summary { cursor: pointer; min-height: 24px; color: var(--muted); }
   .statement { padding: 6px 0 10px; } .actions { display: flex; gap: 8px; margin-top: 8px; }

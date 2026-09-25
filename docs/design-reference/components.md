@@ -9,6 +9,21 @@ holds the token values. Every value below comes from a `<style>` rule in
 marked "raw". A value with no token, such as an opacity or a pixel gap, is
 listed as written.
 
+## Shared component library
+
+`src/lib/ui/` owns reusable settings controls. Models and Extend share
+`SearchToolbar`: the filter icon comes first, search fills the row, and actions
+sit at the right. Filters expand below the toolbar. `Button` supplies compact
+32px controls, icon-only accessible names, disabled states and focus rings.
+`ChoiceField` supplies labeled choices with optional provider marks, keyboard
+navigation, Escape dismissal and focus return. It uses the overlay shadow token.
+`SettingsTabs`, `Toggle` and `ProviderLogo` remain the shared tabs, switches and marks.
+
+Screens own layout and data. They import these controls instead of copying their
+CSS. Colors, fonts, radii and shadows come from `src/styles/tokens.css`.
+New settings controls extend this library. Native selects and custom dropdowns
+do not coexist for the same choice pattern. Capability filters use reported data.
+
 ## Shared defaults
 
 These rules apply to every control in a group unless a row below overrides
