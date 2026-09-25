@@ -27,7 +27,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
       # Promotion checks the signatures in the bytes it publishes. osslsigncode
-      # and unzip come pinned from the Ubuntu archive; rcodesign is a pinned
+      # and archive extractors come pinned from the Ubuntu archive; rcodesign is a pinned
       # release checked against the SHA-256 its project publishes.
       - name: Install signature verifiers
         env:
@@ -38,7 +38,7 @@ jobs:
           sudo=
           [ "$(id -u)" -eq 0 ] || sudo=sudo
           $sudo apt-get update -qq
-          $sudo apt-get install -y -qq --no-install-recommends osslsigncode=2.8-2 unzip=6.0-28ubuntu4.1
+          $sudo apt-get install -y -qq --no-install-recommends osslsigncode=2.8-2 unzip=6.0-28ubuntu4.1 p7zip-full=16.02+transitional.1
           tools="$RUNNER_TEMP/signature-tools"
           mkdir -p "$tools"
           archive="$tools/rcodesign.tar.gz"
@@ -49,6 +49,7 @@ jobs:
           rm -f "$archive"
           echo "$tools" >> "$GITHUB_PATH"
           osslsigncode --version
+          7z i >/dev/null
           "$tools/rcodesign" --version
       - name: Assert WebDriver marker and capability absence from release artifacts
         env:
