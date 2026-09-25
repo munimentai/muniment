@@ -15,8 +15,8 @@ export const PROVIDERS = [
   { id: 'lmstudio', name: 'LM Studio', popular: true, methods: ['endpoint'], baseUrl: 'http://localhost:1234/v1' },
   { id: 'custom', name: 'Custom OpenAI-compatible endpoint', popular: true, methods: ['endpoint'] },
   { id: 'github-copilot', name: 'GitHub Copilot', methods: ['account'], account: { provider: 'github-copilot', label: 'GitHub Copilot account' } },
-  { id: 'meta', name: 'Meta', methods: ['account'], account: { provider: 'meta', label: 'Muse Code account' } },
-  { id: 'devin', name: 'Devin', methods: ['account'], account: { provider: 'devin', label: 'Devin account' } },
+  { id: 'meta', name: 'Meta', popular: true, methods: ['account'], account: { provider: 'meta', label: 'Muse Code account' } },
+  { id: 'devin', name: 'Devin', popular: true, methods: ['account'], account: { provider: 'devin', label: 'Devin account' } },
   { id: 'kimi', name: 'Kimi', methods: ['account'], account: { provider: 'kimi', label: 'Kimi Code account' } },
   { id: 'deepseek', name: 'DeepSeek', methods: ['key'] },
   { id: 'mistral', name: 'Mistral', methods: ['key'] },
@@ -65,7 +65,7 @@ export function methodLabel(provider, method) {
   return METHOD_LABELS[method] ?? method
 }
 
-// The catalog split the connector shows: the popular eight first, then the rest
+// The catalog split the connector shows: the featured providers first, then the rest
 // by name. A query narrows both by name or id.
 export function searchProviders(query = '') {
   const needle = query.trim().toLowerCase()

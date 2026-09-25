@@ -409,7 +409,7 @@
         <LucideIcon name="search" variant="action" size={14} />
         <input type="search" aria-label="Search providers" placeholder="Search providers" bind:value={providerQuery}>
       </div>
-      {#each [['Popular', catalog.popular], ['Other', catalog.other]] as [group, entries]}
+      {#each [['Popular & Subscriptions', catalog.popular], ['Other', catalog.other]] as [group, entries]}
         {#if entries.length}
           <h5 class="group-label">{group}</h5>
           <ul class="provider-list">

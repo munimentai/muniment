@@ -13,10 +13,10 @@ const inventory = {
 }
 
 describe('provider catalog', () => {
-  it('puts the eight featured providers first and searches the rest by name or id', () => {
+  it('puts the featured providers first and searches the rest by name or id', () => {
     const { popular, other } = searchProviders()
-    expect(popular.map((provider) => provider.id)).toEqual(['anthropic', 'openai', 'xai', 'google', 'openrouter', 'ollama', 'lmstudio', 'custom'])
-    expect(other.length).toBe(PROVIDERS.length - 8)
+    expect(popular.map((provider) => provider.id)).toEqual(['anthropic', 'openai', 'xai', 'google', 'openrouter', 'ollama', 'lmstudio', 'custom', 'meta', 'devin'])
+    expect(other.length).toBe(PROVIDERS.length - 10)
     expect(other.map((provider) => provider.name)).toEqual([...other.map((provider) => provider.name)].sort((a, b) => a.localeCompare(b)))
     expect(searchProviders('grok').popular.map((provider) => provider.id)).toEqual(['xai'])
     expect(searchProviders('xai').popular.map((provider) => provider.id)).toEqual(['xai'])
@@ -77,10 +77,10 @@ describe('provider catalog', () => {
   })
 
   it('offers the popular providers that are not connected, counting aliases as connected', () => {
-    expect(connectableProviders(inventory).map((provider) => provider.id)).toEqual(['xai', 'google', 'openrouter', 'lmstudio', 'custom'])
+    expect(connectableProviders(inventory).map((provider) => provider.id)).toEqual(['xai', 'google', 'openrouter', 'lmstudio', 'custom', 'meta', 'devin'])
     const withEndpoint = { providers: [{ id: 'custom-litellm', name: 'LiteLLM', source: 'custom', models: [] }, { id: 'claude-bridge', name: 'Anthropic', source: 'claude-code', models: [] }] }
-    expect(connectableProviders(withEndpoint).map((provider) => provider.id)).toEqual(['openai', 'xai', 'google', 'openrouter', 'ollama', 'lmstudio'])
-    expect(connectableProviders(null)).toHaveLength(8)
+    expect(connectableProviders(withEndpoint).map((provider) => provider.id)).toEqual(['openai', 'xai', 'google', 'openrouter', 'ollama', 'lmstudio', 'meta', 'devin'])
+    expect(connectableProviders(null)).toHaveLength(10)
   })
 
   it('reads the saved default when it is shown, else the first shown model, and labels the chip', () => {
