@@ -15,6 +15,8 @@ listed as written.
 `SearchToolbar`: the filter icon comes first, search fills the row, and actions
 sit at the right. Filters expand below the toolbar. `Button` supplies compact
 32px controls, icon-only accessible names, disabled states and focus backgrounds.
+Its primary variant uses the optional accent and accent-soft tokens. Daybreak and
+Afterglow use orange actions and teal selection. Other themes keep their neutral actions.
 `SegmentedField` supplies square, two-sided choices with pointer and arrow-key selection.
 `ChoiceField` supplies labeled choices with optional provider marks, keyboard
 navigation, Escape dismissal and focus return. It uses the overlay shadow token.

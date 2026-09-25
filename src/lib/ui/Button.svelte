@@ -13,6 +13,7 @@
   button[aria-pressed="true"] { background: var(--faint); border-color: var(--muted); }
   button:focus-visible { background: var(--faint); color: var(--ink); }
   button[data-variant="capability"][aria-pressed="true"] { color: var(--signal); background: var(--signal-soft); border-color: transparent; }
+  button[data-variant="primary"] { color: var(--accent, var(--ink)); background: var(--accent-soft, var(--faint)); }
   button:disabled { opacity: .5; cursor: default; }
   .icon-only { padding: 6px; }
 </style>

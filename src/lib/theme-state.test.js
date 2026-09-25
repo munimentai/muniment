@@ -18,8 +18,8 @@ const system = { mode: THEME_SYSTEM, light: 'paper', dark: 'vault' }
 
 describe('theme state', () => {
   it('names four light and four dark themes with a scheme each', () => {
-    expect(LIGHT_THEMES).toEqual(['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'].map((name) => name.toLowerCase()))
-    expect(DARK_THEMES).toEqual(['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon'].map((name) => name.toLowerCase()))
+    expect(LIGHT_THEMES).toEqual(['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet', 'Daybreak'].map((name) => name.toLowerCase()))
+    expect(DARK_THEMES).toEqual(['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon', 'Afterglow'].map((name) => name.toLowerCase()))
     for (const theme of LIGHT_THEMES) expect(themeScheme(theme)).toBe(THEME_LIGHT)
     for (const theme of DARK_THEMES) expect(themeScheme(theme)).toBe(THEME_DARK)
     expect(themeScheme('system')).toBe(null)

@@ -452,3 +452,46 @@
 :root { --code-added: light-dark(#276349, #8DC7A5); --code-name: light-dark(#62518E, #C1B0E2); }
 
 :root { --reference: light-dark(#285C9E, #86B8F4); }
+
+/* Vibrant themes add an orange action accent to teal selection and activity. */
+:root[data-theme="daybreak"], [data-swatch][data-theme="daybreak"] {
+  --paper: #EAF5FA;
+  --surface: #FFFFFF;
+  --faint: #DCEEF5;
+  --ink: #142E38;
+  --muted: #435F69;
+  --border: #B7D4DF;
+  --signal: #006D6D;
+  --signal-opacity: .10;
+  --signal-soft: rgba(0, 109, 109, var(--signal-opacity));
+  --oxide: #B13D42;
+  --ochre: #805A00;
+  --accent: #A94700;
+  --accent-soft: #FFE8D5;
+  --on-accent: #FFFFFF;
+  color-scheme: light;
+}
+:root[data-theme="afterglow"], [data-swatch][data-theme="afterglow"] {
+  --paper: #10242D;
+  --surface: #17333D;
+  --faint: #20414A;
+  --ink: #EDF8FC;
+  --muted: #AAC8D4;
+  --border: #3D626C;
+  --signal: #51D6C6;
+  --signal-opacity: .12;
+  --signal-soft: rgba(81, 214, 198, var(--signal-opacity));
+  --oxide: #FF9B9B;
+  --ochre: #EFCA08;
+  --accent: #FFA64D;
+  --accent-soft: #433324;
+  --on-accent: #10242D;
+  color-scheme: dark;
+}
+/* Optional accent roles must reset when leaving a vibrant theme. */
+:root:not([data-theme="daybreak"]):not([data-theme="afterglow"]),
+[data-swatch]:not([data-theme="daybreak"]):not([data-theme="afterglow"]) {
+  --accent: initial;
+  --accent-soft: initial;
+  --on-accent: initial;
+}

@@ -346,7 +346,7 @@
     {#if status}<p class="support" role="status">{status}</p>{/if}
     <div class="tabs-row">
       <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Routing',icon:'route'}]} onchange={value => tab = value} />
-      {#if tab === 'accounts'}<div class="tab-action"><Button icon="plus" onclick={openConnector}>Connect account</Button></div>{/if}
+      {#if tab === 'accounts'}<div class="tab-action"><Button icon="plus" variant="primary" onclick={openConnector}>Connect account</Button></div>{/if}
       {#if tab === 'models'}<div class="tab-action"><Button icon="refresh-cw" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</Button></div>{/if}
     </div>
     {#if tab === 'routing'}

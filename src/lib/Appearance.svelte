@@ -2,7 +2,7 @@
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import ContextSettings from '../activity/ContextSettings.svelte'
   import { onMount } from 'svelte'
-  import { DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
+  import { VIBRANT_THEMES, DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
   import { SHIPPED_FONTS, SIZE_STEP_MAX, SIZE_STEP_MIN, TYPE_EVENT, bodySize, commitType, filterFonts, readStoredType, stepType, typeSizeShortcut, typeSizeShortcutLabel } from './type-state.js'
 
   let { tauri } = $props()
@@ -40,7 +40,7 @@
     type = commitType({ ...type, [register]: family })
   }
   const modeOptions = [['System', 'system'], ['Light', 'light'], ['Dark', 'dark']]
-  const themeGroups = [['Light', LIGHT_THEMES], ['Dark', DARK_THEMES]]
+  const themeGroups = [['Light', LIGHT_THEMES.filter(name => !VIBRANT_THEMES.includes(name))], ['Dark', DARK_THEMES.filter(name => !VIBRANT_THEMES.includes(name))], ['Vibrant', VIBRANT_THEMES]]
 
   function commit(next) {
     theme = next
@@ -78,7 +78,7 @@
       <div class="theme-grid">
         {#each row as name}
           <button type="button" class="theme-pick" aria-pressed={picked(name)} onclick={() => chooseTheme(name)}>
-            <span class="swatch" data-swatch data-theme={name} aria-hidden="true"><span class="swatch-card"><i class="swatch-ink"></i><i class="swatch-muted"></i><i class="swatch-signal"></i></span></span>
+            <span class="swatch" data-swatch data-theme={name} aria-hidden="true"><span class="swatch-card"><i class="swatch-ink"></i><i class="swatch-muted"></i><i class="swatch-signal"></i>{#if VIBRANT_THEMES.includes(name)}<i class="swatch-accent"></i>{/if}</span></span>
             <span>{THEME_NAMES[name]}</span>
           </button>
         {/each}
@@ -139,6 +139,8 @@
   .swatch i { display: block; height: 2px; }
   .swatch-ink { width: 80%; background: var(--ink); }
   .swatch-muted { width: 50%; background: var(--muted); }
+  .swatch-accent { width: 8px; background: var(--accent); position: absolute; right: 2px; bottom: 3px; }
+  .swatch-card { position: relative; }
   .swatch-signal { width: 8px; background: var(--signal); }
   /* Type: the size row is three quiet buttons around a mono readout, and each register is one search over the installed families with the shipped family first. */
   .type-section { margin-top: 22px; max-width: 560px; }

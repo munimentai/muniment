@@ -9,7 +9,7 @@ default. The interface is the user's territory and the model is a visitor.
 
 `src/styles/tokens.css` is the token source. Code has theme-aware syntax tokens. Light and dark are both
 first-class, the OS picks the default, and a user override persists per device.
-Every theme carries the same ten color tokens in one `:root[data-theme]`
+Every theme carries ten core color tokens in one `:root[data-theme]`
 block. The house sets are Paper, Vellum, Ledger and Foolscap in light and
 Moss, Vault, Graphite and Inkwell in dark. Parchment, Manila and Linen carry
 the light neutrals of Solarized, Gruvbox and Catppuccin, and Lagoon, Umber,
@@ -32,7 +32,7 @@ below.
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
 
-Every neutral carries a faint green cast that ties it to signal. The one
+Daybreak and Afterglow add teal-blue neutrals and orange action accents. House neutrals carry a faint green cast. The one
 exception is Vault's black paper: its surface and faint keep the cast, so the
 frame is black and every panel on it still ties to signal.
 

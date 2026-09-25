@@ -2719,6 +2719,7 @@
   .auth-actions { display: flex; gap: 8px; }
   .sign-in-link { justify-self: start; color: var(--ink); font-size: var(--text-12); text-decoration: underline; }
   .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .composer-action.primary { background: var(--accent, var(--ink)); border-color: var(--accent, var(--ink)); color: var(--on-accent, var(--paper)); }
   .composer-actions .primary[aria-disabled="true"] { background: var(--faint); border-color: var(--border); color: var(--muted); }
 
   button {
@@ -2738,7 +2739,7 @@
   }
 
   .primary:hover:not(:disabled):not([aria-disabled="true"]) {
-    background: var(--ink);
+    background: var(--accent, var(--ink));
   }
 
   button:disabled {
