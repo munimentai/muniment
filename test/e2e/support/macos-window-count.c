@@ -63,8 +63,9 @@ static bool has_area(CFDictionaryRef window) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    fprintf(stderr, "usage: macos-window-count <pid>\n");
+  bool print_id = argc == 3 && strcmp(argv[2], "--id") == 0;
+  if (argc != 2 && !print_id) {
+    fprintf(stderr, "usage: macos-window-count <pid> [--id]\n");
     return 2;
   }
   errno = 0;
@@ -94,6 +95,7 @@ int main(int argc, char **argv) {
   }
 
   long count = 0;
+  long window_id = 0;
   CFIndex total = CFArrayGetCount(windows);
   for (CFIndex index = 0; index < total; index++) {
     CFTypeRef entry = CFArrayGetValueAtIndex(windows, index);
@@ -109,8 +111,13 @@ int main(int argc, char **argv) {
     if (!read_number(window, kCGWindowLayer, &layer) || layer != 0) continue;
     if (!on_screen(window) || !has_area(window)) continue;
     count++;
+    if (print_id && !read_number(window, kCGWindowNumber, &window_id)) {
+      CFRelease(windows);
+      return 1;
+    }
   }
   CFRelease(windows);
-  printf("%ld\n", count);
+  if (print_id && count != 1) return 1;
+  printf("%ld\n", print_id ? window_id : count);
   return 0;
 }

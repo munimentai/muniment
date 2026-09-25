@@ -162,11 +162,34 @@ const APP_COMMANDS: &[&str] = &[
     "runtime_stop",
     "open_login_items",
     "runtime_notice_observed",
+    "subscription_probe_observed",
     "e2e_drive_folder_dialog",
     "e2e_folder_dialog_snapshot",
 ];
 
 fn main() {
+    // Bind installed diagnostics to the source that built the signed executable.
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(|text| text.trim().to_owned())
+    };
+    for name in [Some("HEAD".to_owned()), git(&["symbolic-ref", "-q", "HEAD"])]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(file) = git(&["rev-parse", "--git-path", &name]) {
+            println!("cargo:rerun-if-changed={file}");
+        }
+    }
+    let source = git(&["rev-parse", "HEAD"])
+        .filter(|sha| sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .unwrap_or_else(|| "unavailable".into());
+    println!("cargo:rustc-env=MUNIMENT_BUILD_SOURCE_SHA={source}");
     println!("cargo:rerun-if-env-changed=MUNIMENT_UPDATER_PUBLIC_KEY");
     println!("cargo:rerun-if-env-changed=MUNIMENT_UPDATER_ENDPOINT");
     let os = std::env::var("CARGO_CFG_TARGET_OS").expect("target OS is set by Cargo");

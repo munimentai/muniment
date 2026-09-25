@@ -169,6 +169,7 @@
     "allow-runtime-state",
     "allow-runtime-start",
     "allow-open-login-items",
-    "allow-runtime-notice-observed"
+    "allow-runtime-notice-observed",
+    "allow-subscription-probe-observed"
   ]
 }

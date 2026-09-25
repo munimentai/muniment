@@ -41,6 +41,7 @@ mod creations;
 mod terminal;
 mod record;
 mod runtime_owner;
+mod subscription_probe;
 #[cfg(test)]
 mod test_support;
 mod thread_retention;
@@ -119,6 +120,9 @@ pub fn run() {
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))
         .manage(attach_service::AttachApprovalState::default())
         .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                subscription_probe::install(webview);
+            }
             #[cfg(target_os = "macos")]
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 macos_runtime_notice_probe::install(webview);
@@ -166,6 +170,7 @@ pub fn run() {
         })
         .on_window_event(launcher::window_event)
         .invoke_handler(tauri::generate_handler![
+            subscription_probe::subscription_probe_observed,
             extend::extend_command,
             creations::creation_list,
             creations::creation_save,
