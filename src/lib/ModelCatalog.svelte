@@ -73,8 +73,8 @@
         <ChoiceField label="Minimum context" value={minContext} inline={false} options={[{value:'0',label:'Any size'},{value:'32000',label:'32K+'},{value:'128000',label:'128K+'},{value:'200000',label:'200K+'},{value:'1000000',label:'1M+'}]} onchange={value => minContext = value} />
         <ChoiceField label="Visibility" value={shownOnly ? 'shown' : 'all'} inline={false} options={[{value:'all',label:'All models'},{value:'shown',label:'Shown in composer'}]} onchange={value => shownOnly = value === 'shown'} />
         <div class="capability-filter"><span title="Only models with reported support match these filters.">Capabilities</span><div class="capability-options">
-          <Button icon="eye" variant="outline" aria-pressed={vision} onclick={() => vision = !vision}>Vision</Button>
-          <Button icon="brain" variant="outline" aria-pressed={reasoning} onclick={() => reasoning = !reasoning}>Reasoning</Button>
+          <Button icon="eye" variant="capability" aria-pressed={vision} onclick={() => vision = !vision}>Vision</Button>
+          <Button icon="brain" variant="capability" aria-pressed={reasoning} onclick={() => reasoning = !reasoning}>Reasoning</Button>
         </div></div>
         <div class="clear-filters"><Button aria-label="Clear filters" onclick={() => { minContext = '0'; vision = false; reasoning = false; shownOnly = false }}>Clear</Button></div>
       </div>

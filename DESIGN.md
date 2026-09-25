@@ -60,7 +60,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    state, the streaming underscore and caret on
    the active line, the route segment of the provenance line, the live voice
    polish flash, the enabled state of the Models show switch, and workflow-run
-   indicators. Settings tabs, verified updates and enabled extension switches use the theme signal.
+   indicators. Settings tabs, selected capability filters, verified updates and enabled extension switches use the theme signal.
    Other buttons, links, selection, icons at rest and badges are ink on paper.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit

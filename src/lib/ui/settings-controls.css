@@ -31,7 +31,7 @@
 }
 [data-settings-controls] button.quiet:not([role]) { background: transparent; }
 [data-settings-controls] button:not([role="tab"]):not([role="switch"]):hover:not(:disabled) { border-color: var(--muted); }
-[data-settings-controls] button[aria-pressed="true"]:not([role]) { color: var(--ink); border-color: var(--muted); background: var(--faint); }
+[data-settings-controls] button[aria-pressed="true"]:not([role]):not([data-ui-button]) { color: var(--ink); border-color: var(--muted); background: var(--faint); }
 [data-settings-controls] :is(button, input, textarea, select):disabled { opacity: .5; cursor: default; }
 [data-settings-controls] :is(button, input, textarea, select):focus-visible { background: var(--faint); color: var(--ink); }
 [data-settings-controls] label:not(.show) { font: var(--text-13) var(--font-human); color: var(--muted); }
