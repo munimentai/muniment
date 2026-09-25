@@ -52,7 +52,7 @@ jobs:
           echo "$tools" >> "$GITHUB_PATH"
           osslsigncode --version
           7z i >/dev/null
-          unsquashfs -version
+          command -v unsquashfs >/dev/null
           "$tools/rcodesign" --version
       - name: Test compressed AppImage guard
         run: bash test/e2e/support/test-appimage-guard.sh
