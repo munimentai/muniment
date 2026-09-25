@@ -21,6 +21,13 @@ if [[ $artifact == *.deb ]]; then
   tar -xf "$payload" -C "$work/payload"
 elif [[ $artifact == *.app.tar.gz ]]; then
   tar -xf "$artifact" -C "$work/outer"
+elif [[ $artifact == *.AppImage ]]; then
+  offset=$(node test/e2e/support/appimage-offset.mjs "$artifact")
+  unsquashfs -no-progress -o "$offset" -d "$work/payload" "$artifact" >/dev/null
+elif [[ $artifact == *.dmg ]]; then
+  # The drag-to-install shortcut points outside the image. Inspect the app
+  # payload without creating that absolute /Applications symlink on the runner.
+  7z x -y '-x!Muniment/Applications' "-o$work/outer" "$artifact" >/dev/null
 else
   7z x -y "-o$work/outer" "$artifact" >/dev/null
 fi

@@ -25,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.source_sha }}
+          # Use the checked workflow's tools while promoting the separately
+          # verified source SHA. Tooling fixes do not rebuild release bytes.
+          ref: ${{ github.sha }}
       # Promotion checks the signatures in the bytes it publishes. osslsigncode
       # and archive extractors come pinned from the Ubuntu archive; rcodesign is a pinned
       # release checked against the SHA-256 its project publishes.
@@ -38,7 +40,7 @@ jobs:
           sudo=
           [ "$(id -u)" -eq 0 ] || sudo=sudo
           $sudo apt-get update -qq
-          $sudo apt-get install -y -qq --no-install-recommends osslsigncode=2.8-2 unzip=6.0-28ubuntu4.1 p7zip-full=16.02+transitional.1
+          $sudo apt-get install -y -qq --no-install-recommends osslsigncode=2.8-2 unzip=6.0-28ubuntu4.1 p7zip-full=16.02+transitional.1 squashfs-tools=1:4.6.1-1build1
           tools="$RUNNER_TEMP/signature-tools"
           mkdir -p "$tools"
           archive="$tools/rcodesign.tar.gz"
@@ -50,7 +52,10 @@ jobs:
           echo "$tools" >> "$GITHUB_PATH"
           osslsigncode --version
           7z i >/dev/null
+          unsquashfs -version
           "$tools/rcodesign" --version
+      - name: Test compressed AppImage guard
+        run: bash test/e2e/support/test-appimage-guard.sh
       - name: Assert WebDriver marker and capability absence from release artifacts
         env:
           GH_TOKEN: ${{ github.token }}
