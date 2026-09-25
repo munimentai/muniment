@@ -26,7 +26,7 @@ Install the candidate through the native release pipeline before this probe.
 Run this probe before any WDIO step replaces the installed executable or DLL.
 The existing Ollama and source-built WDIO checks remain separate.
 
-The runner verifies the updater signature against the repository's public key.
+The runner verifies the updater signature against `src-tauri/updater.pub`.
 It compares the installed payload with the signed package before and after the probe.
 It also checks the package digest, platform, asset name, and compiled source SHA.
 The runner does not install, uninstall, publish, or promote a package.
@@ -116,6 +116,13 @@ Upload its output as the GitHub artifact `release-acceptance`.
 A missing platform produces blocked cases and a nonzero exit code.
 The proof covers only `chat`, `direct-model-selection`, and `model-switching`.
 It cannot satisfy the full release matrix or mark a release complete.
+
+`.github/workflows/subscriptions.yml` runs this probe on Linux, Windows, macOS ARM64, and macOS x64.
+Dispatch it with the signed candidate source SHA after the nightly build job.
+It reads `FACTORY_SUBSCRIPTION_LEASES` and `FACTORY_SUBSCRIPTION_MODELS`.
+A missing secret, model list, or native desktop-ci runner still publishes blocked cases.
+The collector job then uploads `release-acceptance` and fails with that reason.
+Call it from the nightly workflow after the signed upload.
 
 Run the focused regression checks with:
 

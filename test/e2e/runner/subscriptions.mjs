@@ -126,17 +126,24 @@ function screenshot(platform, pid, output, env) {
   }
 }
 
-export async function run({ candidateFile, packageFile, signatureFile, executable, leasesFile, output, sourceSha, platform }) {
+export const updaterPublicKeyFile = 'src-tauri/updater.pub'
+
+export function writeBlocked(output, sourceSha, platform, reason) {
+  fs.mkdirSync(output, { recursive: true, mode: 0o700 })
+  save(path.join(output, 'release-acceptance.json'), blocked(sourceSha, platform, reason))
+  save(path.join(output, `${platform}-subscription.json`), { status: 'blocked', reason })
+  fs.rmSync(path.join(output, `screenshot-${platform}-subscriptions.png`), { force: true })
+}
+
+export async function run({ candidateFile, packageFile, signatureFile, executable, leasesFile, output, sourceSha, platform, publicKeyFile = updaterPublicKeyFile }) {
   if (!platforms.includes(platform) || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) {
     throw new Error('Provide a supported native platform and the exact candidate source SHA.')
   }
-  fs.mkdirSync(output, { recursive: true, mode: 0o700 })
   const proofFile = path.join(output, 'release-acceptance.json')
   const evidenceFile = path.join(output, `${platform}-subscription.json`)
   // Write a blocked result first so a killed runner cannot leave stale passing evidence.
   let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
-  save(proofFile, blocked(sourceSha, platform, reason))
-  save(evidenceFile, { status: 'blocked', reason })
+  writeBlocked(output, sourceSha, platform, reason)
   let root, env, app, appClosed, runtime, runtimeClosed, verify, candidate, packageName
   let passed = false
   let evidence, proof
@@ -156,7 +163,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     candidate = json(candidateFile)
     const bytes = fs.readFileSync(packageFile)
     packageName = checkIdentity(candidate, sourceSha, platform, bytes)
-    const publicKey = json('src-tauri/tauri.conf.json').plugins.updater.pubkey
+    const publicKey = fs.readFileSync(publicKeyFile || updaterPublicKeyFile, 'utf8')
     const comment = verifyUpdaterSignature(bytes, fs.readFileSync(signatureFile, 'utf8'), publicKey)
     if (!comment.split('\t').includes(`file:${packageName}`)) throw new Error('The signed package name does not match the candidate.')
     reason = 'Provide four distinct models and access-only factory subscription leases valid for at least 20 minutes.'
@@ -226,8 +233,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     passed = true
   } catch {
     // Never export parser excerpts, native stderr, provider errors, or conversation logs.
-    save(evidenceFile, { status: 'blocked', reason })
-    save(proofFile, blocked(sourceSha, platform, reason))
+    writeBlocked(output, sourceSha, platform, reason)
   } finally {
     let cleanupFailed = false
     for (const [child, closed] of [[app, appClosed], [runtime, runtimeClosed]]) {
@@ -250,10 +256,8 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     if (cleanupFailed) {
       passed = false
       reason = 'The native probe cleanup failed. Stop the disposable login before another check.'
-      save(evidenceFile, { status: 'blocked', reason })
-      save(proofFile, blocked(sourceSha, platform, reason))
+      writeBlocked(output, sourceSha, platform, reason)
     }
-    if (!passed) fs.rmSync(path.join(output, `screenshot-${platform}-subscriptions.png`), { force: true })
   }
   if (passed) {
     save(evidenceFile, evidence)

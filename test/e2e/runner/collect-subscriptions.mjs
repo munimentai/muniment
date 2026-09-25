@@ -45,18 +45,27 @@ export function collect(sourceSha, output, inputs) {
       }
       evidence = JSON.parse(read(evidenceName))
       const original = JSON.parse(read('release-acceptance.json'))
-      const packages = Object.entries(original.packages ?? {})
-      if (packages.length !== 1) throw new Error('The platform proof does not identify one package.')
-      const [packageName, sha256] = packages[0]
-      const candidate = { source_sha: original.source_sha, platform, sha256 }
-      proof = acceptance(candidate, sourceSha, platform, evidence, evidence.transports, packageName)
-      if (JSON.stringify(original) !== JSON.stringify(proof)) throw new Error('The platform proof does not match its runner results.')
-      const screenshot = redactScreenshot(read(screenshotName), screenshotName)
-      if (combined.packages[packageName] && combined.packages[packageName] !== sha256) throw new Error('The package digests conflict.')
-      fs.writeFileSync(path.join(output, screenshotName), screenshot, { mode: 0o600 })
-      Object.assign(combined.packages, proof.packages)
-      evidence = { status: 'passed', installed: true, unchanged: true, webdriver: false,
-        source_sha: sourceSha, package_sha256: sha256, models: proof.cases[0].models }
+      if (evidence.status === 'blocked') {
+        if (typeof evidence.reason !== 'string' || evidence.reason.length < 20) throw new Error('The blocked reason is missing.')
+        proof = blocked(sourceSha, platform, evidence.reason)
+        if (JSON.stringify(original) !== JSON.stringify(proof)) throw new Error('The platform proof does not match its runner results.')
+        complete = false
+        evidence = { status: 'blocked', reason: evidence.reason }
+        fs.rmSync(path.join(output, screenshotName), { force: true })
+      } else {
+        const packages = Object.entries(original.packages ?? {})
+        if (packages.length !== 1) throw new Error('The platform proof does not identify one package.')
+        const [packageName, sha256] = packages[0]
+        const candidate = { source_sha: original.source_sha, platform, sha256 }
+        proof = acceptance(candidate, sourceSha, platform, evidence, evidence.transports, packageName)
+        if (JSON.stringify(original) !== JSON.stringify(proof)) throw new Error('The platform proof does not match its runner results.')
+        const screenshot = redactScreenshot(read(screenshotName), screenshotName)
+        if (combined.packages[packageName] && combined.packages[packageName] !== sha256) throw new Error('The package digests conflict.')
+        fs.writeFileSync(path.join(output, screenshotName), screenshot, { mode: 0o600 })
+        Object.assign(combined.packages, proof.packages)
+        evidence = { status: 'passed', installed: true, unchanged: true, webdriver: false,
+          source_sha: sourceSha, package_sha256: sha256, models: proof.cases[0].models }
+      }
     } catch {
       complete = false
       // Do not copy malformed evidence or untrusted parser error text.
