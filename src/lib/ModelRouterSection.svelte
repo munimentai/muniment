@@ -48,7 +48,7 @@
     finally { pending = false }
   }
 
-  const rows = $derived(catalog(settings?.accounts ?? [], settings?.options ?? []))
+  const rows = $derived(catalog())
 
   // Every command answers with the whole settings, so one reply redraws the page.
   $effect(() => {
@@ -168,7 +168,7 @@
     <summary>Classifier and fallback</summary>
     <div class="disclosure-body">
     <p class="support">Your last message goes to the classifier to choose a model.</p>
-    {#each ['Built to classify', 'Self-hosted', 'On your accounts'] as group}
+    {#each ['Built to classify', 'Self-hosted'] as group}
       <h6 class="catalog-label">{group}</h6>
       <ul class="catalog">
         {#each rows.filter((row) => row.group === group) as row (row.id)}
