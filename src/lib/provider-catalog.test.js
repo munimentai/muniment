@@ -18,7 +18,7 @@ describe('provider catalog', () => {
     expect(popular.map((provider) => provider.id)).toEqual(['anthropic', 'openai', 'xai', 'google', 'openrouter', 'ollama', 'lmstudio', 'custom'])
     expect(other.length).toBe(PROVIDERS.length - 8)
     expect(other.map((provider) => provider.name)).toEqual([...other.map((provider) => provider.name)].sort((a, b) => a.localeCompare(b)))
-    expect(searchProviders('grok').popular).toEqual([])
+    expect(searchProviders('grok').popular.map((provider) => provider.id)).toEqual(['xai'])
     expect(searchProviders('xai').popular.map((provider) => provider.id)).toEqual(['xai'])
     expect(searchProviders('Fire').other.map((provider) => provider.id)).toEqual(['fireworks'])
   })
@@ -27,15 +27,34 @@ describe('provider catalog', () => {
     expect(catalogProvider('openai').methods).toEqual(['account', 'key'])
     expect(methodLabel(catalogProvider('openai'), 'account')).toBe('ChatGPT Plus or Pro account')
     expect(catalogProvider('openai').account.provider).toBe('openai-codex')
-    expect(methodLabel(catalogProvider('xai'), 'account')).toBe('SuperGrok or X Premium account')
+    expect(methodLabel(catalogProvider('xai'), 'account')).toBe('Grok Build account')
     expect(catalogProvider('anthropic').methods).toEqual(['claude-code', 'key'])
     expect(methodLabel(catalogProvider('anthropic'), 'claude-code')).toBe('Claude Code sign-in')
-    expect(catalogProvider('google').methods).toEqual(['key'])
+    expect(catalogProvider('google').methods).toEqual(['account', 'key'])
     expect(catalogProvider('lmstudio').methods).toEqual(['endpoint'])
     expect(catalogProvider('ollama').baseUrl).toBe('http://localhost:11434/v1')
     for (const provider of PROVIDERS) {
       expect(provider.methods.length).toBeGreaterThan(0)
       if (provider.methods.includes('account')) expect(provider.account.provider).toBeTruthy()
+    }
+  })
+
+  it('offers all six subscription sign-ins and Muse Code through provider search', () => {
+    const cases = [
+      ['Antigravity', 'google', 'antigravity'],
+      ['ChatGPT', 'openai', 'openai-codex'],
+      ['Claude Code', 'anthropic', null],
+      ['Grok', 'xai', 'xai'],
+      ['Devin', 'devin', 'devin'],
+      ['Kimi Code', 'kimi', 'kimi'],
+      ['Muse Code', 'meta', 'meta'],
+    ]
+    for (const [query, id, signIn] of cases) {
+      const results = searchProviders(query)
+      expect([...results.popular, ...results.other].map((p) => p.id)).toContain(id)
+      const provider = catalogProvider(id)
+      expect(provider.methods).toContain(signIn ? 'account' : 'claude-code')
+      if (signIn) expect(provider.account.provider).toBe(signIn)
     }
   })
 

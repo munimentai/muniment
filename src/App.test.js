@@ -1467,11 +1467,32 @@ describe('workspace composer entry', () => {
 
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^xAI/ }))
-    expect(within(dialog).getByText(/Sign in with your SuperGrok or X Premium account\./)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Sign in with your Grok Build account\./)).toBeInTheDocument()
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Anthropic/ }))
     expect(within(dialog).getByText(/Anthropic through your Claude Code sign-in\./)).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Use an API key instead' })).toBeInTheDocument()
+  })
+
+  it('shows all six subscription options and Muse Code in Connect account', async () => {
+    localModeStatus = true
+    render(App)
+    const dialog = await openSettings()
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect account' }))
+    for (const name of [/^Anthropic.*Claude Code/, /^OpenAI.*ChatGPT/, /^xAI.*Grok Build/,
+      /^Google.*Antigravity/, /^Devin.*Devin account/, /^Kimi.*Kimi Code account/, /^Meta.*Muse Code/]) {
+      expect(within(dialog).getByRole('button', { name })).toBeVisible()
+    }
+    for (const [query, row, signIn] of [
+      ['Antigravity', /^Google/, 'antigravity'], ['Devin', /^Devin/, 'devin'],
+      ['Kimi Code', /^Kimi/, 'kimi'], ['Muse Code', /^Meta/, 'meta'],
+    ]) {
+      await fireEvent.input(within(dialog).getByRole('searchbox'), { target: { value: query } })
+      await fireEvent.click(within(dialog).getByRole('button', { name: row }))
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Sign in' }))
+      expect(invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: signIn })
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
+    }
   })
 
   it('opens provider sign-in from the account connector', async () => {
