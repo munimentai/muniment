@@ -229,7 +229,7 @@ it.each(['linux', 'windows', 'macos'])('uses one VM and gates packaging on prefl
       expect(status).toBe(failure === 'true' ? 29 : 0)
       const executed = fs.readFileSync(log, 'utf8')
       const packaging = platform === 'windows' ? 'build-windows-installers.mjs'
-        : platform === 'linux' ? 'build-linux.sh' : 'package-cef-macos.mjs'
+        : platform === 'linux' ? 'build-linux.sh' : 'build-macos-app.mjs'
       expect(executed.includes(packaging)).toBe(failure === 'false')
     }
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
