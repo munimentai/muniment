@@ -8,12 +8,12 @@ import { catalogProvider, pickerGroups } from './provider-catalog.js'
 afterEach(cleanup)
 const inventory = { providers: [], hidden: [] }
 const settings = { accounts: [], classifier_connections: [], options: [] }
-it('places classifiers between popular accounts and the Pi catalog', async () => {
+it('places classifiers between popular accounts and the full provider catalog', async () => {
   const tauri = { invoke: vi.fn(async command => command === 'model_router_settings' ? settings : inventory) }
   render(ModelsSection, { tauri, inventory })
   await fireEvent.click(await screen.findByRole('button', { name: 'Connect account' }))
   const sections = screen.getAllByRole('heading', { level: 5 }).map(el => el.textContent)
-  expect(sections).toEqual(['Popular & Subscriptions', 'Classifiers', 'All Pi providers'])
+  expect(sections).toEqual(['Popular & Subscriptions', 'Classifiers', 'All providers'])
   expect(CLASSIFIERS[0].name).toBe('Jev')
   expect(CLASSIFIERS).toHaveLength(10)
   await fireEvent.click(screen.getByRole('button', { name: /Jev Hosted API/ }))

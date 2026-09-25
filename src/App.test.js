@@ -230,6 +230,8 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  // Each test represents a fresh app, including its bridge-scoped account cache.
+  window.__TAURI__.core = { ...window.__TAURI__.core }
   Object.assign(featureFlags, {cloud: true, companyRecord: true})
   localStorage.clear()
   recordQueryResult = { page: { kind: 'deal', total: 1, offset: 0, limit: 200, sort: 'updated_at', descending: true, rows: [{ id: 'deal-1', kind: 'deal', title: 'Northwind renewal', state: 'won', updated_at: '2026-09-15T10:30:00.000Z', created_at: '2026-09-15T10:00:00.000Z', body_text: 'Northwind renewal: won.', data: { name: 'Northwind renewal', stage: 'won' } }] } }
