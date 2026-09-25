@@ -1,8 +1,8 @@
 name: Nightly desktop release
 
 on:
-  schedule:
-    - cron: "0 5 * * *"
+  # Release candidates run on demand so repairs do not compete with a daily
+  # full matrix. Keep the workflow name used by stable promotion proofs.
   workflow_dispatch:
     inputs:
       platform:
