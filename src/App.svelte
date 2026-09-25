@@ -1,4 +1,5 @@
 <script>
+  import { accountCache } from './lib/account-cache.js'
   import PopupClose from './lib/PopupClose.svelte'
   import { featureFlags } from './feature-flags.js'
   import { floatingMenu } from './lib/floating-menu.js'
@@ -100,6 +101,7 @@
   }
 
   const tauri = window.__TAURI__?.core
+  onMount(() => tauri ? accountCache(tauri).start() : undefined)
   let auth = $state(bootState)
   let localEntryError = $state('')
   let accountStatus = $state('')
@@ -109,7 +111,7 @@
   $effect(() => {
     if (!inventory) { hasSubscriptions = false; return }
     let disposed = false
-    void tauri.invoke('model_router_settings').then(settings => {
+    void accountCache(tauri).read().then(settings => {
       if (!disposed) {
         hasSubscriptions = (settings?.accounts ?? []).some(account => account.source === 'account')
         if (!hasSubscriptions) capacityOpen = false

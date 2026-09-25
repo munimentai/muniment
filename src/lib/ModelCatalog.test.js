@@ -90,3 +90,17 @@ it('combines reported capabilities and context filters without changing saved vi
   expect(screen.getAllByRole('switch')).toHaveLength(3)
   expect(tauri.invoke).not.toHaveBeenCalled()
 })
+
+it('selects either visibility segment with pointer or keyboard without changing preferences', async () => {
+  const tauri = { invoke: vi.fn() }
+  render(ModelCatalog, { tauri, inventory: { ...inventory(), hidden: ['anthropic/first'] } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
+  const enabled = screen.getByRole('radio', { name: 'Enabled' })
+  await fireEvent.click(enabled)
+  expect(enabled).toHaveAttribute('aria-checked', 'true')
+  expect(switches()).toHaveLength(1)
+  await fireEvent.keyDown(enabled, { key: 'ArrowLeft' })
+  expect(screen.getByRole('radio', { name: 'All models' })).toHaveAttribute('aria-checked', 'true')
+  expect(switches()).toHaveLength(2)
+  expect(tauri.invoke).not.toHaveBeenCalled()
+})

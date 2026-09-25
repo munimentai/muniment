@@ -125,3 +125,10 @@ it('shows runtime routing eligibility and fallback evidence without starting a c
   expect(screen.getByText('35 ms')).toBeInTheDocument()
   expect(tauri.invoke.mock.calls).toEqual([['model_router_test_route', { sample: 'Summarize my file' }]])
 })
+
+it('shows accounts without waiting for model discovery', async () => {
+  const settings = { ...routing(), accounts: [{ id: 'fast', family: 'openai', label: 'Instant account', source: 'account', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [] }] }
+  const tauri = { invoke: vi.fn(command => command === 'local_mode_provider_inventory' ? new Promise(() => {}) : Promise.resolve(settings)) }
+  render(Settings, { tauri, inventory, section: 'models', onclose: vi.fn() })
+  expect(await screen.findByText('Instant account')).toBeInTheDocument()
+})

@@ -1,4 +1,5 @@
 <script>
+  import SegmentedField from './ui/SegmentedField.svelte'
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import SearchToolbar from './ui/SearchToolbar.svelte'
   import ChoiceField from './ui/ChoiceField.svelte'
@@ -71,7 +72,7 @@
   {#if filtersOpen}
       <div class="filter-fields" id="model-filters">
         <ChoiceField label="Minimum context" value={minContext} inline={false} options={[{value:'0',label:'Any size'},{value:'32000',label:'32K+'},{value:'128000',label:'128K+'},{value:'200000',label:'200K+'},{value:'1000000',label:'1M+'}]} onchange={value => minContext = value} />
-        <ChoiceField label="Visibility" value={shownOnly ? 'shown' : 'all'} inline={false} options={[{value:'all',label:'All models'},{value:'shown',label:'Shown in composer'}]} onchange={value => shownOnly = value === 'shown'} />
+        <SegmentedField label="Visibility" value={shownOnly ? 'enabled' : 'all'} options={[{value:'all',label:'All models'},{value:'enabled',label:'Enabled'}]} onchange={value => shownOnly = value === 'enabled'} />
         <div class="capability-filter"><span title="Only models with reported support match these filters.">Capabilities</span><div class="capability-options">
           <Button icon="eye" variant="capability" aria-pressed={vision} onclick={() => vision = !vision}>Vision</Button>
           <Button icon="brain" variant="capability" aria-pressed={reasoning} onclick={() => reasoning = !reasoning}>Reasoning</Button>
@@ -94,7 +95,7 @@
           <div class="model-row">
             <div class="identity"><span class="model-id">{model.label}</span><span class="meta">{route ? `${model.accounts || 1} ${model.accounts > 1 ? 'accounts' : 'account'}` : 'Direct'}{#if model.context} · {model.context} context{/if}</span></div>
             {#if current?.provider === provider && current?.model === choice}<span class="meta">Selected</span>{:else}<button disabled={pending || !shown} onclick={() => run('local_mode_set_default_model', { provider, model: choice })}>Use</button>{/if}
-            <label class="show"><Toggle checked={shown} disabled={pending || key in visibility} aria-label={`Show ${model.label} in the selector`} onchange={shown => setShown(model, shown)} />Show</label>
+            <label class="show"><Toggle checked={shown} disabled={pending || key in visibility} aria-label={`Enable ${model.label}`} onchange={shown => setShown(model, shown)} />Enabled</label>
           </div>
           {#if route}
             <details><DisclosureSummary>Routing statement</DisclosureSummary><p class="statement">{route.description}</p>

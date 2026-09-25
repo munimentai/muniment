@@ -1,5 +1,6 @@
 <script>
   import './ui/settings-controls.css'
+  import { accountCache } from './account-cache.js'
   import SearchToolbar from './ui/SearchToolbar.svelte'
   import Button from './ui/Button.svelte'
   // Settings → Models, one screen: every connection is a named account under
@@ -31,7 +32,8 @@
   let view = $state('list')
   // The router's settings: the accounts in every pool, the models in the
   // running and the classifier. One read feeds every card and the Routing foot.
-  let router = $state(null)
+  const accounts = accountCache(tauri)
+  let router = $state(accounts.current.settings)
   let routerError = $state('')
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
@@ -75,54 +77,37 @@
       .filter((family) => !needle || familyName(family).toLowerCase().includes(needle))
   })
 
-  let refreshingAccounts = $state(false)
   let refreshError = $state('')
-  let closed = false
-  async function refreshAccounts() {
-    if (closed || refreshingAccounts || document.hidden || !router?.accounts?.some((account) => account.allowance_readable)) return
-    refreshingAccounts = true
-    try {
-      const fresh = await tauri.invoke('model_router_refresh_quota', { id: null })
-      if (!closed && router) { router = { ...router, accounts: fresh.accounts }; refreshError = '' }
-    } catch (_) {
-      if (!closed) refreshError = 'Account allowances could not refresh. The last values remain visible.'
-    } finally { refreshingAccounts = false }
-  }
   onMount(() => {
-    closed = false
-    void load().then(refreshAccounts)
-    const timer = setInterval(() => { void refreshAccounts() }, 120_000)
-    const resume = () => { if (!document.hidden) void refreshAccounts() }
-    document.addEventListener('visibilitychange', resume)
-    return () => { closed = true; clearInterval(timer); document.removeEventListener('visibilitychange', resume) }
+    const unsubscribe = accounts.subscribe(value => {
+      router = value.settings
+      routerError = value.error
+      refreshError = value.refreshError
+    })
+    const stop = accounts.start()
+    void load()
+    return () => { unsubscribe(); stop() }
   })
 
-  async function loadRouter() {
-    try {
-      router = await tauri.invoke('model_router_settings')
-      routerError = ''
-    } catch (_) {
-      router = null
-      routerError = 'Muniment could not read routing settings. Try again.'
-    }
-  }
+  async function loadRouter() { await accounts.read() }
 
   // Every router command answers with the whole settings, so one reply
   // redraws every card, and the inventory rereads so the picker follows.
   function onRouterSettings(next) {
-    router = next
+    accounts.set(next)
     void load()
   }
   onDestroy(() => { stopListening() })
 
   let discovering = $state(false)
   async function load(force = false) {
+    void loadRouter()
     discovering = true
     try {
       inventory = await tauri.invoke('local_mode_provider_inventory', { force })
       loadError = ''
       oninventory?.(inventory)
-      await loadRouter()
+
     } catch (_) {
       loadError = 'Muniment cannot read provider settings. Restart the app to retry.'
     } finally { discovering = false }
@@ -374,7 +359,7 @@
 
     {:else if tab === 'accounts'}
     <section class="accounts-section" aria-label="Accounts">
-    {#if refreshingAccounts}<p class="support" role="status">Refreshing allowances…</p>{/if}
+    
     {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
     {#if router?.classifier_connections?.length}
@@ -445,7 +430,7 @@
         {/if}
       {/each}
     {:else if view === 'classifier' && classifierEntry}
-      <ClassifierConnection entry={classifierEntry} {tauri} onconnected={next => { router = next; status = 'Classifier connected. Select it in Routing.'; view = 'list'; tab = 'accounts' }} />
+      <ClassifierConnection entry={classifierEntry} {tauri} onconnected={next => { accounts.set(next); status = 'Classifier connected. Select it in Routing.'; view = 'list'; tab = 'accounts' }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
       <div class="connection-field"><label for="provider-key">{provider.name} API key</label><input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
