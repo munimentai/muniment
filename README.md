@@ -61,3 +61,8 @@ Muniment uses [FSL-1.1-ALv2](LICENSE.md), a Fair Source license.
 Each version converts to Apache 2.0 after two years.
 Third-party components retain their own licenses.
 See the [test architecture](docs/decisions/0013-desktop-e2e-harness.md) for verification details.
+
+`npm run check:agent-dependencies` checks Claude Code, Pi, and extension pins against current releases and Pi peer ranges.
+Updates require the focused regression tests and the native CI and installed nightly checks.
+`npm run test:agent-runtime` checks extension loading, selected models, streamed completion, and cache usage against a local fixture.
+Set `PI_TEST_BINARY` to the verified Pi executable and `PI_TEST_PACKAGES` to an isolated frozen install of `pi_packages.bun.lock`.
