@@ -30,6 +30,7 @@
     finally { pending = false }
   }
 </script>
+<div class="classifier-connection">
 <p class="support">{entry.note}</p>
 <div class="methods" role="group" aria-label="Connection method">
   {#each entry.methods as id}<button disabled={pending} type="button" aria-pressed={method === id} onclick={() => choose(id)}>{CONNECTION_METHODS[id].name}</button>{/each}
@@ -45,22 +46,32 @@
 {:else}
   {#if method === 'server'}<p class="support">Enter the full System One URL for a local or hosted server. Chat completion endpoints do not work here.</p>{/if}
   <p class="support">When routing is on, Muniment sends the message to this classifier. The connection test sends a sample request.</p>
-  <label for="classifier-name">Connection name</label><input id="classifier-name" bind:value={name} disabled={pending}>
-  {#if method === 'cloudflare'}
-    <label for="cloudflare-account">Cloudflare account ID</label><input id="cloudflare-account" bind:value={accountId} disabled={pending}>
-  {:else}
-    <label for="classifier-url">Classifier URL</label><input id="classifier-url" type="url" bind:value={url} disabled={pending}>
-  {/if}
-  <label for="classifier-model">Model ID</label><input id="classifier-model" bind:value={model} disabled={pending}>
-  <label for="classifier-key">API key{CONNECTION_METHODS[method]?.key ? '' : ' (optional)'}</label><input id="classifier-key" type="password" autocomplete="off" bind:value={key} disabled={pending}>
+  <div class="fields">
+    <div class="field"><label for="classifier-name">Connection name</label><input id="classifier-name" bind:value={name} disabled={pending}></div>
+    <div class="field"><label for="classifier-model">Model ID</label><input id="classifier-model" bind:value={model} disabled={pending}></div>
+    <div class="field wide">
+      {#if method === 'cloudflare'}
+        <label for="cloudflare-account">Cloudflare account ID</label><input id="cloudflare-account" bind:value={accountId} disabled={pending}>
+      {:else}
+        <label for="classifier-url">Classifier URL</label><input id="classifier-url" type="url" bind:value={url} disabled={pending}>
+      {/if}
+    </div>
+    <div class="field wide"><label for="classifier-key">API key{CONNECTION_METHODS[method]?.key ? '' : ' (optional)'}</label><input id="classifier-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
+  </div>
   <button type="button" disabled={pending || !name.trim() || !model.trim() || (method === 'cloudflare' ? !/^[a-f0-9]{32}$/i.test(accountId.trim()) : !url.trim()) || (CONNECTION_METHODS[method]?.key && !key.trim())} onclick={connect}>{pending ? 'Testing connection…' : 'Test and connect'}</button>
 {/if}
 {#if error}<p role="alert">{error}</p>{/if}
+</div>
 <style>
+  .classifier-connection { display: grid; gap: 12px; max-width: 680px; min-width: 0; font-size: var(--text-13); }
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+  .field { display: grid; gap: 5px; min-width: 0; }
+  .wide { grid-column: 1 / -1; }
+  @media (max-width: 600px) { .fields { grid-template-columns: 1fr; } }
   .methods { display: flex; flex-wrap: wrap; gap: 8px; }
-  button, input { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 9px 12px; }
-  button { cursor: pointer; } button[aria-pressed="true"] { border-color: var(--signal); background: var(--signal-soft); }
+  button, input { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 7px 10px; }
+  button { cursor: pointer; justify-self: start; } button[aria-pressed="true"] { border-color: var(--signal); background: var(--signal-soft); }
   button:disabled { opacity: .5; cursor: default; } .support, label { color: var(--muted); font-size: var(--text-13); }
-  pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; background: var(--faint); font: var(--text-12) var(--font-mono); }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 12px; background: var(--faint); font: var(--text-12) var(--font-mono); }
   p { margin: 0; line-height: 1.5; } input { width: 100%; box-sizing: border-box; }
 </style>

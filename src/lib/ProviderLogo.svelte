@@ -5,7 +5,8 @@
   // variant shows the one for the current theme; the rest are one file.
   const files = import.meta.glob('./logos/*.svg', { query: '?raw', import: 'default', eager: true })
   // Rizzo Flow publishes a raster mark: https://github.com/Rizzo-AI-Academy/rizzo-flow/blob/HEAD/docs/assets/logo.webp
-  const images = import.meta.glob('./logos/*.webp', { query: '?url', import: 'default', eager: true })
+  // Nimble uses Bespoke Labs’ favicon: https://framerusercontent.com/images/tBmIC2QpuzBT566Qth8NNaI5CJE.png
+  const images = import.meta.glob('./logos/*.{webp,png}', { query: '?url', import: 'default', eager: true })
   const classifiers = new Set(CLASSIFIERS.map(entry => entry.id))
   const logos = {}
   for (const [path, svg] of Object.entries(files)) {
@@ -29,7 +30,7 @@
   let { provider, size = 16 } = $props()
   const id = $derived(ALIASES[provider] ?? provider?.replace(/^custom-.*/, 'custom'))
   const logo = $derived(logos[id] ?? null)
-  const image = $derived(images[`./logos/${id}.webp`] ?? null)
+  const image = $derived(images[`./logos/${id}.webp`] ?? images[`./logos/${id}.png`] ?? null)
 </script>
 
 {#if logo?.any}

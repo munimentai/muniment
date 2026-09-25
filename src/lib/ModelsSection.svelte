@@ -3,7 +3,7 @@
   // its provider, key or subscription, with its allowance and usage on the
   // card, the provider's models once, the connector that adds a provider, and
   // routing controls and one shared model catalog.
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import SettingsTabs from './SettingsTabs.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
@@ -133,6 +133,16 @@
     } catch (error) {
       status = String(error?.message ?? error)
     }
+  }
+
+  // Each settings subpage starts at its heading, independent of catalog scroll.
+  function resetPageScroll(node) {
+    const reset = () => {
+      const scroll = node.closest('[data-panel-scroll]')
+      if (scroll) scroll.scrollTop = 0
+    }
+    void tick().then(reset)
+    return { update() { void tick().then(reset) } }
   }
 
   function openConnector() {
@@ -342,7 +352,7 @@
   }
 </script>
 
-<div class="models">
+<div class="models" use:resetPageScroll={[view, tab, providerId, classifierId].join(':')} class:connecting={view !== 'list'}>
   {#if view === 'list'}
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
@@ -413,6 +423,7 @@
       {#if view === 'connect'}
         <h4>Connect account</h4>
       {:else if view === 'classifier'}
+        <ProviderLogo provider={classifierId} size={20} />
         <h4>Connect {classifierEntry?.name}</h4>
       {:else}
         <ProviderLogo provider={providerId} size={18} />
@@ -527,6 +538,7 @@
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
   .models { display: grid; gap: 28px; align-content: start; }
+  .models.connecting { gap: 16px; }
   .account-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 28px; padding: 3px 4px; }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
