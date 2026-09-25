@@ -10,7 +10,7 @@ import { isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } fr
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signature.mjs'
 import { host } from './e2e/runner/subscription-host.mjs'
-import { guest, selectAssets } from './e2e/runner/subscription-guest.mjs'
+import { guest, selectAssets, defaultArtifactsDir } from './e2e/runner/subscription-guest.mjs'
 
 const sourceSha = 'a'.repeat(40)
 const bytes = Buffer.from('signed package fixture')
@@ -426,6 +426,101 @@ test('the guest publishes blocked cases when models are missing', async () => {
     assert.equal(await guest({ sourceSha, platform: 'windows', output: root, leases: '', models: '[]', repository: 'owner/repo', token: 't' }), 1)
     assert.match(JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json'))).cases[0].reason, /FACTORY_SUBSCRIPTION_LEASES/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('the guest defaults artifacts to the desktop-ci collection directory', async () => {
+  assert.equal(defaultArtifactsDir({ TEMP: path.join('C:', 'Temp') }, 'win32'), path.join('C:', 'Temp', 'dci-artifacts'))
+  assert.equal(defaultArtifactsDir({ TMP: path.join('C:', 'Temp') }, 'win32'), path.join('C:', 'Temp', 'dci-artifacts'))
+  assert.equal(defaultArtifactsDir({ TMPDIR: '/other', OUTPUT: '/out' }, 'linux'), '/tmp/dci-artifacts')
+  assert.equal(defaultArtifactsDir({ TMPDIR: '/other' }, 'darwin'), '/tmp/dci-artifacts')
+  assert.equal(defaultArtifactsDir({ DCI_ARTIFACTS_DIR: '/custom', TEMP: path.join('C:', 'Temp'), OUTPUT: '/out' }, 'win32'), '/custom')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-default-'))
+  try {
+    const temp = path.join(root, 'Temp')
+    fs.mkdirSync(temp)
+    assert.equal(await guest({
+      sourceSha, platform: 'windows', leases: '', models: '[]', repository: 'owner/repo', token: 'secret-token',
+      env: { TEMP: temp }, runtime: 'win32',
+    }), 1)
+    const output = path.join(temp, 'dci-artifacts')
+    const proof = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'), 'utf8'))
+    assert.match(proof.cases[0].reason, /FACTORY_SUBSCRIPTION_LEASES/)
+    assert.equal(JSON.stringify(proof).includes('secret-token'), false)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('the guest loads the nightly package through the GitHub REST API', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-fetch-'))
+  const token = 'secret-token-value'
+  const repository = 'munimentai/muniment'
+  const packageName = `nightly-${sourceSha}-linux-muniment_1.0.0_amd64.AppImage`
+  const release = { assets: [{ name: packageName, id: 101 }, { name: `${packageName}.sig`, id: 202 }] }
+  const calls = []
+  const previousFetch = globalThis.fetch
+  const previousError = console.error
+  const previousUser = process.env.MUNIMENT_NATIVE_DISPOSABLE_USER
+  const logs = []
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), headers: init?.headers ?? {} })
+    const href = String(url)
+    if (href === `https://api.github.com/repos/${repository}/releases/tags/nightly`) {
+      return { ok: true, json: async () => release }
+    }
+    if (href === `https://api.github.com/repos/${repository}/releases/assets/101`) {
+      return { ok: true, arrayBuffer: async () => Buffer.from('package-bytes') }
+    }
+    if (href === `https://api.github.com/repos/${repository}/releases/assets/202`) {
+      return { ok: true, arrayBuffer: async () => Buffer.from('signature-bytes') }
+    }
+    throw new Error(`unexpected ${href}`)
+  }
+  console.error = message => { logs.push(String(message)) }
+  try {
+    assert.equal(await guest({
+      sourceSha, platform: 'linux', output: root, leases: JSON.stringify([lease]),
+      models: JSON.stringify(models), repository, token,
+    }), 1)
+    assert.equal(calls.length, 3)
+    assert.equal(calls[0].url, `https://api.github.com/repos/${repository}/releases/tags/nightly`)
+    assert.equal(calls[0].headers.Authorization, `Bearer ${token}`)
+    for (const call of calls.slice(1)) {
+      assert.match(call.url, /^https:\/\/api\.github\.com\/repos\/munimentai\/muniment\/releases\/assets\/(101|202)$/)
+      assert.equal(call.headers.Authorization, `Bearer ${token}`)
+      assert.equal(call.headers.Accept, 'application/octet-stream')
+    }
+    const proof = fs.readFileSync(path.join(root, 'release-acceptance.json'), 'utf8')
+    assert.equal(proof.includes(token), false)
+    assert.equal(logs.join('\n').includes(token), false)
+    const source = fs.readFileSync('test/e2e/runner/subscription-guest.mjs', 'utf8')
+    assert.equal(source.includes("spawnSync('gh'"), false)
+    assert.match(source, /api\.github\.com/)
+    calls.length = 0
+    globalThis.fetch = async (_url, init) => {
+      throw new Error(`401 ${init.headers.Authorization}`)
+    }
+    assert.equal(await guest({
+      sourceSha, platform: 'linux', output: root, leases: JSON.stringify([lease]),
+      models: JSON.stringify(models), repository, token,
+    }), 1)
+    const blockedProof = JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json'), 'utf8'))
+    assert.match(blockedProof.cases[0].reason, /signed nightly package/)
+    assert.equal(JSON.stringify(blockedProof).includes(token), false)
+    assert.equal(logs.join('\n').includes(token), false)
+    globalThis.fetch = async () => ({ ok: false, json: async () => ({ message: token }) })
+    assert.equal(await guest({
+      sourceSha, platform: 'linux', output: root, leases: JSON.stringify([lease]),
+      models: JSON.stringify(models), repository, token,
+    }), 1)
+    const failedProof = JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json'), 'utf8'))
+    assert.match(failedProof.cases[0].reason, /signed nightly package/)
+    assert.equal(JSON.stringify(failedProof).includes(token), false)
+  } finally {
+    globalThis.fetch = previousFetch
+    console.error = previousError
+    if (previousUser === undefined) delete process.env.MUNIMENT_NATIVE_DISPOSABLE_USER
+    else process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = previousUser
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('the workflow runs a native job per platform and uploads release-acceptance', () => {
