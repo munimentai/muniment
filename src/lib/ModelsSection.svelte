@@ -69,7 +69,6 @@
       .filter((family) => !needle || familyName(family).toLowerCase().includes(needle))
   })
 
-  $effect(() => { void load() })
   let refreshingAccounts = $state(false)
   let refreshError = $state('')
   let closed = false
@@ -85,7 +84,7 @@
   }
   onMount(() => {
     closed = false
-    void loadRouter().then(refreshAccounts)
+    void load().then(refreshAccounts)
     const timer = setInterval(() => { void refreshAccounts() }, 120_000)
     const resume = () => { if (!document.hidden) void refreshAccounts() }
     document.addEventListener('visibilitychange', resume)

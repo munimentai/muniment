@@ -6,6 +6,7 @@
   let query = $state('')
   let error = $state('')
   let pending = $state(false)
+  let visibility = $state({})
   let editing = $state('')
   let statement = $state('')
   const groups = $derived(pickerGroups(inventory ? { ...inventory, hidden: [] } : null, query).filter((group) => !group.classifier))
@@ -22,6 +23,32 @@
       editing = ''
     } catch (failure) { error = String(failure?.message ?? failure) }
     finally { pending = false }
+  }
+  async function setShown(model, shown) {
+    const key = modelKey(model.provider, model.choice)
+    visibility = { ...visibility, [key]: shown }
+    error = ''
+    try {
+      await tauri.invoke('local_mode_set_model_hidden', { provider: model.provider, model: model.choice, hidden: !shown })
+      const next = { ...inventory, hidden: (inventory?.hidden ?? []).filter(entry => entry !== key) }
+      if (!shown) next.hidden.push(key)
+      inventory = next
+      oninventory?.(next)
+      // Hiding the saved default must also update the runtime's choice.
+      if (!shown && modelKey(next.default_provider, next.default_model) === key) {
+        const fallback = currentModel(next)
+        if (fallback) {
+          await tauri.invoke('local_mode_set_default_model', { provider: fallback.provider, model: fallback.model })
+          inventory = { ...inventory, default_provider: fallback.provider, default_model: fallback.model }
+          oninventory?.(inventory)
+        }
+      }
+    } catch (failure) { error = String(failure?.message ?? failure) }
+    finally {
+      const remaining = { ...visibility }
+      delete remaining[key]
+      visibility = remaining
+    }
   }
   function saveStatement(route) {
     const routes = (settings.routes ?? []).filter((entry) => entry.family !== route.family || entry.model !== route.model)
@@ -41,12 +68,13 @@
         {@const route = routeFor(model)}
         {@const provider = route && settings?.enabled ? 'muniment-router' : model.provider}
         {@const choice = route && settings?.enabled ? route.key : model.choice}
-        {@const shown = !hidden.has(modelKey(model.provider, model.choice))}
+        {@const key = modelKey(model.provider, model.choice)}
+        {@const shown = visibility[key] ?? !hidden.has(key)}
         <div class="model">
           <div class="model-row">
             <div class="identity"><span class="model-id">{model.label}</span><span class="meta">{route ? `${model.accounts || 1} ${model.accounts > 1 ? 'accounts' : 'account'}` : 'Direct'}{#if model.context} · {model.context} context{/if}</span></div>
             {#if current?.provider === provider && current?.model === choice}<span class="meta">Selected</span>{:else}<button disabled={pending || !shown} onclick={() => run('local_mode_set_default_model', { provider, model: choice })}>Use</button>{/if}
-            <label class="show"><Toggle checked={shown} disabled={pending} aria-label={`Show ${model.label} in the selector`} onchange={() => run('local_mode_set_model_hidden', { provider: model.provider, model: model.choice, hidden: shown })} />Show</label>
+            <label class="show"><Toggle checked={shown} disabled={pending || key in visibility} aria-label={`Show ${model.label} in the selector`} onchange={shown => setShown(model, shown)} />Show</label>
           </div>
           {#if route}
             <details><summary>Routing statement</summary><p class="statement">{route.description}</p>
