@@ -7,8 +7,10 @@ import { createUpdateFeed } from "./update-feed.mjs";
 import { verifyUpdaterSignature } from "./updater-signature.mjs";
 import { macosArchitectures, macosFormats } from "./macos-variants.mjs";
 const API = "https://api.github.com";
+// Signature tools block the event loop. Close each connection so a later write
+// cannot reuse an idle socket whose remote close has not been processed yet.
 const request = async (fetchImpl, token, url, options = {}) => {
-  const response = await fetchImpl(url, { ...options, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", ...options.headers } });
+  const response = await fetchImpl(url, { ...options, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", ...options.headers, Connection: "close" } });
   if (!response.ok) { const error = new Error(`${options.method ?? "GET"} ${url}: ${response.status} ${await response.text()}`); error.status = response.status; throw error; }
   return response;
 };
