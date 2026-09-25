@@ -27,7 +27,7 @@
 <div class="field" class:inline bind:this={root}>
   <span>{label}</span>
   <div class="control">
-    <button data-ui-choice class="trigger" type="button" bind:this={trigger} {disabled} aria-label={`${label}: ${selected?.label ?? placeholder}`} aria-haspopup="menu" aria-expanded={open} onclick={show}>
+    <button data-ui-choice type="button" bind:this={trigger} {disabled} aria-label={`${label}: ${selected?.label ?? placeholder}`} aria-haspopup="menu" aria-expanded={open} onclick={show}>
       {#if selected?.provider}<ProviderLogo provider={selected.provider} size={16} />{/if}<span>{selected?.label ?? placeholder}</span><LucideIcon name="chevron-down" size={14} variant="action" />
     </button>
     {#if open}<div class="choices" role="menu" aria-label={label}>

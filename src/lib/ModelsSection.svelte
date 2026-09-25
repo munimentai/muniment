@@ -419,7 +419,7 @@
     </header>
     {#if view === 'connect'}
       <SearchToolbar label="Search providers" placeholder="Search providers" bind:value={providerQuery} />
-      {#each [['Popular & Subscriptions', catalog.popular], ['Classifiers', searchClassifiers(providerQuery)], ['All Pi providers', catalog.other]] as [group, entries]}
+      {#each [['Popular & Subscriptions', catalog.popular], ['Classifiers', searchClassifiers(providerQuery)], ['All providers', catalog.other]] as [group, entries]}
         {#if entries.length}
           <h5 class="group-label">{group}</h5>
           <ul class="provider-list">

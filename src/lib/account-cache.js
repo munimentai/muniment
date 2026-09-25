@@ -13,7 +13,8 @@ export function accountCache(tauri) {
     if (reading) return reading
     const started = version
     reading = Promise.resolve().then(() => tauri.invoke('model_router_settings')).then(settings => {
-      if (started === version && settings?.accounts) set(settings)
+      if (!Array.isArray(settings?.accounts)) throw new Error('Invalid account list')
+      if (started === version) set(settings)
       return current.settings
     }).catch(() => {
       publish({ error: 'Muniment could not read routing settings. Try again.' })
@@ -29,6 +30,7 @@ export function accountCache(tauri) {
       const started = version
       try {
         const fresh = await tauri.invoke('model_router_refresh_quota', { id: null })
+        if (!Array.isArray(fresh?.accounts)) throw new Error('Invalid account list')
         if (started === version) {
           set({ ...current.settings, accounts: fresh.accounts })
           publish({ refreshError: '' })

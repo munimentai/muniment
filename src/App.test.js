@@ -1443,11 +1443,11 @@ describe('workspace composer entry', () => {
     render(App)
     const dialog = await openSettings()
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect account' }))
-    expect(within(dialog).getByRole('heading', { name: 'Popular' })).toBeInTheDocument()
-    expect(within(dialog).getByRole('heading', { name: 'Other' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: 'Popular & Subscriptions' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: 'All providers' })).toBeInTheDocument()
     // The featured eight lead, in the SPEC order.
-    const popular = within(dialog).getByRole('heading', { name: 'Popular' }).nextElementSibling
-    expect([...popular.querySelectorAll('button')].map((button) => button.querySelector('span:not(.logo)').textContent)).toEqual(['Anthropic', 'OpenAI', 'xAI', 'Google', 'OpenRouter', 'Ollama', 'LM Studio', 'Custom OpenAI-compatible endpoint'])
+    const popular = within(dialog).getByRole('heading', { name: 'Popular & Subscriptions' }).nextElementSibling
+    expect([...popular.querySelectorAll('button')].map((button) => button.querySelector('span:not(.logo)').textContent)).toEqual(['Anthropic', 'OpenAI', 'xAI', 'Google', 'OpenRouter', 'Ollama', 'LM Studio', 'Custom OpenAI-compatible endpoint', 'Meta Muse', 'Devin', 'Kimi', 'vLLM'])
 
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Ollama/ }))
     expect(within(dialog).getByLabelText('Ollama server URL')).toHaveValue('http://localhost:11434/v1')

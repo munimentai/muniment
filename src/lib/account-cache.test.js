@@ -42,3 +42,16 @@ it('retains last values after failure and does not let an old read undo an accou
   await pending
   expect(cache.current.settings).toBe(edited)
 })
+
+it('rejects malformed account reads and refreshes without replacing the last snapshot', async () => {
+  const saved = { accounts: [{ id: 'saved', allowance_readable: true }] }
+  const bridge = { invoke: vi.fn(async () => ({ accounts: {} })) }
+  const cache = accountCache(bridge)
+  cache.set(saved)
+  await cache.read()
+  expect(cache.current.settings).toBe(saved)
+  expect(cache.current.error).toBeTruthy()
+  await cache.refresh()
+  expect(cache.current.settings).toBe(saved)
+  expect(cache.current.refreshError).toBeTruthy()
+})

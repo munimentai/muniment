@@ -73,7 +73,7 @@
       <div class="filter-fields" id="model-filters">
         <ChoiceField label="Minimum context" value={minContext} inline={false} options={[{value:'0',label:'Any size'},{value:'32000',label:'32K+'},{value:'128000',label:'128K+'},{value:'200000',label:'200K+'},{value:'1000000',label:'1M+'}]} onchange={value => minContext = value} />
         <SegmentedField label="Visibility" value={shownOnly ? 'enabled' : 'all'} options={[{value:'all',label:'All models'},{value:'enabled',label:'Enabled'}]} onchange={value => shownOnly = value === 'enabled'} />
-        <div class="capability-filter"><span title="Only models with reported support match these filters.">Capabilities</span><div class="capability-options">
+        <div class="capability-filter"><span>Capabilities</span><div class="capability-options">
           <Button icon="eye" variant="capability" aria-pressed={vision} onclick={() => vision = !vision}>Vision</Button>
           <Button icon="brain" variant="capability" aria-pressed={reasoning} onclick={() => reasoning = !reasoning}>Reasoning</Button>
         </div></div>
