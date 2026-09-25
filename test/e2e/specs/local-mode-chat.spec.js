@@ -3,17 +3,12 @@ import { access, readFile } from 'node:fs/promises'
 import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'
 import { piAgentDirectory } from '../support/pi-agent-directory.mjs'
 import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
+import { readPins } from '../../../scripts/check-agent-dependencies.mjs'
 
 async function checkCandidatePackages() {
   if (process.env.MUNIMENT_PI_CANDIDATE !== '1') return
   const agentDirectory = piAgentDirectory()
-  const packages = [
-    ['pi-web-access', '0.30.0'],
-    ['pi-subagents', '0.71.0'],
-    ['pi-background-tasks', '2.5.0'],
-    ['pi-mcp-adapter', '2.37.0'],
-    ['pi-claude-bridge', '0.8.0'],
-  ]
+  const packages = Object.entries(readPins().packages)
   const settings = JSON.parse(await readFile(path.join(agentDirectory, 'settings.json'), 'utf8'))
   expect(settings.packages).toEqual(packages.map(([name, version]) => `npm:${name}@${version}`))
   expect(settings.defaultTools).toEqual(['read', 'bash', 'powershell', 'edit', 'write', 'grep', 'find', 'ls'])
