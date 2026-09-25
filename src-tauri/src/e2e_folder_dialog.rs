@@ -90,7 +90,12 @@ fn poll(home: String) -> Result<bool, String> {
                     "The Home picker needs Accessibility trust for the app process, and AXIsProcessTrusted reads false.".into(),
                 );
             }
-            app.activate();
+            // The WebDriver client owns focus before this command. Cooperative
+            // activation alone may leave the visible panel without a key window.
+            // This runs only in the E2E build, after validating the native picker.
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
+            panel.makeKeyAndOrderFront(None);
             *slot = Some(Drive {
                 panel,
                 home: home.clone(),
