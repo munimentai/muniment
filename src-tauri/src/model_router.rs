@@ -4,6 +4,9 @@
 //! A credential enters through here and never leaves. The settings this
 //! answers with carry an account's source and its counters, never its key.
 
+mod connections;
+pub(crate) use connections::*;
+
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -162,6 +165,7 @@ pub(crate) struct RouterSettings {
     fallback: Option<String>,
     min_confidence: f64,
     classifier: ClassifierView,
+    classifier_connections: Vec<connections::ConnectionView>,
     served_models: Vec<String>,
 }
 
@@ -213,7 +217,8 @@ fn account_view(
             Some("Account weight is zero.")
         } else if !account.credential.servable() {
             Some("This subscription transport is not supported.")
-        } else if usage.is_some_and(|usage| !usage.available(chrono::Utc::now().timestamp_millis())) {
+        } else if usage.is_some_and(|usage| !usage.available(chrono::Utc::now().timestamp_millis()))
+        {
             Some("Account is temporarily unavailable.")
         } else {
             None
@@ -366,6 +371,7 @@ fn settings(
         fallback: config.fallback.clone(),
         min_confidence: config.min_confidence,
         classifier: classifier_view(&config.classifier),
+        classifier_connections: connections::views(agent, &config.classifier)?,
         served_models: served_models(&config),
     })
 }
@@ -757,13 +763,20 @@ pub(crate) async fn model_router_test_classifier() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub(crate) async fn model_router_test_route(app: tauri::AppHandle, sample: String) -> Result<server::RouteTest, String> {
+pub(crate) async fn model_router_test_route(
+    app: tauri::AppHandle,
+    sample: String,
+) -> Result<server::RouteTest, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<RouterState>();
         let held = state.0.lock().map_err(|_| "Cannot reach the router.")?;
-        let handle = held.as_ref().ok_or("Turn on account balancing before testing routing.")?;
+        let handle = held
+            .as_ref()
+            .ok_or("Turn on account balancing before testing routing.")?;
         handle.test_route(&sample)
-    }).await.map_err(|_| "The routing test did not finish.".to_string())?
+    })
+    .await
+    .map_err(|_| "The routing test did not finish.".to_string())?
 }
 
 /// Lifts the credential a pool sign-in left in its scratch directory into the
@@ -838,7 +851,8 @@ pub(crate) fn import_credential<R: tauri::Runtime>(
 /// upstream said anything.
 pub(crate) fn refresh_quota(agent: &Path, id: &str) -> Result<bool, String> {
     let now = chrono::Utc::now().timestamp_millis();
-    let account = muniment_core::model_router::native_auth::refresh_account(agent, id, now, quota::TIMEOUT)?;
+    let account =
+        muniment_core::model_router::native_auth::refresh_account(agent, id, now, quota::TIMEOUT)?;
     let original = account.credential.clone();
     let probed = quota::probe(&account, now, quota::TIMEOUT);
     save_probe(agent, id, &original, account.credential.clone(), probed)
@@ -869,9 +883,14 @@ fn save_probe(
     };
     // What the upstream said about the account itself outlives the probe: the
     // email names an account the sign-in left unnamed, and the plan is shown.
-    let placeholder = account.label.rsplit_once(" account ").is_some_and(|(prefix, suffix)| {
-        suffix.parse::<usize>().is_ok() && muniment_core::model_router::family::family(&account.family).is_some_and(|f| f.name == prefix)
-    });
+    let placeholder = account
+        .label
+        .rsplit_once(" account ")
+        .is_some_and(|(prefix, suffix)| {
+            suffix.parse::<usize>().is_ok()
+                && muniment_core::model_router::family::family(&account.family)
+                    .is_some_and(|f| f.name == prefix)
+        });
     if let Credential::Subscription { email, plan, .. } = &mut account.credential {
         if email.is_none() && probed.email.is_some() {
             *email = probed.email.clone();

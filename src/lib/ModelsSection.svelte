@@ -9,7 +9,8 @@
   import ModelAccounts from './ModelAccounts.svelte'
   import ModelRouterSection from './ModelRouterSection.svelte'
   import ModelCatalog from './ModelCatalog.svelte'
-  import RoutingTest from './RoutingTest.svelte'
+  import ClassifierConnection from './ClassifierConnection.svelte'
+  import { CLASSIFIERS, searchClassifiers } from './classifier-connections.js'
   import ProviderLogo from './ProviderLogo.svelte'
   import { catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders, sourceTag } from './provider-catalog.js'
 
@@ -31,6 +32,8 @@
   let routerError = $state('')
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
+  let classifierId = $state('')
+  const classifierEntry = $derived(CLASSIFIERS.find(entry => entry.id === classifierId))
   let providerId = $state('')
   let method = $state('')
   let providerQuery = $state('')
@@ -160,7 +163,7 @@
     if (login?.stage && login.stage !== 'done' && login.stage !== 'failed' && login.stage !== 'cancelled') void cancelLogin()
     login = null
     formError = ''
-    view = view === 'method' ? origin : 'list'
+    view = view === 'classifier' ? 'connect' : view === 'method' ? origin : 'list'
   }
 
   async function finishConnect(message) {
@@ -175,7 +178,7 @@
     pending = true
     formError = ''
     try {
-      await tauri.invoke('local_mode_store_provider_key', { provider: providerId, key })
+      await tauri.invoke('local_mode_store_provider_key', { provider: provider.keyProvider ?? providerId, key })
       key = ''
       await finishConnect(`Muniment saved the ${provider.name} key.`)
     } catch (error) {
@@ -207,7 +210,7 @@
     try {
       await tauri.invoke('local_mode_store_endpoint', {
         kind: providerId === 'lmstudio' ? 'lmstudio' : 'custom',
-        name: providerId === 'lmstudio' ? 'LM Studio' : endpointName.trim(),
+        name: providerId === 'custom' ? endpointName.trim() : provider.name,
         baseUrl,
         key,
         models,
@@ -350,9 +353,9 @@
       <p class="support" role="alert">{routerError}</p>
       <button type="button" onclick={loadRouter}>Retry routing settings</button>
     {:else if router}
-      <ModelRouterSection {tauri} settings={router} {inventory} onsettings={onRouterSettings} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
+      <ModelRouterSection onconnect={() => { tab = 'accounts'; openConnector() }} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
     {:else}<p class="support" role="status">Reading routing settings…</p>{/if}
-    <details class="routing-test"><summary>Test routing</summary><RoutingTest {tauri} settings={router} /></details>
+
     {:else if tab === 'accounts'}
     <section class="accounts-section" aria-label="Accounts">
     {#if refreshingAccounts}<p class="support" role="status">Refreshing allowances…</p>{/if}
@@ -362,6 +365,16 @@
       <button type="button" class="connect" onclick={openConnector}><LucideIcon name="plus" variant="action" size={14} />Connect account</button>
     </header>
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
+    {#if router?.classifier_connections?.length}
+      <section class="provider-group" aria-label="Connected classifiers">
+        <header><h5>Classifiers</h5></header>
+        {#each router.classifier_connections as connection (connection.id)}
+          <div class="account-row"><strong>{connection.name}</strong><span class="tag">{connection.active ? 'Selected for routing' : 'Connected'}</span>
+            <button type="button" class="quiet" onclick={async () => { try { router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }) } catch (error) { status = String(error?.message ?? error) } }}>Disconnect {connection.name}</button>
+          </div>
+        {/each}
+      </section>
+    {/if}
     {#each shownProviders as entry (entry.id)}
       <section class="provider-group" aria-label={entry.name}>
         <header>
@@ -399,6 +412,8 @@
       <button type="button" class="quiet back" aria-label="Back" onclick={back}><LucideIcon name="arrow-left" variant="action" size={16} /></button>
       {#if view === 'connect'}
         <h4>Connect account</h4>
+      {:else if view === 'classifier'}
+        <h4>Connect {classifierEntry?.name}</h4>
       {:else}
         <ProviderLogo provider={providerId} size={18} />
         <h4>Connect {provider?.name}</h4>
@@ -409,16 +424,18 @@
         <LucideIcon name="search" variant="action" size={14} />
         <input type="search" aria-label="Search providers" placeholder="Search providers" bind:value={providerQuery}>
       </div>
-      {#each [['Popular & Subscriptions', catalog.popular], ['Other', catalog.other]] as [group, entries]}
+      {#each [['Popular & Subscriptions', catalog.popular], ['Classifiers', searchClassifiers(providerQuery)], ['All Pi providers', catalog.other]] as [group, entries]}
         {#if entries.length}
           <h5 class="group-label">{group}</h5>
           <ul class="provider-list">
             {#each entries as entry (entry.id)}
-              <li><button type="button" class="quiet provider-row" onclick={() => chooseProvider(entry.id)}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span><span class="tag">{entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
+              <li><button type="button" class="quiet provider-row" onclick={() => { if (group === 'Classifiers') { classifierId = entry.id; view = 'classifier' } else chooseProvider(entry.id) }}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span> <span class="tag">{group === 'Classifiers' ? (entry.id === 'jev' ? 'Hosted API' : entry.compatible ? 'Local or hosted server · Download' : 'Adapter required · Download') : entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
             {/each}
           </ul>
         {/if}
       {/each}
+    {:else if view === 'classifier' && classifierEntry}
+      <ClassifierConnection entry={classifierEntry} {tauri} onconnected={next => { router = next; status = 'Classifier connected. Select it in Routing.'; view = 'list'; tab = 'accounts' }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
       <label for="provider-key">{provider.name} API key</label>
@@ -432,7 +449,7 @@
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
     {:else if method === 'endpoint'}
-      <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : 'a LiteLLM proxy or another gateway.'}</p>
+      <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : provider.id === 'vllm' ? 'a running vLLM server.' : 'a LiteLLM proxy or another gateway.'}</p>
       {#if provider.id === 'custom'}
         <label for="endpoint-name">Name</label>
         <input id="endpoint-name" type="text" bind:value={endpointName} disabled={pending}>
@@ -505,8 +522,6 @@
 </div>
 
 <style>
-  .routing-test { margin-top: 12px; }
-  .routing-test summary { cursor: pointer; color: var(--muted); }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }

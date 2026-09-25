@@ -62,6 +62,19 @@ const KEY_PROVIDERS: &[(&str, &str)] = &[
     ("minimax", "MiniMax"),
     ("qwen-token-plan", "Qwen Token Plan"),
     ("radius", "Radius"),
+    ("xiaomi", "Xiaomi"),
+    ("moonshotai", "Moonshot AI"),
+    ("zai-coding-cn", "ZAI Coding China"),
+    ("xiaomi-token-plan-sgp", "Xiaomi Token Plan Singapore"),
+    ("qwen-token-plan-individual", "Qwen Token Plan Individual"),
+    ("moonshotai-cn", "Moonshot AI China"),
+    ("xiaomi-token-plan-cn", "Xiaomi Token Plan China"),
+    ("xiaomi-token-plan-ams", "Xiaomi Token Plan Amsterdam"),
+    ("typesafe", "TypeSafe"),
+    ("qwen-token-plan-cn", "Qwen Token Plan China"),
+    ("google-vertex", "Google Vertex AI"),
+    ("ant-ling", "Ant Ling"),
+    ("minimax-cn", "MiniMax China"),
 ];
 /// Providers Pi signs into with an account, by Pi id and display name.
 const ACCOUNT_PROVIDERS: &[(&str, &str)] = &[
