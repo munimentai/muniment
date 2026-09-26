@@ -7,6 +7,7 @@ import vm from 'node:vm'
 import https from 'node:https'
 import { spawnSync } from 'node:child_process'
 import { updateFixture } from './e2e/runner/subscription-update.mjs'
+import { awaitUpdateResult, verifyUpdateResult } from './e2e/runner/subscriptions.mjs'
 import { featureChecks } from './e2e/support/subscription-acceptance.mjs'
 
 const nonce = 'MUNIMENT-' + 'a'.repeat(32)
@@ -79,7 +80,13 @@ async function probe(failure) {
     if (command === 'browser_view') return
     if (command === 'browser_command') {
       if (data.request.action === 'navigate') throw new Error('Unsafe URL.')
-      if (data.request.action === 'snapshot') return JSON.stringify({ title: 'Docs', text: 'The local documentation page.', url: 'http://127.0.0.1:1234/docs/' })
+      if (data.request.action === 'snapshot') {
+        state.snapshots = (state.snapshots ?? 0) + 1
+        if (failure === 'loading-forever' || (failure === 'loading-once' && state.snapshots === 1)) throw 'The page is still loading.'
+        if (failure === 'loading-error-once' && state.snapshots === 1) throw new Error('The page is still loading.')
+        if (failure === 'snapshot-failed') throw new Error('The snapshot failed.')
+        return JSON.stringify({ title: 'Docs', text: 'The local documentation page.', url: 'http://127.0.0.1:1234/docs/' })
+      }
       return {}
     }
     if (command === 'terminal_start') { terminalOpen = true; return 'terminal' }
@@ -113,14 +120,17 @@ async function probe(failure) {
     setValue: (_element, value) => { prompt = value }, turns: plan.turns })
   const initial = { ...await run('chat'), ...await run('features') }
   const restart = await run('restart')
-  return { initial: JSON.parse(JSON.stringify(initial)), restart: JSON.parse(JSON.stringify(restart)), state }
+  await assert.rejects(run('update'))
+  const updated = failure === 'subscription_probe_update' ? { 'signed-update': [] } : await run('update-restart')
+  return { initial: JSON.parse(JSON.stringify({ ...initial, 'signed-update': updated['signed-update'] })),
+    restart: JSON.parse(JSON.stringify(restart)), state }
 }
 
 test('the installed feature probe exercises commands and validates their results', async () => {
   const result = await probe()
   for (const [feature, checks] of Object.entries(featureChecks)) {
     if (feature === 'local-startup') continue
-    assert.deepEqual({ ...result.initial, ...result.restart }[feature], checks, feature)
+    assert.deepEqual({ ...result.initial, ...result.restart }[feature], feature === 'signed-update' ? checks.slice(0, -1) : checks, feature)
   }
   assert.equal(result.state.content, `${fileNonce}\nEdited\n`)
   assert.equal(result.state.profile, '')
@@ -142,6 +152,104 @@ for (const [failure, feature] of [
   assert.deepEqual({ ...result.initial, ...result.restart }[feature], [])
   assert.equal(JSON.stringify(result.initial).includes('private provider error'), false)
   if (feature !== 'projects') assert.deepEqual(result.initial.projects, featureChecks.projects)
+})
+
+for (const failure of ['loading-once', 'loading-error-once']) {
+  test(`the browser probe retries ${failure}`, async () => {
+    const result = await probe(failure)
+    assert.deepEqual(result.initial.browser, featureChecks.browser)
+    assert.equal(result.state.snapshots, 2)
+  })
+}
+
+for (const [failure, attempts] of [['loading-forever', 10], ['snapshot-failed', 1]]) {
+  test(`the browser probe blocks ${failure} and closes the view`, async () => {
+    const result = await probe(failure)
+    assert.deepEqual(result.initial.browser, [])
+    assert.equal(result.state.snapshots, attempts)
+    assert.equal(result.state.commands.filter(command => command === 'browser_view').length, 2)
+  })
+}
+
+test('the update probe requires a new process, restored profile, and the candidate payload', async () => {
+  const turns = [{ thread: 'thread', run: 'chat' }]
+  const valid = { pid: 200, update_parent_pid: 100, passed: true, phase: 'update-restart', source_sha: 'a'.repeat(40), webdriver: false, turns,
+    features: { 'signed-update': featureChecks['signed-update'].slice(0, -1) } }
+  let verified = 0
+  const verify = result => verifyUpdateResult(result, 100, valid.source_sha, turns, () => { verified++ })
+  assert.deepEqual(verify(structuredClone(valid)).features['signed-update'], featureChecks['signed-update'])
+  assert.equal(verified, 1)
+  for (const change of [
+    { passed: false }, { passed: 'true' }, { phase: 'update' }, { pid: 100 }, { pid: 0 },
+    { pid: 2.5 }, { pid: '200' }, { pid: 2147483648 }, { update_parent_pid: 200 }, { update_parent_pid: undefined },
+    { source_sha: 'b'.repeat(40) }, { webdriver: true }, { turns: [] },
+    { features: { 'signed-update': [] } },
+    { features: { 'signed-update': featureChecks['signed-update'].slice(0, 3) } },
+  ]) assert.throws(() => verify({ ...structuredClone(valid), ...change }))
+  assert.equal(verified, 1)
+  const changedPayload = structuredClone(valid)
+  assert.throws(() => verifyUpdateResult(changedPayload, 100, valid.source_sha, turns, () => {
+    throw new Error('The candidate digest does not match.')
+  }))
+  assert.equal(changedPayload.features['signed-update'].includes('candidate-digest-verified'), false)
+})
+
+for (const mode of ['failed-install', 'returned-without-restart']) {
+  test(`the installed webview blocks ${mode}`, async () => {
+    const turns = Array.from({ length: 4 }, (_, index) => ({ thread: 'thread', run: `chat-${index}` }))
+    let observed, installs = 0
+    const context = { window: { __MUNIMENT_SUBSCRIPTION_PLAN__: { phase: 'update', acceptance: true, turns, nonce },
+      __TAURI__: { core: { invoke: async (command, data) => {
+        if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
+        if (command === 'chat_current_thread') return 'thread'
+        if (command === 'subscription_probe_update') {
+          installs++
+          if (mode === 'failed-install') throw new Error('The installation failed.')
+          return
+        }
+        if (command === 'subscription_probe_observed') { observed = data; return }
+        assert.fail(`Unexpected command: ${command}`)
+      } } } },
+      document: { querySelector: () => ({ getClientRects: () => [1] }),
+        querySelectorAll: () => turns.map(() => ({ getClientRects: () => [1], querySelector: () => ({ textContent: nonce }) })) },
+    }
+    vm.createContext(context)
+    vm.runInContext(fs.readFileSync('test/e2e/support/subscription-features.js', 'utf8'), context)
+    await vm.runInContext(fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8'), context)
+    assert.equal(installs, 1)
+    assert.equal(observed.passed, false)
+    assert.deepEqual(Object.keys(observed.features), [])
+  })
+}
+
+test('the update wait blocks a missing relaunch and reports a failed installation', async () => {
+  let clock = 0
+  const options = { now: () => clock, wait: async ms => { clock += ms }, timeout: 1000 }
+  await assert.rejects(awaitUpdateResult(() => false, options), /did not restart/)
+  assert.equal(clock, 1000)
+  const failed = { passed: false, pid: 100, features: {} }
+  assert.equal(await awaitUpdateResult(() => failed, options), failed)
+  assert.throws(() => verifyUpdateResult(failed, 100, 'a'.repeat(40), [], () => assert.fail('Unexpected payload check.')))
+  clock = 0
+  const restarted = { passed: true, pid: 200 }
+  assert.equal(await awaitUpdateResult(() => clock >= 500 && restarted, options), restarted)
+  assert.equal(clock, 500)
+})
+
+test('the installed probe uses production update commands and retains Windows installer selection', () => {
+  const probe = fs.readFileSync('src-tauri/src/subscription_probe.rs', 'utf8')
+  const production = fs.readFileSync('src-tauri/src/app_update.rs', 'utf8')
+  assert.match(probe, /app_update_prepare\(app\.clone\(\), state\.clone\(\)\)/)
+  assert.match(probe, /app_update_install\(app\.clone\(\), activity, state\)/)
+  assert.match(probe, /mark_active_run\(\)/)
+  assert.doesNotMatch(probe, /\.updater_builder\(\)/)
+  assert.match(production, /builder\.target\(windows_update_target\(\)\?\)/)
+  assert.match(production, /ready\.0\.install\(&ready\.1\)/)
+  assert.match(production, /app\.restart\(\)/)
+  for (const file of ['per-user.wxs', 'per-machine.wxs']) {
+    const installer = fs.readFileSync(`src-tauri/windows/${file}`, 'utf8')
+    assert.match(installer, /AUTOLAUNCHAPP AND NOT \(REMOVE = "ALL"\) AND \(NOT Installed OR REINSTALL\)/)
+  }
 })
 
 test('the MCP fixture returns a token only through the declared tool', () => {
@@ -169,16 +277,20 @@ test('the MCP fixture returns a token only through the declared tool', () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('the update fixture serves pinned bytes and a damaged copy over loopback TLS', async () => {
+for (const [platform, target] of Object.entries({ linux: 'linux-x86_64', windows: 'windows-x86_64-msi-user',
+  'macos-arm64': 'darwin-aarch64', 'macos-x64': 'darwin-x86_64' })) test(`the ${platform} update fixture serves pinned bytes and a damaged copy over loopback TLS`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-update-test-'))
   let server
   try {
     const bytes = Buffer.from('signed package')
-    await assert.rejects(updateFixture(root, Buffer.alloc(0), 'signature', '1.0.0'))
-    await assert.rejects(updateFixture(root, bytes, '', '1.0.0'))
-    await assert.rejects(updateFixture(root, bytes, 'signature', 'invalid'))
+    await assert.rejects(updateFixture(root, Buffer.alloc(0), 'signature', '1.0.0', 'linux'))
+    await assert.rejects(updateFixture(root, bytes, '', '1.0.0', 'linux'))
+    await assert.rejects(updateFixture(root, bytes, 'signature', 'invalid', 'linux'))
+    for (const platform of ['unknown', 'toString', '__proto__', undefined]) {
+      await assert.rejects(updateFixture(root, bytes, 'signature', '1.0.0', platform))
+    }
     assert.deepEqual(fs.readdirSync(root), [])
-    server = await updateFixture(root, bytes, 'signature', '1.0.0')
+    server = await updateFixture(root, bytes, 'signature', '1.0.0', platform)
     const get = url => new Promise((resolve, reject) => {
       https.get(url, { rejectUnauthorized: false }, response => {
         const chunks = []
@@ -189,8 +301,10 @@ test('the update fixture serves pinned bytes and a damaged copy over loopback TL
     const manifest = JSON.parse((await get(server.url)).toString())
     assert.equal(new URL(server.url).hostname, '127.0.0.1')
     assert.equal(manifest.version, '1.0.0')
-    assert.equal(manifest.signature, 'signature')
-    assert.deepEqual(await get(manifest.url), bytes)
+    assert.deepEqual(Object.keys(manifest.platforms), [target])
+    assert.equal(manifest.url, undefined)
+    assert.equal(manifest.platforms[target].signature, 'signature')
+    assert.deepEqual(await get(manifest.platforms[target].url), bytes)
     const damaged = await get(new URL('/tampered', server.url))
     assert.equal(damaged.length, bytes.length)
     assert.notDeepEqual(damaged, bytes)

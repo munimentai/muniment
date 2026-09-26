@@ -290,7 +290,7 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
   })
 }
 
-for (const phase of ['features', 'restart']) {
+for (const phase of ['features', 'restart', 'update', 'update-restart']) {
   test(`the ${phase} launch restores four replies without sending another chat`, async () => {
     let observed, checked = false
     const turns = fixture().result.turns.map(({ requested, expected, ...turn }) => turn)

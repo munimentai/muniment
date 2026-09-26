@@ -60,6 +60,7 @@ fn restart_muniment(app: tauri::AppHandle) {
 }
 
 pub fn run() {
+    subscription_probe::restore_profile();
     #[cfg(feature = "cef-smoke")]
     for arg in std::env::args() {
         if let Some(root) = arg.strip_prefix("--cef-smoke-state=") {

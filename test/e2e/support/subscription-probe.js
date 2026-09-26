@@ -5,7 +5,8 @@
   window.__munimentSubscriptionProbeStarted = true
   const plan = window.__MUNIMENT_SUBSCRIPTION_PLAN__
   const invoke = window.__TAURI__.core.invoke
-  const turns = ['features', 'restart'].includes(plan.phase) ? plan.turns : []
+  const restored = ['features', 'restart', 'update', 'update-restart'].includes(plan.phase)
+  const turns = restored ? plan.turns : []
   let features = {}
   const visible = element => element && element.getClientRects().length > 0
   const wait = async predicate => {
@@ -27,7 +28,7 @@
       const status = await invoke('attach_listener_status')
       return status.supervisor_running === true && status.connected === true
     })
-    for (let index = 0; !['features', 'restart'].includes(plan.phase) && index < plan.models.length; index++) {
+    for (let index = 0; !restored && index < plan.models.length; index++) {
       const model = plan.models[index]
       if (index > 0) {
         const chip = await wait(() => document.querySelector('.model-chip'))
@@ -72,7 +73,7 @@
       })
       turns.push({ index, thread, run: entry.runId, rendered: true, context: true })
     }
-    if (['features', 'restart'].includes(plan.phase)) {
+    if (restored) {
       await wait(async () => {
         if (await invoke('chat_current_thread') !== turns[0].thread) return false
         const responses = [...document.querySelectorAll('.response')].filter(response =>

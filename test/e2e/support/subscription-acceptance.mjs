@@ -10,7 +10,7 @@ export const featureChecks = {
   mcp: ['server-connected', 'tool-discovered', 'tool-completed'],
   files: ['file-read', 'file-edit-saved', 'stale-edit-rejected'],
   'restart-persistence': ['thread-restored', 'model-restored', 'file-restored', 'settings-restored'],
-  'signed-update': ['signature-verified', 'tampered-package-rejected', 'signed-version-verified'],
+  'signed-update': ['signature-verified', 'tampered-package-rejected', 'signed-version-verified', 'busy-install-rejected', 'app-relaunched', 'profile-restored', 'candidate-digest-verified'],
   'local-startup': ['composer-visible', 'runtime-connected'],
   projects: ['project-created', 'project-renamed'],
   memory: ['profile-saved', 'profile-restored'],

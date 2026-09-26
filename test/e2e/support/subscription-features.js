@@ -11,7 +11,11 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     features[name] = []
     try { features[name] = await action() } catch { /* Keep provider errors out of evidence. */ }
   }
-  if (plan.phase === 'restart') {
+  if (plan.phase === 'update') {
+    await invoke('subscription_probe_update')
+    throw new Error('The updated app did not restart.')
+  }
+  if (['restart', 'update-restart'].includes(plan.phase)) {
     await run('restart-persistence', async () => {
       const thread = await invoke('chat_current_thread')
       check(thread === plan.turns[0].thread)
@@ -25,6 +29,10 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
       check(settings.accounts[0]?.label === 'Acceptance account')
       return ['thread-restored', 'model-restored', 'file-restored', 'settings-restored']
     })
+    if (plan.phase === 'update-restart') {
+      features['signed-update'] = features['restart-persistence'].length === 4
+        ? ['signature-verified', 'tampered-package-rejected', 'signed-version-verified', 'busy-install-rejected', 'app-relaunched', 'profile-restored'] : []
+    }
     return features
   }
   if (plan.phase === 'chat') {
@@ -45,10 +53,6 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     })
     return features
   }
-  await run('signed-update', async () => {
-    await invoke('subscription_probe_update')
-    return ['signature-verified', 'tampered-package-rejected', 'signed-version-verified']
-  })
   await run('settings', async () => {
     const before = await invoke('model_router_settings')
     const id = before.accounts[0].id
@@ -135,7 +139,14 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     await invoke('browser_view', { label: 'browser', bounds: { x: 0, y: 0, width: 640, height: 480 } })
     try {
       await wait(async () => {
-        const snapshot = JSON.parse(await invoke('browser_command', { request: { view: 'browser', action: 'snapshot' } }))
+        let response
+        try {
+          response = await invoke('browser_command', { request: { view: 'browser', action: 'snapshot' } })
+        } catch (error) {
+          if ((error?.message ?? error) === 'The page is still loading.') return false
+          throw error
+        }
+        const snapshot = JSON.parse(response)
         return snapshot.title && snapshot.text.length > 20 && new URL(snapshot.url).hostname === '127.0.0.1'
       })
       await rejects(() => invoke('browser_command', { request: { view: 'browser', action: 'navigate', value: 'file:///etc/passwd' } }))

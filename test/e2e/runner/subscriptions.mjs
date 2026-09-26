@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { acceptance, blocked, checkIdentity, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
+import { acceptance, blocked, checkIdentity, featureChecks, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { updateFixture } from './subscription-update.mjs'
 
@@ -127,6 +127,30 @@ function screenshot(platform, pid, output, env) {
   }
 }
 
+export async function awaitUpdateResult(readResult, { now = Date.now, wait = delay, timeout = 300_000 } = {}) {
+  const deadline = now() + timeout
+  while (now() < deadline) {
+    const result = readResult()
+    if (result) return result
+    await wait(250)
+  }
+  throw new Error('The updated app did not restart.')
+}
+
+export function verifyUpdateResult(result, parentPid, sourceSha, turns, verifyPayload) {
+  const checks = featureChecks['signed-update'].slice(0, -1)
+  if (result?.passed !== true || result.phase !== 'update-restart' || !Number.isSafeInteger(result.pid) ||
+      result.pid <= 0 || result.pid > 2147483647 || result.pid === parentPid || result.update_parent_pid !== parentPid ||
+      result.source_sha !== sourceSha || result.webdriver !== false ||
+      JSON.stringify(result.turns) !== JSON.stringify(turns) ||
+      JSON.stringify(result.features?.['signed-update']) !== JSON.stringify(checks)) {
+    throw new Error('The installed update or profile restore failed.')
+  }
+  verifyPayload()
+  result.features['signed-update'].push('candidate-digest-verified')
+  return result
+}
+
 export const updaterPublicKeyFile = 'src-tauri/updater.pub'
 
 export function writeBlocked(output, sourceSha, platform, reason) {
@@ -146,7 +170,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
   // Write a blocked result first so a killed runner cannot leave stale passing evidence.
   let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
   writeBlocked(output, sourceSha, platform, reason)
-  let root, env, app, appClosed, runtime, runtimeClosed, verify, candidate, packageName, updateServer
+  let root, env, app, appClosed, runtime, runtimeClosed, verify, candidate, packageName, updateServer, relaunchedPid
   const stop = async (child, closed) => {
     if (!child?.pid) return
     if (process.platform === 'win32') {
@@ -206,7 +230,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     const version = comment.split('\t').find(field => field.startsWith('version:'))?.slice(8)
     if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) throw new Error('The signed package version is missing.')
     reason = 'The disposable signed update server could not start. Install OpenSSL on the native runner.'
-    updateServer = await updateFixture(root, bytes, fs.readFileSync(signatureFile, 'utf8').trim(), version)
+    updateServer = await updateFixture(root, bytes, fs.readFileSync(signatureFile, 'utf8').trim(), version, platform)
     const plan = { models: candidate.models, nonce, fileNonce, mcpNonce, mcpReceipt,
       acceptance: true, phase: 'chat', fixtureFile, fixtureDirectory: root,
       mcpCommand: process.execPath, mcpScript: path.resolve('test/e2e/support/subscription-mcp.mjs'),
@@ -221,7 +245,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     })
     reason = 'The installed probe did not finish. Check the native runtime, subscription access, and selected models.'
     const resultFile = path.join(state, 'subscription-probe-result.json')
-    const launch = async () => {
+    const launch = async (updating = false) => {
       if (platform !== 'linux') {
         const runtimeFile = platform === 'windows' ? path.join(path.dirname(executable), 'muniment-runtime.exe')
           : path.resolve(executable, '../../Library/LaunchServices/muniment-runtime')
@@ -230,12 +254,20 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
         await delay(3000)
         if (!runtime.pid || runtime.exitCode !== null) throw new Error('The installed runtime could not start with the disposable profile.')
       }
-      app = spawn(executable, ['--probe-subscription-chat'], { env, stdio: 'ignore', detached: process.platform !== 'win32' })
+      app = spawn(executable, ['--probe-subscription-chat', `--probe-subscription-profile=${state}`],
+        { env, stdio: 'ignore', detached: process.platform !== 'win32' })
       let appError = false
       appClosed = new Promise(resolve => {
         app.once('exit', resolve)
         app.once('error', () => { appError = true; resolve() })
       })
+      if (updating) {
+        const result = await awaitUpdateResult(() => fs.existsSync(resultFile) && json(resultFile))
+        if (Number.isSafeInteger(result.pid) && result.pid > 0 && result.pid <= 2147483647 && result.pid !== app.pid) {
+          relaunchedPid = result.pid
+        }
+        return result
+      }
       const deadline = Date.now() + 20 * 60_000
       while (!fs.existsSync(resultFile) && Date.now() < deadline && app.exitCode === null && !appError) await delay(250)
       if (!fs.existsSync(resultFile)) throw new Error('The installed probe did not finish. Check the native runtime and subscription access.')
@@ -272,8 +304,19 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     if (!restarted.passed || restarted.source_sha !== probe.source_sha || restarted.webdriver !== false ||
         JSON.stringify(restarted.turns) !== JSON.stringify(probe.turns)) throw new Error(reason)
     verify()
+    reason = 'The installed update failed or did not restore the disposable profile after relaunch.'
+    await stop(app, appClosed)
+    await stop(runtime, runtimeClosed)
+    app = runtime = undefined
+    fs.rmSync(resultFile)
+    save(path.join(state, 'subscription-probe.json'), { ...plan, phase: 'update', turns: probe.turns })
+    const updated = await launch(true)
+    verifyUpdateResult(updated, app.pid, sourceSha, probe.turns, verify)
+    // Require the relaunched process to stay alive through the native capture.
+    process.kill(updated.pid, 0)
     const result = { status: 'passed', installed: true, unchanged: true, source_sha: probe.source_sha, webdriver: probe.webdriver,
-      package_sha256: candidate.sha256, features: { ...probe.features, ...featureResult.features, ...restarted.features },
+      package_sha256: candidate.sha256, features: { ...probe.features, ...featureResult.features, ...restarted.features,
+        'signed-update': updated.features['signed-update'] },
       turns: probe.turns.map(turn => ({ ...turn, requested: candidate.models[turn.index]?.id, expected: nonce })) }
     proof = acceptance(candidate, sourceSha, platform, result, transports, packageName)
     reason = 'The native screenshot failed. Install the capture tool and grant the disposable login screen capture access.'
@@ -281,7 +324,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     const safe = path.join(root, 'safe')
     fs.mkdirSync(raw)
     const screenshotName = `screenshot-${platform}-subscriptions.png`
-    screenshot(platform, app.pid, path.join(raw, screenshotName), env)
+    screenshot(platform, updated.pid, path.join(raw, screenshotName), env)
     // Keep the redactor's injected-secret screening separate from the app environment.
     execute(process.execPath, ['test/e2e/support/redact.mjs', raw, safe], process.env)
     fs.copyFileSync(path.join(safe, screenshotName), path.join(output, screenshotName))
@@ -292,6 +335,12 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     writeBlocked(output, sourceSha, platform, reason)
   } finally {
     let cleanupFailed = false
+    if (relaunchedPid) {
+      try {
+        if (process.platform === 'win32') execute('taskkill.exe', ['/PID', String(relaunchedPid), '/T', '/F'], env, 15_000)
+        else process.kill(relaunchedPid, 'SIGKILL')
+      } catch (error) { if (error.code !== 'ESRCH') cleanupFailed = true }
+    }
     for (const [child, closed] of [[app, appClosed], [runtime, runtimeClosed]]) {
       try {
         await stop(child, closed)

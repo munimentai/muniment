@@ -4,8 +4,10 @@ import https from 'node:https'
 import { spawnSync } from 'node:child_process'
 
 // Serve the exact signed candidate and one damaged copy on loopback only.
-export async function updateFixture(root, bytes, signature, version) {
-  if (!Buffer.isBuffer(bytes) || !bytes.length || typeof signature !== 'string' || !signature.trim() ||
+export async function updateFixture(root, bytes, signature, version, platform) {
+  const target = { linux: 'linux-x86_64', windows: 'windows-x86_64-msi-user',
+    'macos-arm64': 'darwin-aarch64', 'macos-x64': 'darwin-x86_64' }[platform]
+  if (typeof target !== 'string' || !Buffer.isBuffer(bytes) || !bytes.length || typeof signature !== 'string' || !signature.trim() ||
       typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) {
     throw new Error('Provide package bytes, a signature, and the signed version for the update fixture.')
   }
@@ -21,7 +23,9 @@ export async function updateFixture(root, bytes, signature, version) {
   const server = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (request, response) => {
     if (request.url === '/manifest') {
       response.setHeader('content-type', 'application/json')
-      response.end(JSON.stringify({ version, url: `https://127.0.0.1:${server.address().port}/package`, signature }))
+      response.end(JSON.stringify({ version, platforms: {
+        [target]: { url: `https://127.0.0.1:${server.address().port}/package`, signature },
+      } }))
     } else if (request.url === '/package' || request.url === '/tampered') {
       response.end(request.url === '/package' ? bytes : damaged)
     } else { response.writeHead(404); response.end() }

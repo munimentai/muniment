@@ -33,17 +33,41 @@ pub(crate) fn install<R: tauri::Runtime>(webview: &tauri::Webview<R>) {
     ));
 }
 
-// This diagnostic never changes the installed app or the production update feed.
-#[tauri::command]
-pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(), &'static str> {
-    use sha2::{Digest, Sha256};
-    use tauri_plugin_updater::{Error, UpdaterExt};
-    let root = root()?;
-    let plan: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(root.join("subscription-probe.json"))
+// MSI relaunches the app outside the runner's process environment.
+// The explicit probe argument restores only the disposable state directory.
+pub(crate) fn restore_profile() {
+    if !std::env::args_os().any(|arg| arg == "--probe-subscription-chat") {
+        return;
+    }
+    for arg in std::env::args() {
+        if let Some(directory) = arg.strip_prefix("--probe-subscription-profile=") {
+            let path = PathBuf::from(directory);
+            if path.is_absolute() && path.join("subscription-probe.json").is_file() {
+                std::env::set_var("MUNIMENT_STATE_DIR", &path);
+                std::env::set_var("PI_CODING_AGENT_DIR", path.join("agent"));
+                std::env::set_var("MUNIMENT_SUBSCRIPTION_PROBE", "1");
+            }
+        }
+    }
+}
+
+fn update_plan() -> Result<serde_json::Value, &'static str> {
+    serde_json::from_slice(
+        &std::fs::read(root()?.join("subscription-probe.json"))
             .map_err(|_| "The update plan is missing.")?,
     )
-    .map_err(|_| "The update plan is invalid.")?;
+    .map_err(|_| "The update plan is invalid.")
+}
+
+// Change only the feed and same-version policy. Production code selects the
+// Windows installer, verifies the signature, installs the package, and restarts.
+pub(crate) fn update_builder(
+    builder: tauri_plugin_updater::UpdaterBuilder,
+) -> Result<tauri_plugin_updater::UpdaterBuilder, String> {
+    if root().is_err() {
+        return Ok(builder);
+    }
+    let plan = update_plan()?;
     let endpoint: url::Url = plan["updateUrl"]
         .as_str()
         .ok_or("The update address is missing.")?
@@ -58,40 +82,64 @@ pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(
         || endpoint.query().is_some()
         || endpoint.fragment().is_some()
     {
-        return Err("The update probe requires a loopback fixture.");
+        return Err("The update probe requires a loopback fixture.".into());
     }
-    let updater = app
-        .updater_builder()
-        .pubkey(include_str!("../updater.pub").trim())
+    let builder = builder
         .version_comparator(|current, release| release.version == current)
         .no_proxy()
         // Only this opt-in loopback fixture uses a disposable TLS certificate.
         // The compiled release key still verifies every downloaded package.
         .configure_client(|client| client.danger_accept_invalid_certs(true).https_only(true))
-        .endpoints(vec![endpoint.clone()])
-        .map_err(|_| "The update endpoint is invalid.")?
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|_| "The installed updater could not start.")?;
-    let mut update = updater
-        .check()
-        .await
-        .map_err(|_| "The installed updater could not read the fixture.")?
-        .ok_or("The fixture does not match the installed version.")?;
+        .endpoints(vec![endpoint])
+        .map_err(|_| "The update endpoint is invalid.")?;
+    // Reinstall the exact candidate rather than inventing a signed version.
+    #[cfg(windows)]
+    let builder = builder.installer_args(["REINSTALL=ALL", "REINSTALLMODE=vomus"]);
+    Ok(builder)
+}
+
+pub(crate) fn check_update_download(update: &tauri_plugin_updater::Update) -> Result<(), String> {
+    if root().is_err() {
+        return Ok(());
+    }
+    let plan = update_plan()?;
+    let endpoint: url::Url = plan["updateUrl"]
+        .as_str()
+        .ok_or("The update address is missing.")?
+        .parse()
+        .map_err(|_| "The update address is invalid.")?;
     if update.download_url
         != endpoint
             .join("/package")
             .map_err(|_| "The update address is invalid.")?
     {
-        return Err("The update package must stay on loopback.");
+        return Err("The update package must stay on loopback.".into());
     }
-    update.timeout = Some(std::time::Duration::from_secs(120));
-    let bytes = update
-        .download(|_, _| {}, || {})
-        .await
-        .map_err(|_| "The installed updater rejected the signed package.")?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use tauri::Manager;
+    use tauri_plugin_updater::Error;
+    let root = root()?;
+    let mut plan = update_plan()?;
+    if plan["phase"] != "update" {
+        return Err("The update probe requires the update phase.".into());
+    }
+    let endpoint: url::Url = plan["updateUrl"]
+        .as_str()
+        .ok_or("The update address is missing.")?
+        .parse()
+        .map_err(|_| "The update address is invalid.")?;
+    let state = app.state::<crate::app_update::AppUpdate>();
+    crate::app_update::app_update_prepare(app.clone(), state.clone())
+        .await?
+        .ok_or("The candidate update is unavailable.")?;
+    let (mut update, bytes) = state.prepared()?;
     if plan["packageSha256"].as_str() != Some(format!("{:x}", Sha256::digest(&bytes)).as_str()) {
-        return Err("The updater downloaded a different package.");
+        return Err("The updater downloaded a different package.".into());
     }
     update.download_url = endpoint
         .join("/tampered")
@@ -100,7 +148,7 @@ pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(
         update.download(|_, _| {}, || {}).await,
         Err(Error::Minisign(_))
     ) {
-        return Err("The installed updater did not reject the damaged package.");
+        return Err("The installed updater did not reject the damaged package.".into());
     }
     update.download_url = endpoint
         .join("/package")
@@ -110,9 +158,24 @@ pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(
         update.download(|_, _| {}, || {}).await,
         Err(Error::SignedVersionMismatch { .. })
     ) {
-        return Err("The installed updater did not reject the wrong version.");
+        return Err("The installed updater did not reject the wrong version.".into());
     }
-    Ok(())
+    let activity = app.state::<muniment_core::attach::RuntimeActivityRegistry>();
+    let busy = activity.mark_active_run();
+    let refused =
+        crate::app_update::app_update_install(app.clone(), activity.clone(), state.clone()).await;
+    drop(busy);
+    if refused.err().as_deref() != Some("Finish the current action before updating.") {
+        return Err("The installed updater did not reject active work.".into());
+    }
+    plan["phase"] = "update-restart".into();
+    plan["updateParentPid"] = std::process::id().into();
+    std::fs::write(
+        root.join("subscription-probe.json"),
+        serde_json::to_vec(&plan).map_err(|_| "The update checkpoint is invalid.")?,
+    )
+    .map_err(|_| "The update checkpoint could not be saved.")?;
+    crate::app_update::app_update_install(app.clone(), activity, state).await
 }
 
 #[derive(Deserialize, Serialize)]
@@ -150,7 +213,11 @@ pub(crate) fn subscription_probe_observed(
     {
         return Err("The subscription probe returned invalid feature checks.");
     }
+    let plan = update_plan()?;
     let result = serde_json::json!({
+        "pid": std::process::id(),
+        "update_parent_pid": plan["updateParentPid"],
+        "phase": plan["phase"],
         "passed": passed,
         "turns": turns,
         "features": features,
