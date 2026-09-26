@@ -382,11 +382,10 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
         .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
     // The server names its own models; the pinned id stands in when it does not answer.
     let discovered = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
-    let model_ids: Vec<String> = if discovered.is_empty() {
-        vec![OLLAMA_MODEL.to_owned()]
-    } else {
-        discovered
-    };
+    let model_ids = discovered.unwrap_or_else(|| vec![OLLAMA_MODEL.to_owned()]);
+    if model_ids.is_empty() {
+        return Err("The server has no chat models. Add a chat model, then try again.".into());
+    }
     let default_model = if model_ids.iter().any(|id| id == OLLAMA_MODEL) {
         OLLAMA_MODEL.to_owned()
     } else {
@@ -839,11 +838,11 @@ fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
             let Some(base_url) = entry.get("baseUrl").and_then(serde_json::Value::as_str) else {
                 continue;
             };
-            let discovered =
-                muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
-            if discovered.is_empty() {
+            let Some(discovered) =
+                muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT)
+            else {
                 continue;
-            }
+            };
             let current: Vec<&str> = entry
                 .get("models")
                 .and_then(serde_json::Value::as_array)
@@ -1320,7 +1319,8 @@ fn store_endpoint_provider(
         .cloned()
         .collect();
     if models.is_empty() {
-        models = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
+        models = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT)
+            .unwrap_or_default();
     }
     if models.is_empty() {
         return Err("The server named no models. Start it, or list its models here.".into());
