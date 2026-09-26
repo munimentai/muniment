@@ -225,7 +225,7 @@ signing out.
 | --- | --- | --- | --- | --- |
 | Section list | `.account-sections` | Holds the account sections | margin-top 14px | None |
 | Section label | `.access-label` | Heads each section | `--muted`, `--text-12 --font-mono`, uppercase, `letter-spacing: .04em` | None |
-| Section | `.retention-section, .entitlements-section, .devices-section, .companions-section, .voice-section` | Dividers between sections | margin-top 14px, padding-top 12px, 1px `--border` top | None |
+| Section | `.retention-section, .entitlements-section, .devices-section, .pairing-section, .companions-section, .voice-section` | Dividers between sections | margin-top 14px, padding-top 12px, 1px `--border` top | None |
 | Retention help | `.retention-help` | One sentence | `--muted`, `--text-12` | None |
 | Retention option | `.retention-options label` | Radio row | 24px min height, gap 7px, `--text-12` | Radio: 24px floor, `accent-color: var(--ink)`. Disabled while saving |
 | Access status | `.access-status` | Loading, error, or notice line with a control | `--muted`, `--text-12 --font-mono`, margin 8px 0 | Try again, Restart Muniment, and Close this window use the panel button |
@@ -237,6 +237,8 @@ signing out.
 | Current device chip | `.current-device` | This device | 1px `--border`, `--radius-chip`, `--faint`, `--muted`, `--text-12 --font-mono`, padding 1px 5px | None |
 | Device state | `.device-state` | Active or Revoked | `--muted`, `--text-12 --font-mono`, flush right | The word carries the state |
 | Device time | `.device-list time` | Last active | `--muted`, `--text-12 --font-mono` | None |
+| Paired phone | `.paired-phone` | Exact mobile installation id | `--text-13`, id in `--muted --text-12 --font-mono` | None |
+| Pairing QR | `.pairing-qr` | Server-issued challenge code | 220px, `--ink` modules on `--surface` | Hidden at `expires_at`. Countdown `.expiry` in `--text-12 --font-mono` |
 | Companion row | `.companion-list li` | One connected program | padding 9px 2px, 1px `--border` top after the first, heading at `--text-12` with `strong` at `font-weight: 600` (raw) | Hover or focus-within hides the kind label and reveals Revoke |
 | Companion revoke | `.companion-revoke` | Opens the revoke confirm | Absolute, 24px floor, transparent border, `--paper`, `--muted`, `--text-12 --font-mono`, opacity 0, transition `opacity 120ms ease` (raw, `--motion-popover` exists) | Row hover or focus-within: opacity 1. Hover: `--faint`, `--ink`. Focus-visible: `outline-color: var(--ink)` |
 | Companion confirm | `.companion-confirm` | Inline Revoke and Cancel | `--ink`, `--text-12`, `strong` at `font-weight: 600` (raw) | Buttons: quiet, `--text-12 --font-mono`, padding 3px 6px, hover `--faint`. Disabled while pending. Error `.revoke-error` in `--muted` |

@@ -385,6 +385,73 @@ async fn auth_devices_with_state<R: tauri::Runtime>(
     decode_devices(response)
 }
 
+/// Request a pairing QR challenge. The SVG encodes the server `qr` object.
+#[cfg(any(unix, target_os = "windows"))]
+#[tauri::command]
+pub async fn auth_pairing_challenge(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+) -> Result<auth::PairingChallengeView, String> {
+    let _ = app;
+    let client = connected_client(attach_state.desktop_client_session())?;
+    let response = state
+        .marked_refresh(move || {
+            client
+                .create_pairing_challenge_with_diagnostics()
+                .map_err(|(error, failure)| desktop_request_error(error, failure.as_ref()))
+        })
+        .await
+        .map_err(|_| runtime_task_error())??;
+    serde_json::from_value(response).map_err(|_| runtime_response_error())
+}
+
+/// Read the current authorized phone and keep stored peer identity in sync.
+#[cfg(any(unix, target_os = "windows"))]
+#[tauri::command]
+pub async fn auth_pairing_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+) -> Result<auth::PairingStatusView, String> {
+    let _ = app;
+    let client = connected_client(attach_state.desktop_client_session())?;
+    let response = state
+        .marked_refresh(move || {
+            client
+                .pairing_status_with_diagnostics()
+                .map_err(|(error, failure)| desktop_request_error(error, failure.as_ref()))
+        })
+        .await
+        .map_err(|_| runtime_task_error())??;
+    serde_json::from_value(response).map_err(|_| runtime_response_error())
+}
+
+/// Revoke the named pair and clear matching stored peer identity.
+#[cfg(any(unix, target_os = "windows"))]
+#[tauri::command]
+pub async fn auth_pairing_revoke(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+    pair_id: String,
+) -> Result<auth::PairingRevokeView, String> {
+    let _ = app;
+    if uuid::Uuid::parse_str(&pair_id).is_err() {
+        return Err("The pairing request failed.".into());
+    }
+    let client = connected_client(attach_state.desktop_client_session())?;
+    let response = state
+        .marked_refresh(move || {
+            client
+                .revoke_pairing_with_diagnostics(&pair_id)
+                .map_err(|(error, failure)| desktop_request_error(error, failure.as_ref()))
+        })
+        .await
+        .map_err(|_| runtime_task_error())??;
+    serde_json::from_value(response).map_err(|_| runtime_response_error())
+}
+
 #[cfg(any(unix, target_os = "windows"))]
 pub(crate) fn background_service_error() -> String {
     "Muniment cannot reach its background service.".to_string()

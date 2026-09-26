@@ -3,13 +3,16 @@
 pub use muniment_core::attach::EntitlementSnapshotResult;
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{
-    api_base_url, ensure_native_session as ensure_core_native_session, list_native_devices,
-    native_status, run_native_sign_in_while, sign_out_native_session, AuthStatus, BrowserOpener,
-    EntitlementSnapshotTracker, FreshNativeSession, FreshNativeSessionError,
-    KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError, NativeSignInError,
-    NativeTokenError, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
-    UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
+    api_base_url, create_pairing_challenge, ensure_native_session as ensure_core_native_session,
+    list_native_devices, native_status, read_pairing, revoke_pairing, run_native_sign_in_while,
+    sign_out_native_session, AuthStatus, BrowserOpener, EntitlementSnapshotTracker,
+    FreshNativeSession, FreshNativeSessionError, KeyringNativeCredentialStore, NativeDeviceList,
+    NativeDeviceListError, NativeSignInError, NativeTokenError, PairingChallengeView, PairingError,
+    PairingRevokeView, PairingStatusView, UreqAuthorizationTransport,
+    UreqNativeDeviceListTransport, UreqPairingTransport, UreqRegistrationTransport,
+    UreqRevocationTransport, UreqTokenTransport, PAIR_FILE_NAME,
 };
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,5 +154,46 @@ pub fn list_devices(access_token: &str) -> Result<NativeDeviceList, NativeDevice
         &UreqNativeDeviceListTransport::new(Duration::from_secs(30)),
         &api_base_url(),
         access_token,
+    )
+}
+
+fn pairing_transport() -> UreqPairingTransport {
+    UreqPairingTransport::new(Duration::from_secs(30))
+}
+
+fn pair_store(profile_directory: &Path) -> std::path::PathBuf {
+    profile_directory.join(PAIR_FILE_NAME)
+}
+
+/// Requests a QR pairing challenge for the signed-in desktop installation.
+pub fn request_pairing_challenge(access_token: &str) -> Result<PairingChallengeView, PairingError> {
+    create_pairing_challenge(&pairing_transport(), &api_base_url(), access_token)
+}
+
+/// Reads the current pair and stores or clears the local peer identity.
+pub fn pairing_status(
+    access_token: &str,
+    profile_directory: &Path,
+) -> Result<PairingStatusView, PairingError> {
+    read_pairing(
+        &pairing_transport(),
+        &api_base_url(),
+        access_token,
+        &pair_store(profile_directory),
+    )
+}
+
+/// Revokes the named pair and clears matching stored peer identity.
+pub fn revoke_pairing_pair(
+    access_token: &str,
+    pair_id: uuid::Uuid,
+    profile_directory: &Path,
+) -> Result<PairingRevokeView, PairingError> {
+    revoke_pairing(
+        &pairing_transport(),
+        &api_base_url(),
+        access_token,
+        pair_id,
+        &pair_store(profile_directory),
     )
 }

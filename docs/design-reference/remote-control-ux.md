@@ -5,9 +5,8 @@ pending owner mockup confirmation. Owner mockups remain ground truth.
 
 ## Boundary
 
-This repository has no Remote Control code today. A search of `src/`,
-`src-tauri/`, and `test/` for `remote_control`, `remoteControl`, and
-`remote-control` returns no matches.
+Account settings hosts QR phone pairing when cloud is enabled and the owner is
+signed in. Live-session remote control remains a later surface.
 
 [Harness specification §14](../spec/harness-spec.md#14-remote-control-owner-decision-2026-07-17)
 and [ADR 0012](../decisions/0012-user-level-runtime-service.md) ratify the
