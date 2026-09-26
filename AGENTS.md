@@ -30,6 +30,13 @@ CI reuses a successful PR result on main only when the tested Git tree matches.
 Missing proof or a different tree runs the checks. Platform and feature variants
 keep separate coverage. The steering check remains the local file hygiene check.
 
+The factory accepts owner pull requests as release work. It fixes build and
+acceptance failures without planning new product features. The nightly workflow
+runs on demand as the release candidate proof. Targeted platform runs support
+repairs; a full run proves the final candidate before stable promotion. A merge
+does not finish the release: installed behavior, distribution and live download
+links must pass. Stable releases reuse the exact verified packages.
+
 The format check fails CI when formatting would create any diff. For focused Rust checks, use `src-tauri/Cargo.toml` and each changed package name.
 
 ## Windows code
