@@ -1,4 +1,4 @@
-import { it, expect } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -44,72 +44,74 @@ fs.writeFileSync(args[args.indexOf('--output') + 1], process.env.TOOL_BYTES)
   }
 }
 
-it.each(['GH_TOKEN', 'GITHUB_TOKEN'])('uses %s to download through the anonymous API rate limit', (variable) => {
-  const f = fixture()
-  try {
-    const blocked = f.run({ RATE_LIMIT: '1' })
-    expect(blocked.status).toBe(22)
-    expect(blocked.stderr).toContain('403')
-    expect(existsSync(f.destination)).toBe(false)
-    const result = f.run({ RATE_LIMIT: '1', [variable]: token })
-    expect(result.status, result.stderr).toBe(0)
-    expect(readFileSync(f.destination, 'utf8')).toBe(payload)
-    expect(statSync(f.destination).mode & 0o111).toBe(0o111)
-    const { args, headers } = f.request()
-    expect(headers).toContain('Accept: application/octet-stream')
-    expect(headers).toContain(`Authorization: Bearer ${token}`)
-    expect(args).toContain(api)
-    expect(args).toContain('--location')
-    expect(args).not.toContain('--location-trusted')
-    expect(JSON.stringify(args)).not.toContain(token)
-    expect(result.stdout + result.stderr).not.toContain(token)
-  } finally { f.cleanup() }
-})
+describe.skipIf(process.platform === 'win32')('Linux build downloads', () => {
+  it.each(['GH_TOKEN', 'GITHUB_TOKEN'])('uses %s to download through the anonymous API rate limit', (variable) => {
+    const f = fixture()
+    try {
+      const blocked = f.run({ RATE_LIMIT: '1' })
+      expect(blocked.status).toBe(22)
+      expect(blocked.stderr).toContain('403')
+      expect(existsSync(f.destination)).toBe(false)
+      const result = f.run({ RATE_LIMIT: '1', [variable]: token })
+      expect(result.status, result.stderr).toBe(0)
+      expect(readFileSync(f.destination, 'utf8')).toBe(payload)
+      expect(statSync(f.destination).mode & 0o111).toBe(0o111)
+      const { args, headers } = f.request()
+      expect(headers).toContain('Accept: application/octet-stream')
+      expect(headers).toContain(`Authorization: Bearer ${token}`)
+      expect(args).toContain(api)
+      expect(args).toContain('--location')
+      expect(args).not.toContain('--location-trusted')
+      expect(JSON.stringify(args)).not.toContain(token)
+      expect(result.stdout + result.stderr).not.toContain(token)
+    } finally { f.cleanup() }
+  })
 
-it.each([
-  'https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/commit/linuxdeploy-plugin-gtk.sh',
-  'https://api.github.com.example.com/tool',
-  'https://api.github.com@other.example/tool',
-])('does not send the token to %s', (url) => {
-  const f = fixture()
-  try {
-    const result = f.run({ GH_TOKEN: token }, url)
-    expect(result.status, result.stderr).toBe(0)
-    expect(f.request().headers).not.toContain('Authorization')
-    expect(JSON.stringify(f.request())).not.toContain(token)
-  } finally { f.cleanup() }
-})
+  it.each([
+    'https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/commit/linuxdeploy-plugin-gtk.sh',
+    'https://api.github.com.example.com/tool',
+    'https://api.github.com@other.example/tool',
+  ])('does not send the token to %s', (url) => {
+    const f = fixture()
+    try {
+      const result = f.run({ GH_TOKEN: token }, url)
+      expect(result.status, result.stderr).toBe(0)
+      expect(f.request().headers).not.toContain('Authorization')
+      expect(JSON.stringify(f.request())).not.toContain(token)
+    } finally { f.cleanup() }
+  })
 
-it('supports public downloads without a token', () => {
-  const f = fixture()
-  try {
-    const result = f.run()
-    expect(result.status, result.stderr).toBe(0)
-    expect(f.request().headers).not.toContain('Authorization')
-  } finally { f.cleanup() }
-})
+  it('supports public downloads without a token', () => {
+    const f = fixture()
+    try {
+      const result = f.run()
+      expect(result.status, result.stderr).toBe(0)
+      expect(f.request().headers).not.toContain('Authorization')
+    } finally { f.cleanup() }
+  })
 
-it('reuses only a cache entry with the pinned digest', () => {
-  const f = fixture()
-  try {
-    writeFileSync(f.destination, payload)
-    expect(f.run({ DOWNLOAD_FAIL: '1' }).status).toBe(0)
-    expect(f.requested()).toBe(false)
-    writeFileSync(f.destination, 'corrupt cache')
-    const result = f.run({ GH_TOKEN: token })
-    expect(result.status, result.stderr).toBe(0)
-    expect(f.requested()).toBe(true)
-    expect(readFileSync(f.destination, 'utf8')).toBe(payload)
-  } finally { f.cleanup() }
-})
+  it('reuses only a cache entry with the pinned digest', () => {
+    const f = fixture()
+    try {
+      writeFileSync(f.destination, payload)
+      expect(f.run({ DOWNLOAD_FAIL: '1' }).status).toBe(0)
+      expect(f.requested()).toBe(false)
+      writeFileSync(f.destination, 'corrupt cache')
+      const result = f.run({ GH_TOKEN: token })
+      expect(result.status, result.stderr).toBe(0)
+      expect(f.requested()).toBe(true)
+      expect(readFileSync(f.destination, 'utf8')).toBe(payload)
+    } finally { f.cleanup() }
+  })
 
-it.each([{ TOOL_BYTES: 'wrong bytes' }, { DOWNLOAD_FAIL: '1' }])('rejects a failed download without replacing the cache: %j', (env) => {
-  const f = fixture()
-  try {
-    writeFileSync(f.destination, 'old cache')
-    const result = f.run({ GH_TOKEN: token, ...env })
-    expect(result.status).not.toBe(0)
-    expect(readFileSync(f.destination, 'utf8')).toBe('old cache')
-    expect(result.stdout + result.stderr).not.toContain(token)
-  } finally { f.cleanup() }
+  it.each([{ TOOL_BYTES: 'wrong bytes' }, { DOWNLOAD_FAIL: '1' }])('rejects a failed download without replacing the cache: %j', (env) => {
+    const f = fixture()
+    try {
+      writeFileSync(f.destination, 'old cache')
+      const result = f.run({ GH_TOKEN: token, ...env })
+      expect(result.status).not.toBe(0)
+      expect(readFileSync(f.destination, 'utf8')).toBe('old cache')
+      expect(result.stdout + result.stderr).not.toContain(token)
+    } finally { f.cleanup() }
+  })
 })
