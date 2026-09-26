@@ -1,0 +1,202 @@
+name: Installed subscription acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Exact 40-character SHA of the signed nightly candidate"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      source_sha:
+        description: "Exact 40-character SHA of the signed nightly candidate"
+        required: true
+        type: string
+
+# Nightly.yml remains the candidate builder. This workflow proves subscription chats
+# against that signed candidate.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: subscription-acceptance-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: self-hosted
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      PLATFORM: linux
+      REPOSITORY: ${{ github.repository }}
+      RELEASE_TOKEN: ${{ github.token }}
+      FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
+      FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
+      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
+    steps:
+      - name: Check out subscription harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate pinned source identity
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Run installed subscription check
+        env:
+          OUTPUT: ${{ runner.temp }}/subscription-linux
+        run: node test/e2e/runner/subscription-host.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: subscription-linux
+          path: ${{ runner.temp }}/subscription-linux
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
+  windows:
+    needs: linux
+    if: always() && !cancelled()
+    runs-on: self-hosted
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      PLATFORM: windows
+      REPOSITORY: ${{ github.repository }}
+      RELEASE_TOKEN: ${{ github.token }}
+      FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
+      FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
+      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
+    steps:
+      - name: Check out subscription harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate pinned source identity
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Run installed subscription check
+        env:
+          OUTPUT: ${{ runner.temp }}/subscription-windows
+        run: node test/e2e/runner/subscription-host.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: subscription-windows
+          path: ${{ runner.temp }}/subscription-windows
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
+  macos-arm64:
+    needs: windows
+    if: always() && !cancelled()
+    # macos-15 supplies a fresh ARM64 VM and console login for this job.
+    # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      PLATFORM: macos-arm64
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Check out subscription harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate pinned source identity
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Run installed ARM64 subscription check
+        env:
+          OUTPUT: ${{ runner.temp }}/subscription-macos-arm64
+          GH_TOKEN: ${{ github.token }}
+          FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
+          FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
+        run: node test/e2e/runner/subscription-macos-arm64.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: subscription-macos-arm64
+          path: ${{ runner.temp }}/subscription-macos-arm64
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
+  macos-x64:
+    needs: macos-arm64
+    if: always() && !cancelled()
+    runs-on: self-hosted
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      PLATFORM: macos-x64
+      REPOSITORY: ${{ github.repository }}
+      RELEASE_TOKEN: ${{ github.token }}
+      FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
+      FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
+      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
+    steps:
+      - name: Check out subscription harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate pinned source identity
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Run installed subscription check
+        env:
+          OUTPUT: ${{ runner.temp }}/subscription-macos-x64
+        run: node test/e2e/runner/subscription-host.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: subscription-macos-x64
+          path: ${{ runner.temp }}/subscription-macos-x64
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
+  collect:
+    needs: [linux, windows, macos-arm64, macos-x64]
+    if: always() && !cancelled()
+    runs-on: self-hosted
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+    steps:
+      - name: Check out subscription harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate pinned source identity
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Download platform evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        continue-on-error: true
+        with:
+          pattern: subscription-*
+          path: ${{ runner.temp }}/subscription-inputs
+          merge-multiple: false
+      - name: Generate release-acceptance
+        id: collect
+        env:
+          OUTPUT: ${{ runner.temp }}/release-acceptance
+        run: |
+          set +e
+          node test/e2e/runner/collect-subscriptions.mjs "$SOURCE_SHA" "$OUTPUT" \
+            "$RUNNER_TEMP/subscription-inputs/subscription-linux" \
+            "$RUNNER_TEMP/subscription-inputs/subscription-windows" \
+            "$RUNNER_TEMP/subscription-inputs/subscription-macos-arm64" \
+            "$RUNNER_TEMP/subscription-inputs/subscription-macos-x64"
+          status=$?
+          set -e
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: release-acceptance
+          path: ${{ runner.temp }}/release-acceptance
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+      - name: Preserve collector result
+        if: always()
+        env:
+          COLLECT_STATUS: ${{ steps.collect.outputs.status }}
+        run: |
+          test "$COLLECT_STATUS" = 0
+          echo 'Subscription proof covers chat, direct-model-selection, and model-switching only.'

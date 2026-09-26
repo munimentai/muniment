@@ -47,7 +47,7 @@
           {#each group.models as model (model.id)}
             {@const inUse = current?.provider === model.provider && current?.model === model.choice}
             <li>
-              <button type="button" class="quiet picker-row" aria-pressed={inUse} onclick={() => onchoose(model.provider, model.choice)}>
+              <button type="button" class="quiet picker-row" data-provider={model.provider} data-model={model.choice} aria-pressed={inUse} onclick={() => onchoose(model.provider, model.choice)}>
                 <span class="model-label">{#if model.id === 'auto' && group.classifier}<ProviderLogo provider={providerId} size={16} />{/if}<span class="model-id" class:classifier={model.id === 'auto' && group.classifier}>{model.label ?? model.id}</span></span>
                 {#if model.accounts > 1}<span class="balanced" aria-label={`Balanced across ${model.accounts} accounts`}><LucideIcon name="scale" variant="action" size={14} /><span class="tag">{model.accounts}</span></span>{/if}
                 {#if inUse}<LucideIcon name="check" variant="action" size={14} />{/if}
