@@ -4,13 +4,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
+import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { acceptance, blocked, checkIdentity, hash, platforms, subscriptionAccounts } from './e2e/support/subscription-acceptance.mjs'
 import { isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signature.mjs'
-import { host } from './e2e/runner/subscription-host.mjs'
-import { guest, selectAssets, defaultArtifactsDir } from './e2e/runner/subscription-guest.mjs'
+import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
+import { guest, selectAssets, defaultArtifactsDir, decodeSubscriptionPayload } from './e2e/runner/subscription-guest.mjs'
+import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
 
 const sourceSha = 'a'.repeat(40)
 const bytes = Buffer.from('signed package fixture')
@@ -387,19 +389,112 @@ test('the host copies guest evidence and keeps a failed native check red', () =>
     const proof = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
     assert.ok(proof.cases.every(item => item.status === 'blocked'))
     assert.match(proof.cases[0].reason, /subscription reply/)
-    const mapped = path.join(root, 'arm64')
+    const mapped = path.join(root, 'x64')
     assert.equal(host({
-      sourceSha, platform: 'macos-arm64', output: mapped, leases: JSON.stringify([lease]), models: JSON.stringify(models),
+      sourceSha, platform: 'macos-x64', output: mapped, leases: JSON.stringify([lease]), models: JSON.stringify(models),
       sshKey: 'k', knownHosts: 'h', repository: 'owner/repo', token: 't',
       invoke: ({ platform, subscriptionPlatform, output: artifacts }) => {
         assert.equal(platform, 'macos')
-        assert.equal(subscriptionPlatform, 'macos-arm64')
-        writeBlocked(artifacts, sourceSha, 'macos-arm64', 'The native desktop-ci runner for this platform is unavailable.')
+        assert.equal(subscriptionPlatform, 'macos-x64')
+        writeBlocked(artifacts, sourceSha, 'macos-x64', 'The native desktop-ci runner for this platform is unavailable.')
         return { status: 1 }
       },
     }), 1)
-    assert.equal(JSON.parse(fs.readFileSync(path.join(mapped, 'release-acceptance.json'))).cases[0].platform, 'macos-arm64')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(mapped, 'release-acceptance.json'))).cases[0].platform, 'macos-x64')
+    assert.equal(host({
+      sourceSha, platform: 'macos-arm64', output: mapped, leases: JSON.stringify([lease]), models: JSON.stringify(models),
+      sshKey: 'k', knownHosts: 'h', invoke: () => assert.fail('ARM64 must not use the Intel factory runner.'),
+    }), 1)
+    assert.match(JSON.parse(fs.readFileSync(path.join(mapped, 'release-acceptance.json'))).cases[0].reason, /macos-15/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+for (const platform of ['linux', 'macos', 'windows']) {
+  test(`the subscription payload survives the ${platform} environment transport`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-transport-'))
+    // Include shell syntax to catch quote loss and accidental evaluation.
+    const leases = JSON.stringify([{ ...lease, account_id: 'fixture "account" $HOME `false` $(false) \\ \' é' }])
+    const modelJson = JSON.stringify(models)
+    let transported, calls = 0
+    try {
+      assert.deepEqual(runDesktopCi({
+        sourceSha, platform, subscriptionPlatform: platform === 'macos' ? 'macos-x64' : platform,
+        output: root, leases, models: modelJson, repository: 'owner/repo', token: 'fixture-token',
+        sshKey: 'fixture-key', knownHosts: 'fixture-host',
+        spawnProcess(command, args, options) {
+          calls += 1
+          if (command === 'ssh') {
+            for (const value of [leases, lease.access, 'fixture-token', Buffer.from(leases).toString('base64')]) {
+              assert.equal(args.join(' ').includes(value), false)
+            }
+            const envFile = path.join(root, 'dci_env')
+            fs.writeFileSync(envFile, options.input, { mode: 0o600 })
+            if (platform === 'windows') {
+              // The Windows driver reads KEY=VALUE without shell expansion.
+              transported = Object.fromEntries(options.input.trim().split('\n').map(line => {
+                const separator = line.indexOf('=')
+                return [line.slice(0, separator), line.slice(separator + 1)]
+              }))
+            } else {
+              // Match the driver's shell-loading step, not a JavaScript parser.
+              const loaded = spawnSync('/bin/bash', ['-c',
+                'set -a; source "$ENV_FILE"; exec "$NODE" -e \'process.stdout.write(JSON.stringify(process.env))\''], {
+                env: { PATH: process.env.PATH, ENV_FILE: envFile, NODE: process.execPath }, encoding: 'utf8', timeout: 10_000,
+              })
+              assert.equal(loaded.status, 0)
+              assert.equal(loaded.stderr, '')
+              transported = JSON.parse(loaded.stdout)
+            }
+            return { status: 0, stdout: '', stderr: '' }
+          }
+          assert.equal(command, 'bash')
+          assert.equal(fs.readFileSync(args[1], 'utf8'), '')
+          return { status: 0 }
+        },
+      }), { status: 0 })
+      assert.equal(calls, 2)
+      assert.equal(transported.MUNIMENT_SUBSCRIPTION_LEASES, undefined)
+      assert.equal(decodeSubscriptionPayload(transported.MUNIMENT_SUBSCRIPTION_LEASES_BASE64), leases)
+      assert.equal(decodeSubscriptionPayload(transported.MUNIMENT_SUBSCRIPTION_MODELS_BASE64), modelJson)
+      let fetched = false
+      const output = path.join(root, 'proof')
+      assert.equal(await guest({
+        sourceSha, platform: 'linux', output,
+        encodedLeases: transported.MUNIMENT_SUBSCRIPTION_LEASES_BASE64,
+        encodedModels: transported.MUNIMENT_SUBSCRIPTION_MODELS_BASE64,
+        fetchRelease: () => { fetched = true; return { assets: [] } },
+      }), 1)
+      assert.equal(fetched, true)
+      const proof = fs.readFileSync(path.join(output, 'release-acceptance.json'), 'utf8')
+      assert.match(proof, /signed nightly package/)
+      assert.equal(proof.includes(lease.access), false)
+      assert.equal(proof.includes(transported.MUNIMENT_SUBSCRIPTION_LEASES_BASE64), false)
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+}
+
+test('the guest blocks malformed encoded payloads without exposing their values', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-transport-invalid-'))
+  const previousError = console.error
+  const logs = []
+  console.error = value => logs.push(value)
+  try {
+    for (const field of ['encodedLeases', 'encodedModels']) {
+      for (const encoded of ['fixture-secret!', 'W10', 'W11=', '', Buffer.from('{').toString('base64')]) {
+        assert.equal(await guest({
+          sourceSha, platform: 'linux', output: root, leases: '[]', models: '[]', [field]: encoded,
+          fetchRelease: () => assert.fail('Invalid payloads must block before a download.'),
+        }), 1)
+        const proof = fs.readFileSync(path.join(root, 'release-acceptance.json'), 'utf8')
+        assert.match(proof, field === 'encodedLeases' ? /FACTORY_SUBSCRIPTION_LEASES/ : /FACTORY_SUBSCRIPTION_MODELS/)
+        assert.equal(proof.includes('fixture-secret'), false)
+      }
+    }
+    assert.equal(logs.join('\n').includes('fixture-secret'), false)
+  } finally {
+    console.error = previousError
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('the guest selects one signed package and signature per platform', () => {
@@ -523,6 +618,54 @@ test('the guest loads the nightly package through the GitHub REST API', async ()
   }
 })
 
+for (const mode of ['native', 'guest-blocked', 'linux', 'intel-node', 'intel-host', 'self-hosted', 'root', 'wrong-console', 'no-gui', 'no-uname']) {
+  test(`the hosted ARM64 entry checks ${mode} before the signed guest`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-arm64-'))
+    const env = { RUNNER_ARCH: 'ARM64', RUNNER_OS: 'macOS', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' }
+    if (mode === 'self-hosted') env.RUNNER_ENVIRONMENT = 'self-hosted'
+    const commands = []
+    let invoked = false
+    try {
+      const code = await hostedArm64({
+        sourceSha, output: root, leases: JSON.stringify([lease]), models: JSON.stringify(models),
+        repository: 'owner/repo', token: 'fixture-token', env,
+        runtime: mode === 'linux' ? 'linux' : 'darwin', arch: mode === 'intel-node' ? 'x64' : 'arm64',
+        uid: mode === 'root' ? 0 : 501,
+        execute(command, args) {
+          commands.push([command, args])
+          assert.equal(JSON.stringify([command, args]).includes('fixture-token'), false)
+          if (command === '/usr/bin/uname') return { status: mode === 'no-uname' ? 1 : 0, stdout: mode === 'intel-host' ? 'x86_64\n' : 'arm64\n' }
+          if (command === '/usr/bin/stat') return { status: 0, stdout: mode === 'wrong-console' ? '502\n' : '501\n' }
+          if (command === '/bin/launchctl') return { status: mode === 'no-gui' ? 1 : 0, stdout: 'GUI session\n' }
+          assert.fail('Unexpected native command.')
+        },
+        invoke: async options => {
+          invoked = true
+          assert.equal(options.platform, 'macos-arm64')
+          assert.equal(options.sourceSha, sourceSha)
+          assert.equal(options.output, root)
+          assert.equal(options.leases, JSON.stringify([lease]))
+          assert.equal(options.models, JSON.stringify(models))
+          assert.equal(options.repository, 'owner/repo')
+          assert.equal(options.token, 'fixture-token')
+          assert.deepEqual(commands, [
+            ['/usr/bin/uname', ['-m']], ['/usr/bin/stat', ['-f', '%u', '/dev/console']], ['/bin/launchctl', ['print', 'gui/501']],
+          ])
+          return mode === 'guest-blocked' ? 1 : 0
+        },
+      })
+      assert.equal(code, mode === 'native' ? 0 : 1)
+      assert.equal(invoked, ['native', 'guest-blocked'].includes(mode))
+      if (!invoked) {
+        const proof = JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json')))
+        assert.ok(proof.cases.every(item => item.status === 'blocked' && item.platform === 'macos-arm64'))
+        assert.match(proof.cases[0].reason, ['root', 'wrong-console', 'no-gui'].includes(mode) ? /native GUI session/ : /ARM64 runner/)
+        assert.deepEqual(proof.packages, {})
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+}
+
 test('the workflow runs a native job per platform and uploads release-acceptance', () => {
   const workflow = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8')
   const nightly = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
@@ -537,6 +680,14 @@ test('the workflow runs a native job per platform and uploads release-acceptance
     assert.match(workflow, new RegExp(`PLATFORM: ${platform}`))
     assert.match(workflow, new RegExp(`name: subscription-${platform}`))
   }
+  const armJob = workflow.split('  macos-arm64:\n')[1].split('\n  macos-x64:')[0]
+  assert.match(armJob, /runs-on: macos-15\n/)
+  assert.match(armJob, /run: node test\/e2e\/runner\/subscription-macos-arm64\.mjs/)
+  assert.match(armJob, /GH_TOKEN: \$\{\{ github\.token \}\}/)
+  assert.equal(armJob.includes('subscription-host.mjs'), false)
+  assert.equal(armJob.includes('DESKTOP_CI_'), false)
+  assert.match(armJob, /if: always\(\)/)
+  assert.match(armJob, /if-no-files-found: error/)
   assert.match(workflow, /name: release-acceptance/)
   assert.match(workflow, /test "\$COLLECT_STATUS" = 0/)
   assert.match(workflow, /chat, direct-model-selection, and model-switching only/)

@@ -11,6 +11,15 @@ const missingPackage = 'The signed nightly package or updater signature for this
 const missingLeases = 'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.'
 const missingModels = 'Provide the FACTORY_SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
 
+export function decodeSubscriptionPayload(encoded, reason) {
+  if (typeof encoded !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error(reason)
+  }
+  const bytes = Buffer.from(encoded, 'base64')
+  if (bytes.toString('base64') !== encoded) throw new Error(reason)
+  return bytes.toString('utf8')
+}
+
 function packagePattern(sourceSha, platform) {
   if (platform === 'linux') return new RegExp(`^nightly-${sourceSha}-linux-muniment_[0-9]+\\.[0-9]+\\.[0-9]+_amd64\\.AppImage$`)
   if (platform === 'windows') return new RegExp(`^nightly-${sourceSha}-windows-muniment_[0-9]+\\.[0-9]+\\.[0-9]+_x64_en-US\\.msi$`)
@@ -78,7 +87,7 @@ function install(platform, packageFile, root) {
   return executable
 }
 
-export async function guest({ sourceSha, platform, output, leases, models, repository, token, fetchRelease, fetchAsset, env = process.env, runtime = process.platform }) {
+export async function guest({ sourceSha, platform, output, leases, models, encodedLeases, encodedModels, repository, token, fetchRelease, fetchAsset, env = process.env, runtime = process.platform }) {
   const artifacts = output || defaultArtifactsDir(env, runtime)
   if (!platforms.includes(platform) || !/^[a-f0-9]{40}$/.test(sourceSha ?? '') || !artifacts) {
     throw new Error('Provide a supported native platform, output directory, and the exact candidate source SHA.')
@@ -86,6 +95,8 @@ export async function guest({ sourceSha, platform, output, leases, models, repos
   writeBlocked(artifacts, sourceSha, platform, 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-'))
   try {
+    if (encodedLeases !== undefined) leases = decodeSubscriptionPayload(encodedLeases, missingLeases)
+    if (encodedModels !== undefined) models = decodeSubscriptionPayload(encodedModels, missingModels)
     if (!String(leases ?? '').trim()) throw new Error(missingLeases)
     if (!String(models ?? '').trim()) throw new Error(missingModels)
     let parsedModels
@@ -131,6 +142,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     platform: process.env.MUNIMENT_SUBSCRIPTION_PLATFORM,
     leases: process.env.MUNIMENT_SUBSCRIPTION_LEASES,
     models: process.env.MUNIMENT_SUBSCRIPTION_MODELS,
+    encodedLeases: process.env.MUNIMENT_SUBSCRIPTION_LEASES_BASE64,
+    encodedModels: process.env.MUNIMENT_SUBSCRIPTION_MODELS_BASE64,
     repository: process.env.GITHUB_REPOSITORY,
     token: process.env.GH_TOKEN,
   })

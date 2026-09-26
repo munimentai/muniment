@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { platforms } from '../support/subscription-acceptance.mjs'
 import { writeBlocked } from './subscriptions.mjs'
 
-const desktopCiName = platform => platform.startsWith('macos-') ? 'macos' : platform
+const desktopCiName = platform => platform === 'macos-x64' ? 'macos' : platform
 
 function compactJson(value, reason) {
   try {
@@ -18,7 +18,7 @@ function compactJson(value, reason) {
   }
 }
 
-export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output, leases, models, repository, token, sshKey, knownHosts, harnessSha }) {
+export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output, leases, models, repository, token, sshKey, knownHosts, harnessSha, spawnProcess = spawnSync }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-host-'))
   try {
     const keyFile = path.join(root, 'key')
@@ -39,17 +39,18 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
       `GITHUB_REPOSITORY=${repository}`,
       `MUNIMENT_E2E_SOURCE_SHA=${sourceSha}`,
       `MUNIMENT_SUBSCRIPTION_PLATFORM=${subscriptionPlatform}`,
-      `MUNIMENT_SUBSCRIPTION_LEASES=${leases}`,
-      `MUNIMENT_SUBSCRIPTION_MODELS=${models}`,
+      // POSIX guests source these lines. Windows guests read them as literal values.
+      `MUNIMENT_SUBSCRIPTION_LEASES_BASE64=${Buffer.from(leases, 'utf8').toString('base64')}`,
+      `MUNIMENT_SUBSCRIPTION_MODELS_BASE64=${Buffer.from(models, 'utf8').toString('base64')}`,
       'MUNIMENT_NATIVE_DISPOSABLE_USER=1',
     ].join('\n') + '\n'
-    const ssh = spawnSync('ssh', [
+    const ssh = spawnProcess('ssh', [
       '-i', keyFile, '-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${hostsFile}`,
       '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=8',
       'desktopci@10.1.10.10', remote,
     ], { input, encoding: 'utf8', timeout: 40 * 60_000 })
     fs.writeFileSync(transcript, `${ssh.stdout ?? ''}${ssh.stderr ?? ''}`)
-    const extract = spawnSync('bash', ['test/e2e/support/extract-artifacts.sh', transcript, output, String(ssh.status ?? 1)])
+    const extract = spawnProcess('bash', ['test/e2e/support/extract-artifacts.sh', transcript, output, String(ssh.status ?? 1)])
     return { status: ssh.status === 0 && extract.status === 0 ? 0 : 1 }
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
@@ -60,7 +61,9 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
   if (!platforms.includes(platform) || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) {
     throw new Error('Provide a supported native platform and the exact candidate source SHA.')
   }
-  const missingRunner = 'The native desktop-ci runner for this platform is unavailable.'
+  const missingRunner = platform === 'macos-arm64'
+    ? 'Use the macos-15 GitHub-hosted ARM64 job. The factory macOS runner supports Intel only.'
+    : 'The native desktop-ci runner for this platform is unavailable.'
   const missingLeases = 'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.'
   const missingModels = 'Provide the FACTORY_SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
   let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
@@ -70,7 +73,7 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
     if (!String(models ?? '').trim()) throw new Error(missingModels)
     const compactLeases = compactJson(leases, missingLeases)
     const compactModels = compactJson(models, missingModels)
-    if (!sshKey || !knownHosts) throw new Error(missingRunner)
+    if (platform === 'macos-arm64' || !sshKey || !knownHosts) throw new Error(missingRunner)
     const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-artifacts-'))
     try {
       const result = invoke({

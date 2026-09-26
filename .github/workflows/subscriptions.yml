@@ -90,26 +90,27 @@ jobs:
   macos-arm64:
     needs: windows
     if: always() && !cancelled()
-    runs-on: self-hosted
+    # macos-15 supplies a fresh ARM64 VM and console login for this job.
+    # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       PLATFORM: macos-arm64
       REPOSITORY: ${{ github.repository }}
-      RELEASE_TOKEN: ${{ github.token }}
-      FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
-      FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
-      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
-      - name: Run installed subscription check
+      - name: Run installed ARM64 subscription check
         env:
           OUTPUT: ${{ runner.temp }}/subscription-macos-arm64
-        run: node test/e2e/runner/subscription-host.mjs
+          GH_TOKEN: ${{ github.token }}
+          FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
+          FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
+        run: node test/e2e/runner/subscription-macos-arm64.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
