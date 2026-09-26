@@ -2650,7 +2650,9 @@
 {#if pairingRequests[0]}
   {#key pairingRequests[0]}
     <ConfirmDialog title="Approve Muniment connection" onDecision={decidePairing}>
-      <p>The connecting program supplied these claims: kind {pairingRequests[0].claimedKind} and version {pairingRequests[0].claimedVersion}. Allow this program to access workspace {pairingRequests[0].workspace} with the scopes {pairingRequests[0].scopes.join(' and ')}?</p>
+      <p>Allow this program to access workspace {pairingRequests[0].workspace}?</p>
+      <p>Permissions: {pairingRequests[0].scopes.map(scope => ({ 'run.write': 'run tasks', 'thread.read': 'read workspace data' })[scope] ?? scope).join(' and ') || 'none'}.</p>
+      <p>Identifies as {pairingRequests[0].claimedKind} {pairingRequests[0].claimedVersion}.</p>
     </ConfirmDialog>
   {/key}
 {/if}
