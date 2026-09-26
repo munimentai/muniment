@@ -32,9 +32,9 @@ use muniment_core::attach::{CompanionRecord, EntitlementSnapshotResult};
 use muniment_core::attach::{
     CompanionRegistry, RuntimeActivityGuard, RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
-#[cfg(any(unix, target_os = "windows"))]
-use muniment_core::auth::NativeDeviceListError;
 use muniment_core::auth::{BrowserOpenError, BrowserOpener, EntitlementSnapshotTracker, TokenSet};
+#[cfg(any(unix, target_os = "windows"))]
+use muniment_core::auth::{NativeDeviceListError, PairingError};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::cas::ContentHash;
 use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
@@ -839,6 +839,39 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         service::list_devices(&access_token).map_err(device_list_protocol_error)
     }
 
+    fn pairing_status(&self) -> Result<muniment_core::auth::PairingStatusView, ProtocolError> {
+        let access_token = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .access_token;
+        service::pairing_status(&access_token, &self.profile_directory)
+            .map_err(pairing_protocol_error)
+    }
+
+    fn create_pairing_challenge(
+        &self,
+        _provenance: Provenance,
+    ) -> Result<muniment_core::auth::PairingChallengeView, ProtocolError> {
+        let access_token = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .access_token;
+        service::request_pairing_challenge(&access_token).map_err(pairing_protocol_error)
+    }
+
+    fn revoke_pairing(
+        &self,
+        pair_id: uuid::Uuid,
+        _provenance: Provenance,
+    ) -> Result<muniment_core::auth::PairingRevokeView, ProtocolError> {
+        let access_token = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .access_token;
+        service::revoke_pairing_pair(&access_token, pair_id, &self.profile_directory)
+            .map_err(pairing_protocol_error)
+    }
+
     fn list_companions(&self) -> Result<Vec<CompanionRecord>, ProtocolError> {
         service::list_companions(&self.companion_registry)
     }
@@ -1425,6 +1458,21 @@ fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
         | NativeDeviceListError::Transport(_)
         | NativeDeviceListError::HttpStatus(_)
         | NativeDeviceListError::MalformedResponse(_) => ProtocolError::persistence_failed(),
+    }
+}
+
+fn pairing_protocol_error(error: PairingError) -> ProtocolError {
+    match error {
+        PairingError::CredentialsMissing | PairingError::HttpStatus(401 | 403) => {
+            ProtocolError::unauthorized()
+        }
+        PairingError::HttpStatus(409 | 429) => {
+            ProtocolError::persistence_failed_with_reason(error.to_string())
+        }
+        PairingError::Config(_)
+        | PairingError::Transport(_)
+        | PairingError::HttpStatus(_)
+        | PairingError::MalformedResponse(_) => ProtocolError::persistence_failed(),
     }
 }
 

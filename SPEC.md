@@ -22,7 +22,7 @@ Both flags default off. Only the literal build-time value `true` enables one.
 These are developer build options, not controls in user Settings.
 
 - `VITE_MUNIMENT_CLOUD=true` enables Muniment cloud sign-in, the account footer,
-  Account settings, saved-session startup and cloud entitlement notices.
+  Account settings, phone pairing, saved-session startup and cloud entitlement notices.
 - `VITE_MUNIMENT_COMPANY_RECORD=true` enables Record, its keyboard shortcut,
   the company record panel and Companies settings.
 
@@ -110,9 +110,9 @@ The receipt request carries the run id alone. The relay is one outbound HTTPS
 leg from the runtime to MUNICLOUD, direct-first with relay fallback, end-to-end
 encrypted, and its account tiers belong to phase two.
 
-**muniment-mobile, phase two.** Mobile drives this runtime through the relay and sees the
-live tool stream, Stop, queued follow-ups and the permission-gate card that
-becomes a run receipt, and approving a proposal from the phone is that card.
+**muniment-mobile, phase two.** After QR pairing, mobile drives this runtime through the relay
+and sees the live tool stream, Stop, queued follow-ups and the permission-gate card
+that becomes a run receipt. Approving a proposal from the phone is that card.
 
 **muniment-qa.** The local-mode chat smoke is the first installed nightly spec
 on Linux, Windows and macOS, and real sign-in gates no other spec.

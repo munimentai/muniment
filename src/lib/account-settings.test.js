@@ -56,6 +56,7 @@ function companionInvoke(revoke = async () => {}) {
   return vi.fn(async (command, args) => {
     if (command === 'auth_entitlement_snapshot') return snapshot
     if (command === 'auth_devices') return []
+    if (command === 'auth_pairing_status') return { pair: null }
     if (command === 'attach_companions') return [companion]
     if (command === 'attach_listener_status') return { started: true, failure: null }
     if (command === 'attach_revoke_companion') return revoke(args)
@@ -144,6 +145,7 @@ describe('account settings layout', () => {
       }
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return [companion]
       if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)
@@ -175,6 +177,7 @@ describe('account settings layout', () => {
       if (command === 'record_thread_retention_choice') return save.promise
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return [companion]
       if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)
@@ -207,6 +210,7 @@ describe('account settings layout', () => {
       }
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return [companion]
       if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)
@@ -283,6 +287,7 @@ describe('account settings layout', () => {
     const invoke = vi.fn(async (command, args) => {
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return programs
       if (command === 'attach_listener_status') return { started: true, failure: null }
       if (command === 'attach_revoke_companion') {
@@ -309,6 +314,7 @@ describe('account settings layout', () => {
       const invoke = vi.fn(async (command) => {
         if (command === 'auth_entitlement_snapshot') return snapshot
         if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
         if (command === 'attach_companions') return []
         if (command === 'attach_listener_status') return { started: false, failure }
         if (command === 'restart_muniment') return
@@ -332,6 +338,7 @@ describe('account settings layout', () => {
       const invoke = vi.fn(async (command) => {
         if (command === 'auth_entitlement_snapshot') return snapshot
         if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
         if (command === 'attach_companions') return []
         if (command === 'attach_listener_status') return { started: false, failure: 'instance_lock', presenting, supervisor_running: supervisorRunning }
         throw new Error(`unexpected command: ${command}`)
@@ -354,6 +361,7 @@ describe('account settings layout', () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return []
       if (command === 'attach_listener_status') {
         statusCalls += 1
@@ -374,6 +382,7 @@ describe('account settings layout', () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return []
       if (command === 'attach_listener_status') {
         statusCalls += 1
@@ -393,6 +402,7 @@ describe('account settings layout', () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return []
       if (command === 'attach_listener_status') return { started: false, failure: null, pending: false, stopped: true }
       if (command === 'restart_muniment') return
@@ -411,6 +421,7 @@ describe('account settings layout', () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return []
       if (command === 'attach_listener_status') {
         statusCalls += 1
@@ -432,6 +443,7 @@ describe('account settings layout', () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return []
       if (command === 'attach_listener_status') {
         statusCalls += 1
@@ -453,6 +465,7 @@ describe('account settings layout', () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'auth_entitlement_snapshot') return snapshot
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return []
       if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)

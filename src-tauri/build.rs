@@ -44,6 +44,9 @@ const APP_COMMANDS: &[&str] = &[
     "auth_status",
     "auth_entitlement_snapshot",
     "auth_devices",
+    "auth_pairing_challenge",
+    "auth_pairing_status",
+    "auth_pairing_revoke",
     "auth_sign_out",
     "local_mode_status",
     "local_mode_enter",
@@ -179,9 +182,12 @@ fn main() {
             .and_then(|output| String::from_utf8(output.stdout).ok())
             .map(|text| text.trim().to_owned())
     };
-    for name in [Some("HEAD".to_owned()), git(&["symbolic-ref", "-q", "HEAD"])]
-        .into_iter()
-        .flatten()
+    for name in [
+        Some("HEAD".to_owned()),
+        git(&["symbolic-ref", "-q", "HEAD"]),
+    ]
+    .into_iter()
+    .flatten()
     {
         if let Some(file) = git(&["rev-parse", "--git-path", &name]) {
             println!("cargo:rerun-if-changed={file}");

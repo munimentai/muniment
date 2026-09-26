@@ -293,6 +293,7 @@ beforeEach(() => {
     if (command === 'chat_file_metadata') return { displayName: payload.path.split(/[\\/]/).pop(), byteLength: 1536 }
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
+    if (command === 'auth_pairing_status') return { pair: null }
     if (command === 'attach_companions') return []
     if (command === 'attach_listener_status') return { started: true, failure: null }
     if (command === 'record_companies') return recordCompaniesResult
@@ -7264,6 +7265,7 @@ describe('signed-in access popover', () => {
         ])
       }
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return []
       if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)
@@ -7278,7 +7280,7 @@ describe('signed-in access popover', () => {
     expect(screen.getByText(/Ask a question or request a file/)).toBeInTheDocument()
 
     rejectOpen(new Error('offline'))
-    const retry = await within(dialog).findByRole('button', { name: 'Try again' })
+    const retry = await within(dialog.querySelector('.entitlements-section')).findByRole('button', { name: 'Try again' })
     expect(screen.getByText(/Ask a question or request a file/)).toBeInTheDocument()
     await fireEvent.click(retry)
     expect(accessCalls).toBe(3)
@@ -7302,6 +7304,7 @@ describe('signed-in access popover', () => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot([grant()])
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'auth_devices') return [
         device('revoked-newest', { platform: 'ios', revoked_at: '2026-06-01T00:00:00Z', last_active_at: '2026-07-01T00:00:00Z' }),
         device('active-old', { platform: 'android', last_active_at: '2026-05-01T00:00:00Z' }),
@@ -7374,6 +7377,7 @@ describe('signed-in access popover', () => {
       'retention-heading',
       'entitlements-heading',
       'devices-heading',
+      'pairing-heading',
       'companions-heading',
       'voice-heading',
     ])
@@ -7402,6 +7406,7 @@ describe('signed-in access popover', () => {
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot([grant()])
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'auth_devices') {
         deviceCalls += 1
         if (deviceCalls === 1) throw new Error('raw backend secret')
@@ -7417,7 +7422,7 @@ describe('signed-in access popover', () => {
     expect(dialog).not.toHaveTextContent('raw backend secret')
     expect(within(dialog).getByRole('button', { name: 'allow use · gpt' })).toBeInTheDocument()
     const entitlementCalls = invoke.mock.calls.filter(([command]) => command === 'auth_entitlement_snapshot').length
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }))
+    await fireEvent.click(within(dialog.querySelector('.devices-section')).getByRole('button', { name: 'Try again' }))
     expect(await within(dialog).findByText('Active')).toBeInTheDocument()
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_entitlement_snapshot')).toHaveLength(entitlementCalls)
   })
@@ -7432,6 +7437,7 @@ describe('signed-in access popover', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return pendingCompanions.promise
       if (command === 'attach_listener_status') return { started: true, failure: null }
       throw new Error(`unexpected command: ${command}`)
@@ -7463,6 +7469,7 @@ describe('signed-in access popover', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') {
         companionCalls += 1
         if (companionCalls === 1) throw new Error('raw backend secret')
