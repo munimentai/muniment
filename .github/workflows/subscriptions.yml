@@ -14,8 +14,7 @@ on:
         required: true
         type: string
 
-# Nightly.yml remains the candidate builder. This workflow proves subscription chats
-# against that signed candidate.
+# Nightly builds the candidate. Native runners test its installed packages.
 permissions:
   contents: read
   actions: read
@@ -39,9 +38,13 @@ jobs:
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha }}
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Clear platform output
+        run: rm -rf "$RUNNER_TEMP/subscription-linux"
       - name: Run installed subscription check
         env:
           OUTPUT: ${{ runner.temp }}/subscription-linux
@@ -71,9 +74,13 @@ jobs:
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha }}
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Clear platform output
+        run: rm -rf "$RUNNER_TEMP/subscription-windows"
       - name: Run installed subscription check
         env:
           OUTPUT: ${{ runner.temp }}/subscription-windows
@@ -101,9 +108,13 @@ jobs:
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha }}
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Clear platform output
+        run: rm -rf "$RUNNER_TEMP/subscription-macos-arm64"
       - name: Run installed ARM64 subscription check
         env:
           OUTPUT: ${{ runner.temp }}/subscription-macos-arm64
@@ -136,9 +147,13 @@ jobs:
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha }}
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Clear platform output
+        run: rm -rf "$RUNNER_TEMP/subscription-macos-x64"
       - name: Run installed subscription check
         env:
           OUTPUT: ${{ runner.temp }}/subscription-macos-x64
@@ -161,9 +176,13 @@ jobs:
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha }}
       - name: Validate pinned source identity
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
+      - name: Clear collection directories
+        run: rm -rf "$RUNNER_TEMP/subscription-inputs" "$RUNNER_TEMP/release-acceptance"
       - name: Download platform evidence
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         continue-on-error: true
@@ -175,6 +194,7 @@ jobs:
         id: collect
         env:
           OUTPUT: ${{ runner.temp }}/release-acceptance
+          SUBSCRIPTION_JOB_RESULTS: ${{ toJSON(needs) }}
         run: |
           set +e
           node test/e2e/runner/collect-subscriptions.mjs "$SOURCE_SHA" "$OUTPUT" \
@@ -199,4 +219,4 @@ jobs:
           COLLECT_STATUS: ${{ steps.collect.outputs.status }}
         run: |
           test "$COLLECT_STATUS" = 0
-          echo 'Subscription proof covers chat, direct-model-selection, and model-switching only.'
+          echo 'The installed release acceptance checks passed on all four platforms.'

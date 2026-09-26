@@ -4,7 +4,8 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { createHash } from 'node:crypto'
-import { platforms } from '../support/subscription-acceptance.mjs'
+import { platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
+import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { run, writeBlocked } from './subscriptions.mjs'
 
 const missingPackage = 'The signed nightly package or updater signature for this platform is missing.'
@@ -103,6 +104,7 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
     let compactLeases
     try { parsedModels = JSON.parse(models) } catch { throw new Error(missingModels) }
     try { compactLeases = JSON.stringify(JSON.parse(leases)) } catch { throw new Error(missingLeases) }
+    try { subscriptionAccounts(parsedModels, JSON.parse(compactLeases)) } catch { throw new Error(missingLeases) }
     const leasesFile = path.join(root, 'leases.json')
     fs.writeFileSync(leasesFile, compactLeases, { mode: 0o600 })
     const release = await (fetchRelease ?? (() => loadRelease(repository, token)))()
@@ -121,6 +123,10 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
       source_sha: sourceSha, platform, asset: packageAsset.name,
       sha256: createHash('sha256').update(fs.readFileSync(packageFile)).digest('hex'), models: parsedModels,
     }) + '\n', { mode: 0o600 })
+    const comment = verifyUpdaterSignature(fs.readFileSync(packageFile), fs.readFileSync(signatureFile, 'utf8'),
+      fs.readFileSync('src-tauri/updater.pub', 'utf8'))
+    const stableName = packageAsset.name.replace(`nightly-${sourceSha}-${platform.startsWith('macos-') ? 'macos' : platform}-`, '')
+    if (!comment.split('\t').includes(`file:${stableName}`)) throw new Error(missingPackage)
     const executable = install(platform, packageFile, root)
     process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = '1'
     return await run({ candidateFile, packageFile, signatureFile, executable, leasesFile, output: artifacts, sourceSha, platform })

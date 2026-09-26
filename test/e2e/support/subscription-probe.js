@@ -5,7 +5,9 @@
   window.__munimentSubscriptionProbeStarted = true
   const plan = window.__MUNIMENT_SUBSCRIPTION_PLAN__
   const invoke = window.__TAURI__.core.invoke
-  const turns = []
+  const restored = ['features', 'restart', 'update', 'update-restart'].includes(plan.phase)
+  const turns = restored ? plan.turns : []
+  let features = {}
   const visible = element => element && element.getClientRects().length > 0
   const wait = async predicate => {
     const deadline = Date.now() + 180_000
@@ -26,7 +28,7 @@
       const status = await invoke('attach_listener_status')
       return status.supervisor_running === true && status.connected === true
     })
-    for (let index = 0; index < plan.models.length; index++) {
+    for (let index = 0; !restored && index < plan.models.length; index++) {
       const model = plan.models[index]
       if (index > 0) {
         const chip = await wait(() => document.querySelector('.model-chip'))
@@ -71,13 +73,29 @@
       })
       turns.push({ index, thread, run: entry.runId, rendered: true, context: true })
     }
-    // Keep only the synthetic thread visible for the native screenshot.
+    if (restored) {
+      await wait(async () => {
+        if (await invoke('chat_current_thread') !== turns[0].thread) return false
+        const responses = [...document.querySelectorAll('.response')].filter(response =>
+          response.querySelector('.response-prose')?.textContent.trim() === plan.nonce)
+        return responses.length === 4 && responses.every(visible)
+      })
+    }
+    if (plan.acceptance) {
+      features = await window.__munimentSubscriptionFeatures({ plan, invoke, wait, setValue, turns })
+      if (plan.phase === 'chat') features['local-startup'] = ['composer-visible', 'runtime-connected']
+    }
+    // Show only verified synthetic replies. Hide account details and tool output.
     const style = document.createElement('style')
-    style.textContent = 'body * { visibility: hidden !important } .thread, .thread * { visibility: visible !important }'
+    style.textContent = 'body * { visibility: hidden !important } [data-subscription-evidence], [data-subscription-evidence] * { visibility: visible !important }'
+    for (const response of [...document.querySelectorAll('.response')]) {
+      if (response.querySelector('.response-prose')?.textContent.trim() === plan.nonce) response.setAttribute?.('data-subscription-evidence', '')
+    }
     document.head.append(style)
+    document.querySelector('[data-subscription-evidence]')?.scrollIntoView?.({ block: 'start' })
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
-    await invoke('subscription_probe_observed', { turns, passed: true })
+    await invoke('subscription_probe_observed', { turns, features, passed: true })
   } catch {
-    await invoke('subscription_probe_observed', { turns, passed: false })
+    await invoke('subscription_probe_observed', { turns, features, passed: false })
   }
 })()
