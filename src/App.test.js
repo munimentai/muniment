@@ -396,6 +396,17 @@ describe('entitlement change toast', () => {
 })
 
 describe('pairing decisions', () => {
+  it('removes an expired request without discarding the next request', async () => {
+    render(App)
+    await waitFor(() => expect(pairingListener).toBeDefined())
+    pairingListener({ payload: { challenge: 'expired', claimed_kind: 'Old client', deadline_ms: 30 } })
+    pairingListener({ payload: { challenge: 'current', claimed_kind: 'Current client', deadline_ms: 120000 } })
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('Current client'))
+    expect(invoke).not.toHaveBeenCalledWith('attach_pairing_decide', expect.objectContaining({ challenge: 'expired' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', { challenge: 'current', approve: true }))
+  })
+
   it('records a rejected listener registration without a stale unlisten handle', async () => {
     pairingRegistrationError = new Error('sensitive registration detail')
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
