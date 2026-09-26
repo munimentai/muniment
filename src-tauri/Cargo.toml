@@ -79,6 +79,11 @@ name = "launcher-panel"
 path = "tests/launcher_panel.rs"
 harness = false
 
+[[test]]
+name = "workspace-popup"
+path = "tests/workspace_popup.rs"
+harness = false
+
 [[example]]
 name = "sidecar-test-stub"
 path = "core/src/bin/sidecar-test-stub.rs"
