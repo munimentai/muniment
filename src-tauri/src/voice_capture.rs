@@ -2,10 +2,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use muniment_core::asr::capture::{bounded_pcm_channel, PcmConsumer, PcmProducer};
 
+const CAPTURE_START_TIMEOUT: Duration = Duration::from_secs(10);
 const QUEUE_CAPACITY_SAMPLES: usize = 16_000 * 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +15,7 @@ pub enum VoiceCaptureError {
     NoInputDevice,
     UnsupportedConfig,
     StreamBuildFailed,
+    StartupTimedOut,
     RuntimeStreamFailed,
     AlreadyRunning,
 }
@@ -86,17 +89,8 @@ impl VoiceCaptureState {
                 }
             })
             .map_err(|_| VoiceCaptureError::StreamBuildFailed)?;
-        let consumer = match ready_rx.recv() {
-            Ok(Ok(consumer)) => consumer,
-            Ok(Err(error)) => {
-                let _ = capture_thread.join();
-                return Err(error);
-            }
-            Err(_) => {
-                let _ = capture_thread.join();
-                return Err(VoiceCaptureError::StreamBuildFailed);
-            }
-        };
+        let (consumer, capture_thread) =
+            wait_for_capture(ready_rx, capture_thread, CAPTURE_START_TIMEOUT)?;
         *active = Some(ActiveCapture {
             stop: stop_tx,
             thread: Some(capture_thread),
@@ -223,6 +217,28 @@ impl VoiceCaptureState {
     }
 }
 
+// A system audio driver can block while opening. Drop the receiver on timeout,
+// so a late worker closes its stream instead of starting an orphan recording.
+fn wait_for_capture<T>(
+    ready: mpsc::Receiver<Result<T, VoiceCaptureError>>,
+    worker: JoinHandle<()>,
+    timeout: Duration,
+) -> Result<(T, JoinHandle<()>), VoiceCaptureError> {
+    match ready.recv_timeout(timeout) {
+        Ok(Ok(consumer)) => Ok((consumer, worker)),
+        Ok(Err(error)) => {
+            let _ = worker.join();
+            Err(error)
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = worker.join();
+            Err(VoiceCaptureError::StreamBuildFailed)
+        }
+        // Do not join a thread blocked inside the operating system.
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(VoiceCaptureError::StartupTimedOut),
+    }
+}
+
 fn drain_capture(consumer: &PcmConsumer) -> CapturedPcm {
     let samples = consumer.drain();
     // Reset only after draining: queued audio precedes the reported gap. A
@@ -269,6 +285,29 @@ mod tests {
             consumer,
         });
         state
+    }
+
+    #[test]
+    fn startup_timeout_returns_and_closes_a_late_stream() {
+        let (ready, receiver) = mpsc::sync_channel(1);
+        let (release, gate) = mpsc::sync_channel(1);
+        let (closed, done) = mpsc::sync_channel(1);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let worker_drops = drops.clone();
+        let worker = thread::spawn(move || {
+            gate.recv().unwrap();
+            let stream = FakeStream(worker_drops);
+            assert!(ready.send(Ok(())).is_err());
+            drop(stream);
+            closed.send(()).unwrap();
+        });
+        assert!(matches!(
+            wait_for_capture(receiver, worker, Duration::from_millis(1)),
+            Err(VoiceCaptureError::StartupTimedOut)
+        ));
+        release.send(()).unwrap();
+        done.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
 
     #[test]

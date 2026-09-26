@@ -382,11 +382,10 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
         .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
     // The server names its own models; the pinned id stands in when it does not answer.
     let discovered = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
-    let model_ids: Vec<String> = if discovered.is_empty() {
-        vec![OLLAMA_MODEL.to_owned()]
-    } else {
-        discovered
-    };
+    let model_ids = discovered.unwrap_or_else(|| vec![OLLAMA_MODEL.to_owned()]);
+    if model_ids.is_empty() {
+        return Err("The server has no chat models. Add a chat model, then try again.".into());
+    }
     let default_model = if model_ids.iter().any(|id| id == OLLAMA_MODEL) {
         OLLAMA_MODEL.to_owned()
     } else {
@@ -839,11 +838,11 @@ fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
             let Some(base_url) = entry.get("baseUrl").and_then(serde_json::Value::as_str) else {
                 continue;
             };
-            let discovered =
-                muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
-            if discovered.is_empty() {
+            let Some(discovered) =
+                muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT)
+            else {
                 continue;
-            }
+            };
             let current: Vec<&str> = entry
                 .get("models")
                 .and_then(serde_json::Value::as_array)
@@ -1050,6 +1049,10 @@ fn set_default_model(agent: &Path, provider: &str, model: &str) -> Result<(), St
 #[tauri::command]
 pub(crate) fn context_settings() -> Result<serde_json::Value, String> {
     let agent = harness_agent_directory(READ_SETTINGS_ERROR)?;
+    read_context_settings(&agent)
+}
+
+fn read_context_settings(agent: &Path) -> Result<serde_json::Value, String> {
     let settings = read_json_store(&agent.join("settings.json"))?.unwrap_or_default();
     let compact = settings.get("compaction");
     Ok(serde_json::json!({
@@ -1065,11 +1068,20 @@ pub(crate) fn context_settings_save(
     reserve_tokens: u64,
     keep_recent_tokens: u64,
 ) -> Result<serde_json::Value, String> {
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    save_context_settings(&agent, enabled, reserve_tokens, keep_recent_tokens)
+}
+
+fn save_context_settings(
+    agent: &Path,
+    enabled: bool,
+    reserve_tokens: u64,
+    keep_recent_tokens: u64,
+) -> Result<serde_json::Value, String> {
     if !(4096..=131072).contains(&reserve_tokens) || !(4096..=131072).contains(&keep_recent_tokens)
     {
         return Err("Choose token counts between 4,096 and 131,072.".into());
     }
-    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
     let path = agent.join("settings.json");
     let lock = muniment_core::pi_settings::lock_settings(&path)
         .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
@@ -1085,7 +1097,8 @@ pub(crate) fn context_settings_save(
     object.insert("keepRecentTokens".into(), keep_recent_tokens.into());
     lock.check().map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     write_json_for_update(&path, &settings)?;
-    context_settings()
+    drop(lock);
+    read_context_settings(agent)
 }
 
 /// Whether Pi's settings name no default model yet.
@@ -1306,7 +1319,8 @@ fn store_endpoint_provider(
         .cloned()
         .collect();
     if models.is_empty() {
-        models = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
+        models = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT)
+            .unwrap_or_default();
     }
     if models.is_empty() {
         return Err("The server named no models. Start it, or list its models here.".into());
@@ -1572,6 +1586,33 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         let path = std::env::temp_dir().join(format!("muniment-local-mode-{}", Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn context_settings_save_returns_persisted_values_without_relocking_the_write() {
+        let agent = temporary_directory();
+        fs::write(
+            agent.join("settings.json"),
+            r#"{"defaultModel":"audit-model"}"#,
+        )
+        .unwrap();
+        let saved = save_context_settings(&agent, false, 8192, 12000).unwrap();
+        assert_eq!(
+            saved,
+            serde_json::json!({
+                "enabled": false, "reserveTokens": 8192, "keepRecentTokens": 12000
+            })
+        );
+        assert_eq!(read_context_settings(&agent).unwrap(), saved);
+        assert_eq!(
+            read_json_store(&agent.join("settings.json"))
+                .unwrap()
+                .unwrap()["defaultModel"],
+            "audit-model"
+        );
+        assert!(save_context_settings(&agent, true, 0, 12000).is_err());
+        assert_eq!(read_context_settings(&agent).unwrap(), saved);
+        fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]

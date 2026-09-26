@@ -391,6 +391,10 @@ fn failure(category: &'static str, message: &'static str) -> DictationFailure {
 fn redact_capture(error: VoiceCaptureError) -> DictationFailure {
     match error {
         VoiceCaptureError::NoInputDevice => failure("noInputDevice", "No microphone is available."),
+        VoiceCaptureError::StartupTimedOut => failure(
+            "captureTimeout",
+            "The microphone did not start. Check your input device and try again.",
+        ),
         VoiceCaptureError::AlreadyRunning => {
             failure("captureBusy", "The microphone is already in use.")
         }

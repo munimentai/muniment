@@ -468,6 +468,11 @@ fn start_with(app: &AppHandle, provider: &str, target: Target) -> Result<(), Str
         .arg(&extension)
         .env("PI_CODING_AGENT_DIR", &agent)
         .env("PI_OFFLINE", "1")
+        .env(
+            "MUNIMENT_LOGIN_SUCCESS_HTML",
+            callback_page(Some(provider_display_name(provider))),
+        )
+        .env("MUNIMENT_LOGIN_ERROR_HTML", callback_page(None))
         .env_remove("BUN_BE_BUN")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

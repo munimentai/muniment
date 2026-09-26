@@ -349,13 +349,19 @@ pub(super) fn serve_chat_events_at(
 pub(super) fn register_approval_event_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let approval_app = app.clone();
     app.state::<AttachApprovalState>()
-        .register_presenter(move |request| {
+        .register_presenter_until(move |request, deadline| {
             let request = AttachPairingRequest {
                 challenge: request.challenge.clone(),
                 claimed_kind: request.claimed_kind.clone(),
                 claimed_version: request.claimed_version.clone(),
                 workspace: request.workspace.clone(),
                 scopes: request.scopes.clone(),
+                deadline_ms: u64::try_from(
+                    deadline
+                        .saturating_duration_since(std::time::Instant::now())
+                        .as_millis(),
+                )
+                .unwrap_or(u64::MAX),
             };
             approval_app
                 .emit("attach-pairing-requested", &request)

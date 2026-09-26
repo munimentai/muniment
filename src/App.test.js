@@ -396,6 +396,17 @@ describe('entitlement change toast', () => {
 })
 
 describe('pairing decisions', () => {
+  it('removes an expired request without discarding the next request', async () => {
+    render(App)
+    await waitFor(() => expect(pairingListener).toBeDefined())
+    pairingListener({ payload: { challenge: 'expired', claimed_kind: 'Old client', deadline_ms: 30 } })
+    pairingListener({ payload: { challenge: 'current', claimed_kind: 'Current client', deadline_ms: 120000 } })
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('Current client'))
+    expect(invoke).not.toHaveBeenCalledWith('attach_pairing_decide', expect.objectContaining({ challenge: 'expired' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', { challenge: 'current', approve: true }))
+  })
+
   it('records a rejected listener registration without a stale unlisten handle', async () => {
     pairingRegistrationError = new Error('sensitive registration detail')
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -426,8 +437,9 @@ describe('pairing decisions', () => {
     })
 
     const dialog = await screen.findByRole('dialog', { name: 'Approve Muniment connection' })
-    expect(dialog).toHaveTextContent('The connecting program supplied these claims: kind ACP adapter and version 2.4.1.')
-    expect(dialog).toHaveTextContent('Allow this program to access workspace Legal matters with the scopes run.write and thread.read?')
+    expect(dialog).toHaveTextContent('Identifies as ACP adapter 2.4.1.')
+    expect(dialog).toHaveTextContent('Allow this program to access workspace Legal matters?')
+    expect(dialog).toHaveTextContent('Permissions: run tasks and read workspace data.')
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Deny' })).toHaveFocus())
 
     await fireEvent.click(within(dialog).getByRole('button', { name: button }))
@@ -539,10 +551,10 @@ describe('pairing decisions', () => {
     pairingListener({ payload: { challenge: 'first', claimed_kind: 'CLI', claimed_version: '1' } })
     pairingListener({ payload: { challenge: 'second', claimed_kind: 'Editor', claimed_version: '2' } })
 
-    expect(await screen.findByRole('dialog')).toHaveTextContent('kind CLI and version 1')
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Identifies as CLI 1.')
     await waitFor(() => expect(requestUserAttention).toHaveBeenCalledTimes(2))
     await fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
-    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('kind Editor and version 2'))
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('Identifies as Editor 2.'))
     await fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('attach_pairing_decide', {
       challenge: 'second', approve: false,

@@ -41,6 +41,26 @@ describe('dictation controller', () => {
     vi.useRealTimers()
   })
 
+  it('allows another attempt when startup fails after a stop request', async () => {
+    let starts = 0
+    const invoke = vi.fn(async command => {
+      if (command === 'dictation_start') { starts++; return { state: 'starting' } }
+      if (command === 'dictation_stop') return { state: 'starting' }
+      return { state: 'failed', message: 'The microphone did not start.' }
+    })
+    const context = setup({ invoke })
+    await context.controller.start()
+    await context.controller.stop()
+    expect(context.controller.snapshot().finishing).toBe(true)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(context.controller.busy()).toBe(false)
+    expect(context.controller.snapshot().finishing).toBe(false)
+    expect(context.errors).toContain('The microphone did not start.')
+    await context.controller.start()
+    expect(starts).toBe(2)
+    context.controller.cleanup()
+  })
+
   it('ignores transcript events from a stale capture epoch', async () => {
     const context = setup()
     await context.controller.start()
