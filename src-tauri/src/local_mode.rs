@@ -1050,6 +1050,10 @@ fn set_default_model(agent: &Path, provider: &str, model: &str) -> Result<(), St
 #[tauri::command]
 pub(crate) fn context_settings() -> Result<serde_json::Value, String> {
     let agent = harness_agent_directory(READ_SETTINGS_ERROR)?;
+    read_context_settings(&agent)
+}
+
+fn read_context_settings(agent: &Path) -> Result<serde_json::Value, String> {
     let settings = read_json_store(&agent.join("settings.json"))?.unwrap_or_default();
     let compact = settings.get("compaction");
     Ok(serde_json::json!({
@@ -1065,11 +1069,20 @@ pub(crate) fn context_settings_save(
     reserve_tokens: u64,
     keep_recent_tokens: u64,
 ) -> Result<serde_json::Value, String> {
+    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
+    save_context_settings(&agent, enabled, reserve_tokens, keep_recent_tokens)
+}
+
+fn save_context_settings(
+    agent: &Path,
+    enabled: bool,
+    reserve_tokens: u64,
+    keep_recent_tokens: u64,
+) -> Result<serde_json::Value, String> {
     if !(4096..=131072).contains(&reserve_tokens) || !(4096..=131072).contains(&keep_recent_tokens)
     {
         return Err("Choose token counts between 4,096 and 131,072.".into());
     }
-    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
     let path = agent.join("settings.json");
     let lock = muniment_core::pi_settings::lock_settings(&path)
         .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
@@ -1085,7 +1098,8 @@ pub(crate) fn context_settings_save(
     object.insert("keepRecentTokens".into(), keep_recent_tokens.into());
     lock.check().map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     write_json_for_update(&path, &settings)?;
-    context_settings()
+    drop(lock);
+    read_context_settings(agent)
 }
 
 /// Whether Pi's settings name no default model yet.
@@ -1572,6 +1586,33 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         let path = std::env::temp_dir().join(format!("muniment-local-mode-{}", Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn context_settings_save_returns_persisted_values_without_relocking_the_write() {
+        let agent = temporary_directory();
+        fs::write(
+            agent.join("settings.json"),
+            r#"{"defaultModel":"audit-model"}"#,
+        )
+        .unwrap();
+        let saved = save_context_settings(&agent, false, 8192, 12000).unwrap();
+        assert_eq!(
+            saved,
+            serde_json::json!({
+                "enabled": false, "reserveTokens": 8192, "keepRecentTokens": 12000
+            })
+        );
+        assert_eq!(read_context_settings(&agent).unwrap(), saved);
+        assert_eq!(
+            read_json_store(&agent.join("settings.json"))
+                .unwrap()
+                .unwrap()["defaultModel"],
+            "audit-model"
+        );
+        assert!(save_context_settings(&agent, true, 0, 12000).is_err());
+        assert_eq!(read_context_settings(&agent).unwrap(), saved);
+        fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]
