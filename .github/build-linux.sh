@@ -25,9 +25,16 @@ fetch_tool() {
   if [ -f "$destination" ] && printf '%s  %s\n' "$sha256" "$destination" | sha256sum --check --quiet 2>/dev/null; then
     return 0
   fi
+  local headers='Accept: application/octet-stream'
+  local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  # CI shares an IP, so use its token instead of the anonymous API quota.
+  # Send the token through stdin, not argv, and only to the GitHub API.
+  if [[ "$url" == https://api.github.com/* && -n "$token" ]]; then
+    headers+=$'\n'"Authorization: Bearer $token"
+  fi
   curl --fail --location --retry 3 --retry-delay 2 --retry-all-errors \
-    --header 'Accept: application/octet-stream' \
-    --output "$temporary" "$url"
+    --header @- \
+    --output "$temporary" "$url" <<< "$headers"
   printf '%s  %s\n' "$sha256" "$temporary" | sha256sum --check --quiet
   chmod +x "$temporary"
   mv "$temporary" "$destination"
