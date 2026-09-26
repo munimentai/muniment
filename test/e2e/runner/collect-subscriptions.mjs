@@ -19,7 +19,7 @@ function redactScreenshot(bytes, name) {
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 }
 
-export function collect(sourceSha, output, inputs) {
+export function collect(sourceSha, output, inputs, jobResults) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha)) throw new Error('Provide the exact candidate source SHA.')
   const canonical = directory => fs.existsSync(directory) ? fs.realpathSync(directory) : path.resolve(directory)
   if (inputs.some(input => canonical(input) === canonical(output))) throw new Error('Keep the collection output separate from platform evidence.')
@@ -59,12 +59,18 @@ export function collect(sourceSha, output, inputs) {
         const candidate = { source_sha: original.source_sha, platform, sha256 }
         proof = acceptance(candidate, sourceSha, platform, evidence, evidence.transports, packageName)
         if (JSON.stringify(original) !== JSON.stringify(proof)) throw new Error('The platform proof does not match its runner results.')
+        if (jobResults !== undefined && jobResults?.[platform]?.result !== 'success') {
+          throw new Error('The native job did not pass in this attempt.')
+        }
         const screenshot = redactScreenshot(read(screenshotName), screenshotName)
         if (combined.packages[packageName] && combined.packages[packageName] !== sha256) throw new Error('The package digests conflict.')
         fs.writeFileSync(path.join(output, screenshotName), screenshot, { mode: 0o600 })
         Object.assign(combined.packages, proof.packages)
-        evidence = { status: 'passed', installed: true, unchanged: true, webdriver: false,
-          source_sha: sourceSha, package_sha256: sha256, models: proof.cases[0].models }
+        if (proof.cases.some(item => item.status !== 'passed')) complete = false
+        evidence = { status: proof.cases.every(item => item.status === 'passed') ? 'passed' : 'blocked',
+          installed: true, unchanged: true, webdriver: false, source_sha: sourceSha, package_sha256: sha256,
+          models: proof.cases[0].models,
+          features: Object.fromEntries(proof.cases.filter(item => item.checks).map(item => [item.feature, item.checks])) }
       }
     } catch {
       complete = false
@@ -74,6 +80,8 @@ export function collect(sourceSha, output, inputs) {
       fs.rmSync(path.join(output, screenshotName), { force: true })
     }
     fs.writeFileSync(path.join(output, evidenceName), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 })
+    fs.writeFileSync(path.join(output, `${platform}-subscription.log`), proof.cases.map(item =>
+      `${item.feature}: ${item.status}\n`).join(''), { mode: 0o600 })
     combined.cases.push(...proof.cases)
   }
   fs.writeFileSync(path.join(output, 'release-acceptance.json'), JSON.stringify(combined, null, 2) + '\n', { mode: 0o600 })
@@ -85,5 +93,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!output) {
     console.error('Use collect-subscriptions.mjs SOURCE_SHA OUTPUT PLATFORM_OUTPUT...')
     process.exitCode = 1
-  } else process.exitCode = collect(sourceSha, output, inputs)
+  } else {
+    let jobResults
+    if (process.env.SUBSCRIPTION_JOB_RESULTS !== undefined) {
+      try { jobResults = JSON.parse(process.env.SUBSCRIPTION_JOB_RESULTS) ?? {} } catch { jobResults = {} }
+    }
+    process.exitCode = collect(sourceSha, output, inputs, jobResults)
+  }
 }

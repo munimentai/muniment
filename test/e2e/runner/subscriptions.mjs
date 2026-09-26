@@ -6,6 +6,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { acceptance, blocked, checkIdentity, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
+import { updateFixture } from './subscription-update.mjs'
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const nativePlatform = () => process.platform === 'darwin' ? `macos-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
@@ -132,6 +133,7 @@ export function writeBlocked(output, sourceSha, platform, reason) {
   fs.mkdirSync(output, { recursive: true, mode: 0o700 })
   save(path.join(output, 'release-acceptance.json'), blocked(sourceSha, platform, reason))
   save(path.join(output, `${platform}-subscription.json`), { status: 'blocked', reason })
+  fs.writeFileSync(path.join(output, `${platform}-subscription.log`), 'The native acceptance run is blocked.\n', { mode: 0o600 })
   fs.rmSync(path.join(output, `screenshot-${platform}-subscriptions.png`), { force: true })
 }
 
@@ -144,7 +146,21 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
   // Write a blocked result first so a killed runner cannot leave stale passing evidence.
   let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
   writeBlocked(output, sourceSha, platform, reason)
-  let root, env, app, appClosed, runtime, runtimeClosed, verify, candidate, packageName
+  let root, env, app, appClosed, runtime, runtimeClosed, verify, candidate, packageName, updateServer
+  const stop = async (child, closed) => {
+    if (!child?.pid) return
+    if (process.platform === 'win32') {
+      if (child.exitCode === null) execute('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], env, 15_000)
+    } else {
+      try { process.kill(-child.pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
+    }
+    let timer
+    try {
+      await Promise.race([closed, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('The native probe process did not stop.')), 5000)
+      })])
+    } finally { clearTimeout(timer) }
+  }
   let passed = false
   let evidence, proof
   try {
@@ -182,7 +198,20 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     }
     const nonce = `MUNIMENT-${randomBytes(16).toString('hex')}`
     const state = env.MUNIMENT_STATE_DIR
-    save(path.join(state, 'subscription-probe.json'), { models: candidate.models, nonce })
+    const fixtureFile = path.join(root, 'acceptance.txt')
+    const fileNonce = `MUNIMENT-${randomBytes(16).toString('hex')}`
+    const mcpNonce = `MUNIMENT-${randomBytes(16).toString('hex')}`
+    const mcpReceipt = path.join(root, 'mcp-receipt.json')
+    fs.writeFileSync(fixtureFile, fileNonce, { mode: 0o600 })
+    const version = comment.split('\t').find(field => field.startsWith('version:'))?.slice(8)
+    if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) throw new Error('The signed package version is missing.')
+    reason = 'The disposable signed update server could not start. Install OpenSSL on the native runner.'
+    updateServer = await updateFixture(root, bytes, fs.readFileSync(signatureFile, 'utf8').trim(), version)
+    const plan = { models: candidate.models, nonce, fileNonce, mcpNonce, mcpReceipt,
+      acceptance: true, phase: 'chat', fixtureFile, fixtureDirectory: root,
+      mcpCommand: process.execPath, mcpScript: path.resolve('test/e2e/support/subscription-mcp.mjs'),
+      updateUrl: updateServer.url, packageSha256: candidate.sha256 }
+    save(path.join(state, 'subscription-probe.json'), plan)
     fs.writeFileSync(path.join(state, '.adopted'), '', { mode: 0o600 })
     fs.writeFileSync(path.join(state, 'local-mode'), '1', { mode: 0o600 })
     save(path.join(env.PI_CODING_AGENT_DIR, 'muniment-router.json'), { enabled: true, accounts })
@@ -191,34 +220,61 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
       defaultProvider: 'muniment-router', defaultModel: `${candidate.models[0].family}/${candidate.models[0].id}`,
     })
     reason = 'The installed probe did not finish. Check the native runtime, subscription access, and selected models.'
-    // Start the installed runtime with the same disposable profile on service-based platforms.
-    if (platform !== 'linux') {
-      const runtimeFile = platform === 'windows' ? path.join(path.dirname(executable), 'muniment-runtime.exe')
-        : path.resolve(executable, '../../Library/LaunchServices/muniment-runtime')
-      runtime = spawn(runtimeFile, [], { env, stdio: 'ignore', detached: process.platform !== 'win32' })
-      runtimeClosed = new Promise(resolve => { runtime.once('exit', resolve); runtime.once('error', resolve) })
-      await delay(3000)
-      if (!runtime.pid || runtime.exitCode !== null) throw new Error('The installed runtime could not start with the disposable profile.')
-    }
-    app = spawn(executable, ['--probe-subscription-chat'], { env, stdio: 'ignore', detached: process.platform !== 'win32' })
-    let appError = false
-    appClosed = new Promise(resolve => {
-      app.once('exit', resolve)
-      app.once('error', () => { appError = true; resolve() })
-    })
     const resultFile = path.join(state, 'subscription-probe-result.json')
-    const deadline = Date.now() + 15 * 60_000
-    while (!fs.existsSync(resultFile) && Date.now() < deadline && app.exitCode === null && !appError) await delay(250)
-    if (!fs.existsSync(resultFile)) throw new Error('The installed probe did not finish. Check the native runtime and subscription access.')
-    const probe = json(resultFile)
+    const launch = async () => {
+      if (platform !== 'linux') {
+        const runtimeFile = platform === 'windows' ? path.join(path.dirname(executable), 'muniment-runtime.exe')
+          : path.resolve(executable, '../../Library/LaunchServices/muniment-runtime')
+        runtime = spawn(runtimeFile, [], { env, stdio: 'ignore', detached: process.platform !== 'win32' })
+        runtimeClosed = new Promise(resolve => { runtime.once('exit', resolve); runtime.once('error', resolve) })
+        await delay(3000)
+        if (!runtime.pid || runtime.exitCode !== null) throw new Error('The installed runtime could not start with the disposable profile.')
+      }
+      app = spawn(executable, ['--probe-subscription-chat'], { env, stdio: 'ignore', detached: process.platform !== 'win32' })
+      let appError = false
+      appClosed = new Promise(resolve => {
+        app.once('exit', resolve)
+        app.once('error', () => { appError = true; resolve() })
+      })
+      const deadline = Date.now() + 20 * 60_000
+      while (!fs.existsSync(resultFile) && Date.now() < deadline && app.exitCode === null && !appError) await delay(250)
+      if (!fs.existsSync(resultFile)) throw new Error('The installed probe did not finish. Check the native runtime and subscription access.')
+      return json(resultFile)
+    }
+    const probe = await launch()
     reason = 'The installed subscription reply or model switch failed. Check model access and thread continuity.'
     if (!probe.passed) throw new Error('The installed subscription reply or model switch failed.')
     reason = 'The native model receipts or package identity failed verification. Check requested models, compiled source, and signed package.'
+    // Freeze chat receipts before any tool check can create another provider turn.
     const transports = fs.readFileSync(path.join(env.PI_CODING_AGENT_DIR, 'subscription-probe-transports.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+    const chatResult = { status: 'passed', installed: true, unchanged: true, source_sha: probe.source_sha,
+      webdriver: probe.webdriver, package_sha256: candidate.sha256,
+      turns: probe.turns.map(turn => ({ ...turn, requested: candidate.models[turn.index]?.id, expected: nonce })) }
+    acceptance(candidate, sourceSha, platform, chatResult, transports, packageName)
+    verify()
+    reason = 'The installed feature checks could not start with the disposable profile.'
+    await stop(app, appClosed)
+    await stop(runtime, runtimeClosed)
+    app = runtime = undefined
+    fs.rmSync(resultFile)
+    save(path.join(state, 'subscription-probe.json'), { ...plan, phase: 'features', turns: probe.turns })
+    const featureResult = await launch()
+    if (!featureResult.passed || featureResult.source_sha !== probe.source_sha || featureResult.webdriver !== false ||
+        JSON.stringify(featureResult.turns) !== JSON.stringify(probe.turns)) throw new Error(reason)
+    if (!fs.existsSync(mcpReceipt) || json(mcpReceipt).token !== mcpNonce) featureResult.features.mcp = []
+    reason = 'The installed app could not restore its disposable profile after restart.'
+    await stop(app, appClosed)
+    await stop(runtime, runtimeClosed)
+    app = runtime = undefined
+    fs.rmSync(resultFile)
+    save(path.join(state, 'subscription-probe.json'), { ...plan, phase: 'restart', turns: probe.turns })
+    const restarted = await launch()
+    if (!restarted.passed || restarted.source_sha !== probe.source_sha || restarted.webdriver !== false ||
+        JSON.stringify(restarted.turns) !== JSON.stringify(probe.turns)) throw new Error(reason)
     verify()
     const result = { status: 'passed', installed: true, unchanged: true, source_sha: probe.source_sha, webdriver: probe.webdriver,
-      package_sha256: candidate.sha256, turns: probe.turns.map(turn => ({ ...turn,
-        requested: candidate.models[turn.index]?.id, expected: nonce })) }
+      package_sha256: candidate.sha256, features: { ...probe.features, ...featureResult.features, ...restarted.features },
+      turns: probe.turns.map(turn => ({ ...turn, requested: candidate.models[turn.index]?.id, expected: nonce })) }
     proof = acceptance(candidate, sourceSha, platform, result, transports, packageName)
     reason = 'The native screenshot failed. Install the capture tool and grant the disposable login screen capture access.'
     const raw = path.join(root, 'capture')
@@ -238,19 +294,14 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     let cleanupFailed = false
     for (const [child, closed] of [[app, appClosed], [runtime, runtimeClosed]]) {
       try {
-        if (!child?.pid) continue
-        if (process.platform === 'win32') {
-          if (child.exitCode === null) execute('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], env, 15_000)
-        } else {
-          try { process.kill(-child.pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
-        }
-        await Promise.race([closed, delay(5000).then(() => { throw new Error('The native probe process did not stop.') })])
+        await stop(child, closed)
       } catch { cleanupFailed = true }
     }
     try {
       verify?.()
     } catch { cleanupFailed = true }
     try {
+      await updateServer?.close()
       if (root) fs.rmSync(root, { recursive: true, force: true })
     } catch { cleanupFailed = true }
     if (cleanupFailed) {
@@ -262,8 +313,10 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
   if (passed) {
     save(evidenceFile, evidence)
     save(proofFile, proof)
+    fs.writeFileSync(path.join(output, `${platform}-subscription.log`), proof.cases.map(item =>
+      `${item.feature}: ${item.status}\n`).join(''), { mode: 0o600 })
   }
-  return passed ? 0 : 1
+  return passed && proof.cases.every(item => item.status === 'passed') ? 0 : 1
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
