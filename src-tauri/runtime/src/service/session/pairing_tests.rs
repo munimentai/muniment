@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::thread;
 
 use super::{pairing_status, request_pairing_challenge, revoke_pairing_pair, PairingError};
-use uuid::Uuid;
+use muniment_core::auth::PairId;
 
 struct TemporaryProfile {
     profile: PathBuf,
@@ -16,7 +16,7 @@ impl TemporaryProfile {
         let profile = std::env::temp_dir().join(format!(
             "muniment-runtime-{test_name}-{}-{}",
             std::process::id(),
-            Uuid::new_v4()
+            PairId::new_v4()
         ));
         std::fs::create_dir_all(&profile).unwrap();
         Self { profile }
@@ -128,7 +128,7 @@ fn revoke_pairing_sends_the_pair_id() {
 
     let (base_url, server) = spawn_server(200, REVOKE_BODY.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", &base_url);
-    let pair_id = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+    let pair_id = PairId::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
     let result = revoke_pairing_pair("caller-access-token", pair_id, &profile.profile).unwrap();
     assert!(result.revoked);
     let request = server.join().unwrap().to_ascii_lowercase();

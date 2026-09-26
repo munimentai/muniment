@@ -861,7 +861,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
 
     fn revoke_pairing(
         &self,
-        pair_id: uuid::Uuid,
+        pair_id: muniment_core::auth::PairId,
         _provenance: Provenance,
     ) -> Result<muniment_core::auth::PairingRevokeView, ProtocolError> {
         let access_token = self

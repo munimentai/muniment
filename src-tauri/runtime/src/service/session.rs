@@ -10,8 +10,8 @@ use muniment_core::auth::{
     list_native_devices, native_status, read_pairing, revoke_pairing, run_native_sign_in_while,
     sign_out_native_session, AuthStatus, BrowserOpener, EntitlementSnapshotTracker,
     FreshNativeSession, FreshNativeSessionError, KeyringNativeCredentialStore, NativeDeviceList,
-    NativeDeviceListError, NativeSignInError, NativeTokenError, PairingChallengeView, PairingError,
-    PairingRevokeView, PairingStatusView, UreqAuthorizationTransport,
+    NativeDeviceListError, NativeSignInError, NativeTokenError, PairId, PairingChallengeView,
+    PairingError, PairingRevokeView, PairingStatusView, UreqAuthorizationTransport,
     UreqNativeDeviceListTransport, UreqPairingTransport, UreqRegistrationTransport,
     UreqRevocationTransport, UreqTokenTransport, PAIR_FILE_NAME,
 };
@@ -189,7 +189,7 @@ pub fn pairing_status(
 /// Revokes the named pair and clears matching stored peer identity.
 pub fn revoke_pairing_pair(
     access_token: &str,
-    pair_id: uuid::Uuid,
+    pair_id: PairId,
     profile_directory: &Path,
 ) -> Result<PairingRevokeView, PairingError> {
     revoke_pairing(
