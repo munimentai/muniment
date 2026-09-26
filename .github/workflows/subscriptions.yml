@@ -36,7 +36,6 @@ jobs:
       FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
       FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
       DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
-      OUTPUT: ${{ runner.temp }}/subscription-linux
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -44,6 +43,8 @@ jobs:
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
       - name: Run installed subscription check
+        env:
+          OUTPUT: ${{ runner.temp }}/subscription-linux
         run: node test/e2e/runner/subscription-host.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
@@ -67,7 +68,6 @@ jobs:
       FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
       FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
       DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
-      OUTPUT: ${{ runner.temp }}/subscription-windows
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -75,6 +75,8 @@ jobs:
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
       - name: Run installed subscription check
+        env:
+          OUTPUT: ${{ runner.temp }}/subscription-windows
         run: node test/e2e/runner/subscription-host.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
@@ -98,7 +100,6 @@ jobs:
       FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
       FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
       DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
-      OUTPUT: ${{ runner.temp }}/subscription-macos-arm64
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -106,6 +107,8 @@ jobs:
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
       - name: Run installed subscription check
+        env:
+          OUTPUT: ${{ runner.temp }}/subscription-macos-arm64
         run: node test/e2e/runner/subscription-host.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
@@ -129,7 +132,6 @@ jobs:
       FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
       FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
       DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
-      OUTPUT: ${{ runner.temp }}/subscription-macos-x64
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -137,6 +139,8 @@ jobs:
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
       - name: Run installed subscription check
+        env:
+          OUTPUT: ${{ runner.temp }}/subscription-macos-x64
         run: node test/e2e/runner/subscription-host.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
