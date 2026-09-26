@@ -1,11 +1,74 @@
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::Mutex;
+use std::thread;
 
-use muniment_core::auth::PairingError;
-use muniment_runtime::{pairing_status, request_pairing_challenge, revoke_pairing_pair};
+use super::{pairing_status, request_pairing_challenge, revoke_pairing_pair, PairingError};
 use uuid::Uuid;
 
-mod common;
-use common::{spawn_server, TemporaryProfile};
+struct TemporaryProfile {
+    profile: PathBuf,
+}
+
+impl TemporaryProfile {
+    fn new(test_name: &str) -> Self {
+        let profile = std::env::temp_dir().join(format!(
+            "muniment-runtime-{test_name}-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&profile).unwrap();
+        Self { profile }
+    }
+}
+
+impl Drop for TemporaryProfile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.profile);
+    }
+}
+
+fn spawn_server(status: u16, body: String) -> (String, thread::JoinHandle<String>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_request(&mut stream);
+        write!(
+            stream,
+            "HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        request
+    });
+    (base_url, handle)
+}
+
+fn read_request(stream: &mut TcpStream) -> String {
+    let mut bytes = Vec::new();
+    loop {
+        let mut buffer = [0; 1024];
+        let read = stream.read(&mut buffer).unwrap();
+        assert_ne!(read, 0, "the client sends the complete request");
+        bytes.extend_from_slice(&buffer[..read]);
+        if let Some(head_length) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&bytes[..head_length]).to_ascii_lowercase();
+            let length: usize = head
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("content-length:")
+                        .map(|value| value.trim().parse().unwrap())
+                })
+                .unwrap_or(0);
+            if bytes.len() >= head_length + 4 + length {
+                break;
+            }
+        }
+    }
+    String::from_utf8(bytes).unwrap()
+}
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -36,7 +99,7 @@ fn request_pairing_challenge_sends_the_caller_token() {
 #[test]
 fn pairing_status_clears_stored_identity_when_the_pair_is_absent() {
     let _guard = TEST_LOCK.lock().unwrap();
-    let profile = TemporaryProfile::new("pairing-status", false);
+    let profile = TemporaryProfile::new("pairing-status");
     let (base_url, pair_server) = spawn_server(200, PAIR_BODY.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", &base_url);
     let paired = pairing_status("caller-access-token", &profile.profile).unwrap();
@@ -57,7 +120,7 @@ fn pairing_status_clears_stored_identity_when_the_pair_is_absent() {
 #[test]
 fn revoke_pairing_sends_the_pair_id() {
     let _guard = TEST_LOCK.lock().unwrap();
-    let profile = TemporaryProfile::new("pairing-revoke", false);
+    let profile = TemporaryProfile::new("pairing-revoke");
     let (base_url, seed) = spawn_server(200, PAIR_BODY.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", &base_url);
     pairing_status("caller-access-token", &profile.profile).unwrap();

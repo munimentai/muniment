@@ -1,5 +1,8 @@
 //! Native session service operations.
 
+#[cfg(test)]
+mod pairing_tests;
+
 pub use muniment_core::attach::EntitlementSnapshotResult;
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::auth::{
