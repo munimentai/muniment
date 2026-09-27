@@ -1,0 +1,19 @@
+name: Set up the artifact store
+description: Set up the authenticated MinIO client outside the checkout.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        if command -v aws >/dev/null; then
+          cli="$(command -v aws)"
+        else
+          directory="$RUNNER_TEMP/minio-artifact-cli"
+          if [ ! -x "$directory/bin/aws" ]; then
+            python3 -m venv "$directory"
+            env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY "$directory/bin/pip" install awscli
+          fi
+          cli="$directory/bin/aws"
+        fi
+        printf 'AWS_CLI=%s\n' "$cli" >> "$GITHUB_ENV"
