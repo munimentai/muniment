@@ -24,8 +24,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Native desktop-ci jobs inherit the private release runner's SSH key.
   linux:
-    runs-on: self-hosted
+    runs-on: muniment-release
     timeout-minutes: 45
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
@@ -61,7 +62,7 @@ jobs:
   windows:
     needs: linux
     if: always() && !cancelled()
-    runs-on: self-hosted
+    runs-on: muniment-release
     timeout-minutes: 45
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
@@ -134,7 +135,7 @@ jobs:
   macos-x64:
     needs: macos-arm64
     if: always() && !cancelled()
-    runs-on: self-hosted
+    runs-on: muniment-release
     timeout-minutes: 45
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
