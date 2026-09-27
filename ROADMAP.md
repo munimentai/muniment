@@ -50,3 +50,8 @@ while the desktop grows. This file lists remaining outcomes, not completed work.
 - Markdown-only pull requests use the smoke and steering gate.
 - Public-surface changes update `docs/public-evidence/` when prepared for publication.
 - Release, publication, push and paid-service activation require an explicit request.
+
+## Brand release gate
+
+- Review Pocket Fold in dark and light modes at desktop and phone widths.
+- Confirm the shared identity, readable contrast and geometric assets in release builds.

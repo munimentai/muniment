@@ -8,7 +8,7 @@ default. The interface is the user's territory and the model is a visitor.
 ## Tokens
 
 `src/styles/tokens.css` is the token source. Code has theme-aware syntax tokens. Light and dark are both
-first-class, the OS picks the default, and a user override persists per device.
+first-class, dark mode is the default, and a user override persists per device.
 Every theme carries ten core color tokens in one `:root[data-theme]`
 block. The house sets are Paper, Vellum, Ledger and Foolscap in light and
 Moss, Vault, Graphite and Inkwell in dark. Parchment, Manila and Linen carry
@@ -16,18 +16,18 @@ the light neutrals of Solarized, Gruvbox and Catppuccin, and Lagoon, Umber,
 Fjord, Plum, Nocturne, Nightshade, Basalt and Obsidian carry the dark
 neutrals of Solarized, Gruvbox, Nord, Catppuccin, Tokyo Night, Dracula,
 Monokai and One Dark. Broadsheet and Carbon are the high contrast sets, pure
-ink on pure paper with strong hairlines. Paper and Vault are the two defaults
+ink on pure paper with strong hairlines. Paper and Moss are the two defaults
 below.
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `--paper` | `#F6F7F6` | `#000000` | App background |
-| `--surface` | `#FFFFFF` | `#0E1110` | Cards, composer, bars |
+| `--paper` | `#F8F7F4` | `#141716` | App background |
+| `--surface` | `#FFFFFF` | `#1C201E` | Cards, composer, bars |
 | `--faint` | `#EDEFEE` | `#161A18` | User bubbles, kbd chips, hover |
-| `--ink` | `#1A1D1C` | `#ECEFED` | Text, primary buttons |
-| `--muted` | `#5C6461` | `#9AA29E` | Secondary text, icons at rest |
-| `--border` | `#E2E5E3` | `#262B28` | Hairlines |
-| `--signal` | `#2A7264` | `#58B39F` | Computation only |
+| `--ink` | `#111111` | `#E8EBE9` | Text, primary buttons |
+| `--muted` | `#5C6461` | `#8A928E` | Secondary text, icons at rest |
+| `--border` | `#E2E5E3` | `#2A2F2C` | Hairlines |
+| `--signal` | `#2A7264` | `#58B39F` | Primary actions, selection, computation |
 | `--signal-soft` | `rgba(42,114,100,.10)` | `rgba(88,179,159,.12)` | Signal backgrounds |
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
@@ -49,20 +49,16 @@ The super key with `=`, `-` and `0` moves the same step. Both live on the
 device beside the theme and the shipped pair stays the default.
 
 Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
-Shape: Settings tabs and the update control use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
+Shape: Settings tabs and the update control use `--radius-pill`. Other radii are `--radius-chip` 4, `--radius-control` 10, `--radius-panel` 16.
 Hairline borders do the work. `--shadow-window` and `--shadow-overlay` are the only depth tokens. Motion is purposeful and
-rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide. `prefers-reduced-motion` removes all of it.
+rare: the active action's text sheen, the streaming underscore, the panel slide. `prefers-reduced-motion` removes all of it.
 
 ## Laws
 
-1. **Color means computation.** The static setup brand graph also uses
-   `--signal`. Otherwise `--signal` appears only on the mark's thinking
-   state, the streaming underscore and caret on
-   the active line, the route segment of the provenance line, the live voice
-   polish flash, the enabled state of the Models show switch, and workflow-run
-   indicators. Settings tabs, selected capability filters, verified updates and enabled extension switches use the theme signal.
-   Other buttons, links, selection, icons at rest and badges are ink on paper.
-   `src/styles/signal-allowlist.test.js` enforces the list.
+1. **Verdigris identifies action and state.** Primary actions, the active workspace,
+   selected controls and live computation use signal. Other controls stay in ink.
+   The Pocket Fold ear keeps its fixed brand color in both themes.
+   `src/styles/signal-allowlist.test.js` enforces the allowed selectors.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
    entries, costs, model names, file paths and keyboard chips render in Commit
    Mono. Conversation renders in Schibsted Grotesk.
@@ -84,25 +80,26 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    names its harness. A state line, an empty state and a composer hint are one
    line each and under twelve words.
 
-## The ring
+## Pocket Fold identity
 
-The mark is the woven graph ring. Its canonical vertices and size reductions
-live in `src/lib/graph-mark.js`. The 20px, 32px and 56px variants use 22, 33
-and 55 nodes with two connections per node and thicker lines at small sizes.
-At 96px and above the full graph has 110 nodes, 220 connections and node dots.
-The setup lockup shows the static 160px graph with the wordmark in its center.
-Static marks retain the original proportions. Native icons use size reductions
-in verdigris on the dark brand card. Provider callbacks use the static 56px graph.
-Only the 20px chat mark moves: irregular pulse, eased random rotation, and
-an occasional outline trace. The inner graph contracts during the pulse so
-the center opening shrinks. Visible chat marks share one clock. Reduced
-motion keeps the original static pose. No light balls traverse the graph.
+Pocket Fold is the product mark. Its body and custom outlined wordmark use ink,
+and its ear uses verdigris `#2A7264` in both themes. The fold diagonal is straight.
+The letterforms use smooth geometric curves. The wordmark is an asset, not a font.
+The symbol has no face, eyes or mascot behavior. Small icons use the symbol alone.
+Light surfaces use warm paper `#F8F7F4`, white panels and near-black `#111111` ink.
+Dark surfaces use `#141716` paper and `#1C201E` panels with light ink.
+Verdigris identifies primary actions, selected states and live computation.
+Dark controls use `#58B39F` with dark text for contrast. The logo ear stays `#2A7264`.
+Schibsted Grotesk carries interface copy. Commit Mono carries evidence.
+Radii use 4 for chips, 10 for controls and 16 for panels. Tables stay compact.
+Dark mode is the default. A saved light-mode choice persists.
+Keyboard focus, readable contrast and reduced motion remain required.
 
 ## Grammar
 
 Layout is sidebar, thread, and one rail column for workspace tabs or the optional Record panel (⌘K).
 Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
-messages sit right in `faint` bubbles at radius 10. Responses sit plain on
+messages sit right in `faint` bubbles at radius 16. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
 36px gutter, and render as Markdown from the first token. The composer keeps
 its 760px column, and the transcript scrolls on under it and fades into the
@@ -155,7 +152,7 @@ down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
 The composer band is one mono row under the composer. The horizontal ellipsis,
 model selector and capacity control share their height and spacing. Voice and
 the attachment paperclip sit beside the send control. The band's one action control sits at its right
-end: absent while the draft is empty, an ink up-arrow button once the draft has
+end: absent while the draft is empty, a verdigris up-arrow button once the draft has
 text, and a muted stop square while a reply is in flight. Enter sends. A
 message sent while a reply is in flight steers it: the reply picks it up at its
 next check, and the stop control ends the reply. The band shows no hint in
