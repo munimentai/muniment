@@ -108,6 +108,8 @@ export function createDictationController({
         finishing = true
         finish(completionEpoch)
       }
+    } else if (!isDictationActive(next) && completionEpoch !== undefined) {
+      complete(completionEpoch)
     }
     publish()
   }

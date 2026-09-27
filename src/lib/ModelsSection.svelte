@@ -116,7 +116,7 @@
   async function disconnect(entry) {
     try {
       await tauri.invoke('local_mode_disconnect_provider', { provider: entry.id })
-      status = `${entry.name} is disconnected.`
+      status = entry.source === 'claude-code' ? 'The Claude Code connection is disconnected.' : `${entry.name} is disconnected.`
       await load()
     } catch (error) {
       status = String(error?.message ?? error)

@@ -813,8 +813,32 @@ pub(crate) fn import_credential<R: tauri::Runtime>(
     let family = family_for_pi_provider(provider)
         .ok_or_else(|| "This provider has no subscription the router can pool.".to_string())?;
     let agent = agent()?;
+    let mut credential = credential;
+    quota::identify_claude(&mut credential, quota::TIMEOUT);
+    // Identify older opaque credentials outside the settings lock. Apply each
+    // answer only if another sign-in has not replaced that credential.
+    let mut identities = Vec::new();
+    if provider == "anthropic" {
+        for account in load(&agent)?.accounts {
+            let original = account.credential;
+            let mut identified = original.clone();
+            quota::identify_claude(&mut identified, quota::TIMEOUT);
+            if identified != original {
+                identities.push((account.id, original, identified));
+            }
+        }
+    }
     let lock = lock_pi_auth_file(&config::config_path(&agent))?;
     let mut config = load(&agent)?;
+    for (id, original, identified) in identities {
+        if let Some(account) = config
+            .accounts
+            .iter_mut()
+            .find(|account| account.id == id && account.credential == original)
+        {
+            account.credential = identified;
+        }
+    }
     // A pooled subscription serves through the router alone, so the account
     // that joins turns the router on.
     config.enabled = true;

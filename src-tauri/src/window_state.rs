@@ -8,6 +8,13 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 #[cfg(target_os = "macos")]
 mod macos;
 
+pub fn plugin_builder() -> tauri_plugin_window_state::Builder {
+    tauri_plugin_window_state::Builder::default()
+        .skip_initial_state("main")
+        // Transient windows must stay hidden until their owner positions and opens them.
+        .with_denylist(&["launcher", "workspace-menu"])
+}
+
 #[derive(Deserialize)]
 struct SavedState {
     width: u32,
