@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, profileLogs, transcriptText, linuxRuntimeStatus, readDiagnosticLog } from './e2e/support/subscription-diagnostics.mjs'
-import { awaitProbeResult, equalPayload, isolatedEnvironment, verifyInstalled, writeBlocked } from './e2e/runner/subscriptions.mjs'
+import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, profileLogs, transcriptText, linuxRuntimeStatus, readDiagnosticLog, probeProgress } from './e2e/support/subscription-diagnostics.mjs'
+import { awaitProbeResult, awaitUpdateResult, equalPayload, isolatedEnvironment, verifyInstalled, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 
@@ -131,6 +131,64 @@ test('profile logs retain redacted app and runtime tails without credential file
     assert.match(linuxRuntimeStatus(env), /stale/)
   }
 }))
+
+test('Linux diagnostics retain exit and signal receipts after the desktop reaps the runtime', () => temporary(root => {
+  const env = isolatedEnvironment(root, {})
+  const directory = path.join(env.XDG_RUNTIME_DIR, 'muniment')
+  fs.mkdirSync(directory)
+  const identity = { pid: 2147483647, started: 123 }
+  const file = path.join(directory, 'desktop-runtime.json')
+  const receipt = path.join(directory, `desktop-runtime-${identity.pid}-${identity.started}.exit`)
+  fs.writeFileSync(file, JSON.stringify(identity))
+  for (const [raw, expected] of [[42 << 8, 'exit=42 signal=none'], [15, 'exit=none signal=15'], [0, 'exit=0 signal=none'], [139, 'exit=none signal=11']]) {
+    fs.writeFileSync(receipt, `${raw}\n`)
+    assert.ok(linuxRuntimeStatus(env).endsWith(expected))
+  }
+  for (const invalid of ['', '10752', '-1\n', '65536\n', '127\n', '128\n', '65\n', '257\n', '1.5\n', 'secret\n']) {
+    fs.writeFileSync(receipt, invalid)
+    assert.match(linuxRuntimeStatus(env), /state=absent exit=unavailable/)
+  }
+  fs.writeFileSync(receipt, '10752\n')
+  fs.writeFileSync(file, JSON.stringify({ ...identity, started: identity.started + 1 }))
+  assert.match(linuxRuntimeStatus(env), /state=absent exit=unavailable/)
+  fs.writeFileSync(file, JSON.stringify(identity))
+  fs.rmSync(receipt)
+  if (process.platform !== 'win32') {
+    fs.symlinkSync(file, receipt)
+    assert.match(linuxRuntimeStatus(env), /state=absent exit=unavailable/)
+  }
+}))
+
+test('update timeouts read the latest checkpoint without changing the failing step', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-checkpoint-'))
+  try {
+    const env = isolatedEnvironment(root, {})
+    const checkpoint = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe.json')
+    const resultFile = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe-result.json')
+    fs.writeFileSync(checkpoint, JSON.stringify({ phase: 'update' }))
+    let clock = 0
+    await assert.rejects(awaitUpdateResult(() => fs.existsSync(resultFile), {
+      now: () => clock, timeout: 500, wait: async ms => {
+        clock += ms
+        fs.writeFileSync(checkpoint, JSON.stringify({ phase: 'update-restart' }))
+      },
+    }), error => {
+      writeBlocked(root, sourceSha, 'linux', 'The updated app did not restart.',
+        `${probeProgress(env, 'update/wait-result', 'update')}\nerror=${error.message}`, redact)
+      return /did not restart/.test(error.message)
+    })
+    const log = fs.readFileSync(path.join(root, 'linux-subscription.log'), 'utf8')
+    assert.match(log, /step=update\/wait-result\nphase=update-restart\nerror=The updated app did not restart/)
+    assert.equal(fs.existsSync(resultFile), false)
+    for (const content of ['', '{', JSON.stringify({ phase: lease.access }), '{}', 'null']) {
+      fs.writeFileSync(checkpoint, content)
+      assert.equal(probeProgress(env, 'update/wait-result', 'update'), 'step=update/wait-result\nphase=update')
+    }
+    fs.rmSync(checkpoint)
+    assert.equal(probeProgress(env, 'chat/app-start', 'chat'), 'step=chat/app-start\nphase=chat')
+    assert.equal(probeProgress(undefined, 'prerequisites', 'not started'), 'step=prerequisites\nphase=not started')
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
 
 test('native log tails decode Windows MSI logs, bound large files, and reject links', () => temporary(root => {
   const file = path.join(root, 'msi.log')

@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { acceptance, blocked, checkIdentity, featureChecks, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { updateFixture } from './subscription-update.mjs'
-import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus } from '../support/subscription-diagnostics.mjs'
+import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus, probeProgress } from '../support/subscription-diagnostics.mjs'
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const nativePlatform = () => process.platform === 'darwin' ? `macos-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
@@ -384,7 +384,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     passed = true
   } catch (error) {
     writeBlocked(output, sourceSha, platform, reason,
-      `step=${step}\nphase=${phase}\nerror=${error.message}\napp: ${processStatus(app)}\nruntime: ${platform === 'linux' ? linuxRuntimeStatus(env) : processStatus(runtime)}\n${profileLogs(env, redact)}`, redact)
+      `${probeProgress(env, step, phase)}\nerror=${error.message}\napp: ${processStatus(app)}\nruntime: ${platform === 'linux' ? linuxRuntimeStatus(env) : processStatus(runtime)}\n${profileLogs(env, redact)}`, redact)
   } finally {
     let cleanupFailed = false
     if (relaunchedPid) {
@@ -412,7 +412,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
       cleanupFailed = true
       writeBlocked(output, sourceSha, platform, reason, `step=cleanup/payload\nerror=${error.message}`, redact)
     }
-    finalDiagnostics = redact(`step=cleanup/logs\nphase=${phase}\napp: ${processStatus(app)}\nruntime: ${platform === 'linux' ? linuxRuntimeStatus(env) : processStatus(runtime)}\n${profileLogs(env, redact)}`)
+    finalDiagnostics = redact(`${probeProgress(env, 'cleanup/logs', phase)}\napp: ${processStatus(app)}\nruntime: ${platform === 'linux' ? linuxRuntimeStatus(env) : processStatus(runtime)}\n${profileLogs(env, redact)}`)
     try {
       await updateServer?.close()
       if (root) fs.rmSync(root, { recursive: true, force: true })

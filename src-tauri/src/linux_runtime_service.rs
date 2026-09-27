@@ -4,7 +4,10 @@ use muniment_core::attach::linux::AttachFilesystem;
 use tauri::Manager;
 
 mod activation;
+mod child;
 mod process;
+
+pub(crate) use child::RuntimeChild;
 
 #[cfg(test)]
 mod tests;

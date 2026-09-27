@@ -1,9 +1,9 @@
+use super::child::RuntimeChild;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Child;
 
 use muniment_core::attach::linux::AttachFilesystem;
 
@@ -61,11 +61,19 @@ impl Identity {
 pub(super) fn spawn_runtime(
     filesystem: &AttachFilesystem,
     executable: &Path,
-) -> Result<Child, String> {
+) -> Result<RuntimeChild, String> {
     let mut child = super::activation::spawn_runtime(executable)?;
-    let result = (|| -> io::Result<()> {
+    let result = (|| -> io::Result<File> {
         let identity = Identity::read(child.id().try_into().map_err(|_| invalid_identity())?)?;
         let path = record_path(filesystem);
+        let receipt = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path.with_file_name(format!(
+                "desktop-runtime-{}-{}.exit",
+                identity.pid, identity.started
+            )))?;
         let temporary =
             path.with_file_name(format!("desktop-runtime-{}.tmp", uuid::Uuid::now_v7()));
         let mut file = OpenOptions::new()
@@ -78,17 +86,20 @@ pub(super) fn spawn_runtime(
             std::fs::rename(&temporary, path)
         })();
         let _ = std::fs::remove_file(temporary);
-        result
+        result?;
+        Ok(receipt)
     })();
-    if let Err(error) = result {
-        // A start without a saved identity would leave the next desktop unable to stop it.
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!(
-            "Muniment could not save its runtime process identity: {error}"
-        ));
+    match result {
+        Ok(receipt) => Ok(RuntimeChild::new(child, receipt)),
+        Err(error) => {
+            // A start without a saved identity would leave the next desktop unable to stop it.
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(format!(
+                "Muniment could not save its runtime process identity: {error}"
+            ))
+        }
     }
-    Ok(child)
 }
 
 // Return false when the record has no live match, so the owner can stop a systemd service.
@@ -177,6 +188,12 @@ mod tests {
         let mut child = spawn_runtime(&filesystem, Path::new("/usr/bin/yes")).unwrap();
         let path = record_path(&filesystem);
         let original = std::fs::read(&path).unwrap();
+        let identity: Identity = serde_json::from_slice(&original).unwrap();
+        let receipt = path.with_file_name(format!(
+            "desktop-runtime-{}-{}.exit",
+            identity.pid, identity.started
+        ));
+        assert!(std::fs::read_to_string(&receipt).unwrap().is_empty());
         for field in ["boot", "started", "device", "inode"] {
             let mut identity: Identity = serde_json::from_slice(&original).unwrap();
             match field {
@@ -203,6 +220,7 @@ mod tests {
         std::fs::write(&path, original).unwrap();
         assert!(stop_runtime(&filesystem).unwrap());
         child.wait().unwrap();
+        assert_eq!(std::fs::read_to_string(receipt).unwrap(), "9\n");
         assert!(!stop_runtime(&filesystem).unwrap());
     }
 

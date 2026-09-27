@@ -2,6 +2,11 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
+#[cfg(target_os = "linux")]
+use crate::linux_runtime_service::RuntimeChild;
+#[cfg(target_os = "macos")]
+use std::process::Child as RuntimeChild;
+
 const DWELL: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -44,7 +49,7 @@ pub(crate) struct Snapshot {
 pub(crate) struct RuntimeOwner {
     state: Mutex<Lifecycle>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    child: Mutex<Option<std::process::Child>>,
+    child: Mutex<Option<RuntimeChild>>,
 }
 
 #[derive(Default)]
@@ -197,7 +202,7 @@ impl RuntimeOwner {
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(crate) fn keep_child(&self, child: std::process::Child) {
+    pub(crate) fn keep_child(&self, child: RuntimeChild) {
         *self.child.lock().unwrap() = Some(child);
     }
 

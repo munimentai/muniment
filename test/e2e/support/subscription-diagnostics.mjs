@@ -55,6 +55,15 @@ export function processStatus(child) {
   return `pid=${child.pid} exit=${child.exitCode ?? 'none'} signal=${child.signalCode ?? 'none'}`
 }
 
+export function probeProgress(env, step, phase) {
+  try {
+    const checkpoint = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe.json')
+    const current = JSON.parse(fs.readFileSync(checkpoint, 'utf8')).phase
+    if (['chat', 'features', 'restart', 'update', 'update-restart'].includes(current)) phase = current
+  } catch { /* Keep the last phase when the checkpoint is missing or incomplete. */ }
+  return `step=${step}\nphase=${phase}`
+}
+
 export function linuxRuntimeStatus(env) {
   if (!env) return 'not started'
   try {
@@ -64,6 +73,23 @@ export function linuxRuntimeStatus(env) {
     const identity = JSON.parse(fs.readFileSync(file, 'utf8'))
     if (!Number.isSafeInteger(identity.pid) || identity.pid <= 1 || identity.pid > 2147483647 ||
         !Number.isSafeInteger(identity.started) || identity.started <= 0) return 'The runtime identity is invalid. exit=unavailable'
+    // A matching receipt survives reaping and PID reuse. Live children have empty receipts.
+    const receipt = path.join(path.dirname(file), `desktop-runtime-${identity.pid}-${identity.started}.exit`)
+    try {
+      const info = fs.lstatSync(receipt)
+      if (info.isFile() && info.size <= 16) {
+        const text = fs.readFileSync(receipt, 'utf8')
+        if (/^\d+\n$/.test(text)) {
+          const status = Number(text)
+          const signal = status & 127
+          const exited = (status & 255) === 0
+          const signaled = status <= 255 && signal > 0 && signal <= 64
+          if (Number.isSafeInteger(status) && status >= 0 && status <= 65535 && (exited || signaled)) {
+            return `pid=${identity.pid} exit=${signal ? 'none' : status >> 8} signal=${signal || 'none'}`
+          }
+        }
+      }
+    } catch { /* Older packages have no exit receipt. */ }
     let stat
     try { stat = fs.readFileSync(`/proc/${identity.pid}/stat`, 'utf8') }
     catch { return `pid=${identity.pid} state=absent exit=unavailable` }
