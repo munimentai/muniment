@@ -22,16 +22,18 @@ import {
 } from "./lib/macos-signing.mjs";
 import { prepareMacosVariants, packageMacosDmg } from "./lib/macos-variants.mjs";
 import { readSigningEnvironment } from "./lib/signing-env.mjs";
+import { macosBuildDeadline, remainingBuildMilliseconds } from "./lib/macos-build-budget.mjs";
 
-const remainingBuildBudget = process.env.MACOS_BUILD_REMAINING_SECONDS ?? "3600";
-const remainingBuildSeconds = Number(remainingBuildBudget);
-if (!/^-?\d+$/.test(remainingBuildBudget) || !Number.isSafeInteger(remainingBuildSeconds) || remainingBuildSeconds > 3600) {
-  throw new Error("MACOS_BUILD_REMAINING_SECONDS must be an integer at most 3600");
-}
-// Keep 1200 seconds of the full desktop-ci build budget for failure reporting and process startup.
-const notarizationDeadline = performance.now() + (
-  remainingBuildSeconds - (3600 - NOTARIZATION_DEADLINE_SECONDS)
-) * 1000;
+const buildDeadline = macosBuildDeadline(process.env.MACOS_BUILD_REMAINING_SECONDS);
+console.log(`macOS build budget_seconds=${Math.floor(remainingBuildMilliseconds(buildDeadline) / 1000)}`);
+const buildOptions = () => ({ timeout: remainingBuildMilliseconds(buildDeadline), killSignal: "SIGKILL" });
+const buildSpawnSync = (cmd, args, options = {}) => {
+  const result = spawnSync(cmd, args, { ...options, ...buildOptions() });
+  remainingBuildMilliseconds(buildDeadline);
+  // Node errors can carry secret-bearing command arguments.
+  if (result.error) throw new Error(`${cmd} failed (${result.error.code ?? "unknown"})`);
+  return result;
+};
 
 const bundleBase = join("src-tauri", "target", "universal-apple-darwin", "release", "bundle");
 const bundleDir = join(bundleBase, "macos");
@@ -40,14 +42,14 @@ const pkgDir = join(bundleDir, "..", "pkg");
 
 const tauri = (...args) => {
   const cli = join("node_modules", "@tauri-apps", "cli", "tauri.js");
-  const result = spawnSync(process.execPath, [cli, ...args], { stdio: "inherit" });
+  const result = buildSpawnSync(process.execPath, [cli, ...args], { stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
 
 // Fail loudly with the tool's own output rather than a generic message.
 const mustRun = (label, cmd, args) => {
-  const result = spawnSync(cmd, args, { stdio: "inherit" });
+  const result = buildSpawnSync(cmd, args, { stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     console.error(`${label} FAILED (${cmd} rc=${result.status}) — see output above`);
@@ -80,7 +82,12 @@ tauri("build", "--target", "universal-apple-darwin", "--no-bundle", "--no-sign")
 mustRun("build universal CEF helper", process.execPath, [join(".github", "build-macos-cef-helper.mjs")]);
 tauri("bundle", "--target", "universal-apple-darwin", "--bundles", "app", "--no-sign");
 mustRun("package universal CEF", process.execPath, ["scripts/package-cef-macos.mjs", app, "--universal"]);
-const variants = prepareMacosVariants(bundleBase);
+const runPackaging = (cmd, args) => {
+  const result = buildSpawnSync(cmd, args, { encoding: "utf8", maxBuffer: 1024 * 1024 });
+  if (result.error || result.status !== 0) throw new Error(`${cmd} failed`);
+  return result.stdout;
+};
+const variants = prepareMacosVariants(bundleBase, runPackaging);
 
 if (!signing) {
   console.log("macOS signing SKIPPED: MACOS_SIGNING_ENABLED is false (unsigned build)");
@@ -88,7 +95,7 @@ if (!signing) {
   for (const variant of variants) {
     packageApp(variant.app, variant.zip);
     mustRun("build installer", "productbuild", productbuildArguments(variant.app, variant.pkg));
-    packageMacosDmg(variant.app, variant.dmg);
+    packageMacosDmg(variant.app, variant.dmg, runPackaging);
   }
   process.exit(0);
 }
@@ -112,7 +119,7 @@ const loginKeychain = join(homedir(), "Library", "Keychains", "login.keychain-db
 const intermediateSha1 = certificateSha1(readFileSync(intermediateCertPath));
 let intermediatePlaced = false;
 const cleanup = () => {
-  if (intermediatePlaced) spawnSync("security", ["delete-certificate", "-Z", intermediateSha1, loginKeychain]);
+  if (intermediatePlaced) spawnSync("security", ["delete-certificate", "-Z", intermediateSha1, loginKeychain], { timeout: 10_000, killSignal: "SIGKILL" });
   rmSync(workDir, { recursive: true, force: true });
 };
 process.on("exit", cleanup);
@@ -127,7 +134,7 @@ mustRun("keychain settings", "security", ["set-keychain-settings", keychain]);
 mustRun("unlock keychain", "security", ["unlock-keychain", "-p", keychainPassword, keychain]);
 mustRun("import certificate", "security",
   signingCertificateImportArguments(certPath, keychain, signingConfig.certificatePassword));
-const intermediatePresent = spawnSync("security",
+const intermediatePresent = buildSpawnSync("security",
   ["find-certificate", "-Z", "-c", "Developer ID Certification Authority", loginKeychain], { encoding: "utf8" });
 if (intermediatePresent.error) throw intermediatePresent.error;
 if ((intermediatePresent.stdout || "").includes(intermediateSha1)) {
@@ -139,7 +146,7 @@ if ((intermediatePresent.stdout || "").includes(intermediateSha1)) {
 }
 mustRun("authorize signing tools", "security",
   signingKeyPartitionListArguments(keychain, keychainPassword));
-const priorKeychains = spawnSync("security", ["list-keychains", "-d", "user"], { encoding: "utf8" });
+const priorKeychains = buildSpawnSync("security", ["list-keychains", "-d", "user"], { encoding: "utf8" });
 if (priorKeychains.error) throw priorKeychains.error;
 if (priorKeychains.status !== 0) {
   console.error("Cannot read the keychain search list.");
@@ -150,9 +157,9 @@ if (priorKeychains.status !== 0) {
 mustRun("register keychain", "security",
   keychainSearchListArguments(keychain, priorKeychains.stdout || ""));
 
-const found = spawnSync("security", signingIdentityArguments(keychain), { encoding: "utf8" });
+const found = buildSpawnSync("security", signingIdentityArguments(keychain), { encoding: "utf8" });
 const identity = requireSigningIdentity(found);
-const installerIdentities = spawnSync("security", ["find-identity", "-v", keychain], { encoding: "utf8" });
+const installerIdentities = buildSpawnSync("security", ["find-identity", "-v", keychain], { encoding: "utf8" });
 const installerIdentity = parseInstallerIdentity(installerIdentities.stdout || "");
 if (!installerIdentity) {
   console.error("no Developer ID Installer identity found in the imported certificate");
@@ -193,36 +200,43 @@ for (const variant of variants) {
   mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 }
 
-const mustNotarize = async (archive) => {
-  try {
-    await notarize(signingConfig, archive, keyPath, notarizationDeadline);
-  } catch (error) {
-    console.error(error.message);
-    process.exit(1);
-  }
+const mustNotarizeAll = async (archives) => {
+  const deadline = Math.min(buildDeadline, performance.now() + NOTARIZATION_DEADLINE_SECONDS * 1000);
+  console.log(`macOS notarization batch archives=${archives.length} budget_seconds=${Math.max(0, Math.floor((deadline - performance.now()) / 1000))}`);
+  // Wait for every bounded request before cleanup removes the signing key.
+  const results = await Promise.allSettled(archives.map(archive => notarize(signingConfig, archive, keyPath, deadline)));
+  const failures = results.filter(result => result.status === "rejected");
+  for (const failure of failures) console.error(failure.reason.message);
+  if (failures.length) process.exit(1);
 };
 
-// All submissions share the remaining build deadline. Submit app variants
-// together, then staple before creating their final download containers.
-await Promise.all(variants.map(async variant => {
+// Finish synchronous packaging before uploads so it cannot block requests or their timers.
+const submissionZips = variants.map(variant => {
   const submissionZip = join(workDir, `muniment${variant.suffix}-notarize.zip`);
   mustRun("zip for notarization", "ditto", ["-c", "-k", "--keepParent", variant.app, submissionZip]);
-  await mustNotarize(submissionZip);
+  return submissionZip;
+});
+await mustNotarizeAll(submissionZips);
+for (const variant of variants) {
   mustRun("staple", "xcrun", stapleArguments(variant.app));
   mustRun("validate staple", "xcrun", ["stapler", "validate", variant.app]);
-}));
+}
 mustRun("make package directory", "mkdir", ["-p", pkgDir]);
 for (const variant of variants) {
   packageApp(variant.app, variant.zip);
   mustRun("build signed installer", "productbuild",
     productbuildArguments(variant.app, variant.pkg, installerIdentity.hash, keychain));
-  packageMacosDmg(variant.app, variant.dmg);
+  packageMacosDmg(variant.app, variant.dmg, runPackaging);
   mustRun("sign disk image", "codesign", codesignArguments(identity.hash, variant.dmg));
 }
-await Promise.all(variants.flatMap(variant => [variant.pkg, variant.dmg]).map(async file => {
+const downloads = variants.flatMap(variant => [variant.pkg, variant.dmg]);
+for (const file of downloads) {
   if (file.endsWith(".dmg")) mustRun("verify disk image signature", "codesign", ["--verify", "--strict", file]);
-  await mustNotarize(file);
+  else mustRun("verify installer signature", "pkgutil", ["--check-signature", file]);
+}
+await mustNotarizeAll(downloads);
+for (const file of downloads) {
   mustRun("staple download", "xcrun", stapleArguments(file));
   mustRun("validate download staple", "xcrun", ["stapler", "validate", file]);
   console.log(`kept ${file} (signed + notarized + stapled)`);
-}));
+}

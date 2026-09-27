@@ -140,10 +140,13 @@ jobs:
           if [ "$PLATFORM" = "windows" ]; then
             build='node .github/build-windows-installers.mjs --install-dependencies && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/windows-installers.ps1'
           fi
+          build_timeout=3600
           if [ "$PLATFORM" = "macos" ]; then
+            # Allow 80 minutes for setup, compilation, two notarization batches, packaging, and upload.
+            build_timeout=4800
             # The first step takes the signing line out of /tmp/dci_env into an
             # unexported shell variable, and the package step reads it on stdin.
-            build='signing_env=$(node .github/lib/signing-env.mjs) && . scripts/prepare-cef-macos.sh && npm ci --ignore-scripts --no-audit --no-fund && rustup target add aarch64-apple-darwin && printf %s "$signing_env" | MACOS_BUILD_REMAINING_SECONDS=$((3600 - $(date +%s) + macos_build_started)) node .github/build-macos-app.mjs'
+            build='signing_env=$(node .github/lib/signing-env.mjs) && . scripts/prepare-cef-macos.sh && npm ci --ignore-scripts --no-audit --no-fund && rustup target add aarch64-apple-darwin && printf %s "$signing_env" | MACOS_BUILD_REMAINING_SECONDS=$((macos_build_seconds - $(date +%s) + macos_build_started)) node .github/build-macos-app.mjs'
           fi
 
           # The VM is destroyed when desktop-ci exits, so completed bundles are
@@ -156,10 +159,10 @@ jobs:
           cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && $build && node .github/upload-nightly-assets.mjs $REPOSITORY $SOURCE_SHA $PLATFORM"
           # Start the macOS clock inside the VM before Git and dependency setup.
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='macos_build_started=$(date +%s) && '"$cmd"
+            cmd="macos_build_seconds=$build_timeout && "'macos_build_started=$(date +%s) && '"$cmd"
           fi
           repo_url="https://github.com/${REPOSITORY}.git"
-          ssh_cmd="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd'"
+          ssh_cmd="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd' --build-timeout '$build_timeout'"
 
           # Signing secrets travel as one hex line that the desktop-ci preamble
           # skips, so they never enter the build environment. The first build

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -135,8 +135,8 @@ export const codesignArguments = (identityHash, file) => [
   file,
 ];
 
-// Cap both submissions and compilation together. The remaining desktop-ci budget can shorten this bound.
-export const NOTARIZATION_DEADLINE_SECONDS = 2400;
+// Each batch gets 20 minutes after compilation or packaging, within the build deadline.
+export const NOTARIZATION_DEADLINE_SECONDS = 1200;
 
 const notarytoolArguments = (configuration, keyPath) => [
   "--key", keyPath,
@@ -162,38 +162,46 @@ export const notarize = async (configuration, archive, keyPath, deadline) => {
   };
   if (!Number.isFinite(deadline)) fail("invalid-deadline");
   const remaining = () => deadline - performance.now();
-  const request = (args, timeout) => {
+  const validId = (id) => typeof id === "string" && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id);
+  const request = async (args, timeout) => {
     if (remaining() <= 0) fail("notarization-timeout");
-    const result = spawnSync("xcrun", args, {
-      encoding: "utf8",
-      timeout: Math.max(1, Math.ceil(Math.min(timeout, remaining()))),
-      killSignal: "SIGKILL",
+    const { error, stdout } = await new Promise((resolve) => {
+      try {
+        execFile("xcrun", args, {
+          encoding: "utf8",
+          timeout: Math.max(1, Math.ceil(Math.min(timeout, remaining()))),
+          killSignal: "SIGKILL",
+          maxBuffer: 1024 * 1024,
+        }, (error, stdout) => resolve({ error, stdout }));
+      } catch (error) {
+        resolve({ error });
+      }
     });
-    if (result.error || result.status !== 0) {
-      if (result.stdout) process.stdout.write(result.stdout);
-      if (result.stderr) process.stderr.write(result.stderr);
-      fail(remaining() <= 0 ? "notarization-timeout" : "notarytool-failed");
+    let response;
+    try { response = JSON.parse(stdout); } catch { /* Validate below without printing credential-bearing tool output. */ }
+    if (args[1] === "submit" && validId(response?.id)) submissionId = response.id;
+    if (error) {
+      fail(remaining() <= 0 || error.killed || error.code === "ETIMEDOUT" ? "notarization-timeout" : "notarytool-failed");
     }
-    try {
-      return JSON.parse(result.stdout);
-    } catch {
-      fail("invalid-response");
-    }
+    if (!response) fail("invalid-response");
+    return response;
   };
-  const submission = request(notarytoolSubmitArguments(configuration, archive, keyPath), 300_000);
-  if (typeof submission?.id !== "string" ||
-      !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(submission.id)) fail("invalid-response");
-  submissionId = submission.id;
+  // Six concurrent installer uploads share the connection. Allow ten minutes per upload.
+  const submission = await request(notarytoolSubmitArguments(configuration, archive, keyPath), 600_000);
+  if (!validId(submission?.id)) fail("invalid-response");
   console.log(`macOS notarization submission_id=${submissionId} archive=${JSON.stringify(archive)}`);
   while (true) {
-    const info = request([
+    const info = await request([
       "notarytool", "info", submissionId, ...notarytoolArguments(configuration, keyPath),
     ], 60_000);
     if (info?.id !== submissionId ||
         !["In Progress", "Accepted", "Invalid", "Rejected"].includes(info.status)) fail("invalid-response");
     lastStatus = info.status;
     if (remaining() <= 0) fail("notarization-timeout");
-    if (lastStatus === "Accepted") return;
+    if (lastStatus === "Accepted") {
+      console.log(`macOS notarization submission_id=${submissionId} last_status="Accepted" waited_seconds=${Math.ceil((performance.now() - started) / 1000)} archive=${JSON.stringify(archive)}`);
+      return;
+    }
     if (lastStatus !== "In Progress") fail("notarization-rejected");
     await sleep(Math.min(15_000, remaining()));
   }
