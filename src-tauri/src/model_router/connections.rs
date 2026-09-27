@@ -10,6 +10,8 @@ struct Connection {
     name: String,
     catalog_id: String,
     classifier: Classifier,
+    #[serde(default)]
+    profile: classify::Profile,
 }
 
 #[derive(Debug, Serialize)]
@@ -38,6 +40,7 @@ fn read(agent: &Path, active: &Classifier) -> Result<Vec<Connection>, String> {
                         }
                         .into(),
                         classifier: active.clone(),
+                        profile: Default::default(),
                     }]
                 } else {
                     vec![]
@@ -76,7 +79,16 @@ pub(crate) async fn model_router_connect_classifier(
     model: String,
     base_url: String,
     api_key: Option<String>,
+    min_confidence: Option<f64>,
+    score_kind: Option<classify::Score>,
 ) -> Result<RouterSettings, String> {
+    let profile = classify::Profile {
+        minimum: min_confidence.unwrap_or(0.6),
+        score: score_kind.unwrap_or_default(),
+    };
+    if !profile.minimum.is_finite() || !(0.0..=1.0).contains(&profile.minimum) {
+        return Err("Enter a minimum score between zero and one.".into());
+    }
     let url = url::Url::parse(base_url.trim()).map_err(|_| "Enter a valid classifier URL.")?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host().is_none()
@@ -96,9 +108,12 @@ pub(crate) async fn model_router_connect_classifier(
         model: model.trim().into(),
     };
     let probe = classifier.clone();
-    tauri::async_runtime::spawn_blocking(move || classify::check(&probe, CLASSIFIER_TIMEOUT))
-        .await
-        .map_err(|_| "The connection test did not finish.".to_string())??;
+    let probe_profile = profile.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        classify::check_profile(&probe, &probe_profile, CLASSIFIER_TIMEOUT)
+    })
+    .await
+    .map_err(|_| "The connection test did not finish.".to_string())??;
     let _guard = MUTATION.lock().map_err(|_| SAVE_ERROR.to_string())?;
     let agent = agent()?;
     let config = load(&agent)?;
@@ -108,6 +123,7 @@ pub(crate) async fn model_router_connect_classifier(
         name: name.trim().into(),
         catalog_id,
         classifier,
+        profile,
     });
     write(&agent, &connections)?;
     settings(
@@ -132,6 +148,10 @@ pub(crate) fn model_router_select_classifier(
         .ok_or("Choose a connected classifier.")?;
     write(&agent, &connections)?;
     config.classifier = selected.classifier.clone();
+    config.policy.classifier_profiles.insert(
+        classify::profile_key(&config.classifier),
+        selected.profile.clone(),
+    );
     save(&agent, &config)?;
     apply(&agent, &state, &config)?;
     settings(

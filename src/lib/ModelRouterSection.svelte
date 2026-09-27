@@ -6,6 +6,14 @@
   let { tauri, settings, onsettings, inventory, oninventory, onconnect } = $props()
   let pending = $state(false)
   let error = $state('')
+  let budget = $state('')
+  $effect(() => { budget = settings.task_budget_usd ?? '' })
+  async function constraints(offline = settings.offline_only ?? false) {
+    pending = true; error = ''
+    try { onsettings?.(await tauri.invoke('model_router_save_constraints', { offlineOnly: offline, taskBudgetUsd: budget === '' ? null : Number(budget) })) }
+    catch (e) { error = String(e?.message ?? e) }
+    finally { pending = false }
+  }
   const automatic = $derived(inventory?.default_provider === 'muniment-router' && inventory?.default_model === 'auto')
   const connections = $derived(settings.classifier_connections ?? [])
   const active = $derived(connections.find(entry => entry.active)?.id ?? '')
@@ -44,6 +52,12 @@
   {/if}
   {#if !connections.length}<p>Connect a classifier in Accounts to use routing.</p><Button onclick={onconnect}>Connect classifier</Button>{/if}
   {#if !settings.options.length}<p>Connect an account to choose models automatically.</p>{/if}
+  <Toggle checked={settings.offline_only ?? false} label="Loopback endpoints only" disabled={pending} onchange={constraints} />
+  <p>This limits answer and classifier requests to this device. A local proxy can still forward requests elsewhere.</p>
+  <label for="routing-budget">Estimated task budget (USD)</label>
+  <input id="routing-budget" type="number" min="0" step="0.01" bind:value={budget} disabled={pending} placeholder="No limit" />
+  <p>A budget requires a task ID and known model prices. Budgeted tasks skip the classifier. Provider bills can differ from estimates.</p>
+  <Button disabled={pending || (budget !== '' && (!Number.isFinite(Number(budget)) || Number(budget) < 0))} onclick={() => constraints()}>Save limits</Button>
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 <style>

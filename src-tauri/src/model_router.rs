@@ -164,6 +164,8 @@ pub(crate) struct RouterSettings {
     routes: Vec<Route>,
     fallback: Option<String>,
     min_confidence: f64,
+    offline_only: bool,
+    task_budget_usd: Option<f64>,
     classifier: ClassifierView,
     classifier_connections: Vec<connections::ConnectionView>,
     served_models: Vec<String>,
@@ -370,6 +372,8 @@ fn settings(
         routes: config.routes.clone(),
         fallback: config.fallback.clone(),
         min_confidence: config.min_confidence,
+        offline_only: config.policy.offline_only,
+        task_budget_usd: config.policy.task_budget_usd,
         classifier: classifier_view(&config.classifier),
         classifier_connections: connections::views(agent, &config.classifier)?,
         served_models: served_models(&config),
@@ -1145,4 +1149,26 @@ mod tests {
         assert!(written["providers"].get("muniment-router").is_none());
         assert!(written["providers"]["ollama"].is_object());
     }
+}
+
+#[tauri::command]
+pub(crate) fn model_router_save_constraints(
+    state: tauri::State<'_, RouterState>,
+    offline_only: bool,
+    task_budget_usd: Option<f64>,
+) -> Result<RouterSettings, String> {
+    if task_budget_usd.is_some_and(|n| !n.is_finite() || n < 0.0) {
+        return Err("Enter a nonnegative task budget or leave it blank.".into());
+    }
+    let agent = agent()?;
+    let mut config = load(&agent)?;
+    config.policy.offline_only = offline_only;
+    config.policy.task_budget_usd = task_budget_usd;
+    save(&agent, &config)?;
+    apply(&agent, &state, &config)?;
+    settings(
+        &agent,
+        running_endpoint(&state).as_ref(),
+        &running_active(&state),
+    )
 }
