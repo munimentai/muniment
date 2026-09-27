@@ -106,29 +106,31 @@ mod tests {
     use super::*;
     use serde_json::json;
     fn setup() -> (RouterConfig, Features) {
-        let mut c = RouterConfig::default();
-        c.accounts = vec![
-            Account {
-                id: "remote".into(),
-                family: "openai".into(),
-                label: "Remote".into(),
-                credential: Credential::ApiKey { key: "test".into() },
-                base_url: Some("https://example.com/v1".into()),
-                models: vec!["remote-model".into()],
-                enabled: true,
-                weight: 1,
-            },
-            Account {
-                id: "local".into(),
-                family: "openai".into(),
-                label: "Local".into(),
-                credential: Credential::ApiKey { key: "test".into() },
-                base_url: Some("http://127.0.0.1:8080/v1".into()),
-                models: vec!["local-model".into()],
-                enabled: true,
-                weight: 1,
-            },
-        ];
+        let mut c = RouterConfig {
+            accounts: vec![
+                Account {
+                    id: "remote".into(),
+                    family: "openai".into(),
+                    label: "Remote".into(),
+                    credential: Credential::ApiKey { key: "test".into() },
+                    base_url: Some("https://example.com/v1".into()),
+                    models: vec!["remote-model".into()],
+                    enabled: true,
+                    weight: 1,
+                },
+                Account {
+                    id: "local".into(),
+                    family: "openai".into(),
+                    label: "Local".into(),
+                    credential: Credential::ApiKey { key: "test".into() },
+                    base_url: Some("http://127.0.0.1:8080/v1".into()),
+                    models: vec!["local-model".into()],
+                    enabled: true,
+                    weight: 1,
+                },
+            ],
+            ..RouterConfig::default()
+        };
         for (name, cost) in [("remote-model", 10.0), ("local-model", 0.0)] {
             c.policy.models.insert(
                 format!("openai/{name}"),
