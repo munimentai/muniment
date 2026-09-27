@@ -424,7 +424,7 @@
           <h5 class="group-label">{group}</h5>
           <ul class="provider-list">
             {#each entries as entry (entry.id)}
-              <li><button type="button" class="quiet provider-row" onclick={() => { if (group === 'Classifiers') { classifierId = entry.id; view = 'classifier' } else chooseProvider(entry.id) }}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span> <span class="tag">{group === 'Classifiers' ? (entry.id === 'jev' ? 'Hosted API' : entry.compatible ? 'Local or hosted server · Download' : 'Adapter required · Download') : entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
+              <li><button type="button" class="quiet provider-row" onclick={() => { if (group === 'Classifiers') { classifierId = entry.id; view = 'classifier' } else chooseProvider(entry.id) }}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span>{#if entry.badge}<span class="classifier-badge">{entry.badge}</span>{/if} <span class="tag">{group === 'Classifiers' ? (entry.id === 'jev' ? 'Hosted API' : entry.compatible ? 'Local or hosted server · Download' : 'Adapter required · Download') : entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
             {/each}
           </ul>
         {/if}
@@ -516,6 +516,7 @@
   .quiet { background: transparent; border-color: transparent; }
   .models { display: grid; gap: 28px; align-content: start; }
   .models.connecting { gap: 16px; }
+  .classifier-badge { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 2px 6px; font-size: var(--text-12); color: var(--ink); white-space: nowrap; }
   .connection-field { display: grid; gap: 6px; }
   .account-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 28px; padding: 3px 4px; }

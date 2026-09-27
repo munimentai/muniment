@@ -118,6 +118,7 @@ impl Drop for Handle {
 /// it has not yet written down.
 struct State {
     sessions: Mutex<super::policy::Sessions>,
+    contexts: super::context::Contexts,
     active_sessions: Mutex<std::collections::HashSet<String>>,
     progress: super::progress::Progress,
     agent: PathBuf,
@@ -202,6 +203,9 @@ fn route_availability(
 impl State {
     fn classifier_config(&self) -> RouterConfig {
         let config = self.config();
+        if config.policy.offline_only || config.policy.task_budget_usd.is_some() {
+            return config;
+        }
         if let config::Classifier::Pooled { family, model } = &config.classifier {
             if let Ok(account) =
                 balance::pick(&config, &self.ledger(), family, model, (self.now_ms)())
@@ -224,7 +228,11 @@ impl State {
             return Err("Enter a sample of 1 to 32,000 bytes.".into());
         }
         let started = std::time::Instant::now();
-        let config = self.classifier_config();
+        let original = self.classifier_config();
+        let features = super::policy::Features::read(
+            &serde_json::json!({"messages":[{"role":"user","content":sample}]}),
+        );
+        let config = super::constraints::filter(&original, &Default::default(), &features, true);
         let decision = super::classify::decide(
             &config,
             &super::options(&config),
@@ -466,6 +474,7 @@ fn start_with_clock(agent: PathBuf, clock: fn() -> i64) -> io::Result<Handle> {
     let active: Active = Arc::new(Mutex::new(BTreeMap::new()));
     let state = Arc::new(State {
         sessions: Mutex::new(super::policy::Sessions::load(&agent)),
+        contexts: Default::default(),
         active_sessions: Default::default(),
         progress: Default::default(),
         ledger: Mutex::new(usage::load(&agent)),
@@ -737,6 +746,7 @@ fn complete(
     let mut session = thread
         .and_then(|id| state.sessions.lock().ok()?.entries.get(id).cloned())
         .unwrap_or_default();
+    session.reserved_cost = 0.0; // A prior ambiguous attempt remains charged.
     let features = super::policy::Features::read(request);
     let boundary = session.observe(&features, &super::policy::digest(task));
     if let Some(failures) = failures {
@@ -746,13 +756,46 @@ fn complete(
     state
         .progress
         .stage(progress, "choosing-model", (state.now_ms)());
-    let config = state.classifier_config();
+    let original = state.classifier_config();
+    if original.policy.task_budget_usd.is_some() && thread.is_none() {
+        respond(
+            stream,
+            422,
+            "Unprocessable Content",
+            &wire::error_body(
+                "An estimated task budget requires a thread ID.",
+                "routing_budget",
+            ),
+        );
+        return;
+    }
+    let requested = wire::requested_model(request).unwrap_or(config::AUTO_MODEL);
+    let config = super::constraints::filter(
+        &original,
+        &session,
+        &features,
+        requested == config::AUTO_MODEL,
+    );
+    if !super::options(&original).is_empty() && super::options(&config).is_empty() {
+        respond(
+            stream,
+            422,
+            "Unprocessable Content",
+            &wire::error_body(
+                "No model satisfies the endpoint, capability and estimated budget limits.",
+                "routing_constraints",
+            ),
+        );
+        return;
+    }
     if session.cache_scope != super::policy::scope(&config, &session.account) {
         session.tokens.cache_read = 0;
     }
 
-    let requested = wire::requested_model(request).unwrap_or(config::AUTO_MODEL);
-    let text = super::policy::classifier_context(request, &session);
+    let context_key = thread
+        .map(str::to_owned)
+        .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+    let (text, mut context_refresh) = state.contexts.prepare(&context_key, request, &session);
     // Reuse the decision across attempts so failure never spends the classifier twice.
     let classification_started = std::time::Instant::now();
     let mut plan = match plan(&config, &state.ledger(), requested, &text, (state.now_ms)()) {
@@ -774,8 +817,11 @@ fn complete(
     if let Some(spent_on) = &plan.classifier_spent_on {
         state.record_success(spent_on, plan.classifier_spent);
     }
+    if let Some(cost) = plan.classifier.as_ref().and_then(|c| c.cost) {
+        session.estimated_cost += cost;
+    }
     let mut policy_reason = None;
-    if thread.is_some() {
+    {
         if requested == config::AUTO_MODEL {
             match super::policy::choose(
                 &config,
@@ -812,7 +858,7 @@ fn complete(
                 model: plan.model.clone(),
                 description: String::new(),
             };
-            if super::policy::model(&config, &route).is_some_and(|m| !features.fits(&m)) {
+            if super::policy::model(&config, &route).is_some_and(|m| !features.fits_direct(&m)) {
                 respond(stream, 422, "Unprocessable Content", &wire::error_body("The selected model cannot fit this request or lacks a required capability.","routing_capability"));
                 return;
             }
@@ -897,6 +943,14 @@ fn complete(
                     continue;
                 }
             };
+            if config.policy.offline_only
+                && !account
+                    .upstream()
+                    .is_some_and(|url| super::constraints::loopback(&url))
+            {
+                refusals.push("This account is not a loopback endpoint.".into());
+                continue;
+            }
             let prepared = match transport::prepare(&account, request, &route.model) {
                 Ok(prepared) => prepared,
                 Err(message) => {
@@ -905,6 +959,7 @@ fn complete(
                 }
             };
             let agent = ureq::AgentBuilder::new()
+                .redirects(0)
                 .timeout_connect(CONNECT_TIMEOUT)
                 .timeout_read(READ_TIMEOUT)
                 .build();
@@ -913,6 +968,45 @@ fn complete(
                 .set("content-type", "application/json");
             for (name, value) in &prepared.headers {
                 call = call.set(name, value);
+            }
+            if let Some(left) = super::constraints::remaining(&config, &session) {
+                let reserve = super::constraints::reserve(&config, &route, &features)
+                    .unwrap_or(f64::INFINITY);
+                if reserve > left {
+                    respond(
+                        stream,
+                        422,
+                        "Unprocessable Content",
+                        &wire::error_body(
+                            "The estimated task budget cannot cover another attempt.",
+                            "routing_budget",
+                        ),
+                    );
+                    return;
+                }
+                session.reserved_cost = reserve;
+                session.estimated_cost += reserve;
+                session.updated_ms = (state.now_ms)();
+                if let Some(id) = thread {
+                    if let Ok(mut sessions) = state.sessions.lock() {
+                        sessions.entries.insert(id.into(), session.clone());
+                        if sessions.save(&state.agent, (state.now_ms)()).is_err() {
+                            respond(stream,503,"Unavailable",&wire::error_body("The task budget could not be saved. No model request was sent.","routing_budget"));
+                            return;
+                        }
+                    } else {
+                        respond(
+                            stream,
+                            503,
+                            "Unavailable",
+                            &wire::error_body(
+                                "The task budget could not be saved.",
+                                "routing_budget",
+                            ),
+                        );
+                        return;
+                    }
+                }
             }
             let call = call.send_json(&prepared.body);
             match call {
@@ -987,6 +1081,9 @@ fn complete(
                                         },
                                         super::policy::model(&config, &route).as_ref(),
                                     );
+                                    if let Some(job) = context_refresh.take() {
+                                        state.contexts.refresh(job);
+                                    }
                                     session.remember_cache(&config, &route);
                                     if let Ok(mut sessions) = state.sessions.lock() {
                                         sessions.entries.insert(id.into(), session.clone());
@@ -1028,6 +1125,9 @@ fn complete(
                                     },
                                     super::policy::model(&config, &route).as_ref(),
                                 );
+                                if let Some(job) = context_refresh.take() {
+                                    state.contexts.refresh(job);
+                                }
                                 session.remember_cache(&config, &route);
                                 if let Ok(mut sessions) = state.sessions.lock() {
                                     sessions.entries.insert(id.into(), session.clone());
@@ -1398,7 +1498,24 @@ mod tests {
     }
 
     fn config(accounts: Vec<Account>) -> RouterConfig {
+        let mut policy = super::super::policy::Settings::default();
+        for account in &accounts {
+            for model in &account.models {
+                policy.models.insert(
+                    format!("{}/{model}", account.family),
+                    super::super::policy::Model {
+                        context: 128000,
+                        output_limit: 8192,
+                        tools: true,
+                        input: 1.0,
+                        output: 1.0,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
         RouterConfig {
+            policy,
             enabled: true,
             accounts,
             routes: vec![Route {
@@ -1682,6 +1799,7 @@ mod tests {
         let agent = agent_dir();
         let state = State {
             sessions: Default::default(),
+            contexts: Default::default(),
             active_sessions: Default::default(),
             progress: Default::default(),
             agent,
@@ -1711,6 +1829,7 @@ mod tests {
     fn check_subscription_pool(provider: &str) {
         let state = State {
             sessions: Default::default(),
+            contexts: Default::default(),
             active_sessions: Default::default(),
             progress: Default::default(),
             agent: agent_dir(),
@@ -2080,6 +2199,46 @@ mod tests {
             &endpoint.token,
         );
         assert_eq!(status, 400);
+    }
+
+    #[test]
+    fn constraints_reject_before_a_classifier_or_answer_request() {
+        let agent = agent_dir();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let mut c = config(vec![account("a", &url)]);
+        c.policy.task_budget_usd = Some(0.0);
+        c.classifier = config::Classifier::Endpoint {
+            base_url: url.clone(),
+            model: "test".into(),
+            api_key: None,
+        };
+        config::save(&agent, &c).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let endpoint = handle.endpoint();
+        let (status, _) = call(
+            endpoint,
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &endpoint.token,
+        );
+        assert_eq!(status, 422);
+        assert!(listener.accept().is_err());
+        c.policy.task_budget_usd = None;
+        c.policy.offline_only = true;
+        c.accounts[0].base_url = Some("https://example.com/v1".into());
+        config::save(&agent, &c).unwrap();
+        let (status, _) = call(
+            endpoint,
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &endpoint.token,
+        );
+        assert_eq!(status, 422);
+        assert!(listener.accept().is_err());
     }
 
     #[test]

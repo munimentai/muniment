@@ -252,13 +252,13 @@ alone until a user writes its statement.
 
 **Routing is optional and the classifier is the user's own.** With no
 classifier every turn takes the fallback and the pool is still balanced. With
-one, the turn's last user message goes out as one choice question over the
-statements, and the answer names the option. A confidence under the floor takes
-the fallback, so a guess never picks the expensive model. The floor is `0.6`.
-The fallback is the option the user names, else the cheapest model in the
-running, and a model with no known price is never the cheapest. A classifier is
-a network call to a service the user names, the screen says so, and its key is
-write-only: nothing reads one back.
+one, bounded task context goes out as one choice question over eligible
+statements. Endpoint, capability, context, and estimated budget checks run first.
+Each connection stores a score type and floor, initially `0.6`. Invalid choices
+and scores use an eligible fallback. Scores do not establish task success.
+The memory-only extract uses no model call and rejects stale background updates.
+Budgeted tasks skip classification and reserve estimated uncached spend per attempt.
+The screen states that routing context leaves the device. Keys remain write-only.
 
 **The classifier catalog is models that classify.** TypeSafe's jev answers a
 typed choice with a probability over every route. A small model on an account

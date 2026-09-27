@@ -226,6 +226,7 @@ pub fn run() {
             model_router::model_router_update_account,
             model_router::model_router_remove_account,
             model_router::model_router_save_routes,
+            model_router::model_router_save_constraints,
             model_router::model_router_set_classifier,
             model_router::model_router_connect_classifier,
             model_router::model_router_select_classifier,
