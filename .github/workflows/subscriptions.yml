@@ -3,6 +3,11 @@ name: Installed subscription acceptance
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: "Select a platform for a repair check. Only all produces full release acceptance."
+        type: choice
+        default: all
+        options: [all, linux, windows, macos-arm64, macos-x64]
       source_sha:
         description: "Exact 40-character SHA of the signed nightly candidate"
         required: true
@@ -30,6 +35,7 @@ concurrency:
 jobs:
   # Native desktop-ci jobs inherit the private release runner's SSH key.
   linux:
+    if: inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'linux'
     runs-on: muniment-release
     timeout-minutes: 45
     env:
@@ -66,7 +72,7 @@ jobs:
 
   windows:
     needs: linux
-    if: always() && !cancelled()
+    if: always() && !cancelled() && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'windows')
     runs-on: muniment-release
     timeout-minutes: 45
     env:
@@ -103,7 +109,7 @@ jobs:
 
   macos-arm64:
     needs: windows
-    if: always() && !cancelled()
+    if: always() && !cancelled() && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'macos-arm64')
     # macos-15 supplies a fresh ARM64 VM and console login for this job.
     # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
     runs-on: macos-15
@@ -141,7 +147,7 @@ jobs:
 
   macos-x64:
     needs: macos-arm64
-    if: always() && !cancelled()
+    if: always() && !cancelled() && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'macos-x64')
     runs-on: muniment-release
     timeout-minutes: 45
     env:
@@ -178,7 +184,7 @@ jobs:
 
   collect:
     needs: [linux, windows, macos-arm64, macos-x64]
-    if: always() && !cancelled()
+    if: always() && !cancelled() && (inputs.platform == '' || inputs.platform == 'all')
     runs-on: self-hosted
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}

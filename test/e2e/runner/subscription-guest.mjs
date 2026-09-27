@@ -8,6 +8,7 @@ import { platforms, subscriptionAccounts } from '../support/subscription-accepta
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { run, writeBlocked } from './subscriptions.mjs'
 import { subscriptionRedactor, nativeFailure, readDiagnosticLog } from '../support/subscription-diagnostics.mjs'
+import { prepareLinuxSandbox, sandboxRequirement } from './subscription-linux-sandbox.mjs'
 
 const missingPackage = 'The signed nightly package or updater signature for this platform is missing.'
 const missingLeases = 'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.'
@@ -97,6 +98,7 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
   fs.rmSync(path.join(artifacts, `${platform}-subscription.log`), { force: true })
   writeBlocked(artifacts, sourceSha, platform, 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.')
   let step = 'guest/leases'
+  let cleanupSandbox
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-'))
   try {
     if (encodedLeases !== undefined) leases = decodeSubscriptionPayload(encodedLeases, missingLeases)
@@ -134,19 +136,29 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
     if (!comment.split('\t').includes(`file:${stableName}`)) throw new Error(missingPackage)
     step = 'guest/install'
     const executable = install(platform, packageFile, root)
+    if (platform === 'linux') {
+      step = 'guest/linux-sandbox'
+      if (runtime !== 'linux') throw new Error('Run this check on the requested native platform and architecture.')
+      cleanupSandbox = prepareLinuxSandbox(packageFile, root)
+    }
     process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = '1'
     return await run({ candidateFile, packageFile, signatureFile, executable, leasesFile, output: artifacts, sourceSha, platform })
   } catch (error) {
     const known = [missingPackage, missingLeases, missingModels,
       'Run this check on the requested native platform and architecture.']
-    const reason = known.includes(error?.message) ? error.message : missingPackage
+    const reason = known.includes(error?.message) ? error.message : step === 'guest/linux-sandbox' ? sandboxRequirement : missingPackage
     const redact = subscriptionRedactor({ leases, values: [token, encodedLeases] })
     writeBlocked(artifacts, sourceSha, platform, reason,
       `step=${step}\nerror=${error.message}\ninstall tail:\n${readDiagnosticLog(path.join(root, 'install.log'), root, redact)}`, redact)
     console.error(reason)
     return 1
   } finally {
-    fs.rmSync(root, { recursive: true, force: true })
+    try { cleanupSandbox?.() } catch (error) {
+      const redact = subscriptionRedactor({ leases, values: [token, encodedLeases] })
+      writeBlocked(artifacts, sourceSha, platform, 'The Chromium sandbox helper cleanup failed.',
+        `step=guest/linux-sandbox-cleanup\nerror=${error.message}`, redact)
+      return 1
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
   }
 }
 

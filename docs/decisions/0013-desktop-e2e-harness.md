@@ -155,6 +155,22 @@ its platform case and is never shared across platforms or nightly runs; within
 a case it may be reset to the verified clean snapshot between artifacts, but
 dirty guest state and signed-in profiles are never reused.
 
+### Linux subscription sandbox
+
+The AppImage uses Chromium's sandbox. Its FUSE mount cannot supply a setuid helper.
+Hosts that restrict unprivileged user namespaces require the root-owned helper at `/usr/lib/muniment/cef/chrome-sandbox` with mode `4755`.
+The DEB configures this helper for user installations.
+
+The subscription guest verifies the AppImage's updater signature and signed name before it extracts only the helper.
+It installs that helper on the guest filesystem, checks ownership, mode, mount options, and bytes, then launches the unchanged signed AppImage.
+The guest refuses to overwrite an existing helper and removes its helper after the probe.
+Setup or cleanup failures block acceptance.
+The guest does not disable Chromium's sandbox or change the host's user namespace policy.
+
+For a Linux repair check, dispatch `subscriptions.yml` with `platform=linux` and the signed candidate's `source_sha`.
+A targeted dispatch produces only that platform's evidence, not full release acceptance.
+Nightly calls and default dispatches require every platform and the full release acceptance collector.
+
 ### Real-auth fixture and diagnostic contract
 
 The product owner owns the dedicated, non-human E2E identity, its least-privilege
