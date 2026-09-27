@@ -4,8 +4,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
 
-use super::{pairing_status, request_pairing_challenge, revoke_pairing_pair, PairingError};
-use muniment_core::auth::PairId;
+use super::{pairing_status, request_pairing_challenge, revoke_pairing_pair, PairId, PairingError};
 
 struct TemporaryProfile {
     profile: PathBuf,
