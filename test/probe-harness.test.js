@@ -103,6 +103,12 @@ describe('probe harness', () => {
     expect(table.unknownCommands).toEqual([])
   })
 
+  it('reports no paired phone in the Account fixture', async () => {
+    const table = buildProbeCommandTable('access')
+    await expect(table.invoke('auth_pairing_status')).resolves.toEqual({ pair: null })
+    expect(table.unknownCommands).toEqual([])
+  })
+
   it('rejects an unknown core command with its name', async () => {
     const table = buildProbeCommandTable('restored')
     await expect(table.invoke('missing_probe_command')).rejects.toThrow('Unknown probe command: missing_probe_command')

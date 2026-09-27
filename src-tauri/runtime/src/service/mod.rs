@@ -16,7 +16,8 @@ pub use run::{
     resume_run, run_prompt, ConfigureRunError, PromptAcceptance, PromptLaunch,
 };
 pub use session::{
-    ensure_native_session, entitlement_snapshot, list_devices, session_status, sign_in, sign_out,
+    ensure_native_session, entitlement_snapshot, list_devices, pairing_status,
+    request_pairing_challenge, revoke_pairing_pair, session_status, sign_in, sign_out,
     EntitlementSnapshotError, EntitlementSnapshotResult, SignOutError,
 };
 pub use threads::{

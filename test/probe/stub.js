@@ -434,6 +434,7 @@ export function buildProbeCommandTable(fixtureName) {
         grants: [],
       }
     }
+    if (command === 'auth_pairing_status') return { pair: null }
     if (command === 'auth_devices') return accessFixture
       ? [
           {
