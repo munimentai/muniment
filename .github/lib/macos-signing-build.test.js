@@ -3,6 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const application = '  1) A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4 "Developer ID Application: Muniment (Y5DUNHQA74)"';
 const installer = '  2) B1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4 "Developer ID Installer: Muniment (Y5DUNHQA74)"';
 let spawn;
+let exec;
+let delay;
+let packageDmg;
 let identityResult;
 let searchListResult;
 let exitListeners;
@@ -17,19 +20,35 @@ const jsonResult = (value) => ({ status: 0, stdout: JSON.stringify(value) });
 beforeEach(() => {
   vi.resetModules();
   variantCount = 1;
+  packageDmg = vi.fn();
   vi.doMock("./macos-variants.mjs", () => ({
     prepareMacosVariants: base => ["", "-arm64", "-x64"].slice(0, variantCount).map(suffix => ({
       suffix, app: `${base}/macos/${suffix ? `${suffix.slice(1)}/` : ""}muniment.app`,
       zip: `${base}/macos/muniment${suffix}.app.zip`, pkg: `${base}/pkg/muniment${suffix}.pkg`, dmg: `${base}/dmg/muniment${suffix}.dmg`,
     })),
-    packageMacosDmg: vi.fn(),
+    packageMacosDmg: (...args) => packageDmg(...args),
   }));
   // The signing phase narrows PATH to the system directories.
   originalPath = process.env.PATH;
   clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
+  const events = [];
+  let scheduled = false;
+  const tick = () => {
+    scheduled = false;
+    const next = Math.min(...events.map(event => event.at));
+    clock = Math.max(clock, next);
+    const ready = events.filter(event => event.at <= clock);
+    for (const event of ready) events.splice(events.indexOf(event), 1);
+    for (const event of ready) event.resolve();
+    if (events.length) { scheduled = true; setImmediate(tick); }
+  };
+  delay = (milliseconds) => new Promise(resolve => {
+    events.push({ at: clock + milliseconds, resolve });
+    if (!scheduled) { scheduled = true; setImmediate(tick); }
+  });
   vi.doMock("node:timers/promises", () => {
-    const timers = { setTimeout: vi.fn(async (delay) => { clock += delay; }) };
+    const timers = { setTimeout: vi.fn(delay) };
     return { ...timers, default: timers };
   });
   notaryResult = (args) => jsonResult({
@@ -45,7 +64,7 @@ beforeEach(() => {
   ].map((name) => [name, "test-value"]));
   vi.doMock("./signing-env.mjs", () => ({ readSigningEnvironment: vi.fn(() => credentials) }));
   vi.stubEnv("MACOS_SIGNING_ENABLED", "true");
-  vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", "3600");
+  vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", "4800");
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(process.stdout, "write").mockReturnValue(true);
@@ -75,7 +94,17 @@ beforeEach(() => {
     if (command === "security" && args[0] === "list-keychains" && !args.includes("-s")) return searchListResult;
     return { status: 0, stdout: "" };
   });
-  vi.doMock("node:child_process", () => ({ spawnSync: spawn, default: { spawnSync: spawn } }));
+  exec = vi.fn((command, args, options, callback) => {
+    Promise.resolve(spawn(command, args, options)).then(result => {
+      const error = result.error ?? (result.status === 0 ? null : new Error("notarytool failed"));
+      callback(error, result.stdout ?? "", result.stderr ?? "");
+    });
+  });
+  const sync = (...args) => {
+    if (args[0] === "xcrun" && args[1][0] === "notarytool") throw new Error("Notarization must use nonblocking requests");
+    return spawn(...args);
+  };
+  vi.doMock("node:child_process", () => ({ spawnSync: sync, execFile: exec, default: { spawnSync: sync, execFile: exec } }));
 });
 
 afterEach(() => {
@@ -90,7 +119,7 @@ afterEach(() => {
 
 it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (setupSeconds) => {
   clock = setupSeconds * 1000;
-  vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", String(3600 - setupSeconds));
+  vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", String(4800 - setupSeconds));
   await import("../build-macos-app.mjs");
   const calls = spawn.mock.calls;
   const tauri = calls.find(([, args]) => args[0].endsWith("tauri.js"));
@@ -136,7 +165,7 @@ it.each([0, 700])("keeps the accepted path after %s seconds of setup", async (se
   const packaging = calls.slice(submission).filter(([command]) => ["xcrun", "ditto", "productbuild"].includes(command));
   expect(packaging.map(([command, args]) => command === "xcrun" ? args.slice(0, 2).join(" ") : command)).toEqual([
     "notarytool submit", "notarytool info", "stapler staple", "stapler validate",
-    "ditto", "productbuild", "notarytool submit", "notarytool info", "notarytool submit", "notarytool info",
+    "ditto", "productbuild", "notarytool submit", "notarytool submit", "notarytool info", "notarytool info",
     "stapler staple", "stapler validate", "stapler staple", "stapler validate",
   ]);
   expect(packaging[2][1].at(-1)).toMatch(/muniment\.app$/);
@@ -194,6 +223,19 @@ it.each(["import", "set-key-partition-list"])("stops before signing when %s fail
   expect(spawn.mock.calls.some(([command]) => ["codesign", "productbuild", "xcrun"].includes(command))).toBe(false);
 });
 
+it("does not expose certificate arguments when import cannot start", async () => {
+  const defaultSpawn = spawn.getMockImplementation();
+  spawn.mockImplementation((command, args, options) => {
+    if (command === "security" && args[0] === "import") {
+      return { status: null, error: Object.assign(new Error("secret test-value"), { code: "ENOENT", spawnargs: args }) };
+    }
+    return defaultSpawn(command, args, options);
+  });
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow(/^security failed \(ENOENT\)$/);
+  expect(console.error.mock.calls.flat().join("\n")).not.toContain("test-value");
+  expect(spawn.mock.calls.some(([command]) => command === "codesign")).toBe(false);
+});
+
 it("places the Developer ID G2 intermediate in the login keychain before signing and removes it on exit", async () => {
   await import("../build-macos-app.mjs");
   const calls = spawn.mock.calls;
@@ -238,8 +280,8 @@ it.each([
   [false, 0], [true, 0], [false, 700], [true, 700],
 ])("names a queue timeout for installer=%s after %s seconds of setup", async (installer, setupSeconds) => {
   clock = setupSeconds * 1000;
-  vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", String(3600 - setupSeconds));
-  const waitSeconds = 2400 - setupSeconds;
+  vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", String(4800 - setupSeconds));
+  const waitSeconds = 1200;
   notaryResult = (args) => {
     const id = args[1] === "submit" ? (args[2].endsWith(".pkg") || args[2].endsWith(".dmg") ? installerId : submissionId) : args[2];
     return jsonResult({ id, status: installer && id === submissionId ? "Accepted" : "In Progress" });
@@ -256,57 +298,85 @@ it.each([
   for (const [, args, options] of spawn.mock.calls.filter(([, args]) => args[0] === "notarytool")) {
     expect(args).not.toContain("--wait");
     expect(options.timeout).toBeGreaterThan(0);
-    expect(options.timeout).toBeLessThanOrEqual(300_000);
+    expect(options.timeout).toBeLessThanOrEqual(args[1] === "submit" ? 600_000 : 60_000);
     expect(options.killSignal).toBe("SIGKILL");
   }
 });
 
-it.each([0, 700])("shares the installer deadline with compilation and %s seconds of setup", async (setupSeconds) => {
+it.each([[0, false], [700, false], [700, true]])("completes nine timed submissions after %s seconds of setup with shared bandwidth=%s", async (setupSeconds, sharedBandwidth) => {
+  variantCount = 3;
   clock = setupSeconds * 1000;
-  vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", String(3600 - setupSeconds));
-  const deadlineSeconds = 2400;
+  vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", String(4800 - setupSeconds));
   const defaultSpawn = spawn.getMockImplementation();
   spawn.mockImplementation((command, args, options) => {
     if (args[0].endsWith("tauri.js")) clock += 600_000;
+    if (command === "codesign" && args[0] === "--force") clock += 5_000;
+    if (command === "ditto") clock += 30_000;
+    if (command === "productbuild") clock += 60_000;
     return defaultSpawn(command, args, options);
   });
-  notaryResult = (args) => {
-    const id = args[1] === "submit" ? (args[2].endsWith(".pkg") || args[2].endsWith(".dmg") ? installerId : submissionId) : args[2];
-    return jsonResult({ id, status: id === submissionId && clock >= (setupSeconds + 1200) * 1000 ? "Accepted" : "In Progress" });
+  packageDmg.mockImplementation(() => { clock += 80_000; });
+  const pending = new Map();
+  const batches = [];
+  let active = 0;
+  notaryResult = async (args) => {
+    if (args[1] === "submit") {
+      active++;
+      batches.push(active);
+      const id = `${String(pending.size + 1).padStart(8, "0")}-92d9-42a1-82e1-b05b8b7da7db`;
+      const uploadTime = 90_000 * (sharedBandwidth ? active : 1);
+      pending.set(id, clock + uploadTime + 60_000);
+      await delay(uploadTime);
+      active--;
+      return jsonResult({ id });
+    }
+    await delay(5_000);
+    return jsonResult({ id: args[2], status: clock >= pending.get(args[2]) ? "Accepted" : "In Progress" });
   };
-  await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
-  expect(clock).toBe(deadlineSeconds * 1000);
-  expect(console.error).toHaveBeenCalledWith(expect.stringContaining(
-    `submission_id=${installerId} last_status="In Progress" waited_seconds=${deadlineSeconds - setupSeconds - 1200}`,
-  ));
+  await import("../build-macos-app.mjs");
+  expect(batches).toEqual([1, 2, 3, 1, 2, 3, 4, 5, 6]);
+  expect(pending.size).toBe(9);
+  expect(exec.mock.calls.filter(([, args]) => args[1] === "submit")).toHaveLength(9);
+  expect(clock).toBe((setupSeconds + (sharedBandwidth ? 2935 : 2305)) * 1000);
+  // With setup, this workload exceeds the old 2400-second deadline even with parallel uploads.
+  if (setupSeconds) expect(clock).toBeGreaterThan(2400_000);
+  expect(clock).toBeLessThan(4200_000);
+  expect(console.log.mock.calls.filter(([message]) => message.includes('last_status="Accepted"'))).toHaveLength(9);
+  expect(spawn.mock.calls.filter(([, args]) => args[0] === "stapler" && args[1] === "validate")).toHaveLength(9);
+  expect(spawn.mock.calls.filter(([cmd]) => cmd === "pkgutil")).toHaveLength(3);
+  expect(process.exit).not.toHaveBeenCalled();
 });
 
 it("does not submit after compilation exhausts the deadline", async () => {
   const defaultSpawn = spawn.getMockImplementation();
   spawn.mockImplementation((command, args, options) => {
-    if (args[0].endsWith("tauri.js")) clock = 2400_000;
+    if (args[0].endsWith("tauri.js")) clock = 4200_000;
     return defaultSpawn(command, args, options);
   });
-  await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
-  expect(console.error).toHaveBeenCalledWith(expect.stringContaining(
-    'cause=notarization-timeout submission_id=unknown last_status="unknown" waited_seconds=0',
-  ));
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("cause=build-timeout");
   expect(spawn.mock.calls.some(([, args]) => args[0] === "notarytool")).toBe(false);
 });
 
-it.each(["", " ", "NaN", "Infinity", "3601", "1.5", "1e3", "-9007199254740992"])("rejects an invalid remaining build budget %s", async (budget) => {
+it.each(["", " ", "NaN", "Infinity", "4801", "1.5", "1e3", "-9007199254740992"])("rejects an invalid remaining build budget %s", async (budget) => {
   vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", budget);
-  await expect(import("../build-macos-app.mjs")).rejects.toThrow("MACOS_BUILD_REMAINING_SECONDS must be an integer at most 3600");
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("MACOS_BUILD_REMAINING_SECONDS must be an integer at most 4800");
   expect(spawn).not.toHaveBeenCalled();
 });
 
-it.each(["1200", "600", "0", "-1"])("does not submit with an exhausted remaining build budget %s", async (budget) => {
+it.each(["600", "0", "-1"])("does not build with an exhausted remaining build budget %s", async (budget) => {
   vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", budget);
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("cause=build-timeout");
+  expect(spawn).not.toHaveBeenCalled();
+});
+
+it.each([601, 1200])("caps notarization by the remaining build budget of %s seconds", async (seconds) => {
+  vi.stubEnv("MACOS_BUILD_REMAINING_SECONDS", String(seconds));
+  notaryResult = () => jsonResult({ id: submissionId, status: "In Progress" });
   await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
+  expect(clock).toBe((seconds - 600) * 1000);
   expect(console.error).toHaveBeenCalledWith(expect.stringContaining(
-    'cause=notarization-timeout submission_id=unknown last_status="unknown" waited_seconds=0',
+    `cause=notarization-timeout submission_id=${submissionId} last_status="In Progress" waited_seconds=${seconds - 600}`,
   ));
-  expect(spawn.mock.calls.some(([, args]) => args[0] === "notarytool")).toBe(false);
 });
 
 it.each([undefined, NaN, Infinity, "2400000"])("rejects an invalid deadline %s before a request", async (deadline) => {
@@ -346,37 +416,105 @@ it.each([
 
 it("keeps the last status when a later request stalls at the deadline", async () => {
   notaryResult = (args, options) => {
-    if (args[1] === "info" && clock >= 2355_000) {
+    if (args[1] === "info" && clock >= 1155_000) {
       clock += options.timeout;
       return { status: null, error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) };
     }
     return jsonResult({ id: submissionId, status: "In Progress" });
   };
   await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
-  expect(clock).toBe(2400_000);
+  expect(clock).toBe(1200_000);
   expect(console.error).toHaveBeenCalledWith(expect.stringContaining(
-    `cause=notarization-timeout submission_id=${submissionId} last_status="In Progress" waited_seconds=2400`,
+    `cause=notarization-timeout submission_id=${submissionId} last_status="In Progress" waited_seconds=1200`,
   ));
 });
 
-it.each([2399_999, 2400_000])("accepts only a status inside the deadline at %s milliseconds", async (acceptedAt) => {
-  const defaultSpawn = spawn.getMockImplementation();
-  spawn.mockImplementation((command, args, options) => {
-    if (args[0].endsWith("tauri.js")) clock = 2390_000;
-    return defaultSpawn(command, args, options);
-  });
+it.each([1199_999, 1200_000])("accepts only a status inside the deadline at %s milliseconds", async (acceptedAt) => {
   notaryResult = (args) => {
     if (args[1] === "info") clock = acceptedAt;
-    const id = args[1] === "submit" ? (args[2].endsWith(".pkg") || args[2].endsWith(".dmg") ? installerId : submissionId) : args[2];
-    return jsonResult({ id, status: "Accepted" });
+    return jsonResult({ id: submissionId, status: "Accepted" });
   };
-  if (acceptedAt < 2400_000) {
-    await import("../build-macos-app.mjs");
-    expect(process.exit).not.toHaveBeenCalled();
-  } else {
-    await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("cause=notarization-timeout"));
-  }
+  const { notarize } = await import("./macos-signing.mjs");
+  const result = notarize({}, "muniment.app.zip", "/tmp/key.p8", 1200_000);
+  if (acceptedAt < 1200_000) await expect(result).resolves.toBeUndefined();
+  else await expect(result).rejects.toThrow(`cause=notarization-timeout submission_id=${submissionId} last_status="Accepted" waited_seconds=1200`);
+});
+
+it.each(["productbuild", "hdiutil"])("bounds %s packaging by the build deadline", async (command) => {
+  const defaultSpawn = spawn.getMockImplementation();
+  spawn.mockImplementation((cmd, args, options) => {
+    if (cmd === command) {
+      expect(options.timeout).toBe(4200_000 - clock);
+      expect(options.killSignal).toBe("SIGKILL");
+      clock += options.timeout;
+      return { status: null, error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) };
+    }
+    return defaultSpawn(cmd, args, options);
+  });
+  packageDmg.mockImplementation((app, output, run) => run("hdiutil", ["create", output]));
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("cause=build-timeout");
+  expect(exec.mock.calls.filter(([, args]) => args[1] === "submit")).toHaveLength(1);
+});
+
+it.each(["--check-signature", "--verify", "staple", "validate"])("fails when installer verification %s fails", async (step) => {
+  const defaultSpawn = spawn.getMockImplementation();
+  spawn.mockImplementation((command, args, options) => {
+    if (args.includes(step) && /\.(pkg|dmg)$/.test(args.at(-1))) return { status: 1 };
+    return defaultSpawn(command, args, options);
+  });
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
+  expect(console.log.mock.calls.some(([message]) => message.startsWith("kept "))).toBe(false);
+});
+
+it("waits for the other submissions before a rejected Intel installer fails the batch", async () => {
+  variantCount = 3;
+  const archives = new Map();
+  notaryResult = async (args) => {
+    if (args[1] === "submit") {
+      const id = `${String(archives.size + 1).padStart(8, "0")}-92d9-42a1-82e1-b05b8b7da7db`;
+      archives.set(id, args[2]);
+      await delay(30_000);
+      return jsonResult({ id });
+    }
+    const rejected = archives.get(args[2]).endsWith("muniment-x64.pkg");
+    await delay(rejected ? 5_000 : 20_000);
+    return jsonResult({ id: args[2], status: rejected ? "Rejected" : "Accepted" });
+  };
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
+  expect(clock).toBe(100_000);
+  expect(archives.size).toBe(9);
+  expect(console.error).toHaveBeenCalledWith(expect.stringContaining(
+    'submission_id=00000008-92d9-42a1-82e1-b05b8b7da7db last_status="Rejected" waited_seconds=35',
+  ));
+  expect(console.log.mock.calls.filter(([message]) => message.includes('last_status="Accepted"'))).toHaveLength(8);
+  expect(spawn.mock.calls.filter(([, args]) => args[0] === "stapler" && args[1] === "validate")).toHaveLength(3);
+});
+
+it.each([false, true])("reports an upload timeout with its available submission ID=%s", async (hasId) => {
+  notaryResult = async (args, options) => {
+    expect(args[1]).toBe("submit");
+    await delay(options.timeout);
+    return {
+      status: null, error: Object.assign(new Error("secret test-value"), { killed: true }),
+      stdout: hasId ? JSON.stringify({ id: submissionId }) : "secret test-value", stderr: "secret test-value",
+    };
+  };
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
+  expect(clock).toBe(600_000);
+  expect(console.error).toHaveBeenCalledWith(expect.stringContaining(
+    `cause=notarization-timeout submission_id=${hasId ? submissionId : "unknown"} last_status="unknown" waited_seconds=600`,
+  ));
+  expect(console.error.mock.calls.flat().join("\n")).not.toContain("test-value");
+  expect(process.stdout.write).not.toHaveBeenCalled();
+  expect(process.stderr.write).not.toHaveBeenCalled();
+  expect(spawn.mock.calls.some(([, args]) => args[0] === "stapler")).toBe(false);
+});
+
+it("does not print credentials when the request cannot start", async () => {
+  exec.mockImplementation(() => { throw new Error("secret test-value"); });
+  await expect(import("../build-macos-app.mjs")).rejects.toThrow("exit 1");
+  expect(console.error).toHaveBeenCalledWith(expect.stringContaining("cause=notarytool-failed"));
+  expect(console.error.mock.calls.flat().join("\n")).not.toContain("test-value");
 });
 
 it("stops before codesign and prints the failed identity check output", async () => {

@@ -72,7 +72,7 @@ describe('nightly macOS package build', () => {
     `], { encoding: 'utf8' })
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
-    expect(result.stdout).toBe('750 2850\n')
+    expect(result.stdout).toBe('750 4050\n')
   })
 
   it('builds and publishes the package while signing stays disabled', () => {

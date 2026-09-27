@@ -33,22 +33,22 @@ export function nativeFiles(directory) {
 }
 // Derive thin apps before signing. CEF, speech libraries and helper processes
 // must all match the selected architecture, not just the main executable.
-export function prepareMacosVariants(base) {
+export function prepareMacosVariants(base, run = execute) {
   const variants = macosVariants(base);
   for (const variant of variants.slice(1)) {
     if (existsSync(variant.app)) throw new Error(`Variant already exists: ${variant.app}`);
     mkdirSync(dirname(variant.app), { recursive: true });
-    execute('ditto', [variants[0].app, variant.app]);
+    run('ditto', [variants[0].app, variant.app]);
     const files = nativeFiles(variant.app);
     if (!files.length) throw new Error('Application has no native code');
     for (const file of files) {
-      const arches = execute('lipo', ['-archs', file]).trim().split(/\s+/);
+      const arches = run('lipo', ['-archs', file]).trim().split(/\s+/);
       if (!arches.includes(variant.arch)) throw new Error(`${file} lacks ${variant.arch}`);
       if (arches.length > 1) {
-        execute('lipo', [file, '-thin', variant.arch, '-output', `${file}.thin`]);
+        run('lipo', [file, '-thin', variant.arch, '-output', `${file}.thin`]);
         renameSync(`${file}.thin`, file);
       }
-      if (execute('lipo', ['-archs', file]).trim() !== variant.arch) throw new Error(`Wrong architecture: ${file}`);
+      if (run('lipo', ['-archs', file]).trim() !== variant.arch) throw new Error(`Wrong architecture: ${file}`);
     }
     const resources = join(variant.app, 'Contents/Frameworks/Chromium Embedded Framework.framework/Resources');
     if (existsSync(resources)) for (const name of readdirSync(resources)) {
