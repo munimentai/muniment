@@ -4,7 +4,9 @@
 The app runs a fixed diagnostic in its main webview.
 The diagnostic sends four synthetic prompts in one thread and selects each later model through the composer picker.
 Later prompts omit the random token from the first prompt.
-Every reply must repeat that token without tools.
+Each of those four replies must repeat that token without tools.
+Separate feature checks exercise tools after the runner freezes the four chat receipts.
+The runner restarts the app and runtime to check stored thread, model, file, and account settings.
 
 The subscription transport records the provider's model field, not the selected route label.
 A missing, conflicting, or different model ID fails the check.
@@ -21,6 +23,8 @@ Use a disposable GUI login or a disposable VM on each platform:
 - macOS x64 needs the installed signed x64 app and the same macOS tools and permission.
 
 Node must support the repository's ESM scripts.
+OpenSSL supplies a disposable TLS certificate for the loopback update fixture.
+Windows uses OpenSSL from `C:\Program Files\Git\usr\bin\openssl.exe`.
 The checkout must match the candidate source.
 Install the candidate through the native release pipeline before this probe.
 Run this probe before any WDIO step replaces the installed executable or DLL.
@@ -34,7 +38,8 @@ Dispose of the native login after the check so its runtime service cannot outliv
 
 ## Factory subscriptions
 
-The factory's refresh owner supplies one fresh access lease per selected provider.
+The factory's refresh owner supplies fresh access leases for every selected provider.
+Account balancing needs two distinct accounts from one provider and two selected models that both accounts serve.
 The lease file is a JSON array with these fields:
 
 ```json
@@ -50,7 +55,9 @@ The lease file is a JSON array with these fields:
 
 Replace the example expiry with a Unix millisecond value at least 20 minutes ahead.
 Supported provider IDs are `openai-codex`, `anthropic`, `xai`, and `kimi`.
-Codex requires `account_id`. Other providers may omit it.
+Codex requires `account_id`.
+Multiple leases for one provider also require distinct account IDs.
+Keep the leases valid through all four platform jobs.
 Do not supply refresh tokens, API keys, provider home directories, or `gh` credentials.
 The runner rejects extra lease fields and never writes to the lease file.
 It copies only the leased access fields into a disposable app profile.
@@ -95,13 +102,15 @@ It creates a new app profile for every run and removes that profile after it sto
 
 ## Evidence and release scope
 
-A successful check writes `release-acceptance.json`, a platform evidence JSON file, and a native screenshot.
+A successful check writes `release-acceptance.json`, a platform evidence JSON file, a result log, and a native screenshot.
 The evidence JSON contains synthetic reply tokens, thread IDs, run IDs, and requested/actual model receipts.
-The screenshot shows only the synthetic thread.
+The screenshot shows only verified synthetic replies.
+It hides account details, prompts, and tool output.
 The existing screenshot redactor strips metadata before publication.
 The runner does not publish raw provider errors, account files, conversation logs, or native stderr.
 
-A missing native runner, package, or lease produces three blocked cases and a nonzero exit code.
+A missing native runner, package, or lease blocks every platform case and returns a nonzero exit code.
+A missing feature observation blocks that feature, even when chat passes.
 A failed reply, changed payload, wrong model, or cleanup failure also returns a nonzero exit code.
 Every run replaces stale passing evidence before it checks prerequisites.
 
@@ -114,15 +123,23 @@ node test/e2e/runner/collect-subscriptions.mjs SOURCE_SHA OUTPUT LINUX_OUTPUT WI
 The collector rebuilds the proof from runner receipts and rejects missing or conflicting evidence.
 Upload its output as the GitHub artifact `release-acceptance`.
 A missing platform produces blocked cases and a nonzero exit code.
-The proof covers only `chat`, `direct-model-selection`, and `model-switching`.
-It cannot satisfy the full release matrix or mark a release complete.
+Every platform covers chat, direct model selection, model switching, routing, account balancing, settings, tools, MCP, files, restart persistence, and signed updates.
+The local checks also cover startup, projects, memory, terminal, agents, artifacts, and browser behavior.
+Cloud and company record features stay outside the default local release build.
+Voice hardware and optional model downloads stay outside this credential-driven harness.
+
+The installed updater downloads the signed candidate through a disposable loopback TLS fixture.
+It must reject both damaged package bytes and a different announced version.
+This check does not apply an update or alter the production feed.
 
 `.github/workflows/subscriptions.yml` runs this probe on Linux, Windows, macOS ARM64, and macOS x64.
-Dispatch it with the signed candidate source SHA after the nightly build job.
+Full nightly runs call it after the existing installed gates, including runs that reuse packages.
+Targeted nightly runs keep their platform gates and do not claim full acceptance.
 It reads `FACTORY_SUBSCRIPTION_LEASES` and `FACTORY_SUBSCRIPTION_MODELS`.
 A missing secret, model list, or native desktop-ci runner still publishes blocked cases.
 The collector job then uploads `release-acceptance` and fails with that reason.
-Call it from the nightly workflow after the signed upload.
+The nightly proof also requires this workflow to pass.
+A separate dispatch accepts the exact signed candidate source SHA.
 
 Run the focused regression checks with:
 

@@ -374,7 +374,7 @@
         {{/if}}
 
         <InstallExecuteSequence>
-          <Custom Action="LaunchApplication" After="InstallFinalize">AUTOLAUNCHAPP AND NOT Installed</Custom>
+          <Custom Action="LaunchApplication" After="InstallFinalize">AUTOLAUNCHAPP AND NOT (REMOVE = "ALL") AND (NOT Installed OR REINSTALL)</Custom>
         </InstallExecuteSequence>
 
         <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLDIR]" After="CostFinalize"/>

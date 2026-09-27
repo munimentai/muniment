@@ -554,13 +554,23 @@ jobs:
           fi
 
 
-  proof:
+  release-acceptance:
     needs: [prepare, build, publish, linux-e2e, windows-e2e, macos-e2e]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      (github.event.inputs.platform == '' || github.event.inputs.platform == 'all')
+    uses: ./.github/workflows/subscriptions.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+    secrets: inherit
+
+  proof:
+    needs: [prepare, build, publish, linux-e2e, windows-e2e, macos-e2e, release-acceptance]
     if: >-
       !cancelled() && needs.prepare.outputs.reuse != 'true' &&
       needs.build.result == 'success' && needs.publish.result == 'success' &&
       needs.linux-e2e.result == 'success' && needs.windows-e2e.result == 'success' &&
-      needs.macos-e2e.result == 'success'
+      needs.macos-e2e.result == 'success' && needs.release-acceptance.result == 'success'
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

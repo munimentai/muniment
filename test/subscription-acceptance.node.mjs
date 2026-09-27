@@ -1,3 +1,4 @@
+import './subscription-features.node.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -6,7 +7,7 @@ import path from 'node:path'
 import vm from 'node:vm'
 import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
-import { acceptance, blocked, checkIdentity, hash, platforms, subscriptionAccounts } from './e2e/support/subscription-acceptance.mjs'
+import { acceptance, blocked, checkIdentity, hash, platforms, subscriptionAccounts, features, featureChecks, chatFeatures } from './e2e/support/subscription-acceptance.mjs'
 import { isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signature.mjs'
@@ -15,6 +16,8 @@ import { guest, selectAssets, defaultArtifactsDir, decodeSubscriptionPayload } f
 import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
 
 const sourceSha = 'a'.repeat(40)
+const packageNames = { linux: 'muniment_1.0.0_amd64.AppImage', windows: 'muniment_1.0.0_x64_en-US.msi',
+  'macos-arm64': 'muniment-arm64.app.tar.gz', 'macos-x64': 'muniment-x64.app.tar.gz' }
 const bytes = Buffer.from('signed package fixture')
 const models = Array.from({ length: 4 }, (_, index) => ({ family: 'openai', id: `model-${index}` }))
 const candidate = { source_sha: sourceSha, sha256: hash(bytes), platform: 'linux',
@@ -26,30 +29,57 @@ function fixture() {
     run: `22222222-2222-4222-8222-22222222222${index}`, rendered: true, context: true,
     requested: model.id, expected: nonce }))
   return { result: { status: 'passed', installed: true, unchanged: true, webdriver: false, source_sha: sourceSha,
-    package_sha256: candidate.sha256, turns },
+    package_sha256: candidate.sha256, turns, features: structuredClone(featureChecks) },
   transports: turns.map(turn => ({ requested: turn.requested, actual: turn.requested, subscription: true,
     finished: true, tools: 0, reply_sha256: hash(Buffer.from(nonce)) })) }
 }
 const build = ({ result, transports }, identity = candidate) => acceptance(identity, sourceSha, 'linux', result, transports, 'muniment_1.0.0_amd64.AppImage')
 const lease = { provider: 'openai-codex', access: 'fixture-access', account_id: 'fixture-account', expires_ms: Date.now() + 30 * 60_000 }
 
-test('the runner emits only the three subscription cases in the consumer schema', () => {
+test('the runner emits every required case in the consumer schema', () => {
   const proof = build(fixture())
   assert.equal(proof.schema, 1)
   assert.equal(proof.source_sha, sourceSha)
   assert.deepEqual(proof.packages, { 'muniment_1.0.0_amd64.AppImage': candidate.sha256 })
-  assert.deepEqual(proof.cases.map(item => item.feature), ['chat', 'direct-model-selection', 'model-switching'])
+  assert.deepEqual(proof.cases.map(item => item.feature), ['chat', 'direct-model-selection', 'model-switching',
+    'routing', 'account-balancing', 'settings', 'tools', 'mcp', 'files', 'restart-persistence', 'signed-update',
+    'local-startup', 'projects', 'memory', 'terminal', 'agents', 'artifacts', 'browser'])
   for (const item of proof.cases) {
     assert.equal(item.status, 'passed')
     assert.equal(item.installed, true)
     assert.equal(item.evidence, 'linux-subscription.json')
-    assert.equal(new Set(item.models.map(model => model.actual)).size, 4)
+    assert.equal(new Set(item.models.map(model => model.actual)).size, chatFeatures.includes(item.feature) ? 4 : 0)
+    if (featureChecks[item.feature]) assert.deepEqual(item.checks, featureChecks[item.feature])
     for (const model of item.models) {
       assert.equal(model.requested, model.actual)
       assert.equal(model.reply, nonce)
       assert.equal(model.subscription, true)
     }
   }
+})
+
+for (const feature of Object.keys(featureChecks)) {
+  test(`the proof requires independent runner checks for ${feature}`, () => {
+    for (const invalid of [undefined, [], true, ['passed'], [...featureChecks[feature], 'extra'],
+      featureChecks[feature].slice(1), [...featureChecks[feature]].reverse()]) {
+      if (JSON.stringify(invalid) === JSON.stringify(featureChecks[feature])) continue
+      const f = fixture()
+      f.result.features[feature] = invalid
+      const proof = build(f)
+      assert.equal(proof.cases.find(item => item.feature === feature).status, 'blocked')
+      assert.ok(proof.cases.filter(item => item.feature !== feature).every(item => item.status === 'passed'))
+    }
+  })
+}
+
+test('the lease importer accepts distinct accounts for balancing but rejects duplicate identities', () => {
+  const second = { ...lease, access: 'second-access', account_id: 'second-account' }
+  const accounts = subscriptionAccounts(models, [lease, second])
+  assert.equal(accounts.length, 2)
+  assert.notEqual(accounts[0].id, accounts[1].id)
+  assert.equal(accounts[0].family, accounts[1].family)
+  assert.throws(() => subscriptionAccounts(models, [lease, { ...second, account_id: lease.account_id }]))
+  assert.throws(() => subscriptionAccounts(models, [lease, { ...second, refresh: 'private' }]))
 })
 
 for (const [name, mutate] of [
@@ -122,6 +152,7 @@ test('the importer rejects fewer than four distinct models and local providers',
   assert.throws(() => subscriptionAccounts(models.map(model => ({ ...model, id: '../model' })), [lease]))
   assert.throws(() => subscriptionAccounts(models.map(model => ({ ...model, id: undefined })), [lease]))
   assert.throws(() => subscriptionAccounts(models.map(model => ({ ...model, id: 1 })), [lease]))
+  assert.throws(() => subscriptionAccounts(models.map(model => ({ ...model, refresh: 'private' })), [lease]))
 })
 
 test('the disposable environment does not inherit factory authority or provider homes', () => {
@@ -139,7 +170,7 @@ test('the disposable environment does not inherit factory authority or provider 
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('the collector generates twelve cases and blocks missing or contradictory platform evidence', () => {
+test('the collector generates all platform cases and blocks missing or contradictory evidence', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-collect-'))
   const output = path.join(root, 'out')
   const inputs = []
@@ -149,7 +180,7 @@ test('the collector generates twelve cases and blocks missing or contradictory p
       inputs.push(directory)
       fs.mkdirSync(directory)
       const f = fixture()
-      const proof = acceptance({ ...candidate, platform }, sourceSha, platform, f.result, f.transports, `${platform}.package`)
+      const proof = acceptance({ ...candidate, platform }, sourceSha, platform, f.result, f.transports, packageNames[platform])
       fs.writeFileSync(path.join(directory, 'release-acceptance.json'), JSON.stringify(proof))
       fs.writeFileSync(path.join(directory, `${platform}-subscription.json`), JSON.stringify({ ...f.result, transports: f.transports }))
       fs.writeFileSync(path.join(directory, `screenshot-${platform}-subscriptions.png`),
@@ -158,9 +189,28 @@ test('the collector generates twelve cases and blocks missing or contradictory p
     assert.throws(() => collect(sourceSha, inputs[0], inputs))
     assert.equal(collect(sourceSha, output, inputs), 0)
     const combined = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
-    assert.equal(combined.cases.length, 12)
+    assert.equal(combined.cases.length, 72)
     assert.equal(Object.keys(combined.packages).length, 4)
-    assert.ok(combined.cases.every(item => ['chat', 'direct-model-selection', 'model-switching'].includes(item.feature)))
+    for (const platform of platforms) {
+      assert.deepEqual(combined.cases.filter(item => item.platform === platform).map(item => item.feature), features)
+      const log = fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8')
+      assert.ok(features.every(feature => log.includes(`${feature}: passed\n`)))
+    }
+    const jobs = Object.fromEntries(platforms.map(platform => [platform, { result: 'success' }]))
+    assert.equal(collect(sourceSha, output, inputs, jobs), 0)
+    jobs.linux.result = 'failure'
+    assert.equal(collect(sourceSha, output, inputs, jobs), 1)
+    assert.ok(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases
+      .filter(item => item.platform === 'linux').every(item => item.status === 'blocked'))
+    const linuxEvidence = path.join(inputs[0], 'linux-subscription.json')
+    const incomplete = fixture()
+    delete incomplete.result.features.mcp
+    fs.writeFileSync(linuxEvidence, JSON.stringify({ ...incomplete.result, transports: incomplete.transports }))
+    const partial = acceptance(candidate, sourceSha, 'linux', incomplete.result, incomplete.transports, packageNames.linux)
+    fs.writeFileSync(path.join(inputs[0], 'release-acceptance.json'), JSON.stringify(partial))
+    assert.equal(collect(sourceSha, output, inputs), 1)
+    const partialCombined = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
+    assert.deepEqual(partialCombined.cases.filter(item => item.status === 'blocked').map(item => [item.platform, item.feature]), [['linux', 'mcp']])
     assert.equal(collect(sourceSha, output, inputs.slice(1)), 1)
     assert.ok(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases
       .filter(item => item.platform === 'linux').every(item => item.status === 'blocked'))
@@ -188,7 +238,7 @@ test('the collector preserves blocked runner reasons and still fails', () => {
     }
     assert.equal(collect(sourceSha, output, inputs), 1)
     const combined = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
-    assert.equal(combined.cases.length, 12)
+    assert.equal(combined.cases.length, 72)
     assert.ok(combined.cases.every(item => item.status === 'blocked' && item.reason === reason))
     assert.deepEqual(combined.packages, {})
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
@@ -240,6 +290,33 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
   })
 }
 
+for (const phase of ['features', 'restart', 'update', 'update-restart']) {
+  test(`the ${phase} launch restores four replies without sending another chat`, async () => {
+    let observed, checked = false
+    const turns = fixture().result.turns.map(({ requested, expected, ...turn }) => turn)
+    await vm.runInNewContext(fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8'), {
+      window: { __MUNIMENT_SUBSCRIPTION_PLAN__: { phase, acceptance: true, turns, models, nonce },
+        __munimentSubscriptionFeatures: async ({ plan }) => { checked = true; assert.equal(plan.phase, phase); return {} },
+        __TAURI__: { core: { invoke: async (command, payload) => {
+          if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
+          if (command === 'chat_current_thread') return thread
+          if (command === 'subscription_probe_observed') { observed = payload; return }
+          assert.fail('A restored launch must not select a model or send another chat.')
+        } } } },
+      document: { head: { append() {} }, createElement: () => ({}),
+        querySelector: () => ({ getClientRects: () => [1] }),
+        querySelectorAll: selector => {
+          assert.equal(selector, '.response')
+          return turns.map(() => ({ getClientRects: () => [1], querySelector: () => ({ textContent: nonce }), setAttribute() {} }))
+        } },
+      Event: class {}, setTimeout: callback => callback(), requestAnimationFrame: callback => callback(),
+    })
+    assert.equal(checked, true)
+    assert.equal(observed.passed, true)
+    assert.deepEqual(observed.turns, turns)
+  })
+}
+
 test('each absent native runner emits actionable blocked cases and replaces stale evidence', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-blocked-'))
   try {
@@ -250,7 +327,7 @@ test('each absent native runner emits actionable blocked cases and replaces stal
       fs.writeFileSync(path.join(root, 'release-acceptance.json'), JSON.stringify(build(fixture())))
       assert.equal(await run({ output: root, sourceSha, platform }), 1)
       const proof = JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json')))
-      assert.equal(proof.cases.length, 3)
+      assert.equal(proof.cases.length, 18)
       assert.ok(proof.cases.every(item => item.status === 'blocked' && item.installed === false && item.reason.length > 20))
       assert.deepEqual(proof.packages, {})
       assert.ok(fs.statSync(path.join(root, `${platform}-subscription.json`)).size > 0)
@@ -371,6 +448,25 @@ test('the host publishes blocked cases when leases, models, or native runners ar
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+test('the host blocks refresh tokens before remote dispatch and rejects stale passing proof after transport failure', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-host-failure-'))
+  try {
+    const options = { sourceSha, platform: 'linux', output: root, models: JSON.stringify(models), sshKey: 'key', knownHosts: 'host' }
+    assert.equal(host({ ...options, leases: JSON.stringify([{ ...lease, refresh: 'private-refresh-token' }]),
+      invoke: () => assert.fail('The host must not forward refresh tokens.') }), 1)
+    assert.equal(fs.readFileSync(path.join(root, 'release-acceptance.json'), 'utf8').includes('private-refresh-token'), false)
+    assert.equal(host({ ...options, leases: JSON.stringify([lease]), invoke: ({ output }) => {
+      const f = fixture()
+      fs.writeFileSync(path.join(output, 'release-acceptance.json'), JSON.stringify(build(f)))
+      fs.writeFileSync(path.join(output, 'linux-subscription.json'), JSON.stringify({ ...f.result, transports: f.transports }))
+      fs.writeFileSync(path.join(output, 'unapproved.log'), 'private-token')
+      return { status: 1 }
+    } }), 1)
+    assert.ok(JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json'))).cases.every(item => item.status === 'blocked'))
+    assert.equal(fs.existsSync(path.join(root, 'unapproved.log')), false)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
 test('the host copies guest evidence and keeps a failed native check red', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-host-copy-'))
   try {
@@ -464,9 +560,9 @@ for (const platform of ['linux', 'macos', 'windows']) {
         encodedModels: transported.MUNIMENT_SUBSCRIPTION_MODELS_BASE64,
         fetchRelease: () => { fetched = true; return { assets: [] } },
       }), 1)
-      assert.equal(fetched, true)
+      assert.equal(fetched, false)
       const proof = fs.readFileSync(path.join(output, 'release-acceptance.json'), 'utf8')
-      assert.match(proof, /signed nightly package/)
+      assert.match(proof, /FACTORY_SUBSCRIPTION_LEASES/)
       assert.equal(proof.includes(lease.access), false)
       assert.equal(proof.includes(transported.MUNIMENT_SUBSCRIPTION_LEASES_BASE64), false)
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
@@ -690,7 +786,33 @@ test('the workflow runs a native job per platform and uploads release-acceptance
   assert.match(armJob, /if-no-files-found: error/)
   assert.match(workflow, /name: release-acceptance/)
   assert.match(workflow, /test "\$COLLECT_STATUS" = 0/)
-  assert.match(workflow, /chat, direct-model-selection, and model-switching only/)
+  assert.match(workflow, /SUBSCRIPTION_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/)
+  assert.match(workflow, /installed release acceptance checks passed on all four platforms/)
+  assert.equal((workflow.match(/ref: \$\{\{ inputs.source_sha \}\}/g) ?? []).length, 5)
+  assert.match(nightly, /uses: \.\/\.github\/workflows\/subscriptions.yml/)
+  assert.match(nightly, /needs\.release-acceptance\.result == 'success'/)
+  const acceptanceJob = nightly.split('  release-acceptance:\n')[1].split('\n  proof:')[0]
+  assert.match(acceptanceJob, /needs: \[prepare, build, publish, linux-e2e, windows-e2e, macos-e2e\]/)
+  assert.match(acceptanceJob, /source_sha: \$\{\{ needs.prepare.outputs.source_sha \}\}/)
+  assert.match(acceptanceJob, /secrets: inherit/)
+  assert.match(acceptanceJob, /github.event.inputs.platform == 'all'/)
+  assert.doesNotMatch(acceptanceJob, /outputs.reuse|continue-on-error/)
+  const condition = acceptanceJob.match(/if: >-\n((?:      .+\n)+)/)[1].trim()
+  const allowed = (platform, prepare = 'success', cancelled = false) => Function(`return (${condition
+    .replace('cancelled()', JSON.stringify(cancelled))
+    .replaceAll('needs.prepare.result', JSON.stringify(prepare))
+    .replaceAll('github.event.inputs.platform', JSON.stringify(platform))})`)()
+  assert.equal(allowed('all'), true)
+  assert.equal(allowed(''), true)
+  assert.equal(allowed('all', 'failure'), false)
+  assert.equal(allowed('all', 'success', true), false)
+  for (const platform of ['linux', 'windows', 'macos']) assert.equal(allowed(platform), false)
+  const proofJob = nightly.split('  proof:\n')[1]
+  for (const gate of ['build', 'publish', 'linux-e2e', 'windows-e2e', 'macos-e2e', 'release-acceptance']) {
+    assert.ok(proofJob.includes(`needs.${gate}.result == 'success'`))
+  }
+  assert.match(workflow, /rm -rf "\$RUNNER_TEMP\/subscription-inputs"/)
+  assert.equal((workflow.match(/name: Clear platform output/g) ?? []).length, 4)
   assert.ok((workflow.match(/if: always\(\)/g) ?? []).length >= 6)
   assert.match(workflow, /needs: \[linux, windows, macos-arm64, macos-x64\]/)
   assert.equal(nightly.includes('subscription-host.mjs'), false)

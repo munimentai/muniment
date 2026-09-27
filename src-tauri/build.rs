@@ -163,6 +163,7 @@ const APP_COMMANDS: &[&str] = &[
     "open_login_items",
     "runtime_notice_observed",
     "subscription_probe_observed",
+    "subscription_probe_update",
     "e2e_drive_folder_dialog",
     "e2e_folder_dialog_snapshot",
 ];

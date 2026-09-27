@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { platforms } from '../support/subscription-acceptance.mjs'
+import { platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { writeBlocked } from './subscriptions.mjs'
 
 const desktopCiName = platform => platform === 'macos-x64' ? 'macos' : platform
@@ -28,7 +28,7 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
     fs.writeFileSync(hostsFile, knownHosts.endsWith('\n') ? knownHosts : `${knownHosts}\n`, { mode: 0o600 })
     let cmd = 'node test/e2e/runner/subscription-guest.mjs'
     if (platform === 'linux') {
-      cmd = 'sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xvfb xdotool imagemagick dbus-x11 fuse3 && dbus-run-session -- xvfb-run -a node test/e2e/runner/subscription-guest.mjs'
+      cmd = 'sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xvfb xdotool imagemagick dbus-x11 fuse3 openssl && dbus-run-session -- xvfb-run -a node test/e2e/runner/subscription-guest.mjs'
     }
     const extra = platform === 'windows' ? ' --console-user' : platform === 'macos' ? ' --screendump' : ''
     const ref = /^[a-f0-9]{40}$/.test(harnessSha ?? '') ? harnessSha : sourceSha
@@ -73,6 +73,8 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
     if (!String(models ?? '').trim()) throw new Error(missingModels)
     const compactLeases = compactJson(leases, missingLeases)
     const compactModels = compactJson(models, missingModels)
+    try { subscriptionAccounts(JSON.parse(compactModels), JSON.parse(compactLeases)) }
+    catch { throw new Error(missingLeases) }
     if (platform === 'macos-arm64' || !sshKey || !knownHosts) throw new Error(missingRunner)
     const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-artifacts-'))
     try {
@@ -83,17 +85,21 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
       const evidence = path.join(artifacts, `${platform}-subscription.json`)
       const proof = path.join(artifacts, 'release-acceptance.json')
       if (!fs.existsSync(evidence) || !fs.existsSync(proof)) throw new Error(missingRunner)
-      for (const name of fs.readdirSync(artifacts)) {
+      for (const name of ['release-acceptance.json', `${platform}-subscription.json`, `${platform}-subscription.log`,
+        `screenshot-${platform}-subscriptions.png`]) {
         const file = path.join(artifacts, name)
-        if (!fs.statSync(file).isFile()) continue
+        if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) continue
         fs.copyFileSync(file, path.join(output, name))
+      }
+      if (result.status !== 0 && JSON.parse(fs.readFileSync(proof, 'utf8')).cases?.every(item => item.status === 'passed')) {
+        writeBlocked(output, sourceSha, platform, missingRunner)
       }
       return result.status === 0 ? 0 : 1
     } finally {
       fs.rmSync(artifacts, { recursive: true, force: true })
     }
   } catch (error) {
-    reason = error instanceof Error ? error.message : missingRunner
+    reason = [missingLeases, missingModels, missingRunner].includes(error?.message) ? error.message : missingRunner
     writeBlocked(output, sourceSha, platform, reason)
     console.error(reason)
     return 1
@@ -111,6 +117,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     token: process.env.RELEASE_TOKEN,
     sshKey: process.env.DESKTOP_CI_SSH_KEY,
     knownHosts: process.env.DESKTOP_CI_KNOWN_HOSTS,
-    harnessSha: process.env.GITHUB_SHA,
+    harnessSha: process.env.SOURCE_SHA,
   })
 }
