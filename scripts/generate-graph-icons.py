@@ -2,6 +2,7 @@
 """Generate desktop Pocket Fold icons on macOS. Requires Node, Pillow and CairoSVG."""
 import io
 import json
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -37,7 +38,17 @@ def png(pixels, logical):
 for name, (pixels, logical) in PNG_SIZES.items():
     (ICONS / name).write_bytes(png(pixels, logical))
 
-# ICO holds separate reductions, not resizes of the largest graph.
+# Keep each checked-in launcher and search icon density on the same mark.
+for directory in ("ios", "android"):
+    for target in (ICONS / directory).rglob("*.png"):
+        pixels = Image.open(target).width
+        source = SOURCE.replace('rx="200"', 'rx="0"')
+        if "foreground" in target.name:
+            source = re.sub(r'<rect[^>]*/>', '', SOURCE)
+        cairosvg.svg2png(bytestring=source.encode(), write_to=str(target),
+                        output_width=pixels, output_height=pixels)
+
+# ICO holds separate reductions for each platform icon size.
 ico_sizes = (16, 24, 32, 48, 64, 128, 256)
 payloads = [png(size, size) for size in ico_sizes]
 offset = 6 + 16 * len(payloads)
