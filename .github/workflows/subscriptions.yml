@@ -32,10 +32,6 @@ jobs:
       SOURCE_SHA: ${{ inputs.source_sha }}
       PLATFORM: linux
       REPOSITORY: ${{ github.repository }}
-      RELEASE_TOKEN: ${{ github.token }}
-      FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
-      FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
-      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -49,15 +45,20 @@ jobs:
       - name: Run installed subscription check
         env:
           OUTPUT: ${{ runner.temp }}/subscription-linux
+          RELEASE_TOKEN: ${{ github.token }}
+          FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
+          FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
+          DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
         run: node test/e2e/runner/subscription-host.mjs
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: ./.github/actions/store-artifact
         if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
         with:
           name: subscription-linux
           path: ${{ runner.temp }}/subscription-linux
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 90
+          source: ${{ inputs.source_sha }}
 
   windows:
     needs: linux
@@ -68,10 +69,6 @@ jobs:
       SOURCE_SHA: ${{ inputs.source_sha }}
       PLATFORM: windows
       REPOSITORY: ${{ github.repository }}
-      RELEASE_TOKEN: ${{ github.token }}
-      FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
-      FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
-      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -85,15 +82,20 @@ jobs:
       - name: Run installed subscription check
         env:
           OUTPUT: ${{ runner.temp }}/subscription-windows
+          RELEASE_TOKEN: ${{ github.token }}
+          FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
+          FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
+          DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
         run: node test/e2e/runner/subscription-host.mjs
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: ./.github/actions/store-artifact
         if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
         with:
           name: subscription-windows
           path: ${{ runner.temp }}/subscription-windows
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 90
+          source: ${{ inputs.source_sha }}
 
   macos-arm64:
     needs: windows
@@ -123,14 +125,15 @@ jobs:
           FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
           FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
         run: node test/e2e/runner/subscription-macos-arm64.mjs
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: ./.github/actions/store-artifact
         if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
         with:
           name: subscription-macos-arm64
           path: ${{ runner.temp }}/subscription-macos-arm64
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 90
+          source: ${{ inputs.source_sha }}
 
   macos-x64:
     needs: macos-arm64
@@ -141,10 +144,6 @@ jobs:
       SOURCE_SHA: ${{ inputs.source_sha }}
       PLATFORM: macos-x64
       REPOSITORY: ${{ github.repository }}
-      RELEASE_TOKEN: ${{ github.token }}
-      FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
-      FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
-      DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
     steps:
       - name: Check out subscription harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -158,15 +157,20 @@ jobs:
       - name: Run installed subscription check
         env:
           OUTPUT: ${{ runner.temp }}/subscription-macos-x64
+          RELEASE_TOKEN: ${{ github.token }}
+          FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
+          FACTORY_SUBSCRIPTION_MODELS: ${{ vars.FACTORY_SUBSCRIPTION_MODELS }}
+          DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
         run: node test/e2e/runner/subscription-host.mjs
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: ./.github/actions/store-artifact
         if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
         with:
           name: subscription-macos-x64
           path: ${{ runner.temp }}/subscription-macos-x64
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 90
+          source: ${{ inputs.source_sha }}
 
   collect:
     needs: [linux, windows, macos-arm64, macos-x64]
@@ -184,13 +188,17 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be exactly 40 lowercase hex characters' >&2; exit 1; }
       - name: Clear collection directories
         run: rm -rf "$RUNNER_TEMP/subscription-inputs" "$RUNNER_TEMP/release-acceptance"
+      - uses: ./.github/actions/setup-artifact-store
       - name: Download platform evidence
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        continue-on-error: true
-        with:
-          pattern: subscription-*
-          path: ${{ runner.temp }}/subscription-inputs
-          merge-multiple: false
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+        run: |
+          for platform in linux windows macos-arm64 macos-x64; do
+            # A missing or invalid download leaves no directory. The collector rejects it.
+            node .github/lib/artifact-store.mjs download "subscription-$platform" \
+              "$RUNNER_TEMP/subscription-inputs/subscription-$platform" || echo "No verified evidence for $platform."
+          done
       - name: Generate release-acceptance
         id: collect
         env:
@@ -206,14 +214,15 @@ jobs:
           status=$?
           set -e
           printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: ./.github/actions/store-artifact
         if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
         with:
           name: release-acceptance
           path: ${{ runner.temp }}/release-acceptance
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 90
+          source: ${{ inputs.source_sha }}
       - name: Preserve collector result
         if: always()
         env:

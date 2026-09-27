@@ -43,10 +43,14 @@ jobs:
         with:
           ref: ${{ steps.source.outputs.sha }}
 
+      - uses: ./.github/actions/setup-artifact-store
+
       - name: Reuse unchanged nightly builds
         id: proof
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
           WINDOWS_SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
           MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED || 'false' }}
@@ -589,10 +593,11 @@ jobs:
             const assets = await nightlyAssets(github, context.repo, head);
             const settings = { windowsSigning: process.env.WINDOWS_SIGNING_ENABLED, macosSigning: process.env.MACOS_SIGNING_ENABLED };
             writeProof(context, 'nightly.yml', { head, assets, settings });
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: ./.github/actions/store-artifact
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
         with:
           name: nightly.yml-proof
           path: ${{ runner.temp }}/proof.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 90
+          source: ${{ needs.prepare.outputs.source_sha }}

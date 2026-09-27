@@ -117,8 +117,10 @@ describe('nightly Linux E2E workflow', () => {
     expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', prepare: 'failure' })).toBe(false)
   })
 
-  it('stores platform diagnostics in MinIO and only the small reuse proof in GitHub', () => {
+  it('stores platform diagnostics and the reuse proof in MinIO', () => {
     expect(job('proof')).toContain('name: nightly.yml-proof')
+    expect(job('proof')).toContain('uses: ./.github/actions/store-artifact')
+    expect(workflow).not.toMatch(/actions\/(?:upload|download)-artifact|actions\/artifacts/)
     for (const platform of ['linux', 'windows', 'macos']) {
       const lane = job(`${platform}-e2e`, platform === 'linux' ? 'windows-e2e' : platform === 'windows' ? 'macos-e2e' : 'verify-requested-e2e')
       expect(lane).not.toMatch(/actions\/(?:upload|download)-artifact|actions\/artifacts/)

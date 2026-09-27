@@ -15,7 +15,7 @@ it.skipIf(process.platform === 'win32')('retains the complete envelope and stabl
     writeFileSync(join(source, 'driver-app.log'), 'runtime failure evidence')
     writeFileSync(join(root, 'aws'), `#!/usr/bin/env node
 const fs = require('node:fs'); const path = require('node:path');
-const [source, dest] = process.argv.slice(6, 8);
+const [source, dest] = process.argv.slice(10, 12);
 const local = value => value.startsWith('s3://') ? path.join(process.env.STORE, value.slice(5)) : value;
 fs.mkdirSync(path.dirname(local(dest)), { recursive: true });
 fs.copyFileSync(local(source), local(dest));
@@ -23,12 +23,16 @@ if (source.startsWith('s3://') && process.env.CORRUPT) fs.appendFileSync(local(d
 `, { mode: 0o755 })
     const env = { ...process.env, PATH: `${root}:${process.env.PATH}`, STORE: store,
       AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '2',
+      GITHUB_REPOSITORY: 'munimentai/muniment', SOURCE_SHA: 'a'.repeat(40),
       GITHUB_STEP_SUMMARY: join(root, 'summary') }
     const publish = () => spawnSync('bash', [resolve('.github/publish-ci-artifacts.sh'), 'windows', source], { env, encoding: 'utf8' })
     const result = publish()
     expect(result.status, result.stderr).toBe(0)
     const prefix = join(store, 'factory-ci-artifacts/muniment-desktop/42')
-    expect(readdirSync(join(prefix, 'windows-e2e-report'))).toEqual(['junit-results.xml'])
+    expect(readdirSync(join(prefix, 'windows-e2e-report'))).toEqual(['junit-results.xml', 'manifest.json'])
+    const manifest = JSON.parse(readFileSync(join(prefix, 'windows-e2e-report/manifest.json')))
+    expect(manifest).toMatchObject({ repository: env.GITHUB_REPOSITORY, run: 42, attempt: 2, source: env.SOURCE_SHA })
+    expect(manifest.files[0]).toMatchObject({ path: 'junit-results.xml', size: 13, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
     const archive = join(prefix, 'windows-e2e/attempt-2/diagnostics.tar.gz')
     const log = spawnSync('tar', ['-xOzf', archive, './driver-app.log'], { encoding: 'utf8' })
     expect(log.stdout).toBe('runtime failure evidence')
