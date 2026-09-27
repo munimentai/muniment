@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { upload } from './artifact-store.mjs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readProof, reusePullRequest, reuseNightlyBuild } from './ci-proof.mjs'
@@ -94,18 +94,39 @@ describe('unchanged nightly build reuse', () => {
   })
 })
 
-it('reads bounded JSON from a workflow artifact and rejects an unrelated run', async () => {
-  const f = fixture()
+it('reads bounded MinIO proofs for the exact repository, run, attempt and source', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ci-proof-test-'))
+  const id = { repository: 'munimentai/muniment', run: 1, attempt: 2, source: 'a'.repeat(40) }
+  const repo = { owner: 'munimentai', repo: 'muniment' }
+  const run = { id: 1, run_attempt: 2, head_sha: id.source }
+  const proof = { schema: 1, repository: id.repository, run: 1, attempt: 2, head: id.source, workflow: 'ci.yml' }
+  const objects = new Map()
+  const store = { put: (key, bytes) => objects.set(key, bytes), get: (key, limit) => {
+    const bytes = objects.get(key)
+    if (!bytes || bytes.length > limit) throw new Error('Invalid object.')
+    return bytes
+  } }
+  const read = (value = run, name = 'ci.yml-proof') => readProof({}, repo, value, name, store)
   try {
-    writeFileSync(join(dir, 'proof.json'), JSON.stringify(f.proof))
-    execFileSync('zip', ['-q', 'proof.zip', 'proof.json'], { cwd: dir })
-    const bytes = readFileSync(join(dir, 'proof.zip'))
-    const actions = f.github.rest.actions
-    actions.listWorkflowRunArtifacts = vi.fn(async () => ({ data: { artifacts: [{ id: 7, name: 'ci.yml-proof', expired: false, size_in_bytes: bytes.length }] } }))
-    actions.downloadArtifact = vi.fn(async () => ({ data: bytes }))
-    expect(await readProof(f.github, f.context.repo, f.run, 'ci.yml-proof')).toEqual(f.proof)
-    expect(await readProof(f.github, f.context.repo, { id: 5 }, 'ci.yml-proof')).toBeNull()
-    expect(await readProof(f.github, f.context.repo, f.run, 'missing')).toBeNull()
+    const save = value => {
+      writeFileSync(join(dir, 'proof.json'), JSON.stringify(value))
+      upload(id, 'ci.yml-proof', dir, store)
+    }
+    save(proof)
+    expect(await read()).toEqual(proof)
+    for (const changed of [{ id: 5 }, { run_attempt: 3 }, { head_sha: 'b'.repeat(40) }]) {
+      await expect(read({ ...run, ...changed })).rejects.toThrow()
+    }
+    await expect(read(run, 'missing')).rejects.toThrow()
+    await expect(readProof({}, { owner: 'other', repo: 'muniment' }, run, 'ci.yml-proof', store)).rejects.toThrow()
+    for (const changed of [{ run: 5 }, { attempt: 1 }, { head: 'b'.repeat(40) }, { repository: 'other/repo' }]) {
+      save({ ...proof, ...changed })
+      expect(await read()).toBeNull()
+    }
+    save({ ...proof, padding: 'x'.repeat(64 * 1024) })
+    await expect(read()).rejects.toThrow()
+    save(proof)
+    objects.set('s3://factory-ci-artifacts/muniment-desktop/1/ci.yml-proof/proof.json', Buffer.from('{}'))
+    await expect(read()).rejects.toThrow()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

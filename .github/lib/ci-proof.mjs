@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
+import { readArtifact } from './artifact-store.mjs'
 import { join } from 'node:path'
 import { expectedNightlyAssets } from './release-promotion.mjs'
 
@@ -13,7 +13,8 @@ export const checkoutTree = () => execFileSync('git', ['rev-parse', 'HEAD^{tree}
 export function writeProof(context, workflow, extra = {}) {
   const proof = {
     schema, workflow, repository: `${context.repo.owner}/${context.repo.repo}`,
-    run: context.runId, head: context.payload.pull_request?.head.sha ?? context.sha,
+    run: context.runId, attempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+    head: context.payload.pull_request?.head.sha ?? context.sha,
     tree: checkoutTree(), ...extra,
   }
   const file = join(process.env.RUNNER_TEMP, 'proof.json')
@@ -21,23 +22,13 @@ export function writeProof(context, workflow, extra = {}) {
   return file
 }
 
-export async function readProof(github, repo, run, name) {
-  const { data } = await github.rest.actions.listWorkflowRunArtifacts({ ...repo, run_id: run.id, per_page: 100 })
-  const artifacts = data.artifacts.filter(a => a.name === name && !a.expired)
-  if (artifacts.length !== 1 || artifacts[0].size_in_bytes > limit) return null
-  const archive = await github.rest.actions.downloadArtifact({ ...repo, artifact_id: artifacts[0].id, archive_format: 'zip' })
-  const bytes = Buffer.from(archive.data)
-  if (bytes.length > limit) return null
-  const dir = mkdtempSync(join(tmpdir(), 'ci-proof-'))
-  try {
-    const file = join(dir, 'proof.zip')
-    writeFileSync(file, bytes)
-    const proof = JSON.parse(execFileSync('unzip', ['-p', file, 'proof.json'], { maxBuffer: limit, encoding: 'utf8' }))
-    return proof.schema === schema && proof.run === run.id &&
-      proof.repository === `${repo.owner}/${repo.repo}` ? proof : null
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+export async function readProof(github, repo, run, name, store) {
+  const repository = `${repo.owner}/${repo.repo}`
+  const files = readArtifact({ repository, run: run.id, attempt: run.run_attempt, source: run.head_sha }, name, store, limit)
+  if (files.size !== 1 || !files.has('proof.json')) return null
+  const proof = JSON.parse(files.get('proof.json'))
+  return proof.schema === schema && proof.run === run.id && proof.attempt === run.run_attempt &&
+    proof.head === run.head_sha && proof.repository === repository ? proof : null
 }
 
 export async function reusePullRequest({ github, context, core, workflow, tree = checkoutTree(), read = readProof }) {
