@@ -16,3 +16,11 @@ it('selects only connected classifiers and keeps account balancing on', async ()
  expect(invoke).not.toHaveBeenCalledWith('model_router_set_enabled',{enabled:false})
  expect(screen.getByText(/Account balancing stays on/)).toBeInTheDocument()
 })
+
+it('saves explicit limits and keeps a blank budget unlimited', async () => {
+  const invoke=vi.fn().mockResolvedValue({})
+  render(ModelRouterSection,{tauri:{invoke},settings:{options:[],accounts:[]},onsettings:vi.fn(),inventory:{providers:[]}})
+  await fireEvent.input(screen.getByLabelText('Estimated task budget (USD)'),{target:{value:'0.25'}})
+  await fireEvent.click(screen.getByRole('button',{name:'Save limits'}))
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('model_router_save_constraints',{offlineOnly:false,taskBudgetUsd:0.25}))
+})
