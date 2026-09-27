@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { writeBlocked } from './subscriptions.mjs'
+import { subscriptionRedactor, diagnosticTail, nativeFailure, transcriptText } from '../support/subscription-diagnostics.mjs'
 
 const desktopCiName = platform => platform === 'macos-x64' ? 'macos' : platform
 
@@ -20,6 +21,8 @@ function compactJson(value, reason) {
 
 export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output, leases, models, repository, token, sshKey, knownHosts, harnessSha, spawnProcess = spawnSync }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-host-'))
+  const redact = subscriptionRedactor({ leases, values: [token, sshKey] })
+  let detail = 'step=desktop-ci/ssh\n'
   try {
     const keyFile = path.join(root, 'key')
     const hostsFile = path.join(root, 'known_hosts')
@@ -48,11 +51,22 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
       '-i', keyFile, '-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${hostsFile}`,
       '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=8',
       'desktopci@10.1.10.10', remote,
-    ], { input, encoding: 'utf8', timeout: 40 * 60_000 })
-    fs.writeFileSync(transcript, `${ssh.stdout ?? ''}${ssh.stderr ?? ''}`)
-    const extract = spawnProcess('bash', ['test/e2e/support/extract-artifacts.sh', transcript, output, String(ssh.status ?? 1)])
+    ], { input, encoding: 'utf8', timeout: 40 * 60_000, maxBuffer: 32 * 1024 * 1024 })
+    fs.writeFileSync(transcript, `${ssh.stdout ?? ''}${ssh.stderr ?? ''}`, { mode: 0o600 })
+    detail += `status=${ssh.status ?? 'none'} signal=${ssh.signal ?? 'none'} error=${redact(ssh.error?.message ?? 'none')}\n`
+    detail += diagnosticTail(transcriptText(nativeFailure('ssh', ssh).message), redact)
+    const extract = spawnProcess('bash', ['test/e2e/support/extract-artifacts.sh', transcript, output, String(ssh.status ?? 1)],
+      { encoding: 'utf8', timeout: 60_000 })
+    detail += `\nstep=desktop-ci/extract\n${diagnosticTail(nativeFailure('extract-artifacts', extract).message, redact)}`
     return { status: ssh.status === 0 && extract.status === 0 ? 0 : 1 }
+  } catch (error) {
+    detail += `\nerror=${redact(error.message)}\n`
+    throw error
   } finally {
+    fs.mkdirSync(output, { recursive: true, mode: 0o700 })
+    const log = path.join(output, `${subscriptionPlatform}-subscription.log`)
+    const previous = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''
+    fs.writeFileSync(log, redact(`${previous}\n${detail}\n`), { mode: 0o600 })
     fs.rmSync(root, { recursive: true, force: true })
   }
 }
@@ -67,6 +81,8 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
   const missingLeases = 'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.'
   const missingModels = 'Provide the FACTORY_SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
   let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
+  const redact = subscriptionRedactor({ leases, values: [token, sshKey] })
+  fs.rmSync(path.join(output, `${platform}-subscription.log`), { force: true })
   writeBlocked(output, sourceSha, platform, reason)
   try {
     if (!String(leases ?? '').trim()) throw new Error(missingLeases)
@@ -78,14 +94,22 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
     if (platform === 'macos-arm64' || !sshKey || !knownHosts) throw new Error(missingRunner)
     const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-artifacts-'))
     try {
-      const result = invoke({
-        sourceSha, platform: desktopCiName(platform), subscriptionPlatform: platform, output: artifacts,
-        leases: compactLeases, models: compactModels, repository, token, sshKey, knownHosts, harnessSha,
-      })
+      let result
+      try {
+        result = invoke({
+          sourceSha, platform: desktopCiName(platform), subscriptionPlatform: platform, output: artifacts,
+          leases: compactLeases, models: compactModels, repository, token, sshKey, knownHosts, harnessSha,
+        })
+      } finally {
+        const log = path.join(artifacts, `${platform}-subscription.log`)
+        if (fs.existsSync(log) && fs.lstatSync(log).isFile()) {
+          fs.writeFileSync(path.join(output, `${platform}-subscription.log`), redact(fs.readFileSync(log, 'utf8')), { mode: 0o600 })
+        }
+      }
       const evidence = path.join(artifacts, `${platform}-subscription.json`)
       const proof = path.join(artifacts, 'release-acceptance.json')
       if (!fs.existsSync(evidence) || !fs.existsSync(proof)) throw new Error(missingRunner)
-      for (const name of ['release-acceptance.json', `${platform}-subscription.json`, `${platform}-subscription.log`,
+      for (const name of ['release-acceptance.json', `${platform}-subscription.json`,
         `screenshot-${platform}-subscriptions.png`]) {
         const file = path.join(artifacts, name)
         if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) continue
@@ -100,7 +124,7 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
     }
   } catch (error) {
     reason = [missingLeases, missingModels, missingRunner].includes(error?.message) ? error.message : missingRunner
-    writeBlocked(output, sourceSha, platform, reason)
+    writeBlocked(output, sourceSha, platform, reason, `step=host\nerror=${error.message}`, redact)
     console.error(reason)
     return 1
   }
@@ -117,6 +141,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     token: process.env.RELEASE_TOKEN,
     sshKey: process.env.DESKTOP_CI_SSH_KEY,
     knownHosts: process.env.DESKTOP_CI_KNOWN_HOSTS,
-    harnessSha: process.env.SOURCE_SHA,
+    harnessSha: process.env.HARNESS_SHA ?? process.env.SOURCE_SHA,
   })
 }

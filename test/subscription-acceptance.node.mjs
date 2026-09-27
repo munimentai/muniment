@@ -1,4 +1,5 @@
 import './subscription-features.node.mjs'
+import './subscription-diagnostics.node.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -368,18 +369,40 @@ async function identityRun(mutate, publicKeyFile = true) {
     const leasesFile = path.join(root, 'leases.json')
     fs.writeFileSync(leasesFile, JSON.stringify([lease]), { mode: 0o600 })
     const output = path.join(root, 'out')
-    mutate?.({ packageFile, signatureFile, candidateFile, keyFile, keys, packageName })
+    mutate?.({ packageFile, signatureFile, candidateFile, keyFile, keys, packageName, executable, leasesFile })
     const code = await run({
       candidateFile, packageFile, signatureFile, executable, leasesFile, output, sourceSha, platform: 'linux',
       ...(publicKeyFile === true ? { publicKeyFile: keyFile } : publicKeyFile === null ? {} : { publicKeyFile }),
     })
     const proof = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
-    return { code, proof, reason: proof.cases[0].reason }
+    return { code, proof, reason: proof.cases[0].reason, log: fs.readFileSync(path.join(output, 'linux-subscription.log'), 'utf8') }
   } finally {
     if (previous === undefined) delete process.env.MUNIMENT_NATIVE_DISPOSABLE_USER
     else process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = previous
     fs.rmSync(root, { recursive: true, force: true })
   }
+}
+
+for (const end of ['exit 42', 'kill -TERM $$']) {
+  test(`the installed probe retains redacted process logs after ${end}`, { skip: !nativeLinux }, async () => {
+    const result = await identityRun(files => {
+      const script = Buffer.from(`#!/bin/sh\nprintf '%s\\n' 'app failed ${lease.access}' 'runtime failed ${lease.account_id}' >&2\n${end}\n`)
+      fs.writeFileSync(files.packageFile, script)
+      fs.writeFileSync(files.executable, script)
+      fs.chmodSync(files.executable, 0o755)
+      fs.writeFileSync(files.candidateFile, JSON.stringify({ ...candidate, sha256: hash(script) }))
+      fs.writeFileSync(files.signatureFile, signUpdaterBytes(script, files.keys.key, { fileName: files.packageName, version: '1.0.0' }))
+    })
+    assert.equal(result.code, 1)
+    assert.ok(result.proof.cases.every(item => item.status === 'blocked'))
+    assert.match(result.log, /step=chat\/wait-result/)
+    assert.match(result.log, /phase=chat/)
+    assert.match(result.log, end === 'exit 42' ? /exit=42/ : /signal=SIGTERM/)
+    assert.match(result.log, /app failed/)
+    assert.match(result.log, /runtime failed/)
+    assert.equal(result.log.includes(lease.access), false)
+    assert.equal(result.log.includes(lease.account_id), false)
+  })
 }
 
 test('the runner reads the committed updater public key', () => {
@@ -516,10 +539,12 @@ for (const platform of ['linux', 'macos', 'windows']) {
       assert.deepEqual(runDesktopCi({
         sourceSha, platform, subscriptionPlatform: platform === 'macos' ? 'macos-x64' : platform,
         output: root, leases, models: modelJson, repository: 'owner/repo', token: 'fixture-token',
-        sshKey: 'fixture-key', knownHosts: 'fixture-host',
+        sshKey: 'fixture-key', knownHosts: 'fixture-host', harnessSha: 'b'.repeat(40),
         spawnProcess(command, args, options) {
           calls += 1
           if (command === 'ssh') {
+            assert.ok(args.at(-1).includes(`--ref '${'b'.repeat(40)}'`))
+            assert.ok(options.input.includes(`MUNIMENT_E2E_SOURCE_SHA=${sourceSha}\n`))
             for (const value of [leases, lease.access, 'fixture-token', Buffer.from(leases).toString('base64')]) {
               assert.equal(args.join(' ').includes(value), false)
             }
@@ -805,7 +830,9 @@ test('the workflow runs a native job per platform and uploads release-acceptance
   assert.match(workflow, /test "\$COLLECT_STATUS" = 0/)
   assert.match(workflow, /SUBSCRIPTION_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/)
   assert.match(workflow, /installed release acceptance checks passed on all four platforms/)
-  assert.equal((workflow.match(/ref: \$\{\{ inputs.source_sha \}\}/g) ?? []).length, 5)
+  assert.equal((workflow.match(/ref: \$\{\{ github.sha \}\}/g) ?? []).length, 5)
+  assert.match(workflow, /HARNESS_SHA: \$\{\{ github.sha \}\}/)
+  assert.equal((workflow.match(/SOURCE_SHA: \$\{\{ inputs.source_sha \}\}/g) ?? []).length, 5)
   assert.match(nightly, /uses: \.\/\.github\/workflows\/subscriptions.yml/)
   assert.match(nightly, /needs\.release-acceptance\.result == 'success'/)
   const acceptanceJob = nightly.split('  release-acceptance:\n')[1].split('\n  proof:')[0]
@@ -836,6 +863,7 @@ test('the workflow runs a native job per platform and uploads release-acceptance
   assert.equal(nightly.includes('FACTORY_SUBSCRIPTION_LEASES'), false)
   assert.equal(workflow.includes('echo $FACTORY_SUBSCRIPTION_LEASES'), false)
   const hostSource = fs.readFileSync('test/e2e/runner/subscription-host.mjs', 'utf8')
+  assert.match(hostSource, /harnessSha: process\.env\.HARNESS_SHA \?\? process\.env\.SOURCE_SHA/)
   assert.equal(hostSource.includes('console.log(leases'), false)
   assert.equal(hostSource.includes('console.error(leases'), false)
 })

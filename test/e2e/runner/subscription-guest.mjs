@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { run, writeBlocked } from './subscriptions.mjs'
+import { subscriptionRedactor, nativeFailure, readDiagnosticLog } from '../support/subscription-diagnostics.mjs'
 
 const missingPackage = 'The signed nightly package or updater signature for this platform is missing.'
 const missingLeases = 'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.'
@@ -76,13 +77,13 @@ function install(platform, packageFile, root) {
     const expanded = path.join(root, 'app')
     fs.mkdirSync(expanded)
     const result = spawnSync('tar', ['-xzf', packageFile, '-C', expanded], { timeout: 60_000 })
-    if (result.status !== 0) throw new Error(missingPackage)
+    if (result.error || result.status !== 0) throw nativeFailure('tar', result)
     const executable = path.join(expanded, 'muniment.app', 'Contents', 'MacOS', 'muniment-desktop')
     if (!fs.existsSync(executable)) throw new Error(missingPackage)
     return executable
   }
-  const result = spawnSync('msiexec.exe', ['/i', packageFile, '/qn', '/norestart'], { timeout: 180_000, windowsHide: true })
-  if (result.status !== 0 && result.status !== 3010) throw new Error(missingPackage)
+  const result = spawnSync('msiexec.exe', ['/i', packageFile, '/qn', '/norestart', '/L*v', path.join(root, 'install.log')], { timeout: 180_000, windowsHide: true })
+  if (result.error || (result.status !== 0 && result.status !== 3010)) throw nativeFailure('msiexec/install', result)
   const executable = path.join(process.env.LOCALAPPDATA, 'muniment', 'muniment-desktop.exe')
   if (!fs.existsSync(executable)) throw new Error(missingPackage)
   return executable
@@ -93,7 +94,9 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
   if (!platforms.includes(platform) || !/^[a-f0-9]{40}$/.test(sourceSha ?? '') || !artifacts) {
     throw new Error('Provide a supported native platform, output directory, and the exact candidate source SHA.')
   }
+  fs.rmSync(path.join(artifacts, `${platform}-subscription.log`), { force: true })
   writeBlocked(artifacts, sourceSha, platform, 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.')
+  let step = 'guest/leases'
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-'))
   try {
     if (encodedLeases !== undefined) leases = decodeSubscriptionPayload(encodedLeases, missingLeases)
@@ -107,6 +110,7 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
     try { subscriptionAccounts(parsedModels, JSON.parse(compactLeases)) } catch { throw new Error(missingLeases) }
     const leasesFile = path.join(root, 'leases.json')
     fs.writeFileSync(leasesFile, compactLeases, { mode: 0o600 })
+    step = 'guest/nightly-assets'
     const release = await (fetchRelease ?? (() => loadRelease(repository, token)))()
     const { packageAsset, signatureAsset } = selectAssets(release, sourceSha, platform)
     const packageFile = path.join(root, packageAsset.name)
@@ -123,10 +127,12 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
       source_sha: sourceSha, platform, asset: packageAsset.name,
       sha256: createHash('sha256').update(fs.readFileSync(packageFile)).digest('hex'), models: parsedModels,
     }) + '\n', { mode: 0o600 })
+    step = 'guest/updater-signature'
     const comment = verifyUpdaterSignature(fs.readFileSync(packageFile), fs.readFileSync(signatureFile, 'utf8'),
       fs.readFileSync('src-tauri/updater.pub', 'utf8'))
     const stableName = packageAsset.name.replace(`nightly-${sourceSha}-${platform.startsWith('macos-') ? 'macos' : platform}-`, '')
     if (!comment.split('\t').includes(`file:${stableName}`)) throw new Error(missingPackage)
+    step = 'guest/install'
     const executable = install(platform, packageFile, root)
     process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = '1'
     return await run({ candidateFile, packageFile, signatureFile, executable, leasesFile, output: artifacts, sourceSha, platform })
@@ -134,7 +140,9 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
     const known = [missingPackage, missingLeases, missingModels,
       'Run this check on the requested native platform and architecture.']
     const reason = known.includes(error?.message) ? error.message : missingPackage
-    writeBlocked(artifacts, sourceSha, platform, reason)
+    const redact = subscriptionRedactor({ leases, values: [token, encodedLeases] })
+    writeBlocked(artifacts, sourceSha, platform, reason,
+      `step=${step}\nerror=${error.message}\ninstall tail:\n${readDiagnosticLog(path.join(root, 'install.log'), root, redact)}`, redact)
     console.error(reason)
     return 1
   } finally {
