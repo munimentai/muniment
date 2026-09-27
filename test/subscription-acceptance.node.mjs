@@ -762,6 +762,23 @@ for (const mode of ['native', 'guest-blocked', 'linux', 'intel-node', 'intel-hos
   })
 }
 
+for (const platform of ['linux', 'windows', 'macos-x64']) {
+  test(`the ${platform} subscription job uses the private release runner and its SSH channel`, () => {
+    const workflow = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8')
+    const job = workflow.split(`\n  ${platform}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0]
+    assert.ok(job, `The workflow must define the ${platform} subscription job.`)
+    assert.deepEqual(job.match(/^    runs-on: .+$/gm), ['    runs-on: muniment-release'])
+    assert.match(job, /run: node test\/e2e\/runner\/subscription-host\.mjs/)
+    assert.match(job, /DESKTOP_CI_KNOWN_HOSTS: \$\{\{ vars\.DESKTOP_CI_KNOWN_HOSTS \}\}/)
+    assert.match(job, /FACTORY_SUBSCRIPTION_LEASES: \$\{\{ secrets\.FACTORY_SUBSCRIPTION_LEASES \}\}/)
+    assert.match(job, /FACTORY_SUBSCRIPTION_MODELS: \$\{\{ vars\.FACTORY_SUBSCRIPTION_MODELS \}\}/)
+    // The private release runner supplies the SSH key through its environment.
+    assert.doesNotMatch(workflow, /DESKTOP_CI_SSH_KEY/)
+    const hostSource = fs.readFileSync('test/e2e/runner/subscription-host.mjs', 'utf8')
+    assert.match(hostSource, /sshKey: process\.env\.DESKTOP_CI_SSH_KEY/)
+  })
+}
+
 test('the workflow runs a native job per platform and uploads release-acceptance', () => {
   const workflow = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8')
   const nightly = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
