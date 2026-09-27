@@ -78,9 +78,10 @@ pub use service::{
     accept_prompt, answer_permission, apply_retention, cancel_run, configure_run, create_company,
     create_thread, delete_company, delete_thread, drive_prompt, ensure_home, ensure_native_session,
     entitlement_snapshot, list_companies, list_companions, list_devices, onboard_workspace,
-    open_profile_storage, queue_run_message, rename_company, rename_thread, resume_run,
-    revoke_companion, run_prompt, select_company, select_thread, session_status, sign_in, sign_out,
-    stream_run, subscribe_run_commits, thread_page, thread_summaries, ConfigureRunError,
+    open_profile_storage, pairing_status, queue_run_message, rename_company, rename_thread,
+    request_pairing_challenge, resume_run, revoke_companion, revoke_pairing_pair, run_prompt,
+    select_company, select_thread, session_status, sign_in, sign_out, stream_run,
+    subscribe_run_commits, thread_page, thread_summaries, ConfigureRunError,
     EntitlementSnapshotError, EntitlementSnapshotResult, PromptAcceptance, PromptLaunch,
     RecordRegistry, SignOutError,
 };

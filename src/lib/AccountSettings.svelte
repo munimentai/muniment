@@ -6,6 +6,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
+  import PhonePairing from './PhonePairing.svelte'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
 
   let { tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut } = $props()
@@ -295,6 +296,7 @@
       </ul>
     {/if}
   </section>
+  <PhonePairing {tauri} />
   <section class="companions-section" aria-labelledby="companions-heading">
     <h3 id="companions-heading" class="access-label">Connected programs</h3>
     {#if companions.name === 'loading'}

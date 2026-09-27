@@ -133,7 +133,7 @@ Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings is a popup over the workspace with a
 section list on its left: Models & routing, Extend, Preferences, Profile & Memory and Storage.
-The company-record flag adds Companies. The cloud flag adds Account. It shows the
+The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it. Dismissal returns focus to the opener.
