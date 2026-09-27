@@ -42,6 +42,41 @@ and [all downloads](https://github.com/munimentai/muniment/releases/latest) for 
 Open the app, [connect a provider](https://muniment.ai/docs/connections/), and start a thread.
 Follow the [getting started guide](https://muniment.ai/docs/start/) for your first project.
 
+### AppImage sandbox setup
+
+Ubuntu 24.04 restricts unprivileged user namespaces. The AppImage needs a host sandbox helper on these systems, even without the DEB.
+The AppImage includes a setup script and the Chromium sandbox helper.
+
+1. Download the AppImage from the official release.
+2. In an empty directory, extract its sandbox setup.
+
+```sh
+chmod +x /path/to/muniment.AppImage
+/path/to/muniment.AppImage --appimage-extract usr/lib/muniment/cef/chrome-sandbox
+/path/to/muniment.AppImage --appimage-extract setup-sandbox.sh
+```
+
+3. Install the helper with administrator access.
+
+```sh
+sudo /bin/sh squashfs-root/setup-sandbox.sh
+```
+
+4. Remove the extracted files.
+
+```sh
+rm -r squashfs-root
+```
+
+5. Run the original AppImage as your normal user.
+
+The setup requires a setuid-enabled executable filesystem at `/usr/lib/muniment/cef`.
+It keeps Chromium's sandbox enabled and leaves the host's user namespace policy unchanged.
+Run setup for each AppImage update. Matching helpers need no changes.
+If setup reports a different helper, keep the DEB helper when the DEB is installed.
+For an AppImage-only installation, close Muniment and remove `/usr/lib/muniment/cef/chrome-sandbox` with `sudo rm` before setup.
+To uninstall an AppImage-only installation, remove that helper and the AppImage.
+
 ### Homebrew
 
 The official Homebrew cask is not available yet. Use the macOS download above.

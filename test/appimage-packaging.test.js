@@ -11,7 +11,7 @@ function fixture() {
   const lib = join(appDir, 'usr/lib')
   const cef = join(lib, 'muniment/cef')
   mkdirSync(join(cef, 'locales'), { recursive: true })
-  for (const name of ['icudtl.dat', 'v8_context_snapshot.bin', 'resources.pak', 'libcef.so']) writeFileSync(join(cef, name), name)
+  for (const name of ['icudtl.dat', 'v8_context_snapshot.bin', 'resources.pak', 'libcef.so', 'chrome-sandbox']) writeFileSync(join(cef, name), name)
   writeFileSync(join(cef, 'locales/en-US.pak'), 'English')
   writeFileSync(join(appDir, 'AppRun'), 'executable')
   chmodSync(join(appDir, 'AppRun'), 0o755)
@@ -26,6 +26,7 @@ it.skipIf(process.platform === 'win32')('puts Chromium data beside libcef and us
     writeFileSync(join(f.lib, 'libcef.so'), 'linuxdeploy patched library')
     prepareAppDir(f.appDir)
     expect(readlinkSync(join(f.lib, 'chrome-sandbox'))).toBe('/usr/lib/muniment/cef/chrome-sandbox')
+    expect(readFileSync(join(f.appDir, 'setup-sandbox.sh'), 'utf8')).toBe(readFileSync('src-tauri/packaging/appimage/setup-sandbox.sh', 'utf8'))
     prepareAppDir(f.appDir) // Repackaging preserves the fixed host link.
     expect(readFileSync(join(f.lib, 'libcef.so'), 'utf8')).toBe('linuxdeploy patched library')
     expect(readFileSync(join(f.lib, 'icudtl.dat'), 'utf8')).toBe('icudtl.dat')
@@ -35,6 +36,24 @@ it.skipIf(process.platform === 'win32')('puts Chromium data beside libcef and us
     expect(existsSync(join(f.lib, 'libcrypto.so.3'))).toBe(true)
     rmSync(join(f.cef, 'icudtl.dat'))
     expect(() => prepareAppDir(f.appDir)).toThrow('Missing CEF AppImage resource: icudtl.dat')
+  } finally { rmSync(f.directory, { recursive: true, force: true }) }
+})
+
+it('requires a regular sandbox helper in the AppImage', () => {
+  const f = fixture()
+  try {
+    rmSync(join(f.cef, 'chrome-sandbox'))
+    expect(() => prepareAppDir(f.appDir)).toThrow('Missing CEF AppImage resource: chrome-sandbox')
+    writeFileSync(join(f.cef, 'chrome-sandbox'), '')
+    expect(() => prepareAppDir(f.appDir)).toThrow('Missing CEF AppImage resource: chrome-sandbox')
+    rmSync(join(f.cef, 'chrome-sandbox'))
+    mkdirSync(join(f.cef, 'chrome-sandbox'))
+    expect(() => prepareAppDir(f.appDir)).toThrow('Missing CEF AppImage resource: chrome-sandbox')
+    if (process.platform !== 'win32') {
+      rmSync(join(f.cef, 'chrome-sandbox'), { recursive: true })
+      symlinkSync('libcef.so', join(f.cef, 'chrome-sandbox'))
+      expect(() => prepareAppDir(f.appDir)).toThrow('Missing CEF AppImage resource: chrome-sandbox')
+    }
   } finally { rmSync(f.directory, { recursive: true, force: true }) }
 })
 

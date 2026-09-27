@@ -160,10 +160,13 @@ dirty guest state and signed-in profiles are never reused.
 The AppImage uses Chromium's sandbox. Its FUSE mount cannot supply a setuid helper.
 Hosts that restrict unprivileged user namespaces require the root-owned helper at `/usr/lib/muniment/cef/chrome-sandbox` with mode `4755`.
 The DEB configures this helper for user installations.
+AppImage-only installations use the setup script inside the signed AppImage, as described in the README.
 
-The subscription guest verifies the AppImage's updater signature and signed name before it extracts only the helper.
-It installs that helper on the guest filesystem, checks ownership, mode, mount options, and bytes, then launches the unchanged signed AppImage.
+The subscription guest verifies the AppImage's updater signature and signed name before it extracts the setup script and helper.
+It runs the shipped setup, checks ownership, mode, mount options, and bytes, then launches the unchanged signed AppImage.
 The guest refuses to overwrite an existing helper and removes its helper after the probe.
+The Linux guest must deny `unshare --user --map-root-user true` with `Operation not permitted`.
+This precondition makes the four-model installed probe a startup regression under restricted user namespaces, without a DEB prerequisite.
 Setup or cleanup failures block acceptance.
 The guest does not disable Chromium's sandbox or change the host's user namespace policy.
 
