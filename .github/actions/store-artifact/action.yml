@@ -1,0 +1,22 @@
+name: Store an artifact in MinIO
+description: Upload evidence through authenticated HTTPS and verify each readback.
+inputs:
+  name:
+    description: The artifact name.
+    required: true
+  path:
+    description: The file or directory to upload.
+    required: true
+  source:
+    description: The exact source SHA.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-artifact-store
+    - shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.name }}
+        ARTIFACT_PATH: ${{ inputs.path }}
+        SOURCE_SHA: ${{ inputs.source }}
+      run: node .github/lib/artifact-store.mjs upload "$ARTIFACT_NAME" "$ARTIFACT_PATH"

@@ -15,6 +15,7 @@ import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signat
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
 import { guest, selectAssets, defaultArtifactsDir, decodeSubscriptionPayload } from './e2e/runner/subscription-guest.mjs'
 import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
+import { upload } from '../.github/lib/artifact-store.mjs'
 
 const sourceSha = 'a'.repeat(40)
 const packageNames = { linux: 'muniment_1.0.0_amd64.AppImage', windows: 'muniment_1.0.0_x64_en-US.msi',
@@ -825,7 +826,12 @@ test('the workflow runs a native job per platform and uploads release-acceptance
   assert.equal(armJob.includes('subscription-host.mjs'), false)
   assert.equal(armJob.includes('DESKTOP_CI_'), false)
   assert.match(armJob, /if: always\(\)/)
-  assert.match(armJob, /if-no-files-found: error/)
+  assert.match(armJob, /uses: .\/.github\/actions\/store-artifact/)
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-subscription-evidence-'))
+  try {
+    assert.throws(() => upload({ repository: 'munimentai/muniment', run: 1, attempt: 1, source: sourceSha },
+      'subscription-macos-arm64', empty, { put() { assert.fail('Empty evidence must not upload.') } }), /Invalid artifact file count/)
+  } finally { fs.rmSync(empty, { recursive: true, force: true }) }
   assert.match(workflow, /name: release-acceptance/)
   assert.match(workflow, /test "\$COLLECT_STATUS" = 0/)
   assert.match(workflow, /SUBSCRIPTION_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/)

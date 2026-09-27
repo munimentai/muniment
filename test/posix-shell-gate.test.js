@@ -9,7 +9,7 @@ const ALLOWED = {
   'test/macos-wdio-tools.test.js:23:22': "describe.skipIf(process.platform === 'win32')('macOS WDIO build tools')",
   'test/macos-keychain-session.test.js:27:22': "describe.skipIf(process.platform === 'win32')('macOS CI keychain session')",
   'test/desktop-e2e-harness.test.js:1327:22': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
-  'test/ci-artifacts.test.js:27:27': "it.skipIf(process.platform === 'win32') on the artifact publisher test",
+  'test/ci-artifacts.test.js:28:27': "it.skipIf(process.platform === 'win32') on the artifact publisher test",
   'test/macos-local-mode-config.test.js:18:29': "The fixture shell runs only through it.skipIf(process.platform === 'win32').",
   'test/linux-sign-in-state.test.js:19:20': "describe.skipIf(process.platform === 'win32')('Linux sign-in state cleanup')",
   'test/linux-build-download.test.js:35:35': "describe.skipIf(process.platform === 'win32')('Linux build downloads')",
