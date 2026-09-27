@@ -2,9 +2,9 @@
  * Design tokens for docs/spec/design-spec.md §1.3–1.5. This file is the single
  * source for color, radius, and type tokens; components reference the custom
  * properties, never raw values. `--signal` may only be referenced by
- * components on the §1.2 allowed list (color means computation).
+ * components on the §1.2 allowed list (brand actions and computation).
  *
- * Themes follow the OS by default (§1.3); an explicit per-device preference
+ * Moss is the default dark theme; an explicit per-device preference
  * overrides the media query through the data-theme selectors below.
  */
 
@@ -40,12 +40,12 @@
 
   /* §1.3 light color tokens */
   --overlay-backdrop: color-mix(in srgb, var(--paper) 64%, transparent);
-  --paper: #F6F7F6;
+  --paper: #F8F7F4;
   --surface: #FFFFFF;
-  --faint: #EDEFEE;
-  --ink: #1A1D1C;
+  --faint: #EEEDE8;
+  --ink: #111111;
   --muted: #5C6461;
-  --border: #E2E5E3;
+  --border: #DEDFD8;
   --signal: #2A7264;
   --signal-opacity: .10;
   --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
@@ -79,9 +79,9 @@
 
   /* §1.5 radius scale. Extend tabs use a pill shape. */
   --radius-pill: 999px; /* Extend tabs */
-  --radius-chip: 2px;    /* chips, kbd */
-  --radius-control: 6px; /* buttons, tools, inputs */
-  --radius-panel: 10px;  /* panels, composer, window */
+  --radius-chip: 4px;    /* chips, kbd */
+  --radius-control: 10px; /* buttons, tools, inputs */
+  --radius-panel: 16px;  /* panels, composer, window */
 
   /* §4 depth: black-based and theme-independent */
   --shadow-window: 0 1px 2px rgba(0,0,0,.05), 0 12px 40px rgba(0,0,0,.08);
@@ -114,12 +114,12 @@
  */
 /* The default light: the §1.3 light set. */
 :root[data-theme="paper"], [data-swatch][data-theme="paper"] {
-  --paper: #F6F7F6;
+  --paper: #F8F7F4;
   --surface: #FFFFFF;
-  --faint: #EDEFEE;
-  --ink: #1A1D1C;
+  --faint: #EEEDE8;
+  --ink: #111111;
   --muted: #5C6461;
-  --border: #E2E5E3;
+  --border: #DEDFD8;
   --signal: #2A7264;
   --signal-opacity: .10;
   --signal-soft: rgba(42, 114, 100, var(--signal-opacity));

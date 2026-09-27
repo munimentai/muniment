@@ -12,7 +12,7 @@ export const LIGHT_THEMES = ['paper', 'vellum', 'ledger', 'foolscap', 'parchment
 export const DARK_THEMES = ['moss', 'vault', 'graphite', 'inkwell', 'lagoon', 'umber', 'fjord', 'plum', 'nocturne', 'nightshade', 'basalt', 'obsidian', 'carbon', 'afterglow', 'canopy']
 export const VIBRANT_THEMES = ['daybreak', 'afterglow', 'canopy', 'coral']
 export const DEFAULT_LIGHT_THEME = 'paper'
-export const DEFAULT_DARK_THEME = 'vault'
+export const DEFAULT_DARK_THEME = 'moss'
 export const THEME_NAMES = {
   canopy: 'Canopy', coral: 'Coral',
   daybreak: 'Daybreak', afterglow: 'Afterglow',
@@ -31,7 +31,7 @@ export function themeScheme(theme) {
   return null
 }
 
-const defaults = () => ({ mode: THEME_SYSTEM, light: DEFAULT_LIGHT_THEME, dark: DEFAULT_DARK_THEME })
+const defaults = () => ({ mode: THEME_DARK, light: DEFAULT_LIGHT_THEME, dark: DEFAULT_DARK_THEME })
 
 // Missing, malformed, or older values restore the documented OS default. An
 // older bare mode keeps that mode with its default theme, and a bare theme

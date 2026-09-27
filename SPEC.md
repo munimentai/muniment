@@ -330,11 +330,11 @@ onboarding spec proves the composer, the three chips and a first Send.
    chat, and [docs/desktop-single-mode.md](docs/desktop-single-mode.md) maps
    it to the cloud routing-surface name. Enforcer:
    `test/smoke.sh`.
-4. **Color law.** Color means computation. `--signal` appears only on the
-   mark's thinking state, the running-tool pulse, the streaming underline and
-   caret, the provenance route segment, the voice polish flash, and
-   workflow-run indicators, selected Extend tabs and enabled extension switches. No gradients,
-   violet, glassmorphism, typing dots, avatars, sparkles, emoji, or pill radius outside Extend tabs.
+4. **Color law.** Verdigris identifies primary actions, active workspace selection,
+   selected controls and computation. Pocket Fold uses a straight fold diagonal,
+   geometric curves and the fixed verdigris ear. Its wordmark uses outlined paths.
+   Warm paper and rounded panels follow `DESIGN.md`. No gradients, violet,
+   glassmorphism, typing dots, avatars, sparkles or emoji.
 5. **If it is a record, it is mono.** Provenance lines, tool cards, costs,
    model names and paths render in Commit Mono. Conversation renders in
    Schibsted Grotesk.

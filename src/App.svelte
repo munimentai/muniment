@@ -55,6 +55,7 @@
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import GraphMark from './lib/GraphMark.svelte'
+  import Wordmark from './lib/Wordmark.svelte'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
   import AppUpdate from './lib/AppUpdate.svelte'
@@ -2056,9 +2057,9 @@
     <div class="lockup">
       <GraphMark size={160} />
       {#if onboarding.name === 'complete' && (auth.name === 'signed-out' || auth.name === 'signing-in')}
-        <h1 class="name">muniment</h1>
+        <h1 class="name" aria-label="muniment"><Wordmark /></h1>
       {:else}
-        <span class="name">muniment</span>
+        <span class="name"><Wordmark /></span>
       {/if}
     </div>
     <p class="meta">shell v{version}</p>
@@ -2694,18 +2695,19 @@
     padding: 24px;
   }
 
-  /* The full static graph surrounds the centered wordmark. */
+  /* Pocket Fold sits above its custom outlined wordmark. */
   .lockup {
     position: relative;
     display: grid;
     place-items: center;
     width: 160px;
-    height: 160px;
-    color: var(--signal);
+    height: auto;
+    gap: 14px;
+    color: var(--ink);
   }
 
   .name {
-    position: absolute;
+    margin: 0;
     color: var(--ink);
     font-size: var(--text-15);
     font-weight: 600;
@@ -2732,8 +2734,8 @@
 
   .auth-actions { display: flex; gap: 8px; }
   .sign-in-link { justify-self: start; color: var(--ink); font-size: var(--text-12); text-decoration: underline; }
-  .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
-  .composer-action.primary { background: var(--accent, var(--ink)); border-color: var(--accent, var(--ink)); color: var(--on-accent, var(--paper)); }
+  .primary { background: var(--signal); border-color: var(--signal); color: var(--paper); }
+  .composer-action.primary { background: var(--signal); border-color: var(--signal); color: var(--paper); }
   .composer-actions .primary[aria-disabled="true"] { background: var(--faint); border-color: var(--border); color: var(--muted); }
 
   button {
@@ -2880,7 +2882,7 @@
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); user-select: none; -webkit-user-select: none; }
   button.thread-row:hover:not([aria-disabled="true"]) { background: var(--faint); }
   /* A selected row reads darker than the open thread's faint row, so a selection and the open thread never look alike. */
-  .thread-row.selected { background: color-mix(in srgb, var(--ink) 14%, var(--surface)); }
+  .thread-row.selected { background: var(--signal-soft); box-shadow: inset 3px 0 var(--signal); }
   /* The row's delete control shows while the pointer or focus rests on the row, in the time's place. */
   .thread-actions { position: absolute; top: 50%; right: 4px; min-width: 22px; min-height: 22px; padding: 0 4px; transform: translateY(-50%); color: var(--muted); opacity: 0; pointer-events: none; }
   .thread-record:hover .thread-actions, .thread-record:focus-within .thread-actions { opacity: 1; pointer-events: auto; }

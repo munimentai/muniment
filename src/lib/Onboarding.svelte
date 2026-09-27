@@ -220,7 +220,7 @@
   button { min-height: 28px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled, button[aria-disabled="true"] { color: var(--muted); cursor: default; }
-  .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .primary { background: var(--signal); border-color: var(--signal); color: var(--paper); }
   .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   @media (max-height: 600px) { section.onboarding { margin-top: 12px; max-height: calc(100% - 12px); } }
 </style>
