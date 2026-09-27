@@ -110,12 +110,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
-        .plugin(
-            tauri_plugin_window_state::Builder::default()
-                .skip_initial_state("main")
-                .with_denylist(&["launcher"])
-                .build(),
-        )
+        .plugin(window_state::plugin_builder().build())
         .manage(auth::AuthState::new(runtime_activity.clone()))
         .manage(terminal::TerminalState::default())
         .manage(Arc::new(voice_capture::VoiceCaptureState::new()))

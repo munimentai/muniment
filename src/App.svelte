@@ -566,6 +566,7 @@
   let workspace = $state()
   let entitlementToastVisible = $state(false)
   let pairingRequests = $state([])
+  const pairingTimers = new Map()
   let desktopClientStatus = $state(null)
   let desktopClientStatusVersion = 0
   let runtimeNotice = $state(null)
@@ -1728,6 +1729,7 @@
       console.error('Registration retry status failed.')
     })
     window.__TAURI__?.event?.listen('attach-pairing-requested', ({ payload }) => {
+      if (pairingRequests.some(request => request.challenge === payload?.challenge)) return
       pairingRequests = [...pairingRequests, {
         challenge: payload?.challenge,
         claimedKind: boundedAttachClaim(payload?.claimed_kind),
@@ -1735,6 +1737,12 @@
         workspace: boundedAttachWorkspace(payload?.workspace),
         scopes: Array.isArray(payload?.scopes) ? payload.scopes : [],
       }]
+      const challenge = payload?.challenge
+      const lifetime = Number.isFinite(payload?.deadline_ms) ? Math.max(0, Math.min(payload.deadline_ms, 120000)) : 120000
+      pairingTimers.set(challenge, setTimeout(() => {
+        pairingRequests = pairingRequests.filter(request => request.challenge !== challenge)
+        pairingTimers.delete(challenge)
+      }, lifetime))
       const appWindow = getCurrentWindow()
       void appWindow.isFocused().then((focused) => {
         if (!focused) return appWindow.requestUserAttention(UserAttentionType.Informational)
@@ -1877,6 +1885,8 @@
       entitlementToast.cleanup()
       backgroundServiceNotice.cleanup()
       pairingUnlisten?.()
+      for (const timer of pairingTimers.values()) clearTimeout(timer)
+      pairingTimers.clear()
       registrationRetryUnlisten?.()
       desktopClientUnlisten?.()
       launcherUnlisten?.()
@@ -1900,7 +1910,9 @@
     } catch {
       console.error('Pairing decision failed.')
     } finally {
-      pairingRequests = pairingRequests.slice(1)
+      clearTimeout(pairingTimers.get(request.challenge))
+      pairingTimers.delete(request.challenge)
+      pairingRequests = pairingRequests.filter(item => item.challenge !== request.challenge)
     }
   }
 
@@ -2650,7 +2662,9 @@
 {#if pairingRequests[0]}
   {#key pairingRequests[0]}
     <ConfirmDialog title="Approve Muniment connection" onDecision={decidePairing}>
-      <p>The connecting program supplied these claims: kind {pairingRequests[0].claimedKind} and version {pairingRequests[0].claimedVersion}. Allow this program to access workspace {pairingRequests[0].workspace} with the scopes {pairingRequests[0].scopes.join(' and ')}?</p>
+      <p>Allow this program to access workspace {pairingRequests[0].workspace}?</p>
+      <p>Permissions: {pairingRequests[0].scopes.map(scope => ({ 'run.write': 'run tasks', 'thread.read': 'read workspace data' })[scope] ?? scope).join(' and ') || 'none'}.</p>
+      <p>Identifies as {pairingRequests[0].claimedKind} {pairingRequests[0].claimedVersion}.</p>
     </ConfirmDialog>
   {/key}
 {/if}

@@ -185,6 +185,7 @@ pub(super) struct AttachPairingRequest {
     pub(super) claimed_version: String,
     pub(super) workspace: String,
     pub(super) scopes: std::collections::BTreeSet<String>,
+    pub(super) deadline_ms: u64,
 }
 
 #[tauri::command]
