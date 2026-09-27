@@ -67,6 +67,7 @@ const APP_COMMANDS: &[&str] = &[
     "model_router_update_account",
     "model_router_remove_account",
     "model_router_save_routes",
+    "model_router_save_constraints",
     "model_router_set_classifier",
     "model_router_connect_classifier",
     "model_router_select_classifier",
