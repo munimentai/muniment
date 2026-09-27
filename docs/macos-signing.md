@@ -43,11 +43,15 @@ Set the `MACOS_SIGNING_ENABLED` repository variable to `true` after all six secr
 5. The build checks for a valid Developer ID Application identity before any `codesign` call.
 6. The build finds the Developer ID Installer identity by SHA-1.
 7. The build signs the ASR runtime dylibs, runtime, and `.app` with the hardened runtime and a secure timestamp.
-8. The build submits the app archive through `xcrun notarytool submit … --wait` with the API key.
-   A rejected build fails the job.
+8. The build submits universal, ARM64, and Intel app archives together through `xcrun notarytool submit … --no-wait`.
+   The build polls each submission until Apple returns `Accepted`.
+   A rejection or timeout fails the job.
 9. The build staples the ticket with `xcrun stapler staple` so Gatekeeper validates offline.
 10. The build packages `muniment.app.zip` from the signed and stapled bundle.
-11. The build creates the signed `.pkg`, notarizes it, and staples its ticket.
+11. The build creates three signed PKGs and three signed DMGs.
+12. The build verifies each installer signature.
+13. The build notarizes all six installers together.
+14. The build staples and validates every ticket before upload.
 
 The throwaway keychain holds both Developer ID identities and their private keys.
 The login keychain holds the public Developer ID G2 intermediate for the run.
@@ -62,6 +66,25 @@ If that command fails or lists no valid Developer ID Application identity, the b
 The error names the certificate chain and keychain access checks.
 This preflight does not replace the signed nightly check.
 
+### Build and notarization budgets
+
+The nightly macOS VM has an explicit 4800-second build limit within the 90-minute job limit.
+The build clock starts before Git and dependency setup.
+The script reserves 600 seconds for cleanup and asset upload.
+Compile, signing, and packaging commands use the remaining build time as their timeout.
+
+Each notarization batch gets up to 1200 seconds after its archives exist, capped by the remaining build time.
+The app batch contains three archives.
+The installer batch contains six archives.
+Uploads and status requests run without blocking each other.
+Each upload has a 600-second limit, and each status request has a 60-second limit.
+The batch deadline can shorten either limit.
+
+The build finishes packaging before each batch starts, so packaging cannot block request timers.
+It waits for every submission in a batch before stapling or cleanup.
+Failure logs show the submission ID, last status, elapsed seconds, and archive path without raw credential-bearing tool output.
+An upload that returns no submission ID reports `unknown`.
+
 The nightly release notes state whether the macOS artifacts have signatures.
 
 ## 3. Verify the signed nightly
@@ -69,7 +92,11 @@ The nightly release notes state whether the macOS artifacts have signatures.
 Open the nightly `build (macos)` job log.
 Confirm that the log shows the Developer ID Application identity before the first ASR dylib signature.
 Check that `replacing existing signature` has no following `errSecInternalComponent` or chain warning.
-Confirm that the app signature passes and the job reaches `notarytool submit`.
+Confirm that all nine submissions log `last_status="Accepted"`.
+Check signature verification and staple validation for every app, PKG, and DMG.
+Inspect the macOS installed-test proof after the targeted nightly lane passes.
+Require the full release run before stable promotion.
+Promote only the exact verified packages.
 
 ## 4. Verify a signed + notarized artifact
 

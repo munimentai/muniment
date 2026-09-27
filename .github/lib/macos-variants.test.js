@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { macosVariants, nativeFiles, packageMacosDmg, prepareMacosVariants } from './macos-variants.mjs';
@@ -14,6 +14,28 @@ it('gives each architecture its own downloads and keeps the app bundle name', ()
   expect(new Set(variants.flatMap(v => [v.zip, v.tar, v.pkg, v.dmg])).size).toBe(12);
   expect(variants.map(v => v.arch)).toEqual([null, 'arm64', 'x86_64']);
   expect(variants.every(v => v.app.endsWith('/muniment.app'))).toBe(true);
+});
+
+it('uses the supplied runner for every variant command', () => {
+  const root = temporary();
+  const [universal] = macosVariants(root);
+  const binary = join(universal.app, 'Contents/MacOS/fixture');
+  mkdirSync(dirname(binary), { recursive: true });
+  writeFileSync(binary, Buffer.from('cffaedfe', 'hex'));
+  const calls = [];
+  const thinned = new Map();
+  const variants = prepareMacosVariants(root, (command, args) => {
+    calls.push([command, args]);
+    if (command === 'ditto') cpSync(args[0], args[1], { recursive: true });
+    else if (args[0] === '-archs') return thinned.get(args[1]) ?? 'arm64 x86_64';
+    else {
+      copyFileSync(args[0], args.at(-1));
+      thinned.set(args[0], args[2]);
+    }
+    return '';
+  });
+  expect(calls.map(([command]) => command)).toEqual(['ditto', 'lipo', 'lipo', 'lipo', 'ditto', 'lipo', 'lipo', 'lipo']);
+  for (const variant of variants.slice(1)) expect(thinned.get(join(variant.app, 'Contents/MacOS/fixture'))).toBe(variant.arch);
 });
 
 describe.skipIf(process.platform !== 'darwin')('native Mac packaging', () => {

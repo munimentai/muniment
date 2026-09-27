@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { MACOS_BUILD_SECONDS, MACOS_UPLOAD_RESERVE_SECONDS } from "./macos-build-budget.mjs";
 import {
   SIGNING_VARIABLES,
   NOTARIZATION_DEADLINE_SECONDS,
@@ -258,9 +259,17 @@ describe("Signing, notarization, and stapling commands", () => {
     ]);
   });
 
-  it("reserves at least ten minutes before the desktop-ci build bound", () => {
-    expect(NOTARIZATION_DEADLINE_SECONDS).toBeGreaterThan(0);
-    expect(NOTARIZATION_DEADLINE_SECONDS).toBeLessThanOrEqual(3600 - 600);
+  it("reserves ten minutes for upload and bounds both notarization batches within the VM budget", () => {
+    expect(MACOS_UPLOAD_RESERVE_SECONDS).toBeGreaterThanOrEqual(600);
+    expect(NOTARIZATION_DEADLINE_SECONDS).toBe(1200);
+    expect(2 * NOTARIZATION_DEADLINE_SECONDS + MACOS_UPLOAD_RESERVE_SECONDS).toBeLessThan(MACOS_BUILD_SECONDS);
+    const workflow = readFileSync(".github/workflows/nightly.yml", "utf8");
+    expect(workflow).toContain(`build_timeout=${MACOS_BUILD_SECONDS}`);
+    expect(workflow).toContain("--build-timeout '$build_timeout'");
+    expect(workflow).toContain("macos_build_seconds=$build_timeout");
+    expect(workflow).toContain("MACOS_BUILD_REMAINING_SECONDS=$((macos_build_seconds - $(date +%s) + macos_build_started))");
+    const jobMinutes = Number(workflow.match(/\n  build:[\s\S]*?timeout-minutes: (\d+)/)[1]);
+    expect(MACOS_BUILD_SECONDS + 600).toBeLessThanOrEqual(jobMinutes * 60);
   });
 
   it("submits with the App Store Connect API key and requests JSON without a wait", () => {
