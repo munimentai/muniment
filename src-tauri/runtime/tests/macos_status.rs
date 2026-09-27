@@ -258,6 +258,9 @@ fn expected_unified_message(event: MacosDiagnosticEvent) -> &'static str {
         MacosDiagnosticEvent::SocketBindFailed => {
             "event=activation_failed step=socket_bind message=runtime socket bind failed"
         }
+        MacosDiagnosticEvent::SocketPathTooLong => {
+            "event=activation_failed step=socket_bind reason=socket_path_too_long message=attach socket path exceeds 103 bytes"
+        }
         MacosDiagnosticEvent::StateOpenFailed => {
             "event=activation_failed step=state_open message=runtime state open failed"
         }
@@ -276,11 +279,12 @@ fn expected_unified_message(event: MacosDiagnosticEvent) -> &'static str {
     }
 }
 
-fn diagnostic_events() -> [MacosDiagnosticEvent; 8] {
+fn diagnostic_events() -> [MacosDiagnosticEvent; 9] {
     [
         MacosDiagnosticEvent::ActivationFailed,
         MacosDiagnosticEvent::DesktopExecutableCheckFailed,
         MacosDiagnosticEvent::SocketBindFailed,
+        MacosDiagnosticEvent::SocketPathTooLong,
         MacosDiagnosticEvent::StateOpenFailed,
         MacosDiagnosticEvent::ArgumentsInvalid,
         MacosDiagnosticEvent::InstanceLockWait,
