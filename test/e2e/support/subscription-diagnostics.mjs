@@ -197,7 +197,8 @@ export function readDiagnosticLog(file, root, redact) {
   } catch (error) { return `${redact(error.message)}\n` }
 }
 
-// Read only named logs from the disposable profile. Never walk credentials or conversations.
+// Use only the environment from isolatedEnvironment after disposable login validation.
+// Read only named logs. Never walk credentials or conversations.
 export function profileLogs(env, redact) {
   if (!env) return 'The disposable profile has not started.\n'
   const files = [
@@ -205,10 +206,11 @@ export function profileLogs(env, redact) {
     ['runtime', path.join(env.TMPDIR, 'subscription-runtime.log')],
     ['msi-admin', path.join(env.TMPDIR, 'subscription-msi-admin.log')],
     ['cef', path.join(env.MUNIMENT_STATE_DIR, 'browser/cef.log')],
-    ['runtime-service', path.join(env.HOME, 'Library/Logs/Muniment/runtime-service.log')],
-    ['runtime-native', path.join(env.LOCALAPPDATA, 'ai.muniment.desktop/logs/runtime.log')],
+    ['keychain', path.join(env.MUNIMENT_STATE_DIR, 'browser/keychain-audit.log')],
+    ['runtime-service', path.join(env.HOME, 'Library/Logs/Muniment/runtime-service.log'), env.HOME],
+    ['runtime-native', path.join(env.LOCALAPPDATA, 'ai.muniment.desktop/logs/runtime.log'), env.LOCALAPPDATA],
   ]
-  return files.map(([name, file]) => `${name} tail:\n${readDiagnosticLog(file, path.dirname(env.TMPDIR), redact)}`).join('')
+  return files.map(([name, file, root = path.dirname(env.TMPDIR)]) => `${name} tail:\n${readDiagnosticLog(file, root, redact)}`).join('')
 }
 
 // Artifact envelopes contain encoded archives, not readable native diagnostics.

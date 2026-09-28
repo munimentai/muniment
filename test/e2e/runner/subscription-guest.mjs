@@ -90,6 +90,16 @@ function install(platform, packageFile, root) {
   return executable
 }
 
+// Keep one unlocked Keychain across chat, restart, and signed update checks.
+export function runMacosProbe({ candidateFile, packageFile, signatureFile, executable, leasesFile, output, sourceSha, platform }, execute = spawnSync) {
+  const result = execute('/bin/bash', [path.resolve('test/e2e/support/macos-keychain-session.sh'),
+    process.execPath, path.resolve('test/e2e/runner/subscriptions.mjs'),
+    candidateFile, packageFile, signatureFile, executable, leasesFile, output, sourceSha, platform],
+  { timeout: 30 * 60_000, encoding: 'utf8', stdio: 'pipe' })
+  if (result.error || result.status !== 0) throw nativeFailure('macos-keychain-session', result)
+  return 0
+}
+
 export async function guest({ sourceSha, platform, output, leases, models, encodedLeases, encodedModels, repository, token, fetchRelease, fetchAsset, env = process.env, runtime = process.platform }) {
   const artifacts = output || defaultArtifactsDir(env, runtime)
   if (!platforms.includes(platform) || !/^[a-f0-9]{40}$/.test(sourceSha ?? '') || !artifacts) {
@@ -142,11 +152,18 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
       cleanupSandbox = prepareLinuxSandbox(packageFile, root)
     }
     process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = '1'
-    return await run({ candidateFile, packageFile, signatureFile, executable, leasesFile, output: artifacts, sourceSha, platform })
+    const probe = { candidateFile, packageFile, signatureFile, executable, leasesFile, output: artifacts, sourceSha, platform }
+    if (platform.startsWith('macos-')) {
+      step = 'guest/keychain-session'
+      return runMacosProbe(probe)
+    }
+    return await run(probe)
   } catch (error) {
     const known = [missingPackage, missingLeases, missingModels,
       'Run this check on the requested native platform and architecture.']
-    const reason = known.includes(error?.message) ? error.message : step === 'guest/linux-sandbox' ? sandboxRequirement : missingPackage
+    const reason = known.includes(error?.message) ? error.message
+      : step === 'guest/keychain-session' ? 'The installed macOS probe or disposable Keychain session failed.'
+        : step === 'guest/linux-sandbox' ? sandboxRequirement : missingPackage
     const redact = subscriptionRedactor({ leases, values: [token, encodedLeases] })
     writeBlocked(artifacts, sourceSha, platform, reason,
       `step=${step}\nerror=${error.message}\ninstall tail:\n${readDiagnosticLog(path.join(root, 'install.log'), root, redact)}`, redact)

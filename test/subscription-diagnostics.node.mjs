@@ -282,15 +282,16 @@ test('probe waits report timeout, process exit, and the completed result', async
 })
 
 test('profile logs retain redacted app and runtime tails without credential files', () => temporary(root => {
-  const env = isolatedEnvironment(root, {})
+  const env = isolatedEnvironment(root, {}, 'linux')
   fs.writeFileSync(path.join(env.TMPDIR, 'subscription-app.log'), `app failed ${lease.access}\n`)
   fs.writeFileSync(path.join(env.TMPDIR, 'subscription-runtime.log'), `runtime failed ${lease.account_id}\n`)
   fs.mkdirSync(path.join(env.MUNIMENT_STATE_DIR, 'browser'))
   fs.writeFileSync(path.join(env.MUNIMENT_STATE_DIR, 'browser/cef.log'), 'CEF failed\nprivate-access-val')
+  fs.writeFileSync(path.join(env.MUNIMENT_STATE_DIR, 'browser/keychain-audit.log'), 'own-key-preflight status=-25308\n')
   fs.writeFileSync(path.join(env.PI_CODING_AGENT_DIR, 'auth.json'), 'Do not collect this file.')
   const logs = profileLogs(env, redact)
   assertSafe(logs)
-  for (const message of ['app failed', 'runtime failed', 'CEF failed']) assert.ok(logs.includes(message))
+  for (const message of ['app failed', 'runtime failed', 'CEF failed', 'own-key-preflight status=-25308']) assert.ok(logs.includes(message))
   assert.equal(logs.includes('Do not collect'), false)
   assert.equal(logs.includes('private-access-val'), false)
   assert.match(logs, /final incomplete line/)
@@ -311,8 +312,59 @@ test('profile logs retain redacted app and runtime tails without credential file
   }
 }))
 
+for (const platform of ['windows', 'macos-arm64', 'macos-x64']) {
+  test(`the ${platform} profile reads only redacted named logs from the disposable native home`, () => temporary(root => {
+    const profile = path.join(root, 'profile')
+    const nativeHome = path.join(root, 'native-home')
+    const ownerHome = path.join(root, 'owner-home')
+    fs.mkdirSync(nativeHome)
+    fs.mkdirSync(ownerHome)
+    // Model the verified native home independently of the host platform's path syntax.
+    const env = isolatedEnvironment(profile, {}, 'linux')
+    const windows = platform === 'windows'
+    env[windows ? 'LOCALAPPDATA' : 'HOME'] = nativeHome
+    const name = windows ? 'runtime-native' : 'runtime-service'
+    const file = path.join(nativeHome, windows ? 'ai.muniment.desktop/logs/runtime.log' : 'Library/Logs/Muniment/runtime-service.log')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, `native startup failed ${privateValues.join(' ')}\naccess_token=unknown-native-secret\n`)
+    fs.writeFileSync(path.join(nativeHome, 'auth.json'), 'Do not collect native credentials.\n')
+    fs.writeFileSync(path.join(path.dirname(file), 'other.log'), 'Do not collect unnamed logs.\n')
+    fs.writeFileSync(path.join(env.TMPDIR, 'subscription-app.log'), `app failed ${lease.access}\n`)
+    const logs = profileLogs(env, redact)
+    assert.match(logs, new RegExp(`${name} tail:\\nnative startup failed`))
+    assert.match(logs, /app failed/)
+    assertSafe(logs)
+    assert.equal(logs.includes('unknown-native-secret'), false)
+    assert.equal(logs.includes('Do not collect'), false)
+    assert.equal(logs.includes('leaves the disposable profile'), false)
+
+    fs.rmSync(file)
+    fs.mkdirSync(file)
+    assert.match(profileLogs(env, redact), new RegExp(`${name} tail:\\nThe log is not a regular file`))
+    fs.rmSync(file, { recursive: true })
+    assert.match(profileLogs(env, redact), new RegExp(`${name} tail:\\nNo log exists`))
+    if (process.platform !== 'win32') {
+      const credentials = path.join(nativeHome, 'auth.json')
+      fs.symlinkSync(credentials, file)
+      assert.match(profileLogs(env, redact), new RegExp(`${name} tail:\\nThe log is not a regular file`))
+      fs.rmSync(file)
+      fs.writeFileSync(path.join(ownerHome, path.basename(file)), 'Do not collect owner data.\n')
+      fs.rmSync(path.dirname(file), { recursive: true })
+      fs.symlinkSync(ownerHome, path.dirname(file))
+      const escaped = profileLogs(env, redact)
+      assert.match(escaped, new RegExp(`${name} tail:\\nThe log leaves the disposable profile`))
+      assert.equal(escaped.includes('Do not collect'), false)
+
+      // Native homes do not expand the allowed roots for synthetic profile logs.
+      fs.rmSync(path.join(env.TMPDIR, 'subscription-app.log'))
+      fs.symlinkSync(credentials, path.join(env.TMPDIR, 'subscription-app.log'))
+      assert.match(profileLogs(env, redact), /app tail:\nThe log leaves the disposable profile/)
+    }
+  }))
+}
+
 test('Linux diagnostics retain exit and signal receipts after the desktop reaps the runtime', () => temporary(root => {
-  const env = isolatedEnvironment(root, {})
+  const env = isolatedEnvironment(root, {}, 'linux')
   const directory = path.join(env.XDG_RUNTIME_DIR, 'muniment')
   fs.mkdirSync(directory)
   const identity = { pid: 2147483647, started: 123 }
@@ -341,7 +393,7 @@ test('Linux diagnostics retain exit and signal receipts after the desktop reaps 
 test('update timeouts read the latest checkpoint without changing the failing step', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-checkpoint-'))
   try {
-    const env = isolatedEnvironment(root, {})
+    const env = isolatedEnvironment(root, {}, 'linux')
     const checkpoint = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe.json')
     const resultFile = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe-result.json')
     fs.writeFileSync(checkpoint, JSON.stringify({ phase: 'update' }))
