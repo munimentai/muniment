@@ -9,7 +9,7 @@ import vm from 'node:vm'
 import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { acceptance, blocked, checkIdentity, hash, platforms, subscriptionAccounts, features, featureChecks, chatFeatures } from './e2e/support/subscription-acceptance.mjs'
-import { isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } from './e2e/runner/subscriptions.mjs'
+import { assertAttachSocketPath, disposableProfilePrefix, isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signature.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
@@ -170,6 +170,37 @@ test('the disposable environment does not inherit factory authority or provider 
     assert.equal(env.HOME, path.join(root, 'home'))
     assert.deepEqual(tree(env.MUNIMENT_STATE_DIR), {})
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+for (const platform of ['macos-arm64', 'macos-x64']) {
+  test(`the ${platform} profile fits the attach socket limit despite a long GUI TMPDIR`, () => {
+    const guiTmpdir = `/var/folders/xx/${'a'.repeat(28)}/T/`
+    const oldState = path.posix.join(guiTmpdir, 'muniment-subscriptions-XXXXXX', 'state')
+    assert.throws(() => assertAttachSocketPath(platform, oldState), /maximum is 103 bytes/)
+    const prefix = disposableProfilePrefix(platform, guiTmpdir)
+    assert.equal(prefix, path.join('/tmp', 'muniment-subscriptions-'))
+    const state = path.join(prefix + 'XXXXXX', 'state')
+    assert.doesNotThrow(() => assertAttachSocketPath(platform, state))
+    assert.ok(Buffer.byteLength(path.posix.join(state, 'muniment', 'attach-v1.sock')) < 104)
+  })
+
+  test(`the ${platform} socket preflight reserves a terminator and counts UTF-8 bytes`, () => {
+    const suffixLength = Buffer.byteLength('/muniment/attach-v1.sock')
+    const state = bytes => '/' + 'a'.repeat(bytes - suffixLength - 1)
+    assert.doesNotThrow(() => assertAttachSocketPath(platform, state(103)))
+    for (const bytes of [104, 105, 108]) {
+      assert.throws(() => assertAttachSocketPath(platform, state(bytes)), new RegExp(`uses ${bytes} bytes`))
+    }
+    assert.throws(() => assertAttachSocketPath(platform, '/' + 'é'.repeat(39) + 'a'), /uses 104 bytes/)
+  })
+}
+
+test('other platforms keep their temporary directory and socket rules', () => {
+  const temporaryDirectory = path.join(os.tmpdir(), 'subscription-profile-test')
+  for (const platform of ['linux', 'windows']) {
+    assert.equal(path.dirname(disposableProfilePrefix(platform, temporaryDirectory)), temporaryDirectory)
+    assert.doesNotThrow(() => assertAttachSocketPath(platform, '/' + 'a'.repeat(200)))
+  }
 })
 
 test('the collector generates all platform cases and blocks missing or contradictory evidence', () => {
@@ -344,6 +375,62 @@ function testKey() {
   const keyId = randomBytes(8)
   const publicText = `untrusted comment: minisign public key: ${keyId.toString('hex').toUpperCase()}\n${Buffer.concat([Buffer.from('Ed', 'latin1'), keyId, pk]).toString('base64')}\n`
   return { key: { keyId, privateKey }, publicText }
+}
+
+for (const arch of ['arm64', 'x64']) {
+  test(`an overlong macOS ${arch} profile blocks the run before launch`, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-path-test-'))
+    const profile = path.join(root, 'a'.repeat(110))
+    const platform = `macos-${arch}`
+    const previousPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+    const previousArch = Object.getOwnPropertyDescriptor(process, 'arch')
+    const previousDisposable = process.env.MUNIMENT_NATIVE_DISPOSABLE_USER
+    try {
+      const keys = testKey()
+      const packageName = packageNames[platform]
+      const files = {
+        candidateFile: JSON.stringify({ ...candidate, platform, asset: `nightly-${sourceSha}-macos-${packageName}` }),
+        packageFile: bytes,
+        signatureFile: signUpdaterBytes(bytes, keys.key, { fileName: packageName, version: '1.0.0' }),
+        executable: 'The runner must not launch this file.',
+        leasesFile: JSON.stringify([lease]),
+        publicKeyFile: keys.publicText,
+      }
+      const inputs = {}
+      for (const [name, content] of Object.entries(files)) {
+        inputs[name] = path.join(root, name)
+        fs.writeFileSync(inputs[name], content, { mode: 0o600 })
+      }
+      const output = path.join(root, 'out')
+      fs.mkdirSync(output)
+      fs.writeFileSync(path.join(output, 'release-acceptance.json'), JSON.stringify(build(fixture())))
+      fs.mkdirSync(profile, { mode: 0o700 })
+      t.mock.method(fs, 'mkdtempSync', prefix => {
+        assert.equal(prefix, path.join('/tmp', 'muniment-subscriptions-'))
+        return profile
+      })
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+      Object.defineProperty(process, 'arch', { value: arch, configurable: true })
+      process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = '1'
+      assert.equal(await run({ ...inputs, output, sourceSha, platform }), 1)
+      const proof = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
+      assert.ok(proof.cases.every(item => item.status === 'blocked' && item.installed === false))
+      assert.match(proof.cases[0].reason, /socket path must be shorter than 104 bytes/)
+      const log = fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8')
+      assert.match(log, /step=profile\/attach-socket-path/)
+      assert.match(log, /maximum is 103 bytes/)
+      assert.equal(log.includes(lease.access), false)
+      assert.equal(log.includes(lease.account_id), false)
+      assert.equal(fs.existsSync(profile), false)
+    } finally {
+      t.mock.restoreAll()
+      Object.defineProperty(process, 'platform', previousPlatform)
+      Object.defineProperty(process, 'arch', previousArch)
+      if (previousDisposable === undefined) delete process.env.MUNIMENT_NATIVE_DISPOSABLE_USER
+      else process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = previousDisposable
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 }
 
 const nativeLinux = process.platform === 'linux' && process.arch === 'x64'

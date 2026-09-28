@@ -38,6 +38,18 @@ export function isolatedEnvironment(root, source = process.env) {
   return env
 }
 
+export function disposableProfilePrefix(platform, temporaryDirectory = os.tmpdir()) {
+  // macOS GUI temporary directories can exceed the attach socket path limit.
+  return path.join(platform.startsWith('macos-') ? '/tmp' : temporaryDirectory, 'muniment-subscriptions-')
+}
+
+export function assertAttachSocketPath(platform, state) {
+  if (!platform.startsWith('macos-')) return
+  const bytes = Buffer.byteLength(path.posix.join(state, 'muniment', 'attach-v1.sock'))
+  // The 104-byte sun_path field must also hold the null terminator.
+  if (bytes >= 104) throw new Error(`The macOS attach socket path uses ${bytes} bytes. The maximum is 103 bytes.`)
+}
+
 export function tree(root) {
   const entries = {}
   function visit(directory, prefix = '') {
@@ -245,8 +257,13 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     }
     step = 'leases'
     const accounts = subscriptionAccounts(candidate.models, json(leasesFile))
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-subscriptions-'))
+    step = 'profile'
+    reason = 'The disposable profile could not be created.'
+    root = fs.mkdtempSync(disposableProfilePrefix(platform))
     env = isolatedEnvironment(root)
+    step = 'profile/attach-socket-path'
+    reason = 'The macOS attach socket path must be shorter than 104 bytes. Use a shorter disposable profile path.'
+    assertAttachSocketPath(platform, env.MUNIMENT_STATE_DIR)
     reason = 'The installed payload does not match the signed package. Check native package and signature tools.'
     step = 'payload'
     const verifyPayload = verifyInstalled(candidate, packageFile, executable, root, env, setStep)
