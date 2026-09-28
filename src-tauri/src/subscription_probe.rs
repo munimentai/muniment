@@ -178,6 +178,26 @@ pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(
     crate::app_update::app_update_install(app.clone(), activity, state).await
 }
 
+#[tauri::command]
+pub(crate) fn subscription_probe_progress(
+    stage: String,
+    turn: Option<usize>,
+    error_class: String,
+) -> Result<(), &'static str> {
+    let outcome = match stage.as_str() {
+        "reply" => "pending",
+        "render" | "complete" => "complete",
+        _ => "not-started",
+    };
+    muniment_core::model_router::subscription_probe::record(
+        &root()?,
+        &stage,
+        turn,
+        outcome,
+        &error_class,
+    )
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Turn {

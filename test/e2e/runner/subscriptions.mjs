@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { acceptance, blocked, checkIdentity, featureChecks, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { updateFixture } from './subscription-update.mjs'
-import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus, probeProgress, payloadDifferenceDetail, reportPayloadDifferences } from '../support/subscription-diagnostics.mjs'
+import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus, probeProgress, probeFailure, payloadDifferenceDetail, reportPayloadDifferences } from '../support/subscription-diagnostics.mjs'
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const nativePlatform = () => process.platform === 'darwin' ? `macos-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
@@ -50,6 +50,15 @@ export function isolatedEnvironment(root, source = process.env, platform = nativ
   fs.mkdirSync(env.PI_CODING_AGENT_DIR, { mode: 0o700 })
   env.MUNIMENT_SUBSCRIPTION_PROBE = '1'
   return env
+}
+
+export function prepareProbeHome(state) {
+  // A fresh profile otherwise shows onboarding, whose Send only confirms Home.
+  const home = path.join(state, 'probe-home')
+  for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
+    fs.mkdirSync(path.join(home, directory), { recursive: true, mode: 0o700 })
+  }
+  save(path.join(state, 'home.json'), { location: home })
 }
 
 export function disposableProfilePrefix(platform, temporaryDirectory = os.tmpdir()) {
@@ -165,6 +174,23 @@ function screenshot(platform, pid, output, env) {
   }
 }
 
+export function stopWindowsTree(pid, env, executeNative = execute) {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2147483647) throw new Error('The native probe process ID is invalid.')
+  executeNative('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.resolve('test/e2e/support/subscription-stop.ps1'),
+    '-RootPid', String(pid), '-TimeoutMs', '15000'], env, 20_000)
+}
+
+export async function removeProbeProfile(root, { remove = fs.promises.rm, now = Date.now, wait = delay, timeout = 15_000 } = {}) {
+  const deadline = now() + timeout
+  for (;;) {
+    try { await remove(root, { recursive: true, force: true }); return }
+    catch (error) {
+      if (!['EPERM', 'EBUSY', 'ENOTEMPTY', 'EACCES'].includes(error.code) || now() >= deadline) throw error
+      await wait(Math.min(250, deadline - now()))
+    }
+  }
+}
+
 export async function awaitProbeResult(readResult, alive, { now = Date.now, wait = delay, timeout = 20 * 60_000 } = {}) {
   const deadline = now() + timeout
   while (now() < deadline) {
@@ -202,13 +228,15 @@ export function verifyUpdateResult(result, parentPid, sourceSha, turns, verifyPa
 
 export const updaterPublicKeyFile = 'src-tauri/updater.pub'
 
-export function writeBlocked(output, sourceSha, platform, reason, detail = '', redact = subscriptionRedactor()) {
+export function writeBlocked(output, sourceSha, platform, reason, detail = '', redact = subscriptionRedactor(), failureKind) {
   fs.mkdirSync(output, { recursive: true, mode: 0o700 })
   save(path.join(output, 'release-acceptance.json'), blocked(sourceSha, platform, reason))
-  save(path.join(output, `${platform}-subscription.json`), { status: 'blocked', reason })
+  save(path.join(output, `${platform}-subscription.json`), { status: failureKind === 'product' ? 'failed' : 'blocked', reason,
+    ...(failureKind ? { failure_kind: failureKind } : {}) })
   const log = path.join(output, `${platform}-subscription.log`)
   const previous = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''
-  fs.writeFileSync(log, redact(`${previous}The native acceptance run is blocked.\n${detail}\n`), { mode: 0o600 })
+  const status = failureKind === 'product' ? 'failed' : 'blocked'
+  fs.writeFileSync(log, redact(`${previous}The native acceptance run ${status === 'failed' ? 'failed' : 'is blocked'}.\n${detail}\n`), { mode: 0o600 })
   fs.rmSync(path.join(output, `screenshot-${platform}-subscriptions.png`), { force: true })
 }
 
@@ -229,7 +257,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
   const stop = async (child, closed) => {
     if (!child?.pid) return
     if (process.platform === 'win32') {
-      if (child.exitCode === null && child.signalCode === null) execute('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], env, 15_000)
+      stopWindowsTree(child.pid, env)
     } else {
       try { process.kill(-child.pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
     }
@@ -240,7 +268,8 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
       })])
     } finally { clearTimeout(timer) }
   }
-  let passed = false
+  let passed = false, failureKind
+  const reportBlocked = (detail = '') => writeBlocked(output, sourceSha, platform, reason, detail, redact, failureKind)
   let evidence, proof, finalDiagnostics
   try {
     reason = 'Run this check on the requested native platform and architecture.'
@@ -287,6 +316,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     }
     const nonce = `MUNIMENT-${randomBytes(16).toString('hex')}`
     const state = env.MUNIMENT_STATE_DIR
+    prepareProbeHome(state)
     const fixtureFile = path.join(root, 'acceptance.txt')
     const fileNonce = `MUNIMENT-${randomBytes(16).toString('hex')}`
     const mcpNonce = `MUNIMENT-${randomBytes(16).toString('hex')}`
@@ -414,18 +444,22 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     evidence = { ...result, transports }
     passed = true
   } catch (error) {
-    writeBlocked(output, sourceSha, platform, reason,
-      `${probeProgress(env, step, phase)}\nerror=${error.message}\napp: ${processStatus(app)}\nruntime: ${platform === 'linux' ? linuxRuntimeStatus(env) : processStatus(runtime)}\n${profileLogs(env, redact)}`, redact)
+    if (app) {
+      failureKind = probeFailure(env)
+      if (failureKind === 'auth') reason = 'Subscription authentication blocked the probe. Renew the factory access lease.'
+      else if (failureKind === 'quota') reason = 'Subscription quota blocked the probe. Retry after capacity returns.'
+    }
+    reportBlocked(`step=${step}\nerror=${error.message}\napp: ${processStatus(app)}\nruntime: ${platform === 'linux' ? linuxRuntimeStatus(env) : processStatus(runtime)}\n${profileLogs(env, redact)}\n${probeProgress(env, step, phase)}`)
   } finally {
     let cleanupFailed = false
     if (relaunchedPid) {
       try {
-        if (process.platform === 'win32') execute('taskkill.exe', ['/PID', String(relaunchedPid), '/T', '/F'], env, 15_000)
+        if (process.platform === 'win32') stopWindowsTree(relaunchedPid, env)
         else process.kill(relaunchedPid, 'SIGKILL')
       } catch (error) {
         if (error.code !== 'ESRCH') {
           cleanupFailed = true
-          writeBlocked(output, sourceSha, platform, reason, `step=cleanup/relaunch\nerror=${error.message}`, redact)
+          reportBlocked(`step=cleanup/relaunch\nerror=${error.message}`)
         }
       }
     }
@@ -434,28 +468,34 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
         await stop(child, closed)
       } catch (error) {
         cleanupFailed = true
-        writeBlocked(output, sourceSha, platform, reason, `step=cleanup/stop\nerror=${error.message}`, redact)
+        reportBlocked(`step=cleanup/stop\nerror=${error.message}`)
       }
     }
     try {
       verify?.()
     } catch (error) {
       cleanupFailed = true
-      writeBlocked(output, sourceSha, platform, reason, `step=cleanup/payload\nerror=${error.message}`, redact)
+      reportBlocked(`step=cleanup/payload\nerror=${error.message}`)
     }
-    finalDiagnostics = redact(`${probeProgress(env, 'cleanup/logs', phase)}\napp: ${processStatus(app)}\nruntime: ${platform === 'linux' ? linuxRuntimeStatus(env) : processStatus(runtime)}\n${profileLogs(env, redact)}`)
+    finalDiagnostics = redact(`app: ${processStatus(app)}\nruntime: ${platform === 'linux' ? linuxRuntimeStatus(env) : processStatus(runtime)}\n${profileLogs(env, redact)}\n${probeProgress(env, step, phase)}`)
     try {
       await updateServer?.close()
-      if (root) fs.rmSync(root, { recursive: true, force: true })
     } catch (error) {
       cleanupFailed = true
-      writeBlocked(output, sourceSha, platform, reason, `step=cleanup/profile\nerror=${error.message}`, redact)
+      reportBlocked(`step=cleanup/update-server\nerror=${error.message}`)
     }
-    if (!passed || cleanupFailed) writeBlocked(output, sourceSha, platform, reason, finalDiagnostics, redact)
+    try {
+      if (root) await removeProbeProfile(root)
+    } catch (error) {
+      cleanupFailed = true
+      reportBlocked(`step=cleanup/profile\nerror=${error.message}`)
+    }
+    if (!passed || cleanupFailed) reportBlocked(finalDiagnostics)
     if (cleanupFailed) {
       passed = false
-      reason = 'The native probe cleanup failed. Stop the disposable login before another check.'
-      writeBlocked(output, sourceSha, platform, reason, '', redact)
+      failureKind = 'product'
+      reason = `${reason} The native probe cleanup failed. Stop the disposable login before another check.`
+      reportBlocked()
     }
   }
   if (passed) {

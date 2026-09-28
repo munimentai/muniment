@@ -200,6 +200,7 @@ for (const mode of ['failed-install', 'returned-without-restart']) {
     let observed, installs = 0
     const context = { window: { __MUNIMENT_SUBSCRIPTION_PLAN__: { phase: 'update', acceptance: true, turns, nonce },
       __TAURI__: { core: { invoke: async (command, data) => {
+        if (command === 'subscription_probe_progress') return
         if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
         if (command === 'chat_current_thread') return 'thread'
         if (command === 'subscription_probe_update') {
@@ -210,6 +211,7 @@ for (const mode of ['failed-install', 'returned-without-restart']) {
         if (command === 'subscription_probe_observed') { observed = data; return }
         assert.fail(`Unexpected command: ${command}`)
       } } } },
+      setTimeout, clearTimeout,
       document: { querySelector: () => ({ getClientRects: () => [1] }),
         querySelectorAll: () => turns.map(() => ({ getClientRects: () => [1], querySelector: () => ({ textContent: nonce }) })) },
     }

@@ -349,27 +349,36 @@ test('the collector preserves blocked runner reasons and still fails', () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context', 'new-thread']) {
+for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context', 'new-thread', 'onboarding-only', 'disabled-send', 'hung-inventory', 'command-failed', 'progress-failed']) {
   test(`the installed webview probe checks ${mode}`, async () => {
-    let selected = 0, picker = false, observed, clock = 0
-    const prompts = [], entries = []
+    let selected = 0, picker = false, observed, clock = 0, hung = false
+    const prompts = [], entries = [], progress = []
     const composer = { value: '', dispatchEvent() {}, getClientRects: () => [1] }
     const responses = () => entries.map(entry => ({ getClientRects: () => [1], querySelector: selector =>
       selector === '.response-prose' ? { textContent: entry.text } : {} }))
-    const send = { textContent: 'Send', getAttribute: () => 'Send', getClientRects: () => [1], click: () => {
+    const send = { textContent: 'Send', getAttribute: name => name === 'aria-label' ? 'Send' : mode === 'disabled-send' ? 'true' : null,
+      getClientRects: () => [1], click: () => {
       prompts.push(composer.value)
       entries.push({ runId: `22222222-2222-4222-8222-22222222222${entries.length}`,
         phase: mode === 'failed-reply' ? 'failed' : 'complete', text: mode === 'lost-context' ? 'unknown' : nonce })
     } }
     const document = {
       head: { append() {} }, createElement: () => ({}),
-      querySelector: selector => selector.startsWith('textarea') ? composer : selector === '.model-chip'
+      querySelector: selector => selector.startsWith('textarea') ?
+        (mode === 'onboarding-only' && selector === 'textarea#composer-message' ? null : composer) : selector === '.model-chip'
         ? { click: () => { picker = true } } : picker ? {} : null,
       querySelectorAll: selector => selector === '.response' ? responses() : selector === 'button' ? [send]
         : models.map((model, index) => ({ dataset: { provider: 'muniment-router', model: `${model.family}/${model.id}` },
           click: () => { selected = index; picker = false } })),
     }
     const invoke = async (command, payload) => {
+      if (command === 'subscription_probe_progress') {
+        if (mode === 'progress-failed') throw new Error('PRIVATE TOKEN')
+        progress.push(payload)
+        return
+      }
+      if (command === 'local_mode_provider_inventory' && mode === 'command-failed') throw new Error('PRIVATE TOKEN AND REPLY')
+      if (command === 'local_mode_provider_inventory' && mode === 'hung-inventory') { hung = true; return new Promise(() => {}) }
       if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
       if (command === 'local_mode_provider_inventory') return { default_provider: 'muniment-router',
         default_model: `openai/${mode === 'wrong-selection' ? 'wrong' : models[selected].id}` }
@@ -381,11 +390,30 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
     }
     await vm.runInNewContext(fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8'), {
       window: { __MUNIMENT_SUBSCRIPTION_PLAN__: { models, nonce }, __TAURI__: { core: { invoke } } },
-      document, Event: class {}, setTimeout: callback => callback(), requestAnimationFrame: callback => callback(),
+      document, Event: class {}, clearTimeout() {},
+      setTimeout: (callback, ms) => { if (ms === 250 || hung) { hung = false; callback() } },
       Date: { now: () => { clock += 1000; return clock } },
     })
     assert.equal(observed.passed, mode === 'success')
+    assert.ok(progress.length < 40)
+    assert.ok(!JSON.stringify(progress).includes(nonce))
+    assert.ok(!JSON.stringify({ progress, observed }).includes('PRIVATE'))
+    if (mode === 'command-failed') assert.equal(progress.at(-1).errorClass, 'command-failed')
+    if (mode === 'onboarding-only') {
+      assert.equal(prompts.length, 0)
+      assert.equal(progress.at(-1).stage, 'composer')
+      assert.equal(progress.at(-1).errorClass, 'timeout')
+    }
+    if (mode === 'disabled-send') {
+      assert.equal(prompts.length, 0)
+      assert.equal(progress.at(-1).stage, 'send')
+    }
+    if (mode === 'hung-inventory') {
+      assert.equal(progress.at(-1).stage, 'inventory')
+      assert.equal(progress.at(-1).errorClass, 'command-timeout')
+    }
     if (mode === 'success') {
+      assert.deepEqual(progress.filter(row => row.stage === 'complete').map(row => row.turn), [0, 1, 2, 3])
       assert.equal(observed.turns.length, 4)
       assert.ok(prompts[0].includes(nonce))
       assert.ok(prompts.slice(1).every(prompt => !prompt.includes(nonce)))
@@ -403,6 +431,7 @@ for (const phase of ['features', 'restart', 'update', 'update-restart']) {
       window: { __MUNIMENT_SUBSCRIPTION_PLAN__: { phase, acceptance: true, turns, models, nonce },
         __munimentSubscriptionFeatures: async ({ plan }) => { checked = true; assert.equal(plan.phase, phase); return {} },
         __TAURI__: { core: { invoke: async (command, payload) => {
+          if (command === 'subscription_probe_progress') return
           if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
           if (command === 'chat_current_thread') return thread
           if (command === 'subscription_probe_observed') { observed = payload; return }
@@ -414,7 +443,7 @@ for (const phase of ['features', 'restart', 'update', 'update-restart']) {
           assert.equal(selector, '.response')
           return turns.map(() => ({ getClientRects: () => [1], querySelector: () => ({ textContent: nonce }), setAttribute() {} }))
         } },
-      Event: class {}, setTimeout: callback => callback(), requestAnimationFrame: callback => callback(),
+      Event: class {}, setTimeout, clearTimeout,
     })
     assert.equal(checked, true)
     assert.equal(observed.passed, true)

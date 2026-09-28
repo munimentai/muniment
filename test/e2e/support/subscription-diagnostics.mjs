@@ -120,13 +120,63 @@ export function processStatus(child) {
   return `pid=${child.pid} exit=${child.exitCode ?? 'none'} signal=${child.signalCode ?? 'none'}`
 }
 
+const probeStages = ['composer', 'runtime', 'selection', 'inventory', 'send', 'reply', 'render', 'complete', 'restore', 'features', 'result', 'transport']
+const probeErrors = ['none', 'timeout', 'command-timeout', 'command-failed', 'reply-failed', 'context-mismatch', 'auth', 'quota', 'http', 'network', 'stream']
+const probePhases = ['chat', 'features', 'restart', 'update', 'update-restart']
+
+export function readProbeProgress(env, transport = false) {
+  try {
+    const file = path.join(env.MUNIMENT_STATE_DIR, transport ? 'subscription-probe-transport-progress.jsonl' : 'subscription-probe-progress.jsonl')
+    const stat = fs.lstatSync(file)
+    if (!stat.isFile() || stat.size > 32_768) return []
+    const fd = fs.openSync(file, 'r')
+    let text
+    try {
+      const bytes = Buffer.alloc(32_769)
+      const size = fs.readSync(fd, bytes, 0, bytes.length, 0)
+      if (size > 32_768) return []
+      text = bytes.subarray(0, size).toString('utf8')
+    } finally { fs.closeSync(fd) }
+    return text.slice(0, text.lastIndexOf('\n') + 1).split('\n').filter(Boolean).flatMap(line => {
+      try {
+        const row = JSON.parse(line)
+        if (!probePhases.includes(row.phase) || !probeStages.includes(row.stage) ||
+            !probeErrors.includes(row.error_class) || !['not-started', 'pending', 'accepted', 'complete', 'failed'].includes(row.transport) ||
+            !(row.turn === null && row.requested === null || Number.isInteger(row.turn) && row.turn >= 0 && row.turn < 4 &&
+              typeof row.requested === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(row.requested))) return []
+        return [{ phase: row.phase, stage: row.stage, turn: row.turn, requested: row.requested,
+          transport: row.transport, error_class: row.error_class }]
+      } catch { return [] }
+    })
+  } catch { return [] }
+}
+
+export function probeFailure(env) {
+  const current = readProbeProgress(env).at(-1)
+  const transport = readProbeProgress(env, true).filter(row => row.phase === current?.phase &&
+    row.turn === current?.turn && row.requested === current?.requested).at(-1)
+  // Only a provider refusal during the reply can block access. A later UI failure remains a product failure.
+  if (current?.stage === 'reply' && transport?.transport === 'failed' && ['auth', 'quota'].includes(transport.error_class)) {
+    return transport.error_class
+  }
+  return 'product'
+}
+
 export function probeProgress(env, step, phase) {
   try {
     const checkpoint = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe.json')
     const current = JSON.parse(fs.readFileSync(checkpoint, 'utf8')).phase
     if (['chat', 'features', 'restart', 'update', 'update-restart'].includes(current)) phase = current
   } catch { /* Keep the last phase when the checkpoint is missing or incomplete. */ }
-  return `step=${step}\nphase=${phase}`
+  const progress = readProbeProgress(env).filter(row => row.phase === phase)
+  const transports = readProbeProgress(env, true).filter(row => row.phase === phase)
+  const current = progress.at(-1)
+  const transport = transports.filter(row => row.turn === current?.turn && row.requested === current?.requested).at(-1)
+  return `step=${step}\nphase=${phase}` +
+    progress.map(row => `\nprobe-progress=${JSON.stringify(row)}`).join('') +
+    transports.map(row => `\nprovider-progress=${JSON.stringify(row)}`).join('') +
+    (current ? `\nprobe-current=${JSON.stringify({ ...current,
+      provider_transport: transport?.transport || 'not-started', provider_error_class: transport?.error_class || 'none' })}` : '')
 }
 
 export function linuxRuntimeStatus(env) {

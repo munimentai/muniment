@@ -7,12 +7,94 @@ import { spawnSync } from 'node:child_process'
 import { transcriptTail } from './e2e/support/transcript-tail.mjs'
 import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
 import { platforms } from './e2e/support/subscription-acceptance.mjs'
-import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, profileLogs, transcriptText, linuxRuntimeStatus, readDiagnosticLog, probeProgress, payloadDifferenceDetail, reportPayloadDifferences, reportSubscriptionFailure } from './e2e/support/subscription-diagnostics.mjs'
-import { awaitProbeResult, awaitUpdateResult, equalPayload, isolatedEnvironment, verifyInstalled, writeBlocked } from './e2e/runner/subscriptions.mjs'
+import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, profileLogs, transcriptText, linuxRuntimeStatus, readDiagnosticLog, probeProgress, readProbeProgress, probeFailure, payloadDifferenceDetail, reportPayloadDifferences, reportSubscriptionFailure } from './e2e/support/subscription-diagnostics.mjs'
+import { awaitProbeResult, awaitUpdateResult, equalPayload, isolatedEnvironment, verifyInstalled, writeBlocked, prepareProbeHome, stopWindowsTree, removeProbeProfile } from './e2e/runner/subscriptions.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { legacyPerUserTemplate } from '../.github/lib/windows-upgrade-fixture.mjs'
 import { assertMsiPayload } from './windows-msi-payload.mjs'
+
+test('the disposable profile selects Home before the chat composer mounts', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-home-'))
+  try {
+    prepareProbeHome(root)
+    const { location } = JSON.parse(fs.readFileSync(path.join(root, 'home.json'), 'utf8'))
+    assert.equal(location, path.join(root, 'probe-home'))
+    for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
+      assert.ok(fs.statSync(path.join(location, directory)).isDirectory())
+    }
+    const probe = fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8')
+    assert.ok(probe.includes("document.querySelector('textarea#composer-message')"))
+    assert.ok(!probe.includes('textarea[placeholder='))
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('blocked diagnostics name the turn and provider outcome without replies or tokens', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-progress-'))
+  const env = { MUNIMENT_STATE_DIR: root }
+  const row = { phase: 'chat', stage: 'reply', turn: 2, requested: 'model-two', transport: 'pending', error_class: 'timeout' }
+  const progress = path.join(root, 'subscription-probe-progress.jsonl')
+  const transports = path.join(root, 'subscription-probe-transport-progress.jsonl')
+  try {
+    fs.writeFileSync(progress, JSON.stringify({ ...row, reply: 'PRIVATE REPLY', access: 'PRIVATE TOKEN' }) + '\n')
+    assert.deepEqual(readProbeProgress(env), [row])
+    assert.equal(probeFailure(env), 'product')
+    for (const error_class of ['auth', 'quota', 'http', 'network', 'stream']) {
+      fs.writeFileSync(transports, JSON.stringify({ ...row, stage: 'transport', transport: 'failed', error_class }) + '\n')
+      assert.equal(probeFailure(env), ['auth', 'quota'].includes(error_class) ? error_class : 'product')
+      const detail = probeProgress(env, 'chat/wait-result', 'chat')
+      assert.match(detail, /"turn":2,"requested":"model-two"/)
+      assert.ok(detail.includes(`"error_class":"${error_class}"`))
+      assert.ok(!detail.includes('PRIVATE'))
+      assert.match(detail.split('\n').at(-1), /^probe-current=.*"stage":"reply"/)
+      writeBlocked(root, sourceSha, 'linux', 'The probe did not pass.', detail, value => value, probeFailure(env))
+      const evidence = JSON.parse(fs.readFileSync(path.join(root, 'linux-subscription.json'), 'utf8'))
+      assert.equal(evidence.status, ['auth', 'quota'].includes(error_class) ? 'blocked' : 'failed')
+      assert.equal(evidence.failure_kind, probeFailure(env))
+    }
+    // Ignore stale refusals, successful retries, malformed rows, and partial writes.
+    fs.writeFileSync(transports, JSON.stringify({ ...row, turn: 1, transport: 'failed', error_class: 'auth' }) + '\n')
+    assert.equal(probeFailure(env), 'product')
+    fs.writeFileSync(transports, JSON.stringify({ ...row, transport: 'complete', error_class: 'none' }) + '\n')
+    assert.equal(probeFailure(env), 'product')
+    fs.appendFileSync(progress, '{"reply":"PRIVATE')
+    assert.deepEqual(readProbeProgress(env), [row])
+    for (const change of [{ turn: -1 }, { turn: 4 }, { turn: 0.5 }, { requested: 'bad\nmodel' }, { stage: 'PRIVATE' }, { error_class: 'PRIVATE' }]) {
+      fs.writeFileSync(progress, JSON.stringify({ ...row, ...change }) + '\n')
+      assert.deepEqual(readProbeProgress(env), [])
+    }
+    fs.writeFileSync(progress, 'x'.repeat(32_769))
+    assert.deepEqual(readProbeProgress(env), [])
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('Windows shutdown waits on descendant handles before bounded profile removal', async () => {
+  const calls = []
+  stopWindowsTree(123, {}, (...args) => calls.push(args))
+  assert.equal(calls[0][0], 'powershell.exe')
+  assert.ok(calls[0][1].some(arg => arg.endsWith('subscription-stop.ps1')))
+  assert.equal(calls[0][3], 20_000)
+  for (const pid of [0, -1, 1.5, '123', 2147483648]) assert.throws(() => stopWindowsTree(pid, {}, () => assert.fail()))
+  const script = fs.readFileSync('test/e2e/support/subscription-stop.ps1', 'utf8')
+  assert.ok(script.indexOf('$process.Handle') < script.indexOf('$handles[$RootPid].Kill()'))
+  assert.ok(script.includes('$process.WaitForExit([int]$remaining)'))
+  assert.ok(script.includes('$process.Dispose()'))
+  let clock = 0, attempts = 0
+  await removeProbeProfile('/disposable', { now: () => clock, wait: async ms => { clock += ms }, remove: async (_, options) => {
+    assert.deepEqual(options, { recursive: true, force: true })
+    if (++attempts < 3) throw Object.assign(new Error('The profile is busy.'), { code: 'EPERM' })
+  } })
+  assert.equal(attempts, 3)
+  assert.equal(clock, 500)
+  attempts = 0
+  await assert.rejects(removeProbeProfile('/disposable', { timeout: 500, now: () => clock, wait: async ms => { clock += ms }, remove: async () => {
+    attempts++
+    throw Object.assign(new Error('The profile is busy.'), { code: 'EBUSY' })
+  } }), /busy/)
+  assert.equal(attempts, 3)
+  assert.equal(clock, 1000)
+  await assert.rejects(removeProbeProfile('/disposable', { remove: async () => { throw new Error('The disk failed.') } }), /disk failed/)
+})
 
 const sourceSha = 'a'.repeat(40)
 const lease = { provider: 'openai-codex', access: 'private-access-value', account_id: 'private-account-value', expires_ms: Date.now() + 60 * 60_000 }
