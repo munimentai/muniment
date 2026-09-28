@@ -922,18 +922,58 @@ for (const platform of ['linux', 'windows', 'macos-x64']) {
   })
 }
 
+test('targeted subscription runs select one platform without granting full release proof', () => {
+  const workflow = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8')
+  const nightly = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
+  assert.equal((workflow.match(/default: all/g) ?? []).length, 2)
+  assert.match(workflow, /options: \[all, linux, windows, macos-arm64, macos-x64\]/)
+  assert.match(workflow, /all\|linux\|windows\|macos\|macos-arm64\|macos-x64\) ;;/)
+  assert.match(workflow, /Select a supported subscription platform.*exit 1/)
+  for (const [jobName, selected] of [['linux', 'linux'], ['windows', 'windows'], ['macos-arm64', 'macos'], ['macos-x64', 'macos']]) {
+    const job = workflow.split(`\n  ${jobName}:\n`)[1].split(/\n  [\w-]+:\n/)[0]
+    const condition = job.match(/^    if: (.+)$/m)[1]
+    const allowed = (platform, validation = 'success', cancelled = false) => Function(`return (${condition
+      .replace('always()', 'true')
+      .replace('cancelled()', JSON.stringify(cancelled))
+      .replaceAll('needs.validate-platform.result', JSON.stringify(validation))
+      .replaceAll('inputs.platform', JSON.stringify(platform))})`)()
+    for (const platform of ['all', ...platforms, 'macos', '', 'invalid']) {
+      assert.equal(allowed(platform), platform === 'all' || platform === selected || platform === jobName)
+    }
+    assert.match(job, /needs: .*validate-platform/)
+    if (jobName !== 'linux') {
+      assert.equal(allowed(selected, 'failure'), false)
+      assert.equal(allowed(selected, 'success', true), false)
+    }
+  }
+  const collect = workflow.split('\n  collect:\n')[1]
+  assert.match(collect, /if: always\(\) && !cancelled\(\) && inputs.platform == 'all'/)
+  const targeted = nightly.split('\n  targeted-release-acceptance:\n')[1].split('\n  proof:')[0]
+  assert.match(targeted, /contains\(fromJSON\('\["linux","windows","macos"\]'\), github.event.inputs.platform\)/)
+  assert.match(targeted, /source_sha: \$\{\{ needs.prepare.outputs.source_sha \}\}/)
+  assert.match(targeted, /platform: \$\{\{ github.event.inputs.platform \}\}/)
+  assert.match(targeted, /uses: \.\/\.github\/workflows\/subscriptions.yml/)
+  assert.match(nightly, /ref: context.sha/)
+  const proof = nightly.split('\n  proof:\n')[1]
+  assert.match(proof, /needs.release-acceptance.result == 'success'/)
+  assert.match(proof, /needs.publish.result == 'success'/)
+  assert.doesNotMatch(proof, /targeted-release-acceptance/)
+})
+
 test('targeted subscription dispatch keeps full release acceptance exclusive to all platforms', () => {
   const workflow = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8')
   const dispatch = workflow.split('  workflow_dispatch:')[1].split('  workflow_call:')[0]
   assert.match(dispatch, /platform:\s+description:.*\n\s+type: choice\n\s+default: all\n\s+options: \[all, linux, windows, macos-arm64, macos-x64\]/)
   const reusable = workflow.split('  workflow_call:')[1].split('\n#')[0]
-  assert.doesNotMatch(reusable, /platform:/)
-  for (const selected of ['', 'all', ...platforms]) {
+  assert.match(reusable, /platform:\s+description:.*\n\s+type: string\n\s+default: all/)
+  for (const selected of ['', 'all', ...platforms, 'macos', 'invalid']) {
     for (const jobName of [...platforms, 'collect']) {
       const job = workflow.split(`\n  ${jobName}:\n`)[1].split(/\n  [\w-]+:\n/)[0]
       const condition = job.match(/^    if: (.*)$/m)[1]
-      const enabled = vm.runInNewContext(condition, { inputs: { platform: selected }, always: () => true, cancelled: () => false })
-      assert.equal(enabled, selected === '' || selected === 'all' || jobName === selected, `${selected}: ${jobName}`)
+      const enabled = vm.runInNewContext(condition.replaceAll('needs.validate-platform.result', "needs['validate-platform'].result"), { inputs: { platform: selected },
+        needs: { 'validate-platform': { result: 'success' } }, always: () => true, cancelled: () => false })
+      assert.equal(enabled, selected === 'all' || jobName === selected || (selected === 'macos' && jobName.startsWith('macos-')),
+        `${selected}: ${jobName}`)
     }
   }
 })

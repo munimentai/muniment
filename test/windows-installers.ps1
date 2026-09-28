@@ -8,9 +8,10 @@ $machineMsi = @(Get-ChildItem (Join-Path $bundleRoot "msi") -Filter "*-machine.m
 $regularMsi = @(Get-ChildItem (Join-Path $bundleRoot "msi") -Filter "*.msi" -File |
   Where-Object { $_.Name -notlike "*-machine.msi" })
 $upgradeBaseMsi = Join-Path $bundleRoot "machine-upgrade-base.msi"
+$userUpgradeBaseMsi = Join-Path $bundleRoot "per-user-upgrade-base.msi"
 if ($nsis.Count -ne 1 -or $machineMsi.Count -ne 1 -or $regularMsi.Count -ne 1 -or
-    -not (Test-Path $upgradeBaseMsi)) {
-  throw "Expected one NSIS installer, one regular MSI, one machine MSI, and one upgrade-base MSI"
+    -not (Test-Path $upgradeBaseMsi) -or -not (Test-Path $userUpgradeBaseMsi)) {
+  throw "Expected one NSIS installer, one regular MSI, one machine MSI, and both upgrade-base MSIs."
 }
 
 function Assert-CefInstallation([string]$Directory) {
@@ -19,6 +20,20 @@ function Assert-CefInstallation([string]$Directory) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Get-Item -LiteralPath $file).Length -eq 0) {
       throw "The installed CEF resource is missing or empty: $file"
     }
+  }
+}
+
+function Assert-MsiPayload($Package, $Directory) {
+  $expanded = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
+  New-Item -ItemType Directory -Path $expanded | Out-Null
+  try {
+    $resolvedPackage = (Resolve-Path -LiteralPath $Package).Path
+    $process = Start-Process msiexec.exe -ArgumentList "/a `"$resolvedPackage`" /qn /norestart TARGETDIR=`"$expanded`"" -Wait -PassThru
+    if ($process.ExitCode -notin @(0, 3010)) { throw "The MSI admin extraction failed: $($process.ExitCode)." }
+    & node (Join-Path $PSScriptRoot "windows-msi-payload.mjs") $expanded $Directory
+    if ($LASTEXITCODE -ne 0) { throw "The installed payload differs from the MSI admin image." }
+  } finally {
+    Remove-Item -LiteralPath $expanded -Recurse -Force
   }
 }
 
@@ -95,7 +110,7 @@ function Get-MunimentRegistrations {
   })
 }
 
-foreach ($package in @($regularMsi[0].FullName, $machineMsi[0].FullName, $upgradeBaseMsi)) {
+foreach ($package in @($regularMsi[0].FullName, $machineMsi[0].FullName, $upgradeBaseMsi, $userUpgradeBaseMsi)) {
   Write-MsiProperties $package
 }
 
@@ -134,6 +149,7 @@ if ((Get-MunimentRegistrations).Count -ne 0) {
 Remove-Item $upgradeBaseMsi -Force
 
 $userRuntime = Join-Path $env:LOCALAPPDATA "muniment\muniment-runtime.exe"
+$userUninstallShortcut = Join-Path ([Environment]::GetFolderPath('Programs')) "muniment\Uninstall muniment.lnk"
 $userProductCode = Get-MsiProductCode $regularMsi[0].FullName
 $sessionSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $userMsiLog = [IO.Path]::GetTempFileName()
@@ -172,6 +188,13 @@ try {
   if (Test-Path $machineKey) { throw "The per-user MSI wrote application registration under HKLM." }
   if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
   Assert-CefInstallation (Split-Path $userRuntime)
+  if (Test-Path (Join-Path (Split-Path $userRuntime) "Uninstall muniment.lnk")) {
+    throw "The per-user MSI must keep the uninstall shortcut outside the install directory."
+  }
+  if (-not (Test-Path -LiteralPath $userUninstallShortcut -PathType Leaf)) {
+    throw "The per-user MSI must create the uninstall shortcut in the Start menu."
+  }
+  Assert-MsiPayload $regularMsi[0].FullName (Split-Path $userRuntime)
 } finally {
   try {
     Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
@@ -182,10 +205,49 @@ try {
     if (@(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid).Count -ne 0) {
       throw "The MSI product registration remains after the per-user uninstall."
     }
+    if (Test-Path $userUninstallShortcut) { throw "The uninstall shortcut remains after the per-user MSI uninstall." }
     if (Test-Path $userRuntime) { throw "The runtime remains after the per-user MSI uninstall." }
     if (Test-Path $userKey) { throw "The application registration remains after the per-user MSI uninstall." }
   }
 }
+
+# Exercise the old MSI's upgrade condition, not a manually planted shortcut.
+$legacyShortcut = Join-Path (Split-Path $userRuntime) "Uninstall muniment.lnk"
+$oldUserProductCode = Get-MsiProductCode $userUpgradeBaseMsi
+if ($oldUserProductCode -eq $userProductCode) { throw "The per-user upgrade requires distinct ProductCodes." }
+try {
+  Invoke-Msi "/i" $userUpgradeBaseMsi "Silent legacy per-user MSI install"
+  Assert-MsiProductContext @(Get-MsiRegistrations $userUpgradeBaseMsi $sessionSid) $sessionSid
+  if (-not (Test-Path -LiteralPath $legacyShortcut -PathType Leaf)) {
+    throw "The legacy per-user MSI must create its shortcut in the install directory."
+  }
+  if (Test-Path -LiteralPath $userUninstallShortcut) {
+    throw "The legacy per-user MSI must not create the new Start menu uninstall shortcut."
+  }
+
+  Invoke-Msi "/i" $regularMsi[0].FullName "Silent per-user MSI in-place upgrade"
+  if (@(Get-MsiRegistrations $userUpgradeBaseMsi $sessionSid).Count -ne 0) {
+    throw "The legacy per-user MSI remains registered after the upgrade."
+  }
+  Assert-MsiProductContext @(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid) $sessionSid
+  if (Test-Path -LiteralPath $legacyShortcut) { throw "The legacy uninstall shortcut remains after the upgrade." }
+  if (-not (Test-Path -LiteralPath $userUninstallShortcut -PathType Leaf)) {
+    throw "The upgraded per-user MSI must create the Start menu uninstall shortcut."
+  }
+  Assert-MsiPayload $regularMsi[0].FullName (Split-Path $userRuntime)
+} finally {
+  foreach ($package in @($regularMsi[0].FullName, $userUpgradeBaseMsi)) {
+    if (@(Get-MsiRegistrations $package $sessionSid).Count -ne 0) {
+      Invoke-Msi "/x" $package "Silent per-user upgrade cleanup"
+    }
+  }
+  Remove-Item -LiteralPath $userUpgradeBaseMsi -Force
+}
+foreach ($shortcut in @($legacyShortcut, $userUninstallShortcut)) {
+  if (Test-Path -LiteralPath $shortcut) { throw "An uninstall shortcut remains after the upgrade uninstall." }
+}
+if (Test-Path -LiteralPath $userRuntime) { throw "The runtime remains after the upgrade uninstall." }
+if (Test-Path $userKey) { throw "The application registration remains after the upgrade uninstall." }
 
 # NSIS /S is case-sensitive. Its silent uninstall retains the default install path under the shared HKCU key.
 # Run NSIS after both MSI lifecycles so the retained key cannot affect MSI assertions.

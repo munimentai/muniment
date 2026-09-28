@@ -3344,7 +3344,9 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
     // Replace COM identity and release calls. The fixture runs the registration helper and its property getters.
     const fixtureHelpers = helpers.replaceAll(
       '[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(', '[void](Release-FixtureComObject ',
-    ).replaceAll('[Runtime.InteropServices.Marshal]::IsComObject(', '(Test-FixtureComObject ')
+    ).replaceAll('[Runtime.InteropServices.Marshal]::IsComObject(', '(Test-FixtureComObject ').replace(
+      '(Join-Path $PSScriptRoot "windows-msi-payload.mjs")', `'${path.join(root, 'test/windows-msi-payload.mjs').replaceAll("'", "''")}'`,
+    )
     fs.writeFileSync(file, `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${fixtureHelpers}\n${body}\n`)
     return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
       encoding: 'utf8', timeout: 15_000,
@@ -3430,7 +3432,7 @@ $argsPath = $args[0]
     expect(script).toContain('$database.SummaryInformation(0)')
     expect(script).toContain('([int]$summary.Property(15) -band 8)')
     expect(script).toContain('msi properties $(Split-Path -Leaf $Package): ALLUSERS=$($values.ALLUSERS) MSIINSTALLPERUSER=$($values.MSIINSTALLPERUSER) InstallScope=$scope')
-    expect(script).toContain('@($regularMsi[0].FullName, $machineMsi[0].FullName, $upgradeBaseMsi)')
+    expect(script).toContain('@($regularMsi[0].FullName, $machineMsi[0].FullName, $upgradeBaseMsi, $userUpgradeBaseMsi)')
     expect(script.indexOf('  Write-MsiProperties $package')).toBeLessThan(script.indexOf('Invoke-Msi "/i"'))
   })
 
@@ -3458,6 +3460,34 @@ $argsPath = $args[0]
       expect(position, step).toBeGreaterThan(previous)
       previous = position
     }
+  })
+
+  it('Tests the legacy per-user upgrade after the clean install and before NSIS.', () => {
+    const steps = [
+      'Assert-MsiPayload $regularMsi[0].FullName (Split-Path $userRuntime)',
+      'Invoke-Msi "/x" $regularMsi[0].FullName',
+      'Invoke-Msi "/i" $userUpgradeBaseMsi',
+      'Assert-MsiProductContext @(Get-MsiRegistrations $userUpgradeBaseMsi $sessionSid) $sessionSid',
+      'throw "The legacy per-user MSI must create its shortcut in the install directory."',
+      'Invoke-Msi "/i" $regularMsi[0].FullName "Silent per-user MSI in-place upgrade"',
+      'throw "The legacy per-user MSI remains registered after the upgrade."',
+      'Assert-MsiProductContext @(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid) $sessionSid',
+      'throw "The legacy uninstall shortcut remains after the upgrade."',
+      'throw "The upgraded per-user MSI must create the Start menu uninstall shortcut."',
+      'Assert-MsiPayload $regularMsi[0].FullName (Split-Path $userRuntime)',
+      'Invoke-Msi "/x" $package "Silent per-user upgrade cleanup"',
+      'throw "An uninstall shortcut remains after the upgrade uninstall."',
+      '$nsisProcess = Start-Process $nsis.FullName',
+    ]
+    let previous = -1
+    for (const step of steps) {
+      const position = script.indexOf(step, previous + 1)
+      expect(position, step).toBeGreaterThan(previous)
+      previous = position
+    }
+    expect(script).toContain('if ($oldUserProductCode -eq $userProductCode)')
+    expect(script).toContain('windows-msi-payload.mjs')
+    expect(script).toContain('if ($LASTEXITCODE -ne 0)')
   })
 
   it('Prints scope evidence before install errors and registration assertions exit.', () => {
@@ -3537,7 +3567,7 @@ $argsPath = $args[0]
     [2, 0, 2, 0, 2, 2], [1, 1, 1, 0, 2, 2], [1, 0, 0, 1603, 2, 1],
     [0, 1, 0, 0, 4, 1], [1, 0, 1, 0, 4, 1],
     [0, 0, 0, 0, 2, 1], [2, 0, 2, 0, 2, 1], [1, 1, 1, 0, 2, 1],
-    ...['userProduct', 'userData', 'managed', 'machineProduct', 'leftover', 'application-leftover', 'product-leftover'].map((invalid) => [0, 1, 0, 0, 2, 1, invalid]),
+    ...['userProduct', 'userData', 'managed', 'machineProduct', 'leftover', 'application-leftover', 'product-leftover', 'legacy-shortcut'].map((invalid) => [0, 1, 0, 0, 2, 1, invalid]),
   ])('Prints counts for HKCU=%s HKLM=%s HKU=%s, install code %s, context %s, and registrations %s.', (hkcu, hklm, hku, code, context, count, invalid = '') => {
     const msi = path.join(temp(), 'fixture.msi')
     fs.writeFileSync(msi, '')
@@ -3549,13 +3579,27 @@ $argsPath = $args[0]
       fs.mkdirSync(path.dirname(resource), { recursive: true })
       fs.writeFileSync(resource, 'CEF fixture')
     }
-    // Replace the Windows identity boundary while the fixture runs both per-user installer cycles.
+    const payload = path.join(path.dirname(msi), 'payload')
+    fs.cpSync(path.dirname(runtime), payload, { recursive: true })
+    fs.mkdirSync(path.join(path.dirname(msi), 'Programs/muniment'), { recursive: true })
+    // Replace the Windows identity and Start menu boundaries for the installer fixture.
     const sequence = script.slice(script.indexOf('\n', script.indexOf('Remove-Item $upgradeBaseMsi -Force'))).replace(
       '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', '"S-1-5-21-123"',
-    )
+    ).replace("[Environment]::GetFolderPath('Programs')", "(Join-Path $env:LOCALAPPDATA 'Programs')")
     const result = invoke(`
 ${comFixture}
 $regularMsi = @([PSCustomObject]@{ FullName = $args[0] })
+$userUpgradeBaseMsi = Join-Path (Split-Path $args[0]) 'legacy.msi'
+Set-Content -LiteralPath $userUpgradeBaseMsi -Value ''
+$payload = Join-Path (Split-Path $args[0]) 'payload'
+$script:legacyInstalled = $false
+$readRegistrations = (Get-Item Function:Get-MsiRegistrations).ScriptBlock
+function Get-MsiRegistrations($Package, $UserSid) {
+  if ($Package -eq $userUpgradeBaseMsi -and -not $script:legacyInstalled) { return }
+  if ($Package -ne $userUpgradeBaseMsi -and $script:legacyInstalled) { return }
+  $argsPath = $Package
+  & $readRegistrations $Package $UserSid
+}
 $script:fixtureContext = ${context}
 $script:fixtureCount = ${count}
 $nsis = @([PSCustomObject]@{ FullName = 'fixture-setup.exe' })
@@ -3563,13 +3607,16 @@ $userRuntime = $args[1]
 $env:LOCALAPPDATA = Split-Path (Split-Path $userRuntime)
 $script:applicationValues = @{}
 $machineKey = "HKLM:\\Software\\Muniment\\muniment"
-function Test-Path($Path, $LiteralPath) {
+function Test-Path($Path, $LiteralPath, $PathType) {
   if ($Path -eq $machineKey) { return $false }
   if ($Path -eq "HKCU:\\Software\\Muniment\\muniment") {
     if (-not $script:fixtureInstalled) { Write-Host 'MSI application cleanup check.' }
     return $script:applicationValues.Count -ne 0
   }
-  if ($LiteralPath) { return Microsoft.PowerShell.Management\\Test-Path -LiteralPath $LiteralPath }
+  if ($LiteralPath) {
+    if ($PathType) { return Microsoft.PowerShell.Management\\Test-Path -LiteralPath $LiteralPath -PathType $PathType }
+    return Microsoft.PowerShell.Management\\Test-Path -LiteralPath $LiteralPath
+  }
   return Microsoft.PowerShell.Management\\Test-Path $Path
 }
 function Get-ItemPropertyValue($Path, $Name) { return $script:applicationValues[$Name] }
@@ -3577,7 +3624,10 @@ function Get-UserRegistrations($Hive) {
   if ($Hive -eq "HKCU:") { @("fixture") * ${hkcu} } else { @("fixture") * ${hku} }
 }
 function Get-MunimentRegistrations { @('fixture') * ${hklm} }
-function Get-MsiProductCode { return '{12345678-1234-ABCD-EF12-34567890ABCD}' }
+function Get-MsiProductCode($Package) {
+  if ($Package -eq $userUpgradeBaseMsi) { return '{87654321-1234-ABCD-EF12-34567890ABCD}' }
+  return '{12345678-1234-ABCD-EF12-34567890ABCD}'
+}
 $script:fixtureInstalled = $false
 function Test-MsiUserLocation($Location, $LocalAppData) { return $Location -eq 'fixture-location' }
 function Get-PerUserMsiRegistration($ProductCode, $Sid) {
@@ -3610,15 +3660,31 @@ function Start-Process($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThr
     } else { throw "Unexpected installer: $FilePath" }
     return [PSCustomObject]@{ ExitCode = 0 }
   }
+  if ($ArgumentList -match '^/a "[^"]+" /qn /norestart TARGETDIR="([^"]+)"$') {
+    Copy-Item -LiteralPath $payload -Destination (Join-Path $Matches[1] 'muniment') -Recurse
+    return [PSCustomObject]@{ ExitCode = 0 }
+  }
   $script:fixtureInstalled = $ArgumentList -match '/i '
+  $script:legacyInstalled = $script:fixtureInstalled -and $ArgumentList.Contains($userUpgradeBaseMsi)
   if ($script:fixtureInstalled) {
     $script:applicationValues['InstallDir'] = (Split-Path $userRuntime) + '\\'
-    Set-Content -LiteralPath $userRuntime -Value ''
-    Set-Content -LiteralPath $userMsiLog -Value "Property(S): UserSID = S-1-5-21-456"
+    Get-ChildItem -LiteralPath $payload | Copy-Item -Destination (Split-Path $userRuntime) -Recurse -Force
+    if ($script:legacyInstalled) {
+      Set-Content -LiteralPath $legacyShortcut -Value 'legacy shortcut'
+    } else {
+      if ('${invalid}' -ne 'legacy-shortcut' -and $legacyShortcut -and (Test-Path -LiteralPath $legacyShortcut)) {
+        Remove-Item -LiteralPath $legacyShortcut
+      }
+      Set-Content -LiteralPath $userUninstallShortcut -Value 'Start menu shortcut'
+    }
+    if ($ArgumentList.Contains('/L*V')) { Set-Content -LiteralPath $userMsiLog -Value "Property(S): UserSID = S-1-5-21-456" }
   } else {
     if ('${invalid}' -ne 'application-leftover') { $script:applicationValues.Remove('InstallDir') }
     $script:fixtureProductLeftover = '${invalid}' -eq 'product-leftover'
     Remove-Item -LiteralPath $userRuntime
+    foreach ($shortcut in @($legacyShortcut, $userUninstallShortcut)) {
+      if ($shortcut -and (Test-Path -LiteralPath $shortcut)) { Remove-Item -LiteralPath $shortcut }
+    }
   }
   return [PSCustomObject]@{ ExitCode = ${code} }
 }
@@ -3635,6 +3701,7 @@ ${sequence}`, [msi, runtime])
       const messages = {
         'application-leftover': 'The application registration remains after the per-user MSI uninstall.',
         'product-leftover': 'The MSI product registration remains after the per-user uninstall.',
+        'legacy-shortcut': 'The legacy uninstall shortcut remains after the upgrade.',
       }
       expect(result.stderr).toContain(messages[invalid] ?? 'Per-user MSI registration failed')
       expect(result.stdout).toContain('per-user MSI uninstalled ProductCode=')
@@ -3747,7 +3814,9 @@ $regularMsi = @([PSCustomObject]@{ FullName = $args[0] })
 $machineKey = 'HKLM:\\Software\\Muniment\\muniment'
 $userRuntime = Join-Path ([IO.Path]::GetTempPath()) 'muniment-runtime.exe'
 $script:uninstalled = $false
+$userUninstallShortcut = 'fixture-start-menu-shortcut'
 function Test-Path($Path) {
+  if ($Path -eq $userUninstallShortcut) { return -not $script:uninstalled }
   if ($Path -eq $machineKey) { return '${failure}' -eq 'machine key' }
   if ($Path -eq $userRuntime) {
     if ($script:uninstalled) { return '${failure}' -eq 'runtime' }
