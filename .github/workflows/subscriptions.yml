@@ -3,15 +3,15 @@ name: Installed subscription acceptance
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: "Select a platform for a repair check. Only all produces full release acceptance."
+        type: choice
+        default: all
+        options: [all, linux, windows, macos-arm64, macos-x64]
       source_sha:
         description: "Exact 40-character SHA of the signed nightly candidate"
         required: true
         type: string
-      platform:
-        description: "Select the platform to check."
-        type: choice
-        default: all
-        options: [all, linux, windows, macos]
   workflow_call:
     inputs:
       source_sha:
@@ -45,7 +45,7 @@ jobs:
           PLATFORM: ${{ inputs.platform }}
         run: |
           case "$PLATFORM" in
-            all|linux|windows|macos) ;;
+            all|linux|windows|macos|macos-arm64|macos-x64) ;;
             *) echo 'Select a supported subscription platform.' >&2; exit 1 ;;
           esac
 
@@ -126,7 +126,7 @@ jobs:
 
   macos-arm64:
     needs: [validate-platform, windows]
-    if: always() && !cancelled() && needs.validate-platform.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'macos')
+    if: always() && !cancelled() && needs.validate-platform.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'macos' || inputs.platform == 'macos-arm64')
     # macos-15 supplies a fresh ARM64 VM and console login for this job.
     # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
     runs-on: macos-15
@@ -164,7 +164,7 @@ jobs:
 
   macos-x64:
     needs: [validate-platform, macos-arm64]
-    if: always() && !cancelled() && needs.validate-platform.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'macos')
+    if: always() && !cancelled() && needs.validate-platform.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'macos' || inputs.platform == 'macos-x64')
     runs-on: muniment-release
     timeout-minutes: 45
     env:

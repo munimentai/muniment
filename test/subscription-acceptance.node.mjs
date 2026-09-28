@@ -1,5 +1,6 @@
 import './subscription-features.node.mjs'
 import './subscription-diagnostics.node.mjs'
+import './subscription-linux-sandbox.node.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -493,6 +494,35 @@ for (const end of ['exit 42', 'kill -TERM $$']) {
   })
 }
 
+test('a sandbox FATAL reaches blocked probe diagnostics after SIGTRAP', { skip: !nativeLinux }, async () => {
+  const fatal = 'FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:129 No usable sandbox!'
+  const result = await identityRun(files => {
+    const script = Buffer.from(`#!/bin/sh
+ulimit -c 0
+mkdir -p "$MUNIMENT_STATE_DIR/browser"
+printf '%s\\n' '${fatal} ${lease.account_id}' > "$MUNIMENT_STATE_DIR/browser/cef.log"
+printf '%s\\n' '${fatal} ${lease.access}' >&2
+kill -TRAP $$
+`)
+    fs.writeFileSync(files.packageFile, script)
+    fs.writeFileSync(files.executable, script)
+    fs.chmodSync(files.executable, 0o755)
+    fs.writeFileSync(files.candidateFile, JSON.stringify({ ...candidate, sha256: hash(script) }))
+    fs.writeFileSync(files.signatureFile, signUpdaterBytes(script, files.keys.key, { fileName: files.packageName, version: '1.0.0' }))
+  })
+  assert.equal(result.code, 1)
+  assert.ok(result.proof.cases.every(item => item.status === 'blocked' && item.installed === false))
+  assert.match(result.log, /step=chat\/wait-result\nphase=chat/)
+  assert.match(result.log, /process exited before the result/)
+  assert.match(result.log, /exit=none signal=SIGTRAP/)
+  assert.match(result.log, /runtime: No runtime identity exists/)
+  assert.match(result.log, /runtime tail:\nNo log exists/)
+  assert.ok(result.log.includes(`app tail:\n${fatal}`))
+  assert.ok(result.log.includes(`cef tail:\n${fatal}`))
+  assert.equal(result.log.includes(lease.access), false)
+  assert.equal(result.log.includes(lease.account_id), false)
+})
+
 test('the runner reads the committed updater public key', () => {
   assert.equal(updaterPublicKeyFile, 'src-tauri/updater.pub')
   decodePublicKey(fs.readFileSync(updaterPublicKeyFile, 'utf8'))
@@ -896,8 +926,8 @@ test('targeted subscription runs select one platform without granting full relea
   const workflow = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8')
   const nightly = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
   assert.equal((workflow.match(/default: all/g) ?? []).length, 2)
-  assert.match(workflow, /options: \[all, linux, windows, macos\]/)
-  assert.match(workflow, /all\|linux\|windows\|macos\) ;;/)
+  assert.match(workflow, /options: \[all, linux, windows, macos-arm64, macos-x64\]/)
+  assert.match(workflow, /all\|linux\|windows\|macos\|macos-arm64\|macos-x64\) ;;/)
   assert.match(workflow, /Select a supported subscription platform.*exit 1/)
   for (const [jobName, selected] of [['linux', 'linux'], ['windows', 'windows'], ['macos-arm64', 'macos'], ['macos-x64', 'macos']]) {
     const job = workflow.split(`\n  ${jobName}:\n`)[1].split(/\n  [\w-]+:\n/)[0]
@@ -907,8 +937,8 @@ test('targeted subscription runs select one platform without granting full relea
       .replace('cancelled()', JSON.stringify(cancelled))
       .replaceAll('needs.validate-platform.result', JSON.stringify(validation))
       .replaceAll('inputs.platform', JSON.stringify(platform))})`)()
-    for (const platform of ['all', 'linux', 'windows', 'macos', '', 'invalid']) {
-      assert.equal(allowed(platform), platform === 'all' || platform === selected)
+    for (const platform of ['all', ...platforms, 'macos', '', 'invalid']) {
+      assert.equal(allowed(platform), platform === 'all' || platform === selected || platform === jobName)
     }
     assert.match(job, /needs: .*validate-platform/)
     if (jobName !== 'linux') {
@@ -928,6 +958,24 @@ test('targeted subscription runs select one platform without granting full relea
   assert.match(proof, /needs.release-acceptance.result == 'success'/)
   assert.match(proof, /needs.publish.result == 'success'/)
   assert.doesNotMatch(proof, /targeted-release-acceptance/)
+})
+
+test('targeted subscription dispatch keeps full release acceptance exclusive to all platforms', () => {
+  const workflow = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8')
+  const dispatch = workflow.split('  workflow_dispatch:')[1].split('  workflow_call:')[0]
+  assert.match(dispatch, /platform:\s+description:.*\n\s+type: choice\n\s+default: all\n\s+options: \[all, linux, windows, macos-arm64, macos-x64\]/)
+  const reusable = workflow.split('  workflow_call:')[1].split('\n#')[0]
+  assert.match(reusable, /platform:\s+description:.*\n\s+type: string\n\s+default: all/)
+  for (const selected of ['', 'all', ...platforms, 'macos', 'invalid']) {
+    for (const jobName of [...platforms, 'collect']) {
+      const job = workflow.split(`\n  ${jobName}:\n`)[1].split(/\n  [\w-]+:\n/)[0]
+      const condition = job.match(/^    if: (.*)$/m)[1]
+      const enabled = vm.runInNewContext(condition.replaceAll('needs.validate-platform.result', "needs['validate-platform'].result"), { inputs: { platform: selected },
+        needs: { 'validate-platform': { result: 'success' } }, always: () => true, cancelled: () => false })
+      assert.equal(enabled, selected === 'all' || jobName === selected || (selected === 'macos' && jobName.startsWith('macos-')),
+        `${selected}: ${jobName}`)
+    }
+  }
 })
 
 test('the workflow runs a native job per platform and uploads release-acceptance', () => {
