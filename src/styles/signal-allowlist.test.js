@@ -7,7 +7,8 @@ import path from 'node:path'
 // components on the allowed list". Every entry names the clause that permits it;
 // adding one is a spec decision, not a styling one.
 const ALLOWED = {
-  'src/lib/ui/Button.svelte': { 'button[data-variant="capability"][aria-pressed="true"]': 'Selected capability filters use the settings tab highlight.' },
+  'src/lib/Onboarding.svelte': { '.primary': 'First-run send is a primary action.' },
+  'src/lib/ui/Button.svelte': { 'button[data-variant="primary"]': 'Primary action uses verdigris.', 'button[data-variant="capability"][aria-pressed="true"]': 'Selected capability filters use the settings tab highlight.' },
   'src/lib/AppUpdate.svelte': { 'button': 'Verified update ready to install' },
   'src/lib/Toggle.svelte': {
     'button[aria-checked="true"]': 'Enabled switch track',
@@ -20,7 +21,9 @@ const ALLOWED = {
   },
 
   'src/App.svelte': {
-    '.lockup': 'The static brand graph on setup and sign-in.',
+    '.primary': 'Primary action uses verdigris.',
+    '.composer-action.primary': 'Send uses verdigris.',
+    '.thread-row.selected': 'Selected workspace row uses verdigris.' ,
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
   },
@@ -30,10 +33,6 @@ const ALLOWED = {
   },
   'src/lib/AssistantMarkdown.svelte': {
     '.assistant-markdown :global(.caret)': '§1.2 the caret on the active line',
-  },
-  'src/lib/RunMark.svelte': {
-    '.thinking .body': "§1.2 the mark's thinking state (§1.8)",
-    '.thinking .accent': "§1.2 the trace that runs the mark's outline while thinking (§1.8)",
   },
   // Nothing in the access popover is computation: badges and device states
   // are all on §1.2's forbidden list.

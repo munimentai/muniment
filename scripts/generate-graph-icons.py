@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Generate desktop graph icons on macOS. Requires Node, Pillow and CairoSVG."""
+"""Generate desktop Pocket Fold icons on macOS. Requires Node, Pillow and CairoSVG."""
 import io
 import json
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -23,25 +24,11 @@ PNG_SIZES = {
     **{f'Square{size}x{size}Logo.png': (size, size)
        for size in (30, 44, 71, 89, 107, 142, 150, 284, 310)},
 }
-SIZES = sorted({16, 20, 24, 32, 48, 56, 64, 128, 256, 512, 1024,
-                *(logical for _, logical in PNG_SIZES.values())})
-script = """
-import { graphSvg } from './src/lib/graph-mark.js';
-const sizes = JSON.parse(process.argv[1]);
-console.log(JSON.stringify(Object.fromEntries(sizes.map(size => [size, graphSvg(size)]))));
-"""
-SVGS = json.loads(subprocess.check_output(
-    ['node', '--input-type=module', '-e', script, json.dumps(SIZES)], cwd=ROOT, text=True))
-auth = SVGS['56'].replace('<title>', '<style>svg{color:#2A7264}@media(prefers-color-scheme:dark){svg{color:#58B39F}}</style><title>')
-(ICONS / 'muniment-graph-auth.svg').write_text(auth + '\n')
-
+SOURCE = (ICONS / 'pocket-fold.svg').read_text()
+(ICONS / 'muniment-graph-auth.svg').write_text((ROOT / 'docs/assets/pocket-fold.svg').read_text())
 
 def png(pixels, logical):
-    # Preserve the application's dark card and its established 72% mark size.
-    mark = SVGS[str(logical)]
-    body = mark[mark.index('<g '):mark.rindex('</svg>')]
-    source = f'<svg xmlns="http://www.w3.org/2000/svg" width="{pixels}" height="{pixels}" viewBox="0 0 48 48"><rect width="48" height="48" fill="#131816"/><g color="#70D1B7" transform="translate(6.72 6.72) scale(.72)">{body}</g></svg>'
-    raw = cairosvg.svg2png(bytestring=source.encode(), output_width=pixels * 4, output_height=pixels * 4)
+    raw = cairosvg.svg2png(bytestring=SOURCE.encode(), output_width=pixels * 4, output_height=pixels * 4)
     image = Image.open(io.BytesIO(raw)).convert('RGBA').resize((pixels, pixels), Image.Resampling.LANCZOS)
     output = io.BytesIO()
     image.save(output, format='PNG')
@@ -51,7 +38,17 @@ def png(pixels, logical):
 for name, (pixels, logical) in PNG_SIZES.items():
     (ICONS / name).write_bytes(png(pixels, logical))
 
-# ICO holds separate reductions, not resizes of the largest graph.
+# Keep each checked-in launcher and search icon density on the same mark.
+for directory in ("ios", "android"):
+    for target in (ICONS / directory).rglob("*.png"):
+        pixels = Image.open(target).width
+        source = SOURCE.replace('rx="200"', 'rx="0"')
+        if "foreground" in target.name:
+            source = re.sub(r'<rect[^>]*/>', '', SOURCE)
+        cairosvg.svg2png(bytestring=source.encode(), write_to=str(target),
+                        output_width=pixels, output_height=pixels)
+
+# ICO holds separate reductions for each platform icon size.
 ico_sizes = (16, 24, 32, 48, 64, 128, 256)
 payloads = [png(size, size) for size in ico_sizes]
 offset = 6 + 16 * len(payloads)

@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://muniment.ai"><img src="docs/assets/ring-graph.svg" width="128" height="128" alt="Muniment" /></a>
+  <a href="https://muniment.ai"><img src="docs/assets/pocket-fold.svg" width="128" height="128" alt="Muniment" /></a>
 </p>
 
 <h1 align="center">Your models. Working together.</h1>
@@ -101,3 +101,15 @@ See the [test architecture](docs/decisions/0013-desktop-e2e-harness.md) for veri
 Updates require the focused regression tests and the native CI and installed nightly checks.
 `npm run test:agent-runtime` checks extension loading, selected models, streamed completion, and cache usage against a local fixture.
 Set `PI_TEST_BINARY` to the verified Pi executable and `PI_TEST_PACKAGES` to an isolated frozen install of `pi_packages.bun.lock`.
+
+## Visual identity
+
+Pocket Fold is the product mark, with a verdigris ear and custom outlined wordmark.
+`DESIGN.md` defines warm surfaces, geometric corners, typography and action colors.
+
+Local brand review uses the product components with sample data.
+
+```sh
+npm run build
+node scripts/preview-brand.mjs
+```

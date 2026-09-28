@@ -252,13 +252,13 @@ alone until a user writes its statement.
 
 **Routing is optional and the classifier is the user's own.** With no
 classifier every turn takes the fallback and the pool is still balanced. With
-one, the turn's last user message goes out as one choice question over the
-statements, and the answer names the option. A confidence under the floor takes
-the fallback, so a guess never picks the expensive model. The floor is `0.6`.
-The fallback is the option the user names, else the cheapest model in the
-running, and a model with no known price is never the cheapest. A classifier is
-a network call to a service the user names, the screen says so, and its key is
-write-only: nothing reads one back.
+one, bounded task context goes out as one choice question over eligible
+statements. Endpoint, capability, context, and estimated budget checks run first.
+Each connection stores a score type and floor, initially `0.6`. Invalid choices
+and scores use an eligible fallback. Scores do not establish task success.
+The memory-only extract uses no model call and rejects stale background updates.
+Budgeted tasks skip classification and reserve estimated uncached spend per attempt.
+The screen states that routing context leaves the device. Keys remain write-only.
 
 **The classifier catalog is models that classify.** TypeSafe's jev answers a
 typed choice with a probability over every route. A small model on an account
@@ -329,11 +329,11 @@ onboarding spec proves the composer, the three chips and a first Send.
    chat, and [docs/desktop-single-mode.md](docs/desktop-single-mode.md) maps
    it to the cloud routing-surface name. Enforcer:
    `test/smoke.sh`.
-4. **Color law.** Color means computation. `--signal` appears only on the
-   mark's thinking state, the running-tool pulse, the streaming underline and
-   caret, the provenance route segment, the voice polish flash, and
-   workflow-run indicators, selected Extend tabs and enabled extension switches. No gradients,
-   violet, glassmorphism, typing dots, avatars, sparkles, emoji, or pill radius outside Extend tabs.
+4. **Color law.** Verdigris identifies primary actions, active workspace selection,
+   selected controls and computation. Pocket Fold uses a straight fold diagonal,
+   geometric curves and the fixed verdigris ear. Its wordmark uses outlined paths.
+   Warm paper and rounded panels follow `DESIGN.md`. No gradients, violet,
+   glassmorphism, typing dots, avatars, sparkles or emoji.
 5. **If it is a record, it is mono.** Provenance lines, tool cards, costs,
    model names and paths render in Commit Mono. Conversation renders in
    Schibsted Grotesk.

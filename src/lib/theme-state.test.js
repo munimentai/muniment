@@ -14,7 +14,7 @@ import {
   themeScheme,
 } from './theme-state.js'
 
-const system = { mode: THEME_SYSTEM, light: 'paper', dark: 'vault' }
+const system = { mode: THEME_SYSTEM, light: 'paper', dark: 'moss' }
 
 describe('theme state', () => {
   it('names four light and four dark themes with a scheme each', () => {
@@ -25,19 +25,19 @@ describe('theme state', () => {
     expect(themeScheme('system')).toBe(null)
   })
 
-  it('round-trips each state and defaults missing or malformed data to system', () => {
+  it('round-trips each state and defaults missing or malformed data to dark', () => {
     expect(THEME_STORAGE_KEY).toBe('muniment.theme')
-    for (const state of [system, { mode: 'light', light: 'ledger', dark: 'vault' }, { mode: 'dark', light: 'paper', dark: 'inkwell' }]) {
+    for (const state of [system, { mode: 'light', light: 'ledger', dark: 'moss' }, { mode: 'dark', light: 'paper', dark: 'inkwell' }]) {
       expect(parseTheme(serializeTheme(state))).toEqual(state)
     }
-    expect(parseTheme(null)).toEqual(system)
-    expect(parseTheme(undefined)).toEqual(system)
-    expect(parseTheme('')).toEqual(system)
-    expect(parseTheme('Dark')).toEqual(system)
-    expect(parseTheme('{"theme":"dark"}')).toEqual(system)
+    expect(parseTheme(null)).toEqual({ ...system, mode: THEME_DARK })
+    expect(parseTheme(undefined)).toEqual({ ...system, mode: THEME_DARK })
+    expect(parseTheme('')).toEqual({ ...system, mode: THEME_DARK })
+    expect(parseTheme('Dark')).toEqual({ ...system, mode: THEME_DARK })
+    expect(parseTheme('{"theme":"dark"}')).toEqual({ ...system, mode: THEME_DARK })
     expect(parseTheme('{"mode":"dark","light":"neon","dark":"neon"}')).toEqual({ ...system, mode: 'dark' })
-    expect(parseTheme('[1]')).toEqual(system)
-    expect(serializeTheme('invalid')).toBe(JSON.stringify(system))
+    expect(parseTheme('[1]')).toEqual({ ...system, mode: THEME_DARK })
+    expect(serializeTheme('invalid')).toBe(JSON.stringify({ ...system, mode: THEME_DARK }))
   })
 
   it('reads the three older bare modes and a bare theme name', () => {
@@ -45,15 +45,15 @@ describe('theme state', () => {
     expect(parseTheme('light')).toEqual({ ...system, mode: 'light' })
     expect(parseTheme('dark')).toEqual({ ...system, mode: 'dark' })
     expect(parseTheme('moss')).toEqual({ mode: 'dark', light: 'paper', dark: 'moss' })
-    expect(parseTheme('vellum')).toEqual({ mode: 'light', light: 'vellum', dark: 'vault' })
+    expect(parseTheme('vellum')).toEqual({ mode: 'light', light: 'vellum', dark: 'moss' })
   })
 
   it('applies the picked theme and its scheme to the root, or nothing in system', () => {
     const root = { dataset: {} }
-    applyTheme(root, { mode: 'dark', light: 'ledger', dark: 'vault' })
-    expect(root.dataset).toEqual({ theme: 'vault', scheme: 'dark' })
-    expect(activeTheme({ mode: 'dark', light: 'ledger', dark: 'vault' })).toBe('vault')
-    applyTheme(root, { mode: 'light', light: 'ledger', dark: 'vault' })
+    applyTheme(root, { mode: 'dark', light: 'ledger', dark: 'moss' })
+    expect(root.dataset).toEqual({ theme: 'moss', scheme: 'dark' })
+    expect(activeTheme({ mode: 'dark', light: 'ledger', dark: 'moss' })).toBe('moss')
+    applyTheme(root, { mode: 'light', light: 'ledger', dark: 'moss' })
     expect(root.dataset).toEqual({ theme: 'ledger', scheme: 'light' })
     applyTheme(root, system)
     expect(root.dataset).toEqual({})
