@@ -231,6 +231,7 @@ jobs:
         env:
           OUTPUT: ${{ runner.temp }}/release-acceptance
           SUBSCRIPTION_JOB_RESULTS: ${{ toJSON(needs) }}
+          FACTORY_SUBSCRIPTION_LEASES: ${{ secrets.FACTORY_SUBSCRIPTION_LEASES }}
         run: |
           set +e
           node test/e2e/runner/collect-subscriptions.mjs "$SOURCE_SHA" "$OUTPUT" \

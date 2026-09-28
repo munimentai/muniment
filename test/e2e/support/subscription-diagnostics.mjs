@@ -39,6 +39,31 @@ export function subscriptionRedactor({ leases, values = [] } = {}) {
 
 export const diagnosticTail = (text, redact, limit = 16_384) => redact(text).slice(-limit)
 
+export function reportSubscriptionSummary(platform, status, reason, diagnostics, redact, emit = console.error) {
+  const safeReason = diagnosticTail(typeof reason === 'string' && reason ? reason : 'none', redact, 2048)
+  emit(`platform=${platform} status=${status}\nreason=${JSON.stringify(safeReason)}`)
+  if (diagnostics) {
+    const tail = diagnosticTail(transcriptText(redact(diagnostics)), redact)
+    emit(`Diagnostic tail:\n${tail.split('\n').map(line => `  ${line}`).join('\n')}`)
+  }
+}
+
+export function reportSubscriptionFailure(output, platform, status, redact) {
+  let evidence, proof
+  try {
+    evidence = JSON.parse(fs.readFileSync(path.join(output, `${platform}-subscription.json`), 'utf8'))
+    proof = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'), 'utf8'))
+  } catch { /* Report missing or malformed evidence without parser excerpts. */ }
+  const cases = Array.isArray(proof?.cases) ? proof.cases.filter(item => item?.platform === platform) : []
+  if (status === 0 && evidence?.status === 'passed' && cases.length && cases.every(item => item?.status === 'passed')) return
+  const reason = evidence?.reason || cases.find(item => item?.status !== 'passed')?.reason ||
+    'The native check did not produce passing evidence.'
+  let diagnostics = 'No diagnostic log exists.'
+  try { diagnostics = fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8') }
+  catch { /* Keep the summary when the log is missing or unreadable. */ }
+  reportSubscriptionSummary(platform, 'blocked', reason, diagnostics, redact)
+}
+
 const payloadMarker = 'payload-difference='
 
 export function payloadDifferenceDetail(difference, redact = subscriptionRedactor()) {

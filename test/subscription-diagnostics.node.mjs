@@ -3,7 +3,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, profileLogs, transcriptText, linuxRuntimeStatus, readDiagnosticLog, probeProgress, payloadDifferenceDetail, reportPayloadDifferences } from './e2e/support/subscription-diagnostics.mjs'
+import { spawnSync } from 'node:child_process'
+import { transcriptTail } from './e2e/support/transcript-tail.mjs'
+import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
+import { platforms } from './e2e/support/subscription-acceptance.mjs'
+import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, profileLogs, transcriptText, linuxRuntimeStatus, readDiagnosticLog, probeProgress, payloadDifferenceDetail, reportPayloadDifferences, reportSubscriptionFailure } from './e2e/support/subscription-diagnostics.mjs'
 import { awaitProbeResult, awaitUpdateResult, equalPayload, isolatedEnvironment, verifyInstalled, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
@@ -404,7 +408,9 @@ test('blocked logs survive cleanup and collection without stale screenshots or s
 }))
 
 for (const mode of ['missing-envelope', 'blocked-guest', 'ssh-throw']) {
-  test(`the host preserves redacted native diagnostics after ${mode}`, () => temporary(output => {
+  test(`the host preserves redacted native diagnostics after ${mode}`, t => temporary(output => {
+    const messages = []
+    t.mock.method(console, 'error', text => messages.push(text))
     fs.writeFileSync(path.join(output, 'linux-subscription.log'), 'stale transcript')
     const status = host({ sourceSha, platform: 'linux', output, leases, models, token, sshKey: key, knownHosts: 'host',
       invoke: options => runDesktopCi({ ...options, spawnProcess(command, args) {
@@ -425,6 +431,17 @@ for (const mode of ['missing-envelope', 'blocked-guest', 'ssh-throw']) {
     if (mode === 'blocked-guest') assert.match(log, /step=chat\/wait-result/)
     if (mode !== 'ssh-throw') assert.match(log, /runtime exit=42/)
     assert.equal(log.includes('stale transcript'), false)
+    const printed = messages.join('\n')
+    assert.match(printed, /platform=linux status=blocked/)
+    assert.match(printed, /reason=/)
+    assert.match(printed, /step=desktop-ci\/ssh/)
+    if (mode === 'blocked-guest') {
+      assert.match(printed, /reason="The installed probe did not finish\."/)
+      assert.match(printed, /step=chat\/wait-result/)
+    }
+    if (mode !== 'ssh-throw') assert.match(printed, /runtime exit=42/)
+    assertSafe(printed)
+    assert.equal(printed.includes('stale transcript'), false)
     assert.ok(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases.every(item => item.status === 'blocked'))
   }))
 }
@@ -434,3 +451,163 @@ test('SSH diagnostic tails exclude artifact and screenshot envelopes', () => {
     '-----DESKTOP-CI-SCREENDUMP-BEGIN-----\nsecret pixels\n-----DESKTOP-CI-SCREENDUMP-END-----\nexit=1'
   assert.equal(transcriptText(transcript), 'native failure\nexit=1')
 })
+
+for (const platform of ['linux', 'windows', 'macos-x64']) {
+  test(`the ${platform} host prints a bounded summary for a nonzero guest result`, t => temporary(output => {
+    const messages = []
+    t.mock.method(console, 'error', text => messages.push(text))
+    assert.equal(host({ sourceSha, platform, output, leases, models, token, sshKey: key, knownHosts: 'host',
+      invoke: ({ output: artifacts }) => {
+        writeBlocked(artifacts, sourceSha, platform, `The quota check failed. ${privateValues.join(' ')}`,
+          'old diagnostic\n' + 'x.'.repeat(15_000) + `\nstep=chat/wait-result\nquota exhausted ${privateValues.join('\n')}`)
+        return { status: 1 }
+      },
+    }), 1)
+    const printed = messages.join('\n')
+    assert.ok(printed.includes(`platform=${platform} status=blocked`))
+    assert.match(printed, /reason="The quota check failed\./)
+    assert.match(printed, /step=chat\/wait-result/)
+    assert.match(printed, /quota exhausted/)
+    assert.equal(printed.includes('old diagnostic'), false)
+    assert.ok(printed.length < 20_000)
+    assertSafe(printed)
+  }))
+}
+
+for (const mode of ['blocked', 'throw', 'preflight']) {
+  test(`the ARM64 job reports ${mode} failures after the guest settles`, async t => {
+    const output = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-arm-diagnostics-'))
+    const messages = []
+    t.mock.method(console, 'error', text => messages.push(text))
+    const previousKey = process.env.DESKTOP_CI_SSH_KEY
+    process.env.DESKTOP_CI_SSH_KEY = key
+    try {
+      const status = await hostedArm64({ sourceSha, output, leases, models, token,
+        runtime: 'darwin', arch: 'arm64', uid: 501,
+        env: { RUNNER_ARCH: 'ARM64', RUNNER_OS: 'macOS', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' },
+        execute: command => ({ status: mode === 'preflight' ? 1 : 0,
+          stdout: command.endsWith('uname') ? 'arm64' : command.endsWith('stat') ? '501' : '' }),
+        invoke: async () => {
+          await Promise.resolve()
+          if (mode === 'throw') throw new Error(`Native failure ${privateValues.join(' ')}`)
+          writeBlocked(output, sourceSha, 'macos-arm64', 'The subscription authentication failed.',
+            `step=chat/wait-result\nauth failed ${privateValues.join(' ')}`)
+          return 1
+        },
+      })
+      assert.equal(status, 1)
+      const printed = messages.join('\n')
+      assert.match(printed, /platform=macos-arm64 status=blocked/)
+      if (mode === 'blocked') {
+        assert.match(printed, /reason="The subscription authentication failed\."/)
+        assert.match(printed, /step=chat\/wait-result/)
+      } else assert.match(printed, /step=hosted-arm64/)
+      assertSafe(printed)
+    } finally {
+      fs.rmSync(output, { recursive: true, force: true })
+      if (previousKey === undefined) delete process.env.DESKTOP_CI_SSH_KEY
+      else process.env.DESKTOP_CI_SSH_KEY = previousKey
+    }
+  })
+}
+
+test('failure summaries handle missing, malformed, contradictory, and partial evidence', t => temporary(output => {
+  const messages = []
+  t.mock.method(console, 'error', text => messages.push(text))
+  const evidenceFile = path.join(output, 'linux-subscription.json')
+  const proofFile = path.join(output, 'release-acceptance.json')
+  for (const proof of [undefined, '{', 'null', '{"cases":[]}', '{"cases":[null]}']) {
+    messages.length = 0
+    if (proof !== undefined) fs.writeFileSync(proofFile, proof)
+    fs.writeFileSync(evidenceFile, '{"status":"passed"}')
+    reportSubscriptionFailure(output, 'linux', 1, redact)
+    assert.match(messages.join('\n'), /platform=linux status=blocked/)
+    assert.match(messages.join('\n'), /No diagnostic log exists/)
+  }
+  messages.length = 0
+  fs.writeFileSync(proofFile, JSON.stringify({ cases: [
+    { platform: 'linux', status: 'passed' },
+    { platform: 'linux', status: 'blocked', reason: 'The installed feature check did not finish.' },
+  ] }))
+  reportSubscriptionFailure(output, 'linux', 1, redact)
+  assert.match(messages.join('\n'), /reason="The installed feature check did not finish\."/)
+  messages.length = 0
+  fs.writeFileSync(proofFile, JSON.stringify({ cases: [{ platform: 'linux', status: 'passed' }] }))
+  reportSubscriptionFailure(output, 'linux', 0, redact)
+  assert.deepEqual(messages, [])
+  reportSubscriptionFailure(output, 'linux', 1, redact)
+  assert.match(messages.join('\n'), /platform=linux status=blocked/)
+  messages.length = 0
+  fs.writeFileSync(evidenceFile, JSON.stringify({ status: 'blocked', reason: 'old reason '.repeat(2000) + lease.access + '\nFinal reason.' }))
+  reportSubscriptionFailure(output, 'linux', 1, redact)
+  assert.match(messages[0], /Final reason\./)
+  assert.ok(messages[0].length < 2200)
+  assertSafe(messages.join('\n'))
+}))
+
+test('collection prints every platform reason with lease-aware redaction', t => temporary(root => {
+  const messages = []
+  t.mock.method(console, 'error', text => messages.push(text))
+  const previous = process.env.FACTORY_SUBSCRIPTION_LEASES
+  process.env.FACTORY_SUBSCRIPTION_LEASES = leases
+  try {
+    const inputs = platforms.slice(0, 3).map(platform => {
+      const input = path.join(root, platform)
+      writeBlocked(input, sourceSha, platform, `The ${platform} subscription failed. ${lease.access} ${lease.account_id} ${leases}`)
+      return input
+    })
+    assert.equal(collect(sourceSha, path.join(root, 'out'), inputs), 1)
+    assert.equal(messages.length, 4)
+    for (const [index, platform] of platforms.entries()) {
+      assert.ok(messages[index].includes(`platform=${platform} status=blocked`))
+      assert.match(messages[index], /reason="/)
+      if (index < 3) assert.ok(messages[index].includes(`The ${platform} subscription failed.`))
+    }
+    assertSafe(messages.join('\n'))
+  } finally {
+    if (previous === undefined) delete process.env.FACTORY_SUBSCRIPTION_LEASES
+    else process.env.FACTORY_SUBSCRIPTION_LEASES = previous
+  }
+}))
+
+test('transcript tails remove long, repeated, and incomplete envelopes before line and size limits', () => {
+  const envelope = name => `-----DESKTOP-CI-${name}-BEGIN-----\r\n` +
+    'encoded pixels\r\n'.repeat(400) + `-----DESKTOP-CI-${name}-END-----\r\n`
+  const text = 'old line\n' + 'progress\n'.repeat(201) + privateValues.join('\n') + '\nNative failure: exit=42\n' +
+    envelope('ARTIFACTS') + envelope('SCREENDUMP') + envelope('SCREENDUMP') + 'Final status=1\n'
+  const tail = transcriptTail(text, redact)
+  assert.match(tail, /Native failure: exit=42/)
+  assert.match(tail, /Final status=1/)
+  for (const hidden of ['old line', 'encoded pixels', 'DESKTOP-CI']) assert.equal(tail.includes(hidden), false)
+  assert.ok(tail.split('\n').length <= 200)
+  assertSafe(tail)
+  assert.equal(transcriptTail('error\n-----DESKTOP-CI-SCREENDUMP-BEGIN-----\npixels', redact), 'error')
+  assert.equal(transcriptTail('', redact), '')
+  assert.equal(transcriptTail('x.'.repeat(15_000) + '\nlast error', redact).length, 16_384)
+  const multilineKey = '-----BEGIN OPENSSH PRIVATE KEY-----\n' + 'a'.repeat(150) + '\n-----END OPENSSH PRIVATE KEY-----'
+  const safe = transcriptTail(`error\n${multilineKey}\nlast error`, subscriptionRedactor({ values: [multilineKey] }))
+  assert.equal(safe.includes('PRIVATE KEY'), false)
+  assert.equal(safe.includes('a'.repeat(150)), false)
+})
+
+test('nightly uses the redacted transcript tail on every native E2E failure', () => temporary(root => {
+  const workflow = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
+  for (const platform of ['linux', 'windows', 'macos']) {
+    const job = workflow.split(`  ${platform}-e2e:\n`)[1].split(/\n  [a-z][\w-]+:\n/)[0]
+    assert.match(job, /if \(\( run_status != 0 \|\| extract_status != 0 \)\); then\n\s+node test\/e2e\/support\/transcript-tail\.mjs "\$output"/)
+    assert.equal(job.includes('tail -n 200'), false)
+  }
+  const file = path.join(root, 'transcript')
+  fs.writeFileSync(file, `Native failure ${privateValues.join('\n')} fixture-user\n` +
+    '-----DESKTOP-CI-SCREENDUMP-BEGIN-----\n' + 'pixels\n'.repeat(300) + '-----DESKTOP-CI-SCREENDUMP-END-----\n')
+  const result = spawnSync(process.execPath, ['test/e2e/support/transcript-tail.mjs', file], {
+    encoding: 'utf8', env: { ...process.env, FACTORY_SUBSCRIPTION_LEASES: leases,
+      GH_TOKEN: token, DESKTOP_CI_SSH_KEY: key, FIXTURE_USERNAME: 'fixture-user' },
+  })
+  assert.equal(result.status, 0)
+  assert.match(result.stderr, /Native failure/)
+  for (const hidden of ['pixels', 'DESKTOP-CI', 'fixture-user']) assert.equal(result.stderr.includes(hidden), false)
+  assertSafe(result.stderr)
+  const subscriptions = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8').split('  collect:\n')[1]
+  assert.match(subscriptions, /FACTORY_SUBSCRIPTION_LEASES: \$\{\{ secrets\.FACTORY_SUBSCRIPTION_LEASES \}\}/)
+}))

@@ -204,7 +204,9 @@ test('other platforms keep their temporary directory and socket rules', () => {
   }
 })
 
-test('the collector generates all platform cases and blocks missing or contradictory evidence', () => {
+test('the collector generates all platform cases and blocks missing or contradictory evidence', t => {
+  const messages = []
+  t.mock.method(console, 'error', text => messages.push(text))
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-collect-'))
   const output = path.join(root, 'out')
   const inputs = []
@@ -222,6 +224,7 @@ test('the collector generates all platform cases and blocks missing or contradic
     }
     assert.throws(() => collect(sourceSha, inputs[0], inputs))
     assert.equal(collect(sourceSha, output, inputs), 0)
+    assert.deepEqual(messages, platforms.map(platform => `platform=${platform} status=passed\nreason="none"`))
     const combined = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
     assert.equal(combined.cases.length, 72)
     assert.equal(Object.keys(combined.packages).length, 4)
@@ -242,7 +245,9 @@ test('the collector generates all platform cases and blocks missing or contradic
     fs.writeFileSync(linuxEvidence, JSON.stringify({ ...incomplete.result, transports: incomplete.transports }))
     const partial = acceptance(candidate, sourceSha, 'linux', incomplete.result, incomplete.transports, packageNames.linux)
     fs.writeFileSync(path.join(inputs[0], 'release-acceptance.json'), JSON.stringify(partial))
+    messages.length = 0
     assert.equal(collect(sourceSha, output, inputs), 1)
+    assert.match(messages[0], /platform=linux status=blocked\nreason="The installed feature check did not finish/)
     const partialCombined = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
     assert.deepEqual(partialCombined.cases.filter(item => item.status === 'blocked').map(item => [item.platform, item.feature]), [['linux', 'mcp']])
     assert.equal(collect(sourceSha, output, inputs.slice(1)), 1)
