@@ -86,6 +86,7 @@
     "allow-model-router-update-account",
     "allow-model-router-remove-account",
     "allow-model-router-save-routes",
+    "allow-model-router-save-constraints",
     "allow-model-router-set-classifier",
     "allow-model-router-connect-classifier",
     "allow-model-router-select-classifier",

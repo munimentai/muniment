@@ -16,6 +16,9 @@ const LIMIT: usize = 256;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub offline_only: bool,
+    pub task_budget_usd: Option<f64>,
+    pub classifier_profiles: BTreeMap<String, super::classify::Profile>,
     /// Explicitly verified cache scopes, including organization/workspace and region.
     /// An absent entry keeps that account isolated. Never infer scope from model name.
     pub cache_scopes: BTreeMap<String, String>,
@@ -30,6 +33,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            offline_only: false,
+            task_budget_usd: None,
+            classifier_profiles: BTreeMap::new(),
             cache_scopes: BTreeMap::new(),
             mode: Mode::Adaptive,
             models: BTreeMap::new(),
@@ -90,6 +96,7 @@ pub struct Model {
     pub output_limit: u64,
     pub tools: bool,
     pub tools_unknown: bool,
+    pub pricing_unknown: bool,
     pub images: bool,
     pub input: f64,
     pub output: f64,
@@ -243,9 +250,14 @@ impl Features {
             failed,
         }
     }
+    pub fn fits_direct(&self, model: &Model) -> bool {
+        let mut direct = model.clone();
+        direct.tools |= direct.tools_unknown;
+        self.fits(&direct)
+    }
     pub fn fits(&self, model: &Model) -> bool {
         !self.unsupported
-            && (!self.tools || model.tools || model.tools_unknown)
+            && (!self.tools || model.tools)
             && (!self.images || model.images)
             && self.output <= model.output_limit
             && self.input.saturating_add(self.output) <= model.context
@@ -254,6 +266,7 @@ impl Features {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Session {
+    pub reserved_cost: f64,
     pub model_identity: String,
     pub caches: BTreeMap<String, Cache>,
     pub route: String,
@@ -377,9 +390,13 @@ impl Session {
         self.residence = self.residence.saturating_add(1);
         self.calls = self.calls.saturating_add(1);
         self.latency_ms = self.latency_ms.saturating_add(elapsed);
-        if let Some(price) = price {
-            self.estimated_cost += price.cost(tokens);
+        if tokens != Tokens::default() {
+            if let Some(price) = price {
+                self.estimated_cost =
+                    (self.estimated_cost - self.reserved_cost).max(0.0) + price.cost(tokens);
+            }
         }
+        self.reserved_cost = 0.0;
     }
     pub fn remember_cache(&mut self, config: &RouterConfig, route: &Route) {
         let logical = identity(config, route);
@@ -471,9 +488,11 @@ pub fn choose(
                         if next_model.capability > m.capability {
                             return Ok(((*next).clone(), "Escalated for task requirements".into()));
                         }
-                        let measured = next_model
-                            .success_rate
-                            .is_some_and(|p| p >= config.policy.minimum_success.clamp(0.0, 1.0));
+                        let measured = !next_model.pricing_unknown
+                            && !m.pricing_unknown
+                            && next_model.success_rate.is_some_and(|p| {
+                                p >= config.policy.minimum_success.clamp(0.0, 1.0)
+                            });
                         let cheaper = session.estimate(
                             config,
                             next,
@@ -518,10 +537,10 @@ pub fn choose(
     };
     let candidate = eligible
         .iter()
-        .filter(|(_, m)| m.capability >= required)
+        .filter(|(_, m)| m.capability >= required && !m.pricing_unknown)
         .filter(|(_, m)| {
             m.success_rate
-                .is_none_or(|p| p >= config.policy.minimum_success.clamp(0.0, 1.0))
+                .is_some_and(|p| p >= config.policy.minimum_success.clamp(0.0, 1.0))
         })
         .min_by(|(a, am), (b, bm)| {
             session
@@ -538,6 +557,28 @@ pub fn choose(
             }
             .into(),
         ));
+    }
+    if escalates {
+        if let Some((route, _)) = eligible
+            .iter()
+            .filter(|(_, m)| m.capability > floor)
+            .max_by_key(|(_, m)| m.capability)
+        {
+            return Ok((
+                (*route).clone(),
+                "Escalated by known capability without a success estimate".into(),
+            ));
+        }
+    }
+    // Unknown task success is not a measured cost advantage. Use a named,
+    // eligible nomination/fallback, rather than optimizing an invented estimate.
+    if !escalates {
+        if let Some((r, _)) = nominated {
+            return Ok((
+                (*r).clone(),
+                "Used eligible selection without measured success estimates".into(),
+            ));
+        }
     }
     if let Some((r, _)) = current {
         return Ok((
@@ -610,12 +651,18 @@ pub fn load_metadata(agent: &Path, config: &mut RouterConfig) {
             let mut metadata = known.clone().unwrap_or_default();
             if known.is_none() {
                 metadata.tools_unknown = true;
+                metadata.pricing_unknown = true;
             }
             if let Some(v) = value["contextWindow"].as_u64() {
                 metadata.context = v;
             }
             if let Some(v) = value["maxTokens"].as_u64() {
                 metadata.output_limit = v;
+            }
+            if value["cost"]["input"].as_f64().is_some()
+                && value["cost"]["output"].as_f64().is_some()
+            {
+                metadata.pricing_unknown = false;
             }
             if let Some(v) = value["cost"]["input"].as_f64() {
                 metadata.input = v;
@@ -664,9 +711,61 @@ fn unreported_tools_do_not_block_a_direct_chat_but_explicit_denial_does() {
         tools_unknown: true,
         ..Default::default()
     };
-    assert!(features.fits(&model));
+    assert!(features.fits_direct(&model));
+    assert!(!features.fits(&model));
     model.tools_unknown = false;
     assert!(!features.fits(&model));
     model.tools = true;
     assert!(features.fits(&model));
+}
+
+#[test]
+fn budget_reservations_survive_missing_usage_and_settle_with_usage() {
+    let route = Route {
+        key: "r".into(),
+        family: "openai".into(),
+        model: "test".into(),
+        description: String::new(),
+    };
+    let features = Features::read(&json!({"messages":[]}));
+    let price = Model {
+        input: 1.0,
+        output: 2.0,
+        ..Default::default()
+    };
+    let mut s = Session {
+        estimated_cost: 0.1,
+        reserved_cost: 0.03,
+        ..Default::default()
+    };
+    s.finish(
+        &route,
+        "a",
+        &features,
+        Completion {
+            tokens: Tokens::default(),
+            finished_ms: 1,
+            elapsed_ms: 1,
+        },
+        Some(&price),
+    );
+    assert_eq!(s.estimated_cost, 0.1);
+    s.reserved_cost = 0.02;
+    s.estimated_cost += 0.02;
+    s.finish(
+        &route,
+        "a",
+        &features,
+        Completion {
+            tokens: Tokens {
+                input: 1000,
+                output: 1000,
+                ..Default::default()
+            },
+            finished_ms: 2,
+            elapsed_ms: 1,
+        },
+        Some(&price),
+    );
+    assert!((s.estimated_cost - 0.103).abs() < 1e-10);
 }
