@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { writeBlocked } from './subscriptions.mjs'
-import { subscriptionRedactor, diagnosticTail, nativeFailure, transcriptText } from '../support/subscription-diagnostics.mjs'
+import { subscriptionRedactor, diagnosticTail, nativeFailure, transcriptText, reportPayloadDifferences } from '../support/subscription-diagnostics.mjs'
 
 const desktopCiName = platform => platform === 'macos-x64' ? 'macos' : platform
 
@@ -127,6 +127,8 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
     writeBlocked(output, sourceSha, platform, reason, `step=host\nerror=${error.message}`, redact)
     console.error(reason)
     return 1
+  } finally {
+    reportPayloadDifferences(fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8'), redact)
   }
 }
 

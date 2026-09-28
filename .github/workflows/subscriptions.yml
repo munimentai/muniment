@@ -7,12 +7,21 @@ on:
         description: "Exact 40-character SHA of the signed nightly candidate"
         required: true
         type: string
+      platform:
+        description: "Select the platform to check."
+        type: choice
+        default: all
+        options: [all, linux, windows, macos]
   workflow_call:
     inputs:
       source_sha:
         description: "Exact 40-character SHA of the signed nightly candidate"
         required: true
         type: string
+      platform:
+        description: "Select the platform to check."
+        type: string
+        default: all
 
 # Keep harness repairs separate from the signed candidate bytes.
 env:
@@ -28,8 +37,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-platform:
+    runs-on: self-hosted
+    steps:
+      - name: Validate the requested platform
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          case "$PLATFORM" in
+            all|linux|windows|macos) ;;
+            *) echo 'Select a supported subscription platform.' >&2; exit 1 ;;
+          esac
+
   # Native desktop-ci jobs inherit the private release runner's SSH key.
   linux:
+    needs: validate-platform
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
     runs-on: muniment-release
     timeout-minutes: 45
     env:
@@ -65,8 +88,8 @@ jobs:
           source: ${{ inputs.source_sha }}
 
   windows:
-    needs: linux
-    if: always() && !cancelled()
+    needs: [validate-platform, linux]
+    if: always() && !cancelled() && needs.validate-platform.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'windows')
     runs-on: muniment-release
     timeout-minutes: 45
     env:
@@ -102,8 +125,8 @@ jobs:
           source: ${{ inputs.source_sha }}
 
   macos-arm64:
-    needs: windows
-    if: always() && !cancelled()
+    needs: [validate-platform, windows]
+    if: always() && !cancelled() && needs.validate-platform.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'macos')
     # macos-15 supplies a fresh ARM64 VM and console login for this job.
     # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
     runs-on: macos-15
@@ -140,8 +163,8 @@ jobs:
           source: ${{ inputs.source_sha }}
 
   macos-x64:
-    needs: macos-arm64
-    if: always() && !cancelled()
+    needs: [validate-platform, macos-arm64]
+    if: always() && !cancelled() && needs.validate-platform.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'macos')
     runs-on: muniment-release
     timeout-minutes: 45
     env:
@@ -178,7 +201,7 @@ jobs:
 
   collect:
     needs: [linux, windows, macos-arm64, macos-x64]
-    if: always() && !cancelled()
+    if: always() && !cancelled() && inputs.platform == 'all'
     runs-on: self-hosted
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}

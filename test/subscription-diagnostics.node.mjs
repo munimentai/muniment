@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, profileLogs, transcriptText, linuxRuntimeStatus, readDiagnosticLog, probeProgress } from './e2e/support/subscription-diagnostics.mjs'
+import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, profileLogs, transcriptText, linuxRuntimeStatus, readDiagnosticLog, probeProgress, payloadDifferenceDetail, reportPayloadDifferences } from './e2e/support/subscription-diagnostics.mjs'
 import { awaitProbeResult, awaitUpdateResult, equalPayload, isolatedEnvironment, verifyInstalled, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
@@ -65,6 +65,135 @@ test('payload equality reports every missing, extra, and differing relative path
     return true
   })
 })
+
+test('payload diagnostic limits do not waive empty payloads or mismatches beyond the limit', () => temporary(root => {
+  const summary = path.join(root, 'summary')
+  const emitted = []
+  const files = Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`file-${index}.dll`, 'same']))
+  assert.throws(() => equalPayload(files, { ...files, 'file-50.dll': 'changed' }), /"differing":\["file-50.dll"\]/)
+  assert.throws(() => equalPayload({}, {}), error => {
+    reportPayloadDifferences(error.message, redact, { emit: text => emitted.push(text), summary })
+    return true
+  })
+  assert.equal(emitted.length, 1)
+  assert.equal(emitted[0], 'payload-difference={"missing":[],"extra":[],"differing":[]}')
+  assert.match(fs.readFileSync(summary, 'utf8'), /"missing":\[\]/)
+}))
+
+test('payload diagnostics cap and redact path lists in the console and step summary', () => temporary(root => {
+  const summary = path.join(root, 'summary')
+  const emitted = []
+  const difference = {
+    missing: Array.from({ length: 51 }, (_, index) => `resources/file-${index}.dll`),
+    extra: [lease.access, `accounts/${lease.account_id}/state.json`, '/Users/private-person/log',
+      'C:\\Users\\private-person\\log', '../private-person/log', 'dir/../../log', 'dir\n::error::injected',
+      'x'.repeat(513), 'dir/</pre><script>bad</script>.txt'],
+    differing: ['muniment-desktop.exe'],
+    contents: 'Do not print file contents.',
+  }
+  const detail = payloadDifferenceDetail(difference, redact)
+  reportPayloadDifferences(`Unrelated log contents.\n${detail}\n${detail}\npayload-difference={\npayload-difference={"missing":42}`, redact,
+    { emit: text => emitted.push(text), summary })
+  assert.equal(emitted.length, 1)
+  const paths = JSON.parse(emitted[0].slice('payload-difference='.length))
+  assert.equal(paths.missing.length, 50)
+  assert.deepEqual(paths.differing, ['muniment-desktop.exe'])
+  assert.equal(paths.extra.filter(value => value === '[invalid path]').length, 5)
+  assert.ok(paths.extra.includes('[path exceeds limit]'))
+  for (const text of [emitted[0], fs.readFileSync(summary, 'utf8')]) {
+    assertSafe(text)
+    for (const value of ['file-50', 'private-person', '::error::', 'Do not print', 'Unrelated log']) assert.equal(text.includes(value), false)
+  }
+  const markdown = fs.readFileSync(summary, 'utf8')
+  assert.equal(markdown.includes('<script>'), false)
+  assert.match(markdown, /&lt;script&gt;/)
+  for (const name of ['missing', 'extra', 'differing']) {
+    const capped = JSON.parse(payloadDifferenceDetail({ missing: [], extra: [], differing: [], [name]: difference.missing }).slice('payload-difference='.length))
+    assert.equal(capped[name].length, 50)
+  }
+  assert.equal(payloadDifferenceDetail({ missing: [], extra: [] }), '')
+}))
+
+test('payload diagnostics reach the host console and step summary without artifact access', t => temporary(output => {
+  const messages = []
+  t.mock.method(console, 'error', text => messages.push(text))
+  const summary = path.join(output, 'summary')
+  const previous = process.env.GITHUB_STEP_SUMMARY
+  process.env.GITHUB_STEP_SUMMARY = summary
+  try {
+    const status = host({ sourceSha, platform: 'windows', output, leases, models, token, sshKey: key, knownHosts: 'host',
+      invoke: ({ output: artifacts }) => {
+        try { equalPayload({ 'missing.dll': 'hash1', 'app.exe': 'hash2' }, { 'Uninstall muniment.lnk': 'hash3', 'app.exe': 'hash4', [lease.account_id]: 'hash5' }) }
+        catch (error) {
+          writeBlocked(artifacts, sourceSha, 'windows', 'The installed payload does not match the signed package.',
+            `step=payload/compare\nerror=${error.message}`, redact)
+        }
+        return { status: 1 }
+      },
+    })
+    assert.equal(status, 1)
+    for (const text of [messages.join('\n'), fs.readFileSync(summary, 'utf8')]) {
+      assert.match(text, /"missing":\["missing.dll"\]/)
+      assert.match(text, /"extra":\["Uninstall muniment.lnk","\[REDACTED\]"\]/)
+      assert.match(text, /"differing":\["app.exe"\]/)
+      assert.equal(text.includes('hash'), false)
+      assertSafe(text)
+    }
+    assert.ok(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases.every(item => item.status === 'blocked'))
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_STEP_SUMMARY
+    else process.env.GITHUB_STEP_SUMMARY = previous
+  }
+}))
+
+test('the per-user MSI creates its uninstall shortcut outside the signed payload', () => {
+  const template = fs.readFileSync('src-tauri/windows/per-user.wxs', 'utf8')
+  const shortcut = template.match(/<Shortcut Id="UninstallShortcut"[\s\S]*?\/>/)[0]
+  assert.match(shortcut, /Directory="ApplicationProgramsFolder"/)
+  assert.match(shortcut, /Target="\[System64Folder\]msiexec.exe"/)
+  assert.match(shortcut, /Arguments="\/x \[ProductCode\]"/)
+})
+
+for (const prefix of ['muniment', 'SourceDir/muniment', 'SourceDir/PFiles/muniment', 'LocalAppDataFolder/muniment']) {
+  test(`the Windows verifier compares every file beneath ${prefix}`, () => temporary(root => {
+    const installed = path.join(root, 'installed')
+    const files = { 'muniment-desktop.exe': 'desktop', 'muniment-runtime.exe': 'runtime', 'locales/en-US.pak': 'locale', 'resources/sidecar.js': 'sidecar' }
+    const populate = directory => {
+      for (const [name, bytes] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(directory, name)), { recursive: true })
+        fs.writeFileSync(path.join(directory, name), bytes)
+      }
+    }
+    populate(installed)
+    const phases = []
+    const commands = []
+    const verify = verifyInstalled({ platform: 'windows', asset: 'muniment_1.0.0_x64_en-US.msi' },
+      'candidate.msi', path.join(installed, 'muniment-desktop.exe'), root, { TMPDIR: root }, step => phases.push(step), command => {
+        commands.push(command)
+        if (command === 'msiexec.exe') {
+          populate(path.join(root, 'expanded', prefix))
+          fs.writeFileSync(path.join(root, 'expanded/candidate.msi'), 'admin database')
+        }
+      })
+    assert.deepEqual(commands, ['msiexec.exe', 'powershell.exe'])
+    assert.ok(phases.includes('payload/authenticode'))
+    verify()
+    for (const [name, bytes] of Object.entries(files)) {
+      fs.writeFileSync(path.join(installed, name), 'changed')
+      assert.throws(verify, /"differing":\[.+\]/)
+      fs.writeFileSync(path.join(installed, name), bytes)
+      fs.rmSync(path.join(installed, name))
+      assert.throws(verify, /"missing":\[.+\]/)
+      fs.writeFileSync(path.join(installed, name), bytes)
+    }
+    for (const name of ['Uninstall muniment.lnk', 'runtime.log']) {
+      fs.writeFileSync(path.join(installed, name), 'installer or runtime state')
+      assert.throws(verify, /"extra":\[.+\]/)
+      fs.rmSync(path.join(installed, name))
+    }
+    verify()
+  }))
+}
 
 for (const failure of ['msi-admin-extract', 'locate-executable', 'authenticode', 'compare']) {
   test(`the Windows verifier names the ${failure} failure without waiving equality`, () => temporary(root => {

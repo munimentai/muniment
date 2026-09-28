@@ -134,6 +134,7 @@ if ((Get-MunimentRegistrations).Count -ne 0) {
 Remove-Item $upgradeBaseMsi -Force
 
 $userRuntime = Join-Path $env:LOCALAPPDATA "muniment\muniment-runtime.exe"
+$userUninstallShortcut = Join-Path ([Environment]::GetFolderPath('Programs')) "muniment\Uninstall muniment.lnk"
 $userProductCode = Get-MsiProductCode $regularMsi[0].FullName
 $sessionSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $userMsiLog = [IO.Path]::GetTempFileName()
@@ -172,6 +173,12 @@ try {
   if (Test-Path $machineKey) { throw "The per-user MSI wrote application registration under HKLM." }
   if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
   Assert-CefInstallation (Split-Path $userRuntime)
+  if (Test-Path (Join-Path (Split-Path $userRuntime) "Uninstall muniment.lnk")) {
+    throw "The per-user MSI must keep the uninstall shortcut outside the install directory."
+  }
+  if (-not (Test-Path -LiteralPath $userUninstallShortcut -PathType Leaf)) {
+    throw "The per-user MSI must create the uninstall shortcut in the Start menu."
+  }
 } finally {
   try {
     Invoke-Msi "/x" $regularMsi[0].FullName "Silent regular MSI uninstall"
@@ -182,6 +189,7 @@ try {
     if (@(Get-MsiRegistrations $regularMsi[0].FullName $sessionSid).Count -ne 0) {
       throw "The MSI product registration remains after the per-user uninstall."
     }
+    if (Test-Path $userUninstallShortcut) { throw "The uninstall shortcut remains after the per-user MSI uninstall." }
     if (Test-Path $userRuntime) { throw "The runtime remains after the per-user MSI uninstall." }
     if (Test-Path $userKey) { throw "The application registration remains after the per-user MSI uninstall." }
   }

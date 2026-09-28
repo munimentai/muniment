@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { acceptance, blocked, checkIdentity, featureChecks, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { updateFixture } from './subscription-update.mjs'
-import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus, probeProgress } from '../support/subscription-diagnostics.mjs'
+import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus, probeProgress, payloadDifferenceDetail, reportPayloadDifferences } from '../support/subscription-diagnostics.mjs'
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const nativePlatform = () => process.platform === 'darwin' ? `macos-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
@@ -59,7 +59,7 @@ export function equalPayload(expected, installed) {
   const extra = Object.keys(installed).filter(key => !Object.hasOwn(expected, key))
   const differing = keys.filter(key => Object.hasOwn(installed, key) && installed[key] !== expected[key])
   if (!keys.length || missing.length || extra.length || differing.length) {
-    throw new Error(`The installed payload does not match the signed package.\n${JSON.stringify({ missing, extra, differing })}`)
+    throw new Error(`The installed payload does not match the signed package.\n${payloadDifferenceDetail({ missing, extra, differing })}`)
   }
 }
 function locate(root, name) {
@@ -433,6 +433,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     fs.writeFileSync(path.join(output, `${platform}-subscription.log`), proof.cases.map(item =>
       `${item.feature}: ${item.status}\n`).join('') + (proof.cases.some(item => item.status !== 'passed') ? finalDiagnostics : ''), { mode: 0o600 })
   }
+  reportPayloadDifferences(fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8'), redact)
   return passed && proof.cases.every(item => item.status === 'passed') ? 0 : 1
 }
 

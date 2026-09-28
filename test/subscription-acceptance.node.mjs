@@ -805,6 +805,44 @@ for (const platform of ['linux', 'windows', 'macos-x64']) {
   })
 }
 
+test('targeted subscription runs select one platform without granting full release proof', () => {
+  const workflow = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8')
+  const nightly = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
+  assert.equal((workflow.match(/default: all/g) ?? []).length, 2)
+  assert.match(workflow, /options: \[all, linux, windows, macos\]/)
+  assert.match(workflow, /all\|linux\|windows\|macos\) ;;/)
+  assert.match(workflow, /Select a supported subscription platform.*exit 1/)
+  for (const [jobName, selected] of [['linux', 'linux'], ['windows', 'windows'], ['macos-arm64', 'macos'], ['macos-x64', 'macos']]) {
+    const job = workflow.split(`\n  ${jobName}:\n`)[1].split(/\n  [\w-]+:\n/)[0]
+    const condition = job.match(/^    if: (.+)$/m)[1]
+    const allowed = (platform, validation = 'success', cancelled = false) => Function(`return (${condition
+      .replace('always()', 'true')
+      .replace('cancelled()', JSON.stringify(cancelled))
+      .replaceAll('needs.validate-platform.result', JSON.stringify(validation))
+      .replaceAll('inputs.platform', JSON.stringify(platform))})`)()
+    for (const platform of ['all', 'linux', 'windows', 'macos', '', 'invalid']) {
+      assert.equal(allowed(platform), platform === 'all' || platform === selected)
+    }
+    assert.match(job, /needs: .*validate-platform/)
+    if (jobName !== 'linux') {
+      assert.equal(allowed(selected, 'failure'), false)
+      assert.equal(allowed(selected, 'success', true), false)
+    }
+  }
+  const collect = workflow.split('\n  collect:\n')[1]
+  assert.match(collect, /if: always\(\) && !cancelled\(\) && inputs.platform == 'all'/)
+  const targeted = nightly.split('\n  targeted-release-acceptance:\n')[1].split('\n  proof:')[0]
+  assert.match(targeted, /contains\(fromJSON\('\["linux","windows","macos"\]'\), github.event.inputs.platform\)/)
+  assert.match(targeted, /source_sha: \$\{\{ needs.prepare.outputs.source_sha \}\}/)
+  assert.match(targeted, /platform: \$\{\{ github.event.inputs.platform \}\}/)
+  assert.match(targeted, /uses: \.\/\.github\/workflows\/subscriptions.yml/)
+  assert.match(nightly, /ref: context.sha/)
+  const proof = nightly.split('\n  proof:\n')[1]
+  assert.match(proof, /needs.release-acceptance.result == 'success'/)
+  assert.match(proof, /needs.publish.result == 'success'/)
+  assert.doesNotMatch(proof, /targeted-release-acceptance/)
+})
+
 test('the workflow runs a native job per platform and uploads release-acceptance', () => {
   const workflow = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8')
   const nightly = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')

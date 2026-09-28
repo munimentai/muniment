@@ -178,6 +178,7 @@
             <Component Id="CMP_UninstallShortcut" Guid="*">
 
                 <Shortcut Id="UninstallShortcut"
+                          Directory="ApplicationProgramsFolder"
 						  Name="Uninstall {{product_name}}"
 						  Description="Uninstalls {{product_name}}"
 						  Target="[System64Folder]msiexec.exe"

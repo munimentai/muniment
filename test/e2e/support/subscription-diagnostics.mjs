@@ -39,6 +39,46 @@ export function subscriptionRedactor({ leases, values = [] } = {}) {
 
 export const diagnosticTail = (text, redact, limit = 16_384) => redact(text).slice(-limit)
 
+const payloadMarker = 'payload-difference='
+
+export function payloadDifferenceDetail(difference, redact = subscriptionRedactor()) {
+  const paths = {}
+  for (const name of ['missing', 'extra', 'differing']) {
+    if (!Array.isArray(difference?.[name])) return ''
+    // Bound diagnostics without limiting the payload comparison.
+    paths[name] = difference[name].slice(0, 50).map(value => {
+      // Reject absolute paths and control characters before any console or Markdown output.
+      if (typeof value !== 'string' || !value || /^[\\/]|^[a-z]:/i.test(value) ||
+          /[\x00-\x1f\x7f]/.test(value) || value.split(/[\\/]/).some(part => !part || part === '.' || part === '..')) {
+        return '[invalid path]'
+      }
+      const safe = redact(value)
+      // Do not cut through a credential or user identifier at the length limit.
+      return safe.length > 512 ? '[path exceeds limit]' : safe
+    })
+  }
+  return payloadMarker + JSON.stringify(paths)
+}
+
+export function reportPayloadDifferences(text, redact, { emit = console.error, summary = process.env.GITHUB_STEP_SUMMARY } = {}) {
+  const reports = new Set()
+  for (const line of text.split('\n')) {
+    if (!line.startsWith(payloadMarker)) continue
+    try {
+      const detail = payloadDifferenceDetail(JSON.parse(line.slice(payloadMarker.length)), redact)
+      if (detail) reports.add(detail)
+    } catch { /* An incomplete diagnostic cannot supply path lists. */ }
+    if (reports.size === 3) break
+  }
+  for (const detail of reports) {
+    emit(detail)
+    if (summary) {
+      const escaped = detail.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+      fs.appendFileSync(summary, `\n<pre>${escaped}</pre>\n`)
+    }
+  }
+}
+
 export function nativeFailure(command, result) {
   // A timeout or buffer limit can split a secret at the last line.
   const output = value => {

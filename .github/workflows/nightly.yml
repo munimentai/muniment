@@ -26,7 +26,7 @@ jobs:
       reuse: ${{ steps.proof.outputs.reuse }}
       source_sha: ${{ steps.source.outputs.sha }}
     steps:
-      - name: Resolve main revision
+      - name: Resolve the dispatched revision
         id: source
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
@@ -34,7 +34,7 @@ jobs:
             const { data } = await github.rest.repos.getCommit({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              ref: "main",
+              ref: context.sha,
             });
             core.setOutput("sha", data.sha);
 
@@ -569,6 +569,17 @@ jobs:
     uses: ./.github/workflows/subscriptions.yml
     with:
       source_sha: ${{ needs.prepare.outputs.source_sha }}
+    secrets: inherit
+
+  targeted-release-acceptance:
+    needs: [prepare, build, publish, linux-e2e, windows-e2e, macos-e2e]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      contains(fromJSON('["linux","windows","macos"]'), github.event.inputs.platform)
+    uses: ./.github/workflows/subscriptions.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      platform: ${{ github.event.inputs.platform }}
     secrets: inherit
 
   proof:
