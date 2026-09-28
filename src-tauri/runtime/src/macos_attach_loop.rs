@@ -29,12 +29,15 @@ use crate::{
 const MACOS_ATTACH_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const MACOS_ATTACH_DIRECTORY: &str = "muniment";
 const MACOS_ATTACH_SOCKET: &str = "attach-v1.sock";
+// Reserve one byte in macOS sun_path for the null terminator.
+const MACOS_ATTACH_SOCKET_PATH_CAPACITY: usize = 104;
 
 /// The reason a macOS attach acceptor could not bind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosAttachBindFailure {
     Contended,
     Unavailable,
+    SocketPathTooLong,
     DesktopExecutableCheckFailed,
     StateOpenFailed,
 }
@@ -45,6 +48,7 @@ impl MacosAttachBindFailure {
         match self {
             Self::Contended => crate::MacosDiagnosticEvent::InstanceLockWait,
             Self::Unavailable => crate::MacosDiagnosticEvent::SocketBindFailed,
+            Self::SocketPathTooLong => crate::MacosDiagnosticEvent::SocketPathTooLong,
             Self::DesktopExecutableCheckFailed => {
                 crate::MacosDiagnosticEvent::DesktopExecutableCheckFailed
             }
@@ -60,9 +64,13 @@ pub fn macos_attach_socket_path(profile_directory: &Path) -> PathBuf {
         .join(MACOS_ATTACH_SOCKET)
 }
 
-fn classify_bind_failure(error: &io::Error) -> MacosAttachBindFailure {
+fn classify_bind_failure(path: &Path, error: &io::Error) -> MacosAttachBindFailure {
     if error.kind() == io::ErrorKind::AddrInUse {
         MacosAttachBindFailure::Contended
+    } else if error.kind() == io::ErrorKind::InvalidInput
+        && path.as_os_str().as_encoded_bytes().len() >= MACOS_ATTACH_SOCKET_PATH_CAPACITY
+    {
+        MacosAttachBindFailure::SocketPathTooLong
     } else {
         MacosAttachBindFailure::Unavailable
     }
@@ -104,8 +112,9 @@ impl<B> MacosAttachAcceptorWithBoundary<B> {
         bind_boundary: impl FnOnce(&Path) -> io::Result<B>,
     ) -> Result<Self, MacosAttachBindFailure> {
         let profile_directory = profile_directory.as_ref();
-        let boundary = bind_boundary(&macos_attach_socket_path(profile_directory))
-            .map_err(|error| classify_bind_failure(&error))?;
+        let socket_path = macos_attach_socket_path(profile_directory);
+        let boundary = bind_boundary(&socket_path)
+            .map_err(|error| classify_bind_failure(&socket_path, &error))?;
         let state = Arc::new(
             RuntimeAttachState::open(profile_directory, config_directory)
                 .map_err(|_| MacosAttachBindFailure::StateOpenFailed)?,
@@ -176,6 +185,7 @@ impl WindowsAttachFactory for SystemMacosAttachFactory {
                 match error {
                     MacosAttachBindFailure::Contended => WindowsAttachBindFailure::Contended,
                     MacosAttachBindFailure::Unavailable
+                    | MacosAttachBindFailure::SocketPathTooLong
                     | MacosAttachBindFailure::DesktopExecutableCheckFailed
                     | MacosAttachBindFailure::StateOpenFailed => {
                         WindowsAttachBindFailure::Unavailable
@@ -335,6 +345,10 @@ mod tests {
                 MacosDiagnosticEvent::SocketBindFailed,
             ),
             (
+                MacosAttachBindFailure::SocketPathTooLong,
+                MacosDiagnosticEvent::SocketPathTooLong,
+            ),
+            (
                 MacosAttachBindFailure::StateOpenFailed,
                 MacosDiagnosticEvent::StateOpenFailed,
             ),
@@ -348,13 +362,75 @@ mod tests {
     }
 
     #[test]
+    fn distinguishes_long_socket_paths_from_other_invalid_input() {
+        let suffix_length = "/muniment/attach-v1.sock".len();
+        for bytes in [103, 104, 105, 108] {
+            let profile = PathBuf::from(format!("/{}", "a".repeat(bytes - suffix_length - 1)));
+            let result =
+                MacosAttachAcceptorWithBoundary::<()>::bind_with(&profile, &profile, |_| {
+                    Err(io::Error::from(io::ErrorKind::InvalidInput))
+                });
+            assert_eq!(
+                result.err(),
+                Some(if bytes == 103 {
+                    MacosAttachBindFailure::Unavailable
+                } else {
+                    MacosAttachBindFailure::SocketPathTooLong
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn counts_socket_path_bytes_not_characters() {
+        let profile = PathBuf::from(format!("/{}a", "é".repeat(39)));
+        let socket = macos_attach_socket_path(&profile);
+        assert_eq!(socket.as_os_str().as_encoded_bytes().len(), 104);
+        assert_eq!(
+            MacosAttachAcceptorWithBoundary::<()>::bind_with(&profile, &profile, |_| {
+                Err(io::Error::from(io::ErrorKind::InvalidInput))
+            })
+            .err(),
+            Some(MacosAttachBindFailure::SocketPathTooLong)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn classifies_the_native_socket_path_limit() {
+        use std::os::unix::net::SocketAddr;
+
+        let valid = PathBuf::from(format!("/{}", "a".repeat(102)));
+        assert!(SocketAddr::from_pathname(&valid).is_ok());
+        let invalid = PathBuf::from(format!("/{}", "a".repeat(103)));
+        let error = SocketAddr::from_pathname(&invalid).unwrap_err();
+        assert_eq!(
+            classify_bind_failure(&invalid, &error),
+            MacosAttachBindFailure::SocketPathTooLong
+        );
+    }
+
+    #[test]
     fn distinguishes_a_contended_bind() {
         assert_eq!(
-            classify_bind_failure(&io::Error::from(io::ErrorKind::AddrInUse)),
+            classify_bind_failure(
+                Path::new("/tmp/attach.sock"),
+                &io::Error::from(io::ErrorKind::AddrInUse)
+            ),
             MacosAttachBindFailure::Contended
         );
         assert_eq!(
-            classify_bind_failure(&io::Error::from(io::ErrorKind::PermissionDenied)),
+            classify_bind_failure(
+                Path::new("/tmp/attach.sock"),
+                &io::Error::from(io::ErrorKind::PermissionDenied)
+            ),
+            MacosAttachBindFailure::Unavailable
+        );
+        assert_eq!(
+            classify_bind_failure(
+                Path::new("/tmp/attach.sock"),
+                &io::Error::from(io::ErrorKind::InvalidInput)
+            ),
             MacosAttachBindFailure::Unavailable
         );
     }

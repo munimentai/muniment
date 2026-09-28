@@ -14,6 +14,7 @@ pub enum MacosDiagnosticEvent {
     ActivationFailed,
     DesktopExecutableCheckFailed,
     SocketBindFailed,
+    SocketPathTooLong,
     StateOpenFailed,
     ArgumentsInvalid,
     InstanceLockWait,
@@ -32,6 +33,9 @@ impl MacosDiagnosticEvent {
             }
             Self::SocketBindFailed => {
                 b"event=activation_failed step=socket_bind message=runtime socket bind failed\n"
+            }
+            Self::SocketPathTooLong => {
+                b"event=activation_failed step=socket_bind reason=socket_path_too_long message=attach socket path exceeds 103 bytes\n"
             }
             Self::StateOpenFailed => {
                 b"event=activation_failed step=state_open message=runtime state open failed\n"
