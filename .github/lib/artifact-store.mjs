@@ -12,6 +12,19 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex')
 const component = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(value)
 const positive = value => Number.isSafeInteger(value) && value > 0
 
+// Only fixed messages and validated exit statuses may reach the CLI log.
+class ArtifactStoreError extends Error {}
+
+function transferError(error) {
+  if (error.code === 'ENOENT') return new ArtifactStoreError('MinIO transfer failed: CLI missing.')
+  if (error.code === 'ETIMEDOUT') return new ArtifactStoreError('MinIO transfer failed: timeout.')
+  if (error.code === 'ENOBUFS') return new ArtifactStoreError('MinIO transfer failed: CLI output exceeds the size limit.')
+  if (Number.isInteger(error.status) && error.status > 0 && error.status <= 255) {
+    return new ArtifactStoreError(`MinIO transfer failed: CLI exited with status ${error.status}.`)
+  }
+  return new ArtifactStoreError('MinIO transfer failed: CLI execution failed.')
+}
+
 export function identity(env = process.env) {
   const number = value => /^[1-9][0-9]*$/.test(value ?? '') ? Number(value) : NaN
   return { repository: env.GITHUB_REPOSITORY, run: number(env.GITHUB_RUN_ID),
@@ -31,15 +44,15 @@ function safePath(path) {
 }
 
 // The CLI signs each request. Never print its output or pass credentials as arguments.
-export function transport(env = process.env) {
+export function transport(env = process.env, execute = execFileSync) {
   const copy = (source, target) => {
-    if (!env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) throw new Error('Missing MinIO credentials.')
+    if (!env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) throw new ArtifactStoreError('Missing MinIO credentials.')
     try {
-      execFileSync(env.AWS_CLI || 'aws', ['--endpoint-url', endpoint,
+      execute(env.AWS_CLI || 'aws', ['--endpoint-url', endpoint,
         '--cli-connect-timeout', '15', '--cli-read-timeout', '120', 's3', 'cp', source, target, '--only-show-errors'],
       { env: { ...env, AWS_DEFAULT_REGION: 'us-east-1', AWS_EC2_METADATA_DISABLED: 'true' },
         stdio: 'pipe', timeout: 180_000, maxBuffer: 4096 })
-    } catch { throw new Error('MinIO transfer failed.') }
+    } catch (error) { throw transferError(error) }
   }
   return {
     put(key, bytes) {
@@ -55,7 +68,7 @@ export function transport(env = process.env) {
       try {
         const file = join(work, 'payload')
         copy(key, file)
-        if (lstatSync(file).size > limit) throw new Error('Artifact exceeds the size limit.')
+        if (lstatSync(file).size > limit) throw new ArtifactStoreError('Artifact exceeds the size limit.')
         return readFileSync(file)
       } finally { rmSync(work, { recursive: true, force: true }) }
     },
@@ -69,7 +82,8 @@ function filesAt(input) {
     if (stat.isSymbolicLink()) throw new Error('Artifact links are not allowed.')
     if (stat.isDirectory()) {
       for (const child of readdirSync(file).sort()) visit(join(file, child), name ? `${name}/${child}` : child)
-    } else if (stat.isFile() && safePath(name) && stat.size <= maxFile) {
+    } else if (stat.isFile() && safePath(name)) {
+      if (stat.size > maxFile) throw new ArtifactStoreError('Artifact exceeds the size limit.')
       files.push({ path: name, bytes: readFileSync(file) })
     } else { throw new Error('Invalid artifact file.') }
   }
@@ -81,12 +95,12 @@ function filesAt(input) {
 export function upload(id, name, input, store = transport()) {
   const root = prefix(id, name)
   const files = filesAt(input)
-  if (files.reduce((total, file) => total + file.bytes.length, 0) > maxFile) throw new Error('Artifact exceeds the size limit.')
+  if (files.reduce((total, file) => total + file.bytes.length, 0) > maxFile) throw new ArtifactStoreError('Artifact exceeds the size limit.')
   const manifest = { schema: 1, repository: id.repository, run: id.run, attempt: id.attempt,
     source: id.source, name, files: [] }
   const publish = (key, bytes) => {
     store.put(key, bytes)
-    if (!bytes.equals(store.get(key, bytes.length))) throw new Error('Artifact readback mismatch.')
+    if (!bytes.equals(store.get(key, bytes.length))) throw new ArtifactStoreError('Artifact readback mismatch.')
   }
   for (const { path, bytes } of files) {
     publish(root + path, bytes)
@@ -94,7 +108,7 @@ export function upload(id, name, input, store = transport()) {
   }
   // Publish the manifest last. Partial writes cannot produce a verified collection.
   const bytes = Buffer.from(JSON.stringify(manifest))
-  if (bytes.length > maxManifest) throw new Error('Artifact manifest exceeds the size limit.')
+  if (bytes.length > maxManifest) throw new ArtifactStoreError('Artifact manifest exceeds the size limit.')
   publish(root + 'manifest.json', bytes)
   return manifest
 }
@@ -115,7 +129,7 @@ export function readArtifact(id, name, store = transport(), limit = maxFile) {
       throw new Error('Invalid artifact manifest.')
     }
     const bytes = store.get(root + file.path, file.size)
-    if (bytes.length !== file.size || digest(bytes) !== file.sha256) throw new Error('Artifact digest mismatch.')
+    if (bytes.length !== file.size || digest(bytes) !== file.sha256) throw new ArtifactStoreError('Artifact digest mismatch.')
     files.set(file.path, bytes)
   }
   return files
@@ -148,8 +162,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (mode === 'upload') upload(identity(), name, path)
     else download(identity(), name, path)
     console.log(`Verified artifact: ${name}.`)
-  } catch {
-    console.error('The artifact transfer or integrity check failed.')
+  } catch (error) {
+    console.error(error instanceof ArtifactStoreError ? error.message : 'The artifact transfer or integrity check failed.')
     process.exitCode = 1
   }
 }

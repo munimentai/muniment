@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { endpoint, upload, download, readArtifact, transport } from '../.github/lib/artifact-store.mjs'
 
 const id = { repository: 'munimentai/muniment', run: 42, attempt: 2, source: 'a'.repeat(40) }
@@ -131,8 +131,95 @@ if (source.startsWith('s3://')) fs.writeFileSync(target, 'readback');
   assert.equal(args.includes('probe-secret'), false)
   assert.equal(store.get(prefix + 'file', 8).toString(), 'readback')
   assert.throws(() => store.get(prefix + 'file', 7), /size limit/)
-  assert.throws(() => transport({ ...env, FAIL: '1' }).get(prefix + 'file', 100), /^Error: MinIO transfer failed\.$/)
+  assert.throws(() => transport({ ...env, FAIL: '1' }).get(prefix + 'file', 100), /^Error: MinIO transfer failed: CLI exited with status 1\.$/)
   assert.throws(() => transport({ ...env, AWS_SECRET_ACCESS_KEY: '' }).get(prefix + 'file', 100), /Missing MinIO credentials/)
+})
+
+test('Transport errors expose only a fixed class and a validated exit status.', () => {
+  const env = { AWS_ACCESS_KEY_ID: 'private-access', AWS_SECRET_ACCESS_KEY: 'private-secret' }
+  const cases = [
+    [{ code: 'ENOENT' }, 'CLI missing'],
+    [{ code: 'ETIMEDOUT', status: 1 }, 'timeout'],
+    [{ code: 'ENOBUFS' }, 'CLI output exceeds the size limit'],
+    [{ status: 1 }, 'CLI exited with status 1'],
+    [{ status: 255 }, 'CLI exited with status 255'],
+    ...[0, -1, 256, NaN, Infinity, 'private-status', null].map(status => [{ status }, 'CLI execution failed']),
+    [{ code: 'private-code', signal: 'private-signal' }, 'CLI execution failed'],
+  ]
+  for (const [fields, message] of cases) {
+    const execute = () => { throw Object.assign(new Error('private-message'), fields, {
+      stdout: 'private-stdout', stderr: 'private-stderr', path: 'private-path', spawnargs: ['private-key'],
+    }) }
+    for (const operation of ['put', 'get']) {
+      const store = transport(env, execute)
+      assert.throws(() => store[operation](prefix + 'private-key', operation === 'put' ? Buffer.from('data') : 100), error => {
+        assert.equal(error.message, `MinIO transfer failed: ${message}.`)
+        assert.deepEqual(Object.getOwnPropertyNames(error).sort(), ['message', 'stack'])
+        assert.doesNotMatch(error.stack, /private-/)
+        return true
+      })
+    }
+  }
+
+  const store = transport(env, (_cli, _args, options) => {
+    assert.equal(options.timeout, 180_000)
+    assert.equal(options.stdio, 'pipe')
+    execFileSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { ...options, timeout: 50 })
+  })
+  assert.throws(() => store.get(prefix + 'file', 100), /^Error: MinIO transfer failed: timeout\.$/)
+})
+
+test('The CLI reports redacted failure classes and keeps every failure blocked.', t => {
+  const f = fixture(t)
+  const cli = join(f.root, 'aws')
+  writeFileSync(cli, `#!/usr/bin/env node
+const fs = require('node:fs'); const path = require('node:path');
+const [source, target] = process.argv.slice(10, 12);
+if (process.env.FAIL) {
+  console.log(process.env.AWS_ACCESS_KEY_ID, source, target);
+  console.error(process.env.AWS_SECRET_ACCESS_KEY, process.env.AWS_SESSION_TOKEN);
+  process.exit(17);
+}
+const local = value => value.startsWith('s3://') ? path.join(process.env.STORE, value.slice(5)) : value;
+fs.mkdirSync(path.dirname(local(target)), { recursive: true });
+fs.copyFileSync(local(source), local(target));
+if (source.startsWith('s3://')) {
+  if (process.env.CORRUPT) {
+    const bytes = fs.readFileSync(local(target)); bytes[0] ^= 1; fs.writeFileSync(local(target), bytes);
+  }
+  if (process.env.OVERSIZE) fs.appendFileSync(local(target), 'extra');
+}
+`, { mode: 0o755 })
+  const env = { ...process.env, AWS_CLI: cli, AWS_ACCESS_KEY_ID: 'private-access',
+    AWS_SECRET_ACCESS_KEY: 'private-secret', AWS_SESSION_TOKEN: 'private-token', STORE: join(f.root, 'store'),
+    GITHUB_REPOSITORY: id.repository, GITHUB_RUN_ID: String(id.run), GITHUB_RUN_ATTEMPT: String(id.attempt), SOURCE_SHA: id.source }
+  const run = (extra = {}, input = f.input) => spawnSync(process.execPath, ['.github/lib/artifact-store.mjs', 'upload', 'private-key', input], {
+    env: { ...env, ...extra }, encoding: 'utf8', timeout: 10_000,
+  })
+  const cases = [
+    [{ AWS_CLI: join(f.root, 'private-missing-cli') }, 'MinIO transfer failed: CLI missing.'],
+    [{ FAIL: '1' }, 'MinIO transfer failed: CLI exited with status 17.'],
+    [{ CORRUPT: '1' }, 'Artifact readback mismatch.'],
+    [{ OVERSIZE: '1' }, 'Artifact exceeds the size limit.'],
+    [{ AWS_SECRET_ACCESS_KEY: '' }, 'Missing MinIO credentials.'],
+  ]
+  for (const [extra, message] of cases) {
+    const result = run(extra)
+    assert.equal(result.status, 1)
+    assert.equal(result.stdout, '')
+    assert.equal(result.stderr, message + '\n')
+    assert.equal(existsSync(join(env.STORE, 'factory-ci-artifacts/muniment-desktop/42/private-key/manifest.json')), false)
+  }
+  const unknown = run({}, join(f.root, 'private-missing-input'))
+  assert.equal(unknown.status, 1)
+  assert.equal(unknown.stdout, '')
+  assert.equal(unknown.stderr, 'The artifact transfer or integrity check failed.\n')
+
+  truncateSync(join(f.input, 'proof.json'), 256 * 1024 * 1024 + 1)
+  const oversized = run()
+  assert.equal(oversized.status, 1)
+  assert.equal(oversized.stdout, '')
+  assert.equal(oversized.stderr, 'Artifact exceeds the size limit.\n')
 })
 
 test('Trusted CI proves upload, readback and collection without account credentials.', t => {
@@ -156,6 +243,55 @@ fs.copyFileSync(local(source), local(target));
     })
     assert.equal(result.status, 0, result.stderr)
   }
+})
+
+function checkArtifactSetup(text, label, stepIndent = 6) {
+  const setupAction = 'uses: ./.github/actions/setup-artifact-store'
+  // Reset setup at each job. Composite actions have one step list.
+  for (const job of text.split(/^  (?=[\w-]+:\s*$)/m)) {
+    let setup
+    for (const step of job.split(new RegExp(`^ {${stepIndent}}- `, 'm')).slice(1)) {
+      const condition = step.match(/^\s+if:\s*(.+)$/m)?.[1].trim()
+      if (step.includes(setupAction)) {
+        assert.doesNotMatch(step, /continue-on-error:\s*true/, label)
+        setup = { condition }
+      }
+      if (!/\b(?:artifact-store(?:-probe)?\.mjs|publish-ci-artifacts\.sh)\b/.test(step)) continue
+      assert.ok(setup, `${label}: Set up the artifact store before each call in the same job.`)
+      assert.ok(setup.condition === 'always()' || setup.condition === condition,
+        `${label}: Run setup under the same condition as the artifact call.`)
+    }
+  }
+}
+
+test('Every direct artifact call has setup in the same job before the call.', () => {
+  for (const name of readdirSync('.github/workflows').filter(name => /\.ya?ml$/.test(name))) {
+    checkArtifactSetup(readFileSync(`.github/workflows/${name}`, 'utf8'), name)
+  }
+  for (const name of readdirSync('.github/actions')) {
+    const path = `.github/actions/${name}/action.yml`
+    if (existsSync(path)) checkArtifactSetup(readFileSync(path, 'utf8'), path, 4)
+  }
+})
+
+test('The workflow guard rejects missing, late and conditional setup in each E2E job.', () => {
+  const nightly = readFileSync('.github/workflows/nightly.yml', 'utf8')
+  const setup = '      - uses: ./.github/actions/setup-artifact-store\n        if: always()\n\n'
+  for (const platform of ['linux', 'windows', 'macos']) {
+    const start = nightly.indexOf(`  ${platform}-e2e:`)
+    const index = nightly.indexOf(setup, start)
+    const publish = nightly.indexOf('      - name: Publish diagnostics and JUnit to MinIO', start)
+    assert.ok(index > start && index < publish)
+    const before = nightly.slice(0, index)
+    const after = nightly.slice(index + setup.length)
+    assert.throws(() => checkArtifactSetup(before + after, platform), /Set up the artifact store/)
+    assert.throws(() => checkArtifactSetup(before + setup.replace('        if: always()\n', '') + after, platform), /same condition/)
+    const next = after.indexOf('      - name: Preserve E2E result')
+    assert.throws(() => checkArtifactSetup(before + after.slice(0, next) + setup + after.slice(next), platform), /Set up the artifact store/)
+  }
+  const call = '      - run: node .github/lib/artifact-store.mjs upload evidence input\n'
+  assert.throws(() => checkArtifactSetup(`jobs:\n  first:\n    steps:\n${call}${setup}`, 'late'), /Set up the artifact store/)
+  assert.throws(() => checkArtifactSetup(`jobs:\n  first:\n    steps:\n${setup}  second:\n    steps:\n${call}`, 'other job'), /Set up the artifact store/)
 })
 
 test('Every workflow uses MinIO while native tests and public distribution keep their channels.', () => {
