@@ -1,10 +1,18 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mount } from 'svelte'
+// Compile the entry point during collection, outside the per-test timeout.
+// Each test re-evaluates its startup code after resetModules().
+import './main.js'
 
 vi.mock('svelte', () => ({ mount: vi.fn() }))
 vi.mock('./App.svelte', () => ({ default: {} }))
 vi.mock('./Launcher.svelte', () => ({ default: {} }))
 vi.mock('./lib/WorkspacePopup.svelte', () => ({ default: {} }))
+
+beforeEach(() => {
+  vi.resetModules()
+  vi.resetAllMocks()
+})
 
 afterEach(() => {
   history.replaceState({}, '', '/')
@@ -12,7 +20,6 @@ afterEach(() => {
   delete document.documentElement.dataset.theme
   document.body.innerHTML = ''
   vi.restoreAllMocks()
-  vi.resetAllMocks()
 })
 
 it.each([
@@ -28,7 +35,6 @@ it.each([
   ['Dark', undefined],
   ['{"theme":"dark"}', undefined],
 ])('applies the stored theme %j before the app mounts at launch', async (stored, expected) => {
-  vi.resetModules()
   if (stored !== null) localStorage.setItem('muniment.theme', stored)
   document.documentElement.dataset.theme = 'stale'
   document.body.innerHTML = '<div id="app"></div>'
@@ -42,7 +48,6 @@ it.each([
 })
 
 it('mounts only the launcher in the launcher window', async () => {
-  vi.resetModules()
   history.replaceState({}, '', '/index.html?launcher')
   document.body.innerHTML = '<div id="app"></div>'
   const { default: Launcher } = await import('./Launcher.svelte')
@@ -51,7 +56,6 @@ it('mounts only the launcher in the launcher window', async () => {
 })
 
 it('uses the system theme at launch when storage is unavailable', async () => {
-  vi.resetModules()
   vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Storage unavailable') })
   document.documentElement.dataset.theme = 'dark'
   mount.mockImplementation(() => {

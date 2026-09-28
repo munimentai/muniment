@@ -15,7 +15,17 @@ it.skipIf(process.platform === 'win32')('retains the complete envelope and stabl
     writeFileSync(join(source, 'driver-app.log'), 'runtime failure evidence')
     writeFileSync(join(root, 'aws'), `#!/usr/bin/env node
 const fs = require('node:fs'); const path = require('node:path');
-const [source, dest] = process.argv.slice(10, 12);
+const [service, operation, ...args] = process.argv.slice(8);
+let source, dest;
+if (service === 's3' && operation === 'cp') {
+  [source, dest] = args;
+} else if (service === 's3api' && operation === 'get-object' &&
+    args.length === 5 && args[0] === '--bucket' && args[2] === '--key') {
+  source = 's3://' + args[1] + '/' + args[3];
+  dest = args[4];
+} else {
+  throw new Error('Unsupported AWS CLI command.');
+}
 const local = value => value.startsWith('s3://') ? path.join(process.env.STORE, value.slice(5)) : value;
 fs.mkdirSync(path.dirname(local(dest)), { recursive: true });
 fs.copyFileSync(local(source), local(dest));
