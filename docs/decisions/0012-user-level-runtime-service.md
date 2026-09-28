@@ -491,9 +491,34 @@ operations. They scope reads by the signed `grant.workspace` value and return
 the redacted `ThreadListPage` and `ThreadOpenPage` projections. The new
 operations return the subject-scoped desktop projections instead.
 
-Each service entry shrinks the requested page until its encoded response fits
-the `MAX_FRAME_LENGTH` bound. It returns `persistence_failed` only when a
-one-entry page still does not fit.
+Each service entry shrinks the requested page until its serialized body fits
+the response byte bound. It returns `persistence_failed` when one entry exceeds that bound.
+
+Desktop requests for `thread.history` and `run.chat_events` accept an optional
+`snapshot_chunks` boolean. The default is false. A client opts in with true.
+If a snapshot exceeds a frame structure limit, the runtime sends ordered chunks
+instead of dropping history or closing the request connection.
+Each chunk uses the original response or event envelope with this body:
+
+```json
+{"snapshot_chunk":{"offset":0,"total_bytes":20000,"data":"..."}}
+```
+
+The offset and total count UTF-8 bytes in the serialized snapshot body.
+Each chunk carries at most 16 KiB and ends on a UTF-8 boundary.
+The snapshot keeps the 1 MiB byte bound and the envelope depth bound.
+Every wire frame passes the unchanged frame validator.
+
+The client checks every envelope identity, offset, total and chunk size.
+One deadline covers the transfer. A disconnect discards partial state.
+The client publishes only the complete snapshot.
+
+After reconnection, the desktop reads thread history to restore terminal journal state.
+Queued snapshots cannot reopen completed, canceled or failed runs. Interrupted runs can still resume.
+
+An outbound encoding failure returns a correlated request error before any response bytes leave the runtime.
+Later requests, including Stop, keep the request connection.
+Frame diagnostics include direction, operation or event, byte count and frame error kind without payloads.
 
 The run surface, session-thread tracker commands, and `home.ensure` remain
 outside this tranche. The Linux cutover follows conversion of the whole chat
@@ -509,9 +534,9 @@ operation. It requires no idempotency key. A companion session receives
 
 The desktop opens a second desktop client connection for this subscription.
 The session serving that connection answers no other operation. The existing
-request path reads exactly one envelope and rejects an event in place of its
-response. Its holder also locks the socket for each request, so a blocking
-event read would stall every desktop command. Each accepted connection already
+request path reads one response or an opted-in history chunk sequence.
+It rejects an event in place of its response.
+Its holder also locks the socket for each request, so a blocking event read would stall every desktop command. Each accepted connection already
 runs on its own thread with its own service, so the second connection needs no
 new admission rule.
 
