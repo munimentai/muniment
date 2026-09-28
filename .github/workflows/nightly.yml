@@ -352,7 +352,7 @@ jobs:
           bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-e2e-artifacts" "$run_status" || extract_status=$?
           cp "$output" "$RUNNER_TEMP/muniment-e2e-artifacts/desktop-ci-harness.log"
           if (( run_status != 0 || extract_status != 0 )); then
-            tail -n 200 "$output"
+            node test/e2e/support/transcript-tail.mjs "$output"
           fi
           bash test/e2e/support/ensure-junit-report.sh \
             "$RUNNER_TEMP/muniment-e2e-artifacts" installed-linux "$run_status" "$extract_status"
@@ -437,7 +437,7 @@ jobs:
           bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-windows-e2e-artifacts" "$run_status" || extract_status=$?
           cp "$output" "$RUNNER_TEMP/muniment-windows-e2e-artifacts/desktop-ci-harness.log"
           if (( run_status != 0 || extract_status != 0 )); then
-            tail -n 200 "$output"
+            node test/e2e/support/transcript-tail.mjs "$output"
           fi
           bash test/e2e/support/ensure-junit-report.sh \
             "$RUNNER_TEMP/muniment-windows-e2e-artifacts" installed-windows "$run_status" "$extract_status"
@@ -522,7 +522,7 @@ jobs:
           bash test/e2e/support/extract-artifacts.sh "$output" "$RUNNER_TEMP/muniment-macos-e2e-artifacts" "$run_status" || extract_status=$?
           cp "$output" "$RUNNER_TEMP/muniment-macos-e2e-artifacts/desktop-ci-harness.log"
           if (( run_status != 0 || extract_status != 0 )); then
-            tail -n 200 "$output"
+            node test/e2e/support/transcript-tail.mjs "$output"
           fi
           bash test/e2e/support/ensure-junit-report.sh \
             "$RUNNER_TEMP/muniment-macos-e2e-artifacts" installed-macos "$run_status" "$extract_status"

@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { writeBlocked } from './subscriptions.mjs'
-import { subscriptionRedactor, diagnosticTail, nativeFailure, transcriptText, reportPayloadDifferences } from '../support/subscription-diagnostics.mjs'
+import { subscriptionRedactor, diagnosticTail, nativeFailure, transcriptText, reportPayloadDifferences, reportSubscriptionFailure } from '../support/subscription-diagnostics.mjs'
 
 const desktopCiName = platform => platform === 'macos-x64' ? 'macos' : platform
 
@@ -54,7 +54,7 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
     ], { input, encoding: 'utf8', timeout: 40 * 60_000, maxBuffer: 32 * 1024 * 1024 })
     fs.writeFileSync(transcript, `${ssh.stdout ?? ''}${ssh.stderr ?? ''}`, { mode: 0o600 })
     detail += `status=${ssh.status ?? 'none'} signal=${ssh.signal ?? 'none'} error=${redact(ssh.error?.message ?? 'none')}\n`
-    detail += diagnosticTail(transcriptText(nativeFailure('ssh', ssh).message), redact)
+    detail += diagnosticTail(transcriptText(redact(nativeFailure('ssh', ssh).message)), redact)
     const extract = spawnProcess('bash', ['test/e2e/support/extract-artifacts.sh', transcript, output, String(ssh.status ?? 1)],
       { encoding: 'utf8', timeout: 60_000 })
     detail += `\nstep=desktop-ci/extract\n${diagnosticTail(nativeFailure('extract-artifacts', extract).message, redact)}`
@@ -82,6 +82,7 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
   const missingModels = 'Provide the FACTORY_SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
   let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
   const redact = subscriptionRedactor({ leases, values: [token, sshKey] })
+  let status = 1
   fs.rmSync(path.join(output, `${platform}-subscription.log`), { force: true })
   writeBlocked(output, sourceSha, platform, reason)
   try {
@@ -118,16 +119,17 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
       if (result.status !== 0 && JSON.parse(fs.readFileSync(proof, 'utf8')).cases?.every(item => item.status === 'passed')) {
         writeBlocked(output, sourceSha, platform, missingRunner)
       }
-      return result.status === 0 ? 0 : 1
+      status = result.status === 0 ? 0 : 1
+      return status
     } finally {
       fs.rmSync(artifacts, { recursive: true, force: true })
     }
   } catch (error) {
     reason = [missingLeases, missingModels, missingRunner].includes(error?.message) ? error.message : missingRunner
     writeBlocked(output, sourceSha, platform, reason, `step=host\nerror=${error.message}`, redact)
-    console.error(reason)
     return 1
   } finally {
+    reportSubscriptionFailure(output, platform, status, redact)
     reportPayloadDifferences(fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8'), redact)
   }
 }
