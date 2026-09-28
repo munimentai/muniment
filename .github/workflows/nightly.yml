@@ -359,6 +359,9 @@ jobs:
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
+      - uses: ./.github/actions/setup-artifact-store
+        if: always()
+
       - name: Publish diagnostics and JUnit to MinIO
         if: always()
         env:
@@ -441,6 +444,9 @@ jobs:
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
 
+      - uses: ./.github/actions/setup-artifact-store
+        if: always()
+
       - name: Publish diagnostics and JUnit to MinIO
         if: always()
         env:
@@ -522,6 +528,9 @@ jobs:
             "$RUNNER_TEMP/muniment-macos-e2e-artifacts" installed-macos "$run_status" "$extract_status"
           if (( run_status != 0 || extract_status != 0 )); then final_status=1; else final_status=0; fi
           printf 'status=%s\n' "$final_status" >>"$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-artifact-store
+        if: always()
 
       - name: Publish diagnostics and JUnit to MinIO
         if: always()
