@@ -21,14 +21,28 @@ function execute(command, args, env, timeout = 180_000) {
 }
 
 // Do not inherit factory tokens, provider homes, Pi settings, proxies, or gh credentials.
-export function isolatedEnvironment(root, source = process.env) {
+export function isolatedEnvironment(root, source = process.env, platform = nativePlatform()) {
   const env = {}
+  // Native services use the disposable login, not a synthetic OS profile.
+  // Windows expands known folders through USERPROFILE. macOS reads Keychain preferences through HOME.
+  const nativeHomes = platform === 'windows' ? ['USERPROFILE', 'APPDATA', 'LOCALAPPDATA']
+    : platform.startsWith('macos-') ? ['HOME'] : []
+  for (const name of nativeHomes) {
+    const key = platform === 'windows' ? Object.keys(source).find(key => key.toUpperCase() === name) : name
+    const value = source[key]
+    const paths = platform === 'windows' ? path.win32 : path.posix
+    if (source.MUNIMENT_NATIVE_DISPOSABLE_USER !== '1' || typeof value !== 'string' || !paths.isAbsolute(value)) {
+      throw new Error(`The disposable native login requires an absolute ${name} path.`)
+    }
+    env[name] = value
+  }
   for (const name of ['PATH', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY', 'LANG']) {
     if (source[name]) env[name] = source[name]
   }
   for (const [name, directory] of Object.entries({ HOME: 'home', USERPROFILE: 'home', APPDATA: 'roaming', LOCALAPPDATA: 'local',
     XDG_CONFIG_HOME: 'config', XDG_DATA_HOME: 'data', XDG_CACHE_HOME: 'cache', XDG_RUNTIME_DIR: 'runtime',
     TMPDIR: 'tmp', TEMP: 'tmp', TMP: 'tmp', MUNIMENT_STATE_DIR: 'state' })) {
+    if (nativeHomes.includes(name)) continue
     env[name] = path.join(root, directory)
     fs.mkdirSync(env[name], { recursive: true, mode: 0o700 })
   }

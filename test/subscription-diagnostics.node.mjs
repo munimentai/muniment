@@ -282,15 +282,16 @@ test('probe waits report timeout, process exit, and the completed result', async
 })
 
 test('profile logs retain redacted app and runtime tails without credential files', () => temporary(root => {
-  const env = isolatedEnvironment(root, {})
+  const env = isolatedEnvironment(root, {}, 'linux')
   fs.writeFileSync(path.join(env.TMPDIR, 'subscription-app.log'), `app failed ${lease.access}\n`)
   fs.writeFileSync(path.join(env.TMPDIR, 'subscription-runtime.log'), `runtime failed ${lease.account_id}\n`)
   fs.mkdirSync(path.join(env.MUNIMENT_STATE_DIR, 'browser'))
   fs.writeFileSync(path.join(env.MUNIMENT_STATE_DIR, 'browser/cef.log'), 'CEF failed\nprivate-access-val')
+  fs.writeFileSync(path.join(env.MUNIMENT_STATE_DIR, 'browser/keychain-audit.log'), 'own-key-preflight status=-25308\n')
   fs.writeFileSync(path.join(env.PI_CODING_AGENT_DIR, 'auth.json'), 'Do not collect this file.')
   const logs = profileLogs(env, redact)
   assertSafe(logs)
-  for (const message of ['app failed', 'runtime failed', 'CEF failed']) assert.ok(logs.includes(message))
+  for (const message of ['app failed', 'runtime failed', 'CEF failed', 'own-key-preflight status=-25308']) assert.ok(logs.includes(message))
   assert.equal(logs.includes('Do not collect'), false)
   assert.equal(logs.includes('private-access-val'), false)
   assert.match(logs, /final incomplete line/)
@@ -312,7 +313,7 @@ test('profile logs retain redacted app and runtime tails without credential file
 }))
 
 test('Linux diagnostics retain exit and signal receipts after the desktop reaps the runtime', () => temporary(root => {
-  const env = isolatedEnvironment(root, {})
+  const env = isolatedEnvironment(root, {}, 'linux')
   const directory = path.join(env.XDG_RUNTIME_DIR, 'muniment')
   fs.mkdirSync(directory)
   const identity = { pid: 2147483647, started: 123 }
@@ -341,7 +342,7 @@ test('Linux diagnostics retain exit and signal receipts after the desktop reaps 
 test('update timeouts read the latest checkpoint without changing the failing step', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-checkpoint-'))
   try {
-    const env = isolatedEnvironment(root, {})
+    const env = isolatedEnvironment(root, {}, 'linux')
     const checkpoint = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe.json')
     const resultFile = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe-result.json')
     fs.writeFileSync(checkpoint, JSON.stringify({ phase: 'update' }))

@@ -14,7 +14,7 @@ import { assertAttachSocketPath, disposableProfilePrefix, isolatedEnvironment, r
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signature.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
-import { guest, selectAssets, defaultArtifactsDir, decodeSubscriptionPayload } from './e2e/runner/subscription-guest.mjs'
+import { guest, runMacosProbe, selectAssets, defaultArtifactsDir, decodeSubscriptionPayload } from './e2e/runner/subscription-guest.mjs'
 import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
 import { upload } from '../.github/lib/artifact-store.mjs'
 
@@ -163,7 +163,7 @@ test('the disposable environment does not inherit factory authority or provider 
   try {
     const env = isolatedEnvironment(root, { PATH: '/bin', GH_TOKEN: 'secret', GITHUB_TOKEN: 'secret',
       CODEX_HOME: '/shared', PI_CODING_AGENT_DIR: '/shared', HOME: '/shared', CLAUDE_CODE_OAUTH_TOKEN: 'secret',
-      HTTPS_PROXY: 'https://untrusted', NODE_OPTIONS: '--require=/shared/module' })
+      HTTPS_PROXY: 'https://untrusted', NODE_OPTIONS: '--require=/shared/module' }, 'linux')
     assert.equal(env.PATH, '/bin')
     for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'CODEX_HOME', 'CLAUDE_CODE_OAUTH_TOKEN', 'HTTPS_PROXY', 'NODE_OPTIONS']) assert.equal(env[name], undefined)
     assert.equal(env.MUNIMENT_STATE_DIR, path.join(root, 'state'))
@@ -173,7 +173,73 @@ test('the disposable environment does not inherit factory authority or provider 
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+for (const platform of ['windows', 'macos-arm64', 'macos-x64']) {
+  test(`the ${platform} environment keeps native services in the disposable login`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-native-test-'))
+    const source = { MUNIMENT_NATIVE_DISPOSABLE_USER: '1', HOME: '/Users/disposable',
+      UserProfile: 'C:\\Users\\disposable', AppData: 'C:\\Users\\disposable\\AppData\\Roaming',
+      LocalAppData: 'C:\\Users\\disposable\\AppData\\Local', GH_TOKEN: 'private',
+      CODEX_HOME: '/factory/codex', PI_CODING_AGENT_DIR: '/factory/agent',
+      NODE_OPTIONS: '--require=/factory/module', HTTPS_PROXY: 'https://private' }
+    const before = { ...source }
+    try {
+      const env = isolatedEnvironment(root, source, platform)
+      if (platform === 'windows') {
+        // Shell known folders expand the registry value through USERPROFILE, not LOCALAPPDATA.
+        const registryPath = '%USERPROFILE%\\AppData\\Local'.replace('%USERPROFILE%', env.USERPROFILE)
+        assert.equal(registryPath, source.LocalAppData)
+        assert.equal(env.LOCALAPPDATA, source.LocalAppData)
+        assert.equal(env.APPDATA, source.AppData)
+        assert.equal(env.HOME, path.join(root, 'home'))
+      } else {
+        assert.equal(env.HOME, source.HOME)
+      }
+      assert.equal(env.MUNIMENT_STATE_DIR, path.join(root, 'state'))
+      assert.equal(env.PI_CODING_AGENT_DIR, path.join(root, 'state', 'agent'))
+      for (const name of ['GH_TOKEN', 'CODEX_HOME', 'NODE_OPTIONS', 'HTTPS_PROXY', 'MUNIMENT_NATIVE_DISPOSABLE_USER']) {
+        assert.equal(env[name], undefined)
+      }
+      assert.deepEqual(source, before)
+      assert.deepEqual(tree(env.MUNIMENT_STATE_DIR), {})
+      const required = platform === 'windows' ? ['UserProfile', 'AppData', 'LocalAppData'] : ['HOME']
+      for (const name of required) {
+        for (const value of [undefined, '', 'relative', 0]) {
+          assert.throws(() => isolatedEnvironment(root, { ...source, [name]: value }, platform), /absolute .* path/)
+        }
+      }
+      for (const marker of [undefined, '', '0']) {
+        assert.throws(() => isolatedEnvironment(root, { ...source, MUNIMENT_NATIVE_DISPOSABLE_USER: marker }, platform), /disposable native login/)
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+}
+
 for (const platform of ['macos-arm64', 'macos-x64']) {
+  test(`the ${platform} installed probe uses one disposable Keychain session`, () => {
+    const probe = { candidateFile: '/candidate.json', packageFile: '/signed package.tar.gz', signatureFile: '/package.sig',
+      executable: '/installed/muniment.app/Contents/MacOS/muniment-desktop', leasesFile: '/leases.json',
+      output: '/evidence', sourceSha, platform }
+    let calls = 0
+    const execute = (command, args, options) => {
+      calls++
+      assert.equal(command, '/bin/bash')
+      assert.deepEqual(args, [path.resolve('test/e2e/support/macos-keychain-session.sh'), process.execPath,
+        path.resolve('test/e2e/runner/subscriptions.mjs'), ...Object.values(probe)])
+      assert.equal(options.encoding, 'utf8')
+      assert.equal(options.stdio, 'pipe')
+      assert.ok(options.timeout > 0)
+      assert.equal(options.env, undefined)
+      return { status: 0 }
+    }
+    assert.equal(runMacosProbe(probe, execute), 0)
+    assert.equal(calls, 1)
+    for (const result of [{ status: 78, stderr: 'Keychain access failed.' },
+      { status: 1, stderr: 'Keychain cleanup failed.' }, { status: null, signal: 'SIGTERM' },
+      { status: 0, error: new Error('spawn failed') }]) {
+      assert.throws(() => runMacosProbe(probe, () => result), /macos-keychain-session/)
+    }
+  })
+
   test(`the ${platform} profile fits the attach socket limit despite a long GUI TMPDIR`, () => {
     const guiTmpdir = `/var/folders/xx/${'a'.repeat(28)}/T/`
     const oldState = path.posix.join(guiTmpdir, 'muniment-subscriptions-XXXXXX', 'state')
@@ -391,6 +457,7 @@ for (const arch of ['arm64', 'x64']) {
     const previousPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
     const previousArch = Object.getOwnPropertyDescriptor(process, 'arch')
     const previousDisposable = process.env.MUNIMENT_NATIVE_DISPOSABLE_USER
+    const previousHome = process.env.HOME
     try {
       const keys = testKey()
       const packageName = packageNames[platform]
@@ -418,6 +485,7 @@ for (const arch of ['arm64', 'x64']) {
       Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
       Object.defineProperty(process, 'arch', { value: arch, configurable: true })
       process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = '1'
+      process.env.HOME = '/Users/disposable'
       assert.equal(await run({ ...inputs, output, sourceSha, platform }), 1)
       const proof = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
       assert.ok(proof.cases.every(item => item.status === 'blocked' && item.installed === false))
@@ -432,6 +500,8 @@ for (const arch of ['arm64', 'x64']) {
       t.mock.restoreAll()
       Object.defineProperty(process, 'platform', previousPlatform)
       Object.defineProperty(process, 'arch', previousArch)
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
       if (previousDisposable === undefined) delete process.env.MUNIMENT_NATIVE_DISPOSABLE_USER
       else process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = previousDisposable
       fs.rmSync(root, { recursive: true, force: true })

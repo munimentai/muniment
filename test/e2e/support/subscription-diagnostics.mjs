@@ -205,6 +205,7 @@ export function profileLogs(env, redact) {
     ['runtime', path.join(env.TMPDIR, 'subscription-runtime.log')],
     ['msi-admin', path.join(env.TMPDIR, 'subscription-msi-admin.log')],
     ['cef', path.join(env.MUNIMENT_STATE_DIR, 'browser/cef.log')],
+    ['keychain', path.join(env.MUNIMENT_STATE_DIR, 'browser/keychain-audit.log')],
     ['runtime-service', path.join(env.HOME, 'Library/Logs/Muniment/runtime-service.log')],
     ['runtime-native', path.join(env.LOCALAPPDATA, 'ai.muniment.desktop/logs/runtime.log')],
   ]
