@@ -1,9 +1,10 @@
 import { readdir, rename } from "node:fs/promises";
-import { existsSync, copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { takeSigningEnvironment } from "./lib/signing-env.mjs";
+import { legacyPerUserTemplate } from "./lib/windows-upgrade-fixture.mjs";
 import {
   DOTNET_SDK,
   resolveSigningConfiguration,
@@ -168,6 +169,17 @@ const upgradeBaseMsi = join(dirname(msiDirectory), "machine-upgrade-base.msi");
 // there when the template cache lacks it.
 run("bundle", "machine upgrade-base MSI", "--verbose", "--bundles", "msi", "--config", "src-tauri/tauri.machine.conf.json", "--config", cefConfig);
 await rename(await soleMsi(), upgradeBaseMsi);
+// Keep the old per-user shortcut layout for the native major-upgrade regression.
+const userUpgradeBaseMsi = join(dirname(msiDirectory), "per-user-upgrade-base.msi");
+const legacyTemplate = join(tmpdir(), `muniment-legacy-per-user-${process.pid}.wxs`);
+writeFileSync(legacyTemplate, legacyPerUserTemplate(readFileSync("src-tauri/windows/per-user.wxs", "utf8")));
+try {
+  run("bundle", "per-user upgrade-base MSI", "--verbose", "--bundles", "msi", "--config", cefConfig,
+    "--config", JSON.stringify({ bundle: { windows: { wix: { template: legacyTemplate } } } }));
+  await rename(await soleMsi(), userUpgradeBaseMsi);
+} finally {
+  rmSync(legacyTemplate);
+}
 // Tauri fetches NSIS on its first NSIS bundle. When the tool cache lacks it, an
 // unsigned NSIS pass fetches it here; the signed pass below overwrites the file.
 const nsisTool = join(process.env.LOCALAPPDATA ?? tmpdir(), "tauri", "NSIS", "makensis.exe");

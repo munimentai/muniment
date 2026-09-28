@@ -75,16 +75,20 @@ it('keeps the standalone CEF test package separate from the Rust executable', ()
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
-it('builds the DLL before staging and uses bundle-only passes for all three MSI variants', () => {
+it('builds the DLL before staging and uses bundle-only passes for all MSI variants', () => {
   const build = readFileSync('.github/build-windows-installers.mjs', 'utf8')
   expect(build.match(/run\("build"/g)).toHaveLength(1)
   expect(build).toContain('"--lib", "--features", "tauri/custom-protocol"')
   const staging = build.indexOf('"scripts/package-cef-windows.mjs"')
   expect(staging).toBeGreaterThan(build.indexOf('const libraryBuild'))
-  for (const pass of ['per-user installer', 'machine upgrade-base MSI', 'machine MSI']) {
-    const line = build.split('\n').find(line => line.startsWith(`run("bundle", "${pass}"`))
+  for (const pass of ['per-user installer', 'per-user upgrade-base MSI', 'machine upgrade-base MSI', 'machine MSI']) {
+    const line = build.split('\n').find(line => line.trimStart().startsWith(`run("bundle", "${pass}"`))
     expect(line).toContain('"--config", cefConfig')
     expect(build.indexOf(line)).toBeGreaterThan(staging)
-    if (pass !== 'machine upgrade-base MSI') expect(line).toContain('...signArgs')
+    if (!pass.endsWith('upgrade-base MSI')) expect(line).toContain('...signArgs')
   }
+  expect(build).toContain('legacyPerUserTemplate(readFileSync("src-tauri/windows/per-user.wxs", "utf8"))')
+  expect(build).toContain('wix: { template: legacyTemplate }')
+  expect(build).toContain('await rename(await soleMsi(), userUpgradeBaseMsi)')
+  expect(build.indexOf('"per-user upgrade-base MSI"')).toBeLessThan(build.indexOf('signFile(runtime)'))
 })

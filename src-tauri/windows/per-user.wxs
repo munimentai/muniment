@@ -176,6 +176,8 @@
             {{/if}}
             {{resources}}
             <Component Id="CMP_UninstallShortcut" Guid="*">
+                <!-- Older packages keep this shortcut during a major upgrade. -->
+                <RemoveFile Id="LegacyUninstallShortcut" Directory="INSTALLDIR" Name="Uninstall {{product_name}}.lnk" On="install" />
 
                 <Shortcut Id="UninstallShortcut"
                           Directory="ApplicationProgramsFolder"

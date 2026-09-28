@@ -7,6 +7,8 @@ import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, pro
 import { awaitProbeResult, awaitUpdateResult, equalPayload, isolatedEnvironment, verifyInstalled, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
+import { legacyPerUserTemplate } from '../.github/lib/windows-upgrade-fixture.mjs'
+import { assertMsiPayload } from './windows-msi-payload.mjs'
 
 const sourceSha = 'a'.repeat(40)
 const lease = { provider: 'openai-codex', access: 'private-access-value', account_id: 'private-account-value', expires_ms: Date.now() + 60 * 60_000 }
@@ -152,7 +154,51 @@ test('the per-user MSI creates its uninstall shortcut outside the signed payload
   assert.match(shortcut, /Directory="ApplicationProgramsFolder"/)
   assert.match(shortcut, /Target="\[System64Folder\]msiexec.exe"/)
   assert.match(shortcut, /Arguments="\/x \[ProductCode\]"/)
+  const component = template.match(/<Component Id="CMP_UninstallShortcut"[\s\S]*?<\/Component>/)[0]
+  assert.match(component, /<RemoveFile Id="LegacyUninstallShortcut" Directory="INSTALLDIR" Name="Uninstall {{product_name}}\.lnk" On="install" \/>/)
 })
+
+test('the native upgrade fixture keeps the old per-user shortcut and upgrade condition', () => {
+  const template = fs.readFileSync('src-tauri/windows/per-user.wxs', 'utf8')
+  const legacy = legacyPerUserTemplate(template)
+  assert.match(legacy, /InstallScope="perUser"/)
+  assert.match(legacy, /<Shortcut Id="UninstallShortcut"\s+Directory="INSTALLDIR"/)
+  assert.match(legacy, /<RemoveShortcuts>Installed AND NOT UPGRADINGPRODUCTCODE<\/RemoveShortcuts>/)
+  assert.match(legacy, /<MajorUpgrade Schedule="afterInstallInitialize"[^>]+AllowSameVersionUpgrades="yes"/)
+  assert.equal(legacy.includes('<RemoveFile'), false)
+  for (const invalid of [legacy, template + template, template.replace('NOT UPGRADINGPRODUCTCODE', '1')]) {
+    assert.throws(() => legacyPerUserTemplate(invalid), /legacy per-user fixture requires/)
+  }
+})
+
+test('the native MSI payload check rejects legacy shortcuts and changed, missing, or extra files', () => temporary(root => {
+  const expanded = path.join(root, 'expanded')
+  const installed = path.join(root, 'installed')
+  const payload = path.join(expanded, 'SourceDir/muniment')
+  for (const directory of [payload, installed]) {
+    fs.mkdirSync(path.join(directory, 'locales'), { recursive: true })
+    fs.writeFileSync(path.join(directory, 'muniment-desktop.exe'), 'desktop')
+    fs.writeFileSync(path.join(directory, 'locales/en-US.pak'), 'locale')
+  }
+  fs.writeFileSync(path.join(expanded, 'candidate.msi'), 'admin database')
+  assertMsiPayload(expanded, installed)
+  for (const name of ['Uninstall muniment.lnk', 'Uninstall other.lnk', 'runtime.log']) {
+    fs.writeFileSync(path.join(installed, name), 'extra')
+    assert.throws(() => assertMsiPayload(expanded, installed), /"extra":\[.+\]/)
+    fs.rmSync(path.join(installed, name))
+  }
+  fs.writeFileSync(path.join(installed, 'locales/en-US.pak'), 'changed')
+  assert.throws(() => assertMsiPayload(expanded, installed), /"differing":\["locales\/en-US.pak"\]/)
+  fs.rmSync(path.join(installed, 'locales/en-US.pak'))
+  assert.throws(() => assertMsiPayload(expanded, installed), /"missing":\["locales\/en-US.pak"\]/)
+  fs.writeFileSync(path.join(installed, 'locales/en-US.pak'), 'locale')
+  assertMsiPayload(expanded, installed)
+  fs.writeFileSync(path.join(expanded, 'muniment-desktop.exe'), 'duplicate')
+  assert.throws(() => assertMsiPayload(expanded, installed), /exactly one desktop executable/)
+  fs.rmSync(path.join(expanded, 'muniment-desktop.exe'))
+  fs.rmSync(path.join(payload, 'muniment-desktop.exe'))
+  assert.throws(() => assertMsiPayload(expanded, installed), /exactly one desktop executable/)
+}))
 
 for (const prefix of ['muniment', 'SourceDir/muniment', 'SourceDir/PFiles/muniment', 'LocalAppDataFolder/muniment']) {
   test(`the Windows verifier compares every file beneath ${prefix}`, () => temporary(root => {
