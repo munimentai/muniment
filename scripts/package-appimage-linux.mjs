@@ -22,9 +22,13 @@ export function prepareAppDir(appDir) {
       cpSync(join(cef, name), join(libraryDir, name), { recursive: true })
     }
   }
-  // CEF resolves the SUID helper beside libcef (DIR_ASSETS). An AppImage
-  // cannot supply setuid permissions on its FUSE mount. Use the DEB-installed
-  // helper on hosts that restrict user namespaces. Chromium validates it.
+  // CEF resolves the SUID helper beside libcef (DIR_ASSETS).
+  // The shipped setup installs it outside the nosuid FUSE mount.
+  const helper = join(cef, 'chrome-sandbox')
+  if (!existsSync(helper) || !lstatSync(helper).isFile() || lstatSync(helper).size === 0) {
+    throw new Error('Missing CEF AppImage resource: chrome-sandbox')
+  }
+  cpSync(join(dirname(fileURLToPath(import.meta.url)), '../src-tauri/packaging/appimage/setup-sandbox.sh'), join(appDir, 'setup-sandbox.sh'))
   const sandbox = join(libraryDir, 'chrome-sandbox')
   try { unlinkSync(sandbox) } catch (error) { if (error.code !== 'ENOENT') throw error }
   symlinkSync('/usr/lib/muniment/cef/chrome-sandbox', sandbox)

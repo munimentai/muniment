@@ -2,7 +2,7 @@
 
 use muniment_core::attach::linux::AttachFilesystem;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -39,6 +39,8 @@ impl RuntimeDirectory {
     fn command(&self, timeout_ms: u64) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_muniment-runtime"));
         command
+            .env("HOME", &self.0)
+            .env("PI_CODING_AGENT_DIR", self.0.join(".pi/agent"))
             .env("XDG_RUNTIME_DIR", &self.0)
             .env("XDG_DATA_HOME", &self.0)
             .env("XDG_CONFIG_HOME", &self.0)
@@ -67,10 +69,30 @@ impl Drop for RuntimeDirectory {
     }
 }
 
+fn wait_for_endpoint(child: &mut Child, endpoint: &Path) {
+    let started = Instant::now();
+    while !endpoint.exists() {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "runtime exited before the endpoint opened"
+        );
+        if started.elapsed() >= Duration::from_secs(3) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("runtime endpoint did not open");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn wait_for_exit(mut child: Child, timeout: Duration) -> Output {
     let started = Instant::now();
     while child.try_wait().unwrap().is_none() {
-        assert!(started.elapsed() < timeout, "runtime did not exit");
+        if started.elapsed() >= timeout {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("runtime did not exit");
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
     child.wait_with_output().unwrap()
@@ -160,15 +182,8 @@ fn logs_version_state_directory_and_served_endpoint_at_startup() {
     let endpoint = filesystem.endpoint_path().to_owned();
     drop(filesystem);
     let mut command = runtime.command(2_000);
-    let child = command.stderr(Stdio::piped()).spawn().unwrap();
-    let started = Instant::now();
-    while !endpoint.exists() {
-        assert!(
-            started.elapsed() < Duration::from_secs(3),
-            "runtime endpoint did not open"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let mut child = command.stderr(Stdio::piped()).spawn().unwrap();
+    wait_for_endpoint(&mut child, &endpoint);
 
     let signal = Command::new("kill")
         .arg("-TERM")
@@ -193,22 +208,14 @@ fn logs_version_state_directory_and_served_endpoint_at_startup() {
 fn sigterm_releases_the_instance_lock_and_exits_successfully() {
     let runtime = RuntimeDirectory::new();
     let filesystem = AttachFilesystem::from_runtime_directory(&runtime.0).unwrap();
-    let child = runtime.command(2_000).spawn().unwrap();
-    let started = Instant::now();
-    loop {
-        match filesystem.acquire_instance_lock() {
-            Ok(lock) => {
-                drop(lock);
-                assert!(
-                    started.elapsed() < Duration::from_secs(3),
-                    "runtime did not take the lock"
-                );
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(muniment_core::attach::linux::InstanceLockError::AlreadyHeld) => break,
-            Err(error) => panic!("failed to check the instance lock: {error}"),
-        }
-    }
+    let mut child = runtime.command(2_000).spawn().unwrap();
+    // Lock polling can win the startup race and trigger a desktop takeover.
+    // Wait for the endpoint before checking that the runtime holds the lock.
+    wait_for_endpoint(&mut child, filesystem.endpoint_path());
+    assert!(matches!(
+        filesystem.acquire_instance_lock(),
+        Err(muniment_core::attach::linux::InstanceLockError::AlreadyHeld)
+    ));
 
     let signal = Command::new("kill")
         .arg("-TERM")
