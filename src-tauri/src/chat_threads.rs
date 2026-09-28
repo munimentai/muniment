@@ -1164,7 +1164,12 @@ mod tests {
                 ),
                 (
                     json!("thread.history"),
-                    json!({"thread_id": live_id, "limit": 99, "cursor": "history-cursor"})
+                    json!({
+                        "thread_id": live_id,
+                        "limit": 99,
+                        "cursor": "history-cursor",
+                        "snapshot_chunks": true
+                    })
                 ),
                 (
                     json!("thread.rename"),

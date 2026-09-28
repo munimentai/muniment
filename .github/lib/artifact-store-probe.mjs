@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { identity, upload, download } from './artifact-store.mjs'
@@ -27,6 +28,21 @@ for (const [index, platform] of platforms.entries()) {
     assert.deepEqual(JSON.parse(readFileSync(join(directory, `${platform}-subscription.json`))), evidence)
     assert.deepEqual(JSON.parse(readFileSync(join(directory, 'release-acceptance.json'))), proof)
   }
+}
+// Use deterministic bytes without repeated blocks above the CLI multipart threshold.
+const diagnostics = createHash('shake256', { outputLength: 64 * 1024 * 1024 })
+  .update('muniment-artifact-store-diagnostics').digest()
+const diagnosticsDirectory = join(root, 'diagnostics')
+const diagnosticsPath = join(diagnosticsDirectory, `attempt-${id.attempt}`, 'diagnostics.bin')
+if (mode === 'upload') {
+  mkdirSync(join(diagnosticsDirectory, `attempt-${id.attempt}`), { recursive: true, mode: 0o700 })
+  writeFileSync(diagnosticsPath, diagnostics, { mode: 0o600 })
+  upload(id, 'transport-probe-diagnostics', diagnosticsDirectory)
+} else {
+  download(id, 'transport-probe-diagnostics', diagnosticsDirectory)
+  assert.ok(readFileSync(diagnosticsPath).equals(diagnostics), 'The 64 MiB diagnostics must match byte-for-byte.')
+  // Exercise large uploads and readbacks on the self-hosted collector too.
+  upload(id, 'transport-probe-diagnostics-collection', diagnosticsDirectory)
 }
 if (mode === 'collect') {
   const output = join(root, 'collection')

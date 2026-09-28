@@ -19,7 +19,7 @@ jobs:
       - name: Check the transport and workflows
         run: node --test test/artifact-store.node.mjs
       - uses: ./.github/actions/setup-artifact-store
-      - name: Upload and read back the ARM transport fixtures
+      - name: Upload and read back the ARM fixtures with 64 MiB diagnostics
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-artifact-store
-      - name: Verify and collect the exact run fixtures
+      - name: Collect the exact run fixtures and verify 64 MiB uploads
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}

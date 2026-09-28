@@ -12,17 +12,39 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex')
 const component = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(value)
 const positive = value => Number.isSafeInteger(value) && value > 0
 
-// Only fixed messages and validated exit statuses may reach the CLI log.
+// Only fixed messages, allow-listed S3 codes and validated exit statuses reach the CLI log.
 class ArtifactStoreError extends Error {}
 
+const s3ErrorCodes = new Set([
+  'AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch', 'ExpiredToken', 'InvalidToken',
+  'EntityTooLarge', 'EntityTooSmall', 'InvalidPart', 'InvalidPartOrder', 'NoSuchUpload',
+  'NoSuchBucket', 'NoSuchKey', 'RequestTimeout', 'SlowDown', 'InternalError', 'ServiceUnavailable',
+  'NotImplemented', 'InvalidRequest', 'InvalidArgument', 'BadDigest', 'XAmzContentSHA256Mismatch',
+  '400', '403', '404', '408', '413', '429', '500', '502', '503', '504',
+])
+const s3Operations = new Set([
+  'PutObject', 'GetObject', 'HeadObject', 'CreateMultipartUpload', 'UploadPart',
+  'CompleteMultipartUpload', 'AbortMultipartUpload', 'ListParts',
+])
+
+function s3ErrorClass(stderr) {
+  const text = Buffer.isBuffer(stderr) ? stderr.subarray(0, 4096).toString('utf8') :
+    typeof stderr === 'string' ? stderr.slice(0, 4096) : ''
+  const match = text.match(/An error occurred \(([A-Za-z0-9]{1,64})\) when calling the ([A-Za-z0-9]{1,64}) operation/)
+  if (!match || !s3ErrorCodes.has(match[1])) return ''
+  const operation = s3Operations.has(match[2]) ? ` (${match[2]})` : ''
+  return ` S3 error: ${match[1]}${operation}.`
+}
+
 function transferError(error) {
-  if (error.code === 'ENOENT') return new ArtifactStoreError('MinIO transfer failed: CLI missing.')
-  if (error.code === 'ETIMEDOUT') return new ArtifactStoreError('MinIO transfer failed: timeout.')
-  if (error.code === 'ENOBUFS') return new ArtifactStoreError('MinIO transfer failed: CLI output exceeds the size limit.')
-  if (Number.isInteger(error.status) && error.status > 0 && error.status <= 255) {
-    return new ArtifactStoreError(`MinIO transfer failed: CLI exited with status ${error.status}.`)
+  let message = 'CLI execution failed.'
+  if (error.code === 'ENOENT') message = 'CLI missing.'
+  else if (error.code === 'ETIMEDOUT') message = 'timeout.'
+  else if (error.code === 'ENOBUFS') message = 'CLI output exceeds the size limit.'
+  else if (Number.isInteger(error.status) && error.status > 0 && error.status <= 255) {
+    message = `CLI exited with status ${error.status}.`
   }
-  return new ArtifactStoreError('MinIO transfer failed: CLI execution failed.')
+  return new ArtifactStoreError(`MinIO transfer failed: ${message}${s3ErrorClass(error.stderr)}`)
 }
 
 export function identity(env = process.env) {
@@ -45,11 +67,11 @@ function safePath(path) {
 
 // The CLI signs each request. Never print its output or pass credentials as arguments.
 export function transport(env = process.env, execute = execFileSync) {
-  const copy = (source, target) => {
+  const request = args => {
     if (!env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) throw new ArtifactStoreError('Missing MinIO credentials.')
     try {
       execute(env.AWS_CLI || 'aws', ['--endpoint-url', endpoint,
-        '--cli-connect-timeout', '15', '--cli-read-timeout', '120', 's3', 'cp', source, target, '--only-show-errors'],
+        '--cli-connect-timeout', '15', '--cli-read-timeout', '120', ...args],
       { env: { ...env, AWS_DEFAULT_REGION: 'us-east-1', AWS_EC2_METADATA_DISABLED: 'true' },
         stdio: 'pipe', timeout: 180_000, maxBuffer: 4096 })
     } catch (error) { throw transferError(error) }
@@ -60,14 +82,16 @@ export function transport(env = process.env, execute = execFileSync) {
       try {
         const file = join(work, 'payload')
         writeFileSync(file, bytes, { mode: 0o600 })
-        copy(file, key)
+        request(['s3', 'cp', file, key, '--only-show-errors'])
       } finally { rmSync(work, { recursive: true, force: true }) }
     },
     get(key, limit) {
       const work = mkdtempSync(join(tmpdir(), 'minio-get-'))
       try {
         const file = join(work, 'payload')
-        copy(key, file)
+        const url = new URL(key)
+        // GetObject reads the object without the HeadObject preflight that scoped credentials deny.
+        request(['s3api', 'get-object', '--bucket', url.hostname, '--key', url.pathname.slice(1), file])
         if (lstatSync(file).size > limit) throw new ArtifactStoreError('Artifact exceeds the size limit.')
         return readFileSync(file)
       } finally { rmSync(work, { recursive: true, force: true }) }

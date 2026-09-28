@@ -119,8 +119,11 @@ const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.writeFileSync(process.env.RECORD, JSON.stringify(args));
 if (process.env.FAIL) { console.error(process.env.AWS_SECRET_ACCESS_KEY); process.exit(1); }
-const source = args[8], target = args[9];
-if (source.startsWith('s3://')) fs.writeFileSync(target, 'readback');
+if (args[6] === 's3api' && args[7] === 'get-object') fs.writeFileSync(args[12], 'readback');
+else if (args[8].startsWith('s3://')) {
+  console.error('An error occurred (403) when calling the HeadObject operation: Forbidden');
+  process.exit(1);
+}
 `, { mode: 0o755 })
   const env = { ...process.env, AWS_CLI: cli, AWS_ACCESS_KEY_ID: 'probe-access', AWS_SECRET_ACCESS_KEY: 'probe-secret', RECORD: record }
   const store = transport(env)
@@ -129,7 +132,12 @@ if (source.startsWith('s3://')) fs.writeFileSync(target, 'readback');
   assert.deepEqual(args.slice(0, 8), ['--endpoint-url', endpoint, '--cli-connect-timeout', '15', '--cli-read-timeout', '120', 's3', 'cp'])
   assert.equal(endpoint, 'https://s3.roo.run')
   assert.equal(args.includes('probe-secret'), false)
-  assert.equal(store.get(prefix + 'file', 8).toString(), 'readback')
+  assert.equal(store.get(prefix + 'nested/file', 8).toString(), 'readback')
+  args = JSON.parse(readFileSync(record))
+  assert.deepEqual(args.slice(0, 12), ['--endpoint-url', endpoint, '--cli-connect-timeout', '15', '--cli-read-timeout', '120',
+    's3api', 'get-object', '--bucket', 'factory-ci-artifacts', '--key', 'muniment-desktop/42/evidence/nested/file'])
+  assert.equal(args.length, 13)
+  assert.equal(existsSync(args[12]), false)
   assert.throws(() => store.get(prefix + 'file', 7), /size limit/)
   assert.throws(() => transport({ ...env, FAIL: '1' }).get(prefix + 'file', 100), /^Error: MinIO transfer failed: CLI exited with status 1\.$/)
   assert.throws(() => transport({ ...env, AWS_SECRET_ACCESS_KEY: '' }).get(prefix + 'file', 100), /Missing MinIO credentials/)
@@ -169,15 +177,66 @@ test('Transport errors expose only a fixed class and a validated exit status.', 
   assert.throws(() => store.get(prefix + 'file', 100), /^Error: MinIO transfer failed: timeout\.$/)
 })
 
+test('S3 failures expose only bounded, allow-listed codes and operations.', () => {
+  const env = { AWS_ACCESS_KEY_ID: 'private-access', AWS_SECRET_ACCESS_KEY: 'private-secret' }
+  const diagnostic = (code, operation = 'CreateMultipartUpload') =>
+    `upload failed: private-key to https://private-host/?X-Amz-Signature=private-signature\n` +
+    `An error occurred (${code}) when calling the ${operation} operation: private-secret private-token`
+  const cases = [
+    [diagnostic('AccessDenied'), ' S3 error: AccessDenied (CreateMultipartUpload).'],
+    [Buffer.from(diagnostic('EntityTooLarge', 'PutObject')), ' S3 error: EntityTooLarge (PutObject).'],
+    [diagnostic('InvalidPart', 'CompleteMultipartUpload'), ' S3 error: InvalidPart (CompleteMultipartUpload).'],
+    [diagnostic('NoSuchUpload', 'UploadPart'), ' S3 error: NoSuchUpload (UploadPart).'],
+    [diagnostic('413', 'UploadPart'), ' S3 error: 413 (UploadPart).'],
+    [diagnostic('1234567890'), ''],
+    [diagnostic('AccessDenied', 'PrivateOperation'), ' S3 error: AccessDenied.'],
+    [diagnostic('PrivateCode'), ''],
+    [diagnostic('AccessDenied-private-secret'), ''],
+    [diagnostic('AccessDenied\nprivate-secret'), ''],
+    [diagnostic('AccessDenied', 'PutObject\nprivate-secret'), ''],
+    ['private-secret AccessDenied CreateMultipartUpload', ''],
+    ['x'.repeat(4096) + diagnostic('AccessDenied'), ''],
+    [Buffer.from('x'.repeat(4096) + diagnostic('AccessDenied')), ''],
+    [diagnostic('AccessDenied') + 'x'.repeat(100_000), ' S3 error: AccessDenied (CreateMultipartUpload).'],
+    ['', ''], [undefined, ''], [null, ''], [42, ''],
+  ]
+  for (const [stderr, suffix] of cases) {
+    for (const [fields, message] of [
+      [{ status: 1 }, 'CLI exited with status 1.'],
+      [{ code: 'ENOBUFS', status: null }, 'CLI output exceeds the size limit.'],
+    ]) {
+      for (const operation of ['put', 'get']) {
+        const store = transport(env, () => {
+          throw Object.assign(new Error('private-message'), fields, { stderr, stdout: 'private-stdout' })
+        })
+        assert.throws(() => store[operation](prefix + 'private-key', operation === 'put' ? Buffer.from('data') : 100), error => {
+          assert.equal(error.message, `MinIO transfer failed: ${message}${suffix}`)
+          assert.ok(error.message.length < 160)
+          assert.deepEqual(Object.getOwnPropertyNames(error).sort(), ['message', 'stack'])
+          assert.doesNotMatch(error.stack, /private-|Private|https:|X-Amz/)
+          return true
+        })
+      }
+    }
+  }
+})
+
 test('The CLI reports redacted failure classes and keeps every failure blocked.', t => {
   const f = fixture(t)
   const cli = join(f.root, 'aws')
   writeFileSync(cli, `#!/usr/bin/env node
 const fs = require('node:fs'); const path = require('node:path');
-const [source, target] = process.argv.slice(10, 12);
+const args = process.argv.slice(2);
+const [source, target] = args[6] === 's3api' && args[7] === 'get-object'
+  ? ['s3://' + args[9] + '/' + args[11], args[12]] : args.slice(8, 10);
+if (args[6] === 's3' && source.startsWith('s3://')) {
+  console.error('An error occurred (403) when calling the HeadObject operation: Forbidden');
+  process.exit(1);
+}
 if (process.env.FAIL) {
   console.log(process.env.AWS_ACCESS_KEY_ID, source, target);
   console.error(process.env.AWS_SECRET_ACCESS_KEY, process.env.AWS_SESSION_TOKEN);
+  if (process.env.S3_FAIL) console.error('An error occurred (AccessDenied) when calling the CreateMultipartUpload operation: private-secret');
   process.exit(17);
 }
 const local = value => value.startsWith('s3://') ? path.join(process.env.STORE, value.slice(5)) : value;
@@ -199,6 +258,7 @@ if (source.startsWith('s3://')) {
   const cases = [
     [{ AWS_CLI: join(f.root, 'private-missing-cli') }, 'MinIO transfer failed: CLI missing.'],
     [{ FAIL: '1' }, 'MinIO transfer failed: CLI exited with status 17.'],
+    [{ FAIL: '1', S3_FAIL: '1' }, 'MinIO transfer failed: CLI exited with status 17. S3 error: AccessDenied (CreateMultipartUpload).'],
     [{ CORRUPT: '1' }, 'Artifact readback mismatch.'],
     [{ OVERSIZE: '1' }, 'Artifact exceeds the size limit.'],
     [{ AWS_SECRET_ACCESS_KEY: '' }, 'Missing MinIO credentials.'],
@@ -227,7 +287,13 @@ test('Trusted CI proves upload, readback and collection without account credenti
   const cli = join(f.root, 'aws')
   writeFileSync(cli, `#!/usr/bin/env node
 const fs = require('node:fs'); const path = require('node:path');
-const [source, target] = process.argv.slice(10, 12);
+const args = process.argv.slice(2);
+const [source, target] = args[6] === 's3api' && args[7] === 'get-object'
+  ? ['s3://' + args[9] + '/' + args[11], args[12]] : args.slice(8, 10);
+if (args[6] === 's3' && source.startsWith('s3://')) {
+  console.error('An error occurred (403) when calling the HeadObject operation: Forbidden');
+  process.exit(1);
+}
 const local = value => value.startsWith('s3://') ? path.join(process.env.STORE, value.slice(5)) : value;
 fs.mkdirSync(path.dirname(local(target)), { recursive: true });
 fs.copyFileSync(local(source), local(target));
@@ -243,6 +309,11 @@ fs.copyFileSync(local(source), local(target));
     })
     assert.equal(result.status, 0, result.stderr)
   }
+  const objectRoot = join(env.STORE, 'factory-ci-artifacts/muniment-desktop/42')
+  const uploaded = readFileSync(join(objectRoot, 'transport-probe-diagnostics/attempt-2/diagnostics.bin'))
+  assert.equal(uploaded.length, 64 * 1024 * 1024)
+  assert.ok(readFileSync(join(objectRoot, 'transport-probe-diagnostics-collection/attempt-2/diagnostics.bin')).equals(uploaded))
+  assert.ok(readFileSync(join(f.root, 'collect/artifact-store-probe-2/diagnostics/attempt-2/diagnostics.bin')).equals(uploaded))
 })
 
 function checkArtifactSetup(text, label, stepIndent = 6) {
