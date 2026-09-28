@@ -4,7 +4,7 @@ import os from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { acceptance, blocked, platforms } from '../support/subscription-acceptance.mjs'
-import { subscriptionRedactor } from '../support/subscription-diagnostics.mjs'
+import { subscriptionRedactor, reportSubscriptionSummary } from '../support/subscription-diagnostics.mjs'
 
 function redactScreenshot(bytes, name) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-screenshot-'))
@@ -29,6 +29,7 @@ export function collect(sourceSha, output, inputs, jobResults) {
   fs.writeFileSync(path.join(output, 'release-acceptance.json'), JSON.stringify({ ...combined,
     cases: platforms.flatMap(platform => blocked(sourceSha, platform, 'The native evidence collection has not finished.').cases),
   }, null, 2) + '\n', { mode: 0o600 })
+  const redact = subscriptionRedactor({ leases: process.env.FACTORY_SUBSCRIPTION_LEASES })
   let complete = true
   for (const platform of platforms) {
     const evidenceName = `${platform}-subscription.json`
@@ -75,7 +76,7 @@ export function collect(sourceSha, output, inputs, jobResults) {
           features: Object.fromEntries(proof.cases.filter(item => item.checks).map(item => [item.feature, item.checks])) }
       }
       const logName = `${platform}-subscription.log`
-      if (fs.existsSync(path.join(input, logName))) diagnostics = subscriptionRedactor()(read(logName).toString('utf8'))
+      if (fs.existsSync(path.join(input, logName))) diagnostics = redact(read(logName).toString('utf8'))
     } catch {
       complete = false
       // Do not copy malformed evidence or untrusted parser error text.
@@ -86,6 +87,8 @@ export function collect(sourceSha, output, inputs, jobResults) {
     fs.writeFileSync(path.join(output, evidenceName), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 })
     fs.writeFileSync(path.join(output, `${platform}-subscription.log`), proof.cases.map(item =>
       `${item.feature}: ${item.status}\n`).join('') + diagnostics, { mode: 0o600 })
+    reportSubscriptionSummary(platform, evidence.status,
+      evidence.reason || proof.cases.find(item => item.status !== 'passed')?.reason, '', redact)
     combined.cases.push(...proof.cases)
   }
   fs.writeFileSync(path.join(output, 'release-acceptance.json'), JSON.stringify(combined, null, 2) + '\n', { mode: 0o600 })

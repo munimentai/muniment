@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { guest } from './subscription-guest.mjs'
 import { writeBlocked } from './subscriptions.mjs'
+import { subscriptionRedactor, reportSubscriptionFailure } from '../support/subscription-diagnostics.mjs'
 
 export async function hostedArm64({ sourceSha, output, leases, models, repository, token,
   env = process.env, runtime = process.platform, arch = process.arch, uid = process.getuid?.(),
@@ -10,6 +11,8 @@ export async function hostedArm64({ sourceSha, output, leases, models, repositor
     throw new Error('Provide an output directory and the exact candidate source SHA.')
   }
   const platform = 'macos-arm64'
+  const redact = subscriptionRedactor({ leases, values: [token] })
+  let status = 1
   let reason = 'Use the macos-15 GitHub-hosted ARM64 runner without Rosetta.'
   writeBlocked(output, sourceSha, platform, reason)
   try {
@@ -29,13 +32,16 @@ export async function hostedArm64({ sourceSha, output, leases, models, repositor
       throw new Error(reason)
     }
     check('/bin/launchctl', ['print', `gui/${uid}`])
-  } catch {
-    writeBlocked(output, sourceSha, platform, reason)
-    console.error(reason)
+    reason = 'The installed subscription check did not finish.'
+    // The guest keeps the signed package, payload, source, and disposable profile checks.
+    status = await invoke({ sourceSha, platform, output, leases, models, repository, token })
+    return status
+  } catch (error) {
+    writeBlocked(output, sourceSha, platform, reason, `step=hosted-arm64\nerror=${error.message}`, redact)
     return 1
+  } finally {
+    reportSubscriptionFailure(output, platform, status, redact)
   }
-  // The guest keeps the signed package, payload, source, and disposable profile checks.
-  return invoke({ sourceSha, platform, output, leases, models, repository, token })
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
