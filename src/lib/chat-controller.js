@@ -180,6 +180,12 @@ export function createChatController({
   // unchanged when a delta does not extend it.
   function applyLiveEvent(run, event) {
     if (!run || event.runId !== run.id) return run
+    // A queued snapshot cannot reopen a terminal run restored from the journal.
+    // Interrupted runs can resume, so they do not use this guard.
+    if (['complete', 'cancelled', 'failed'].includes(run.phase)) {
+      const phase = event.phase ?? { completed: 'complete', cancelled: 'cancelled', failed: 'failed' }[event.type]
+      if (phase !== run.phase) return run
+    }
     const whole = wholeEvent(run, event)
     if (!whole) return run
     const projected = applyChatEvent(run, whole)

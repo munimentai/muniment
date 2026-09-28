@@ -109,6 +109,30 @@ describe('sign-in link', () => {
 })
 
 describe('chat delivery recovery', () => {
+  it.each(['complete', 'cancelled', 'failed'])('keeps restored %s runs terminal after queued events', async (phase) => {
+    const context = setup()
+    await context.start()
+    const run = { id: 'run-1', phase, text: 'Journal reply', toolActivity: [] }
+    context.setMessages([{ role: 'assistant', run }])
+    for (const event of [
+      { runId: 'run-1', phase: 'streaming', text: 'Stale reply', toolActivity: [{ status: 'running' }] },
+      { runId: 'run-1', type: 'text-delta', text: 'stale' },
+      { runId: 'run-1', phase: 'pending-permission', pendingPermission: { gateId: 'stale' } },
+    ]) context.event(event)
+    expect(context.messages()[0].run).toBe(run)
+    expect(context.active()).toBeNull()
+    context.event({ runId: 'run-1', phase, text: 'Journal reply', receipt: { id: 'receipt' } })
+    expect(context.messages()[0].run.receipt).toEqual({ id: 'receipt' })
+  })
+
+  it('allows interrupted runs to resume after history restore', async () => {
+    const context = setup()
+    await context.start()
+    context.setMessages([{ role: 'assistant', run: { id: 'run-1', phase: 'interrupted', text: 'Partial reply' } }])
+    context.event({ runId: 'run-1', phase: 'streaming', text: 'Resumed reply' })
+    expect(context.messages()[0].run.phase).toBe('streaming')
+  })
+
   it.each(['received', 'lost'])('restores the first run when the shell %s its submit acknowledgment', async (acknowledgment) => {
     const submit = deferred()
     const history = deferred()
