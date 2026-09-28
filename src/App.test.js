@@ -855,7 +855,7 @@ describe('workspace composer entry', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
 
-  it.each(['chat', 'request'])('restores a local reply when the %s socket reconnects first', async (firstSocket) => {
+  it.each([['chat', 0], ['request', 0], ['chat', 300], ['request', 300]])('restores a local reply when the %s socket reconnects first with %s tools', async (firstSocket, toolCount) => {
     localModeStatus = true
     let requestConnected = true
     let restored = false
@@ -867,7 +867,16 @@ describe('workspace composer entry', () => {
       }
       if (command === 'chat_thread_open') {
         if (!requestConnected) throw new Error('The request socket closed.')
-        return [{ runId: 'run-1', prompt: 'Hello', text: restored ? 'The journal kept the reply.' : '', phase: restored ? 'complete' : 'streaming', receipt: {} }]
+        return [{
+          runId: 'run-1', prompt: 'Hello', text: restored ? 'The journal kept the reply.' : toolCount ? 'Partial reply' : '',
+          phase: restored ? 'complete' : 'streaming', receipt: {},
+          toolActivity: Array.from({ length: toolCount }, (_, index) => ({
+            effectId: `tool-${index}`, displayName: 'read', textOffset: 0,
+            status: restored || index < toolCount - 1 ? 'completed' : 'running',
+            input: 'Synthetic input', output: 'Synthetic output',
+            startedAt: '2026-01-01T00:00:00Z', finishedAt: restored || index < toolCount - 1 ? '2026-01-01T00:00:01Z' : null,
+          })),
+        }]
       }
       throw new Error(`unexpected command: ${command}`)
     })
@@ -891,6 +900,17 @@ describe('workspace composer entry', () => {
     }
     expect(await screen.findByText('The journal kept the reply.')).toBeInTheDocument()
     await waitFor(() => expect(document.querySelector('.streaming')).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.live-receipt')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'New thread' })).toBeEnabled()
+    chatListener({ payload: {
+      runId: 'run-1', phase: 'streaming', text: 'Stale reply',
+      toolActivity: [{ effectId: 'tool-299', displayName: 'read', status: 'running' }],
+    } })
+    await tick()
+    expect(screen.getByText('The journal kept the reply.')).toBeInTheDocument()
+    expect(document.querySelector('.live-receipt')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New thread' })).toBeEnabled()
     expect(invoke).not.toHaveBeenCalledWith('auth_status')
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
