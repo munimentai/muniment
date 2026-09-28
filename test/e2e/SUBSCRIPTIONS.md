@@ -99,6 +99,8 @@ Keep the lease and output directories outside the checkout.
 The app and runtime do not inherit factory secrets, proxies, provider homes, or Pi settings.
 The redactor retains its injected-secret checks.
 It creates a new app profile for every run and removes that profile after it stops the probe processes.
+On macOS, the runner creates private profiles under `/tmp` instead of the GUI login's longer temporary directory.
+Before launch, it blocks socket paths of 104 bytes or more, since the socket address also needs a null terminator.
 
 ## Evidence and release scope
 
