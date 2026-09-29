@@ -61,7 +61,7 @@ export function reportSubscriptionFailure(output, platform, status, redact) {
   let diagnostics = 'No diagnostic log exists.'
   try { diagnostics = fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8') }
   catch { /* Keep the summary when the log is missing or unreadable. */ }
-  reportSubscriptionSummary(platform, 'blocked', reason, diagnostics, redact)
+  reportSubscriptionSummary(platform, evidence?.status === 'failed' ? 'failed' : 'blocked', reason, diagnostics, redact)
 }
 
 const payloadMarker = 'payload-difference='

@@ -8,7 +8,7 @@ import { transcriptTail } from './e2e/support/transcript-tail.mjs'
 import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
 import { platforms } from './e2e/support/subscription-acceptance.mjs'
 import { subscriptionRedactor, diagnosticTail, nativeFailure, processStatus, profileLogs, transcriptText, linuxRuntimeStatus, readDiagnosticLog, probeProgress, readProbeProgress, probeFailure, payloadDifferenceDetail, reportPayloadDifferences, reportSubscriptionFailure } from './e2e/support/subscription-diagnostics.mjs'
-import { awaitProbeResult, awaitUpdateResult, equalPayload, isolatedEnvironment, verifyInstalled, writeBlocked, prepareProbeHome, stopWindowsTree, removeProbeProfile } from './e2e/runner/subscriptions.mjs'
+import { awaitProbeResult, awaitUpdateResult, equalPayload, isolatedEnvironment, verifyInstalled, writeBlocked, prepareProbeHome, removeProbeProfile } from './e2e/runner/subscriptions.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { legacyPerUserTemplate } from '../.github/lib/windows-upgrade-fixture.mjs'
@@ -69,16 +69,10 @@ test('blocked diagnostics name the turn and provider outcome without replies or 
 })
 
 test('Windows shutdown waits on descendant handles before bounded profile removal', async () => {
-  const calls = []
-  stopWindowsTree(123, {}, (...args) => calls.push(args))
-  assert.equal(calls[0][0], 'powershell.exe')
-  assert.ok(calls[0][1].some(arg => arg.endsWith('subscription-stop.ps1')))
-  assert.equal(calls[0][3], 20_000)
-  for (const pid of [0, -1, 1.5, '123', 2147483648]) assert.throws(() => stopWindowsTree(pid, {}, () => assert.fail()))
-  const script = fs.readFileSync('test/e2e/support/subscription-stop.ps1', 'utf8')
-  assert.ok(script.indexOf('$process.Handle') < script.indexOf('$handles[$RootPid].Kill()'))
-  assert.ok(script.includes('$process.WaitForExit([int]$remaining)'))
-  assert.ok(script.includes('$process.Dispose()'))
+  const { stopWindowsTree } = await import('./e2e/support/subscription-windows-process.mjs')
+  for (const identity of [0, -1, 1.5, '123', 2147483648, { pid: 123 }]) {
+    await assert.rejects(stopWindowsTree(identity), /identity is missing/)
+  }
   let clock = 0, attempts = 0
   await removeProbeProfile('/disposable', { now: () => clock, wait: async ms => { clock += ms }, remove: async (_, options) => {
     assert.deepEqual(options, { recursive: true, force: true })
@@ -131,6 +125,49 @@ test('subscription diagnostics redact lease values, encoded payloads, headers, a
   const crossing = 'x'.repeat(100) + lease.access + ' end'
   assert.equal(diagnosticTail(crossing, redact, 10).includes('access-value'), false)
 })
+
+test('writer failures keep their classification, reason, and progress through collection and summaries', t => temporary(root => {
+  const messages = []
+  t.mock.method(console, 'error', text => messages.push(text))
+  for (const failureKind of ['product', 'auth', 'quota']) {
+    const input = path.join(root, failureKind)
+    const output = path.join(root, `${failureKind}-collected`)
+    const reason = `The subscription probe stopped with a ${failureKind} failure.`
+    const progress = 'probe-current={"phase":"chat","stage":"reply","turn":2,"requested":"model-two","transport":"failed","error_class":"' +
+      (failureKind === 'product' ? 'stream' : failureKind) + '"}'
+    writeBlocked(input, sourceSha, 'windows', reason, `${progress}\nAuthorization: Bearer private-transport-token`, redact, failureKind)
+    assert.equal(collect(sourceSha, output, [input]), 1)
+    const evidence = JSON.parse(fs.readFileSync(path.join(output, 'windows-subscription.json')))
+    assert.deepEqual(evidence, { status: failureKind === 'product' ? 'failed' : 'blocked', reason, failure_kind: failureKind })
+    const proof = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
+    assert.ok(proof.cases.filter(item => item.platform === 'windows').every(item => item.reason === reason))
+    const log = fs.readFileSync(path.join(output, 'windows-subscription.log'), 'utf8')
+    assert.ok(log.includes(progress))
+    assert.ok(!log.includes('private-transport-token'))
+    assert.ok(messages.some(text => text.includes(`platform=windows status=${evidence.status}`) && text.includes(reason)))
+    assert.ok(messages.some(text => text.includes(progress)))
+    messages.length = 0
+    reportSubscriptionFailure(output, 'windows', 1, redact)
+    assert.ok(messages.some(text => text.includes(`platform=windows status=${evidence.status}`)))
+    assert.ok(messages.some(text => text.includes(progress)))
+    assert.ok(!messages.join('\n').includes('private-transport-token'))
+    messages.length = 0
+  }
+}))
+
+test('the collector rejects contradictory failure classifications', t => temporary(root => {
+  t.mock.method(console, 'error', () => {})
+  for (const [status, failure_kind] of [['failed', 'auth'], ['failed', undefined], ['blocked', 'product'], ['unknown', 'product']]) {
+    const input = path.join(root, 'input')
+    const output = path.join(root, 'output')
+    writeBlocked(input, sourceSha, 'windows', 'The subscription probe did not finish.')
+    fs.writeFileSync(path.join(input, 'windows-subscription.json'), JSON.stringify({ status, failure_kind, reason: 'The subscription probe did not finish.' }))
+    assert.equal(collect(sourceSha, output, [input]), 1)
+    const evidence = JSON.parse(fs.readFileSync(path.join(output, 'windows-subscription.json')))
+    assert.equal(evidence.status, 'blocked')
+    assert.match(evidence.reason, /Supply unique evidence/)
+  }
+}))
 
 test('native failures keep command status and discard a truncated secret fragment', () => {
   const error = nativeFailure('msiexec.exe', { status: 1603, stdout: 'admin image failed', stderr: lease.access })

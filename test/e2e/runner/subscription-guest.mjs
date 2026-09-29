@@ -144,6 +144,14 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
       fs.readFileSync('src-tauri/updater.pub', 'utf8'))
     const stableName = packageAsset.name.replace(`nightly-${sourceSha}-${platform.startsWith('macos-') ? 'macos' : platform}-`, '')
     if (!comment.split('\t').includes(`file:${stableName}`)) throw new Error(missingPackage)
+    if (platform === 'windows') {
+      step = 'guest/windows-job-test'
+      if (runtime !== 'win32') throw new Error('Run this check on the requested native platform and architecture.')
+      const result = spawnSync(process.execPath, ['--test', 'test/subscription-windows-process.node.mjs'], {
+        timeout: 300_000, windowsHide: true, encoding: 'utf8',
+      })
+      if (result.error || result.status !== 0) throw nativeFailure('windows-job-test', result)
+    }
     step = 'guest/install'
     const executable = install(platform, packageFile, root)
     if (platform === 'linux') {

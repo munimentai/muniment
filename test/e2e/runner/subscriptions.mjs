@@ -8,6 +8,7 @@ import { acceptance, blocked, checkIdentity, featureChecks, hash, platforms, sub
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { updateFixture } from './subscription-update.mjs'
 import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus, probeProgress, probeFailure, payloadDifferenceDetail, reportPayloadDifferences } from '../support/subscription-diagnostics.mjs'
+import { launchWindowsTree, stopWindowsTree, windowsTreeAlive } from '../support/subscription-windows-process.mjs'
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const nativePlatform = () => process.platform === 'darwin' ? `macos-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
@@ -174,12 +175,6 @@ function screenshot(platform, pid, output, env) {
   }
 }
 
-export function stopWindowsTree(pid, env, executeNative = execute) {
-  if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2147483647) throw new Error('The native probe process ID is invalid.')
-  executeNative('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.resolve('test/e2e/support/subscription-stop.ps1'),
-    '-RootPid', String(pid), '-TimeoutMs', '15000'], env, 20_000)
-}
-
 export async function removeProbeProfile(root, { remove = fs.promises.rm, now = Date.now, wait = delay, timeout = 15_000 } = {}) {
   const deadline = now() + timeout
   for (;;) {
@@ -257,7 +252,8 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
   const stop = async (child, closed) => {
     if (!child?.pid) return
     if (process.platform === 'win32') {
-      stopWindowsTree(child.pid, env)
+      await stopWindowsTree(child)
+      return
     } else {
       try { process.kill(-child.pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
     }
@@ -341,10 +337,11 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     })
     reason = 'The installed probe did not finish. Check the native runtime, subscription access, and selected models.'
     const resultFile = path.join(state, 'subscription-probe-result.json')
-    const spawnLogged = (file, args, name) => {
+    const spawnLogged = async (file, args, name) => {
       const log = fs.openSync(path.join(env.TMPDIR, `subscription-${name}.log`), 'a', 0o600)
       try {
-        const child = spawn(file, args, { env, stdio: ['ignore', log, log], detached: process.platform !== 'win32' })
+        if (platform === 'windows') return await launchWindowsTree(file, args, env, log, name === 'app' ? state : undefined)
+        const child = spawn(file, args, { env, stdio: ['ignore', log, log], detached: true })
         child.once('error', error => {
           child.diagnosticError = error.message
         })
@@ -357,13 +354,14 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
       if (platform !== 'linux') {
         const runtimeFile = platform === 'windows' ? path.join(path.dirname(executable), 'muniment-runtime.exe')
           : path.resolve(executable, '../../Library/LaunchServices/muniment-runtime')
-        runtime = spawnLogged(runtimeFile, [], 'runtime')
+        runtime = await spawnLogged(runtimeFile, [], 'runtime')
         runtimeClosed = new Promise(resolve => { runtime.once('exit', resolve); runtime.once('error', resolve) })
         await delay(3000)
-        if (!runtime.pid || runtime.exitCode !== null || runtime.signalCode !== null) throw new Error('The installed runtime could not start with the disposable profile.')
+        if (!runtime.pid || runtime.exitCode !== null || runtime.signalCode !== null ||
+            (platform === 'windows' && !windowsTreeAlive(runtime))) throw new Error('The installed runtime could not start with the disposable profile.')
       }
       step = `${phase}/app-start`
-      app = spawnLogged(executable, ['--probe-subscription-chat', `--probe-subscription-profile=${state}`], 'app')
+      app = await spawnLogged(executable, ['--probe-subscription-chat', `--probe-subscription-profile=${state}`], 'app')
       let appError = false
       appClosed = new Promise(resolve => {
         app.once('exit', resolve)
@@ -372,14 +370,15 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
       step = `${phase}/wait-result`
       if (updating) {
         const result = await awaitUpdateResult(() => fs.existsSync(resultFile) && json(resultFile))
-        if (Number.isSafeInteger(result.pid) && result.pid > 0 && result.pid <= 2147483647 && result.pid !== app.pid) {
+        if (platform !== 'windows' && Number.isSafeInteger(result.pid) && result.pid > 0 && result.pid <= 2147483647 && result.pid !== app.pid) {
           relaunchedPid = result.pid
         }
         return result
       }
       return awaitProbeResult(() => fs.existsSync(resultFile) && json(resultFile),
-        () => app.exitCode === null && app.signalCode === null && !appError &&
-          (!runtime || (runtime.exitCode === null && runtime.signalCode === null)))
+        () => platform === 'windows' ? windowsTreeAlive(app) && (!runtime || windowsTreeAlive(runtime))
+          : app.exitCode === null && app.signalCode === null && !appError &&
+            (!runtime || (runtime.exitCode === null && runtime.signalCode === null)))
     }
     const probe = await launch()
     step = 'chat/verify-result'
@@ -423,7 +422,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     save(path.join(state, 'subscription-probe.json'), { ...plan, phase: 'update', turns: probe.turns })
     const updated = await launch(true)
     step = 'update/verify-result'
-    verifyUpdateResult(updated, app.pid, sourceSha, probe.turns, verify)
+    verifyUpdateResult(updated, app.probePid ?? app.pid, sourceSha, probe.turns, verify)
     // Require the relaunched process to stay alive through the native capture.
     process.kill(updated.pid, 0)
     const result = { status: 'passed', installed: true, unchanged: true, source_sha: probe.source_sha, webdriver: probe.webdriver,
@@ -454,8 +453,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     let cleanupFailed = false
     if (relaunchedPid) {
       try {
-        if (process.platform === 'win32') stopWindowsTree(relaunchedPid, env)
-        else process.kill(relaunchedPid, 'SIGKILL')
+        process.kill(relaunchedPid, 'SIGKILL')
       } catch (error) {
         if (error.code !== 'ESRCH') {
           cleanupFailed = true

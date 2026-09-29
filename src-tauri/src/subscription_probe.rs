@@ -34,7 +34,7 @@ pub(crate) fn install<R: tauri::Runtime>(webview: &tauri::Webview<R>) {
 }
 
 // MSI relaunches the app outside the runner's process environment.
-// The explicit probe argument restores only the disposable state directory.
+// The explicit probe argument restores the disposable state directory and its process job.
 pub(crate) fn restore_profile() {
     if !std::env::args_os().any(|arg| arg == "--probe-subscription-chat") {
         return;
@@ -42,11 +42,65 @@ pub(crate) fn restore_profile() {
     for arg in std::env::args() {
         if let Some(directory) = arg.strip_prefix("--probe-subscription-profile=") {
             let path = PathBuf::from(directory);
+            #[cfg(windows)]
+            if !path.is_absolute() || !path.join("subscription-probe.json").is_file() {
+                eprintln!("The subscription probe requires its disposable profile.");
+                std::process::exit(1);
+            }
             if path.is_absolute() && path.join("subscription-probe.json").is_file() {
+                #[cfg(windows)]
+                if join_probe_job(&path).is_err() {
+                    eprintln!("The subscription probe could not join its process job.");
+                    std::process::exit(1);
+                }
                 std::env::set_var("MUNIMENT_STATE_DIR", &path);
                 std::env::set_var("PI_CODING_AGENT_DIR", path.join("agent"));
                 std::env::set_var("MUNIMENT_SUBSCRIPTION_PROBE", "1");
             }
+        }
+    }
+}
+
+// Join before CEF or the runtime can spawn descendants, including after an MSI restart.
+#[cfg(windows)]
+fn join_probe_job(root: &std::path::Path) -> Result<(), ()> {
+    use windows_sys::Win32::{
+        Foundation::CloseHandle,
+        System::{
+            JobObjects::{AssignProcessToJobObject, IsProcessInJob, OpenJobObjectW},
+            SystemServices::{JOB_OBJECT_ASSIGN_PROCESS, JOB_OBJECT_QUERY},
+            Threading::GetCurrentProcess,
+        },
+    };
+    let bytes = std::fs::read(root.join("subscription-probe-job.json")).map_err(|_| ())?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| ())?;
+    let name = value["name"].as_str().ok_or(())?;
+    let id = name
+        .strip_prefix(r"Local\MunimentSubscription-")
+        .ok_or(())?;
+    if id.len() != 36 || uuid::Uuid::parse_str(id).is_err() {
+        return Err(());
+    }
+    let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    // The supervisor owns the job lifetime. This handle only admits the current process.
+    unsafe {
+        let job = OpenJobObjectW(
+            JOB_OBJECT_ASSIGN_PROCESS | JOB_OBJECT_QUERY,
+            0,
+            name.as_ptr(),
+        );
+        if job.is_null() {
+            return Err(());
+        }
+        let process = GetCurrentProcess();
+        let mut member = 0;
+        let joined = IsProcessInJob(process, job, &mut member) != 0
+            && (member != 0 || AssignProcessToJobObject(job, process) != 0);
+        CloseHandle(job);
+        if joined {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 }
