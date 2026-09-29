@@ -2,6 +2,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import vm from 'node:vm'
 
 import { tick } from 'svelte'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
@@ -6096,6 +6097,102 @@ describe('permission gates', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
     expect(answer).toHaveBeenCalledTimes(2)
     await waitFor(() => expect(screen.queryByText('Could not answer this request. Try again.')).not.toBeInTheDocument())
+  })
+})
+
+describe('installed subscription probe reply DOM', () => {
+  const source = fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8')
+  const nonce = 'muniment-probe-123456'
+  const model = { family: 'openai', id: 'subscription-model' }
+
+  async function runProbe(phase, { count = 4, text = nonce, hidden = false } = {}) {
+    localModeStatus = true
+    const entries = phase === 'chat' ? [] : Array.from({ length: count }, (_, index) => ({
+      runId: `probe-${index}`, phase: 'complete', prompt: 'Reply with the test token.',
+      text, receipt: {}, toolActivity: [],
+    }))
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
+      if (command === 'local_mode_provider_inventory') return {
+        ...ollamaInventory, default_provider: 'muniment-router', default_model: `${model.family}/${model.id}`,
+      }
+      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_submit') {
+        const entry = { runId: 'probe-0', phase: 'complete', prompt: payload.prompt, text, receipt: {}, toolActivity: [] }
+        entries.push(entry)
+        return { runId: entry.runId, attachments: [] }
+      }
+      if (command === 'chat_thread_open') {
+        if (phase === 'chat' && entries.length) {
+          chatListener({ payload: entries[0] })
+          await tick()
+        }
+        return entries
+      }
+      if (command === 'subscription_probe_progress' || command === 'subscription_probe_observed') return
+      return fallback(command, payload)
+    })
+    const { container } = render(App)
+    await findWorkspaceComposer()
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+    if (phase !== 'chat') {
+      await waitFor(() => expect(container.querySelectorAll('.response')).toHaveLength(count))
+    }
+    // jsdom has no layout. Keep the reply tree and all selectors from the real components.
+    vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function () {
+      return hidden && this.matches('.response') ? [] : [new DOMRect(0, 0, 100, 20)]
+    })
+    const turns = Array.from({ length: 4 }, (_, index) => ({ index, thread: 'thread-1', run: `probe-${index}` }))
+    let clock = 0
+    const styles = new Set(document.head.querySelectorAll('style'))
+    try {
+      await vm.runInNewContext(source, {
+        window: { __TAURI__: window.__TAURI__, __MUNIMENT_SUBSCRIPTION_PLAN__: { phase, nonce, models: [model], turns } },
+        document, Event,
+        Date: { now: () => { clock += 1000; return clock } },
+        setTimeout: (callback, ms) => ms === 250 ? setTimeout(callback, 0) : undefined,
+        clearTimeout,
+      })
+      const result = invoke.mock.calls.find(([command]) => command === 'subscription_probe_observed')?.[1]
+      expect(result).toBeDefined()
+      return { container, result }
+    } finally {
+      for (const style of document.head.querySelectorAll('style')) {
+        if (!styles.has(style)) style.remove()
+      }
+    }
+  }
+
+  describe.each([
+    { cloud: false, companyRecord: false },
+    { cloud: false, companyRecord: true },
+    { cloud: true, companyRecord: false },
+    { cloud: true, companyRecord: true },
+  ])('with flags %j', flags => {
+    it.each(['chat', 'restart'])('accepts the %s reply DOM and marks the evidence', async phase => {
+      Object.assign(featureFlags, flags)
+      const { container, result } = await runProbe(phase)
+      expect(result.passed).toBe(true)
+      const count = phase === 'chat' ? 1 : 4
+      expect(result.turns).toHaveLength(count)
+      expect(container.querySelectorAll('.response[data-subscription-evidence]')).toHaveLength(count)
+      expect(container.querySelectorAll('.response .assistant-markdown')).toHaveLength(count)
+      if (phase === 'chat') {
+        expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', { stage: 'complete', turn: 0, errorClass: 'none' })
+      } else {
+        expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+      }
+    })
+  })
+
+  it.each([
+    { count: 0 }, { count: 3 }, { count: 5 }, { text: 'wrong-token' }, { hidden: true },
+  ])('rejects an invalid restored reply DOM: %j', async options => {
+    const { container, result } = await runProbe('restart', options)
+    expect(result.passed).toBe(false)
+    expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', { stage: 'restore', turn: null, errorClass: 'timeout' })
+    expect(container.querySelector('[data-subscription-evidence]')).toBeNull()
   })
 })
 

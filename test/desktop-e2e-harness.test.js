@@ -3317,7 +3317,7 @@ describe('installed local-mode chat contract', () => {
     expect(firstRun).toContain("panel.$('button=Open model settings')")
     expect(firstRun).toContain("$('#onboarding-model-panel')")
     expect(spec).toContain("$('button=Save Ollama server')")
-    expect(spec).toContain("response.$('.response-prose.streaming')")
+    expect(spec).toContain("response.$('.streaming .assistant-markdown')")
     expect(spec).not.toContain('browser.tauri.mock')
   })
 })
