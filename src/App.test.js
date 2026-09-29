@@ -1159,6 +1159,47 @@ describe('workspace composer entry', () => {
     expect(invoke).toHaveBeenCalledWith('chat_resume', { runId: 'run-interrupted' })
   })
 
+  it.each([[false, false], [false, true], [true, false], [true, true]])('The installed Stop guard waits with cloud=%s and companyRecord=%s.', async (cloud, companyRecord) => {
+    Object.assign(featureFlags, { cloud, companyRecord })
+    localModeStatus = true
+    const spec = fs.readFileSync(path.join(process.cwd(), 'test/e2e/specs/local-mode-chat.spec.js'), 'utf8')
+    const guardStart = spec.indexOf('    await browser.waitUntil', spec.indexOf('    await checkCandidatePackages()'))
+    const guardEnd = spec.indexOf('    const registered =', guardStart)
+    expect(guardStart).toBeGreaterThan(spec.indexOf('console.log(`The first local-mode reply took'))
+    expect(guardEnd).toBeGreaterThan(guardStart)
+    expect(guardEnd).toBeLessThan(spec.indexOf("invoke('launcher_open')"))
+    const waitUntil = vi.fn()
+    const select = vi.fn(async (selector) => ({
+      isExisting: async () => document.querySelector(selector) !== null,
+    }))
+    await vm.runInNewContext(`(async () => { ${spec.slice(guardStart, guardEnd)} })()`, {
+      browser: { waitUntil }, $: select,
+    })
+    expect(waitUntil).toHaveBeenCalledOnce()
+    expect(waitUntil.mock.calls[0][1]).toMatchObject({ timeout: 180000 })
+    const isIdle = waitUntil.mock.calls[0][0]
+
+    mockRuntimeUpgrade({ pending: false })
+    render(App)
+    const composer = await findWorkspaceComposer()
+    expect(await isIdle()).toBe(true)
+    await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const stop = await screen.findByRole('button', { name: 'Stop' })
+    expect(stop).toHaveClass('composer-action')
+    expect(stop.textContent.trim()).toBe('')
+    expect(await isIdle()).toBe(false)
+    expect(document.querySelector(select.mock.lastCall[0])).toBe(stop)
+
+    chatListener({ payload: { runId: 'run-upgrade', phase: 'streaming', text: 'First reply' } })
+    await screen.findByText('First reply')
+    expect(document.querySelector('.streaming .assistant-markdown')).toHaveTextContent('First reply')
+    expect(await isIdle()).toBe(false)
+    chatListener({ payload: { runId: 'run-upgrade', phase: 'complete', text: 'Complete reply', receipt: {} } })
+    await screen.findByText('Complete reply')
+    await waitFor(async () => expect(await isIdle()).toBe(true))
+  })
+
   it('keeps the stop control and steers by Enter while a run is live', async () => {
     mockRuntimeUpgrade({ pending: false })
     render(App)
@@ -1350,6 +1391,8 @@ describe('workspace composer entry', () => {
     const settings = screen.getByRole('button', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-expanded', 'false')
     await fireEvent.click(settings)
+    // Wait for the lazy import before the DOM query starts its timeout.
+    await vi.dynamicImportSettled()
     const dialog = await screen.findByRole('dialog', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-expanded', 'true')
     expect(dialog).toHaveAttribute('aria-modal', 'true')
