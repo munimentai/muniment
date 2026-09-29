@@ -109,7 +109,7 @@ describe('installed local-mode chat', () => {
     await userMessage.waitForDisplayed()
     const response = await userMessage.$('./ancestor::div[contains(concat(" ", normalize-space(@class), " "), " user-turn ")]/following-sibling::div[contains(concat(" ", normalize-space(@class), " "), " response ")][1]')
     await browser.waitUntil(async () => {
-      const streaming = await response.$('.response-prose.streaming')
+      const streaming = await response.$('.streaming .assistant-markdown')
       if (await streaming.isDisplayed() && (await streaming.getText()).trim()) return true
       return await (await response.$('button.provenance')).isDisplayed()
     }, {
