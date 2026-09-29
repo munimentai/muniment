@@ -89,16 +89,20 @@ function requireCondition(passed, condition) {
   if (!passed) throw new AcceptanceError(condition)
 }
 
-// nameFirstThread awaits one naming request before the first chat request.
-// Allow only that optional leading receipt, not arbitrary extra provider requests.
-export function chatTransports(receipts, firstModel, expected) {
-  if (!Array.isArray(receipts) || receipts.length !== 5) return receipts
-  const naming = receipts[0]
-  requireCondition(naming?.requested === firstModel && naming.actual === firstModel &&
-    naming.subscription === true && naming.finished === true && naming.tools === 0 &&
-    typeof naming.reply_sha256 === 'string' && digest.test(naming.reply_sha256) &&
-    naming.reply_sha256 !== hash(Buffer.from(expected)), 'chat-transport-scope')
-  return receipts.slice(1)
+// Naming can finish after chat starts and can return the chat nonce as its title.
+// Exclude only its explicit request purpose, never a reply digest or arrival position.
+export function chatTransports(receipts, firstModel) {
+  if (!Array.isArray(receipts)) return receipts
+  let named = false
+  return receipts.filter(receipt => {
+    if (receipt?.purpose === 'chat') return true
+    requireCondition(!named && receipt?.purpose === 'thread-name' &&
+      receipt.requested === firstModel && receipt.actual === firstModel &&
+      receipt.subscription === true && receipt.finished === true && receipt.tools === 0 &&
+      typeof receipt.reply_sha256 === 'string' && digest.test(receipt.reply_sha256), 'chat-transport-scope')
+    named = true
+    return false
+  })
 }
 
 export function acceptance(candidate, sourceSha, platform, result, transports, packageName) {

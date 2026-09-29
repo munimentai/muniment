@@ -34,7 +34,7 @@ function fixture() {
     requested: model.id, expected: nonce }))
   return { result: { status: 'passed', installed: true, unchanged: true, webdriver: false, source_sha: sourceSha,
     package_sha256: candidate.sha256, turns, features: structuredClone(featureChecks) },
-  transports: turns.map(turn => ({ requested: turn.requested, actual: turn.requested, subscription: true,
+  transports: turns.map(turn => ({ purpose: 'chat', requested: turn.requested, actual: turn.requested, subscription: true,
     finished: true, tools: 0, reply_sha256: hash(Buffer.from(nonce)) })) }
 }
 const build = ({ result, transports }, identity = candidate) => acceptance(identity, sourceSha, 'linux', result, transports, 'muniment_1.0.0_amd64.AppImage')
@@ -113,34 +113,53 @@ for (const [name, mutate] of [
   assert.throws(() => build(f))
 })
 
-test('the chat receipts exclude only the leading thread name from the signed probe', () => {
-  const f = fixture()
-  const naming = { ...f.transports[0], reply_sha256: hash(Buffer.from('Token memory')) }
-  const receipts = [naming, ...f.transports]
-  assert.throws(() => build({ ...f, transports: receipts }), { condition: 'chat-transport-count' })
-  const selected = chatTransports(receipts, models[0].id, nonce)
-  assert.deepEqual(selected, f.transports)
-  assert.equal(selected.length, 4)
-  assert.equal(receipts.length, 5)
-  assert.ok(build({ ...f, transports: selected }).cases.every(item => item.status === 'passed'))
-  assert.deepEqual(chatTransports(f.transports, models[0].id, nonce), f.transports)
+for (const title of ['Token memory', nonce]) {
+  test(`the chat receipts use request purpose when the title ${title === nonce ? 'equals the nonce' : 'differs from the nonce'}`, () => {
+    const f = fixture()
+    const naming = { ...f.transports[0], purpose: 'thread-name', reply_sha256: hash(Buffer.from(title)) }
+    for (let position = 0; position <= 4; position++) {
+      const receipts = [...f.transports]
+      receipts.splice(position, 0, naming)
+      assert.throws(() => build({ ...f, transports: receipts }), { condition: 'chat-transport-count' })
+      const selected = chatTransports(receipts, models[0].id)
+      assert.deepEqual(selected, f.transports)
+      assert.equal(selected.length, 4)
+      assert.equal(receipts.length, 5)
+      assert.ok(build({ ...f, transports: selected }).cases.every(item => item.status === 'passed'))
+    }
+    assert.deepEqual(chatTransports(f.transports, models[0].id), f.transports)
+  })
+}
 
-  for (const invalid of [null, {}, { ...naming, requested: models[1].id }, { ...naming, actual: 'wrong' },
+test('the chat receipts reject unknown purposes, extra chat receipts, and invalid naming receipts', () => {
+  const f = fixture()
+  const naming = { ...f.transports[0], purpose: 'thread-name' }
+  for (const invalid of [null, {}, { ...naming, purpose: undefined }, { ...naming, purpose: 'PRIVATE PURPOSE' },
+    { ...naming, requested: models[1].id }, { ...naming, actual: 'wrong' },
     { ...naming, subscription: false }, { ...naming, finished: false }, { ...naming, tools: 1 },
-    { ...naming, reply_sha256: 'PRIVATE REPLY' }, f.transports[0]]) {
-    assert.throws(() => chatTransports([invalid, ...f.transports], models[0].id, nonce),
+    { ...naming, reply_sha256: 'PRIVATE REPLY' }]) {
+    assert.throws(() => chatTransports([invalid, ...f.transports], models[0].id),
       { condition: 'chat-transport-scope' })
   }
-  for (const invalid of [[], f.transports.slice(1), [...receipts, naming],
-    [f.transports[0], naming, ...f.transports.slice(1)], [...f.transports, naming],
+  for (const extra of [f.transports[0], { ...f.transports[0], reply_sha256: hash(Buffer.from('Token memory')) }]) {
+    for (let position = 0; position <= 4; position++) {
+      const receipts = [...f.transports]
+      receipts.splice(position, 0, extra)
+      for (const rows of [receipts, [naming, ...receipts]]) {
+        assert.throws(() => build({ ...f, transports: chatTransports(rows, models[0].id) }),
+          { condition: 'chat-transport-count' })
+      }
+    }
+  }
+  for (const invalid of [undefined, null, [], f.transports.slice(1), [naming, ...f.transports, naming],
     [naming, ...f.transports.slice(1)], [naming, ...f.transports.slice().reverse()]]) {
-    assert.throws(() => build({ ...f, transports: chatTransports(invalid, models[0].id, nonce) }))
+    assert.throws(() => build({ ...f, transports: chatTransports(invalid, models[0].id) }))
   }
   for (const mutate of [f => { f.transports[0].actual = 'wrong' }, f => { f.transports[0].finished = false },
     f => { f.transports[0].reply_sha256 = hash(Buffer.from('wrong reply')) }, f => { f.transports[0].tools = 1 }]) {
     const broken = fixture()
     mutate(broken)
-    assert.throws(() => build({ ...broken, transports: chatTransports([naming, ...broken.transports], models[0].id, nonce) }))
+    assert.throws(() => build({ ...broken, transports: chatTransports([naming, ...broken.transports], models[0].id) }))
   }
 })
 
@@ -665,7 +684,8 @@ for (const condition of ['probe-source', 'probe-webdriver', 'chat-turn-count', '
       if (condition === 'probe-source') probe.source_sha = 'b'.repeat(40)
       if (condition === 'probe-webdriver') probe.webdriver = true
       if (condition === 'chat-turn-count') probe.turns = []
-      const receipts = [{ ...f.transports[0], reply_sha256: hash(Buffer.from('Token memory')) }, ...f.transports]
+      // The naming request finishes last and returns the nonce as its title.
+      const receipts = [...f.transports, { ...f.transports[0], purpose: 'thread-name' }]
       if (condition === 'chat-transport-count') receipts.push(f.transports[0])
       const script = Buffer.from(`#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path')
@@ -674,7 +694,7 @@ const plan = JSON.parse(fs.readFileSync(path.join(state, 'subscription-probe.jso
 const probe = ${JSON.stringify(probe)}
 const receipts = ${JSON.stringify(receipts)}
 const crypto = require('node:crypto')
-for (const receipt of receipts.slice(1)) receipt.reply_sha256 = crypto.createHash('sha256').update(plan.nonce).digest('hex')
+for (const receipt of receipts) receipt.reply_sha256 = crypto.createHash('sha256').update(plan.nonce).digest('hex')
 fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'subscription-probe-transports.jsonl'),
   ${condition === 'chat-transport-file' ? "'PRIVATE REPLY AND CREDENTIAL'" : "receipts.map(row => JSON.stringify(row)).join('\\n')"})
 // Stop after chat verification without a native feature test.

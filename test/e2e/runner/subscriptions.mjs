@@ -391,7 +391,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
       const text = fs.readFileSync(path.join(env.PI_CODING_AGENT_DIR, 'subscription-probe-transports.jsonl'), 'utf8').trim()
       receipts = text ? text.split('\n').map(JSON.parse) : []
     } catch { throw new AcceptanceError('chat-transport-file') }
-    const transports = chatTransports(receipts, candidate.models[0].id, nonce)
+    const transports = chatTransports(receipts, candidate.models[0].id)
     const chatResult = { status: 'passed', installed: true, unchanged: true, source_sha: probe.source_sha,
       webdriver: probe.webdriver, package_sha256: candidate.sha256,
       turns: Array.isArray(probe.turns) ? probe.turns.map(turn => ({ ...turn, requested: candidate.models[turn?.index]?.id, expected: nonce })) : probe.turns }
