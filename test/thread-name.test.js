@@ -11,6 +11,7 @@ it('requests a short name separately and saves only the validated result', async
   await nameFirstThread({ model: { id: 'model' }, ui: { editor }, modelRegistry: { getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }) } }, complete)
   expect(complete.mock.calls[0][1].messages[0].content).toBe('Help me fix the report')
   expect(complete.mock.calls[0][2].maxTokens).toBe(256)
+  expect(complete.mock.calls[0][2].headers).toBeUndefined()
   expect(JSON.parse(editor.mock.calls[1][1])).toEqual({ action: 'save', title: 'Report repair' })
 })
 
@@ -28,8 +29,9 @@ it('skips a named thread and lets a failed naming call leave the reply available
 it('uses the current model registry completion boundary without reading credentials directly', async () => {
   const editor = vi.fn().mockResolvedValueOnce('{"prompt":"Compare leases"}').mockResolvedValue('{}')
   const complete = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'Lease comparison' }] })
-  await nameFirstThread({ model: {}, ui: { editor }, modelRegistry: { complete } })
+  await nameFirstThread({ model: { provider: 'muniment-router' }, ui: { editor }, modelRegistry: { complete } })
   expect(complete).toHaveBeenCalledOnce()
+  expect(complete.mock.calls[0][2].headers).toEqual({ 'x-muniment-request-purpose': 'thread-name' })
   expect(JSON.parse(editor.mock.calls[1][1]).title).toBe('Lease comparison')
 })
 
@@ -39,11 +41,12 @@ it('bounds naming even when the provider ignores cancellation and discards its l
     let finish
     const complete = vi.fn(() => new Promise((resolve) => { finish = resolve }))
     const editor = vi.fn().mockResolvedValue('{"prompt":"First request"}')
-    const pending = nameFirstThread({ model: {}, ui: { editor }, modelRegistry: { complete } })
+    const pending = nameFirstThread({ model: { provider: 'muniment-router' }, ui: { editor }, modelRegistry: { complete } })
     await vi.advanceTimersByTimeAsync(8000)
     await pending
     expect(complete.mock.calls[0][2].signal.aborted).toBe(true)
-    finish({ content: [{ type: 'text', text: 'Late title' }] })
+    expect(complete.mock.calls[0][2].headers).toEqual({ 'x-muniment-request-purpose': 'thread-name' })
+    finish({ content: [{ type: 'text', text: 'MUNIMENT-' + 'c'.repeat(32) }] })
     await Promise.resolve()
     expect(editor).toHaveBeenCalledTimes(1)
   } finally { vi.useRealTimers() }

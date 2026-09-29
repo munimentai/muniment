@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { acceptance, blocked, checkIdentity, featureChecks, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
+import { AcceptanceError, acceptance, blocked, chatTransports, checkIdentity, featureChecks, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { updateFixture } from './subscription-update.mjs'
 import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus, probeProgress, probeFailure, payloadDifferenceDetail, reportPayloadDifferences } from '../support/subscription-diagnostics.mjs'
@@ -223,11 +223,11 @@ export function verifyUpdateResult(result, parentPid, sourceSha, turns, verifyPa
 
 export const updaterPublicKeyFile = 'src-tauri/updater.pub'
 
-export function writeBlocked(output, sourceSha, platform, reason, detail = '', redact = subscriptionRedactor(), failureKind) {
+export function writeBlocked(output, sourceSha, platform, reason, detail = '', redact = subscriptionRedactor(), failureKind, condition) {
   fs.mkdirSync(output, { recursive: true, mode: 0o700 })
   save(path.join(output, 'release-acceptance.json'), blocked(sourceSha, platform, reason))
   save(path.join(output, `${platform}-subscription.json`), { status: failureKind === 'product' ? 'failed' : 'blocked', reason,
-    ...(failureKind ? { failure_kind: failureKind } : {}) })
+    ...(failureKind ? { failure_kind: failureKind } : {}), ...(condition ? { condition } : {}) })
   const log = path.join(output, `${platform}-subscription.log`)
   const previous = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''
   const status = failureKind === 'product' ? 'failed' : 'blocked'
@@ -264,8 +264,8 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
       })])
     } finally { clearTimeout(timer) }
   }
-  let passed = false, failureKind
-  const reportBlocked = (detail = '') => writeBlocked(output, sourceSha, platform, reason, detail, redact, failureKind)
+  let passed = false, failureKind, condition
+  const reportBlocked = (detail = '') => writeBlocked(output, sourceSha, platform, reason, detail, redact, failureKind, condition)
   let evidence, proof, finalDiagnostics
   try {
     reason = 'Run this check on the requested native platform and architecture.'
@@ -383,13 +383,18 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     const probe = await launch()
     step = 'chat/verify-result'
     reason = 'The installed subscription reply or model switch failed. Check model access and thread continuity.'
-    if (!probe.passed) throw new Error('The installed subscription reply or model switch failed.')
+    if (probe.passed !== true) throw new AcceptanceError('probe-status')
     reason = 'The native model receipts or package identity failed verification. Check requested models, compiled source, and signed package.'
-    // Freeze chat receipts before any tool check can create another provider turn.
-    const transports = fs.readFileSync(path.join(env.PI_CODING_AGENT_DIR, 'subscription-probe-transports.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+    // Freeze chat receipts before the feature launch adds provider requests.
+    let receipts
+    try {
+      const text = fs.readFileSync(path.join(env.PI_CODING_AGENT_DIR, 'subscription-probe-transports.jsonl'), 'utf8').trim()
+      receipts = text ? text.split('\n').map(JSON.parse) : []
+    } catch { throw new AcceptanceError('chat-transport-file') }
+    const transports = chatTransports(receipts, candidate.models[0].id)
     const chatResult = { status: 'passed', installed: true, unchanged: true, source_sha: probe.source_sha,
       webdriver: probe.webdriver, package_sha256: candidate.sha256,
-      turns: probe.turns.map(turn => ({ ...turn, requested: candidate.models[turn.index]?.id, expected: nonce })) }
+      turns: Array.isArray(probe.turns) ? probe.turns.map(turn => ({ ...turn, requested: candidate.models[turn?.index]?.id, expected: nonce })) : probe.turns }
     acceptance(candidate, sourceSha, platform, chatResult, transports, packageName)
     verify()
     reason = 'The installed feature checks could not start with the disposable profile.'
@@ -443,6 +448,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     evidence = { ...result, transports }
     passed = true
   } catch (error) {
+    if (error instanceof AcceptanceError) condition = error.condition
     if (app) {
       failureKind = probeFailure(env)
       if (failureKind === 'auth') reason = 'Subscription authentication blocked the probe. Renew the factory access lease.'
