@@ -78,36 +78,72 @@ export function subscriptionAccounts(models, leases, now = Date.now()) {
   })
 }
 
+export class AcceptanceError extends Error {
+  constructor(condition) {
+    super(`The subscription acceptance condition failed: ${condition}.`)
+    this.condition = condition
+  }
+}
+
+function requireCondition(passed, condition) {
+  if (!passed) throw new AcceptanceError(condition)
+}
+
+// Naming can finish after chat starts and can return the chat nonce as its title.
+// Exclude only its explicit request purpose, never a reply digest or arrival position.
+export function chatTransports(receipts, firstModel) {
+  if (!Array.isArray(receipts)) return receipts
+  let named = false
+  return receipts.filter(receipt => {
+    if (receipt?.purpose === 'chat') return true
+    requireCondition(!named && receipt?.purpose === 'thread-name' &&
+      receipt.requested === firstModel && receipt.actual === firstModel &&
+      receipt.subscription === true && receipt.finished === true && receipt.tools === 0 &&
+      typeof receipt.reply_sha256 === 'string' && digest.test(receipt.reply_sha256), 'chat-transport-scope')
+    named = true
+    return false
+  })
+}
+
 export function acceptance(candidate, sourceSha, platform, result, transports, packageName) {
-  if (candidate.source_sha !== sourceSha || candidate.platform !== platform || !sha.test(sourceSha) ||
-      !platforms.includes(platform) || !digest.test(candidate.sha256) || typeof packageName !== 'string' || !packageNames[platform].test(packageName)) {
-    throw new Error('The evidence package identity is invalid.')
-  }
-  if (result?.status !== 'passed' || result.installed !== true || result.unchanged !== true || result.webdriver !== false ||
-      result.source_sha !== sourceSha || result.package_sha256 !== candidate.sha256 ||
-      !Array.isArray(result.turns) || result.turns.length !== 4 || !Array.isArray(transports) || transports.length !== 4) {
-    throw new Error('The installed subscription run did not complete four verified replies.')
-  }
+  requireCondition(sha.test(sourceSha) && candidate?.source_sha === sourceSha, 'candidate-source')
+  requireCondition(platforms.includes(platform) && candidate.platform === platform, 'candidate-platform')
+  requireCondition(digest.test(candidate.sha256), 'candidate-digest')
+  requireCondition(typeof packageName === 'string' && packageNames[platform].test(packageName), 'package-name')
+  requireCondition(result?.status === 'passed', 'probe-status')
+  requireCondition(result.installed === true, 'probe-installed')
+  requireCondition(result.unchanged === true, 'probe-unchanged')
+  requireCondition(result.webdriver === false, 'probe-webdriver')
+  requireCondition(result.source_sha === sourceSha, 'probe-source')
+  requireCondition(result.package_sha256 === candidate.sha256, 'probe-package-digest')
+  requireCondition(Array.isArray(result.turns) && result.turns.length === 4, 'chat-turn-count')
+  requireCondition(Array.isArray(transports) && transports.length === 4, 'chat-transport-count')
   const threads = new Set(), runs = new Set(), actual = new Set()
   const models = result.turns.map((turn, index) => {
     const transport = transports[index]
-    if (turn.index !== index || !uuid.test(turn.thread) || !uuid.test(turn.run) ||
-        turn.rendered !== true || turn.context !== true || !validModel(turn.requested) ||
-        transport.requested !== turn.requested || transport.actual !== turn.requested ||
-        transport.finished !== true || transport.subscription !== true || transport.tools !== 0 ||
-        typeof turn.expected !== 'string' || !/^MUNIMENT-[a-f0-9]{32}$/.test(turn.expected) ||
-        transport.reply_sha256 !== hash(Buffer.from(turn.expected))) {
-      throw new Error('A subscription reply, model receipt, or context check failed.')
-    }
+    requireCondition(turn?.index === index, 'turn-index')
+    requireCondition(uuid.test(turn.thread), 'turn-thread')
+    requireCondition(uuid.test(turn.run), 'turn-run')
+    requireCondition(turn.rendered === true, 'turn-rendered')
+    requireCondition(turn.context === true, 'turn-context')
+    requireCondition(validModel(turn.requested), 'turn-model')
+    requireCondition(transport?.requested === turn.requested, 'transport-requested-model')
+    requireCondition(transport.actual === turn.requested, 'transport-actual-model')
+    requireCondition(transport.finished === true, 'transport-finished')
+    requireCondition(transport.subscription === true, 'transport-subscription')
+    requireCondition(transport.tools === 0, 'transport-tools')
+    requireCondition(typeof turn.expected === 'string' && /^MUNIMENT-[a-f0-9]{32}$/.test(turn.expected), 'turn-expected-reply')
+    requireCondition(transport.reply_sha256 === hash(Buffer.from(turn.expected)), 'transport-reply-digest')
     threads.add(turn.thread)
     runs.add(turn.run)
     actual.add(transport.actual)
     return { subscription: true, requested: turn.requested, actual: transport.actual,
       reply: turn.expected, run_id: turn.run, thread_id: turn.thread }
   })
-  if (threads.size !== 1 || runs.size !== 4 || actual.size !== 4 || new Set(models.map(m => m.reply)).size !== 1) {
-    throw new Error('The model switch did not preserve one thread across four distinct replies.')
-  }
+  requireCondition(threads.size === 1, 'chat-thread-continuity')
+  requireCondition(runs.size === 4, 'chat-distinct-runs')
+  requireCondition(actual.size === 4, 'chat-distinct-models')
+  requireCondition(new Set(models.map(m => m.reply)).size === 1, 'chat-reply-continuity')
   return { schema: 1, source_sha: sourceSha, packages: { [packageName]: candidate.sha256 },
     cases: features.map(feature => {
       const checks = featureChecks[feature]
