@@ -14,7 +14,8 @@ import { assertAttachSocketPath, disposableProfilePrefix, isolatedEnvironment, r
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signature.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
-import { guest, runMacosProbe, selectAssets, defaultArtifactsDir, decodeSubscriptionPayload } from './e2e/runner/subscription-guest.mjs'
+import { guest, guestFailureReason, runMacosProbe, selectAssets, defaultArtifactsDir, decodeSubscriptionPayload } from './e2e/runner/subscription-guest.mjs'
+import { sandboxRequirement } from './e2e/runner/subscription-linux-sandbox.mjs'
 import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
 import { upload } from '../.github/lib/artifact-store.mjs'
 
@@ -854,6 +855,37 @@ test('the guest selects one signed package and signature per platform', () => {
   }
   assert.throws(() => selectAssets({ assets: release.assets.filter(asset => !asset.name.endsWith('.sig')) }, sourceSha, 'linux'))
   assert.throws(() => selectAssets({ assets: [] }, sourceSha, 'windows'))
+})
+
+test('the guest distinguishes the Windows job self-test from package failures', () => {
+  for (const message of [
+    'The fixture did not reach its expected state.',
+    'windows-job-test: status=1 signal=none error=none',
+    'windows-job-test: status=none signal=SIGTERM error=spawnSync ETIMEDOUT',
+    '',
+  ]) {
+    assert.equal(guestFailureReason('guest/windows-job-test', new Error(message)),
+      'The Windows process job self-test failed.')
+  }
+  const failure = new Error('Native command failed.')
+  const missingPackage = 'The signed nightly package or updater signature for this platform is missing.'
+  for (const step of ['guest/nightly-assets', 'guest/updater-signature']) {
+    assert.equal(guestFailureReason(step, failure), missingPackage)
+  }
+  assert.equal(guestFailureReason('guest/keychain-session', failure),
+    'The installed macOS probe or disposable Keychain session failed.')
+  assert.equal(guestFailureReason('guest/linux-sandbox', failure), sandboxRequirement)
+  for (const step of ['guest/install', 'guest/unknown', '']) {
+    assert.equal(guestFailureReason(step, failure), 'The native subscription guest failed.')
+  }
+  for (const message of [missingPackage,
+    'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.',
+    'Provide the FACTORY_SUBSCRIPTION_MODELS variable with four distinct supported model IDs.',
+    'Run this check on the requested native platform and architecture.',
+  ]) {
+    assert.equal(guestFailureReason('guest/unknown', new Error(message)), message)
+  }
+  assert.equal(guestFailureReason('guest/windows-job-test', undefined), 'The Windows process job self-test failed.')
 })
 
 test('the guest publishes blocked cases when models are missing', async () => {
