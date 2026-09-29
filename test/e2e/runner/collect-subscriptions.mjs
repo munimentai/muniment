@@ -48,14 +48,21 @@ export function collect(sourceSha, output, inputs, jobResults) {
       }
       evidence = JSON.parse(read(evidenceName))
       const original = JSON.parse(read('release-acceptance.json'))
-      if (evidence.status === 'blocked') {
-        if (typeof evidence.reason !== 'string' || evidence.reason.length < 20) throw new Error('The blocked reason is missing.')
+      if (evidence.status === 'blocked' || evidence.status === 'failed') {
+        if (evidence.status === 'failed' ? evidence.failure_kind !== 'product'
+          : evidence.failure_kind !== undefined && !['auth', 'quota'].includes(evidence.failure_kind)) {
+          throw new Error('The failure classification is invalid.')
+        }
+        if (typeof evidence.reason !== 'string' || evidence.reason.length < 20) throw new Error('The failure reason is missing.')
         proof = blocked(sourceSha, platform, evidence.reason)
         if (JSON.stringify(original) !== JSON.stringify(proof)) throw new Error('The platform proof does not match its runner results.')
         complete = false
-        evidence = { status: 'blocked', reason: evidence.reason }
+        evidence = { status: evidence.status, reason: redact(evidence.reason),
+          ...(evidence.failure_kind ? { failure_kind: evidence.failure_kind } : {}) }
+        proof = blocked(sourceSha, platform, evidence.reason)
         fs.rmSync(path.join(output, screenshotName), { force: true })
       } else {
+        if (evidence.status !== 'passed') throw new Error('The platform evidence status is invalid.')
         const packages = Object.entries(original.packages ?? {})
         if (packages.length !== 1) throw new Error('The platform proof does not identify one package.')
         const [packageName, sha256] = packages[0]
@@ -87,8 +94,10 @@ export function collect(sourceSha, output, inputs, jobResults) {
     fs.writeFileSync(path.join(output, evidenceName), JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 })
     fs.writeFileSync(path.join(output, `${platform}-subscription.log`), proof.cases.map(item =>
       `${item.feature}: ${item.status}\n`).join('') + diagnostics, { mode: 0o600 })
+    const summary = []
     reportSubscriptionSummary(platform, evidence.status,
-      evidence.reason || proof.cases.find(item => item.status !== 'passed')?.reason, '', redact)
+      evidence.reason || proof.cases.find(item => item.status !== 'passed')?.reason, diagnostics, redact, text => summary.push(text))
+    console.error(summary.join('\n'))
     combined.cases.push(...proof.cases)
   }
   fs.writeFileSync(path.join(output, 'release-acceptance.json'), JSON.stringify(combined, null, 2) + '\n', { mode: 0o600 })

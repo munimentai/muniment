@@ -167,6 +167,7 @@ pub fn run() {
         .on_window_event(launcher::window_event)
         .invoke_handler(tauri::generate_handler![
             subscription_probe::subscription_probe_observed,
+            subscription_probe::subscription_probe_progress,
             subscription_probe::subscription_probe_update,
             extend::extend_command,
             creations::creation_list,
