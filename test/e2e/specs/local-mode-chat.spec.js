@@ -119,7 +119,10 @@ describe('installed local-mode chat', () => {
     console.log(`The first local-mode reply took ${((Date.now() - launchStarted) / 1000).toFixed(1)} seconds.`)
     await checkCandidatePackages()
 
-    await browser.waitUntil(async () => !(await (await $('button=Stop')).isExisting()), { timeout: 180000 })
+    await browser.waitUntil(async () => !(await (await $('button[aria-label="Stop"]')).isExisting()), {
+      timeout: 180000,
+      timeoutMsg: 'The first local-mode run did not finish.',
+    })
     const registered = await browser.execute(async () => window.__TAURI__.core.invoke(
       'plugin:global-shortcut|is_registered', { shortcut: 'Control+Alt+Space' },
     ))
@@ -152,8 +155,24 @@ describe('installed local-mode chat', () => {
     await launcher.setValue(launcherPrompt)
     await browser.keys('Enter')
     await browser.switchToWindow(mainHandle)
-    await browser.waitUntil(async () => (await (await $('.thread')).getText()).includes(launcherPrompt))
-    await browser.waitUntil(async () => !(await browser.execute(async () => window.__TAURI__.core.invoke('launcher_is_visible'))))
+    try {
+      await browser.waitUntil(async () => (await (await $('.thread')).getText()).includes(launcherPrompt))
+      await browser.waitUntil(async () => !(await browser.execute(async () => window.__TAURI__.core.invoke('launcher_is_visible'))))
+    } catch (error) {
+      try {
+        await browser.switchToWindow(launcherHandle)
+        console.error('The launcher alert:', await (await $('[role="alert"]')).getProperty('textContent'))
+      } catch (diagnosticError) {
+        console.error('The spec could not read the launcher alert.', diagnosticError)
+      } finally {
+        try {
+          await browser.switchToWindow(mainHandle)
+        } catch (restoreError) {
+          console.error('The spec could not restore the main window.', restoreError)
+        }
+      }
+      throw error
+    }
     expect(await composer.getValue()).toBe('')
     const currentThread = await browser.execute(async () => window.__TAURI__.core.invoke('chat_current_thread'))
     expect(currentThread).toBeTruthy()
