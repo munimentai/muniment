@@ -190,7 +190,6 @@ impl Reader for SidecarReader {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     // A shell script stands in for the sidecar: it echoes the request's call
     // back inside a canned answer, or fails the way the sidecar fails.
@@ -204,8 +203,17 @@ mod tests {
         ));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("muniment-reader");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Write in a child so concurrent test spawns cannot inherit the writer.
+        // An inherited writer can make exec fail with ETXTBSY after this thread closes it.
+        let status = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("printf '%s\\n' \"$2\" > \"$1\" && chmod 755 \"$1\"")
+            .arg("stub")
+            .arg(&path)
+            .arg(format!("#!/bin/sh\n{script}"))
+            .status()
+            .unwrap();
+        assert!(status.success(), "The fixture writer failed: {status}");
         path
     }
 
