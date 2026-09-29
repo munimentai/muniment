@@ -92,7 +92,7 @@
       await wait(() => {
         const responses = [...document.querySelectorAll('.response')]
         return responses.length === index + 1 && responses.every(response =>
-          visible(response) && response.querySelector('.response-prose')?.textContent.trim() === plan.nonce && response.querySelector('.provenance'))
+          visible(response) && response.querySelector('.assistant-markdown')?.textContent.trim() === plan.nonce && response.querySelector('.provenance'))
       })
       turns.push({ index, thread, run: entry.runId, rendered: true, context: true })
       await progress('complete')
@@ -102,7 +102,7 @@
       await wait(async () => {
         if (await invoke('chat_current_thread') !== turns[0].thread) return false
         const responses = [...document.querySelectorAll('.response')].filter(response =>
-          response.querySelector('.response-prose')?.textContent.trim() === plan.nonce)
+          response.querySelector('.assistant-markdown')?.textContent.trim() === plan.nonce)
         return responses.length === 4 && responses.every(visible)
       })
     }
@@ -115,7 +115,7 @@
     const style = document.createElement('style')
     style.textContent = 'body * { visibility: hidden !important } [data-subscription-evidence], [data-subscription-evidence] * { visibility: visible !important }'
     for (const response of [...document.querySelectorAll('.response')]) {
-      if (response.querySelector('.response-prose')?.textContent.trim() === plan.nonce) response.setAttribute?.('data-subscription-evidence', '')
+      if (response.querySelector('.assistant-markdown')?.textContent.trim() === plan.nonce) response.setAttribute?.('data-subscription-evidence', '')
     }
     document.head.append(style)
     document.querySelector('[data-subscription-evidence]')?.scrollIntoView?.({ block: 'start' })

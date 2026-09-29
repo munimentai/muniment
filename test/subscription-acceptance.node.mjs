@@ -355,7 +355,7 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
     const prompts = [], entries = [], progress = []
     const composer = { value: '', dispatchEvent() {}, getClientRects: () => [1] }
     const responses = () => entries.map(entry => ({ getClientRects: () => [1], querySelector: selector =>
-      selector === '.response-prose' ? { textContent: entry.text } : {} }))
+      selector === '.assistant-markdown' ? { textContent: entry.text } : selector === '.provenance' ? {} : null }))
     const send = { textContent: 'Send', getAttribute: name => name === 'aria-label' ? 'Send' : mode === 'disabled-send' ? 'true' : null,
       getClientRects: () => [1], click: () => {
       prompts.push(composer.value)
