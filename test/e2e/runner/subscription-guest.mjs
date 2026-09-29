@@ -14,6 +14,20 @@ const missingPackage = 'The signed nightly package or updater signature for this
 const missingLeases = 'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.'
 const missingModels = 'Provide the FACTORY_SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
 
+export function guestFailureReason(step, error) {
+  const known = [missingPackage, missingLeases, missingModels,
+    'Run this check on the requested native platform and architecture.']
+  if (known.includes(error?.message)) return error.message
+  switch (step) {
+    case 'guest/windows-job-test': return 'The Windows process job self-test failed.'
+    case 'guest/keychain-session': return 'The installed macOS probe or disposable Keychain session failed.'
+    case 'guest/linux-sandbox': return sandboxRequirement
+    case 'guest/nightly-assets':
+    case 'guest/updater-signature': return missingPackage
+    default: return 'The native subscription guest failed.'
+  }
+}
+
 export function decodeSubscriptionPayload(encoded, reason) {
   if (typeof encoded !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
     throw new Error(reason)
@@ -167,11 +181,7 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
     }
     return await run(probe)
   } catch (error) {
-    const known = [missingPackage, missingLeases, missingModels,
-      'Run this check on the requested native platform and architecture.']
-    const reason = known.includes(error?.message) ? error.message
-      : step === 'guest/keychain-session' ? 'The installed macOS probe or disposable Keychain session failed.'
-        : step === 'guest/linux-sandbox' ? sandboxRequirement : missingPackage
+    const reason = guestFailureReason(step, error)
     const redact = subscriptionRedactor({ leases, values: [token, encodedLeases] })
     writeBlocked(artifacts, sourceSha, platform, reason,
       `step=${step}\nerror=${error.message}\ninstall tail:\n${readDiagnosticLog(path.join(root, 'install.log'), root, redact)}`, redact)
