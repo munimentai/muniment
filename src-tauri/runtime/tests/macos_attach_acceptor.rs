@@ -250,6 +250,7 @@ fn hello_frame() -> Vec<u8> {
 
 struct PairingBoundary {
     server: Option<UnixStream>,
+    ready: std::sync::mpsc::Sender<()>,
 }
 
 impl MacosAttachServeBoundary for PairingBoundary {
@@ -261,6 +262,7 @@ impl MacosAttachServeBoundary for PairingBoundary {
 
     fn serve_next(&mut self, service_factory: ServiceFactory) -> WindowsAttachAcceptOutcome {
         let mut service = service_factory().unwrap();
+        self.ready.send(()).unwrap();
         let approval = service.boundaries.signed_workspace_approval();
         let coordinator = service.boundaries.approval_coordinator();
         let live_connections = service.boundaries.live_connections();
@@ -319,10 +321,12 @@ fn companion_pairing_uses_the_activation_presenter_and_live_registry() {
     client
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let mut acceptor =
         MacosAttachAcceptorWithBoundary::bind_with(&profile.profile, &profile.config, |_| {
             Ok(PairingBoundary {
                 server: Some(server),
+                ready: ready_tx,
             })
         })
         .unwrap();
@@ -336,6 +340,8 @@ fn companion_pairing_uses_the_activation_presenter_and_live_registry() {
     let server_thread = thread::spawn(move || acceptor.serve_next());
 
     client.write_all(&hello_frame()).unwrap();
+    // Keep service setup outside the socket read timeout.
+    ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     let _: Welcome = decode_frame(&read_frame(&mut client)).unwrap().unwrap().0;
     let authorized: Authorized = decode_frame(&read_frame(&mut client)).unwrap().unwrap().0;
     state
