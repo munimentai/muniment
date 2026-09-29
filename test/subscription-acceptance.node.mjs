@@ -9,7 +9,7 @@ import path from 'node:path'
 import vm from 'node:vm'
 import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
-import { acceptance, blocked, checkIdentity, hash, platforms, subscriptionAccounts, features, featureChecks, chatFeatures } from './e2e/support/subscription-acceptance.mjs'
+import { AcceptanceError, acceptance, blocked, chatTransports, checkIdentity, hash, platforms, subscriptionAccounts, features, featureChecks, chatFeatures } from './e2e/support/subscription-acceptance.mjs'
 import { assertAttachSocketPath, disposableProfilePrefix, isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signature.mjs'
@@ -111,6 +111,85 @@ for (const [name, mutate] of [
   const f = fixture()
   mutate(f)
   assert.throws(() => build(f))
+})
+
+test('the chat receipts exclude only the leading thread name from the signed probe', () => {
+  const f = fixture()
+  const naming = { ...f.transports[0], reply_sha256: hash(Buffer.from('Token memory')) }
+  const receipts = [naming, ...f.transports]
+  assert.throws(() => build({ ...f, transports: receipts }), { condition: 'chat-transport-count' })
+  const selected = chatTransports(receipts, models[0].id, nonce)
+  assert.deepEqual(selected, f.transports)
+  assert.equal(selected.length, 4)
+  assert.equal(receipts.length, 5)
+  assert.ok(build({ ...f, transports: selected }).cases.every(item => item.status === 'passed'))
+  assert.deepEqual(chatTransports(f.transports, models[0].id, nonce), f.transports)
+
+  for (const invalid of [null, {}, { ...naming, requested: models[1].id }, { ...naming, actual: 'wrong' },
+    { ...naming, subscription: false }, { ...naming, finished: false }, { ...naming, tools: 1 },
+    { ...naming, reply_sha256: 'PRIVATE REPLY' }, f.transports[0]]) {
+    assert.throws(() => chatTransports([invalid, ...f.transports], models[0].id, nonce),
+      { condition: 'chat-transport-scope' })
+  }
+  for (const invalid of [[], f.transports.slice(1), [...receipts, naming],
+    [f.transports[0], naming, ...f.transports.slice(1)], [...f.transports, naming],
+    [naming, ...f.transports.slice(1)], [naming, ...f.transports.slice().reverse()]]) {
+    assert.throws(() => build({ ...f, transports: chatTransports(invalid, models[0].id, nonce) }))
+  }
+  for (const mutate of [f => { f.transports[0].actual = 'wrong' }, f => { f.transports[0].finished = false },
+    f => { f.transports[0].reply_sha256 = hash(Buffer.from('wrong reply')) }, f => { f.transports[0].tools = 1 }]) {
+    const broken = fixture()
+    mutate(broken)
+    assert.throws(() => build({ ...broken, transports: chatTransports([naming, ...broken.transports], models[0].id, nonce) }))
+  }
+})
+
+for (const [condition, mutate] of [
+  ['candidate-source', f => { f.candidate.source_sha = 'PRIVATE SOURCE' }],
+  ['candidate-platform', f => { f.candidate.platform = 'PRIVATE PLATFORM' }],
+  ['candidate-digest', f => { f.candidate.sha256 = 'PRIVATE DIGEST' }],
+  ['probe-status', f => { f.result.status = 'PRIVATE STATUS' }],
+  ['probe-installed', f => { f.result.installed = false }],
+  ['probe-unchanged', f => { f.result.unchanged = false }],
+  ['probe-webdriver', f => { f.result.webdriver = true }],
+  ['probe-source', f => { f.result.source_sha = 'PRIVATE SOURCE' }],
+  ['probe-package-digest', f => { f.result.package_sha256 = 'PRIVATE DIGEST' }],
+  ['chat-turn-count', f => { f.result.turns = [] }],
+  ['chat-transport-count', f => { f.transports.push(f.transports[0]) }],
+  ['turn-index', f => { f.result.turns[0] = null }],
+  ['turn-thread', f => { f.result.turns[0].thread = 'PRIVATE THREAD' }],
+  ['turn-run', f => { f.result.turns[0].run = 'PRIVATE RUN' }],
+  ['turn-rendered', f => { f.result.turns[0].rendered = false }],
+  ['turn-context', f => { f.result.turns[0].context = false }],
+  ['turn-model', f => { f.result.turns[0].requested = 'PRIVATE MODEL' }],
+  ['transport-requested-model', f => { f.transports[0] = null }],
+  ['transport-actual-model', f => { f.transports[0].actual = 'PRIVATE MODEL' }],
+  ['transport-finished', f => { f.transports[0].finished = false }],
+  ['transport-subscription', f => { f.transports[0].subscription = false }],
+  ['transport-tools', f => { f.transports[0].tools = 1 }],
+  ['turn-expected-reply', f => { f.result.turns[0].expected = 'PRIVATE REPLY' }],
+  ['transport-reply-digest', f => { f.transports[0].reply_sha256 = 'PRIVATE REPLY' }],
+  ['chat-thread-continuity', f => { f.result.turns[1].thread = '33333333-3333-4333-8333-333333333333' }],
+  ['chat-distinct-runs', f => { f.result.turns[1].run = f.result.turns[0].run }],
+  ['chat-distinct-models', f => {
+    f.result.turns[1].requested = f.result.turns[0].requested
+    f.transports[1] = f.transports[0]
+  }],
+  ['chat-reply-continuity', f => {
+    f.result.turns[1].expected = 'MUNIMENT-' + 'd'.repeat(32)
+    f.transports[1].reply_sha256 = hash(Buffer.from(f.result.turns[1].expected))
+  }],
+]) test(`the acceptance failure records only the ${condition} label`, () => {
+  const f = { ...fixture(), candidate: { ...candidate } }
+  mutate(f)
+  assert.throws(() => build(f, f.candidate), error => {
+    assert.ok(error instanceof AcceptanceError)
+    assert.equal(error.condition, condition)
+    assert.equal(error.message, `The subscription acceptance condition failed: ${condition}.`)
+    assert.equal(JSON.stringify(error).includes('PRIVATE'), false)
+    assert.equal(JSON.stringify(error).includes(nonce), false)
+    return true
+  })
 })
 
 test('the package binds the source, platform, asset name, and digest', () => {
@@ -569,12 +648,59 @@ async function identityRun(mutate, publicKeyFile = true) {
       ...(publicKeyFile === true ? { publicKeyFile: keyFile } : publicKeyFile === null ? {} : { publicKeyFile }),
     })
     const proof = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json')))
-    return { code, proof, reason: proof.cases[0].reason, log: fs.readFileSync(path.join(output, 'linux-subscription.log'), 'utf8') }
+    return { code, proof, reason: proof.cases[0].reason, log: fs.readFileSync(path.join(output, 'linux-subscription.log'), 'utf8'),
+      evidence: JSON.parse(fs.readFileSync(path.join(output, 'linux-subscription.json'))) }
   } finally {
     if (previous === undefined) delete process.env.MUNIMENT_NATIVE_DISPOSABLE_USER
     else process.env.MUNIMENT_NATIVE_DISPOSABLE_USER = previous
     fs.rmSync(root, { recursive: true, force: true })
   }
+}
+
+for (const condition of ['probe-source', 'probe-webdriver', 'chat-turn-count', 'chat-transport-count', 'chat-transport-file', 'none']) {
+  test(`the installed runner preserves the ${condition} acceptance outcome`, { skip: !nativeLinux }, async () => {
+    const f = fixture()
+    const result = await identityRun(files => {
+      const probe = { passed: true, source_sha: sourceSha, webdriver: false, turns: f.result.turns }
+      if (condition === 'probe-source') probe.source_sha = 'b'.repeat(40)
+      if (condition === 'probe-webdriver') probe.webdriver = true
+      if (condition === 'chat-turn-count') probe.turns = []
+      const receipts = [{ ...f.transports[0], reply_sha256: hash(Buffer.from('Token memory')) }, ...f.transports]
+      if (condition === 'chat-transport-count') receipts.push(f.transports[0])
+      const script = Buffer.from(`#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path')
+const state = process.env.MUNIMENT_STATE_DIR
+const plan = JSON.parse(fs.readFileSync(path.join(state, 'subscription-probe.json')))
+const probe = ${JSON.stringify(probe)}
+const receipts = ${JSON.stringify(receipts)}
+const crypto = require('node:crypto')
+for (const receipt of receipts.slice(1)) receipt.reply_sha256 = crypto.createHash('sha256').update(plan.nonce).digest('hex')
+fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'subscription-probe-transports.jsonl'),
+  ${condition === 'chat-transport-file' ? "'PRIVATE REPLY AND CREDENTIAL'" : "receipts.map(row => JSON.stringify(row)).join('\\n')"})
+// Stop after chat verification without a native feature test.
+if (plan.phase !== 'chat') probe.passed = false
+fs.writeFileSync(path.join(state, 'subscription-probe-result.json'), JSON.stringify(probe))
+setInterval(() => {}, 1000)
+`)
+      fs.writeFileSync(files.packageFile, script)
+      fs.writeFileSync(files.executable, script)
+      fs.chmodSync(files.executable, 0o755)
+      fs.writeFileSync(files.candidateFile, JSON.stringify({ ...candidate, sha256: hash(script) }))
+      fs.writeFileSync(files.signatureFile, signUpdaterBytes(script, files.keys.key, { fileName: files.packageName, version: '1.0.0' }))
+    })
+    assert.equal(result.code, 1)
+    assert.equal(result.evidence.condition, condition === 'none' ? undefined : condition)
+    if (condition === 'none') {
+      assert.match(result.log, /step=features\/verify-result/)
+      assert.doesNotMatch(result.log, /acceptance condition failed/)
+    } else {
+      assert.match(result.log, /step=chat\/verify-result/)
+      assert.ok(result.log.includes(`The subscription acceptance condition failed: ${condition}.`))
+    }
+    for (const value of [nonce, lease.access, lease.account_id, 'PRIVATE']) {
+      assert.equal(JSON.stringify(result).includes(value), false)
+    }
+  })
 }
 
 for (const end of ['exit 42', 'kill -TERM $$']) {
