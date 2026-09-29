@@ -84,6 +84,7 @@ public sealed class SubscriptionJob : IDisposable
         return result.Append('\\', slashes * 2).Append('"').ToString();
     }
     public SubscriptionJob(string executable, string[] args, string name) {
+        // Use the caller's default DACL. The same user opens the job after an MSI restart.
         job = CreateJobObject(IntPtr.Zero, name);
         Check(job != IntPtr.Zero);
         if (Marshal.GetLastWin32Error() == 183) {
@@ -94,7 +95,8 @@ public sealed class SubscriptionJob : IDisposable
         var process = new ProcessInfo();
         try {
             var limits = new ExtendedLimits();
-            limits.basic.flags = 0x2000; // Closing the last job handle kills every member. The job blocks breakaway.
+            // Set only KILL_ON_JOB_CLOSE. Neither breakaway flag nor UI restrictions apply.
+            limits.basic.flags = 0x2000;
             Check(SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf(limits)));
             var startup = new StartupInfo();
             startup.cb = Marshal.SizeOf(startup);
@@ -108,7 +110,10 @@ public sealed class SubscriptionJob : IDisposable
                 IntPtr.Zero, null, ref startup, out process));
             root = process.process;
             Pid = process.pid;
-            Check(AssignProcessToJobObject(job, root));
+            if (!AssignProcessToJobObject(job, root)) {
+                int error = Marshal.GetLastWin32Error();
+                throw new Win32Exception(error, "AssignProcessToJobObject failed. GetLastError=" + error + ".");
+            }
             Check(ResumeThread(process.thread) != uint.MaxValue);
         } catch {
             if (root != IntPtr.Zero) {
