@@ -1391,6 +1391,8 @@ describe('workspace composer entry', () => {
     const settings = screen.getByRole('button', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-expanded', 'false')
     await fireEvent.click(settings)
+    // Wait for the lazy import before the DOM query starts its timeout.
+    await vi.dynamicImportSettled()
     const dialog = await screen.findByRole('dialog', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-expanded', 'true')
     expect(dialog).toHaveAttribute('aria-modal', 'true')
