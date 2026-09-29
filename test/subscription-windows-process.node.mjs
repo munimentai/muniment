@@ -6,6 +6,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { launchWindowsTree, stopWindowsTree, windowsTreeAlive } from './e2e/support/subscription-windows-process.mjs'
 import { removeProbeProfile } from './e2e/runner/subscriptions.mjs'
+import { readDiagnosticLog, subscriptionRedactor } from './e2e/support/subscription-diagnostics.mjs'
 
 const waitFor = async condition => {
   const deadline = Date.now() + 15_000
@@ -19,7 +20,7 @@ for (const mode of ['live', 'exited', 'restart']) {
   const rootExits = mode !== 'live'
   test(`Windows jobs retain descendants after the intermediate exits in ${mode} mode`, {
     skip: process.platform !== 'win32', timeout: 90_000,
-  }, async () => {
+  }, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription job test-'))
     const profile = path.join(root, 'profile')
     fs.mkdirSync(profile)
@@ -36,11 +37,21 @@ try {
 } finally { $file.Dispose() }
 `)
     fs.writeFileSync(fixture, `const { spawn } = require('node:child_process')
+const fs = require('node:fs')
+const path = require('node:path')
 const [mode, holder, locked, ready, rootExits] = process.argv.slice(2)
+const logFile = path.join(__dirname, 'job.log')
+const log = fs.openSync(logFile, 'a')
+const stderr = fs.openSync(path.join(__dirname, 'holder-stderr.log'), 'a')
+// Detach the Node intermediate. Let PowerShell create a hidden console instead of using DETACHED_PROCESS.
 const child = mode === 'root'
-  ? spawn(process.execPath, [__filename, 'middle', holder, locked, ready], { detached: true, stdio: 'ignore' })
-  : spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', holder, '-Locked', locked, '-Ready', ready], { detached: true, stdio: 'ignore' })
+  ? spawn(process.execPath, [__filename, 'middle', holder, locked, ready], { detached: true, stdio: ['ignore', log, log] })
+  : spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', holder, '-Locked', locked, '-Ready', ready], { windowsHide: true, stdio: ['ignore', log, stderr] })
+child.once('error', error => fs.appendFileSync(logFile, 'The ' + mode + ' fixture could not start its child.\\n' + error.stack + '\\n'))
+fs.appendFileSync(logFile, 'The ' + mode + ' fixture started child pid=' + (child.pid ?? 'none') + '.\\n')
 child.unref()
+fs.closeSync(log)
+fs.closeSync(stderr)
 if (mode === 'root' && rootExits === 'false') setInterval(() => {}, 1000)
 `)
     const log = fs.openSync(path.join(root, 'job.log'), 'a')
@@ -101,6 +112,12 @@ try {
       await removeProbeProfile(profile)
       assert.equal(fs.existsSync(profile), false)
       await stopWindowsTree(job)
+    } catch (error) {
+      const redact = subscriptionRedactor()
+      const diagnostics = ['job.log', 'holder-stderr.log'].map(name =>
+        `${name}:\n${readDiagnosticLog(path.join(root, name), root, redact)}`).join('\n')
+      t.diagnostic(diagnostics)
+      throw error
     } finally {
       try { if (job) await stopWindowsTree(job) }
       finally {
