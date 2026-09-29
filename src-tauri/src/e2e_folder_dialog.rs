@@ -15,6 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod accessibility;
+
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
@@ -116,39 +118,43 @@ fn press_confirm(identifier: &str, deadline: Instant) -> Result<(), String> {
     Ok(())
 }
 
+struct NativeAccessibility;
+
+impl accessibility::Accessibility for NativeAccessibility {
+    type Element = CFType;
+
+    fn elements(&self, element: &CFType, name: &str) -> Result<Vec<CFType>, String> {
+        let array = ax_attribute(element, name)?
+            .downcast::<CFArray>()
+            .ok_or("The Home picker needs an Accessibility element list.")?;
+        Ok(array
+            .iter()
+            // SAFETY: The array owns these Core Foundation objects.
+            .map(|element| unsafe { CFType::wrap_under_get_rule(*element) })
+            .collect())
+    }
+
+    fn element(&self, element: &CFType, name: &str) -> Result<CFType, String> {
+        ax_attribute(element, name)
+    }
+
+    fn string(&self, element: &CFType, name: &str) -> Result<String, String> {
+        ax_attribute(element, name)?
+            .downcast::<CFString>()
+            .map(|value| value.to_string())
+            .ok_or_else(|| format!("The Home picker needs text for {name}."))
+    }
+
+    fn boolean(&self, element: &CFType, name: &str) -> Result<bool, String> {
+        ax_attribute(element, name)?
+            .downcast::<CFBoolean>()
+            .map(bool::from)
+            .ok_or_else(|| format!("The Home picker needs a boolean for {name}."))
+    }
+}
+
 fn confirm_button(app: &CFType, identifier: &str) -> Result<Option<CFType>, String> {
-    let windows = ax_attribute(app, "AXWindows")?
-        .downcast::<CFArray>()
-        .ok_or("The Home picker needs an Accessibility window list.")?;
-    let panels: Vec<_> = windows
-        .iter()
-        // SAFETY: AXWindows contains Core Foundation objects owned by the array.
-        .map(|window| unsafe { CFType::wrap_under_get_rule(*window) })
-        .filter(|window| {
-            ax_attribute(window, "AXIdentifier")
-                .ok()
-                .and_then(|value| value.downcast::<CFString>())
-                .is_some_and(|value| value.to_string() == identifier)
-        })
-        .collect();
-    if panels.len() > 1 {
-        return Err("The Home picker needs exactly one matching Accessibility window.".into());
-    }
-    if panels.is_empty() {
-        return Ok(None);
-    }
-    let panel = &panels[0];
-    let button = ax_attribute(panel, "AXDefaultButton")?;
-    if ax_attribute(&button, "AXWindow")? != *panel {
-        return Err("The Home picker button belongs to another window.".into());
-    }
-    if !ax_attribute(&button, "AXEnabled")?
-        .downcast::<CFBoolean>()
-        .is_some_and(bool::from)
-    {
-        return Ok(None);
-    }
-    Ok(Some(button))
+    accessibility::confirm_button(&NativeAccessibility, app, identifier)
 }
 
 fn panel_directory(panel: &NSOpenPanel) -> Option<String> {
