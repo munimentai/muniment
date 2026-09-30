@@ -120,7 +120,8 @@ function fixture() {
   transports: turns.map(turn => ({ purpose: 'chat', requested: turn.requested, actual: turn.requested, subscription: true,
     finished: true, tools: 0, reply_sha256: hash(Buffer.from(nonce)) })) }
 }
-const build = ({ result, transports }, identity = candidate) => acceptance(identity, sourceSha, 'linux', result, transports, 'muniment_1.0.0_amd64.AppImage')
+const build = ({ result, transports }, identity = candidate, platform = 'linux') =>
+  acceptance(identity, sourceSha, platform, result, transports, packageNames[platform])
 const lease = { provider: 'openai-codex', access: 'fixture-access', account_id: 'fixture-account', expires_ms: Date.now() + 30 * 60_000 }
 
 test('the runner emits every required case in the consumer schema', () => {
@@ -196,22 +197,31 @@ for (const [name, mutate] of [
   assert.throws(() => build(f))
 })
 
-for (const title of ['Token memory', nonce]) {
-  test(`the chat receipts use request purpose when the title ${title === nonce ? 'equals the nonce' : 'differs from the nonce'}`, () => {
-    const f = fixture()
-    const naming = { ...f.transports[0], purpose: 'thread-name', reply_sha256: hash(Buffer.from(title)) }
-    for (let position = 0; position <= 4; position++) {
-      const receipts = [...f.transports]
-      receipts.splice(position, 0, naming)
-      assert.throws(() => build({ ...f, transports: receipts }), { condition: 'chat-transport-count' })
-      const selected = chatTransports(receipts, models[0].id)
-      assert.deepEqual(selected, f.transports)
-      assert.equal(selected.length, 4)
-      assert.equal(receipts.length, 5)
-      assert.ok(build({ ...f, transports: selected }).cases.every(item => item.status === 'passed'))
-    }
-    assert.deepEqual(chatTransports(f.transports, models[0].id), f.transports)
-  })
+for (const platform of platforms) {
+  for (const title of ['Token memory', nonce]) {
+    test(`the ${platform} chat receipts use request purpose when the title ${title === nonce ? 'equals the nonce' : 'differs from the nonce'}`, () => {
+      const f = fixture()
+      const identity = { ...candidate, platform }
+      const naming = { ...f.transports[0], purpose: 'thread-name', reply_sha256: hash(Buffer.from(title)) }
+      for (let position = 0; position <= 4; position++) {
+        const receipts = [...f.transports]
+        receipts.splice(position, 0, naming)
+        assert.throws(() => build({ ...f, transports: receipts }, identity, platform), { condition: 'chat-transport-count' })
+        const selected = chatTransports(receipts, models[0].id)
+        assert.deepEqual(selected, f.transports)
+        assert.equal(selected.length, 4)
+        assert.equal(receipts.length, 5)
+        assert.ok(build({ ...f, transports: selected }, identity, platform).cases.every(item => item.status === 'passed'))
+        for (const transports of [selected.slice(0, 3), [...selected, selected[0]]]) {
+          assert.throws(() => build({ ...f, transports }, identity, platform), { condition: 'chat-transport-count' })
+        }
+        const pending = structuredClone(selected)
+        pending[3].finished = false
+        assert.throws(() => build({ ...f, transports: pending }, identity, platform), { condition: 'transport-finished' })
+      }
+      assert.deepEqual(chatTransports(f.transports, models[0].id), f.transports)
+    })
+  }
 }
 
 test('the chat receipts reject unknown purposes, extra chat receipts, and invalid naming receipts', () => {
@@ -759,7 +769,7 @@ async function identityRun(mutate, publicKeyFile = true) {
   }
 }
 
-for (const condition of ['probe-source', 'probe-webdriver', 'chat-turn-count', 'chat-transport-count', 'chat-transport-file', 'none']) {
+for (const condition of ['probe-source', 'probe-webdriver', 'chat-turn-count', 'chat-transport-count', 'chat-transport-file', 'transport-finished', 'none']) {
   test(`the installed runner preserves the ${condition} acceptance outcome`, { skip: !nativeLinux }, async () => {
     const f = fixture()
     const result = await identityRun(files => {
@@ -770,6 +780,7 @@ for (const condition of ['probe-source', 'probe-webdriver', 'chat-turn-count', '
       // The naming request finishes last and returns the nonce as its title.
       const receipts = [...f.transports, { ...f.transports[0], purpose: 'thread-name' }]
       if (condition === 'chat-transport-count') receipts.push(f.transports[0])
+      if (condition === 'transport-finished') receipts[3].finished = false
       const script = Buffer.from(`#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path')
 const state = process.env.MUNIMENT_STATE_DIR
