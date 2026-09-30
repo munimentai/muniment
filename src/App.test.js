@@ -154,6 +154,12 @@ async function findWorkspaceComposer() {
   return composer
 }
 
+async function findReadyWorkspaceComposer() {
+  const composer = await findWorkspaceComposer()
+  await waitFor(() => expect(screen.queryByText('Send waits for the thread. Your draft stays here.')).not.toBeInTheDocument())
+  return composer
+}
+
 async function stopClickCapture(voice) {
   await fireEvent.click(voice)
   await fireEvent.click(voice)
@@ -318,6 +324,7 @@ beforeEach(() => {
     if (command === 'reader_objects') return readerObjectsResult
     if (command === 'reader_connect') return readerConnectResult
     if (command === 'reader_run') return readerRunResults.length > 1 ? readerRunResults.shift() : readerRunResults[0]
+    if (command === 'chat_select_thread') return undefined
     throw new Error(`unexpected command: ${command}`)
   })
 })
@@ -380,6 +387,7 @@ describe('entitlement change toast', () => {
       if (command === 'auth_devices') return []
       if (command === 'auth_sign_out') return { signed_in: false, subject: null }
       if (command === 'local_mode_enter') return undefined
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -477,6 +485,7 @@ describe('pairing decisions', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'attach_pairing_decide') throw new Error('sensitive pairing detail')
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -633,6 +642,7 @@ describe('workspace composer entry', () => {
       if (command === 'auth_devices') return []
       if (command === 'attach_companions') return []
       if (command === 'open_login_items') return undefined
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -697,6 +707,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -722,6 +733,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -744,6 +756,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -768,6 +781,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -797,6 +811,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -834,6 +849,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'chat_current_thread') return 'thread-1'
       if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
   }
@@ -879,6 +895,7 @@ describe('workspace composer entry', () => {
           })),
         }]
       }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -1028,6 +1045,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'chat_thread_summaries') return { summaries: [], nextCursor: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -1049,6 +1067,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return Promise.resolve([])
       if (command === 'auth_entitlement_snapshot') return Promise.resolve(snapshot())
       if (command === 'chat_thread_summaries') return Promise.resolve({ summaries: [], nextCursor: null })
+      if (command === 'chat_select_thread') return Promise.resolve()
       return Promise.reject(new Error(`unexpected command: ${command}`))
     })
     render(App)
@@ -1069,6 +1088,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return Promise.resolve([])
       if (command === 'auth_entitlement_snapshot') return Promise.resolve(snapshot())
       if (command === 'chat_thread_summaries') return Promise.resolve({ summaries: [], nextCursor: null })
+      if (command === 'chat_select_thread') return Promise.resolve()
       return Promise.reject(new Error(`unexpected command: ${command}`))
     })
     render(App)
@@ -1101,6 +1121,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_submit') return { runId: 'run-upgrade', attachments: [] }
       if (command === 'chat_resume') return { runId: 'run-interrupted' }
       if (command === 'chat_queue') return undefined
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
   }
@@ -1108,7 +1129,7 @@ describe('workspace composer entry', () => {
   it('holds Send behind the update notice while the runtime upgrade is pending', async () => {
     mockRuntimeUpgrade({ pending: true })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'A question' } })
 
     const notice = screen.getByText('A Muniment update is finishing.')
@@ -1127,7 +1148,7 @@ describe('workspace composer entry', () => {
   it('drops the update notice and releases Send once the runtime upgrade finishes', async () => {
     mockRuntimeUpgrade({ pending: true })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'A question' } })
     const send = screen.getByRole('button', { name: 'Send' })
     expect(send).toHaveAttribute('aria-disabled', 'true')
@@ -1260,7 +1281,7 @@ describe('workspace composer entry', () => {
       { threadId: 'thread-1', title: 'Current thread', updatedAt: '' },
       { threadId: 'thread-2', title: 'Other thread', updatedAt: '' },
     ]
-    let recovered = false
+    let recovered = true
     let open = deferred()
     const fallback = invoke.getMockImplementation()
     invoke.mockImplementation((command, payload) => {
@@ -1278,6 +1299,7 @@ describe('workspace composer entry', () => {
     await fireEvent.input(composer, { target: { value: 'Keep this draft' } })
     const send = screen.getByRole('button', { name: 'Send' })
     expect(send).toBeEnabled()
+    recovered = false
     await fireEvent.click(screen.getByRole('button', { name: /^Other thread/ }))
 
     expect(send).toBeDisabled()
@@ -1684,6 +1706,7 @@ describe('workspace composer entry', () => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
       if (command === 'local_mode_enter') return localEntry.promise
       if (command === 'chat_thread_open') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -1705,6 +1728,7 @@ describe('workspace composer entry', () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'attach_listener_status') return { connected: true, supervisor_running: true }
       if (command === 'chat_thread_open') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
 
@@ -1730,6 +1754,7 @@ describe('workspace composer entry', () => {
       if (command === 'attach_listener_status') return { connected: false, supervisor_running: true }
       if (command === 'local_mode_enter') return undefined
       if (command === 'chat_thread_open') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
 
@@ -1749,6 +1774,7 @@ describe('workspace composer entry', () => {
     localModeStatus = true
     invoke.mockImplementation(async (command) => {
       if (command === 'chat_thread_open') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
 
@@ -1764,6 +1790,7 @@ describe('workspace composer entry', () => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
       if (command === 'local_mode_enter') return undefined
       if (command === 'chat_thread_open') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -1819,6 +1846,7 @@ describe('workspace composer entry', () => {
       if (command === 'auth_sign_in') return signInRequest.promise
       if (command === 'chat_thread_open') return []
       if (command === 'local_mode_provider_inventory') return { providers: [], hidden: [] }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     const { container } = render(App)
@@ -1849,6 +1877,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -1879,6 +1908,7 @@ describe('workspace composer entry', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -1963,6 +1993,7 @@ describe('workspace composer entry', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_resume') return new Promise((resolve) => { resolveResume = resolve })
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -2602,6 +2633,7 @@ describe('artifact rail', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -2634,6 +2666,7 @@ describe('artifact rail', () => {
       if (command === 'chat_thread_open') return []
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -2948,6 +2981,7 @@ describe('thread name', () => {
       if (command === 'chat_delete_thread') return undefined
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -2997,6 +3031,7 @@ describe('thread name', () => {
       if (command === 'chat_delete_thread') return undefined
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -3044,6 +3079,7 @@ describe('thread name', () => {
       if (command === 'chat_delete_thread') return undefined
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -3070,6 +3106,7 @@ describe('thread name', () => {
       if (command === 'chat_delete_thread') return undefined
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -3099,6 +3136,7 @@ describe('thread name', () => {
       if (command === 'chat_rename_thread') return undefined
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -3200,6 +3238,7 @@ describe('thread name', () => {
     }
     const archive = screen.getByRole('button', { name: /^Archive review/ })
     expect(archive.tabIndex).toBe(0)
+    await waitFor(() => expect(archive).toBeEnabled())
 
     await fireEvent.click(archive)
 
@@ -3236,6 +3275,7 @@ describe('thread name', () => {
       }]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -3700,6 +3740,7 @@ describe('new thread', () => {
       if (command === 'chat_new_thread') return null
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -3727,6 +3768,7 @@ describe('new thread', () => {
       if (command === 'chat_new_thread') return null
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -3751,6 +3793,7 @@ describe('new thread', () => {
       if (command === 'chat_new_thread') throw new Error('offline')
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -3773,6 +3816,7 @@ describe('new thread', () => {
       if (command === 'chat_current_thread') return 'thread-new'
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4325,6 +4369,7 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4352,6 +4397,7 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4376,6 +4422,7 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4406,6 +4453,7 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4439,6 +4487,7 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4472,6 +4521,7 @@ describe('voice dictation', () => {
         return startCalls === 1 ? { state: 'failed', message: 'Could not start' } : { state: 'running' }
       }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4498,6 +4548,7 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
       if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     const signedOut = render(App)
@@ -4508,7 +4559,7 @@ describe('voice dictation', () => {
 
     signedIn = true
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     globalShortcutHandler({ state: 'Pressed' })
@@ -4560,7 +4611,7 @@ describe('voice dictation', () => {
 
   it('captures, applies, and restores a modifier-plus-key voice shortcut', async () => {
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.keyDown(composer, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
     expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
     const dialog = await openSettings('Account')
@@ -4718,6 +4769,7 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return new Promise((resolve) => { resolveStop = resolve })
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4757,6 +4809,7 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return new Promise((resolve) => { resolveStart = resolve })
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4800,6 +4853,7 @@ describe('voice dictation', () => {
         return { state: 'running' }
       }
       if (command === 'dictation_status' && stopping) return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4844,6 +4898,7 @@ describe('voice dictation', () => {
         if (statusCalls === 1) return new Promise((resolve) => { resolveStaleStatus = resolve })
         return { state: 'stopped' }
       }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4885,6 +4940,7 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4914,6 +4970,7 @@ describe('voice dictation', () => {
         return { state: 'running' }
       }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4950,6 +5007,7 @@ describe('voice dictation', () => {
       if (command === 'dictation_start') return { state: 'starting' }
       if (command === 'dictation_status') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -4981,10 +5039,11 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'starting' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Question' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
@@ -5011,10 +5070,11 @@ describe('voice dictation', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'starting' }
       if (command === 'dictation_status') return { state: 'failed', category: 'redacted', message }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Keep this' } })
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
@@ -5051,6 +5111,7 @@ describe('voice dictation', () => {
           ? { state: 'installing', completedBytes: 134_476_861, totalBytes: 672_384_307 }
           : { state: 'installed' }
       }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5097,6 +5158,7 @@ describe('voice dictation', () => {
         totalDownloadBytes: 672_384_307, requiredFreeBytes: 940_819_763, speechModelLicense: 'CC BY 4.0', voiceActivityModelLicense: 'MIT',
       }
       if (command === 'parakeet_install_status') return { state: 'notInstalled' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5129,6 +5191,7 @@ describe('voice dictation', () => {
       }
       if (command === 'parakeet_install_status') return { state: installState === 'failed' ? 'notInstalled' : installState }
       if (command === 'parakeet_install_start') return { state: installState }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5163,6 +5226,7 @@ describe('voice dictation', () => {
           : staleStatus
       }
       if (command === 'parakeet_install_cancel') return { state: 'cancelled' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5205,6 +5269,7 @@ describe('voice dictation', () => {
           : cancelledStatus
       }
       if (command === 'parakeet_install_cancel') return { state: 'installing', completedBytes: 1, totalBytes: 2 }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5242,6 +5307,7 @@ describe('voice dictation', () => {
         return { state: 'cancelled' }
       }
       if (command === 'parakeet_install_cancel') throw new Error('cancel failed')
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5273,6 +5339,7 @@ describe('voice dictation', () => {
         throw 'Dictation status is temporarily unavailable.'
       }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5304,6 +5371,7 @@ describe('voice dictation', () => {
         if (stopCalls === 1) throw 'Dictation could not be stopped.'
         return { state: 'stopped' }
       }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5331,6 +5399,7 @@ describe('voice dictation', () => {
       if (command === 'dictation_start') return { state: 'starting' }
       if (command === 'dictation_status') return { state: 'running' }
       if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     const view = render(App)
@@ -5512,6 +5581,7 @@ describe('local file selection', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') throw 'One or more selected files could not be added. Check the files and try again.'
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     dialogResult = ['/secret/location/evidence.pdf']
@@ -5545,6 +5615,7 @@ describe('local file selection', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     dialogResult = ['/private/contracts/lease.png', '/private/notes.txt']
@@ -5593,6 +5664,7 @@ it('hydrates safe durable attachment chips without paths or hashes', async () =>
     }]
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
+    if (command === 'chat_select_thread') return undefined
     throw new Error(`unexpected command: ${command}`)
   })
   render(App)
@@ -5616,6 +5688,7 @@ it('hydrates durable attachment chips when the prompt is unavailable', async () 
     }]
     if (command === 'auth_entitlement_snapshot') return snapshot()
     if (command === 'auth_devices') return []
+    if (command === 'chat_select_thread') return undefined
     throw new Error(`unexpected command: ${command}`)
   })
   render(App)
@@ -5667,6 +5740,7 @@ describe('history hydration', () => {
       }]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5693,6 +5767,7 @@ describe('interrupted reply resume', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_resume') return new Promise((resolve) => { resolveResume = resolve })
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5720,6 +5795,7 @@ describe('interrupted reply resume', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_resume') return new Promise((resolve) => { resolveResume = resolve })
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5743,6 +5819,7 @@ describe('interrupted reply resume', () => {
       if (command === 'chat_thread_open') return interrupted(false)
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5758,6 +5835,7 @@ describe('interrupted reply resume', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_resume') throw 'This reply cannot be resumed.'
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -5787,6 +5865,7 @@ describe('chat submission settlement', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return new Promise((resolve) => { resolveSubmit = resolve })
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -5818,6 +5897,7 @@ describe('chat submission settlement', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') throw reason
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -5858,6 +5938,7 @@ describe('permission gates', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_answer_permission') return answer(payload)
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -6150,6 +6231,7 @@ describe('installed subscription probe reply DOM', () => {
 
   async function runProbe(phase, { count = 4, text = nonce, hidden = false } = {}) {
     localModeStatus = true
+    let backendThread = null
     const entries = phase === 'chat' ? [] : Array.from({ length: count }, (_, index) => ({
       runId: `probe-${index}`, phase: 'complete', prompt: 'Reply with the test token.',
       text, receipt: {}, toolActivity: [],
@@ -6160,8 +6242,10 @@ describe('installed subscription probe reply DOM', () => {
       if (command === 'local_mode_provider_inventory') return {
         ...ollamaInventory, default_provider: 'muniment-router', default_model: `${model.family}/${model.id}`,
       }
-      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_select_thread') { backendThread = payload.threadId; return }
+      if (command === 'chat_current_thread') return backendThread
       if (command === 'chat_submit') {
+        backendThread = 'thread-1'
         const entry = { runId: 'probe-0', phase: 'complete', prompt: payload.prompt, text, receipt: {}, toolActivity: [] }
         entries.push(entry)
         return { runId: entry.runId, attachments: [] }
@@ -6213,7 +6297,7 @@ describe('installed subscription probe reply DOM', () => {
     { cloud: true, companyRecord: false },
     { cloud: true, companyRecord: true },
   ])('with flags %j', flags => {
-    it.each(['chat', 'restart'])('accepts the %s reply DOM and marks the evidence', async phase => {
+    it.each(['chat', 'features', 'restart', 'update', 'update-restart'])('accepts the %s reply DOM and marks the evidence', async phase => {
       Object.assign(featureFlags, flags)
       const { container, result } = await runProbe(phase)
       expect(result.passed).toBe(true)
@@ -6224,6 +6308,7 @@ describe('installed subscription probe reply DOM', () => {
       if (phase === 'chat') {
         expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', { stage: 'complete', turn: 0, errorClass: 'none' })
       } else {
+        expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'thread-1' })
         expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
       }
     })
@@ -6261,6 +6346,7 @@ it('does not offer another-model retry in a completed reply', async () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit' && submit) return submit
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     return render(App)
@@ -6465,7 +6551,7 @@ it('does not offer another-model retry in a completed reply', async () => {
       signedIn([{ ...entry, prompt: null }])
     } else {
       signedIn([], { runId: entry.runId, attachments: [] })
-      const composer = await screen.findByPlaceholderText('Ask anything')
+      const composer = await findReadyWorkspaceComposer()
       await fireEvent.input(composer, { target: { value: 'A question' } })
       await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
       chatListener({ payload: entry })
@@ -6500,7 +6586,7 @@ it('does not offer another-model retry in a completed reply', async () => {
   ])('shows a live failure cause only in the run when local mode is %s and cause is %j', async (local, cause, guidance) => {
     localModeStatus = local
     signedIn([], { runId: 'run-failed', attachments: [] })
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     const hint = local ? '' : 'Routing is automatic. Every reply carries its receipt.'
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -6523,7 +6609,7 @@ it('does not offer another-model retry in a completed reply', async () => {
     localModeStatus = local
     const submission = deferred()
     signedIn([], submission.promise)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     submission.reject('Muniment cannot reach its background service.')
@@ -6537,7 +6623,7 @@ it('does not offer another-model retry in a completed reply', async () => {
 
   it('shows Pi acquisition before the first reply event', async () => {
     signedIn([], { runId: 'run-9', attachments: [] })
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     const progress = 'Reply setup has started. Please wait.'
@@ -6556,7 +6642,7 @@ it('does not offer another-model retry in a completed reply', async () => {
     const submission = deferred()
     const result = { runId: 'run-acquisition', attachments: [] }
     signedIn([], pending ? submission.promise : result)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     const acquiring = { runId: result.runId, phase: 'acquiring-pi', text: '', toolActivity: [] }
@@ -6580,7 +6666,7 @@ it('does not offer another-model retry in a completed reply', async () => {
 
   it('announces a permission pause during a streamed run', async () => {
     signedIn([], { runId: 'run-9', attachments: [] })
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
@@ -6628,10 +6714,11 @@ it('does not offer another-model retry in a completed reply', async () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-11', attachments: [] }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     chatListener({ payload: { runId: 'run-11', phase: 'complete', text: 'A routed answer', receipt: {}, toolActivity: [] } })
@@ -6669,6 +6756,7 @@ it('does not offer another-model retry in a completed reply', async () => {
       if (command === 'chat_thread_open') return [{ runId: 'run-live', phase: 'streaming', text, prompt: 'A question', receipt: null, toolActivity: [] }]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -6714,7 +6802,7 @@ it('does not offer another-model retry in a completed reply', async () => {
 
   it('announces a terminal outcome once for a run that never streamed', async () => {
     signedIn([], { runId: 'run-10', attachments: [] })
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
@@ -6730,7 +6818,7 @@ it('does not offer another-model retry in a completed reply', async () => {
 
   it('records a stopped live reply and retries its prompt without a second live region', async () => {
     signedIn([], { runId: 'run-stopped', attachments: [] })
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Explain the record' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     chatListener({ payload: { runId: 'run-stopped', type: 'text-delta', text: 'A partial reply' } })
@@ -6781,6 +6869,7 @@ describe('tool activity', () => {
       }]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -6808,6 +6897,7 @@ describe('message action row', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-live', attachments: [] }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     return render(App)
@@ -6913,7 +7003,7 @@ describe('message action row', () => {
   it('never overwrites the run-phase announcement with a copy confirmation', async () => {
     clipboard(vi.fn().mockResolvedValue(undefined))
     restore([])
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'A question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     chatListener({ payload: { runId: 'run-live', phase: 'complete', text: 'A routed answer', receipt: {}, toolActivity: [] } })
@@ -6977,6 +7067,7 @@ describe('provenance line', () => {
       if (command === 'chat_thread_open') return [{ runId: 'run-receipt', phase: 'complete', text: 'A routed answer', prompt: 'A question', receipt, recalls, toolActivity: [] }]
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     return render(App)
@@ -7109,13 +7200,14 @@ describe('active run composer queue', () => {
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-7' }
       if (command === 'chat_queue') return undefined
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
   })
 
   async function startRun() {
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await screen.findByRole('button', { name: 'Stop' })
@@ -7145,7 +7237,7 @@ describe('active run composer queue', () => {
 
   it('keeps focus on the same action control as it turns from send to stop', async () => {
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findReadyWorkspaceComposer()
     await waitFor(() => expect(composer).toBeEnabled())
     await fireEvent.input(composer, { target: { value: 'Initial prompt' } })
     const send = screen.getByRole('button', { name: 'Send' })
@@ -7168,6 +7260,7 @@ describe('active run composer queue', () => {
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-7' }
       if (command === 'chat_queue') throw 'Could not queue this message'
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     const composer = await startRun()
@@ -7232,6 +7325,7 @@ describe('composer auto-grow', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return { runId: 'run-9', attachments: [] }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -7256,6 +7350,7 @@ describe('composer auto-grow', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -7282,6 +7377,7 @@ describe('composer auto-grow', () => {
       if (command === 'auth_devices') return []
       if (command === 'dictation_start') return { state: 'running' }
       if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -7316,6 +7412,7 @@ describe('composer auto-grow', () => {
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_submit') return submitted.promise
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -7396,6 +7493,7 @@ describe('signed-in access popover', () => {
       if (command === 'auth_devices') return []
       if (command === 'auth_sign_out') return { signed_in: false, subject: null }
       if (command === 'auth_sign_in') return { signed_in: true, subject: 'user-b' }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
 
@@ -7440,6 +7538,7 @@ describe('signed-in access popover', () => {
       if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return []
       if (command === 'attach_listener_status') return { started: true, failure: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
 
@@ -7482,6 +7581,7 @@ describe('signed-in access popover', () => {
         device('active-old', { platform: 'android', last_active_at: '2026-05-01T00:00:00Z' }),
         device('current-new', { current: true, last_active_at: '2026-06-01T00:00:00Z' }),
       ]
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -7586,6 +7686,7 @@ describe('signed-in access popover', () => {
       }
       if (command === 'attach_companions') return []
       if (command === 'attach_listener_status') return { started: true, failure: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -7612,6 +7713,7 @@ describe('signed-in access popover', () => {
       if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'attach_companions') return pendingCompanions.promise
       if (command === 'attach_listener_status') return { started: true, failure: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)
@@ -7648,6 +7750,7 @@ describe('signed-in access popover', () => {
         return [{ identity: 'client-2', claimed_kind: 'ACP adapter', claimed_version: '2.0.0', approved_at: '2026-08-04T12:00:00Z' }]
       }
       if (command === 'attach_listener_status') return { started: true, failure: null }
+      if (command === 'chat_select_thread') return undefined
       throw new Error(`unexpected command: ${command}`)
     })
     render(App)

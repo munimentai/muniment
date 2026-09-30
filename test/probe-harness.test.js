@@ -128,7 +128,7 @@ describe('probe harness', () => {
     render(App)
 
     expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
-    expect(screen.getByText('The local notes list the lease renewal date and notice period.')).toBeInTheDocument()
+    expect(await screen.findByText('The local notes list the lease renewal date and notice period.')).toBeInTheDocument()
     expect(screen.queryByText('Sign in')).not.toBeInTheDocument()
   })
 })

@@ -883,8 +883,51 @@ describe('chat controller', () => {
     expect(invoke.mock.calls).toEqual([
       ['chat_thread_summaries', { limit: 20 }],
       ['chat_thread_open', { threadId: 'thread-3', limit: 100 }],
+      ['chat_select_thread', { threadId: 'thread-3' }],
     ])
     expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-3')
+  })
+
+  it('restores the backend selection and four replies after a desktop relaunch', async () => {
+    let backendThread = null
+    const entries = Array.from({ length: 4 }, (_, index) => ({
+      runId: `run-${index}`, prompt: 'Remember the token.', text: 'restore-token', phase: 'complete', receipt: {},
+    }))
+    const invoke = vi.fn(async (command, payload) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'saved-thread' }], nextCursor: null }
+      if (command === 'chat_select_thread') backendThread = payload.threadId
+      if (command === 'chat_current_thread') return backendThread
+      if (command === 'chat_thread_open') return { entries, nextCursor: null }
+    })
+    const context = setup(invoke)
+
+    await context.controller.loadHistory()
+
+    expect(await invoke('chat_current_thread')).toBe('saved-thread')
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('saved-thread')
+    expect(context.messages().filter(message => message.run).map(message => message.run.text)).toEqual(Array(4).fill('restore-token'))
+    expect(context.active()).toBeNull()
+    expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+  })
+
+  it('keeps a failed restore selection retryable without showing an unselected transcript', async () => {
+    let selectionFails = true
+    const invoke = vi.fn(async command => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'saved-thread' }], nextCursor: null }
+      if (command === 'chat_select_thread' && selectionFails) throw new Error('offline')
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+    })
+    const context = setup(invoke)
+
+    await context.controller.loadHistory()
+
+    expect(context.onMessages).not.toHaveBeenCalled()
+    expect(context.onThreadSelected).not.toHaveBeenCalled()
+    const retry = context.onHistoryError.mock.lastCall[1].run
+    selectionFails = false
+    await retry()
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('saved-thread')
+    expect(context.onHistoryError).toHaveBeenLastCalledWith('')
   })
 
   it('reopens the thread the shell holds open when a reconnect reloads history', async () => {
@@ -1059,6 +1102,7 @@ describe('chat controller', () => {
     expect(invoke.mock.calls).toEqual([
       ['chat_thread_summaries', { limit: 20 }],
       ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+      ['chat_select_thread', { threadId: 'thread-3' }],
       ['chat_thread_open', { threadId: 'thread-3', limit: 100 }],
     ])
     expect(currentThreadId).toBe('thread-3')
@@ -1129,6 +1173,7 @@ describe('chat controller', () => {
     const invoke = vi.fn()
       .mockResolvedValueOnce({ summaries, nextCursor: 'page-2' })
       .mockResolvedValueOnce({ entries: [], nextCursor: null })
+      .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce({ summaries: [{ threadId: 'thread-2' }], nextCursor: null })
     const context = setup(invoke)
     const controller = createChatController({
@@ -1169,6 +1214,7 @@ describe('chat controller', () => {
     const invoke = vi.fn()
       .mockResolvedValueOnce({ summaries, nextCursor: 'page-2' })
       .mockResolvedValueOnce({ entries: [], nextCursor: null })
+      .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce({ summaries: [{ threadId: 'thread-2' }], nextCursor: null })
     const controller = createChatController({
@@ -1271,6 +1317,7 @@ describe('chat controller', () => {
       ['chat_thread_summaries', { limit: 20 }],
       ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
       ['chat_thread_open', { threadId: 'thread-1', limit: 100, cursor: 'page-2' }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
     ])
     expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual([
       'First question', 'First answer', 'Second question', 'Second answer',
@@ -1293,6 +1340,7 @@ describe('chat controller', () => {
     expect(invoke.mock.calls).toEqual([
       ['chat_thread_summaries', { limit: 20 }],
       ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
     ])
   })
 
