@@ -333,8 +333,45 @@ fn write_start_detail(
     )
 }
 
+// launchd does not inherit the desktop environment. A profile override must use
+// the bundled child or an existing runtime at that profile's endpoint.
+fn profile_runtime(override_value: Option<&std::ffi::OsStr>) -> Result<bool, ()> {
+    match override_value {
+        None => Ok(false),
+        Some(value) if Path::new(value).is_absolute() => Ok(true),
+        Some(_) => Err(()),
+    }
+}
+
 #[cfg(target_os = "macos")]
-pub(crate) fn start() -> crate::runtime_owner::RuntimeEvent {
+fn process_profile_runtime() -> Result<bool, ()> {
+    profile_runtime(
+        std::env::var_os(muniment_core::state_root::STATE_DIRECTORY_OVERRIDE).as_deref(),
+    )
+}
+
+fn start_scoped_runtime<T>(
+    profile: Result<bool, ()>,
+    child: impl FnOnce() -> T,
+    login_service: impl FnOnce() -> T,
+) -> Result<T, ()> {
+    Ok(if profile? { child() } else { login_service() })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn start(
+    owner: &crate::runtime_owner::RuntimeOwner,
+) -> crate::runtime_owner::RuntimeEvent {
+    start_scoped_runtime(
+        process_profile_runtime(),
+        || start_child(owner),
+        start_login_service,
+    )
+    .unwrap_or(crate::runtime_owner::RuntimeEvent::StartFailed)
+}
+
+#[cfg(target_os = "macos")]
+fn start_login_service() -> crate::runtime_owner::RuntimeEvent {
     use crate::runtime_owner::RuntimeEvent;
     let log_directory = muniment_core::user_diagnostics::effective_user_home()
         .ok()
@@ -417,13 +454,16 @@ pub(crate) fn start_child(
 ) -> crate::runtime_owner::RuntimeEvent {
     use crate::runtime_owner::RuntimeEvent;
     use std::process::{Command, Stdio};
+    if process_profile_runtime().is_err() {
+        return RuntimeEvent::StartFailed;
+    }
     if owner.child_running() {
         return RuntimeEvent::ChildStarted;
     }
     // A runtime that another agent runs already listens. The owner's endpoint watch
     // connects to it, and a stale socket with no listener falls through to a child.
     if muniment_runtime::profile_directory().is_ok_and(|profile| {
-        std::os::unix::net::UnixStream::connect(profile.join("muniment/attach-v1.sock")).is_ok()
+        runtime_endpoint_accepts_connections(&profile.join("muniment/attach-v1.sock"))
     }) {
         return RuntimeEvent::Starting;
     }
@@ -466,6 +506,9 @@ pub(crate) fn start_child(
 
 #[cfg(target_os = "macos")]
 pub(crate) fn requires_approval() -> Option<bool> {
+    if process_profile_runtime() != Ok(false) {
+        return None;
+    }
     match MacosRuntimeServiceAdapter::new().status() {
         Ok(ServiceStatus::RequiresApproval) => Some(true),
         Ok(ServiceStatus::Enabled) => Some(false),
@@ -475,6 +518,10 @@ pub(crate) fn requires_approval() -> Option<bool> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn stop() -> Result<(), ()> {
+    // The runner owns an external profile runtime. Never stop the login service.
+    if process_profile_runtime()? {
+        return Ok(());
+    }
     let adapter = MacosRuntimeServiceAdapter::new();
     // SAFETY: The adapter retains the bundled service for the duration of this call.
     unsafe { adapter.service.unregisterAndReturnError() }.map_err(|_| ())
@@ -508,6 +555,8 @@ fn wait_for_start_command(
 }
 
 // A socket file can remain after a killed runtime. Only a listener proves activity.
+// This readiness connection closes without a handshake. macOS can report ENOTCONN
+// when the listener reads its peer PID. The desktop client uses a separate connection.
 fn runtime_endpoint_accepts_connections(endpoint: &Path) -> bool {
     std::os::unix::net::UnixStream::connect(endpoint).is_ok()
 }
@@ -769,6 +818,45 @@ mod tests {
 
         fn job_active(&self) -> Result<bool, ()> {
             self.0
+        }
+    }
+
+    #[test]
+    fn profile_launch_and_relaunch_never_activate_the_login_service() {
+        let child_calls = Cell::new(0);
+        for _ in 0..2 {
+            assert_eq!(
+                start_scoped_runtime(
+                    profile_runtime(Some(std::ffi::OsStr::new("/tmp/disposable/state"))),
+                    || {
+                        child_calls.set(child_calls.get() + 1);
+                        "profile"
+                    },
+                    || panic!("A profile must not activate the login service."),
+                ),
+                Ok("profile")
+            );
+        }
+        assert_eq!(child_calls.get(), 2);
+        assert_eq!(
+            start_scoped_runtime(
+                profile_runtime(None),
+                || panic!("The default profile uses the login service."),
+                || "login",
+            ),
+            Ok("login")
+        );
+    }
+
+    #[test]
+    fn invalid_profile_overrides_never_start_a_runtime() {
+        for value in ["", "relative/state"] {
+            let result: Result<(), ()> = start_scoped_runtime(
+                profile_runtime(Some(std::ffi::OsStr::new(value))),
+                || panic!("An invalid profile must not start a child."),
+                || panic!("An invalid profile must not activate the login service."),
+            );
+            assert_eq!(result, Err(()));
         }
     }
 

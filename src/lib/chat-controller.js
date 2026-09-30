@@ -387,10 +387,11 @@ export function createChatController({
         // the newest thread, or every reconnect retries the same dead id.
         if (await openThread(openThreadId, switchBlocked) !== false) return
         if (destroyed) return
-        await openThread(newest, switchBlocked)
+        await openThread(newest, true)
         return
       }
-      await openThread(newest, switchBlocked)
+      // A new desktop has no backend selection. Restore it with the transcript.
+      await openThread(newest, switchBlocked, !openThreadId && !switchBlocked)
     } catch (error) {
       if (!destroyed) {
         historyLoadFailed = true
@@ -422,7 +423,7 @@ export function createChatController({
     }
   }
 
-  async function openThread(threadId, select = false) {
+  async function openThread(threadId, select = false, restoreSelection = false) {
     if (active() || switchingThread) return
     threadRefreshSequence += 1
     switchingThread = true
@@ -449,6 +450,12 @@ export function createChatController({
         cursor = result.nextCursor
       }
       if (destroyed) return
+      // Read first so a failed initial history read still permits a fresh thread.
+      if (restoreSelection && !selected) {
+        await invoke('chat_select_thread', { threadId })
+        selected = true
+        if (destroyed) return
+      }
       const published = historyMessages(history)
       // The runtime keeps driving an unsettled run while the window is away. The
       // desktop rejoins that run instead of starting one (ADR 0012, desktop run
@@ -498,7 +505,7 @@ export function createChatController({
         }
         onHistoryError(historyReadError(error), {
           label: 'Restore history',
-          run: () => openThread(threadId, select || switchBlocked),
+          run: () => openThread(threadId, select || switchBlocked, restoreSelection),
         }, true)
       }
       return false

@@ -276,7 +276,7 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     #[cfg(all(target_os = "macos", not(feature = "local-runtime")))]
     // A service that never registers, or registers and never runs, yields to
     // the bundled runtime as the desktop's child.
-    let event = match crate::macos_runtime_service::start() {
+    let event = match crate::macos_runtime_service::start(&owner) {
         RuntimeEvent::RegistrationFailed | RuntimeEvent::ServiceInactive => {
             crate::macos_runtime_service::start_child(&owner)
         }
