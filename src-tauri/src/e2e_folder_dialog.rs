@@ -90,12 +90,6 @@ fn poll(home: String) -> Result<bool, String> {
                     "The Home picker needs Accessibility trust for the app process, and AXIsProcessTrusted reads false.".into(),
                 );
             }
-            // The WebDriver client owns focus before this command. Cooperative
-            // activation alone may leave the visible panel without a key window.
-            // This runs only in the E2E build, after validating the native picker.
-            #[allow(deprecated)]
-            app.activateIgnoringOtherApps(true);
-            panel.makeKeyAndOrderFront(None);
             *slot = Some(Drive {
                 panel,
                 home: home.clone(),
@@ -136,11 +130,25 @@ fn poll(home: String) -> Result<bool, String> {
         if !drive.panel.isVisible() {
             return Err("The NSOpenPanel closed before the picker drive finished.".into());
         }
-        let Some(window) = app.keyWindow() else {
-            // Activation is asynchronous. Never send keys until AppKit assigns focus.
-            if drive.step == 0 && Instant::now() < drive.focus_deadline {
-                return Ok(false);
+        // Activation is asynchronous. Acquire panel focus only after the app becomes active.
+        // Retry within the original deadline, but never restore focus after typing starts.
+        if drive.step == 0 && (!app.isActive() || !drive.panel.isKeyWindow()) {
+            if Instant::now() >= drive.focus_deadline {
+                return Err("The Home picker could not acquire keyboard focus.".into());
             }
+            if app.isActive() {
+                drive.panel.makeKeyAndOrderFront(None);
+            } else {
+                #[allow(deprecated)]
+                app.activateIgnoringOtherApps(true);
+            }
+            drive.next = Instant::now() + Duration::from_millis(100);
+            return Ok(false);
+        }
+        if !app.isActive() {
+            return Err("The Home picker app lost keyboard focus.".into());
+        }
+        let Some(window) = app.keyWindow() else {
             return Err("The Home picker has no key window.".into());
         };
         // Accept only this panel or its sheet. Never type into the composer.
@@ -176,6 +184,7 @@ pub(crate) struct WindowSnapshot {
     class: String,
     title: String,
     visible: bool,
+    key: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -184,6 +193,7 @@ pub(crate) struct FolderDialogSnapshot {
     step: Option<u8>,
     directory: Option<String>,
     trusted: bool,
+    active: bool,
 }
 
 #[tauri::command]
@@ -207,6 +217,7 @@ pub(crate) async fn e2e_folder_dialog_snapshot(
                             class: window.class().name().to_string_lossy().into_owned(),
                             title: window.title().to_string(),
                             visible: window.isVisible(),
+                            key: window.isKeyWindow(),
                         }
                     })
                     .collect(),
@@ -217,6 +228,7 @@ pub(crate) async fn e2e_folder_dialog_snapshot(
                         .and_then(|drive| panel_directory(&drive.panel))
                 }),
                 trusted: process_trusted(),
+                active: app.isActive(),
             })
         })();
         let _ = sender.send(result);

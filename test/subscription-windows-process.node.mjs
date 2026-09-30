@@ -43,10 +43,11 @@ const [mode, holder, locked, ready, rootExits] = process.argv.slice(2)
 const logFile = path.join(__dirname, 'job.log')
 const log = fs.openSync(logFile, 'a')
 const stderr = fs.openSync(path.join(__dirname, 'holder-stderr.log'), 'a')
-// Detach the Node intermediate. Let PowerShell create a hidden console instead of using DETACHED_PROCESS.
+// Detach both children so libuv does not kill the holder when the intermediate exits.
+// The retained subscription job still owns every descendant.
 const child = mode === 'root'
   ? spawn(process.execPath, [__filename, 'middle', holder, locked, ready], { detached: true, stdio: ['ignore', log, log] })
-  : spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', holder, '-Locked', locked, '-Ready', ready], { windowsHide: true, stdio: ['ignore', log, stderr] })
+  : spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', holder, '-Locked', locked, '-Ready', ready], { detached: true, windowsHide: true, stdio: ['ignore', log, stderr] })
 child.once('error', error => fs.appendFileSync(logFile, 'The ' + mode + ' fixture could not start its child.\\n' + error.stack + '\\n'))
 fs.appendFileSync(logFile, 'The ' + mode + ' fixture started child pid=' + (child.pid ?? 'none') + '.\\n')
 child.unref()
@@ -71,9 +72,9 @@ Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class JoinProbeJob {
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr OpenJobObject(uint access, bool inherit, string name);
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
     [DllImport("kernel32.dll")]
     public static extern IntPtr GetCurrentProcess();
@@ -83,18 +84,20 @@ public static class JoinProbeJob {
 '@
 $name = (Get-Content -LiteralPath $JobFile -Raw | ConvertFrom-Json).name
 $handle = [JoinProbeJob]::OpenJobObject(1, $false, $name)
-if ($handle -eq [IntPtr]::Zero) { throw 'The test job is missing.' }
+if ($handle -eq [IntPtr]::Zero) {
+    throw "The test job could not open. Windows reported error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())."
+}
 try {
     if (-not [JoinProbeJob]::AssignProcessToJobObject($handle, [JoinProbeJob]::GetCurrentProcess())) {
-        throw 'The test restart could not join its job.'
+        throw "The test restart could not join its job. Windows reported error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())."
     }
 } finally { $null = [JoinProbeJob]::CloseHandle($handle) }
 & $Node $Fixture root $Holder $Locked $Ready true
 `)
-        // MSI starts outside the tree. Its replacement joins the retained job before it spawns children.
+        // Detach from libuv's job so the replacement can join the retained subscription job.
         restarted = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', restart,
           '-JobFile', jobFile, '-Node', process.execPath, '-Fixture', fixture,
-          '-Holder', holder, '-Locked', locked, '-Ready', ready], { stdio: ['ignore', log, log] })
+          '-Holder', holder, '-Locked', locked, '-Ready', ready], { detached: true, windowsHide: true, stdio: ['ignore', log, log] })
         restarted.once('error', () => {})
       }
       await waitFor(() => fs.existsSync(ready))

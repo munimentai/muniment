@@ -442,6 +442,24 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(ci).toContain('cargo check --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --features e2e-webdriver --target aarch64-apple-darwin')
   })
 
+  it('The AppKit drive acquires focus after activation without typing during the wait.', async () => {
+    const native = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
+    const focus = native.slice(native.indexOf('if drive.step == 0 &&'), native.indexOf('match drive.step'))
+    expect(focus).toContain('(!app.isActive() || !drive.panel.isKeyWindow())')
+    expect(focus).toContain('Instant::now() >= drive.focus_deadline')
+    expect(focus).toMatch(/if app\.isActive\(\) \{\s*drive\.panel\.makeKeyAndOrderFront\(None\);\s*\} else \{/)
+    expect(focus).toContain('app.activateIgnoringOtherApps(true)')
+    expect(focus).toContain('drive.next = Instant::now() + Duration::from_millis(100)')
+    expect(focus).toContain('return Ok(false)')
+    expect(focus).not.toMatch(/focus_deadline\s*=|key\(|type_text\(/)
+    expect(focus).toContain('if !app.isActive()')
+    expect(focus).toContain('let Some(window) = app.keyWindow() else')
+    expect(focus).toContain('window.windowNumber() != drive.panel.windowNumber()')
+    expect(focus).toContain('.sheetParent()')
+    expect(native).toContain('key: window.isKeyWindow()')
+    expect(native).toContain('active: app.isActive()')
+  })
+
   it('The AppKit drive waits for the native panel to close.', async () => {
     vi.useFakeTimers()
     const poll = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true)
@@ -519,6 +537,21 @@ Write-Output 'The confirm and navigation checks passed.'
     await vi.advanceTimersByTimeAsync(4000)
     expect((await failure).message).toContain('NSOpenPanel timed out during the AppKit picker drive. Home picker diagnostics: The Home picker diagnostics timed out.')
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('A focus timeout records app activation and the key window.', async () => {
+    const cause = new Error('The Home picker could not acquire keyboard focus.')
+    const native = {
+      active: true,
+      trusted: true,
+      step: 0,
+      directory: '/Users/harness/Documents',
+      windows: [{ class: 'NSOpenPanel', title: 'Open', visible: true, key: false }],
+    }
+    const diagnostics = { native, open: { status: 'pending' } }
+    await expect(driveMacosFolder(1, () => Promise.reject(cause), () => diagnostics)).rejects.toMatchObject({
+      cause, message: `${cause.message} Home picker diagnostics: ${JSON.stringify(diagnostics)}`,
+    })
   })
 
   it('An empty window list stays explicit in the failure.', async () => {
