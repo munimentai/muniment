@@ -7,7 +7,17 @@ function Install-Tool([string]$Name,[string]$Url,[string]$Sha256,[string]$Execut
   $binary=Join-Path $directory $Executable
   if (!(Test-Path $binary)) {
     $archive=Join-Path $toolsRoot "$Name.zip"
-    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $archive
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+      try {
+        Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $archive -TimeoutSec 120
+        break
+      } catch {
+        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        if ($attempt -eq 3) { throw }
+        Write-Warning "$Name download failed on attempt $attempt. The script will retry."
+        Start-Sleep -Seconds (2 * $attempt)
+      }
+    }
     if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Sha256) {throw "$Name checksum does not match"}
     New-Item -ItemType Directory -Force $directory | Out-Null
     Add-Type -AssemblyName System.IO.Compression.FileSystem

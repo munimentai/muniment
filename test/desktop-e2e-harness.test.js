@@ -4271,6 +4271,83 @@ ${sequence}
   })
 })
 
+describe('CEF build-tool downloads', () => {
+  const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
+  const available = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+  const prepare = fs.readFileSync(path.join(root, 'scripts/prepare-cef-windows.ps1'), 'utf8')
+  const install = prepare.slice(0, prepare.indexOf("\nInstall-Tool 'cmake-"))
+
+  it.skipIf(!available).each([
+    ['success', 0, false, false, 1, null],
+    ['recovery', 2, false, false, 3, null],
+    ['exhausted', 3, false, false, 3, 'The connection was closed unexpectedly.'],
+    ['checksum', 0, true, false, 1, 'fixture checksum does not match'],
+    ['recovery-checksum', 1, true, false, 2, 'fixture checksum does not match'],
+    ['cached', 0, false, true, 0, null],
+  ])('The installer handles %s.', (_name, failures, corrupt, cached, attempts, error) => {
+    const directory = temp()
+    const script = path.join(directory, 'download.ps1')
+    fs.writeFileSync(script, `
+$ErrorActionPreference = 'Stop'
+$env:LOCALAPPDATA = $env:TEST_ROOT
+${install}
+$payload = Join-Path $env:TEST_ROOT 'payload'
+New-Item -ItemType Directory $payload | Out-Null
+Set-Content -LiteralPath (Join-Path $payload 'tool.exe') -Value 'verified tool'
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$fixture = Join-Path $env:TEST_ROOT 'fixture.zip'
+[System.IO.Compression.ZipFile]::CreateFromDirectory($payload, $fixture)
+$sha256 = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+$script:attempts = 0
+$script:delays = @()
+$script:timeouts = @()
+function Start-Sleep { param($Seconds) $script:delays += $Seconds }
+function Invoke-WebRequest {
+  param([switch]$UseBasicParsing, $Uri, $OutFile, $TimeoutSec)
+  if (!$UseBasicParsing) { throw 'The request needs basic parsing.' }
+  $script:timeouts += $TimeoutSec
+  if (Test-Path -LiteralPath $OutFile) { throw 'The retry kept a partial archive.' }
+  $script:attempts++
+  if ($script:attempts -le ${failures}) {
+    Set-Content -LiteralPath $OutFile -Value 'partial archive'
+    throw [System.Net.WebException]::new('The connection was closed unexpectedly.')
+  }
+  if ($${corrupt}) { Set-Content -LiteralPath $OutFile -Value 'wrong bytes' }
+  else { Copy-Item -LiteralPath $fixture -Destination $OutFile }
+}
+$binary = Join-Path (Join-Path $toolsRoot 'fixture') 'tool.exe'
+if ($${cached}) {
+  New-Item -ItemType Directory (Split-Path -Parent $binary) | Out-Null
+  Set-Content -LiteralPath $binary -Value 'cached tool'
+}
+$failure = $null
+try { Install-Tool 'fixture' 'https://example.invalid/tool.zip' $sha256 'tool.exe' }
+catch { $failure = $_.Exception.Message }
+@{
+  attempts = $script:attempts
+  delays = @($script:delays)
+  timeouts = @($script:timeouts)
+  error = $failure
+  installed = Test-Path -LiteralPath $binary
+  archive = Test-Path -LiteralPath (Join-Path $toolsRoot 'fixture.zip')
+  content = if (Test-Path -LiteralPath $binary) { (Get-Content -Raw -LiteralPath $binary).Trim() } else { $null }
+  pathAdded = $env:PATH.StartsWith((Split-Path -Parent $binary) + ';')
+} | ConvertTo-Json -Compress
+`)
+    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
+      encoding: 'utf8', timeout: 20_000, env: { ...process.env, TEST_ROOT: directory },
+    })
+    expect(result.error, result.stderr).toBeUndefined()
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    const report = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1))
+    expect(report).toMatchObject({ attempts, error, installed: error === null, pathAdded: error === null })
+    expect(report.delays).toEqual(Array.from({ length: Math.min(failures, 2) }, (_, index) => (index + 1) * 2))
+    expect(report.timeouts).toEqual(Array(attempts).fill(120))
+    if (!corrupt) expect(report.archive).toBe(false)
+    if (!error) expect(report.content).toBe(cached ? 'cached tool' : 'verified tool')
+  }, 30_000)
+})
+
 describe('Windows folder dialog diagnostics', () => {
   it.skipIf(process.platform !== 'win32')('The timeout reports hidden and offscreen app and WebView2 windows.', () => {
     const directory = temp()
