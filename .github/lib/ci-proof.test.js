@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { upload } from './artifact-store.mjs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readProof, reusePullRequest, reuseNightlyBuild } from './ci-proof.mjs'
+import { proofConfiguration, readProof, reusePullRequest, reuseNightlyBuild } from './ci-proof.mjs'
 
 function fixture() {
   const context = { repo: { owner: 'owner', repo: 'repo' }, sha: 'merge', ref: 'refs/heads/main', eventName: 'push', runId: 2 }
   const pull = { merged_at: 'now', merge_commit_sha: 'merge', base: { ref: 'main' }, head: { sha: 'head', repo: { full_name: 'owner/repo' } } }
-  const run = { id: 1, head_sha: 'head', event: 'pull_request', path: '.github/workflows/ci.yml', status: 'completed', conclusion: 'success', html_url: 'https://github.com/owner/repo/actions/runs/1' }
-  const proof = { schema: 1, repository: 'owner/repo', run: 1, workflow: 'ci.yml', head: 'head', tree: 'tested-tree' }
+  const run = { id: 1, head_sha: 'head', event: 'pull_request', path: '.github/workflows/ci.yml', status: 'completed', conclusion: 'success', html_url: 'https://github.com/owner/repo/actions/runs/1', repository: { full_name: 'owner/repo' }, head_repository: { full_name: 'owner/repo' } }
+  const proof = { schema: 1, repository: 'owner/repo', run: 1, workflow: 'ci.yml', head: 'head', tree: 'tested-tree', configuration: proofConfiguration() }
   const summary = { addRaw: vi.fn().mockReturnThis(), write: vi.fn() }
   const core = { notice: vi.fn(), warning: vi.fn(), summary }
   const github = { rest: {
@@ -31,6 +31,11 @@ describe('exact tested tree reuse', () => {
     ['changed merge tree', f => { f.tree = 'different-tree' }],
     ['different PR head', f => { f.proof.head = 'older-head' }],
     ['different workflow proof', f => { f.proof.workflow = 'secret-scan.yml' }],
+    ['missing configuration', f => { delete f.proof.configuration }],
+    ['different platform configuration', f => { f.configuration = 'a'.repeat(64) }],
+    ['different feature configuration', f => { f.configuration = 'b'.repeat(64) }],
+    ['different toolchain configuration', f => { f.configuration = 'c'.repeat(64) }],
+    ['invalid configuration', f => { f.configuration = f.proof.configuration = '' }],
     ['failed checks', f => { f.run.conclusion = 'failure' }],
     ['pending rerun', f => { f.run.status = 'in_progress' }],
     ['wrong workflow run', f => { f.run.path = '.github/workflows/other.yml' }],
@@ -39,15 +44,48 @@ describe('exact tested tree reuse', () => {
     ['unmerged PR', f => { f.pull.merged_at = null }],
     ['different merge commit', f => { f.pull.merge_commit_sha = 'earlier-merge' }],
     ['fork', f => { f.pull.head.repo.full_name = 'someone/fork' }],
+    ['untrusted run repository', f => { f.run.repository.full_name = 'someone/fork' }],
+    ['untrusted run head', f => { f.run.head_repository.full_name = 'someone/fork' }],
+    ['missing run repository', f => { delete f.run.repository }],
+    ['missing run head repository', f => { delete f.run.head_repository }],
     ['different base', f => { f.pull.base.ref = 'release' }],
     ['direct push', f => { f.github.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({ data: [] }) }],
     ['missing or expired proof', f => { f.read.mockResolvedValue(null) }],
     ['artifact service failure', f => { f.read.mockRejectedValue(new Error('unavailable')) }],
     ['PR event', f => { f.context.eventName = 'pull_request' }],
+    ['non-main push', f => { f.context.ref = 'refs/heads/repair' }],
+    ['cancelled checks', f => { f.run.conclusion = 'cancelled' }],
+    ['no workflow run', f => { f.github.rest.actions.listWorkflowRuns.mockResolvedValue({ data: { workflow_runs: [] } }) }],
   ])('runs checks for %s', async (_, change) => {
     const f = fixture()
     change(f)
     expect(await reusePullRequest(f)).toBe(false)
+  })
+  it('reuses the secret scan only with its own matching proof', async () => {
+    const f = fixture()
+    f.workflow = f.proof.workflow = 'secret-scan.yml'
+    f.run.path = '.github/workflows/secret-scan.yml'
+    expect(await reusePullRequest(f)).toBe(true)
+  })
+  it.each([
+    { PLATFORM: 'windows' },
+    { VITE_MUNIMENT_CLOUD: 'true' },
+    { VITE_MUNIMENT_COMPANY_RECORD: 'true' },
+    { VITE_MUNIMENT_CLOUD: 'true', VITE_MUNIMENT_COMPANY_RECORD: 'true' },
+    { CI_TOOLCHAIN_REVISION: '2' },
+  ])('rejects changed off-tree settings: %j', async settings => {
+    const previous = process.env.CI_PROOF_CONFIGURATION
+    try {
+      process.env.CI_PROOF_CONFIGURATION = '{}'
+      const f = fixture()
+      expect(await reusePullRequest(f)).toBe(true)
+      process.env.CI_PROOF_CONFIGURATION = JSON.stringify(settings)
+      expect(proofConfiguration()).toMatch(/^[0-9a-f]{64}$/)
+      expect(await reusePullRequest(f)).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.CI_PROOF_CONFIGURATION
+      else process.env.CI_PROOF_CONFIGURATION = previous
+    }
   })
   it('does not reuse an old success after a failed rerun', async () => {
     const f = fixture()
@@ -119,7 +157,7 @@ it('reads bounded MinIO proofs for the exact repository, run, attempt and source
     }
     await expect(read(run, 'missing')).rejects.toThrow()
     await expect(readProof({}, { owner: 'other', repo: 'muniment' }, run, 'ci.yml-proof', store)).rejects.toThrow()
-    for (const changed of [{ run: 5 }, { attempt: 1 }, { head: 'b'.repeat(40) }, { repository: 'other/repo' }]) {
+    for (const changed of [{ schema: 0 }, { run: 5 }, { attempt: 1 }, { head: 'b'.repeat(40) }, { repository: 'other/repo' }]) {
       save({ ...proof, ...changed })
       expect(await read()).toBeNull()
     }

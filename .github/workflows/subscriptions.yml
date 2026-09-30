@@ -33,12 +33,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: subscription-acceptance-${{ inputs.source_sha }}
+  group: subscription-acceptance-${{ inputs.source_sha }}-${{ github.sha }}-${{ inputs.platform }}
   cancel-in-progress: false
 
 jobs:
   validate-platform:
-    runs-on: self-hosted
+    runs-on: muniment-checks
     steps:
       - name: Validate the requested platform
         env:
@@ -202,7 +202,7 @@ jobs:
   collect:
     needs: [linux, windows, macos-arm64, macos-x64]
     if: always() && !cancelled() && inputs.platform == 'all'
-    runs-on: self-hosted
+    runs-on: muniment-checks
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
     steps:

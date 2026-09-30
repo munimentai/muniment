@@ -12,9 +12,15 @@ on:
     branches:
       - main
 
+# A PR refresh cancels only that PR. Each main run keeps its acceptance proof.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Change CI_TOOLCHAIN_REVISION when the native host toolchain changes.
+# The proof binds every repository variable as well as the exact Git tree.
+env:
+  CI_PROOF_CONFIGURATION: ${{ toJSON(vars) }}
 
 permissions:
   contents: read
@@ -22,10 +28,23 @@ permissions:
   pull-requests: read
 
 jobs:
+  checks:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: changes
+    runs-on: muniment-checks
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Steering check
+        if: needs.changes.outputs.reuse != 'true'
+        run: scripts/check-steering.sh .
+      - name: UI copy law
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
+        run: npm run lint:copy
+
   changes:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: changes
-    runs-on: self-hosted
+    runs-on: muniment-checks
     outputs:
       reuse: ${{ steps.proof.outputs.reuse }}
       docs_only: ${{ steps.changes.outputs.docs_only }}
@@ -176,9 +195,15 @@ jobs:
 
 
   smoke:
-    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' }}
+    needs: [changes, checks]
     runs-on: self-hosted
     steps:
+      - name: Require small checks
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+        run: test "$CHECKS_RESULT" = success
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -223,10 +248,6 @@ jobs:
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
         run: npm run probe:check
 
-      - name: UI copy law
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
-        run: npm run lint:copy
-
       - name: Browser control relay core
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
         run: npm ci --prefix browser-control --no-audit --no-fund && npm run browser-control
@@ -253,10 +274,6 @@ jobs:
       - name: Structure smoke
         if: needs.changes.outputs.reuse != 'true'
         run: test/smoke.sh
-
-      - name: Steering check
-        if: needs.changes.outputs.reuse != 'true'
-        run: scripts/check-steering.sh .
 
       - name: Public core boundary
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.release_only != 'true')

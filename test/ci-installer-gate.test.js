@@ -100,7 +100,7 @@ describe('PR gate shape', () => {
   })
 
   it('runs smoke and the preflights off the changes job, not off each other', () => {
-    expect(smoke).toContain('    needs: changes\n')
+    expect(smoke).toContain('    needs: [changes, checks]\n')
     expect(smoke).not.toContain('Classify PR changes')
     expect(desktopCompile).toContain('    needs: changes\n')
     expect(desktopCompile).toContain("if: needs.changes.outputs.desktop == 'true'")
