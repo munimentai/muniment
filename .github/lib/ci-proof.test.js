@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { upload } from './artifact-store.mjs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { proofConfiguration, readProof, reusePullRequest, reuseNightlyBuild } from './ci-proof.mjs'
+
+const toolchain = `sha256:${'1'.repeat(64)}`
+beforeEach(() => vi.stubEnv('CI_PROOF_CONFIGURATION', JSON.stringify({ CI_TOOLCHAIN_REVISION: toolchain })))
+afterEach(() => vi.unstubAllEnvs())
 
 function fixture() {
   const context = { repo: { owner: 'owner', repo: 'repo' }, sha: 'merge', ref: 'refs/heads/main', eventName: 'push', runId: 2 }
@@ -72,20 +76,29 @@ describe('exact tested tree reuse', () => {
     { VITE_MUNIMENT_CLOUD: 'true' },
     { VITE_MUNIMENT_COMPANY_RECORD: 'true' },
     { VITE_MUNIMENT_CLOUD: 'true', VITE_MUNIMENT_COMPANY_RECORD: 'true' },
-    { CI_TOOLCHAIN_REVISION: '2' },
+    { CI_TOOLCHAIN_REVISION: `sha256:${'2'.repeat(64)}` },
   ])('rejects changed off-tree settings: %j', async settings => {
-    const previous = process.env.CI_PROOF_CONFIGURATION
-    try {
-      process.env.CI_PROOF_CONFIGURATION = '{}'
-      const f = fixture()
-      expect(await reusePullRequest(f)).toBe(true)
-      process.env.CI_PROOF_CONFIGURATION = JSON.stringify(settings)
-      expect(proofConfiguration()).toMatch(/^[0-9a-f]{64}$/)
-      expect(await reusePullRequest(f)).toBe(false)
-    } finally {
-      if (previous === undefined) delete process.env.CI_PROOF_CONFIGURATION
-      else process.env.CI_PROOF_CONFIGURATION = previous
-    }
+    const f = fixture()
+    expect(await reusePullRequest(f)).toBe(true)
+    vi.stubEnv('CI_PROOF_CONFIGURATION', JSON.stringify({ CI_TOOLCHAIN_REVISION: toolchain, ...settings }))
+    expect(proofConfiguration()).toMatch(/^[0-9a-f]{64}$/)
+    expect(await reusePullRequest(f)).toBe(false)
+  })
+  it.each([
+    undefined, '', '{', 'null', '[]', 'true', '42', '"settings"', '{}',
+    JSON.stringify({ PLATFORM: 'linux', VITE_MUNIMENT_CLOUD: 'false' }),
+    ...[null, false, 1, {}, [], '', ' ', '2', 'sha256:', `sha256:${'a'.repeat(63)}`,
+      `sha256:${'a'.repeat(65)}`, `sha256:${'g'.repeat(64)}`, `${toolchain}\n`, ` ${toolchain}`,
+    ].map(identity => JSON.stringify({ CI_TOOLCHAIN_REVISION: identity })),
+  ])('runs checks without a valid toolchain identity: %j', async configuration => {
+    const f = fixture()
+    vi.stubEnv('CI_PROOF_CONFIGURATION', configuration)
+    expect(proofConfiguration()).toBeNull()
+    expect(await reusePullRequest(f)).toBe(false)
+    // Matching missing identities must not turn into reusable proofs.
+    f.proof.configuration = proofConfiguration()
+    expect(await reusePullRequest(f)).toBe(false)
+    expect(f.github.rest.repos.listPullRequestsAssociatedWithCommit).not.toHaveBeenCalled()
   })
   it('does not reuse an old success after a failed rerun', async () => {
     const f = fixture()

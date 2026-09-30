@@ -17,7 +17,9 @@ concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Change CI_TOOLCHAIN_REVISION when the native host toolchain changes.
+# Set CI_TOOLCHAIN_REVISION to sha256:<digest> of the native toolchain inventory.
+# Refresh the digest when any platform's compiler, SDK, runtime or build tools change.
+# Leave it unset to run checks without proof reuse.
 # The proof binds every repository variable as well as the exact Git tree.
 env:
   CI_PROOF_CONFIGURATION: ${{ toJSON(vars) }}
@@ -39,7 +41,7 @@ jobs:
         run: scripts/check-steering.sh .
       - name: UI copy law
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
-        run: npm run lint:copy
+        run: node test/ui-copy-lint.mjs src src-tauri browser-control
 
   changes:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

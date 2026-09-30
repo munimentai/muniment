@@ -89,7 +89,13 @@ test('The bounded CI job keeps the steering and copy checks with their reuse gat
   const ci = jobs(workflows['ci.yml'])
   assert.match(ci.checks, /needs: changes/)
   assert.match(ci.checks, /name: Steering check\n        if: needs.changes.outputs.reuse != 'true'\n        run: scripts\/check-steering.sh ./)
-  assert.match(ci.checks, /name: UI copy law\n        if: needs.changes.outputs.reuse != 'true' && \(needs.changes.outputs.desktop == 'true' \|\| github.event_name != 'pull_request'\)\n        run: npm run lint:copy/)
+  assert.match(ci.checks, /name: UI copy law\n        if: needs.changes.outputs.reuse != 'true' && \(needs.changes.outputs.desktop == 'true' \|\| github.event_name != 'pull_request'\)\n        run: node test\/ui-copy-lint.mjs src src-tauri browser-control/)
+  assert.doesNotMatch(ci.checks, /\bnpm\b/)
+  const copyCommand = ci.checks.match(/run: (node test\/ui-copy-lint.mjs [^\n]+)/)[1]
+  const copyRun = spawnSync(process.execPath, copyCommand.split(' ').slice(1), {
+    env: { ...process.env, PATH: '' }, timeout: 30000, encoding: 'utf8',
+  })
+  assert.equal(copyRun.status, 0, copyRun.stderr || copyRun.stdout)
   assert.doesNotMatch(ci.smoke, /name: Steering check|name: UI copy law/)
   assert.match(ci.smoke, /if: \$\{\{ !cancelled\(\) && needs.changes.result == 'success' \}\}/)
   assert.match(ci.smoke, /needs: \[changes, checks\]/)

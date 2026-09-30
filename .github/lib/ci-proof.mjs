@@ -12,9 +12,20 @@ const limit = 64 * 1024
 export const checkoutTree = () => execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim()
 
 // The tree binds platform, feature and toolchain definitions in the repository.
-// Hash off-tree configuration without storing variable values in the proof.
-export const proofConfiguration = () => createHash('sha256')
-  .update(process.env.CI_PROOF_CONFIGURATION ?? '{}').digest('hex')
+// Require an off-tree toolchain inventory digest before hashing repository variables.
+// Missing or invalid identities disable reuse, not the checks or proof upload.
+export function proofConfiguration() {
+  const configuration = process.env.CI_PROOF_CONFIGURATION
+  try {
+    const settings = JSON.parse(configuration)
+    if (!settings || Array.isArray(settings) || typeof settings !== 'object' ||
+        typeof settings.CI_TOOLCHAIN_REVISION !== 'string' || settings.CI_TOOLCHAIN_REVISION.length !== 71 ||
+        !/^sha256:[0-9a-f]{64}$/.test(settings.CI_TOOLCHAIN_REVISION)) return null
+    return createHash('sha256').update(configuration).digest('hex')
+  } catch {
+    return null
+  }
+}
 
 export function writeProof(context, workflow, extra = {}) {
   const proof = {
@@ -38,7 +49,8 @@ export async function readProof(github, repo, run, name, store) {
 }
 
 export async function reusePullRequest({ github, context, core, workflow, tree = checkoutTree(), configuration = proofConfiguration(), read = readProof }) {
-  if (context.eventName !== 'push' || context.ref !== 'refs/heads/main') return false
+  if (context.eventName !== 'push' || context.ref !== 'refs/heads/main' ||
+      typeof configuration !== 'string' || configuration.length !== 64 || !/^[0-9a-f]{64}$/.test(configuration)) return false
   try {
     const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: context.sha })
     for (const pull of pulls) {
@@ -55,7 +67,7 @@ export async function reusePullRequest({ github, context, core, workflow, tree =
           run.path !== `.github/workflows/${workflow}` || run.status !== 'completed' || run.conclusion !== 'success') continue
       const proof = await read(github, context.repo, run, `${workflow}-proof`)
       if (!proof || proof.workflow !== workflow || proof.head !== pull.head.sha || proof.tree !== tree ||
-          !/^[0-9a-f]{64}$/.test(configuration) || proof.configuration !== configuration) continue
+          proof.configuration !== configuration) continue
       core.notice(`Reuse ${workflow} from ${run.html_url}: the tested Git tree matches ${tree}.`)
       await core.summary.addRaw(`Reused [successful PR checks](${run.html_url}) for Git tree \`${tree}\`.`).write()
       return true
