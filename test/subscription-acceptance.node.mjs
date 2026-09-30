@@ -686,7 +686,7 @@ async function identityRun(mutate, publicKeyFile = true) {
   }
 }
 
-for (const condition of ['probe-source', 'probe-webdriver', 'chat-turn-count', 'chat-transport-count', 'chat-transport-file', 'none']) {
+for (const condition of ['probe-source', 'probe-webdriver', 'chat-turn-count', 'chat-transport-count', 'chat-transport-file', 'transport-finished', 'none']) {
   test(`the installed runner preserves the ${condition} acceptance outcome`, { skip: !nativeLinux }, async () => {
     const f = fixture()
     const result = await identityRun(files => {
@@ -697,6 +697,7 @@ for (const condition of ['probe-source', 'probe-webdriver', 'chat-turn-count', '
       // The naming request finishes last and returns the nonce as its title.
       const receipts = [...f.transports, { ...f.transports[0], purpose: 'thread-name' }]
       if (condition === 'chat-transport-count') receipts.push(f.transports[0])
+      if (condition === 'transport-finished') receipts[3].finished = false
       const script = Buffer.from(`#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path')
 const state = process.env.MUNIMENT_STATE_DIR
