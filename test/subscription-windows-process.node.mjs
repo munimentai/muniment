@@ -46,7 +46,7 @@ $start = [Diagnostics.ProcessStartInfo]::new()
 $start.FileName = Join-Path $PSHOME 'powershell.exe'
 $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
-$start.Arguments = '-NoProfile -NonInteractive -File "' + (Join-Path $PSScriptRoot 'holder.ps1') + '"'
+$start.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'holder.ps1') + '"'
 $child = [Diagnostics.Process]::Start($start)
 try {
     $receipt = Join-Path $PSScriptRoot 'holder-pid'
@@ -62,7 +62,7 @@ const logFile = path.join(__dirname, 'job.log')
 const log = fs.openSync(logFile, 'a')
 const child = mode === 'root'
   ? spawn(process.execPath, [__filename, 'middle'], { detached: true, stdio: ['ignore', log, log] })
-  : spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.join(__dirname, 'holder-launch.ps1')], { windowsHide: true, stdio: ['ignore', log, log] })
+  : spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'holder-launch.ps1')], { windowsHide: true, stdio: ['ignore', log, log] })
 child.once('error', error => { fs.appendFileSync(logFile, error.stack + '\\n'); process.exitCode = 1 })
 fs.appendFileSync(logFile, 'The ' + mode + ' fixture started child pid=' + (child.pid ?? 'none') + '.\\n')
 fs.closeSync(log)
@@ -97,7 +97,7 @@ foreach ($name in @('middle', 'holder')) {
 $result | ConvertTo-Json -Compress
 `)
     const state = () => {
-      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', stateScript],
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', stateScript],
         { encoding: 'utf8', timeout: 10_000, windowsHide: true })
       assert.equal(result.status, 0, `The fixture state check failed. ${result.error?.message ?? result.stderr}`)
       return JSON.parse(result.stdout.trim())
@@ -167,7 +167,7 @@ $start = [Diagnostics.ProcessStartInfo]::new()
 $start.FileName = Join-Path $PSHOME 'powershell.exe'
 $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
-$start.Arguments = '-NoProfile -NonInteractive -File "' + (Join-Path $PSScriptRoot 'restart.ps1') +
+$start.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'restart.ps1') +
     '" -JobFile "' + (Join-Path $PSScriptRoot 'profile/subscription-probe-job.json') +
     '" -Node "' + $Node + '" -Fixture "' + (Join-Path $PSScriptRoot 'fixture.cjs') + '"'
 $child = [Diagnostics.Process]::Start($start)
@@ -177,7 +177,7 @@ try {
 } finally { $child.Dispose() }
 `)
         // MSI starts outside the tree. Its replacement joins the retained job before it spawns children.
-        restarted = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', launcher, '-Node', process.execPath],
+        restarted = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', launcher, '-Node', process.execPath],
           { windowsHide: true, stdio: ['ignore', log, log] })
         restarted.once('error', () => {})
       }

@@ -12,7 +12,7 @@ export async function launchWindowsTree(executable, args, env, log, profile) {
   const launchFile = path.join(env.TMPDIR, `subscription-job-${id}.json`)
   if (profile) fs.writeFileSync(path.join(profile, 'subscription-probe-job.json'), JSON.stringify({ name: jobName }), { mode: 0o600 })
   fs.writeFileSync(launchFile, JSON.stringify({ executable, args, jobName }), { mode: 0o600 })
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File',
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
     path.resolve('test/e2e/support/subscription-stop.ps1'), '-LaunchFile', launchFile],
   { env, stdio: ['ignore', log, log], windowsHide: true })
   const closed = new Promise(resolve => {
