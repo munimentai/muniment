@@ -584,6 +584,21 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('A focus timeout records app activation and the key window.', async () => {
+    const cause = new Error('The Home picker could not acquire keyboard focus.')
+    const native = {
+      active: true,
+      trusted: true,
+      step: 0,
+      directory: '/Users/harness/Documents',
+      windows: [{ class: 'NSOpenPanel', title: 'Open', visible: true, key: false }],
+    }
+    const diagnostics = { native, open: { status: 'pending' } }
+    await expect(driveMacosFolder(1, () => Promise.reject(cause), () => diagnostics)).rejects.toMatchObject({
+      cause, message: `${cause.message} Home picker diagnostics: ${JSON.stringify(diagnostics)}`,
+    })
+  })
+
   it('An empty window list stays explicit in the failure.', async () => {
     const cause = new Error('The NSOpenPanel lost keyboard focus.')
     const diagnostics = { native: { windows: [], step: 2 }, open: { status: 'unavailable' } }
