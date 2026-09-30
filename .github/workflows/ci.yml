@@ -282,6 +282,10 @@ jobs:
         # Match the serial core run above so deadline tests do not starve each other.
         run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --locked -- --test-threads=1
 
+      - name: Rust shadow router Python contract
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
+        run: python3 -B test/router_shadow_test.py
+
       - name: Companion formatting
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.companion == 'true')
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --check
