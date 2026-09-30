@@ -312,3 +312,130 @@ outcome. It never answers a gate, replays an effect, or starts automatically.
 Rejected resumes leave the journal unchanged and return a path- and
 credential-free error. Pi session JSONL remains runtime recovery material; the
 journal projection, not JSONL, is the UI and history authority.
+
+## Shared Rust shadow routing
+
+`muniment-router-shadow` exposes `muniment-routing-shadow/1` without Tauri, provider credentials, network calls, or provider execution.
+It calls the desktop's `classify::select`, `policy::choose`, and `balance::pick_with_active` functions.
+The policy revision is `muniment-routing/1`.
+The public desktop keeps its current entry points and behavior.
+This executable has no live mode.
+Keep the core crate's default features enabled.
+
+Build the executable with this command:
+
+```sh
+cargo build --manifest-path src-tauri/Cargo.toml -p muniment-core --locked --bin muniment-router-shadow
+```
+
+Create a private state directory outside the desktop profile.
+Run one request per process:
+
+```sh
+muniment-router-shadow --state /private/factory-shadow/router.sqlite < request.json
+```
+
+The process reads one UTF-8 JSON object through EOF, with a 1 MiB limit.
+Stdout contains one JSON response.
+Success exits with zero, and errors exit with one.
+Errors contain `version`, `mode: "shadow"`, and a bounded `error` code, never raw input or storage errors.
+
+Use a local SQLite file, not a network filesystem.
+Restrict access to the executable and state directory to the factory service account.
+The contract accepts trusted scheduler metadata, not provider credentials or untrusted task policy.
+
+### Requests and affinity
+
+The Rust types live in `muniment_core::model_router::headless`.
+The reusable Python client lives in `scripts/router_shadow.py`.
+The executable and classifier fixtures live in `protocol-fixtures/muniment-routing-shadow/1/`.
+Both client tests and Rust conformance tests consume these fixtures.
+Unknown fields and unsupported versions fail closed.
+
+Each request supplies `version` and one `operation`:
+
+- `inspect` supplies `job` and `snapshot` and returns the eligible set without a reservation.
+- `reserve` also accepts an optional `observation` and creates or reuses one durable reservation.
+- `release` supplies `job_id`, `session_id`, `trace_id`, and an `outcome` of `success`, `failed`, `refused`, or `cancelled`.
+
+A job supplies an opaque job identity, session identity, trace identity, role, baseline, token bounds, capability requirements, and budget.
+Roles are `plan`, `implement`, `review`, `test`, and `general`.
+References accept 1–128 ASCII letters, digits, hyphens, underscores, periods, or colons.
+
+Task context accepts at most 8,000 UTF-8 bytes and stays out of storage and responses.
+The scheduler supplies token bounds and capability requirements independently of task text.
+Prices use USD per million tokens.
+The budget bounds estimated uncached input and output cost for those token bounds.
+The provider executor still enforces actual spend and runtime limits.
+
+Snapshots contain explicit account/model eligibility, weights, cooldown deadlines, prices, capabilities, and model-specific caps.
+They contain no authentication fields or execution URLs.
+Each state file accepts one monotonically increasing snapshot revision.
+A changed snapshot requires a higher revision.
+Reordered metadata keeps the same digest.
+
+Each account/model cap contains an epoch, a job limit, and a reset deadline in Unix milliseconds.
+The limit is the available shadow job allowance at that epoch's start, not a continually decremented remaining count.
+Every new reservation spends one allowance, including failed or canceled jobs.
+Release frees the active reservation but does not refund the allowance.
+
+An exhausted or expired cap needs fresh scheduler metadata.
+A cap increase requires a higher epoch, and an epoch change does not change an existing job's account.
+Keep account references stable across snapshots.
+
+SQLite transactions serialize concurrent workers and persist reservations before the process returns.
+Repeated requests and process restarts reuse the original selection without another reservation.
+A retry keeps the same job, session, trace, baseline, role, budget, and capability requirements.
+
+Context may change after session compaction.
+A cooling, removed, disabled, or incompatible pinned account returns `affinity_unavailable`, never another account.
+Release records the live baseline's outcome, not an invented shadow execution outcome.
+A refusal cools only the baseline account through the shared Rust cooldown schedule.
+Repeated release requests preserve the first outcome without extending the cooldown.
+
+Completed identities remain tombstones and cannot reserve again.
+A new job requires a new session identity.
+A timeout can follow a committed reservation, so retries must keep their identities.
+Do not delete state to recover from a timeout or storage error.
+
+### Classifier observations and evidence
+
+The factory owns the Kev-4B service and its deadline.
+Use `inspect` to get the eligible digest and request digest before classifier evaluation.
+The request digest binds the observation to the job constraints and context without storing the context.
+Submit the observation with its revision, trace identity, both digests, elapsed milliseconds, status, and optional answer.
+
+Statuses are `answer`, `timeout`, and `failed`.
+Answers use `{"answers":{"route":{"choice":"family/model","confidence":0.9}}}`.
+The Rust classifier validator requires an eligible choice and finite confidence from zero through one.
+Confidence below 0.6, invalid answers, stale observations, and failures take the shared fallback path.
+The eight-second classifier deadline also applies to externally reported elapsed time.
+Concurrent eligibility changes can invalidate an observation without changing the live baseline.
+
+Responses include the original baseline, shadow selection, eligible digest, policy revision, decision reason, classifier revision, confidence, timing, and fallback cause.
+Retries return the original decision evidence with `reused: true`.
+Release returns that evidence with the outcome and the same trace identity.
+The factory attaches its dispatch, classifier observation, and outcome to that trace in Langfuse.
+Trace metadata may contain opaque account/model references and the eligible digest, never credentials or full prompts.
+
+Grafana labels use only operation, role, fallback, outcome, mode, and bounded error codes.
+Do not label metrics with identities, revisions, model names, digests, context, or decision text.
+Record classifier and routing milliseconds as numeric observations, not labels.
+
+The Python `evaluate` function returns the caller's unchanged baseline as `live_selection` and keeps shadow evidence separate.
+Classifier failure, executable failure, invalid responses, and timeouts cannot replace that baseline.
+The factory retains its model caps, reset handling, resume handling, and isolated `pi-claude-bridge` execution.
+The shared router neither imports account configuration nor launches Pi.
+Live adaptive selection and Ollama replacement require evaluation approval outside this contract.
+
+Run focused Rust and Python contract checks before platform proof:
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml -p muniment-core --locked --test router_shadow
+python3 -B test/router_shadow_test.py
+```
+
+`ROUTER_SHADOW_BIN` overrides the Python test executable path.
+CI also runs the existing routing tests and native compile checks.
+Dispatch `nightly.yml` with one affected `platform` on the published repair branch before the final combined full nightly.
+A targeted native run proves the published source, not an unpublished local diff.
