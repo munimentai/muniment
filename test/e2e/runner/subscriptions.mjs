@@ -170,7 +170,7 @@ function screenshot(platform, pid, output, env) {
     if (!/^\d+$/.test(id)) throw new Error('The native screenshot requires the installed app window.')
     execute('screencapture', ['-x', `-l${id}`, output], env, 10_000)
   } else {
-    execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.resolve('test/e2e/support/subscription-screenshot.ps1'),
+    execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.resolve('test/e2e/support/subscription-screenshot.ps1'),
       '-AppPid', String(pid), '-Destination', output], env, 10_000)
   }
 }

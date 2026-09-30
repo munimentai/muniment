@@ -19,6 +19,89 @@ import { sandboxRequirement } from './e2e/runner/subscription-linux-sandbox.mjs'
 import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
 import { upload } from '../.github/lib/artifact-store.mjs'
 
+function powershellFileLaunches(source) {
+  const commands = []
+  // Scan the source text so generated JavaScript fixtures receive the same checks.
+  for (const match of source.matchAll(/['"]powershell\.exe['"]\s*,\s*\[([^\]]*)\]/gi)) {
+    const args = [...match[1].matchAll(/(['"])((?:\\.|(?!\1)[^\\])*)\1/g)].map(argument => argument[2])
+    commands.push({ source: match[0], index: match.index, args })
+  }
+  // The first PowerShell string holds the options. Later expressions supply the script path and its arguments.
+  for (const match of source.matchAll(/\$\w+\.Arguments\s*=\s*(['"])(.*?)\1/g)) {
+    const args = [...match[2].matchAll(/"[^"]*(?:"|$)|[^\s"]+/g)].map(argument => argument[0].replace(/^"|"$/g, ''))
+    commands.push({ source: match[0], index: match.index, args })
+  }
+  return commands.filter(command => command.args.some(argument => argument.toLowerCase() === '-file'))
+}
+
+function assertPowerShellFilePolicies(source, file) {
+  for (const command of powershellFileLaunches(source)) {
+    const args = command.args.map(argument => argument.toLowerCase())
+    const options = args.slice(0, args.indexOf('-file'))
+    const policyIndex = options.indexOf('-executionpolicy')
+    assert.ok(policyIndex >= 0, `${file} must set the execution policy before -File.`)
+    assert.equal(options[policyIndex + 1], 'bypass', `${file} must use ExecutionPolicy Bypass.`)
+    assert.equal(options.lastIndexOf('-executionpolicy'), policyIndex, `${file} must set the execution policy once.`)
+  }
+}
+
+test('subscription PowerShell file launches bypass the execution policy', () => {
+  const files = ['test/subscription-windows-process.node.mjs']
+  for (const directory of ['test/e2e/runner', 'test/e2e/support']) {
+    for (const name of fs.readdirSync(directory)) {
+      if (name.startsWith('subscription')) files.push(path.join(directory, name))
+    }
+  }
+  const counts = {}
+  for (const file of files) {
+    const source = fs.readFileSync(file, 'utf8')
+    const launches = powershellFileLaunches(source)
+    if (launches.length) counts[file.split(path.sep).join('/')] = launches.length
+    assertPowerShellFilePolicies(source, file)
+    for (const launch of launches) {
+      const withoutPolicy = launch.source.replace(/['"]-ExecutionPolicy['"],\s*['"]Bypass['"],\s*|-ExecutionPolicy Bypass\s*/i, '')
+      assert.notEqual(withoutPolicy, launch.source, `${file} must expose each launch policy to the mutation test.`)
+      const mutated = source.slice(0, launch.index) + withoutPolicy + source.slice(launch.index + launch.source.length)
+      assert.equal(powershellFileLaunches(mutated).length, launches.length)
+      assert.throws(() => assertPowerShellFilePolicies(mutated, file), /must set the execution policy before -File/)
+    }
+  }
+  assert.deepEqual(counts, {
+    'test/subscription-windows-process.node.mjs': 5,
+    'test/e2e/runner/subscriptions.mjs': 1,
+    'test/e2e/support/subscription-windows-process.mjs': 1,
+  })
+})
+
+test('the PowerShell policy guard handles quoted paths and rejects invalid options', () => {
+  const script = 'C:\\Program Files\\subscription fixture.ps1'
+  for (const [valid, options] of [
+    [true, ['-NoProfile', '-ExecutionPolicy', 'Bypass']],
+    [true, ['-noprofile', '-executionpolicy', 'bYpAsS']],
+    [false, []],
+    [false, ['-ExecutionPolicy']],
+    [false, ['-ExecutionPolicy', 'Restricted']],
+    [false, ['-ExecutionPolicy', 'Bypass', '-ExecutionPolicy', 'Restricted']],
+    [false, ['-ExecutionPolicy', 'Bypass', '-ExecutionPolicy', 'Bypass']],
+  ]) {
+    const args = [...options, '-File', script, '-ExecutionPolicy', 'Bypass']
+    const sources = [
+      `spawn('powershell.exe', ${JSON.stringify(args)})`,
+      `$start.Arguments = '${options.join(' ')} -File "${script}" -ExecutionPolicy Bypass'`,
+      `$start.Arguments = '${options.join(' ')} -File "' + (Join-Path $PSScriptRoot 'subscription fixture.ps1') + '"'`,
+    ]
+    for (const source of sources) {
+      const launches = powershellFileLaunches(source)
+      assert.equal(launches.length, 1)
+      if (source.startsWith('$start.Arguments') && !source.includes('Join-Path')) {
+        assert.equal(launches[0].args[options.length + 1], script)
+      }
+      if (valid) assert.doesNotThrow(() => assertPowerShellFilePolicies(source, 'fixture'))
+      else assert.throws(() => assertPowerShellFilePolicies(source, 'fixture'), /must (set|use)/)
+    }
+  }
+})
+
 const sourceSha = 'a'.repeat(40)
 const packageNames = { linux: 'muniment_1.0.0_amd64.AppImage', windows: 'muniment_1.0.0_x64_en-US.msi',
   'macos-arm64': 'muniment-arm64.app.tar.gz', 'macos-x64': 'muniment-x64.app.tar.gz' }
