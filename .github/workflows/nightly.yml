@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: self-hosted
+    runs-on: muniment-checks
     outputs:
       reuse: ${{ steps.proof.outputs.reuse }}
       source_sha: ${{ steps.source.outputs.sha }}
@@ -224,7 +224,7 @@ jobs:
     needs: [prepare, build]
     # Skip on a single-platform targeted run — the release asset-set check needs all platforms.
     if: needs.prepare.outputs.reuse != 'true' && (github.event.inputs.platform == '' || github.event.inputs.platform == 'all')
-    runs-on: self-hosted
+    runs-on: muniment-checks
     permissions:
       contents: write
     env:
@@ -549,7 +549,7 @@ jobs:
   verify-requested-e2e:
     needs: [linux-e2e, windows-e2e, macos-e2e]
     if: always() && github.event_name == 'workflow_dispatch' && github.event.inputs.platform != 'all'
-    runs-on: self-hosted
+    runs-on: muniment-checks
     env:
       REQUESTED_PLATFORM: ${{ github.event.inputs.platform }}
       LINUX_RESULT: ${{ needs.linux-e2e.result }}
@@ -598,7 +598,7 @@ jobs:
       needs.build.result == 'success' && needs.publish.result == 'success' &&
       needs.linux-e2e.result == 'success' && needs.windows-e2e.result == 'success' &&
       needs.macos-e2e.result == 'success' && needs.release-acceptance.result == 'success'
-    runs-on: self-hosted
+    runs-on: muniment-checks
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

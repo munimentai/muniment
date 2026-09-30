@@ -10,14 +10,25 @@ permissions:
   contents: read
 
 jobs:
+  checks:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: muniment-checks
+    timeout-minutes: 15
+    concurrency:
+      group: artifact-store-checks-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check the transport and workflows
+        run: node --test test/artifact-store.node.mjs test/ci-routing.node.mjs
+
+  # Keep the ARM transport probe on its native host.
   upload:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-15
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Check the transport and workflows
-        run: node --test test/artifact-store.node.mjs
       - uses: ./.github/actions/setup-artifact-store
       - name: Upload and read back the ARM fixtures with 64 MiB diagnostics
         env:
@@ -30,7 +41,7 @@ jobs:
 
   collect:
     needs: upload
-    runs-on: self-hosted
+    runs-on: muniment-checks
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
