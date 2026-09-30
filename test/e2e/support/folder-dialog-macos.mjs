@@ -1,5 +1,5 @@
-// The E2E app sends AppKit events to its own NSOpenPanel. No privacy grant
-// or external UI automation process participates in this drive.
+// The E2E app uses Accessibility to press its own NSOpenPanel button.
+// The drive needs Accessibility trust, but not app activation or keyboard focus.
 async function snapshot() {
   return browser.execute(async () => {
     let timer

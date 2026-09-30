@@ -200,7 +200,10 @@ describe('The onboarding folder picker selects a native driver.', () => {
     expect(macos).toContain('windows.objectAtIndex(index).downcast::<NSOpenPanel>().ok()')
     expect(macos).toContain('panel.isVisible()')
     expect(macos).toContain('panels.len() > 1')
-    expect(macos).toContain('The NSOpenPanel lost keyboard focus.')
+    const accessibility = await readFile(new URL('../src-tauri/src/e2e_folder_dialog/accessibility.rs', import.meta.url), 'utf8')
+    expect(accessibility).toContain('The Home picker needs exactly one matching Accessibility window or sheet.')
+    expect(accessibility).toContain('The Home picker button belongs to another window or sheet.')
+    expect(macos).toContain('The Home picker drive timed out.')
     expect(macos).toContain('The NSOpenPanel did not select the isolated Home.')
     expect(macos).toContain('The Home path changed during the picker drive.')
     expect(macos).toContain('drive.panel.URLs()')
@@ -409,7 +412,7 @@ Write-Output 'The confirm and navigation checks passed.'
       expect(result.stdout).toContain('The confirm and navigation checks passed.')
     }, 35_000)
 
-  it('The macOS picker uses the app IPC and posts its keys from the app process.', async () => {
+  it('The macOS picker uses app IPC and presses only its own Accessibility button.', async () => {
     const invoke = vi.fn().mockResolvedValue(true)
     const execute = vi.fn()
     vi.stubGlobal('window', { __TAURI__: { core: { invoke } } })
@@ -421,11 +424,40 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(invoke).toHaveBeenCalledExactlyOnceWith('e2e_drive_folder_dialog')
 
     const native = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
-    expect(native).toContain('event.post(CGEventTapLocation::HID)')
+    expect(native).toContain('panel.setDirectoryURL(Some(&NSURL::fileURLWithPath_isDirectory(')
+    expect(native).toContain('panel.setAccessibilityIdentifier(Some(&NSString::from_str(&identifier)))')
+    expect(native).toContain('AXUIElementCreateApplication(std::process::id() as i32)')
+    const accessibility = await readFile(new URL('../src-tauri/src/e2e_folder_dialog/accessibility.rs', import.meta.url), 'utf8')
+    expect(native).toContain('accessibility::confirm_button(&NativeAccessibility, app, identifier)')
+    expect(accessibility).toContain('ax.elements(app, "AXWindows")?')
+    expect(accessibility).toContain('ax.elements(&element, "AXChildren")?')
+    expect(accessibility).toContain('ax.string(&child, "AXRole").ok().as_deref() == Some("AXSheet")')
+    expect(accessibility).toContain('ax.string(&element, "AXIdentifier").ok().as_deref() == Some(identifier)')
+    expect(accessibility).toContain('ax.element(panel, "AXDefaultButton")?')
+    expect(accessibility).toContain('ax.element(&button, "AXTopLevelUIElement")? != *panel')
+    expect(accessibility).toContain('ax.boolean(&button, "AXEnabled")?')
+    expect(native).toContain('CFString::new("AXPress")')
+    expect(native).toContain('spawn_blocking(move || press_confirm(&identifier, deadline))')
+    const confirm = native.split('fn press_confirm')[1].split('fn panel_directory')[0]
+    expect(accessibility).toContain('if panels.len() > 1')
+    expect(accessibility).toContain('if panels.is_empty()')
+    expect(confirm.indexOf('if Instant::now() >= deadline')).toBeLessThan(confirm.indexOf('AXUIElementPerformAction('))
+    expect(confirm).toContain('status != 0 && status != AX_CANNOT_COMPLETE')
+    expect(confirm.match(/AXUIElementPerformAction\(/g)).toHaveLength(1)
     expect(native).toContain('AXIsProcessTrusted')
     expect(native).toContain('run_on_main_thread')
     expect(native).toContain('MUNIMENT_E2E_ONBOARDING_ONLY')
-    expect(native).not.toMatch(/AXUIElement|sendEvent|osascript|Command::new/)
+    expect(native).not.toMatch(/CGEvent|sendEvent|osascript|Command::new|activateIgnoringOtherApps|makeKeyAndOrderFront|\.ok\(None\)/)
+    const drive = native.split('fn poll(home: String)')[1].split('#[derive(serde::Serialize)]')[0]
+    expect(drive).not.toMatch(/keyWindow|isActive|frontmostApplication/)
+    expect(drive).toContain('!panel.canChooseDirectories()')
+    expect(drive).toContain('panel.canChooseFiles()')
+    expect(drive).toContain('panel.allowsMultipleSelection()')
+    expect(drive).toContain('drive.step = 1;')
+    expect(drive.indexOf('drive.step = 1;')).toBeLessThan(drive.indexOf('Ok(Progress::Confirm('))
+    expect(drive).toContain('urls.len() == 1')
+    expect(drive).toContain('selected.as_deref().and_then(canonical) != canonical(&home)')
+    expect(drive).toContain('canonical(&home).is_none()')
     const main = await readFile(new URL('../src-tauri/src/desktop.rs', import.meta.url), 'utf8')
     expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*mod e2e_folder_dialog/)
     expect(main).toMatch(/#\[cfg\(all\(target_os = "macos", feature = "e2e-webdriver"\)\)\]\s*e2e_folder_dialog::e2e_drive_folder_dialog/)
@@ -434,30 +466,43 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(snapshot).toContain('MUNIMENT_E2E_ONBOARDING_ONLY')
     expect(snapshot).toContain('run_on_main_thread')
     expect(snapshot).toContain('windows: (0..windows.len())')
-    expect(snapshot).toContain('class: window.class().name().to_string_lossy().into_owned()')
-    expect(snapshot).toContain('title: window.title().to_string()')
-    expect(snapshot).toContain('visible: window.isVisible()')
+    expect(snapshot).toContain('window_snapshot(&window)')
+    const windowSnapshot = native.split('fn window_snapshot')[1].split('#[derive(serde::Serialize)]')[0]
+    expect(windowSnapshot).toContain('class: window.class().name().to_string_lossy().into_owned()')
+    expect(windowSnapshot).toContain('title: window.title().to_string()')
+    expect(windowSnapshot).toContain('visible: window.isVisible()')
+    expect(windowSnapshot).toContain('number: window.windowNumber()')
+    expect(snapshot).toContain('NSWorkspace::sharedWorkspace()')
+    expect(snapshot).toContain('.frontmostApplication()')
+    expect(snapshot).toContain('pid: active.processIdentifier()')
+    expect(snapshot).toContain('bundle_identifier: active.bundleIdentifier()')
+    expect(snapshot).toContain('app_active: app.isActive()')
+    expect(snapshot).toContain('key_window: app.keyWindow().map(|window| window_snapshot(&window))')
     expect(snapshot).not.toMatch(/\.filter|sendEvent|key\(/)
     const ci = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
     expect(ci).toContain('cargo check --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --features e2e-webdriver --target aarch64-apple-darwin')
   })
 
-  it('The AppKit drive acquires focus after activation without typing during the wait.', async () => {
-    const native = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
-    const focus = native.slice(native.indexOf('if drive.step == 0 &&'), native.indexOf('match drive.step'))
-    expect(focus).toContain('(!app.isActive() || !drive.panel.isKeyWindow())')
-    expect(focus).toContain('Instant::now() >= drive.focus_deadline')
-    expect(focus).toMatch(/if app\.isActive\(\) \{\s*drive\.panel\.makeKeyAndOrderFront\(None\);\s*\} else \{/)
-    expect(focus).toContain('app.activateIgnoringOtherApps(true)')
-    expect(focus).toContain('drive.next = Instant::now() + Duration::from_millis(100)')
-    expect(focus).toContain('return Ok(false)')
-    expect(focus).not.toMatch(/focus_deadline\s*=|key\(|type_text\(/)
-    expect(focus).toContain('if !app.isActive()')
-    expect(focus).toContain('let Some(window) = app.keyWindow() else')
-    expect(focus).toContain('window.windowNumber() != drive.panel.windowNumber()')
-    expect(focus).toContain('.sheetParent()')
-    expect(native).toContain('key: window.isKeyWindow()')
-    expect(native).toContain('active: app.isActive()')
+  it.each([
+    null,
+    { class: 'TaoWindow', title: 'muniment', visible: true, number: 42 },
+  ])('A failed Accessibility action records the active app and key window (%j).', async (keyWindow) => {
+    const native = {
+      active_app: { pid: 100, bundle_identifier: 'com.apple.finder', name: 'Finder' },
+      app_active: false,
+      key_window: keyWindow,
+      directory: '/tmp/Home space café',
+      step: 1,
+    }
+    const cause = new Error('The Home picker button belongs to another window.')
+    const poll = vi.fn().mockRejectedValue(cause)
+    const diagnostics = { native, open: { status: 'pending' } }
+    const diagnose = vi.fn().mockResolvedValue(diagnostics)
+    await expect(driveMacosFolder(1, poll, diagnose)).rejects.toThrow(
+      `${cause.message} Home picker diagnostics: ${JSON.stringify(diagnostics)}`,
+    )
+    expect(poll).toHaveBeenCalledTimes(1)
+    expect(diagnose).toHaveBeenCalledTimes(1)
   })
 
   it('The AppKit drive waits for the native panel to close.', async () => {
