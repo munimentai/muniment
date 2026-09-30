@@ -12,7 +12,7 @@ default = []
 local-runtime = []
 cef-smoke = ["local-runtime"]
 browser-agent = []
-e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver", "objc2-app-kit/NSOpenPanel", "objc2-app-kit/NSSavePanel", "objc2-app-kit/NSGraphicsContext"]
+e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver", "dep:core-foundation", "objc2-app-kit/NSOpenPanel", "objc2-app-kit/NSSavePanel", "objc2-app-kit/NSGraphicsContext", "objc2-app-kit/NSAccessibilityProtocols", "objc2-app-kit/NSWorkspace", "objc2-app-kit/libc"]
 
 [workspace]
 members = [".", "core", "attach", "code-diff", "cli", "acp", "runtime"]
@@ -59,6 +59,7 @@ x11-dl = "2.21"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
+core-foundation = { version = "0.10", optional = true }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSGraphics", "NSPanel", "NSOpenPanel", "NSSavePanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSEnumerator", "NSError", "NSNotification", "NSString", "NSURL"] }
