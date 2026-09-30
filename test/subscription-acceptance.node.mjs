@@ -19,6 +19,37 @@ import { sandboxRequirement } from './e2e/runner/subscription-linux-sandbox.mjs'
 import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
 import { upload } from '../.github/lib/artifact-store.mjs'
 
+test('subscription PowerShell file launches bypass the execution policy', () => {
+  const files = ['test/subscription-windows-process.node.mjs']
+  for (const directory of ['test/e2e/runner', 'test/e2e/support']) {
+    for (const name of fs.readdirSync(directory)) {
+      if (name.startsWith('subscription')) files.push(path.join(directory, name))
+    }
+  }
+  let launches = 0
+  for (const file of files) {
+    const source = fs.readFileSync(file, 'utf8')
+    const commands = [...source.matchAll(/['"]powershell\.exe['"]\s*,\s*\[([^\]]*)\]/gi)]
+      .map(match => [...match[1].matchAll(/['"]([^'"]*)['"]/g)].map(argument => argument[1]))
+    // Generated PowerShell fixtures use ProcessStartInfo rather than Node spawn.
+    for (const match of source.matchAll(/\$\w+\.Arguments\s*=\s*(['"])(.*?)\1/g)) {
+      commands.push(match[2].trim().split(/\s+/))
+    }
+    for (const command of commands) {
+      const args = command.map(argument => argument.toLowerCase())
+      const fileIndex = args.indexOf('-file')
+      if (fileIndex < 0) continue
+      launches++
+      const options = args.slice(0, fileIndex)
+      const policyIndex = options.indexOf('-executionpolicy')
+      assert.ok(policyIndex >= 0, `${file} must set the execution policy before -File.`)
+      assert.equal(options[policyIndex + 1], 'bypass', `${file} must use ExecutionPolicy Bypass.`)
+      assert.equal(options.lastIndexOf('-executionpolicy'), policyIndex, `${file} must set the execution policy once.`)
+    }
+  }
+  assert.ok(launches >= 7, 'The scan must cover the runner, job launcher, and generated fixtures.')
+})
+
 const sourceSha = 'a'.repeat(40)
 const packageNames = { linux: 'muniment_1.0.0_amd64.AppImage', windows: 'muniment_1.0.0_x64_en-US.msi',
   'macos-arm64': 'muniment-arm64.app.tar.gz', 'macos-x64': 'muniment-x64.app.tar.gz' }
