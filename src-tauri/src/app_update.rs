@@ -7,12 +7,76 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 pub struct AppUpdate(Mutex<Option<(Update, Vec<u8>)>>);
 
 impl AppUpdate {
-    pub(crate) fn prepared(&self) -> Result<(Update, Vec<u8>), String> {
+    pub(crate) fn prepared(&self) -> Result<(Update, Vec<u8>), UpdateFailure> {
         self.0
             .lock()
-            .map_err(|_| "Update state is unavailable.")?
+            .map_err(|_| UpdateFailure::State)?
             .clone()
-            .ok_or_else(|| "No verified update is ready.".into())
+            .ok_or(UpdateFailure::NotPrepared)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum UpdateFailure {
+    Configuration(String),
+    DownloadAddress(String),
+    State,
+    Address,
+    Builder,
+    Check,
+    Download,
+    Busy,
+    NotPrepared,
+    InstallTask,
+    Install,
+    Restart,
+}
+
+impl UpdateFailure {
+    pub(crate) fn probe_code(&self) -> &'static str {
+        match self {
+            Self::Configuration(_) => "update-builder",
+            Self::DownloadAddress(_) => "update-address",
+            Self::State => "update-state",
+            Self::Address => "update-address",
+            Self::Builder => "update-builder",
+            Self::Check => "update-check",
+            Self::Download => "update-download",
+            Self::Busy => "update-busy",
+            Self::NotPrepared => "update-not-prepared",
+            Self::InstallTask => "update-install-task",
+            Self::Install => "update-install",
+            Self::Restart => "update-restart",
+        }
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            Self::Configuration(message) | Self::DownloadAddress(message) => message,
+            Self::State => "Update state is unavailable.",
+            Self::Address => "The update address is invalid.",
+            Self::Builder => "Updates are unavailable.",
+            Self::Check => "Updates could not be checked.",
+            Self::Download => "The update could not be downloaded or verified.",
+            Self::Busy => "Finish the current action before updating.",
+            Self::NotPrepared => "No verified update is ready.",
+            Self::InstallTask => "The update could not be installed.",
+            Self::Install => "The update could not be installed. Try again.",
+            Self::Restart => "The updated app did not restart.",
+        }
+    }
+}
+
+impl From<String> for UpdateFailure {
+    fn from(message: String) -> Self {
+        Self::Configuration(message)
+    }
+}
+
+// Public commands keep their message strings. The probe reads only fixed codes.
+impl serde::Serialize for UpdateFailure {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.message())
     }
 }
 
@@ -20,17 +84,12 @@ impl AppUpdate {
 pub async fn app_update_prepare(
     app: tauri::AppHandle,
     state: State<'_, AppUpdate>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, UpdateFailure> {
     #[cfg(target_os = "linux")]
     if std::env::var_os("APPIMAGE").is_none() {
         return Ok(None);
     }
-    if let Some((update, _)) = state
-        .0
-        .lock()
-        .map_err(|_| "Update state is unavailable.")?
-        .as_ref()
-    {
+    if let Some((update, _)) = state.0.lock().map_err(|_| UpdateFailure::State)?.as_ref() {
         return Ok(Some(update.version.clone()));
     }
     let key = option_env!("MUNIMENT_UPDATER_PUBLIC_KEY")
@@ -45,27 +104,24 @@ pub async fn app_update_prepare(
         .pubkey(key)
         .endpoints(vec![endpoint
             .parse()
-            .map_err(|_| "The update address is invalid.")?])
-        .map_err(|_| "The update address is invalid.")?
+            .map_err(|_| UpdateFailure::Address)?])
+        .map_err(|_| UpdateFailure::Address)?
         .timeout(Duration::from_secs(120));
     let updater = crate::subscription_probe::update_builder(builder)?
         .build()
-        .map_err(|_| "Updates are unavailable.")?;
-    let Some(mut update) = updater
-        .check()
-        .await
-        .map_err(|_| "Updates could not be checked.")?
-    else {
+        .map_err(|_| UpdateFailure::Builder)?;
+    let Some(mut update) = updater.check().await.map_err(|_| UpdateFailure::Check)? else {
         return Ok(None);
     };
-    crate::subscription_probe::check_update_download(&update)?;
+    crate::subscription_probe::check_update_download(&update)
+        .map_err(UpdateFailure::DownloadAddress)?;
     update.timeout = Some(Duration::from_secs(120));
     let bytes = update
         .download(|_, _| {}, || {})
         .await
-        .map_err(|_| "The update could not be downloaded or verified.")?;
+        .map_err(|_| UpdateFailure::Download)?;
     let version = update.version.clone();
-    *state.0.lock().map_err(|_| "Update state is unavailable.")? = Some((update, bytes));
+    *state.0.lock().map_err(|_| UpdateFailure::State)? = Some((update, bytes));
     Ok(Some(version))
 }
 
@@ -74,21 +130,21 @@ pub async fn app_update_install(
     app: tauri::AppHandle,
     activity: State<'_, muniment_core::attach::RuntimeActivityRegistry>,
     state: State<'_, AppUpdate>,
-) -> Result<(), String> {
+) -> Result<(), UpdateFailure> {
     muniment_core::attach::evaluate_quiesce(activity.snapshot())
-        .map_err(|_| "Finish the current action before updating.")?;
+        .map_err(|_| UpdateFailure::Busy)?;
     let ready = state
         .0
         .lock()
-        .map_err(|_| "Update state is unavailable.")?
+        .map_err(|_| UpdateFailure::State)?
         .take()
-        .ok_or("No verified update is ready.")?;
+        .ok_or(UpdateFailure::NotPrepared)?;
     let result = tauri::async_runtime::spawn_blocking(move || {
         let result = ready.0.install(&ready.1);
         (ready, result)
     })
     .await
-    .map_err(|_| "The update could not be installed.")?;
+    .map_err(|_| UpdateFailure::InstallTask)?;
     finish_install(&state.0, result.0, result.1, || app.restart())
 }
 
@@ -97,13 +153,13 @@ fn finish_install<T, E>(
     ready: T,
     result: Result<(), E>,
     restart: impl FnOnce(),
-) -> Result<(), String> {
+) -> Result<(), UpdateFailure> {
     if result.is_err() {
-        *state.lock().map_err(|_| "Update state is unavailable.")? = Some(ready);
-        return Err("The update could not be installed. Try again.".into());
+        *state.lock().map_err(|_| UpdateFailure::State)? = Some(ready);
+        return Err(UpdateFailure::Install);
     }
     restart();
-    Err("The updated app did not restart.".into())
+    Err(UpdateFailure::Restart)
 }
 
 // The CEF sandbox bootstrap loads the application DLL, so Tauri's executable
@@ -136,8 +192,78 @@ fn windows_update_target() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::finish_install;
+    use super::{finish_install, UpdateFailure};
     use std::sync::Mutex;
+
+    #[test]
+    fn update_failures_keep_public_messages_and_fixed_probe_codes() {
+        for (failure, code, message) in [
+            (
+                UpdateFailure::State,
+                "update-state",
+                "Update state is unavailable.",
+            ),
+            (
+                UpdateFailure::Address,
+                "update-address",
+                "The update address is invalid.",
+            ),
+            (
+                UpdateFailure::Builder,
+                "update-builder",
+                "Updates are unavailable.",
+            ),
+            (
+                UpdateFailure::Check,
+                "update-check",
+                "Updates could not be checked.",
+            ),
+            (
+                UpdateFailure::Download,
+                "update-download",
+                "The update could not be downloaded or verified.",
+            ),
+            (
+                UpdateFailure::Busy,
+                "update-busy",
+                "Finish the current action before updating.",
+            ),
+            (
+                UpdateFailure::NotPrepared,
+                "update-not-prepared",
+                "No verified update is ready.",
+            ),
+            (
+                UpdateFailure::InstallTask,
+                "update-install-task",
+                "The update could not be installed.",
+            ),
+            (
+                UpdateFailure::Install,
+                "update-install",
+                "The update could not be installed. Try again.",
+            ),
+            (
+                UpdateFailure::Restart,
+                "update-restart",
+                "The updated app did not restart.",
+            ),
+            (
+                UpdateFailure::Configuration("PRIVATE".into()),
+                "update-builder",
+                "PRIVATE",
+            ),
+            (
+                UpdateFailure::DownloadAddress("PRIVATE".into()),
+                "update-address",
+                "PRIVATE",
+            ),
+        ] {
+            assert_eq!(failure.probe_code(), code);
+            assert_eq!(serde_json::to_value(&failure).unwrap(), message);
+            assert!(!failure.probe_code().contains("PRIVATE"));
+        }
+    }
 
     #[test]
     fn failed_install_preserves_candidate_without_restart() {
@@ -145,10 +271,7 @@ mod tests {
         let result = finish_install(&state, vec![1, 2, 3], Err(()), || {
             panic!("Unexpected restart.")
         });
-        assert_eq!(
-            result.unwrap_err(),
-            "The update could not be installed. Try again."
-        );
+        assert_eq!(result.unwrap_err(), UpdateFailure::Install);
         assert_eq!(*state.lock().unwrap(), Some(vec![1, 2, 3]));
     }
 
@@ -158,7 +281,7 @@ mod tests {
         let mut restarted = false;
         let result = finish_install(&state, (), Ok::<_, ()>(()), || restarted = true);
         assert!(restarted);
-        assert_eq!(result.unwrap_err(), "The updated app did not restart.");
+        assert_eq!(result.unwrap_err(), UpdateFailure::Restart);
         assert!(state.lock().unwrap().is_none());
     }
 

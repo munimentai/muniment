@@ -12,8 +12,18 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     try { features[name] = await action() } catch { /* Keep provider errors out of evidence. */ }
   }
   if (plan.phase === 'update') {
-    await invoke('subscription_probe_update')
-    throw new Error('The updated app did not restart.')
+    const codes = ['update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address',
+      'update-builder', 'update-check', 'update-download', 'update-unavailable', 'update-not-prepared',
+      'update-package-digest', 'update-tamper-rejection', 'update-version-rejection', 'update-active-work-refusal',
+      'update-checkpoint-encode', 'update-checkpoint-write', 'update-busy', 'update-install-task', 'update-install', 'update-restart']
+    try {
+      await invoke('subscription_probe_update')
+    } catch (error) {
+      // Only fixed Rust codes enter the evidence. Never copy an unknown rejection.
+      const errorClass = codes.includes(error) ? error : error?.errorClass === 'command-timeout' ? 'command-timeout' : 'command-failed'
+      throw Object.assign(new Error('The installed update failed.'), { errorClass })
+    }
+    throw Object.assign(new Error('The updated app did not restart.'), { errorClass: 'update-restart' })
   }
   if (['restart', 'update-restart'].includes(plan.phase)) {
     await run('restart-persistence', async () => {

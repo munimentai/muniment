@@ -10,12 +10,13 @@ import vm from 'node:vm'
 import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { AcceptanceError, acceptance, blocked, chatTransports, checkIdentity, hash, platforms, subscriptionAccounts, features, featureChecks, chatFeatures } from './e2e/support/subscription-acceptance.mjs'
-import { assertAttachSocketPath, disposableProfilePrefix, isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } from './e2e/runner/subscriptions.mjs'
+import { assertAttachSocketPath, disposableProfilePrefix, installedExecutable, isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signature.mjs'
 import { host, runDesktopCi } from './e2e/runner/subscription-host.mjs'
 import { guest, guestFailureReason, runMacosProbe, selectAssets, defaultArtifactsDir, decodeSubscriptionPayload } from './e2e/runner/subscription-guest.mjs'
 import { sandboxRequirement } from './e2e/runner/subscription-linux-sandbox.mjs'
+import { probeProgress, readProbeProgress, reportSubscriptionFailure, subscriptionRedactor } from './e2e/support/subscription-diagnostics.mjs'
 import { hostedArm64 } from './e2e/runner/subscription-macos-arm64.mjs'
 import { upload } from '../.github/lib/artifact-store.mjs'
 
@@ -642,6 +643,107 @@ for (const phase of ['features', 'restart', 'update', 'update-restart']) {
     assert.deepEqual(observed.turns, turns)
   })
 }
+
+test('The macOS probe resolves bundle symlinks before the updater caches the executable.', t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-launch-')))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const real = path.join(root, 'private', 'var', 'disposable app', 'muniment.app', 'Contents', 'MacOS', 'muniment-desktop')
+  fs.mkdirSync(path.dirname(real), { recursive: true })
+  fs.writeFileSync(real, 'verified candidate bytes', { mode: 0o700 })
+  const alias = path.join(root, 'var')
+  fs.symlinkSync(path.join(root, 'private', 'var'), alias, process.platform === 'win32' ? 'junction' : 'dir')
+  const executable = path.join(alias, 'disposable app', 'muniment.app', 'Contents', 'MacOS', 'muniment-desktop')
+  // Match Tauri's macOS startup guard without disabling its symlink check.
+  const symlinkAncestor = file => {
+    for (;;) {
+      if (fs.lstatSync(file).isSymbolicLink()) return file
+      const parent = path.dirname(file)
+      if (parent === file) return null
+      file = parent
+    }
+  }
+  assert.equal(symlinkAncestor(executable), alias)
+  for (const platform of ['macos-arm64', 'macos-x64']) {
+    const resolved = installedExecutable(platform, executable)
+    assert.equal(resolved, real)
+    assert.equal(symlinkAncestor(resolved), null)
+    assert.equal(hash(fs.readFileSync(resolved)), hash(fs.readFileSync(executable)))
+    assert.equal(installedExecutable(platform, real), real)
+    assert.throws(() => installedExecutable(platform, path.join(root, 'missing')), { code: 'ENOENT' })
+  }
+  for (const platform of ['linux', 'windows']) assert.equal(installedExecutable(platform, executable), executable)
+})
+
+test('the update probe preserves each fixed failure code through the blocked report', async t => {
+  const codes = ['update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address',
+    'update-builder', 'update-check', 'update-download', 'update-unavailable', 'update-not-prepared',
+    'update-package-digest', 'update-tamper-rejection', 'update-version-rejection', 'update-active-work-refusal',
+    'update-checkpoint-encode', 'update-checkpoint-write', 'update-busy', 'update-install-task', 'update-install', 'update-restart']
+  const featureScript = fs.readFileSync('test/e2e/support/subscription-features.js', 'utf8')
+  const probeScript = fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8')
+  const rust = fs.readFileSync('src-tauri/core/src/model_router/subscription_probe.rs', 'utf8')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-update-errors-'))
+  const env = { MUNIMENT_STATE_DIR: root }
+  const turns = fixture().result.turns.map(({ requested, expected, ...turn }) => turn)
+  const printed = []
+  t.mock.method(console, 'error', text => printed.push(text))
+  try {
+    for (const [rejection, expected] of [
+      ...codes.map(code => [code, code]),
+      [undefined, 'update-restart'],
+      ['PRIVATE TOKEN AND REPLY', 'command-failed'],
+      [null, 'command-failed'],
+      [{ errorClass: 'update-install', message: 'PRIVATE TOKEN' }, 'command-failed'],
+      [{ errorClass: 'command-timeout' }, 'command-timeout'],
+    ]) {
+      let observed
+      const progress = []
+      const phase = ['update-install', 'update-restart', 'update-busy', 'update-install-task'].includes(expected) ? 'update-restart' : 'update'
+      const window = { __MUNIMENT_SUBSCRIPTION_PLAN__: { phase: 'update', acceptance: true, turns, models, nonce },
+        __TAURI__: { core: { invoke: async (command, payload) => {
+          if (command === 'subscription_probe_update') {
+            if (rejection !== undefined) throw rejection
+            return
+          }
+          if (command === 'subscription_probe_progress') {
+            progress.push({ phase, stage: payload.stage, turn: null, requested: null,
+              transport: 'not-started', error_class: payload.errorClass })
+            return
+          }
+          if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
+          if (command === 'chat_current_thread') return thread
+          if (command === 'subscription_probe_observed') { observed = payload; return }
+          assert.fail('The update probe called an unexpected command.')
+        } } } }
+      await vm.runInNewContext(`${featureScript}\n${probeScript}`, {
+        window, document: {
+          querySelector: () => ({ getClientRects: () => [1] }),
+          querySelectorAll: () => turns.map(() => ({ getClientRects: () => [1],
+            querySelector: () => ({ textContent: nonce }) })),
+        }, setTimeout, clearTimeout,
+      })
+      assert.equal(observed.passed, false)
+      assert.equal(progress.at(-1).error_class, expected)
+      if (codes.includes(expected)) assert.ok(rust.includes(`| "${expected}"`))
+      fs.writeFileSync(path.join(root, 'subscription-probe.json'), JSON.stringify({ phase }))
+      fs.writeFileSync(path.join(root, 'subscription-probe-progress.jsonl'), progress.map(row => JSON.stringify(row)).join('\n') + '\n')
+      assert.equal(readProbeProgress(env).at(-1).error_class, expected)
+      const detail = probeProgress(env, 'update/verify-result', 'update')
+      const redact = subscriptionRedactor()
+      printed.length = 0
+      writeBlocked(root, sourceSha, 'macos-arm64', 'The installed update failed.', detail, redact)
+      reportSubscriptionFailure(root, 'macos-arm64', 1, redact)
+      assert.ok(printed.join('\n').includes(`"error_class":"${expected}"`))
+      assert.equal(JSON.stringify({ progress, observed, printed }).includes('PRIVATE'), false)
+      assert.equal(JSON.stringify({ progress, observed, printed }).includes(nonce), false)
+    }
+    fs.writeFileSync(path.join(root, 'subscription-probe-progress.jsonl'), JSON.stringify({
+      phase: 'update', stage: 'features', turn: null, requested: null, transport: 'not-started',
+      error_class: 'update-PRIVATE TOKEN',
+    }) + '\n')
+    assert.deepEqual(readProbeProgress(env), [])
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
 
 test('each absent native runner emits actionable blocked cases and replaces stale evidence', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-blocked-'))

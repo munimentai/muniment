@@ -223,6 +223,12 @@ export function verifyUpdateResult(result, parentPid, sourceSha, turns, verifyPa
 
 export const updaterPublicKeyFile = 'src-tauri/updater.pub'
 
+export function installedExecutable(platform, executable) {
+  // Tauri caches the startup path before main and rejects macOS symlink ancestors.
+  // Resolve /var and /tmp before launch so both the updater and restart use the real bundle.
+  return ['macos-arm64', 'macos-x64'].includes(platform) ? fs.realpathSync(executable) : executable
+}
+
 export function writeBlocked(output, sourceSha, platform, reason, detail = '', redact = subscriptionRedactor(), failureKind, condition) {
   fs.mkdirSync(output, { recursive: true, mode: 0o700 })
   save(path.join(output, 'release-acceptance.json'), blocked(sourceSha, platform, reason))
@@ -281,6 +287,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     if (![candidateFile, packageFile, signatureFile, executable, leasesFile].every(file => file && fs.existsSync(file))) throw new Error(reason)
     // Load the redaction context before any parser or native tool can fail.
     redact = subscriptionRedactor({ leases: fs.readFileSync(leasesFile, 'utf8') })
+    executable = installedExecutable(platform, executable)
     step = 'candidate-identity'
     reason = 'The candidate identity, package digest, or updater signature is invalid.'
     candidate = json(candidateFile)
