@@ -127,6 +127,22 @@ const probeErrors = ['none', 'timeout', 'command-timeout', 'command-failed', 're
   'update-version-rejection', 'update-active-work-refusal', 'update-checkpoint-encode', 'update-checkpoint-write',
   'update-busy', 'update-install-task', 'update-install', 'update-restart']
 const probePhases = ['chat', 'features', 'restart', 'update', 'update-restart']
+const transportKinds = ['dns', 'connect', 'tls', 'proxy', 'timeout', 'other']
+
+function transportDetail(row) {
+  if (row.stage !== 'transport' || row.transport !== 'failed' || row.error_class !== 'network' ||
+      !transportKinds.includes(row.transport_kind)) return {}
+  let host = null
+  if (typeof row.host === 'string' && /^[A-Za-z0-9.:[\]-]{1,253}$/.test(row.host)) {
+    try {
+      const parsed = new URL(`https://${row.host}`)
+      const domain = row.host.replace(/\.$/, '')
+      if (parsed.hostname === row.host && (row.host.startsWith('[') || domain.split('.').every(label =>
+        /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label)))) host = row.host
+    } catch { /* Invalid hosts cannot appear in diagnostics. */ }
+  }
+  return { transport_kind: row.transport_kind, host }
+}
 
 export function readProbeProgress(env, transport = false) {
   try {
@@ -149,7 +165,7 @@ export function readProbeProgress(env, transport = false) {
             !(row.turn === null && row.requested === null || Number.isInteger(row.turn) && row.turn >= 0 && row.turn < 4 &&
               typeof row.requested === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(row.requested))) return []
         return [{ phase: row.phase, stage: row.stage, turn: row.turn, requested: row.requested,
-          transport: row.transport, error_class: row.error_class }]
+          transport: row.transport, error_class: row.error_class, ...transportDetail(row) }]
       } catch { return [] }
     })
   } catch { return [] }
@@ -180,7 +196,8 @@ export function probeProgress(env, step, phase) {
     progress.map(row => `\nprobe-progress=${JSON.stringify(row)}`).join('') +
     transports.map(row => `\nprovider-progress=${JSON.stringify(row)}`).join('') +
     (current ? `\nprobe-current=${JSON.stringify({ ...current,
-      provider_transport: transport?.transport || 'not-started', provider_error_class: transport?.error_class || 'none' })}` : '')
+      provider_transport: transport?.transport || 'not-started', provider_error_class: transport?.error_class || 'none',
+      ...(transport?.transport_kind ? { provider_transport_kind: transport.transport_kind, provider_host: transport.host } : {}) })}` : '')
 }
 
 export function linuxRuntimeStatus(env) {
