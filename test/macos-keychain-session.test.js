@@ -11,7 +11,7 @@ describe.skipIf(process.platform === 'win32')('macOS CI keychain session', () =>
     ['console unlock failure', 1], ['selection failure', 1],
     ['missing console', 1], ['without passwordless sudo', 0], ['create failure', 1],
     ['bootstrap failure', 1], ['console settings failure', 1], ['console timeout', 1],
-    ['partial create failure', 1], ['bootout failure', 1], ['runner signal', 143],
+    ['partial create failure', 1], ['bootout failure', 1], ['runner signal', 143], ['cleanup default', 1], ['cleanup list', 1], ['cleanup delete', 1], ['runner and bootout failure', 1],
   ])('The runner restores the Keychains after %s.', (mode, expected) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keychain fixture & <test> "quote"\'-'))
     const bin = path.join(root, 'bin')
@@ -68,7 +68,7 @@ if (op === 'bootstrap') {
     try { process.kill(-Number(fs.readFileSync(pid, 'utf8')), 'SIGTERM') }
     catch (error) { if (error.code !== 'ESRCH') throw error }
   }
-  if (mode === 'bootout failure') process.exit(1)
+  if (['bootout failure', 'runner and bootout failure'].includes(mode)) process.exit(1)
 } else {
   throw new Error('Unexpected launchctl command: ' + op)
 }
@@ -86,7 +86,7 @@ case "$op" in
     if [[ $# == 3 ]]; then printf '    "/original/login.keychain-db"\\n'
     else
       [[ -f "$TEST_ROOT/agent-stopped" || "\${!#}" != /original/* ]] || exit 91
-      printf '%s\\n' "\${!#}" > "$TEST_ROOT/default"
+      printf '%s\\n' "\${!#}" > "$TEST_ROOT/default"; [[ "$TEST_MODE" != 'cleanup default' || "\${!#}" != /original/* ]] || exit 1
     fi ;;
   list-keychains)
     if [[ $# == 3 ]]; then printf '    "/original/login.keychain-db"\\n    "/original/other.keychain-db"\\n'
@@ -96,7 +96,7 @@ case "$op" in
         [[ -f "$TEST_ROOT/unlocked-gui" && -f "$TEST_ROOT/unlocked-ssh" ]] || exit 91
         [[ "$TEST_MODE" != 'selection failure' ]] || exit 1
       fi
-      printf '%s\\n' "$@" > "$TEST_ROOT/list"
+      printf '%s\\n' "$@" > "$TEST_ROOT/list"; [[ "$TEST_MODE" != 'cleanup list' || "$1" != /original/* ]] || exit 1
     fi ;;
   create-keychain)
     # Creation exposes the Keychain to Spotlight and unlocks only the creator's audit session.
@@ -112,7 +112,7 @@ case "$op" in
     if [[ "$context" == gui ]]; then [[ "$TEST_MODE" != 'console unlock failure' ]] || exit 1
     else [[ "$TEST_MODE" != 'setup failure' ]] || exit 1; fi
     touch "$TEST_ROOT/unlocked-$context" ;;
-  delete-keychain) rm -f -- "$2" ;;
+  delete-keychain) [[ "$TEST_MODE" != 'cleanup delete' ]] || exit 1; rm -f -- "$2" ;;
   *) exit 90 ;;
 esac
 `, { mode: 0o700 })
@@ -122,7 +122,7 @@ esac
         test "$(cat "$TEST_ROOT/default")" = "$(cat "$TEST_ROOT/created")" || exit 92
         test -f "$TEST_ROOT/unlocked-gui" && test -f "$TEST_ROOT/unlocked-ssh" || exit 92
         test ! -f "$(dirname "$(cat "$TEST_ROOT/created")")/password" || exit 92
-        if [ "$TEST_MODE" = 'runner failure' ]; then exit 7; fi
+        if [ "$TEST_MODE" = 'runner failure' ] || [ "$TEST_MODE" = 'runner and bootout failure' ]; then exit 7; fi
         if [ "$TEST_MODE" = 'runner signal' ]; then kill -TERM "$PPID"; fi
       `], {
         cwd: process.cwd(), encoding: 'utf8', timeout: 15_000,
@@ -142,7 +142,7 @@ esac
         expect(fs.existsSync(fs.readFileSync(path.join(root, 'created'), 'utf8'))).toBe(false)
         expect(operations.slice(-3)).toEqual(['ssh:default-keychain', 'ssh:list-keychains', 'ssh:delete-keychain'])
       }
-      const ran = ['success', 'without passwordless sudo', 'runner failure', 'bootout failure', 'runner signal'].includes(mode)
+      const ran = ['success', 'without passwordless sudo', 'runner failure', 'bootout failure', 'runner signal', 'cleanup default', 'cleanup list', 'cleanup delete', 'runner and bootout failure'].includes(mode)
       expect(fs.existsSync(path.join(root, 'runner-started'))).toBe(ran)
       if (ran) {
         expect(operations.slice(0, -3)).toEqual([
@@ -151,7 +151,12 @@ esac
           'ssh:list-keychains', 'ssh:default-keychain',
         ])
       }
-      if (mode === 'console timeout') expect(result.stderr).toContain('The console Keychain setup timed out.')
+      const reason = mode === 'runner failure' ? 'probe-failed' : ['bootout failure', 'runner and bootout failure'].includes(mode) ? 'cleanup-agent'
+        : mode.startsWith('cleanup ') ? mode.replace(' ', '-') : mode === 'console timeout' ? 'setup-timeout' : 'setup-failed'
+      if (expected !== 0 && mode !== 'runner signal') expect(result.stderr).toContain(`macos-keychain-session: reason=${reason}`)
+      if (mode === 'runner failure') expect(result.stderr).not.toContain('reason=cleanup-')
+      if (mode === 'runner and bootout failure') expect(result.stderr).toContain('reason=probe-failed')
+      if (expected === 0) expect(result.stderr).not.toContain('macos-keychain-session: reason=')
       expect(fs.readdirSync(root).filter((name) => name.startsWith('muniment-keychain.'))).toEqual([])
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })

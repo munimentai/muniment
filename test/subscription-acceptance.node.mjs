@@ -147,6 +147,28 @@ test('the runner emits every required case in the consumer schema', () => {
   }
 })
 
+test('the proof includes only fixed failure stages and error codes', () => {
+  for (const [feature, observed, expected] of [
+    ['mcp', ['failed', 'server-add', 'check-failed'], { failure_stage: 'server-add', error_class: 'check-failed' }],
+    ['artifacts', ['failed', 'read', 'timeout'], { failure_stage: 'read', error_class: 'timeout' }],
+    ['settings', ['failed', 'check', 'check-failed'], { failure_stage: 'check', error_class: 'check-failed' }],
+    ['mcp', ['failed', 'private-provider-text', 'check-failed'], {}],
+    ['mcp', ['failed', 'server-add', 'private-provider-text'], {}],
+    ['artifacts', ['failed', 'server-add', 'check-failed'], {}],
+    ['mcp', ['failed', 'server-add', 'check-failed', 'private-provider-text'], {}],
+    ['mcp', [], {}],
+  ]) {
+    const f = fixture()
+    f.result.features[feature] = observed
+    const proof = acceptance(candidate, sourceSha, 'linux', f.result, f.transports, packageNames.linux)
+    const item = proof.cases.find(item => item.feature === feature)
+    assert.equal(item.status, 'blocked')
+    assert.equal(item.failure_stage, expected.failure_stage)
+    assert.equal(item.error_class, expected.error_class)
+    assert.equal(JSON.stringify(proof).includes('private-provider-text'), false)
+  }
+})
+
 for (const feature of Object.keys(featureChecks)) {
   test(`the proof requires independent runner checks for ${feature}`, () => {
     for (const invalid of [undefined, [], true, ['passed'], [...featureChecks[feature], 'extra'],
@@ -454,6 +476,43 @@ for (const platform of ['macos-arm64', 'macos-x64']) {
     assert.throws(() => assertAttachSocketPath(platform, '/' + 'é'.repeat(39) + 'a'), /uses 104 bytes/)
   })
 }
+
+test('the Keychain wrapper distinguishes probe failures from cleanup failures without copying output', () => {
+  for (const [stderr, error, expected] of [
+    ['macos-keychain-session: reason=probe-failed\n', undefined, 'probe-failed'],
+    ['macos-keychain-session: reason=probe-failed\nmacos-keychain-session: reason=cleanup-agent\n', undefined, 'cleanup-agent'],
+    ['macos-keychain-session: reason=cleanup-delete\n', undefined, 'cleanup-delete'],
+    ['macos-keychain-session: reason=private-provider-text\n', undefined, 'session-failed'],
+    ['macos-keychain-session: reason=probe-failed\n', new Error('private-provider-text'), 'session-interrupted'],
+  ]) {
+    if (expected === 'probe-failed') {
+      assert.equal(runMacosProbe({}, () => ({ status: 1, stderr })), 1)
+      continue
+    }
+    assert.throws(() => runMacosProbe({}, () => ({ status: 1, stderr, error })), error => {
+      assert.equal(error.reason, expected)
+      assert.equal(error.message, `macos-keychain-session: reason=${expected}`)
+      const reason = guestFailureReason('guest/keychain-session', error)
+      if (expected.startsWith('cleanup-')) assert.equal(reason, 'The disposable Keychain cleanup failed.')
+      return true
+    })
+  }
+})
+
+test('the disposable environment resolves a symlink before it derives state paths', { skip: process.platform === 'win32' }, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-symlink-'))
+  try {
+    const real = path.join(root, 'real')
+    const link = path.join(root, 'link')
+    fs.mkdirSync(real)
+    fs.symlinkSync(real, link)
+    const env = isolatedEnvironment(link, {}, 'linux')
+    for (const name of ['MUNIMENT_STATE_DIR', 'PI_CODING_AGENT_DIR', 'TMPDIR', 'HOME']) {
+      assert.equal(env[name], fs.realpathSync(env[name]))
+    }
+    assertAttachSocketPath('macos-arm64', '/private/tmp/muniment-subscriptions-XXXXXX/state')
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
 
 test('other platforms keep their temporary directory and socket rules', () => {
   const temporaryDirectory = path.join(os.tmpdir(), 'subscription-profile-test')
@@ -1215,7 +1274,7 @@ test('the guest distinguishes the Windows job self-test from package failures', 
     assert.equal(guestFailureReason(step, failure), missingPackage)
   }
   assert.equal(guestFailureReason('guest/keychain-session', failure),
-    'The installed macOS probe or disposable Keychain session failed.')
+    'The disposable Keychain session failed.')
   assert.equal(guestFailureReason('guest/linux-sandbox', failure), sandboxRequirement)
   for (const step of ['guest/install', 'guest/unknown', '']) {
     assert.equal(guestFailureReason(step, failure), 'The native subscription guest failed.')

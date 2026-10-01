@@ -54,12 +54,15 @@ export function collect(sourceSha, output, inputs, jobResults) {
           throw new Error('The failure classification is invalid.')
         }
         if (typeof evidence.reason !== 'string' || evidence.reason.length < 20) throw new Error('The failure reason is missing.')
-        proof = blocked(sourceSha, platform, evidence.reason)
+        proof = blocked(sourceSha, platform, evidence.reason, evidence.features)
         if (JSON.stringify(original) !== JSON.stringify(proof)) throw new Error('The platform proof does not match its runner results.')
         complete = false
+        const features = Object.fromEntries(proof.cases.filter(item => item.failure_stage)
+          .map(item => [item.feature, ['failed', item.failure_stage, item.error_class]]))
         evidence = { status: evidence.status, reason: redact(evidence.reason),
-          ...(evidence.failure_kind ? { failure_kind: evidence.failure_kind } : {}) }
-        proof = blocked(sourceSha, platform, evidence.reason)
+          ...(evidence.failure_kind ? { failure_kind: evidence.failure_kind } : {}),
+          ...(Object.keys(features).length ? { features } : {}) }
+        proof = blocked(sourceSha, platform, evidence.reason, features)
         fs.rmSync(path.join(output, screenshotName), { force: true })
       } else {
         if (evidence.status !== 'passed') throw new Error('The platform evidence status is invalid.')
