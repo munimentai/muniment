@@ -68,6 +68,63 @@ test('blocked diagnostics name the turn and provider outcome without replies or 
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+test('Windows artifacts keep redacted transport details at chat/verify-result', t => temporary(root => {
+  t.mock.method(console, 'error', () => {})
+  const env = { MUNIMENT_STATE_DIR: root }
+  const row = { phase: 'chat', stage: 'reply', turn: 0, requested: 'model-one', transport: 'pending', error_class: 'reply-failed' }
+  fs.writeFileSync(path.join(root, 'subscription-probe-progress.jsonl'), JSON.stringify(row) + '\n')
+  const endpoints = ['dns', 'connect', 'tls', 'proxy', 'timeout', 'other'].map(kind => [kind, 'api.example.com'])
+  endpoints.push(['proxy', '127.0.0.1'], ['proxy', 'proxy.example'], ['dns', 'redirect.example'])
+  for (const [transport_kind, host] of endpoints) {
+    const failure = { ...row, stage: 'transport', transport: 'failed', error_class: 'network', transport_kind, host }
+    fs.writeFileSync(path.join(root, 'subscription-probe-transport-progress.jsonl'), JSON.stringify({
+      ...failure, url: 'https://user:PRIVATE@api.example.com/PRIVATE?token=PRIVATE',
+      headers: { Authorization: 'Bearer PRIVATE', 'Proxy-Authorization': 'Basic dXNlcjpQUklWQVRF' },
+      proxy: 'http://user:PRIVATE@proxy.example:80', message: 'PRIVATE error detail',
+    }) + '\n')
+    assert.deepEqual(readProbeProgress(env, true), [failure])
+    assert.equal(probeFailure(env), 'product')
+    const detail = probeProgress(env, 'chat/verify-result', 'chat')
+    const input = path.join(root, `${transport_kind}-${host}`)
+    const output = path.join(root, `${transport_kind}-${host}-collected`)
+    writeBlocked(input, sourceSha, 'windows', 'The subscription probe did not pass.', detail, redact, probeFailure(env))
+    assert.equal(collect(sourceSha, output, [input]), 1)
+    const log = fs.readFileSync(path.join(output, 'windows-subscription.log'), 'utf8')
+    assert.match(log, /step=chat\/verify-result/)
+    const progress = JSON.parse(log.split('\n').find(line => line.startsWith('provider-progress=')).slice('provider-progress='.length))
+    assert.deepEqual(progress, failure)
+    assert.ok(log.includes(`"provider_transport_kind":"${transport_kind}"`))
+    assert.ok(log.includes(`"provider_host":"${host}"`))
+    for (const secret of ['PRIVATE', 'Authorization', 'dXNlcjpQUklWQVRF', 'token=', '://']) assert.ok(!log.includes(secret))
+  }
+}))
+
+test('transport diagnostics reject malformed metadata without hiding the failure', () => temporary(root => {
+  const env = { MUNIMENT_STATE_DIR: root }
+  const file = path.join(root, 'subscription-probe-transport-progress.jsonl')
+  const row = { phase: 'chat', stage: 'transport', turn: 0, requested: 'model-one', transport: 'failed', error_class: 'network' }
+  const read = change => {
+    fs.writeFileSync(file, JSON.stringify({ ...row, ...change }) + '\n')
+    return readProbeProgress(env, true)[0]
+  }
+  for (const host of ['api.example.com', 'example.com.', '127.0.0.1', '[::1]']) {
+    assert.equal(read({ transport_kind: 'tls', host }).host, host)
+  }
+  for (const host of [null, '', 42, {}, 'https://example.com?token=PRIVATE', 'user:PRIVATE@example.com',
+    'example.com:443', 'example.com/PRIVATE', 'example.com?PRIVATE', 'example.com#PRIVATE',
+    'example.com\nAuthorization: PRIVATE', 'example.com..', '-example.com', 'PRIVATE!example.com',
+    '[::1]:443', '[xyz]', `${'x'.repeat(64)}.com`, 'x'.repeat(254)]) {
+    assert.deepEqual(read({ transport_kind: 'tls', host }), { ...row, transport_kind: 'tls', host: null })
+  }
+  for (const transport_kind of [null, '', 'PRIVATE', 'TLS', 42, {}]) {
+    assert.deepEqual(read({ transport_kind, host: 'api.example.com' }), row)
+  }
+  assert.deepEqual(read({}), row)
+  for (const change of [{ stage: 'reply' }, { transport: 'complete' }, { error_class: 'auth' }]) {
+    assert.deepEqual(read({ ...change, transport_kind: 'tls', host: 'api.example.com' }), { ...row, ...change })
+  }
+}))
+
 test('Windows shutdown waits on descendant handles before bounded profile removal', async () => {
   const { stopWindowsTree } = await import('./e2e/support/subscription-windows-process.mjs')
   for (const identity of [0, -1, 1.5, '123', 2147483648, { pid: 123 }]) {
