@@ -1,7 +1,7 @@
 #[path = "../src/e2e_folder_dialog/accessibility.rs"]
 mod accessibility;
 
-use accessibility::{confirm_button, Accessibility};
+use accessibility::{confirm_button, Accessibility, ConfirmFailure};
 use std::collections::HashMap;
 
 const APP: usize = 0;
@@ -41,6 +41,7 @@ impl Tree {
     fn panel(sheet: bool) -> Self {
         let mut tree = Self::default();
         tree.set(APP, "AXWindows", Value::Elements(vec![HOST]));
+        tree.set(HOST, "AXRole", Value::String("AXWindow".into()));
         tree.set(
             HOST,
             "AXChildren",
@@ -69,8 +70,29 @@ impl Tree {
         tree
     }
 
-    fn confirm(&self) -> Result<Option<usize>, String> {
-        confirm_button(self, &APP, IDENTIFIER)
+    fn lookup(&self) -> (Result<Option<usize>, ConfirmFailure>, Vec<ConfirmFailure>) {
+        let mut failures = Vec::new();
+        let result = confirm_button(self, &APP, IDENTIFIER, &mut failures, || Ok(()));
+        if let Err(reason) = result {
+            failures.push(reason);
+        }
+        (result, failures)
+    }
+
+    fn confirm(&self) -> Result<Option<usize>, ConfirmFailure> {
+        self.lookup().0
+    }
+
+    fn remote_panel(sheet: bool) -> Self {
+        let mut tree = Self::panel(sheet);
+        tree.0.remove(&(PANEL, "AXIdentifier"));
+        tree.0.remove(&(PANEL, "AXDefaultButton"));
+        tree.set(PANEL, "AXTitle", Value::String(IDENTIFIER.into()));
+        tree.set(PANEL, "AXChildren", Value::Elements(vec![OTHER]));
+        tree.set(OTHER, "AXRole", Value::String("AXGroup".into()));
+        tree.set(OTHER, "AXChildren", Value::Elements(vec![BUTTON]));
+        tree.set(BUTTON, "AXTitle", Value::String(IDENTIFIER.into()));
+        tree
     }
 }
 
@@ -122,10 +144,7 @@ fn foreign_buttons_fail_even_with_a_shared_host_window() {
         for owner in [HOST, OTHER] {
             let mut tree = Tree::panel(sheet);
             tree.set(BUTTON, "AXTopLevelUIElement", Value::Element(owner));
-            assert_eq!(
-                tree.confirm(),
-                Err("The Home picker button belongs to another window or sheet.".into())
-            );
+            assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
         }
     }
 }
@@ -135,17 +154,14 @@ fn duplicate_identifiers_fail_across_windows_and_sheets() {
     for sheet in [false, true] {
         let mut tree = Tree::panel(sheet);
         tree.set(HOST, "AXIdentifier", Value::String(IDENTIFIER.into()));
-        assert_eq!(
-            tree.confirm(),
-            Err("The Home picker needs exactly one matching Accessibility window or sheet.".into())
-        );
+        assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousPanel));
     }
     let mut tree = Tree::panel(true);
     tree.set(HOST, "AXChildren", Value::Elements(vec![PANEL, OTHER]));
     tree.set(OTHER, "AXRole", Value::String("AXSheet".into()));
     tree.set(OTHER, "AXChildren", Value::Elements(vec![]));
     tree.set(OTHER, "AXIdentifier", Value::String(IDENTIFIER.into()));
-    assert!(tree.confirm().unwrap_err().contains("exactly one"));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousPanel));
 }
 
 #[test]
@@ -186,6 +202,219 @@ fn non_sheet_children_cannot_impersonate_the_panel() {
     let mut tree = Tree::panel(true);
     tree.set(PANEL, "AXRole", Value::String("AXGroup".into()));
     assert_eq!(tree.confirm(), Ok(None));
+}
+
+#[test]
+fn remote_panel_uses_its_title_and_prompt_below_a_group() {
+    for sheet in [false, true] {
+        let tree = Tree::remote_panel(sheet);
+        assert_eq!(
+            tree.lookup(),
+            (
+                Ok(Some(BUTTON)),
+                vec![
+                    ConfirmFailure::IdentifierNotFound,
+                    ConfirmFailure::NoDefaultButton,
+                ],
+            )
+        );
+        assert!(tree.1.borrow().iter().all(|(_, name)| name != "AXValue"));
+    }
+}
+
+#[test]
+fn remote_button_can_replace_a_disabled_default_proxy() {
+    let mut tree = Tree::remote_panel(false);
+    tree.set(PANEL, "AXDefaultButton", Value::Element(5));
+    tree.set(5, "AXRole", Value::String("AXButton".into()));
+    tree.set(5, "AXTopLevelUIElement", Value::Element(PANEL));
+    tree.set(5, "AXEnabled", Value::Boolean(false));
+    assert_eq!(
+        tree.lookup(),
+        (
+            Ok(Some(BUTTON)),
+            vec![
+                ConfirmFailure::IdentifierNotFound,
+                ConfirmFailure::ButtonDisabled,
+            ],
+        )
+    );
+}
+
+#[test]
+fn lookup_reasons_distinguish_missing_identifier_default_and_disabled_button() {
+    for sheet in [false, true] {
+        let mut tree = Tree::panel(sheet);
+        tree.0.remove(&(PANEL, "AXIdentifier"));
+        assert_eq!(
+            tree.lookup(),
+            (Ok(None), vec![ConfirmFailure::IdentifierNotFound])
+        );
+        tree.set(PANEL, "AXIdentifier", Value::String(IDENTIFIER.into()));
+        tree.0.remove(&(PANEL, "AXDefaultButton"));
+        let expected = (
+            Ok(None),
+            vec![
+                ConfirmFailure::NoDefaultButton,
+                ConfirmFailure::PromptNotFound,
+            ],
+        );
+        assert_eq!(tree.lookup(), expected);
+        tree.set(PANEL, "AXDefaultButton", Value::String("invalid".into()));
+        assert_eq!(tree.lookup(), expected);
+        tree.set(PANEL, "AXDefaultButton", Value::Element(BUTTON));
+        tree.set(BUTTON, "AXEnabled", Value::Boolean(false));
+        assert_eq!(
+            tree.lookup(),
+            (
+                Ok(None),
+                vec![
+                    ConfirmFailure::ButtonDisabled,
+                    ConfirmFailure::PromptNotFound
+                ],
+            )
+        );
+        tree.set(BUTTON, "AXTopLevelUIElement", Value::Element(OTHER));
+        assert_eq!(
+            tree.lookup(),
+            (
+                Err(ConfirmFailure::WrongTopLevelElement),
+                vec![ConfirmFailure::WrongTopLevelElement],
+            )
+        );
+    }
+}
+
+#[test]
+fn remote_lookup_rejects_foreign_disabled_and_ambiguous_buttons() {
+    for sheet in [false, true] {
+        for owner in [HOST, OTHER] {
+            let mut tree = Tree::remote_panel(sheet);
+            tree.set(BUTTON, "AXTopLevelUIElement", Value::Element(owner));
+            assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
+        }
+        let mut tree = Tree::remote_panel(sheet);
+        tree.set(BUTTON, "AXEnabled", Value::Boolean(false));
+        assert_eq!(tree.confirm(), Ok(None));
+        assert_eq!(
+            tree.lookup().1.last(),
+            Some(&ConfirmFailure::ButtonDisabled)
+        );
+        tree.set(BUTTON, "AXEnabled", Value::Boolean(true));
+        tree.set(OTHER, "AXChildren", Value::Elements(vec![BUTTON, 5]));
+        tree.set(5, "AXRole", Value::String("AXButton".into()));
+        tree.set(5, "AXTitle", Value::String(IDENTIFIER.into()));
+        assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousButton));
+    }
+}
+
+#[test]
+fn remote_lookup_requires_exact_markers_and_rejects_other_sheets() {
+    let mut tree = Tree::remote_panel(false);
+    tree.set(BUTTON, "AXTitle", Value::String("Open".into()));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(BUTTON, "AXTitle", Value::String(IDENTIFIER.into()));
+    tree.set(PANEL, "AXTitle", Value::String("Open".into()));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(PANEL, "AXTitle", Value::String(IDENTIFIER.into()));
+    tree.set(OTHER, "AXRole", Value::String("AXSheet".into()));
+    tree.set(OTHER, "AXTitle", Value::String("another-panel".into()));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(OTHER, "AXTitle", Value::String(IDENTIFIER.into()));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousPanel));
+}
+
+#[test]
+fn title_and_identifier_matches_cannot_select_different_panels() {
+    let mut tree = Tree::remote_panel(false);
+    tree.set(HOST, "AXIdentifier", Value::String(IDENTIFIER.into()));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousPanel));
+    tree.set(APP, "AXWindows", Value::Elements(vec![PANEL]));
+    tree.set(PANEL, "AXRole", Value::String("AXGroup".into()));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
+}
+
+#[test]
+fn lookup_bounds_cycles_traversal_and_deadlines() {
+    let mut tree = Tree::remote_panel(false);
+    tree.set(
+        OTHER,
+        "AXChildren",
+        Value::Elements(vec![OTHER, PANEL, BUTTON, BUTTON]),
+    );
+    assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+    tree.set(OTHER, "AXChildren", Value::Elements((5..=261).collect()));
+    for node in 5..=261 {
+        tree.set(node, "AXRole", Value::String("AXButton".into()));
+    }
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::ElementLimit));
+    tree.1.borrow_mut().clear();
+    assert_eq!(
+        confirm_button(&tree, &APP, IDENTIFIER, &mut Vec::new(), || {
+            Err(ConfirmFailure::Deadline)
+        }),
+        Err(ConfirmFailure::Deadline)
+    );
+    assert!(tree.1.borrow().is_empty());
+    let mut calls = 0;
+    assert_eq!(
+        confirm_button(&tree, &APP, IDENTIFIER, &mut Vec::new(), || {
+            calls += 1;
+            if calls > 2 {
+                Err(ConfirmFailure::Deadline)
+            } else {
+                Ok(())
+            }
+        }),
+        Err(ConfirmFailure::Deadline)
+    );
+    assert!(calls < 10);
+}
+
+#[test]
+fn lookup_errors_never_expose_attribute_payloads() {
+    let tree = Tree::default();
+    assert_eq!(
+        tree.lookup(),
+        (
+            Err(ConfirmFailure::AttributeUnavailable),
+            vec![ConfirmFailure::AttributeUnavailable]
+        )
+    );
+    assert_eq!(
+        ConfirmFailure::AttributeUnavailable.reason(),
+        "attribute_unavailable"
+    );
+    for reason in [
+        ConfirmFailure::IdentifierNotFound,
+        ConfirmFailure::NoDefaultButton,
+        ConfirmFailure::ButtonDisabled,
+        ConfirmFailure::WrongTopLevelElement,
+    ] {
+        assert!(!reason.reason().contains(IDENTIFIER));
+        assert!(!reason.reason().contains('/'));
+    }
+}
+
+#[test]
+fn remote_lookup_rejects_missing_or_invalid_ownership_and_enablement() {
+    for name in ["AXTopLevelUIElement", "AXEnabled"] {
+        let mut tree = Tree::remote_panel(false);
+        tree.0.remove(&(BUTTON, name));
+        assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+        tree.set(BUTTON, name, Value::String("invalid".into()));
+        assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+    }
+    let mut tree = Tree::remote_panel(false);
+    tree.set(BUTTON, "AXRole", Value::String("AXTextField".into()));
+    assert_eq!(tree.confirm(), Ok(None));
+}
+
+#[test]
+fn default_button_must_be_a_button() {
+    let mut tree = Tree::panel(false);
+    tree.set(BUTTON, "AXRole", Value::String("AXTextField".into()));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongButtonRole));
 }
 
 fn prompt_labels(
@@ -299,7 +528,6 @@ fn missing_or_invalid_attributes_fail_closed() {
         for (element, name) in [
             (APP, "AXWindows"),
             (HOST, "AXChildren"),
-            (PANEL, "AXDefaultButton"),
             (BUTTON, "AXTopLevelUIElement"),
             (BUTTON, "AXEnabled"),
         ] {
