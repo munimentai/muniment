@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# The disposable CI login keychain stays locked after an SSH login. Give each
-# runner its own unlocked keychain, without changing access to existing items.
+# Give each runner a disposable Keychain without changing access to existing items.
 set -euo pipefail
 set +x
 umask 077
 [[ $# -gt 0 ]] || exit 2
+session_uid=$(id -u)
+# Create the Keychain in the console audit session before publishing it.
+# An SSH-only unlock leaves Spotlight's console session locked.
+launchctl print "gui/$session_uid" >/dev/null
+console_security() {
+  # asuser adopts the audit session, not the UID. Drop root before touching the Keychain.
+  sudo -n launchctl asuser "$session_uid" sudo -n -H -u "#$session_uid" security "$@"
+}
 prior_default=$(security default-keychain -d user | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
 prior_list=$(security list-keychains -d user | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
 [[ -n $prior_default && -n $prior_list ]] || exit 1
@@ -28,9 +35,11 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 password=$(openssl rand -hex 32)
-security create-keychain -p "$password" "$keychain"
+console_security create-keychain -p "$password" "$keychain"
 created=1
-security set-keychain-settings -lut 21600 "$keychain"
+# Keep both sessions unlocked until cleanup, including across a VM sleep.
+console_security set-keychain-settings "$keychain"
+console_security unlock-keychain -p "$password" "$keychain"
 security unlock-keychain -p "$password" "$keychain"
 unset password
 security list-keychains -d user -s "$keychain"

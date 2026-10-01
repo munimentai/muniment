@@ -30,7 +30,7 @@ describe('The macOS picker baseline records an existing system prompt.', () => {
     const raw = await rawDirectory()
     const native = {
       active_app: { pid: 715, bundle_identifier: 'com.apple.SecurityAgent', name: 'SecurityAgent' },
-      system_prompt: { labels: ['A helper wants the login Keychain.'], error: null },
+      system_prompt: { labels: ['Spotlight wants to use the “e2e” keychain.', 'Please enter the keychain password.'], error: null },
       windows: [],
     }
     const diagnostics = { native, open: { status: 'not-started' } }
