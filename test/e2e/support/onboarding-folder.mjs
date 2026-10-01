@@ -4,7 +4,7 @@ import { appendFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { chooseFolder as chooseLinuxFolder } from './folder-dialog.mjs'
-import { driveMacosFolder } from './folder-dialog-macos.mjs'
+import { driveMacosFolder, snapshotMacosFolder } from './folder-dialog-macos.mjs'
 
 const run = promisify(execFile)
 
@@ -16,6 +16,25 @@ export function folderDialogDescription(title, platform = process.platform) {
   }[platform] ?? title
   const name = { darwin: 'macos', win32: 'windows' }[platform] ?? platform
   return `platform: ${name}. searched window: ${window}`
+}
+
+export async function recordMacosPickerBaseline(rawDir, platform = process.platform, diagnose = snapshotMacosFolder) {
+  if (platform !== 'darwin') return
+  let diagnostics
+  let timer
+  try {
+    diagnostics = await Promise.race([
+      diagnose(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('The Home picker baseline timed out.')), 3000)
+      }),
+    ])
+  } catch (error) {
+    diagnostics = { error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    clearTimeout(timer)
+  }
+  await appendFile(path.join(rawDir, 'folder-picker-baseline.log'), `${JSON.stringify(diagnostics)}\n`)
 }
 
 export async function withWindowsPickerDiagnostics(action, readOutcome, rawDir, platform = process.platform) {

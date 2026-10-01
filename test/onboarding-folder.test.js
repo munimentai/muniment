@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
-import { chooseFolder, folderDialogDescription, withWindowsPickerDiagnostics } from './e2e/support/onboarding-folder.mjs'
+import { chooseFolder, folderDialogDescription, recordMacosPickerBaseline, withWindowsPickerDiagnostics } from './e2e/support/onboarding-folder.mjs'
 import { driveMacosFolder } from './e2e/support/folder-dialog-macos.mjs'
 
 const title = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
@@ -24,6 +24,44 @@ const nativeCases = [
   ['darwin', '/tmp/Home space "quote" café', '', '', 'NSOpenPanel'],
   ['win32', String.raw`C:\Users\Test\Home space & café`, 'powershell.exe', 'folder-dialog-windows.ps1', '#32770'],
 ]
+
+describe('The macOS picker baseline records an existing system prompt.', () => {
+  it('The baseline records the requester before NSOpenPanel opens.', async () => {
+    const raw = await rawDirectory()
+    const native = {
+      active_app: { pid: 715, bundle_identifier: 'com.apple.SecurityAgent', name: 'SecurityAgent' },
+      system_prompt: { labels: ['Spotlight wants to use the “e2e” keychain.', 'Please enter the keychain password.'], error: null },
+      windows: [],
+    }
+    const diagnostics = { native, open: { status: 'not-started' } }
+    await recordMacosPickerBaseline(raw, 'darwin', async () => diagnostics)
+    expect(JSON.parse(await readFile(path.join(raw, 'folder-picker-baseline.log'), 'utf8'))).toEqual(diagnostics)
+    const spec = await readFile(new URL('./e2e/specs/onboarding.spec.js', import.meta.url), 'utf8')
+    expect(spec.indexOf('await recordMacosPickerBaseline(')).toBeLessThan(spec.indexOf('await (await $(\'[data-testid="onboarding-picker"]\')).click()'))
+    const source = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
+    expect(source).toContain('active.bundle_identifier.as_deref() == Some("com.apple.SecurityAgent")')
+    expect(source).toContain('spawn_blocking(move || system_prompt_snapshot(pid))')
+  })
+
+  it.each(['linux', 'win32'])('The baseline does not query another platform (%s).', async (platform) => {
+    const diagnose = vi.fn()
+    await recordMacosPickerBaseline('/absent', platform, diagnose)
+    expect(diagnose).not.toHaveBeenCalled()
+  })
+
+  it.each(['rejected', 'blocked'])('The baseline bounds a %s query.', async (state) => {
+    const raw = await rawDirectory()
+    vi.useFakeTimers()
+    const diagnose = () => state === 'blocked' ? new Promise(() => {}) : Promise.reject(new Error('The app disconnected.'))
+    const result = recordMacosPickerBaseline(raw, 'darwin', diagnose)
+    await vi.advanceTimersByTimeAsync(3000)
+    await result
+    expect(JSON.parse(await readFile(path.join(raw, 'folder-picker-baseline.log'), 'utf8'))).toEqual({
+      error: state === 'blocked' ? 'The Home picker baseline timed out.' : 'The app disconnected.',
+    })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
 
 describe('The Windows picker outcome report preserves the failing check.', () => {
   it.each([

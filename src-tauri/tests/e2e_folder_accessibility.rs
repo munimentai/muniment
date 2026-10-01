@@ -20,7 +20,10 @@ enum Value {
 }
 
 #[derive(Default)]
-struct Tree(HashMap<(usize, &'static str), Value>);
+struct Tree(
+    HashMap<(usize, &'static str), Value>,
+    std::cell::RefCell<Vec<(usize, String)>>,
+);
 
 impl Tree {
     fn set(&mut self, element: usize, name: &'static str, value: Value) {
@@ -28,6 +31,7 @@ impl Tree {
     }
 
     fn get(&self, element: usize, name: &str) -> Result<Value, String> {
+        self.1.borrow_mut().push((element, name.into()));
         self.0
             .get(&(element, name))
             .cloned()
@@ -182,6 +186,111 @@ fn non_sheet_children_cannot_impersonate_the_panel() {
     let mut tree = Tree::panel(true);
     tree.set(PANEL, "AXRole", Value::String("AXGroup".into()));
     assert_eq!(tree.confirm(), Ok(None));
+}
+
+fn prompt_labels(
+    tree: &Tree,
+    app: &usize,
+    check_deadline: impl FnMut() -> Result<(), String>,
+) -> Result<Vec<String>, String> {
+    let mut labels = Vec::new();
+    accessibility::prompt_labels(tree, app, &mut labels, check_deadline)?;
+    Ok(labels)
+}
+
+#[test]
+fn prompt_labels_keep_the_owner_when_a_later_attribute_fails() {
+    let mut tree = Tree::default();
+    tree.set(APP, "AXWindows", Value::Elements(vec![HOST]));
+    tree.set(HOST, "AXRole", Value::String("AXWindow".into()));
+    tree.set(
+        HOST,
+        "AXTitle",
+        Value::String("A helper needs authorization.".into()),
+    );
+    tree.set(HOST, "AXChildren", Value::Elements(vec![OTHER]));
+    let mut labels = Vec::new();
+    assert!(accessibility::prompt_labels(&tree, &APP, &mut labels, || Ok(())).is_err());
+    assert_eq!(labels, vec!["A helper needs authorization."]);
+}
+
+#[test]
+fn prompt_labels_read_window_titles_and_nested_static_text_alone() {
+    let mut tree = Tree::panel(true);
+    tree.set(HOST, "AXRole", Value::String("AXWindow".into()));
+    tree.set(HOST, "AXTitle", Value::String("SecurityAgent".into()));
+    tree.set(PANEL, "AXTitle", Value::String("Keychain access".into()));
+    tree.set(PANEL, "AXChildren", Value::Elements(vec![BUTTON, OTHER, 5]));
+    tree.set(OTHER, "AXRole", Value::String("AXGroup".into()));
+    tree.set(OTHER, "AXChildren", Value::Elements(vec![6, PANEL]));
+    tree.set(6, "AXRole", Value::String("AXStaticText".into()));
+    tree.set(
+        6,
+        "AXValue",
+        Value::String("A helper wants the login Keychain.".into()),
+    );
+    tree.set(5, "AXRole", Value::String("AXTextField".into()));
+    tree.set(5, "AXValue", Value::String("secret".into()));
+    let labels = prompt_labels(&tree, &APP, || Ok(())).unwrap();
+    assert_eq!(
+        labels,
+        vec![
+            "SecurityAgent",
+            "Keychain access",
+            "A helper wants the login Keychain."
+        ]
+    );
+    for (element, name) in tree.1.borrow().iter() {
+        assert!(name != "AXValue" || *element == 6);
+        assert!(!matches!(name.as_str(), "AXDefaultButton" | "AXEnabled"));
+    }
+}
+
+#[test]
+fn prompt_labels_bound_text_and_handle_an_empty_window_list() {
+    let mut tree = Tree::default();
+    tree.set(APP, "AXWindows", Value::Elements(vec![]));
+    assert_eq!(prompt_labels(&tree, &APP, || Ok(())), Ok(vec![]));
+    tree.set(APP, "AXWindows", Value::Elements(vec![HOST, HOST]));
+    tree.set(HOST, "AXRole", Value::String("AXStaticText".into()));
+    tree.set(HOST, "AXValue", Value::String("é".repeat(600)));
+    assert_eq!(
+        prompt_labels(&tree, &APP, || Ok(())),
+        Ok(vec!["é".repeat(512)])
+    );
+}
+
+#[test]
+fn prompt_labels_bound_traversal_and_report_inaccessible_attributes() {
+    let mut tree = Tree::default();
+    assert!(prompt_labels(&tree, &APP, || Ok(())).is_err());
+    tree.set(APP, "AXWindows", Value::Elements((1..=65).collect()));
+    for node in 1..=65 {
+        tree.set(node, "AXRole", Value::String("AXButton".into()));
+    }
+    assert_eq!(
+        prompt_labels(&tree, &APP, || Ok(())),
+        Err("The system prompt snapshot reached its element limit.".into())
+    );
+    tree.1.borrow_mut().clear();
+    assert_eq!(
+        prompt_labels(&tree, &APP, || Err("timeout".into())),
+        Err("timeout".into())
+    );
+    assert!(tree.1.borrow().is_empty());
+    let mut calls = 0;
+    assert_eq!(
+        prompt_labels(&tree, &APP, || {
+            calls += 1;
+            if calls > 2 {
+                Err("timeout".into())
+            } else {
+                Ok(())
+            }
+        }),
+        Err("timeout".into())
+    );
+    assert_eq!(tree.1.borrow().len(), 2);
 }
 
 #[test]

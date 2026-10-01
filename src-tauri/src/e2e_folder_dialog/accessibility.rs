@@ -7,6 +7,49 @@ pub(super) trait Accessibility {
     fn boolean(&self, element: &Self::Element, name: &str) -> Result<bool, String>;
 }
 
+// Read labels alone. Never read editable values or act on another app.
+pub(super) fn prompt_labels<A: Accessibility>(
+    ax: &A,
+    app: &A::Element,
+    labels: &mut Vec<String>,
+    mut check_deadline: impl FnMut() -> Result<(), String>,
+) -> Result<(), String> {
+    check_deadline()?;
+    let mut pending = ax.elements(app, "AXWindows")?;
+    let mut visited = Vec::new();
+    while let Some(element) = pending.pop() {
+        check_deadline()?;
+        if visited.contains(&element) {
+            continue;
+        }
+        if visited.len() == 64 {
+            return Err("The system prompt snapshot reached its element limit.".into());
+        }
+        visited.push(element.clone());
+        let role = ax.string(&element, "AXRole")?;
+        let attribute = match role.as_str() {
+            "AXWindow" | "AXSheet" => Some("AXTitle"),
+            "AXStaticText" => Some("AXValue"),
+            "AXGroup" => None,
+            _ => continue,
+        };
+        if let Some(attribute) = attribute {
+            check_deadline()?;
+            if let Ok(label) = ax.string(&element, attribute) {
+                let label: String = label.chars().take(512).collect();
+                if !label.is_empty() && !labels.contains(&label) {
+                    labels.push(label);
+                }
+            }
+        }
+        if role != "AXStaticText" {
+            check_deadline()?;
+            pending.extend(ax.elements(&element, "AXChildren")?);
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn confirm_button<A: Accessibility>(
     ax: &A,
     app: &A::Element,
