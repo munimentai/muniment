@@ -12,6 +12,7 @@ use objc2_foundation::{NSString, NSURL};
 use std::{
     cell::RefCell,
     path::Path,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -36,6 +37,8 @@ fn process_trusted() -> bool {
     unsafe { AXIsProcessTrusted() }
 }
 
+type ConfirmLookups = Arc<Mutex<Vec<Vec<&'static str>>>>;
+
 struct Drive {
     panel: Retained<NSOpenPanel>,
     home: String,
@@ -43,12 +46,13 @@ struct Drive {
     next: Instant,
     deadline: Instant,
     identifier: String,
+    confirm_lookups: ConfirmLookups,
 }
 
 enum Progress {
     Waiting,
     Complete,
-    Confirm(String, Instant),
+    Confirm(String, Instant, ConfirmLookups),
 }
 
 thread_local! {
@@ -87,7 +91,11 @@ fn ax_attribute(element: &CFType, name: &str) -> Result<CFType, String> {
     Ok(unsafe { CFType::wrap_under_create_rule(value) })
 }
 
-fn press_confirm(identifier: &str, deadline: Instant) -> Result<(), String> {
+fn press_confirm(
+    identifier: &str,
+    deadline: Instant,
+    confirm_lookups: ConfirmLookups,
+) -> Result<(), String> {
     // Run AX client calls off the AppKit thread so the app can answer them.
     // SAFETY: The current process exists, and Create returns an owned AX element.
     let app = unsafe {
@@ -97,8 +105,41 @@ fn press_confirm(identifier: &str, deadline: Instant) -> Result<(), String> {
         if Instant::now() >= deadline {
             return Err("The Home picker drive timed out before confirmation.".into());
         }
-        if let Some(button) = confirm_button(&app, identifier)? {
-            break button;
+        let mut failures = Vec::new();
+        let result = accessibility::confirm_button(
+            &NativeAccessibility,
+            &app,
+            identifier,
+            &mut failures,
+            || {
+                if Instant::now() >= deadline {
+                    Err(accessibility::ConfirmFailure::Deadline)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        if let Err(reason) = &result {
+            failures.push(*reason);
+        }
+        confirm_lookups
+            .lock()
+            .map_err(|_| "The Home picker lookup snapshot is unavailable.")?
+            .push(
+                failures
+                    .into_iter()
+                    .map(|failure| failure.reason())
+                    .collect(),
+            );
+        match result {
+            Ok(Some(button)) => break button,
+            Ok(None) => {}
+            Err(reason) => {
+                return Err(format!(
+                    "The Home picker confirmation lookup failed: {}.",
+                    reason.reason()
+                ));
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     };
@@ -153,10 +194,6 @@ impl accessibility::Accessibility for NativeAccessibility {
     }
 }
 
-fn confirm_button(app: &CFType, identifier: &str) -> Result<Option<CFType>, String> {
-    accessibility::confirm_button(&NativeAccessibility, app, identifier)
-}
-
 fn panel_directory(panel: &NSOpenPanel) -> Option<String> {
     panel.directoryURL()?.path().map(|path| path.to_string())
 }
@@ -199,7 +236,11 @@ fn poll(home: String) -> Result<Progress, String> {
                 );
             }
             let identifier = format!("muniment-e2e-home-{}", uuid::Uuid::now_v7());
-            panel.setAccessibilityIdentifier(Some(&NSString::from_str(&identifier)));
+            let marker = NSString::from_str(&identifier);
+            panel.setAccessibilityIdentifier(Some(&marker));
+            // These public panel properties reach the out-of-process Open panel.
+            panel.setTitle(Some(&marker));
+            panel.setPrompt(Some(&marker));
             panel.setDirectoryURL(Some(&NSURL::fileURLWithPath_isDirectory(
                 &NSString::from_str(&home), true,
             )));
@@ -210,6 +251,7 @@ fn poll(home: String) -> Result<Progress, String> {
                 next: Instant::now() + Duration::from_millis(700),
                 deadline,
                 identifier,
+                confirm_lookups: Arc::default(),
             });
         }
         let drive = slot
@@ -254,7 +296,11 @@ fn poll(home: String) -> Result<Progress, String> {
         }
         // Mark confirmation before the AX call so concurrent polls cannot press twice.
         drive.step = 1;
-        Ok(Progress::Confirm(drive.identifier.clone(), drive.deadline))
+        Ok(Progress::Confirm(
+            drive.identifier.clone(),
+            drive.deadline,
+            Arc::clone(&drive.confirm_lookups),
+        ))
     })
 }
 
@@ -315,6 +361,7 @@ pub(crate) struct FolderDialogSnapshot {
     app_active: bool,
     key_window: Option<WindowSnapshot>,
     system_prompt: Option<SystemPromptSnapshot>,
+    confirm_lookups: Vec<Vec<&'static str>>,
 }
 
 #[tauri::command]
@@ -354,6 +401,19 @@ pub(crate) async fn e2e_folder_dialog_snapshot(
                 app_active: app.isActive(),
                 key_window: app.keyWindow().map(|window| window_snapshot(&window)),
                 system_prompt: None,
+                confirm_lookups: DRIVE.with(|slot| {
+                    slot.borrow()
+                        .as_ref()
+                        .map(|drive| {
+                            drive
+                                .confirm_lookups
+                                .lock()
+                                .map(|lookups| lookups.clone())
+                                .map_err(|_| "The Home picker lookup snapshot is unavailable.")
+                        })
+                        .transpose()
+                        .map(Option::unwrap_or_default)
+                })?,
             })
         })();
         let _ = sender.send(result);
@@ -398,10 +458,12 @@ pub(crate) async fn e2e_drive_folder_dialog(app: tauri::AppHandle) -> Result<boo
     match receiver.recv().map_err(|error| error.to_string())?? {
         Progress::Waiting => Ok(false),
         Progress::Complete => Ok(true),
-        Progress::Confirm(identifier, deadline) => {
-            tauri::async_runtime::spawn_blocking(move || press_confirm(&identifier, deadline))
-                .await
-                .map_err(|error| error.to_string())??;
+        Progress::Confirm(identifier, deadline, confirm_lookups) => {
+            tauri::async_runtime::spawn_blocking(move || {
+                press_confirm(&identifier, deadline, confirm_lookups)
+            })
+            .await
+            .map_err(|error| error.to_string())??;
             Ok(false)
         }
     }
