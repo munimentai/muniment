@@ -25,8 +25,12 @@ export function featureFailure(feature, observed) {
   const stages = feature === 'mcp' ? ['check', 'server-add', 'connection-test', 'toggle', 'tool-turn', 'server-remove', 'receipt']
     : feature === 'artifacts' ? ['check', 'folders', 'new-file', 'save', 'publish', 'read', 'rename']
       : feature === 'signed-update' ? ['check', 'restore'] : ['check']
+  const errors = ['check-failed', 'timeout']
+  if ((feature === 'tools' && observed?.[1] === 'check') || (feature === 'mcp' && observed?.[1] === 'tool-turn')) {
+    errors.push('reply-phase', 'reply-text', 'receipt-tool')
+  }
   if (!Object.hasOwn(featureChecks, feature) || !Array.isArray(observed) || observed.length !== 3 || observed[0] !== 'failed' ||
-      !stages.includes(observed[1]) || !['check-failed', 'timeout'].includes(observed[2])) return {}
+      !stages.includes(observed[1]) || !errors.includes(observed[2])) return {}
   return { failure_stage: observed[1], error_class: observed[2] }
 }
 const providers = { openai: 'openai-codex', anthropic: 'anthropic', xai: 'xai', kimi: 'kimi' }

@@ -1,7 +1,13 @@
 // The installed webview exercises public commands with disposable data.
 window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, turns }) => {
   const features = {}
-  const check = value => { if (!value) throw new Error('The installed feature check failed.') }
+  const failures = new WeakMap()
+  const check = (value, reason = 'check-failed') => {
+    if (value) return
+    const error = new Error('The installed feature check failed.')
+    failures.set(error, reason)
+    throw error
+  }
   const rejects = async action => {
     let rejected = false
     try { await action() } catch { rejected = true }
@@ -13,7 +19,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     const step = async (stage, action) => {
       try { return await action() } catch (error) {
         // Keep the first failure when cleanup also fails. Never copy provider text.
-        failure ??= ['failed', stage, ['timeout', 'command-timeout'].includes(error?.errorClass) ? 'timeout' : 'check-failed']
+        failure ??= ['failed', stage, failures.get(error) ?? (['timeout', 'command-timeout'].includes(error?.errorClass) ? 'timeout' : 'check-failed')]
         throw error
       }
     }
@@ -211,11 +217,12 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     const entry = await wait(async () => {
       const page = await invoke('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
       const entry = page.entries.find(entry => !before.entries.some(old => old.runId === entry.runId))
-      if (entry && ['failed', 'cancelled', 'interrupted', 'pending-permission'].includes(entry.phase)) throw new Error('The tool reply failed.')
+      check(!entry || !['failed', 'cancelled', 'interrupted', 'pending-permission'].includes(entry.phase), 'reply-phase')
       return entry?.phase === 'complete' && entry
     })
-    check(entry.text.trim() === expected)
-    check(entry.receipt?.tools?.some(item => tool.test(item.name) && item.calls > 0 && item.failed === 0))
+    check(typeof entry.text === 'string' && entry.text.trim() === expected, 'reply-text')
+    check(Array.isArray(entry.receipt?.tools) && entry.receipt.tools.some(item =>
+      typeof item?.name === 'string' && tool.test(item.name) && Number.isSafeInteger(item.calls) && item.calls > 0 && item.failed === 0), 'receipt-tool')
   }
   await run('tools', async () => {
     await toolTurn(`Use the read tool to read ${JSON.stringify(plan.fixtureFile)}. Reply with only its first line.`, /^(read|read_file)$/, plan.fileNonce)
@@ -241,7 +248,8 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
         await wait(() => toggle.getAttribute('aria-checked') === 'true')
         extensions.click()
       })
-      await step('tool-turn', () => toolTurn('Call the acceptance_token MCP tool. Reply with only the token from its result.', /acceptance_token|^mcp/, plan.mcpNonce))
+      // A new lazy server has no cached tool names. Scope the call to that server.
+      await step('tool-turn', () => toolTurn('Call the MCP gateway tool mcp with {"server":"extend-release-acceptance","tool":"acceptance_token","args":{}}. Reply with only the token from its result.', /acceptance_token|^mcp/, plan.mcpNonce))
       return ['server-connected', 'tool-discovered', 'tool-completed']
     } finally { await step('server-remove', () => call('remove', { id })) }
   })
