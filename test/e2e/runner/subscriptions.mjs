@@ -159,19 +159,75 @@ export function verifyInstalled(candidate, packageFile, executable, root, env, s
   }
 }
 
-function screenshot(platform, pid, output, env) {
+export const screenshotReasons = {
+  'permission-denied': 'The macOS capture probe lacks Screen Recording permission. Grant Screen Recording to the desktop-ci capture process in the disposable GUI login.',
+  'window-unavailable': 'The macOS screenshot requires one stable, visible installed app window. Restore the disposable GUI session. Rerun the check.',
+  'window-uncapturable': 'The macOS window has no capturable image despite a granted permission check. Provide a desktop-ci display with working window backing images.',
+  'diagnostics-unavailable': 'The macOS capture diagnostics failed. Provide Xcode command-line tools and a readable window list in the disposable GUI login.',
+  'capture-failed': 'The macOS capture command failed despite a granted permission check. Check the native capture log in the platform artifact.',
+}
+
+export class ScreenshotError extends Error {
+  constructor(code, detail) {
+    const reason = screenshotReasons[code] ?? screenshotReasons['diagnostics-unavailable']
+    super(`${reason}\ncapture=${code}\n${detail}`)
+    this.reason = reason
+  }
+}
+
+export function macosCaptureInfo(text, pid) {
+  const info = JSON.parse(text)
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 2147483647 ||
+      typeof info?.screen_capture_access !== 'boolean' || !Array.isArray(info.windows) ||
+      info.windows.some(window => !window || !Number.isInteger(window.id) || window.id <= 0 || window.id > 0xffffffff ||
+        window.pid !== pid || window.layer !== 0 || window.onscreen !== true ||
+        ![window.x, window.y, window.width, window.height].every(Number.isFinite) || window.width < 1 || window.height < 1 ||
+        ![-1, 0, 1, 2].includes(window.sharing_state)) ||
+      new Set(info.windows.map(window => window.id)).size !== info.windows.length) {
+    throw new Error('The macOS capture diagnostics are invalid.')
+  }
+  // Keep diagnostics numeric. Window titles and owner names can contain user data.
+  return { screen_capture_access: info.screen_capture_access,
+    windows: info.windows.map(({ id, pid, layer, onscreen, x, y, width, height, sharing_state }) =>
+      ({ id, pid, layer, onscreen, x, y, width, height, sharing_state })) }
+}
+
+export function screenshot(platform, pid, output, env, executeNative = execute) {
   if (platform === 'linux') {
     const ids = execute('xdotool', ['search', '--onlyvisible', '--pid', String(pid), '--name', '^muniment$'], env, 10_000).split(/\s+/)
     if (ids.length !== 1 || !/^\d+$/.test(ids[0])) throw new Error('The native screenshot requires one installed app window.')
     execute('import', ['-window', ids[0], output], env, 10_000)
   } else if (platform.startsWith('macos-')) {
-    // Screen capture needs a dedicated GUI login with Screen Recording permission.
     const helper = path.join(env.TMPDIR, 'window-id')
-    execute('clang', ['-std=gnu17', '-framework', 'CoreFoundation', '-framework', 'CoreGraphics',
-      '-o', helper, 'test/e2e/support/macos-window-count.c'], env)
-    const id = execute(helper, [String(pid), '--id'], env, 10_000)
-    if (!/^\d+$/.test(id)) throw new Error('The native screenshot requires the installed app window.')
-    execute('screencapture', ['-x', `-l${id}`, output], env, 10_000)
+    const inspect = () => macosCaptureInfo(executeNative(helper, [String(pid), '--capture-info'], env, 10_000), pid)
+    let before
+    try {
+      executeNative('clang', ['-std=gnu17', '-framework', 'CoreFoundation', '-framework', 'CoreGraphics',
+        '-o', helper, 'test/e2e/support/macos-window-count.c'], env)
+      before = inspect()
+    } catch (error) {
+      throw new ScreenshotError('diagnostics-unavailable', error.message)
+    }
+    if (before.windows.length !== 1) {
+      throw new ScreenshotError(before.screen_capture_access ? 'window-unavailable' : 'permission-denied',
+        `before=${JSON.stringify(before)}`)
+    }
+    const id = before.windows[0].id
+    try {
+      // A helper's permission check must not veto a working screencapture process.
+      executeNative('screencapture', ['-x', `-l${id}`, output], env, 10_000)
+    } catch (error) {
+      let after
+      const detail = `before=${JSON.stringify(before)}\n${error.message}`
+      try { after = inspect() }
+      catch (diagnosticError) {
+        throw new ScreenshotError('diagnostics-unavailable', `${detail}\n${diagnosticError.message}`)
+      }
+      const code = !after.screen_capture_access ? 'permission-denied'
+        : after.windows.length !== 1 || after.windows[0].id !== id ? 'window-unavailable'
+          : error.message.includes('could not create image from window') ? 'window-uncapturable' : 'capture-failed'
+      throw new ScreenshotError(code, `${detail}\nafter=${JSON.stringify(after)}`)
+    }
   } else {
     execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.resolve('test/e2e/support/subscription-screenshot.ps1'),
       '-AppPid', String(pid), '-Destination', output], env, 10_000)
@@ -487,7 +543,8 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     passed = true
   } catch (error) {
     if (error instanceof AcceptanceError) condition = error.condition
-    if (app) {
+    if (error instanceof ScreenshotError) reason = error.reason
+    if (app && !(error instanceof ScreenshotError)) {
       failureKind = probeFailure(env)
       if (failureKind === 'auth') reason = 'Subscription authentication blocked the probe. Renew the factory access lease.'
       else if (failureKind === 'quota') reason = 'Subscription quota blocked the probe. Retry after capacity returns.'
