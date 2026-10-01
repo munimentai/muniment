@@ -279,7 +279,7 @@ fn web_url(value: &str) -> Result<url::Url, String> {
 fn save_link(address: &str, destination: &Path) -> Result<(), String> {
     use std::io::Read;
     let mut url = web_url(address)?;
-    let agent = ureq::AgentBuilder::new()
+    let agent = muniment_core::http::agent_builder()
         .redirects(0)
         .timeout(std::time::Duration::from_secs(120))
         .build();

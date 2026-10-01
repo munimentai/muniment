@@ -73,7 +73,7 @@ test('Windows artifacts keep redacted transport details at chat/verify-result', 
   const env = { MUNIMENT_STATE_DIR: root }
   const row = { phase: 'chat', stage: 'reply', turn: 0, requested: 'model-one', transport: 'pending', error_class: 'reply-failed' }
   fs.writeFileSync(path.join(root, 'subscription-probe-progress.jsonl'), JSON.stringify(row) + '\n')
-  const endpoints = ['dns', 'connect', 'tls', 'proxy', 'timeout', 'other'].map(kind => [kind, 'api.example.com'])
+  const endpoints = ['dns', 'connect', 'tls', 'tls_certificate', 'proxy', 'timeout', 'other'].map(kind => [kind, 'api.example.com'])
   endpoints.push(['proxy', '127.0.0.1'], ['proxy', 'proxy.example'], ['dns', 'redirect.example'])
   for (const [transport_kind, host] of endpoints) {
     const failure = { ...row, stage: 'transport', transport: 'failed', error_class: 'network', transport_kind, host }
