@@ -148,7 +148,7 @@ test('the installed feature probe exercises commands and validates their results
   assert.equal(result.state.mcpSelected, true)
   assert.equal(serverId, 'release-acceptance')
   assert.deepEqual(JSON.parse(result.state.prompts[1].match(/\{.*\}/)[0]), {
-    server: serverId, tool: 'acceptance_token', args: {},
+    server: 'extend-release-acceptance', tool: 'acceptance_token', args: {},
   })
   assert.equal(result.state.prompts[1].includes(mcpNonce), false)
 })

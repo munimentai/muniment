@@ -249,7 +249,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
         extensions.click()
       })
       // A new lazy server has no cached tool names. Scope the call to that server.
-      await step('tool-turn', () => toolTurn(`Call the MCP gateway tool mcp with {"server":"${id}","tool":"acceptance_token","args":{}}. Reply with only the token from its result.`, /acceptance_token|^mcp/, plan.mcpNonce))
+      await step('tool-turn', () => toolTurn(`Call the MCP gateway tool mcp with {"server":"extend-${id}","tool":"acceptance_token","args":{}}. Reply with only the token from its result.`, /acceptance_token|^mcp/, plan.mcpNonce))
       return ['server-connected', 'tool-discovered', 'tool-completed']
     } finally { await step('server-remove', () => call('remove', { id })) }
   })
