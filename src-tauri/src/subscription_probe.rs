@@ -177,59 +177,58 @@ pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(
     use sha2::{Digest, Sha256};
     use tauri::Manager;
     use tauri_plugin_updater::Error;
-    let root = root()?;
-    let mut plan = update_plan()?;
+    let root = root().map_err(|_| "update-profile")?;
+    let mut plan = update_plan().map_err(|_| "update-plan")?;
     if plan["phase"] != "update" {
-        return Err("The update probe requires the update phase.".into());
+        return Err("update-phase".into());
     }
     let endpoint: url::Url = plan["updateUrl"]
         .as_str()
-        .ok_or("The update address is missing.")?
+        .ok_or("update-address")?
         .parse()
-        .map_err(|_| "The update address is invalid.")?;
+        .map_err(|_| "update-address")?;
     let state = app.state::<crate::app_update::AppUpdate>();
     crate::app_update::app_update_prepare(app.clone(), state.clone())
-        .await?
-        .ok_or("The candidate update is unavailable.")?;
-    let (mut update, bytes) = state.prepared()?;
+        .await
+        .map_err(|error| error.probe_code())?
+        .ok_or("update-unavailable")?;
+    let (mut update, bytes) = state.prepared().map_err(|error| error.probe_code())?;
     if plan["packageSha256"].as_str() != Some(format!("{:x}", Sha256::digest(&bytes)).as_str()) {
-        return Err("The updater downloaded a different package.".into());
+        return Err("update-package-digest".into());
     }
-    update.download_url = endpoint
-        .join("/tampered")
-        .map_err(|_| "The update address is invalid.")?;
+    update.download_url = endpoint.join("/tampered").map_err(|_| "update-address")?;
     if !matches!(
         update.download(|_, _| {}, || {}).await,
         Err(Error::Minisign(_))
     ) {
-        return Err("The installed updater did not reject the damaged package.".into());
+        return Err("update-tamper-rejection".into());
     }
-    update.download_url = endpoint
-        .join("/package")
-        .map_err(|_| "The update address is invalid.")?;
+    update.download_url = endpoint.join("/package").map_err(|_| "update-address")?;
     update.version = "999999.0.0".into();
     if !matches!(
         update.download(|_, _| {}, || {}).await,
         Err(Error::SignedVersionMismatch { .. })
     ) {
-        return Err("The installed updater did not reject the wrong version.".into());
+        return Err("update-version-rejection".into());
     }
     let activity = app.state::<muniment_core::attach::RuntimeActivityRegistry>();
     let busy = activity.mark_active_run();
     let refused =
         crate::app_update::app_update_install(app.clone(), activity.clone(), state.clone()).await;
     drop(busy);
-    if refused.err().as_deref() != Some("Finish the current action before updating.") {
-        return Err("The installed updater did not reject active work.".into());
+    if refused != Err(crate::app_update::UpdateFailure::Busy) {
+        return Err("update-active-work-refusal".into());
     }
     plan["phase"] = "update-restart".into();
     plan["updateParentPid"] = std::process::id().into();
     std::fs::write(
         root.join("subscription-probe.json"),
-        serde_json::to_vec(&plan).map_err(|_| "The update checkpoint is invalid.")?,
+        serde_json::to_vec(&plan).map_err(|_| "update-checkpoint-encode")?,
     )
-    .map_err(|_| "The update checkpoint could not be saved.")?;
-    crate::app_update::app_update_install(app.clone(), activity, state).await
+    .map_err(|_| "update-checkpoint-write")?;
+    crate::app_update::app_update_install(app.clone(), activity, state)
+        .await
+        .map_err(|error| error.probe_code().into())
 }
 
 #[tauri::command]
