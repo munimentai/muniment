@@ -17,7 +17,9 @@ const json = file => JSON.parse(fs.readFileSync(file, 'utf8'))
 const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 })
 function execute(command, args, env, timeout = 180_000) {
   const result = spawnSync(command, args, { env, timeout, stdio: 'pipe', windowsHide: true })
-  if (result.error || result.status !== 0) throw nativeFailure(command, result)
+  if (result.error || result.status !== 0) {
+    throw Object.assign(nativeFailure(command, result), { cause: result.error, signal: result.signal })
+  }
   return result.stdout.toString('utf8').trim()
 }
 
@@ -164,7 +166,7 @@ export const screenshotReasons = {
   'window-unavailable': 'The macOS screenshot requires one stable, visible installed app window. Restore the disposable GUI session. Rerun the check.',
   'window-uncapturable': 'The macOS window has no capturable image despite a granted permission check. Provide a desktop-ci display with working window backing images.',
   'diagnostics-unavailable': 'The macOS capture diagnostics failed. Provide Xcode command-line tools and a readable window list in the disposable GUI login.',
-  'capture-failed': 'The macOS capture command failed despite a granted permission check. Check the native capture log in the platform artifact.',
+  'capture-failed': 'The macOS capture command failed. Check the native capture log in the platform artifact.',
 }
 
 export class ScreenshotError extends Error {
@@ -218,14 +220,15 @@ export function screenshot(platform, pid, output, env, executeNative = execute) 
       executeNative('screencapture', ['-x', `-l${id}`, output], env, 10_000)
     } catch (error) {
       let after
+      const imageFailure = !error.cause && !error.signal && error.message.includes('could not create image from window')
       const detail = `before=${JSON.stringify(before)}\n${error.message}`
       try { after = inspect() }
       catch (diagnosticError) {
-        throw new ScreenshotError('diagnostics-unavailable', `${detail}\n${diagnosticError.message}`)
+        throw new ScreenshotError(imageFailure ? 'diagnostics-unavailable' : 'capture-failed', `${detail}\n${diagnosticError.message}`)
       }
-      const code = !after.screen_capture_access ? 'permission-denied'
-        : after.windows.length !== 1 || after.windows[0].id !== id ? 'window-unavailable'
-          : error.message.includes('could not create image from window') ? 'window-uncapturable' : 'capture-failed'
+      const code = !imageFailure ? 'capture-failed'
+        : !after.screen_capture_access ? 'permission-denied'
+          : after.windows.length !== 1 || after.windows[0].id !== id ? 'window-unavailable' : 'window-uncapturable'
       throw new ScreenshotError(code, `${detail}\nafter=${JSON.stringify(after)}`)
     }
   } else {

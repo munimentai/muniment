@@ -17,7 +17,7 @@ function capture({ before = snapshot(), after = before, failure, compileFailure,
       return ''
     }
     if (command === 'screencapture') {
-      if (failure) throw new Error(failure)
+      if (failure) throw failure instanceof Error ? failure : new Error(failure)
       return ''
     }
     assert.deepEqual(args, [String(pid), '--capture-info'])
@@ -67,9 +67,45 @@ test('a granted preflight separates an uncapturable image from permission denial
   assert.ok(result.error.message.includes(`after=${JSON.stringify(snapshot())}`))
 })
 
+const executionFailures = [
+  'spawnSync screencapture ENOENT',
+  'screencapture: status=none signal=SIGTERM error=spawnSync screencapture ETIMEDOUT',
+  'screencapture: signal=SIGTERM',
+  Object.assign(new Error(imageFailure), { cause: new Error('spawnSync screencapture ETIMEDOUT') }),
+  Object.assign(new Error(imageFailure), { signal: 'SIGTERM' }),
+]
+
 test('capture tool failures do not claim an uncapturable image', () => {
-  for (const failure of ['spawnSync screencapture ENOENT', 'screencapture: signal=SIGTERM']) {
+  for (const failure of executionFailures) {
     assertReason(capture({ failure }), 'capture-failed')
+  }
+})
+
+test('capture tool failures take precedence over permission and window failures', () => {
+  for (const failure of executionFailures) {
+    for (const before of [snapshot(), snapshot(false)]) {
+      for (const after of [snapshot(false), snapshot(true, []), snapshot(true, [{ ...window, id: 789 }])]) {
+        const result = capture({ before, after, failure })
+        assertReason(result, 'capture-failed')
+        assert.equal(result.inspections, 2)
+        assert.ok(result.error.message.includes(failure.message ?? failure))
+        assert.ok(result.error.message.includes(`before=${JSON.stringify(before)}`))
+        assert.ok(result.error.message.includes(`after=${JSON.stringify(after)}`))
+      }
+    }
+  }
+})
+
+test('capture tool failures take precedence over failed post-capture diagnostics', () => {
+  for (const failure of executionFailures) {
+    for (const before of [snapshot(), snapshot(false)]) {
+      const result = capture({ before, failure, after: new Error('The window list timed out.') })
+      assertReason(result, 'capture-failed')
+      assert.equal(result.inspections, 2)
+      assert.ok(result.error.message.includes(failure.message ?? failure))
+      assert.ok(result.error.message.includes(`before=${JSON.stringify(before)}`))
+      assert.ok(result.error.message.includes('The window list timed out.'))
+    }
   }
 })
 
