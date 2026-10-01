@@ -168,8 +168,9 @@ export function acceptance(candidate, sourceSha, platform, result, transports, p
     }) }
 }
 
-export function blocked(sourceSha, platform, reason) {
+export function blocked(sourceSha, platform, reason, featureFailures = {}) {
   return { schema: 1, source_sha: sourceSha, packages: {}, cases: features.map(feature => ({
     platform, feature, status: 'blocked', installed: false, evidence: `${platform}-subscription.json`, reason,
+    ...featureFailure(feature, featureFailures?.[feature]),
   })) }
 }

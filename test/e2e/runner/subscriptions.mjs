@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { AcceptanceError, acceptance, blocked, chatTransports, checkIdentity, featureChecks, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
+import { AcceptanceError, acceptance, blocked, chatTransports, checkIdentity, featureChecks, featureFailure, hash, platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.mjs'
 import { updateFixture } from './subscription-update.mjs'
 import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus, probeProgress, probeFailure, payloadDifferenceDetail, reportPayloadDifferences } from '../support/subscription-diagnostics.mjs'
@@ -240,11 +240,15 @@ export function installedExecutable(platform, executable) {
   return ['macos-arm64', 'macos-x64'].includes(platform) ? fs.realpathSync(executable) : executable
 }
 
-export function writeBlocked(output, sourceSha, platform, reason, detail = '', redact = subscriptionRedactor(), failureKind, condition) {
+export function writeBlocked(output, sourceSha, platform, reason, detail = '', redact = subscriptionRedactor(), failureKind, condition, featureFailures = {}) {
   fs.mkdirSync(output, { recursive: true, mode: 0o700 })
-  save(path.join(output, 'release-acceptance.json'), blocked(sourceSha, platform, reason))
+  const proof = blocked(sourceSha, platform, reason, featureFailures)
+  const features = Object.fromEntries(proof.cases.filter(item => item.failure_stage)
+    .map(item => [item.feature, ['failed', item.failure_stage, item.error_class]]))
+  save(path.join(output, 'release-acceptance.json'), proof)
   save(path.join(output, `${platform}-subscription.json`), { status: failureKind === 'product' ? 'failed' : 'blocked', reason,
-    ...(failureKind ? { failure_kind: failureKind } : {}), ...(condition ? { condition } : {}) })
+    ...(failureKind ? { failure_kind: failureKind } : {}), ...(condition ? { condition } : {}),
+    ...(Object.keys(features).length ? { features } : {}) })
   const log = path.join(output, `${platform}-subscription.log`)
   const previous = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''
   const status = failureKind === 'product' ? 'failed' : 'blocked'
@@ -282,7 +286,18 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     } finally { clearTimeout(timer) }
   }
   let passed = false, failureKind, condition
-  const reportBlocked = (detail = '') => writeBlocked(output, sourceSha, platform, reason, detail, redact, failureKind, condition)
+  const featureFailures = {}
+  const reportBlocked = (detail = '') => writeBlocked(output, sourceSha, platform, reason, detail, redact, failureKind, condition, featureFailures)
+  const checkpointFailures = result => {
+    for (const feature of Object.keys(featureChecks)) {
+      const failure = featureFailure(feature, result?.features?.[feature])
+      if (failure.failure_stage && !featureFailures[feature]) {
+        featureFailures[feature] = ['failed', failure.failure_stage, failure.error_class]
+      }
+    }
+    // Keep only fixed failure codes until every phase and cleanup check passes.
+    reportBlocked()
+  }
   let evidence, proof, finalDiagnostics
   try {
     reason = 'Run this check on the requested native platform and architecture.'
@@ -399,6 +414,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
             (!runtime || (runtime.exitCode === null && runtime.signalCode === null)))
     }
     const probe = await launch()
+    checkpointFailures(probe)
     step = 'chat/verify-result'
     reason = 'The installed subscription reply or model switch failed. Check model access and thread continuity.'
     if (probe.passed !== true) throw new AcceptanceError('probe-status')
@@ -422,10 +438,12 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     fs.rmSync(resultFile)
     save(path.join(state, 'subscription-probe.json'), { ...plan, phase: 'features', turns: probe.turns })
     const featureResult = await launch()
+    checkpointFailures(featureResult)
     step = 'features/verify-result'
     if (!featureResult.passed || featureResult.source_sha !== probe.source_sha || featureResult.webdriver !== false ||
         JSON.stringify(featureResult.turns) !== JSON.stringify(probe.turns)) throw new Error(reason)
     featureResult.features.mcp = verifyMcpReceipt(featureResult.features.mcp, mcpReceipt, mcpNonce)
+    checkpointFailures(featureResult)
     reason = 'The installed app could not restore its disposable profile after restart.'
     await stop(app, appClosed)
     await stop(runtime, runtimeClosed)
@@ -433,6 +451,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     fs.rmSync(resultFile)
     save(path.join(state, 'subscription-probe.json'), { ...plan, phase: 'restart', turns: probe.turns })
     const restarted = await launch()
+    checkpointFailures(restarted)
     step = 'restart/verify-result'
     if (!restarted.passed || restarted.source_sha !== probe.source_sha || restarted.webdriver !== false ||
         JSON.stringify(restarted.turns) !== JSON.stringify(probe.turns)) throw new Error(reason)
@@ -444,13 +463,14 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     fs.rmSync(resultFile)
     save(path.join(state, 'subscription-probe.json'), { ...plan, phase: 'update', turns: probe.turns })
     const updated = await launch(true)
+    checkpointFailures(updated)
     step = 'update/verify-result'
     verifyUpdateResult(updated, app.probePid ?? app.pid, sourceSha, probe.turns, verify)
     // Require the relaunched process to stay alive through the native capture.
     process.kill(updated.pid, 0)
     const result = { status: 'passed', installed: true, unchanged: true, source_sha: probe.source_sha, webdriver: probe.webdriver,
       package_sha256: candidate.sha256, features: { ...probe.features, ...featureResult.features, ...restarted.features,
-        'signed-update': updated.features['signed-update'] },
+        'signed-update': updated.features['signed-update'], ...featureFailures },
       turns: probe.turns.map(turn => ({ ...turn, requested: candidate.models[turn.index]?.id, expected: nonce })) }
     proof = acceptance(candidate, sourceSha, platform, result, transports, packageName)
     step = 'screenshot'
