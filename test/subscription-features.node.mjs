@@ -133,7 +133,10 @@ async function probe(failure, fault = () => {}) {
 }
 
 test('the installed feature probe exercises commands and validates their results', async () => {
-  const result = await probe()
+  let serverId
+  const result = await probe(undefined, (command, data) => {
+    if (command === 'extend_command' && data.action === 'server') serverId = data.data.id
+  })
   for (const [feature, checks] of Object.entries(featureChecks)) {
     if (feature === 'local-startup') continue
     assert.deepEqual({ ...result.initial, ...result.restart }[feature], feature === 'signed-update' ? checks.slice(0, -1) : checks, feature)
@@ -143,8 +146,9 @@ test('the installed feature probe exercises commands and validates their results
   assert.equal(result.state.projects.project, 'Renamed acceptance project')
   assert.equal(result.state.entries.length, 3)
   assert.equal(result.state.mcpSelected, true)
+  assert.equal(serverId, 'release-acceptance')
   assert.deepEqual(JSON.parse(result.state.prompts[1].match(/\{.*\}/)[0]), {
-    server: 'extend-release-acceptance', tool: 'acceptance_token', args: {},
+    server: serverId, tool: 'acceptance_token', args: {},
   })
   assert.equal(result.state.prompts[1].includes(mcpNonce), false)
 })
