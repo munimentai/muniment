@@ -21,7 +21,7 @@ async function probe(failure, fault = () => {}) {
   const state = { content: fileNonce, revision: 'first', profile: '', projects: {},
     accounts: [{ id: 'one', family: 'openai', source: 'account', requests: 2, active: 0, errors: 0, label: 'One', weight: 1 },
       { id: 'two', family: 'openai', source: 'account', requests: failure === 'single-account' ? 0 : 2, active: 0, errors: 0, label: 'Two', weight: 1 }],
-    entries: [{ runId: 'chat', text: nonce, phase: 'complete' }], commands: [] }
+    entries: [{ runId: 'chat', text: nonce, phase: 'complete' }], commands: [], prompts: [] }
   for (const account of state.accounts) { account.enabled = true; account.models = ['route-model', 'model'] }
   if (failure === 'unequal-shares') { state.accounts[0].requests = 3; state.accounts[1].requests = 1 }
   if (failure === 'active-reservation') state.accounts[0].active = 1
@@ -31,10 +31,13 @@ async function probe(failure, fault = () => {}) {
     : selector.startsWith('[role="switch"]') ? { click: () => { fault('mcp-toggle'); state.mcpSelected = true },
       getAttribute: () => String(state.mcpSelected === true) } : { click() {} }, querySelectorAll: () => [{
     getAttribute: () => 'Send', click() {
+      state.prompts.push(prompt)
       if (prompt.includes('MCP')) fault('mcp-tool-turn')
-      state.entries.push({ runId: `tool-${state.entries.length}`, text: failure === 'replayed-chat-token' ? nonce : prompt.includes('MCP') ? mcpNonce : fileNonce, phase: 'complete', receipt: {
+      const entry = { runId: `tool-${state.entries.length}`, text: failure === 'replayed-chat-token' ? nonce : prompt.includes('MCP') ? mcpNonce : fileNonce, phase: 'complete', receipt: {
         tools: [{ name: prompt.includes('MCP') ? 'mcp__acceptance_token' : 'read', calls: failure === 'no-tool' ? 0 : 1, failed: 0 }],
-      } })
+      } }
+      fault(prompt.includes('MCP') ? 'mcp-reply' : 'tools-reply', entry)
+      state.entries.push(entry)
     },
   }] }
   const invoke = async (command, data = {}) => {
@@ -130,7 +133,10 @@ async function probe(failure, fault = () => {}) {
 }
 
 test('the installed feature probe exercises commands and validates their results', async () => {
-  const result = await probe()
+  let serverId
+  const result = await probe(undefined, (command, data) => {
+    if (command === 'extend_command' && data.action === 'server') serverId = data.data.id
+  })
   for (const [feature, checks] of Object.entries(featureChecks)) {
     if (feature === 'local-startup') continue
     assert.deepEqual({ ...result.initial, ...result.restart }[feature], feature === 'signed-update' ? checks.slice(0, -1) : checks, feature)
@@ -140,6 +146,11 @@ test('the installed feature probe exercises commands and validates their results
   assert.equal(result.state.projects.project, 'Renamed acceptance project')
   assert.equal(result.state.entries.length, 3)
   assert.equal(result.state.mcpSelected, true)
+  assert.equal(serverId, 'release-acceptance')
+  assert.deepEqual(JSON.parse(result.state.prompts[1].match(/\{.*\}/)[0]), {
+    server: 'extend-release-acceptance', tool: 'acceptance_token', args: {},
+  })
+  assert.equal(result.state.prompts[1].includes(mcpNonce), false)
 })
 
 for (const [failure, feature] of [
@@ -196,6 +207,43 @@ for (const [feature, stage, command, action] of [
   })
   assert.deepEqual(result.initial[feature], ['failed', stage, 'check-failed'])
   assert.equal(JSON.stringify(result.initial).includes('private provider error'), false)
+})
+
+for (const feature of ['tools', 'mcp']) {
+  test(`the ${feature} tool turn reports fixed reply sub-reasons without provider text`, async () => {
+    const name = feature === 'tools' ? 'read' : 'mcp__acceptance_token'
+    const cases = [
+      ...['failed', 'cancelled', 'interrupted', 'pending-permission'].map(phase => [{ phase }, 'reply-phase']),
+      [{ text: 'private provider text' }, 'reply-text'], [{ text: '' }, 'reply-text'], [{ text: null }, 'reply-text'],
+      [{ receipt: undefined }, 'receipt-tool'], [{ receipt: { tools: [] } }, 'receipt-tool'],
+      [{ receipt: { tools: {} } }, 'receipt-tool'],
+      ...[null, { name: 'private provider tool', calls: 1, failed: 0 },
+        ...[0, -1, 0.5, '1', Infinity].map(calls => ({ name, calls, failed: 0 })),
+        { name, calls: 1, failed: 1 }, { name, calls: 1, failed: '0' },
+      ].map(item => [{ receipt: { tools: [item] } }, 'receipt-tool']),
+    ]
+    for (const [change, reason] of cases) {
+      const result = await probe(undefined, (name, data) => {
+        if (name === `${feature}-reply`) Object.assign(data, change)
+        if (feature === 'mcp' && name === 'extend_command' && data.action === 'remove') {
+          throw new Error('private cleanup error')
+        }
+      })
+      const stage = feature === 'mcp' ? 'tool-turn' : 'check'
+      assert.deepEqual(result.initial[feature], ['failed', stage, reason])
+      assert.deepEqual(featureFailure(feature, result.initial[feature]), { failure_stage: stage, error_class: reason })
+      assert.equal(JSON.stringify(result.initial).includes('private'), false)
+    }
+  })
+}
+
+test('the MCP probe rejects provider errors that claim a local reply sub-reason', async () => {
+  for (const errorClass of ['reply-phase', 'reply-text', 'receipt-tool']) {
+    const result = await probe(undefined, name => {
+      if (name === 'mcp-tool-turn') throw Object.assign(new Error('private provider error'), { errorClass })
+    })
+    assert.deepEqual(result.initial.mcp, ['failed', 'tool-turn', 'check-failed'])
+  }
 })
 
 test('the MCP probe keeps the first failure when server removal also fails', async () => {
