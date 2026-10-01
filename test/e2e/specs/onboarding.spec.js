@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
-import { chooseFolder, folderDialogDescription, withWindowsPickerDiagnostics } from '../support/onboarding-folder.mjs'
+import { chooseFolder, folderDialogDescription, recordMacosPickerBaseline, withWindowsPickerDiagnostics } from '../support/onboarding-folder.mjs'
 import { homePathMatches } from '../support/home-path.mjs'
 import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 
@@ -104,6 +104,8 @@ describe('installed nightly model-ready onboarding', () => {
     expect(await (await $('[data-testid="onboarding-confirm"]')).isExisting()).toBe(false)
     await mkdir(home, { recursive: true })
     await location.click()
+    // Record any system prompt before the app opens NSOpenPanel.
+    await recordMacosPickerBaseline(process.env.MUNIMENT_E2E_RAW_DIR)
     await (await $('[data-testid="onboarding-picker"]')).click()
     await withWindowsPickerDiagnostics(async () => {
       await chooseFolder(
