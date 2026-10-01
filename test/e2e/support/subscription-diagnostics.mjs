@@ -127,7 +127,7 @@ const probeErrors = ['none', 'timeout', 'command-timeout', 'command-failed', 're
   'update-version-rejection', 'update-active-work-refusal', 'update-checkpoint-encode', 'update-checkpoint-write',
   'update-busy', 'update-install-task', 'update-install', 'update-restart']
 const probePhases = ['chat', 'features', 'restart', 'update', 'update-restart']
-const transportKinds = ['dns', 'connect', 'tls', 'proxy', 'timeout', 'other']
+const transportKinds = ['dns', 'connect', 'tls', 'tls_certificate', 'proxy', 'timeout', 'other']
 
 function transportDetail(row) {
   if (row.stage !== 'transport' || row.transport !== 'failed' || row.error_class !== 'network' ||

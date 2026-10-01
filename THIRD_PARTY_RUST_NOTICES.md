@@ -29,6 +29,9 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `arrayref` 0.3.9 — BSD-2-Clause
 - `arrayvec` 0.7.8 — MIT OR Apache-2.0
 - `ascii` 1.1.0 — Apache-2.0 OR MIT
+- `asn1-rs-derive` 0.6.0 — MIT OR Apache-2.0
+- `asn1-rs-impl` 0.2.0 — MIT/Apache-2.0
+- `asn1-rs` 0.7.2 — MIT OR Apache-2.0
 - `async-broadcast` 0.7.2 — MIT OR Apache-2.0
 - `async-channel` 2.5.0 — Apache-2.0 OR MIT
 - `async-executor` 1.14.0 — Apache-2.0 OR MIT
@@ -51,6 +54,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `base64ct` 1.8.3 — Apache-2.0 OR MIT
 - `bit-set` 0.8.0 — Apache-2.0 OR MIT
 - `bit-vec` 0.8.0 — Apache-2.0 OR MIT
+- `bit-vec` 0.9.1 — Apache-2.0 OR MIT
 - `bitflags` 1.3.2 — MIT/Apache-2.0
 - `bitflags` 2.13.2 — MIT OR Apache-2.0
 - `block-buffer` 0.10.4 — MIT OR Apache-2.0
@@ -125,11 +129,13 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `darling_macro` 0.24.1 — MIT
 - `darling` 0.24.1 — MIT
 - `dasp_sample` 0.11.0 — MIT OR Apache-2.0
+- `data-encoding` 2.11.1 — MIT
 - `data-url` 0.3.2 — MIT OR Apache-2.0
 - `dbus` 0.9.12 — Apache-2.0/MIT
 - `defmt-macros` 1.1.1 — MIT OR Apache-2.0
 - `defmt-parser` 1.0.0 — MIT OR Apache-2.0
 - `defmt` 1.1.1 — MIT OR Apache-2.0
+- `der-parser` 10.0.0 — MIT OR Apache-2.0
 - `der` 0.7.10 — Apache-2.0 OR MIT
 - `deranged` 0.5.8 — MIT OR Apache-2.0
 - `derive_arbitrary` 1.4.2 — MIT OR Apache-2.0
@@ -318,6 +324,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `memchr` 2.8.3 — Unlicense OR MIT
 - `memoffset` 0.9.1 — MIT
 - `mime` 0.3.17 — MIT OR Apache-2.0
+- `minimal-lexical` 0.2.1 — MIT/Apache-2.0
 - `minisign-verify` 0.2.5 — MIT
 - `miniz_oxide` 0.8.9 — MIT OR Zlib OR Apache-2.0
 - `miniz_oxide` 0.9.1 — MIT OR Zlib OR Apache-2.0
@@ -329,8 +336,11 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `ndk` 0.9.0 — MIT OR Apache-2.0
 - `new_debug_unreachable` 1.0.6 — MIT
 - `nix` 0.28.0 — MIT
+- `nom` 7.1.3 — MIT
+- `num-bigint` 0.4.8 — MIT OR Apache-2.0
 - `num-conv` 0.2.2 — MIT OR Apache-2.0
 - `num-derive` 0.4.2 — MIT OR Apache-2.0
+- `num-integer` 0.1.47 — MIT OR Apache-2.0
 - `num-traits` 0.2.19 — MIT OR Apache-2.0
 - `num_enum_derive` 0.7.6 — BSD-3-Clause OR MIT OR Apache-2.0
 - `num_enum` 0.7.6 — BSD-3-Clause OR MIT OR Apache-2.0
@@ -359,10 +369,10 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `objc2-user-notifications` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2-web-kit` 0.3.2 — Zlib OR Apache-2.0 OR MIT
 - `objc2` 0.6.4 — MIT
+- `oid-registry` 0.8.1 — MIT OR Apache-2.0
 - `once_cell_polyfill` 1.70.2 — MIT OR Apache-2.0
 - `once_cell` 1.21.4 — MIT OR Apache-2.0
 - `open` 5.4.4 — MIT
-- `openssl-probe` 0.1.6 — MIT/Apache-2.0
 - `openssl-probe` 0.2.1 — MIT OR Apache-2.0
 - `option-ext` 0.2.0 — MPL-2.0
 - `ordered-stream` 0.2.0 — MIT OR Apache-2.0
@@ -413,6 +423,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `r-efi` 6.0.0 — MIT OR Apache-2.0 OR LGPL-2.1-or-later
 - `rand_core` 0.6.4 — MIT OR Apache-2.0
 - `raw-window-handle` 0.6.2 — MIT OR Apache-2.0 OR Zlib
+- `rcgen` 0.14.10 — MIT OR Apache-2.0
 - `redox_syscall` 0.5.18 — MIT
 - `redox_users` 0.5.3 — MIT
 - `ref-cast-impl` 1.0.27 — MIT OR Apache-2.0
@@ -429,11 +440,10 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `rusqlite` 0.32.1 — MIT
 - `rustc-hash` 2.1.3 — Apache-2.0 OR MIT
 - `rustc_version` 0.4.1 — MIT OR Apache-2.0
+- `rusticata-macros` 4.1.0 — MIT/Apache-2.0
 - `rustix-linux-procfs` 0.1.1 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - `rustix` 1.1.5 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-- `rustls-native-certs` 0.7.3 — Apache-2.0 OR ISC OR MIT
 - `rustls-native-certs` 0.8.4 — Apache-2.0 OR ISC OR MIT
-- `rustls-pemfile` 2.2.0 — Apache-2.0 OR ISC OR MIT
 - `rustls-pki-types` 1.15.1 — MIT OR Apache-2.0
 - `rustls-platform-verifier-android` 0.1.1 — MIT OR Apache-2.0
 - `rustls-platform-verifier` 0.7.0 — MIT OR Apache-2.0
@@ -509,6 +519,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `syn` 2.0.119 — MIT OR Apache-2.0
 - `syn` 3.0.6 — MIT OR Apache-2.0
 - `sync_wrapper` 1.0.2 — Apache-2.0
+- `synstructure` 0.13.2 — MIT
 - `synstructure` 0.14.0 — MIT
 - `system-configuration-sys` 0.6.0 — MIT OR Apache-2.0
 - `system-configuration` 0.7.0 — MIT OR Apache-2.0
@@ -700,9 +711,11 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `x11` 2.21.0 — MIT
 - `x11rb-protocol` 0.13.2 — MIT OR Apache-2.0
 - `x11rb` 0.13.2 — MIT OR Apache-2.0
+- `x509-parser` 0.18.1 — MIT OR Apache-2.0
 - `xattr` 1.6.1 — MIT OR Apache-2.0
 - `xkeysym` 0.2.1 — MIT OR Apache-2.0 OR Zlib
 - `xmlwriter` 0.1.0 — MIT
+- `yasna` 0.6.0 — MIT OR Apache-2.0
 - `yoke-derive` 0.8.3 — Unicode-3.0
 - `yoke` 0.8.3 — Unicode-3.0
 - `zbus_macros` 5.19.0 — MIT
