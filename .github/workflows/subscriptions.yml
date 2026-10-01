@@ -54,7 +54,8 @@ jobs:
     needs: validate-platform
     if: inputs.platform == 'all' || inputs.platform == 'linux'
     runs-on: muniment-release
-    timeout-minutes: 45
+    # Allow the slot wait, guest, artifact collection, and upload to finish.
+    timeout-minutes: 135
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       PLATFORM: linux
@@ -91,7 +92,7 @@ jobs:
     needs: [validate-platform, linux]
     if: always() && !cancelled() && needs.validate-platform.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'windows')
     runs-on: muniment-release
-    timeout-minutes: 45
+    timeout-minutes: 135
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       PLATFORM: windows
@@ -166,7 +167,7 @@ jobs:
     needs: [validate-platform, macos-arm64]
     if: always() && !cancelled() && needs.validate-platform.result == 'success' && (inputs.platform == 'all' || inputs.platform == 'macos' || inputs.platform == 'macos-x64')
     runs-on: muniment-release
-    timeout-minutes: 45
+    timeout-minutes: 135
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       PLATFORM: macos-x64
