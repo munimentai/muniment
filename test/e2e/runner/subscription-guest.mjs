@@ -20,7 +20,8 @@ export function guestFailureReason(step, error) {
   if (known.includes(error?.message)) return error.message
   switch (step) {
     case 'guest/windows-job-test': return 'The Windows process job self-test failed.'
-    case 'guest/keychain-session': return 'The installed macOS probe or disposable Keychain session failed.'
+    case 'guest/keychain-session': return error?.reason?.startsWith('cleanup-')
+      ? 'The disposable Keychain cleanup failed.' : 'The disposable Keychain session failed.'
     case 'guest/linux-sandbox': return sandboxRequirement
     case 'guest/nightly-assets':
     case 'guest/updater-signature': return missingPackage
@@ -110,7 +111,18 @@ export function runMacosProbe({ candidateFile, packageFile, signatureFile, execu
     process.execPath, path.resolve('test/e2e/runner/subscriptions.mjs'),
     candidateFile, packageFile, signatureFile, executable, leasesFile, output, sourceSha, platform],
   { timeout: 30 * 60_000, encoding: 'utf8', stdio: 'pipe' })
-  if (result.error || result.status !== 0) throw nativeFailure('macos-keychain-session', result)
+  if (result.error || result.status !== 0) {
+    const reasons = ['missing-command', 'setup-failed', 'setup-timeout', 'probe-failed',
+      'cleanup-agent', 'cleanup-default', 'cleanup-list', 'cleanup-delete', 'cleanup-files']
+    const reported = String(result.stderr ?? '').split('\n')
+      .filter(line => line.startsWith('macos-keychain-session: reason='))
+      .map(line => line.slice('macos-keychain-session: reason='.length))
+      .filter(reason => reasons.includes(reason))
+    const reason = result.error || result.signal ? 'session-interrupted' : reported.at(-1) ?? 'session-failed'
+    // The probe already wrote its feature evidence. Keep it after successful cleanup.
+    if (reason === 'probe-failed' && Number.isInteger(result.status) && result.status > 0 && result.status <= 255) return result.status
+    throw Object.assign(new Error(`macos-keychain-session: reason=${reason}`), { reason })
+  }
   return 0
 }
 
@@ -177,7 +189,12 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
     const probe = { candidateFile, packageFile, signatureFile, executable, leasesFile, output: artifacts, sourceSha, platform }
     if (platform.startsWith('macos-')) {
       step = 'guest/keychain-session'
-      return runMacosProbe(probe)
+      const status = runMacosProbe(probe)
+      if (status !== 0) {
+        fs.appendFileSync(path.join(artifacts, `${platform}-subscription.log`),
+          '\nstep=guest/probe\nmacos-keychain-session: reason=probe-failed\nThe disposable Keychain cleanup passed.\n', { mode: 0o600 })
+      }
+      return status
     }
     return await run(probe)
   } catch (error) {

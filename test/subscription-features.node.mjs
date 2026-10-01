@@ -7,13 +7,13 @@ import vm from 'node:vm'
 import https from 'node:https'
 import { spawnSync } from 'node:child_process'
 import { updateFixture } from './e2e/runner/subscription-update.mjs'
-import { awaitUpdateResult, verifyUpdateResult } from './e2e/runner/subscriptions.mjs'
-import { featureChecks } from './e2e/support/subscription-acceptance.mjs'
+import { awaitUpdateResult, verifyUpdateResult, verifyMcpReceipt } from './e2e/runner/subscriptions.mjs'
+import { featureChecks, featureFailure } from './e2e/support/subscription-acceptance.mjs'
 
 const nonce = 'MUNIMENT-' + 'a'.repeat(32)
 const fileNonce = 'MUNIMENT-' + 'b'.repeat(32)
 const mcpNonce = 'MUNIMENT-' + 'c'.repeat(32)
-async function probe(failure) {
+async function probe(failure, fault = () => {}) {
   const plan = { nonce, fileNonce, mcpNonce, mcpReceipt: '/tmp/mcp-receipt.json', models: [{ family: 'openai', id: 'route-model' }, { family: 'openai', id: 'model' }], fixtureFile: '/tmp/fixture.txt',
     fixtureDirectory: '/tmp', mcpCommand: 'node', mcpScript: '/tmp/mcp.mjs',
     turns: [{ thread: 'thread', run: 'chat' }] }
@@ -27,9 +27,10 @@ async function probe(failure) {
   let terminalOpen = false, terminalRead = false, prompt = ''
   const composer = {}
   const document = { querySelector: selector => selector.startsWith('textarea') ? composer
-    : selector.startsWith('[role="switch"]') ? { click: () => { state.mcpSelected = true },
+    : selector.startsWith('[role="switch"]') ? { click: () => { fault('mcp-toggle'); state.mcpSelected = true },
       getAttribute: () => String(state.mcpSelected === true) } : { click() {} }, querySelectorAll: () => [{
     getAttribute: () => 'Send', click() {
+      if (prompt.includes('MCP')) fault('mcp-tool-turn')
       state.entries.push({ runId: `tool-${state.entries.length}`, text: failure === 'replayed-chat-token' ? nonce : prompt.includes('MCP') ? mcpNonce : fileNonce, phase: 'complete', receipt: {
         tools: [{ name: prompt.includes('MCP') ? 'mcp__acceptance_token' : 'read', calls: failure === 'no-tool' ? 0 : 1, failed: 0 }],
       } })
@@ -37,6 +38,7 @@ async function probe(failure) {
   }] }
   const invoke = async (command, data = {}) => {
     state.commands.push(command)
+    fault(command, data)
     if (command === failure) throw new Error('private provider error')
     if (command === 'subscription_probe_update') return
     if (command === 'model_router_settings') return structuredClone({ accounts: state.accounts, routes: [], fallback: state.fallback ?? null, min_confidence: 0.6 })
@@ -55,8 +57,8 @@ async function probe(failure) {
       return { model: state.fallback, eligible_models: [...new Set(state.accounts.filter(account => account.enabled)
         .flatMap(account => account.models.map(id => `openai/${id}`)))], fallback_reason: 'No classifier.' }
     }
-    if (command === 'workspace_folders') return [{ path: '/tmp' }]
-    if (command === 'workspace_file_action') return ['/tmp/artifact.html']
+    if (command === 'workspace_folders') return failure === 'empty-folders' ? [] : [{ path: '/tmp' }]
+    if (command === 'workspace_file_action') return failure === 'empty-files' ? [] : ['/tmp/artifact.html']
     if (command === 'workspace_read_text') return { content: data.path === '/tmp/artifact.html' ? '' : state.content, revision: state.revision }
     if (command === 'workspace_save_text') {
       if (data.path === '/tmp/artifact.html') { state.html = data.content; return }
@@ -114,7 +116,7 @@ async function probe(failure) {
       const result = await predicate()
       if (result) return result
     }
-    throw new Error('The check timed out.')
+    throw Object.assign(new Error('The check timed out.'), { errorClass: 'timeout' })
   }
   const run = phase => context.window.__munimentSubscriptionFeatures({ plan: { ...plan, phase }, invoke, wait,
     setValue: (_element, value) => { prompt = value }, turns: plan.turns })
@@ -149,7 +151,12 @@ for (const [failure, feature] of [
   ['agent_save', 'agents'], ['artifact_read', 'artifacts'], ['browser_command', 'browser'],
 ]) test(`the installed probe blocks ${feature} after ${failure}`, async () => {
   const result = await probe(failure)
-  assert.deepEqual({ ...result.initial, ...result.restart }[feature], [])
+  const observed = { ...result.initial, ...result.restart }[feature]
+  if (failure === 'subscription_probe_update') assert.deepEqual(observed, [])
+  else {
+    assert.equal(observed[0], 'failed')
+    assert.ok(featureFailure(feature, observed).failure_stage)
+  }
   assert.equal(JSON.stringify(result.initial).includes('private provider error'), false)
   if (feature !== 'projects') assert.deepEqual(result.initial.projects, featureChecks.projects)
 })
@@ -165,11 +172,54 @@ for (const failure of ['loading-once', 'loading-error-once']) {
 for (const [failure, attempts] of [['loading-forever', 10], ['snapshot-failed', 1]]) {
   test(`the browser probe blocks ${failure} and closes the view`, async () => {
     const result = await probe(failure)
-    assert.deepEqual(result.initial.browser, [])
+    assert.deepEqual(result.initial.browser, ['failed', 'check', failure === 'loading-forever' ? 'timeout' : 'check-failed'])
     assert.equal(result.state.snapshots, attempts)
     assert.equal(result.state.commands.filter(command => command === 'browser_view').length, 2)
   })
 }
+
+for (const [feature, stage, command, action] of [
+  ['mcp', 'server-add', 'extend_command', 'server'],
+  ['mcp', 'connection-test', 'extend_command', 'test'],
+  ['mcp', 'toggle', 'mcp-toggle'], ['mcp', 'tool-turn', 'mcp-tool-turn'],
+  ['mcp', 'server-remove', 'extend_command', 'remove'],
+  ['artifacts', 'folders', 'workspace_folders'], ['artifacts', 'new-file', 'workspace_file_action'],
+  ['artifacts', 'save', 'workspace_save_text'], ['artifacts', 'publish', 'artifact_from_file'],
+  ['artifacts', 'read', 'artifact_read'], ['artifacts', 'rename', 'artifact_edit'],
+  ['artifacts', 'rename', 'artifact_list'],
+]) test(`the installed probe redacts the ${feature} ${stage} failure`, async () => {
+  const result = await probe(undefined, (name, data) => {
+    if (name === command && (!action || data.action === action)) {
+      throw Object.assign(new Error('private provider error'), { errorClass: 'private provider error' })
+    }
+  })
+  assert.deepEqual(result.initial[feature], ['failed', stage, 'check-failed'])
+  assert.equal(JSON.stringify(result.initial).includes('private provider error'), false)
+})
+
+test('the MCP probe keeps the first failure when server removal also fails', async () => {
+  const result = await probe(undefined, (name, data) => {
+    if (name === 'extend_command' && ['test', 'remove'].includes(data.action)) {
+      throw Object.assign(new Error('private provider error'), { errorClass: data.action === 'test' ? 'command-timeout' : 'unknown' })
+    }
+  })
+  assert.deepEqual(result.initial.mcp, ['failed', 'connection-test', 'timeout'])
+})
+
+test('the artifact probe reports an empty folder or file result without provider text', async () => {
+  for (const failure of ['empty-folders', 'empty-files']) {
+    const result = await probe(failure)
+    assert.deepEqual(result.initial.artifacts, ['failed', failure === 'empty-folders' ? 'folders' : 'new-file', 'check-failed'])
+  }
+})
+
+test('the main window can read published artifacts without granting access to browser views', () => {
+  const capability = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'))
+  assert.deepEqual(capability.windows, ['main'])
+  for (const permission of ['allow-artifact-from-file', 'allow-artifact-read', 'allow-artifact-edit', 'allow-artifact-list']) {
+    assert.ok(capability.permissions.includes(permission), permission)
+  }
+})
 
 test('the update probe requires a new process, restored profile, and the candidate payload', async () => {
   const turns = [{ thread: 'thread', run: 'chat' }]
@@ -252,6 +302,46 @@ test('the installed probe uses production update commands and retains Windows in
     const installer = fs.readFileSync(`src-tauri/windows/${file}`, 'utf8')
     assert.match(installer, /AUTOLAUNCHAPP AND NOT \(REMOVE = "ALL"\) AND \(NOT Installed OR REINSTALL\)/)
   }
+})
+
+test('the MCP receipt check preserves the first failure and rejects incomplete receipts', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-receipt-'))
+  const file = path.join(root, 'receipt.json')
+  try {
+    for (const bytes of [undefined, '', '{', 'null', '{}', '{"token":"private-provider-text"}']) {
+      if (bytes !== undefined) fs.writeFileSync(file, bytes)
+      assert.deepEqual(verifyMcpReceipt(featureChecks.mcp, file, mcpNonce), ['failed', 'receipt', 'check-failed'])
+      const failure = ['failed', 'connection-test', 'timeout']
+      assert.deepEqual(verifyMcpReceipt(failure, file, mcpNonce), failure)
+    }
+    fs.writeFileSync(file, JSON.stringify({ token: mcpNonce }))
+    assert.deepEqual(verifyMcpReceipt(featureChecks.mcp, file, mcpNonce), featureChecks.mcp)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('the MCP bridge saves a new stdio server and preserves only matching icons', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-bridge-'))
+  const definition = { command: process.execPath, args: ['fixture.mjs'] }
+  const inventory = path.join(root, 'extensions', 'inventory.json')
+  const call = data => {
+    const result = spawnSync(process.execPath, ['src-tauri/core/src/extend_bridge.mjs'], {
+      env: { ...process.env, MUNIMENT_EXTEND_ROOT: root }, input: JSON.stringify({ action: 'server', data }),
+      encoding: 'utf8', timeout: 10_000,
+    })
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    return JSON.parse(result.stdout.trim().slice('MUNIMENT_EXTEND_RESULT='.length)).result.items
+  }
+  try {
+    const data = { id: 'release-acceptance', name: 'Release acceptance', definition }
+    const items = call(data)
+    assert.equal(items[0].icon, null)
+    assert.equal(items[0].definition.command, process.execPath)
+    items[0].icon = 'saved-icon'
+    fs.writeFileSync(inventory, JSON.stringify({ items }))
+    assert.equal(call({ ...data, name: 'Renamed acceptance' })[0].icon, 'saved-icon')
+    assert.equal(call({ ...data, definition: { url: 'https://example.com/mcp' } })[0].icon, null)
+    assert.equal(call({ name: 'Another stdio server', definition }).length, 2)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
 test('the MCP fixture returns a token only through the declared tool', () => {

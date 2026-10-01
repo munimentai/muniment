@@ -37,6 +37,9 @@ export function isolatedEnvironment(root, source = process.env, platform = nativ
     }
     env[name] = value
   }
+  // CEF requires cache paths and root cache paths to use the same spelling.
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 })
+  root = fs.realpathSync(root)
   for (const name of ['PATH', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY', 'LANG']) {
     if (source[name]) env[name] = source[name]
   }
@@ -221,6 +224,14 @@ export function verifyUpdateResult(result, parentPid, sourceSha, turns, verifyPa
   return result
 }
 
+export function verifyMcpReceipt(checks, file, nonce) {
+  if (checks?.[0] === 'failed') return checks
+  try {
+    if (json(file).token === nonce) return checks
+  } catch { /* A missing or incomplete receipt fails the feature, not the whole probe. */ }
+  return ['failed', 'receipt', 'check-failed']
+}
+
 export const updaterPublicKeyFile = 'src-tauri/updater.pub'
 
 export function installedExecutable(platform, executable) {
@@ -305,7 +316,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     const accounts = subscriptionAccounts(candidate.models, json(leasesFile))
     step = 'profile'
     reason = 'The disposable profile could not be created.'
-    root = fs.mkdtempSync(disposableProfilePrefix(platform))
+    root = fs.realpathSync(fs.mkdtempSync(disposableProfilePrefix(platform)))
     env = isolatedEnvironment(root)
     step = 'profile/attach-socket-path'
     reason = 'The macOS attach socket path must be shorter than 104 bytes. Use a shorter disposable profile path.'
@@ -414,7 +425,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     step = 'features/verify-result'
     if (!featureResult.passed || featureResult.source_sha !== probe.source_sha || featureResult.webdriver !== false ||
         JSON.stringify(featureResult.turns) !== JSON.stringify(probe.turns)) throw new Error(reason)
-    if (!fs.existsSync(mcpReceipt) || json(mcpReceipt).token !== mcpNonce) featureResult.features.mcp = []
+    featureResult.features.mcp = verifyMcpReceipt(featureResult.features.mcp, mcpReceipt, mcpNonce)
     reason = 'The installed app could not restore its disposable profile after restart.'
     await stop(app, appClosed)
     await stop(runtime, runtimeClosed)
@@ -513,7 +524,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     save(evidenceFile, evidence)
     save(proofFile, proof)
     fs.writeFileSync(path.join(output, `${platform}-subscription.log`), proof.cases.map(item =>
-      `${item.feature}: ${item.status}\n`).join('') + (proof.cases.some(item => item.status !== 'passed') ? finalDiagnostics : ''), { mode: 0o600 })
+      `${item.feature}: ${item.status}${item.failure_stage ? ` stage=${item.failure_stage} error=${item.error_class}` : ''}\n`).join('') + (proof.cases.some(item => item.status !== 'passed') ? finalDiagnostics : ''), { mode: 0o600 })
   }
   reportPayloadDifferences(fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8'), redact)
   return passed && proof.cases.every(item => item.status === 'passed') ? 0 : 1
