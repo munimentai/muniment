@@ -283,6 +283,29 @@ struct ActiveAppSnapshot {
 }
 
 #[derive(serde::Serialize)]
+struct SystemPromptSnapshot {
+    labels: Vec<String>,
+    error: Option<String>,
+}
+
+fn system_prompt_snapshot(pid: i32) -> SystemPromptSnapshot {
+    // This diagnostic only reads SecurityAgent after AppKit identifies its PID.
+    // SAFETY: Create returns an owned AX element. A stale PID yields an AX error.
+    let app = unsafe { CFType::wrap_under_create_rule(AXUIElementCreateApplication(pid)) };
+    let deadline = Instant::now() + Duration::from_millis(400);
+    let mut labels = Vec::new();
+    let error = accessibility::prompt_labels(&NativeAccessibility, &app, &mut labels, || {
+        if Instant::now() >= deadline {
+            Err("The system prompt snapshot timed out.".into())
+        } else {
+            Ok(())
+        }
+    })
+    .err();
+    SystemPromptSnapshot { labels, error }
+}
+
+#[derive(serde::Serialize)]
 pub(crate) struct FolderDialogSnapshot {
     windows: Vec<WindowSnapshot>,
     step: Option<u8>,
@@ -291,6 +314,7 @@ pub(crate) struct FolderDialogSnapshot {
     active_app: Option<ActiveAppSnapshot>,
     app_active: bool,
     key_window: Option<WindowSnapshot>,
+    system_prompt: Option<SystemPromptSnapshot>,
 }
 
 #[tauri::command]
@@ -302,7 +326,7 @@ pub(crate) async fn e2e_folder_dialog_snapshot(
     }
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     app.run_on_main_thread(move || {
-        let result = (|| {
+        let result: Result<FolderDialogSnapshot, String> = (|| {
             let mtm = MainThreadMarker::new().ok_or("The Home picker needs the AppKit thread.")?;
             let app = NSApplication::sharedApplication(mtm);
             let windows = app.windows();
@@ -329,12 +353,26 @@ pub(crate) async fn e2e_folder_dialog_snapshot(
                     }),
                 app_active: app.isActive(),
                 key_window: app.keyWindow().map(|window| window_snapshot(&window)),
+                system_prompt: None,
             })
         })();
         let _ = sender.send(result);
     })
     .map_err(|error| error.to_string())?;
-    receiver.recv().map_err(|error| error.to_string())?
+    let mut snapshot: FolderDialogSnapshot =
+        receiver.recv().map_err(|error| error.to_string())??;
+    if let Some(active) = &snapshot.active_app {
+        if active.bundle_identifier.as_deref() == Some("com.apple.SecurityAgent") {
+            let pid = active.pid;
+            // Keep cross-process AX reads off the AppKit thread.
+            snapshot.system_prompt = Some(
+                tauri::async_runtime::spawn_blocking(move || system_prompt_snapshot(pid))
+                    .await
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+    }
+    Ok(snapshot)
 }
 
 #[tauri::command]

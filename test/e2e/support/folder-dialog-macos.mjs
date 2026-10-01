@@ -1,6 +1,6 @@
 // The E2E app uses Accessibility to press its own NSOpenPanel button.
 // The drive needs Accessibility trust, but not app activation or keyboard focus.
-async function snapshot() {
+export async function snapshotMacosFolder() {
   return browser.execute(async () => {
     let timer
     let native
@@ -26,7 +26,7 @@ async function snapshot() {
 
 export async function driveMacosFolder(waitSeconds, poll = () => browser.execute(
   () => window.__TAURI__.core.invoke('e2e_drive_folder_dialog'),
-), diagnose = snapshot) {
+), diagnose = snapshotMacosFolder) {
   let timer
   let stopped = false
   try {
