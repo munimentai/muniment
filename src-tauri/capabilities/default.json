@@ -58,6 +58,7 @@
     "allow-browser-view",
     "allow-artifact-list",
     "allow-artifact-from-file",
+    "allow-artifact-read",
     "allow-onboarding-model-settings-error",
     "allow-installed-fonts",
     "allow-auth-sign-in",

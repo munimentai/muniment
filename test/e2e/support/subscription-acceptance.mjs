@@ -20,6 +20,15 @@ export const featureChecks = {
   browser: ['local-page-rendered', 'unsafe-navigation-rejected', 'view-closed'],
 }
 export const features = [...chatFeatures, ...Object.keys(featureChecks)]
+// Failure arrays share the installed probe's bounded string-list wire format.
+export function featureFailure(feature, observed) {
+  const stages = feature === 'mcp' ? ['check', 'server-add', 'connection-test', 'toggle', 'tool-turn', 'server-remove', 'receipt']
+    : feature === 'artifacts' ? ['check', 'folders', 'new-file', 'save', 'publish', 'read', 'rename']
+      : feature === 'signed-update' ? ['check', 'restore'] : ['check']
+  if (!Object.hasOwn(featureChecks, feature) || !Array.isArray(observed) || observed.length !== 3 || observed[0] !== 'failed' ||
+      !stages.includes(observed[1]) || !['check-failed', 'timeout'].includes(observed[2])) return {}
+  return { failure_stage: observed[1], error_class: observed[2] }
+}
 const providers = { openai: 'openai-codex', anthropic: 'anthropic', xai: 'xai', kimi: 'kimi' }
 const packageNames = {
   linux: /^muniment_\d+\.\d+\.\d+_amd64\.AppImage$/,
@@ -154,12 +163,14 @@ export function acceptance(candidate, sourceSha, platform, result, transports, p
         package_sha256: candidate.sha256, evidence: `${platform}-subscription.json`,
         models: chatFeatures.includes(feature) ? models : [],
         ...(checks ? { checks: passed ? [...checks] : [],
-          ...(!passed ? { reason: 'The installed feature check did not finish. Read the native runner log.' } : {}) } : {}) }
+          ...(!passed ? { reason: 'The installed feature check did not finish. Read the native runner log.',
+            ...featureFailure(feature, observed) } : {}) } : {}) }
     }) }
 }
 
-export function blocked(sourceSha, platform, reason) {
+export function blocked(sourceSha, platform, reason, featureFailures = {}) {
   return { schema: 1, source_sha: sourceSha, packages: {}, cases: features.map(feature => ({
     platform, feature, status: 'blocked', installed: false, evidence: `${platform}-subscription.json`, reason,
+    ...featureFailure(feature, featureFailures?.[feature]),
   })) }
 }

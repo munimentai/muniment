@@ -3,14 +3,16 @@
 set -euo pipefail
 set +x
 umask 077
-[[ $# -gt 0 ]] || exit 2
+report() { printf 'macos-keychain-session: reason=%s\n' "$1" >&2; }
+trap 'report setup-failed' ERR
+[[ $# -gt 0 ]] || { report missing-command; exit 2; }
 session_uid=$(id -u)
 # A GUI LaunchAgent uses the console audit session without root access.
 # An SSH-only unlock leaves Spotlight's console session locked.
 launchctl print "gui/$session_uid" >/dev/null
 prior_default=$(security default-keychain -d user | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
 prior_list=$(security list-keychains -d user | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
-[[ -n $prior_default && -n $prior_list ]] || exit 1
+[[ -n $prior_default && -n $prior_list ]] || { report setup-failed; exit 1; }
 previous=()
 while IFS= read -r entry; do previous+=("$entry"); done <<<"$prior_list"
 work=$(mktemp -d "${TMPDIR:-/tmp}/muniment-keychain.XXXXXX")
@@ -19,17 +21,17 @@ label="ai.muniment.e2e-keychain.${work##*.}"
 agent_requested=0
 cleanup() {
   result=$?
-  trap - EXIT INT TERM
+  trap - EXIT INT TERM ERR
   # Stop the agent before restoring the Keychains or removing its files.
   if (( agent_requested )); then
-    launchctl bootout "gui/$session_uid/$label" || result=1
+    launchctl bootout "gui/$session_uid/$label" >/dev/null 2>&1 || { report cleanup-agent; result=1; }
   fi
   if [[ -f "$work/created" || -f "$keychain" ]]; then
-    security default-keychain -d user -s "$prior_default" || result=1
-    security list-keychains -d user -s "${previous[@]}" || result=1
-    security delete-keychain "$keychain" || result=1
+    security default-keychain -d user -s "$prior_default" >/dev/null 2>&1 || { report cleanup-default; result=1; }
+    security list-keychains -d user -s "${previous[@]}" >/dev/null 2>&1 || { report cleanup-list; result=1; }
+    security delete-keychain "$keychain" >/dev/null 2>&1 || { report cleanup-delete; result=1; }
   fi
-  rm -rf -- "$work" || result=1
+  rm -rf -- "$work" || { report cleanup-files; result=1; }
   exit "$result"
 }
 trap cleanup EXIT
@@ -80,13 +82,18 @@ for (( attempt=0; attempt<300; attempt++ )); do
   sleep 0.1
 done
 if [[ ! -f "$work/result" ]]; then
-  printf 'The console Keychain setup timed out.\n' >&2
+  report setup-timeout
   exit 1
 fi
-cat "$work/setup.log" >&2
-[[ $(<"$work/result") == 0 ]] || exit 1
+[[ $(<"$work/result") == 0 ]] || { report setup-failed; exit 1; }
 security unlock-keychain -p "$(<"$work/password")" "$keychain"
 rm -f -- "$work/password"
 security list-keychains -d user -s "$keychain"
 security default-keychain -d user -s "$keychain"
-"$@"
+if "$@"; then
+  exit 0
+else
+  result=$?
+  report probe-failed
+  exit "$result"
+fi

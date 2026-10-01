@@ -9,7 +9,15 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
   }
   const run = async (name, action) => {
     features[name] = []
-    try { features[name] = await action() } catch { /* Keep provider errors out of evidence. */ }
+    let failure
+    const step = async (stage, action) => {
+      try { return await action() } catch (error) {
+        // Keep the first failure when cleanup also fails. Never copy provider text.
+        failure ??= ['failed', stage, ['timeout', 'command-timeout'].includes(error?.errorClass) ? 'timeout' : 'check-failed']
+        throw error
+      }
+    }
+    try { features[name] = await step('check', () => action(step)) } catch { features[name] = failure }
   }
   if (plan.phase === 'update') {
     const codes = ['update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address',
@@ -41,7 +49,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     })
     if (plan.phase === 'update-restart') {
       features['signed-update'] = features['restart-persistence'].length === 4
-        ? ['signature-verified', 'tampered-package-rejected', 'signed-version-verified', 'busy-install-rejected', 'app-relaunched', 'profile-restored'] : []
+        ? ['signature-verified', 'tampered-package-rejected', 'signed-version-verified', 'busy-install-rejected', 'app-relaunched', 'profile-restored'] : ['failed', 'restore', 'check-failed']
     }
     return features
   }
@@ -132,17 +140,28 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     check(!(await invoke('agent_list')).agents.some(item => item.id === agent.id))
     return ['agent-saved', 'agent-renamed', 'agent-deleted']
   })
-  await run('artifacts', async () => {
-    const folders = await invoke('workspace_folders', { threadId: turns[0].thread })
-    const root = folders.at(-1).path
-    const paths = await invoke('workspace_file_action', { root, destination: root, action: 'new-file', paths: [], name: 'acceptance.html' })
-    const file = await invoke('workspace_read_text', { path: paths[0] })
+  await run('artifacts', async step => {
+    const root = await step('folders', async () => {
+      const folders = await invoke('workspace_folders', { threadId: turns[0].thread })
+      check(folders.at(-1)?.path)
+      return folders.at(-1).path
+    })
+    const filePath = await step('new-file', async () => {
+      const paths = await invoke('workspace_file_action', { root, destination: root, action: 'new-file', paths: [], name: 'acceptance.html' })
+      check(paths[0])
+      return paths[0]
+    })
     const html = `<!doctype html><title>Acceptance artifact</title><p>${plan.nonce}</p>`
-    await invoke('workspace_save_text', { path: paths[0], content: html, revision: file.revision })
-    const artifact = await invoke('artifact_from_file', { threadId: turns[0].thread, path: paths[0] })
-    check((await invoke('artifact_read', { id: artifact.id })).html === html)
-    await invoke('artifact_edit', { id: artifact.id, name: 'Renamed acceptance artifact' })
-    check((await invoke('artifact_list')).some(item => item.id === artifact.id && item.name === 'Renamed acceptance artifact'))
+    await step('save', async () => {
+      const file = await invoke('workspace_read_text', { path: filePath })
+      await invoke('workspace_save_text', { path: filePath, content: html, revision: file.revision })
+    })
+    const artifact = await step('publish', () => invoke('artifact_from_file', { threadId: turns[0].thread, path: filePath }))
+    await step('read', async () => check((await invoke('artifact_read', { id: artifact.id })).html === html))
+    await step('rename', async () => {
+      await invoke('artifact_edit', { id: artifact.id, name: 'Renamed acceptance artifact' })
+      check((await invoke('artifact_list')).some(item => item.id === artifact.id && item.name === 'Renamed acceptance artifact'))
+    })
     return ['html-published', 'artifact-read', 'artifact-renamed']
   })
   await run('browser', async () => {
@@ -202,25 +221,29 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     await toolTurn(`Use the read tool to read ${JSON.stringify(plan.fixtureFile)}. Reply with only its first line.`, /^(read|read_file)$/, plan.fileNonce)
     return ['file-tool-completed']
   })
-  await run('mcp', async () => {
+  await run('mcp', async step => {
     const call = (action, data) => invoke('extend_command', { action, data })
     const id = 'release-acceptance'
-    await call('server', { id, name: 'Release acceptance', definition: { command: plan.mcpCommand, args: [plan.mcpScript, plan.mcpNonce, plan.mcpReceipt] } })
+    await step('server-add', () => call('server', { id, name: 'Release acceptance', definition: { command: plan.mcpCommand, args: [plan.mcpScript, plan.mcpNonce, plan.mcpReceipt] } }))
     try {
-      const connection = await call('test', { id })
-      check(connection.status === 'connected')
-      check(connection.tools.some(tool => tool.name === 'acceptance_token'))
-      const extensions = await wait(() => document.querySelector('button[aria-label="Extensions"]'))
-      extensions.click()
-      const branch = await wait(() => document.querySelector('button[data-branch="mcp"]'))
-      branch.click()
-      const toggle = await wait(() => document.querySelector('[role="switch"][aria-label="Use Release acceptance for this turn"]'))
-      if (toggle.getAttribute('aria-checked') !== 'true') toggle.click()
-      await wait(() => toggle.getAttribute('aria-checked') === 'true')
-      extensions.click()
-      await toolTurn('Call the acceptance_token MCP tool. Reply with only the token from its result.', /acceptance_token|^mcp/, plan.mcpNonce)
+      await step('connection-test', async () => {
+        const connection = await call('test', { id })
+        check(connection.status === 'connected')
+        check(connection.tools.some(tool => tool.name === 'acceptance_token'))
+      })
+      await step('toggle', async () => {
+        const extensions = await wait(() => document.querySelector('button[aria-label="Extensions"]'))
+        extensions.click()
+        const branch = await wait(() => document.querySelector('button[data-branch="mcp"]'))
+        branch.click()
+        const toggle = await wait(() => document.querySelector('[role="switch"][aria-label="Use Release acceptance for this turn"]'))
+        if (toggle.getAttribute('aria-checked') !== 'true') toggle.click()
+        await wait(() => toggle.getAttribute('aria-checked') === 'true')
+        extensions.click()
+      })
+      await step('tool-turn', () => toolTurn('Call the acceptance_token MCP tool. Reply with only the token from its result.', /acceptance_token|^mcp/, plan.mcpNonce))
       return ['server-connected', 'tool-discovered', 'tool-completed']
-    } finally { await call('remove', { id }) }
+    } finally { await step('server-remove', () => call('remove', { id })) }
   })
   return features
 }
