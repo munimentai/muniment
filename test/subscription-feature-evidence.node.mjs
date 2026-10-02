@@ -145,7 +145,8 @@ test('the runner keeps the feature failure gate when later phases pass', async t
   assert.equal(result.proof.cases.find(item => item.feature === 'signed-update').status, 'passed')
 })
 
-for (const reason of ['reply-phase', 'reply-text', 'receipt-tool']) {
+for (const reason of ['reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
+  'reply-phase-pending-permission', 'reply-text', 'receipt-tool']) {
   test(`the runner preserves the MCP ${reason} sub-reason through collection`, async t => {
     const failure = ['failed', 'tool-turn', reason]
     const result = await scenario(t, { featureFailures: { mcp: failure }, failAt: 'update' })

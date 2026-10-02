@@ -206,7 +206,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     await rejects(() => invoke('terminal_read', { id }))
     return ['shell-output', 'shell-closed']
   })
-  const toolTurn = async (prompt, tool, expected) => {
+  const toolTurn = async (prompt, tool, expected, approvalTitle) => {
     const thread = turns[0].thread
     const before = await invoke('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
     const composer = document.querySelector('textarea[placeholder="Ask anything"]')
@@ -214,12 +214,38 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     const send = await wait(() => [...document.querySelectorAll('button')].find(button =>
       (button.getAttribute('aria-label') === 'Send' || button.textContent.trim() === 'Send') && !button.disabled))
     send.click()
-    const entry = await wait(async () => {
-      const page = await invoke('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
-      const entry = page.entries.find(entry => !before.entries.some(old => old.runId === entry.runId))
-      check(!entry || !['failed', 'cancelled', 'interrupted', 'pending-permission'].includes(entry.phase), 'reply-phase')
-      return entry?.phase === 'complete' && entry
-    })
+    let runId, approvedGate, phase
+    let entry
+    try {
+      entry = await wait(async () => {
+        const page = await invoke('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
+        const entry = page.entries.find(entry => runId ? entry.runId === runId : !before.entries.some(old => old.runId === entry.runId))
+        if (!entry) return false
+        runId = entry.runId
+        phase = entry.phase
+        for (const terminal of ['failed', 'cancelled', 'interrupted']) {
+          check(phase !== terminal, `reply-phase-${terminal}`)
+        }
+        if (phase === 'pending-permission') {
+          const gate = entry.pendingPermission
+          // Approve only this fixture call, once. Keep every other gate closed.
+          check(approvalTitle && gate?.kind === 'select' && gate.title === approvalTitle &&
+            typeof gate.gateId === 'string' && gate.gateId.length > 0 &&
+            Array.isArray(gate.options) && gate.options.includes('Allow once') &&
+            (!approvedGate || approvedGate === gate.gateId), 'reply-phase-pending-permission')
+          if (!approvedGate) {
+            approvedGate = gate.gateId
+            try {
+              await invoke('chat_answer_permission', { runId, gateId: gate.gateId, answer: { type: 'select', value: 'Allow once' } })
+            } catch { check(false, 'reply-phase-pending-permission') }
+          }
+        }
+        return phase === 'complete' && entry
+      })
+    } catch (error) {
+      if (phase === 'pending-permission' && error?.errorClass === 'timeout') check(false, 'reply-phase-pending-permission')
+      throw error
+    }
     check(typeof entry.text === 'string' && entry.text.trim() === expected, 'reply-text')
     check(Array.isArray(entry.receipt?.tools) && entry.receipt.tools.some(item =>
       typeof item?.name === 'string' && tool.test(item.name) && Number.isSafeInteger(item.calls) && item.calls > 0 && item.failed === 0), 'receipt-tool')
@@ -249,7 +275,8 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
         extensions.click()
       })
       // A new lazy server has no cached tool names. Scope the call to that server.
-      await step('tool-turn', () => toolTurn(`Call the MCP gateway tool mcp with {"server":"extend-${id}","tool":"acceptance_token","args":{}}. Reply with only the token from its result.`, /acceptance_token|^mcp/, plan.mcpNonce))
+      const approvalTitle = `MCP: extend-${id} wants to run acceptance_token\n\nArguments:\n{}\n\nAllow server for this session permits all tools and arguments on this server until reload or session/branch change. Other security and UI consent checks still apply.`
+      await step('tool-turn', () => toolTurn(`Call the MCP gateway tool mcp with {"server":"extend-${id}","tool":"acceptance_token","args":{}}. Reply with only the token from its result.`, /acceptance_token|^mcp/, plan.mcpNonce, approvalTitle))
       return ['server-connected', 'tool-discovered', 'tool-completed']
     } finally { await step('server-remove', () => call('remove', { id })) }
   })

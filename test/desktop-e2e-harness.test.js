@@ -3339,7 +3339,7 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
   const registration = fs.readFileSync(path.join(root, 'test/windows-msi-registration.ps1'), 'utf8')
   const cefCheck = script.slice(script.indexOf('function Assert-CefInstallation'), script.indexOf('\nfunction Write-MsiProperties'))
   const helpers = registration + '\n' + cefCheck + '\n' + script.slice(script.indexOf('function Write-MsiScopeLog'), script.indexOf('\n$machineKey ='))
-  const invoke = (body, args = []) => {
+  const invoke = (body, args = [], timeout = 15_000) => {
     const file = path.join(temp(), 'diagnostics.ps1')
     // Replace COM identity and release calls. The fixture runs the registration helper and its property getters.
     const fixtureHelpers = helpers.replaceAll(
@@ -3348,9 +3348,11 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
       '(Join-Path $PSScriptRoot "windows-msi-payload.mjs")', `'${path.join(root, 'test/windows-msi-payload.mjs').replaceAll("'", "''")}'`,
     )
     fs.writeFileSync(file, `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${fixtureHelpers}\n${body}\n`)
-    return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
-      encoding: 'utf8', timeout: 15_000,
+    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
+      encoding: 'utf8', timeout,
     })
+    expect(result.error, result.stdout + result.stderr).toBeUndefined()
+    return result
   }
 
   const comFixture = `
@@ -3586,6 +3588,7 @@ $argsPath = $args[0]
     const sequence = script.slice(script.indexOf('\n', script.indexOf('Remove-Item $upgradeBaseMsi -Force'))).replace(
       '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', '"S-1-5-21-123"',
     ).replace("[Environment]::GetFolderPath('Programs')", "(Join-Path $env:LOCALAPPDATA 'Programs')")
+    // The full lifecycle runs two payload checks and both installers under CI load.
     const result = invoke(`
 ${comFixture}
 $regularMsi = @([PSCustomObject]@{ FullName = $args[0] })
@@ -3688,7 +3691,7 @@ function Start-Process($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThr
   }
   return [PSCustomObject]@{ ExitCode = ${code} }
 }
-${sequence}`, [msi, runtime])
+${sequence}`, [msi, runtime], 60_000)
     expect(result.status, result.stdout + result.stderr).toBe(context === 2 && count === 1 && hkcu + hklm === 1 && code === 0 && !invalid ? 0 : 1)
     expect(result.stdout).toContain('Property(S): UserSID = S-1-5-21-456')
     expect(result.stdout).toContain(`hkcu=${hkcu} HKU\\S-1-5-21-123=${hku} hklm=${hklm}`)
@@ -3726,7 +3729,7 @@ ${sequence}`, [msi, runtime])
         expect(JSON.parse(retained[1])).toEqual({ '': path.dirname(runtime) })
       }
     }
-  })
+  }, 90_000)
 
   it.skipIf(!hasPowerShell)('Returns only registration rows before and after uninstall.', () => {
     const msi = path.join(temp(), 'fixture.msi')
