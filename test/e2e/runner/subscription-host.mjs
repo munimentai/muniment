@@ -9,6 +9,28 @@ import { subscriptionRedactor, diagnosticTail, nativeFailure, transcriptText, re
 
 const desktopCiName = platform => platform === 'macos-x64' ? 'macos' : platform
 
+// Allow setup, artifact collection, and cleanup outside the guest build budget.
+export const desktopCiBudget = Object.freeze({ slot: 3600, build: 2400, run: 3600, cleanup: 30, client: 7500 })
+const desktopCiReasons = Object.freeze({
+  'slot-wait': 'The desktop-CI slot stayed busy for the 60-minute wait limit.',
+  guest: 'The desktop-CI guest exceeded its 40-minute build timeout.',
+  run: 'The desktop-CI guest and artifact collection exceeded their 60-minute limit.',
+  startup: 'The desktop-CI driver did not start within the 60-minute limit.',
+  client: 'The desktop-CI SSH session exceeded its 125-minute limit.',
+})
+const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`
+
+function desktopCiFailure(ssh) {
+  if (ssh.error?.code === 'ETIMEDOUT') return 'client'
+  if (ssh.status === 0 || ssh.status === 255 || ssh.status === null) return undefined
+  const transcript = `${ssh.stdout ?? ''}\n${ssh.stderr ?? ''}`
+  const timeout = transcript.match(/^\[subscription-host\] timeout=(slot-wait|run|startup)$/m)
+  if (ssh.status === 124 && timeout) return timeout[1]
+  if (/^\[desktop-ci \d{2}:\d{2}:\d{2}\] BUILD FAILED \((linux|windows|macos)\) rc=124\r?$/m.test(transcript)) return 'guest'
+  if (ssh.status === 124 && !transcript.includes('BUILD GREEN') &&
+      /^\[desktop-ci \d{2}:\d{2}:\d{2}\] SSH up; starting repo build \(timeout 2400s\)\r?$/m.test(transcript)) return 'guest'
+}
+
 function compactJson(value, reason) {
   try {
     const parsed = JSON.parse(value)
@@ -35,7 +57,8 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
     }
     const extra = platform === 'windows' ? ' --console-user' : platform === 'macos' ? ' --screendump' : ''
     const ref = /^[a-f0-9]{40}$/.test(harnessSha ?? '') ? harnessSha : sourceSha
-    const remote = `sudo desktop-ci ${platform}${extra} --repo 'https://github.com/${repository}.git' --ref '${ref}' --cmd '${cmd}' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts`
+    const wrapper = fs.readFileSync(new URL('../support/desktop-ci-budget.py', import.meta.url), 'utf8')
+    const remote = `sudo -n python3 -c ${shellQuote(wrapper)} ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} desktop-ci ${platform}${extra} --repo 'https://github.com/${repository}.git' --ref '${ref}' --cmd '${cmd}' --env-stdin --memory 8192 --build-timeout ${desktopCiBudget.build} --collect-artifacts`
     const input = [
       'MUNIMENT_PI_CANDIDATE=1',
       `GH_TOKEN=${token}`,
@@ -49,16 +72,17 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
     ].join('\n') + '\n'
     const ssh = spawnProcess('ssh', [
       '-i', keyFile, '-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${hostsFile}`,
-      '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=8',
+      '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=30', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=8',
       'desktopci@10.1.10.10', remote,
-    ], { input, encoding: 'utf8', timeout: 40 * 60_000, maxBuffer: 32 * 1024 * 1024 })
+    ], { input, encoding: 'utf8', timeout: desktopCiBudget.client * 1000, maxBuffer: 32 * 1024 * 1024 })
     fs.writeFileSync(transcript, `${ssh.stdout ?? ''}${ssh.stderr ?? ''}`, { mode: 0o600 })
     detail += `status=${ssh.status ?? 'none'} signal=${ssh.signal ?? 'none'} error=${redact(ssh.error?.message ?? 'none')}\n`
     detail += diagnosticTail(transcriptText(redact(nativeFailure('ssh', ssh).message)), redact)
     const extract = spawnProcess('bash', ['test/e2e/support/extract-artifacts.sh', transcript, output, String(ssh.status ?? 1)],
       { encoding: 'utf8', timeout: 60_000 })
     detail += `\nstep=desktop-ci/extract\n${diagnosticTail(nativeFailure('extract-artifacts', extract).message, redact)}`
-    return { status: ssh.status === 0 && extract.status === 0 ? 0 : 1 }
+    const failure = desktopCiFailure(ssh)
+    return { status: !ssh.error && ssh.status === 0 && !extract.error && extract.status === 0 ? 0 : 1, ...(failure ? { failure } : {}) }
   } catch (error) {
     detail += `\nerror=${redact(error.message)}\n`
     throw error
@@ -109,7 +133,8 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
       }
       const evidence = path.join(artifacts, `${platform}-subscription.json`)
       const proof = path.join(artifacts, 'release-acceptance.json')
-      if (!fs.existsSync(evidence) || !fs.existsSync(proof)) throw new Error(missingRunner)
+      const runnerReason = Object.hasOwn(desktopCiReasons, result.failure) ? desktopCiReasons[result.failure] : missingRunner
+      if (!fs.existsSync(evidence) || !fs.existsSync(proof)) throw new Error(runnerReason)
       for (const name of ['release-acceptance.json', `${platform}-subscription.json`,
         `screenshot-${platform}-subscriptions.png`]) {
         const file = path.join(artifacts, name)
@@ -117,7 +142,7 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
         fs.copyFileSync(file, path.join(output, name))
       }
       if (result.status !== 0 && JSON.parse(fs.readFileSync(proof, 'utf8')).cases?.every(item => item.status === 'passed')) {
-        writeBlocked(output, sourceSha, platform, missingRunner)
+        writeBlocked(output, sourceSha, platform, runnerReason)
       }
       status = result.status === 0 ? 0 : 1
       return status
@@ -125,7 +150,7 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
       fs.rmSync(artifacts, { recursive: true, force: true })
     }
   } catch (error) {
-    reason = [missingLeases, missingModels, missingRunner].includes(error?.message) ? error.message : missingRunner
+    reason = [missingLeases, missingModels, missingRunner, ...Object.values(desktopCiReasons)].includes(error?.message) ? error.message : missingRunner
     writeBlocked(output, sourceSha, platform, reason, `step=host\nerror=${error.message}`, redact)
     return 1
   } finally {

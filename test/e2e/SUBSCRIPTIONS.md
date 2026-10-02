@@ -63,6 +63,26 @@ It also checks the package digest, platform, asset name, and compiled source SHA
 The runner does not install, uninstall, publish, or promote a package.
 Dispose of the native login after the check so its runtime service cannot outlive the test environment.
 
+## Desktop-CI budgets
+
+The SSH host needs Python 3 and passwordless sudo for the subscription timeout wrapper.
+The wrapper runs as root so it can kill the driver and its process group after the cleanup limit.
+The wrapper limits the desktop-CI slot wait to 60 minutes and stops the queued driver when that limit expires.
+After desktop-CI reports an acquired slot, the wrapper starts a separate 60-minute budget.
+That budget reserves 40 minutes for the guest build and 20 minutes for setup and artifact collection.
+The wrapper allows 30 seconds for cleanup after a timeout.
+
+SSH allows 125 minutes, and each desktop-CI subscription job allows 135 minutes, including artifact upload.
+Both nightly callers use these subscription jobs.
+The macOS ARM64 job does not use the desktop-CI slot.
+
+A slot timeout records a fixed blocked reason with the busy slot and the 60-minute wait limit.
+Guest timeouts and unreachable runners have separate reasons.
+The host keeps guest failure evidence when artifact collection succeeds.
+
+Run `node --test test/subscription-host.node.mjs` as an unprivileged Linux user with passwordless sudo.
+The tests use real sudo to check root driver cleanup after SIGTERM fails.
+
 ## Factory subscriptions
 
 The factory's refresh owner supplies fresh access leases for every selected provider.
