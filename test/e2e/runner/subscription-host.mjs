@@ -58,7 +58,7 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
     const extra = platform === 'windows' ? ' --console-user' : platform === 'macos' ? ' --screendump' : ''
     const ref = /^[a-f0-9]{40}$/.test(harnessSha ?? '') ? harnessSha : sourceSha
     const wrapper = fs.readFileSync(new URL('../support/desktop-ci-budget.py', import.meta.url), 'utf8')
-    const remote = `python3 -c ${shellQuote(wrapper)} ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} sudo desktop-ci ${platform}${extra} --repo 'https://github.com/${repository}.git' --ref '${ref}' --cmd '${cmd}' --env-stdin --memory 8192 --build-timeout ${desktopCiBudget.build} --collect-artifacts`
+    const remote = `sudo -n python3 -c ${shellQuote(wrapper)} ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} desktop-ci ${platform}${extra} --repo 'https://github.com/${repository}.git' --ref '${ref}' --cmd '${cmd}' --env-stdin --memory 8192 --build-timeout ${desktopCiBudget.build} --collect-artifacts`
     const input = [
       'MUNIMENT_PI_CANDIDATE=1',
       `GH_TOKEN=${token}`,

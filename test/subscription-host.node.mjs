@@ -86,7 +86,8 @@ test('the client and native jobs leave time for the slot, guest, artifacts, and 
     if (command === 'ssh') {
       assert.equal(config.timeout, desktopCiBudget.client * 1000)
       assert.ok(args.includes('ConnectTimeout=30'))
-      assert.ok(args.at(-1).includes(` ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} sudo desktop-ci windows`))
+      assert.ok(args.at(-1).startsWith('sudo -n python3 -c '))
+      assert.ok(args.at(-1).includes(` ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} desktop-ci windows`))
       assert.ok(args.at(-1).includes(`--build-timeout ${desktopCiBudget.build} --collect-artifacts`))
       return { status: 0 }
     }
@@ -96,7 +97,8 @@ test('the client and native jobs leave time for the slot, guest, artifacts, and 
 
 test('the remote shell preserves driver arguments and secret stdin', () => temporary(output => {
   const sudo = path.join(output, 'sudo')
-  fs.writeFileSync(sudo, '#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps({"args": sys.argv[1:], "input": sys.stdin.read()}))\n', { mode: 0o700 })
+  fs.writeFileSync(sudo, '#!/usr/bin/env python3\nimport os, sys\nassert sys.argv[1] == "-n"\nos.execvp(sys.argv[2], sys.argv[2:])\n', { mode: 0o700 })
+  fs.writeFileSync(path.join(output, 'desktop-ci'), '#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps({"args": ["desktop-ci", *sys.argv[1:]], "input": sys.stdin.read()}))\n', { mode: 0o700 })
   let transported
   assert.deepEqual(runDesktopCi({ ...options, output, platform: 'linux', spawnProcess(command, args, config) {
     if (command !== 'ssh') return { status: 0 }
@@ -174,6 +176,67 @@ time.sleep(10)
   assert.equal(result.status, 124)
   assert.match(result.stdout, /\[subscription-host\] timeout=slot-wait\n$/)
 })
+
+for (const parentExits of [false, true]) {
+  test(`sudo cleanup stops the root driver and its child when the driver ${parentExits ? 'exits' : 'ignores SIGTERM'}`, () => temporary(output => {
+    assert.notEqual(process.getuid(), 0, 'Run this test as an unprivileged user with passwordless sudo.')
+    const script = `import os, signal, sys, time
+assert os.geteuid() == 0
+assert sys.stdin.read() == "private-stdin\\n"
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+child = os.fork()
+if child == 0:
+    os.close(1)
+    os.close(2)
+    time.sleep(10)
+    os._exit(0)
+print(f"driver={os.getpid()} child={child}", flush=True)
+if ${parentExits ? 'True' : 'False'}:
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+print(${JSON.stringify(waiting)}, end="", flush=True)
+time.sleep(10)
+print("guest started", flush=True)
+`
+    const driver = path.join(output, 'driver.py')
+    fs.writeFileSync(driver, script)
+    let remote
+    runDesktopCi({ ...options, output, spawnProcess(command, args) {
+      if (command === 'ssh') remote = args.at(-1)
+      return { status: 0 }
+    } })
+    remote = remote.replace(` ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} `, ' 0.8 1.6 0.3 ')
+      .replace(' desktop-ci windows', ` python3 -u '${driver}' windows`)
+    const result = spawnSync('sh', ['-c', remote], {
+      encoding: 'utf8', timeout: 10_000, input: 'private-stdin\n',
+    })
+    const pids = result.stdout?.match(/driver=(\d+) child=(\d+)/)?.slice(1) ?? []
+    try {
+      assert.equal(result.error, undefined)
+      assert.equal(result.status, 124, result.stderr + result.stdout)
+      assert.match(result.stdout, /\[subscription-host\] timeout=slot-wait\n$/)
+      assert.doesNotMatch(result.stdout, /guest started/)
+      assert.equal(pids.length, 2)
+      const check = spawnSync('sudo', ['-n', 'python3', '-c', `import pathlib, sys, time
+for pid in sys.argv[1:]:
+    status = pathlib.Path(f"/proc/{pid}/status")
+    for _ in range(100):
+        try:
+            state = status.read_text()
+        except FileNotFoundError:
+            break
+        if "State:\\tZ" in state:
+            break
+        time.sleep(0.01)
+    else:
+        sys.exit(f"Process {pid} survived the deadline.")
+`, ...pids], { encoding: 'utf8', timeout: 5000 })
+      assert.equal(check.error, undefined)
+      assert.equal(check.status, 0, check.stderr)
+    } finally {
+      if (pids.length) spawnSync('sudo', ['-n', 'kill', '-KILL', '--', ...pids], { timeout: 5000 })
+    }
+  }))
+}
 
 test('an SSH hangup stops the queued driver', async () => {
   const script = `import signal, sys, time

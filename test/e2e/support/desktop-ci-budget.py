@@ -8,7 +8,7 @@ import sys
 import time
 
 
-# Run on the SSH host so a slot timeout also stops the queued driver.
+# Run under sudo on the SSH host so both signals reach the driver and its process group.
 def run(slot_seconds, run_seconds, cleanup_seconds, command):
     child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              start_new_session=True)
@@ -30,7 +30,6 @@ def run(slot_seconds, run_seconds, cleanup_seconds, command):
 
     def stop(signum):
         try:
-            # sudo forwards SIGTERM to the privileged desktop-ci process.
             os.killpg(child.pid, signum)
         except ProcessLookupError:
             pass
@@ -79,6 +78,9 @@ def run(slot_seconds, run_seconds, cleanup_seconds, command):
                 child.wait(timeout=cleanup_seconds)
             except subprocess.TimeoutExpired:
                 stop(signal.SIGKILL)
+        if failure is not None:
+            # Stop remaining children even when the driver exits during cleanup.
+            stop(signal.SIGKILL)
         child.wait()
 
 
