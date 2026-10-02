@@ -130,6 +130,53 @@ test('binds tool approval to the connected server revision', { timeout: 120000 }
   } finally { await demo.close() }
 })
 
+test('invalidates shared OAuth approvals before sign-in through another entry', { timeout: 120000 }, async () => {
+  const demo = await startDemo({ ui: false })
+  try {
+    const first = (await save(demo, demo.fixture.http, 'First account')).items.at(-1)
+    const second = (await save(demo, demo.fixture.http, 'Second account')).items.at(-1)
+    const unrelated = (await save(demo)).items.at(-1)
+    const unaffected = await demo.boundary.dispatch('test', { id: unrelated.id })
+    const authPath = join(demo.boundary.root, 'agent/mcp-auth.json')
+    for (const fail of [false, true]) {
+      const connected = await demo.boundary.dispatch('test', { id: first.id })
+      const other = await demo.boundary.dispatch('test', { id: second.id })
+      if (fail) await writeFile(authPath, '{invalid')
+      const signingIn = demo.boundary.dispatch('auth', { id: second.id })
+      if (fail) await assert.rejects(signingIn, /Sign-in failed/)
+      else assert.equal((await signingIn).status, 'connected')
+      const state = await demo.boundary.dispatch('read')
+      const invalidated = state.items.find(item => item.id === first.id)
+      assert.notEqual(invalidated.revision, connected.revision)
+      assert.equal(invalidated.lastCheck.status, 'failed')
+      assert.equal(demo.boundary.serverTools.has(first.id), false)
+      assert.notEqual(state.items.find(item => item.id === second.id).revision, other.revision)
+      if (fail) {
+        assert.equal(state.items.find(item => item.id === second.id).lastCheck.status, 'failed')
+        assert.equal(demo.boundary.serverTools.has(second.id), false)
+      }
+      assert.equal(state.items.find(item => item.id === unrelated.id).revision, unaffected.revision)
+      assert.equal(state.items.find(item => item.id === unrelated.id).lastCheck.status, 'connected')
+      assert.ok(demo.boundary.serverTools.has(unrelated.id))
+      assert.deepEqual(JSON.parse(await readFile(join(demo.boundary.root, 'inventory.json'), 'utf8')), state)
+      for (const action of ['chat', 'app', 'app-call']) {
+        await assert.rejects(demo.boundary.dispatch(action, call(first.id, connected.revision)), /server changed/)
+        await assert.rejects(demo.boundary.dispatch(action, call(first.id, invalidated.revision)), /Test the connection/)
+      }
+      if (fail) await writeFile(authPath, '{}')
+      const fresh = await demo.boundary.dispatch('test', { id: first.id })
+      for (const action of ['chat', 'app', 'app-call']) {
+        await assert.rejects(demo.boundary.dispatch(action, call(first.id, connected.revision)), /server changed/)
+        await assert.rejects(demo.boundary.dispatch(action, { ...call(first.id, fresh.revision), approved: false }), /Approve/)
+      }
+      assert.match(JSON.stringify((await demo.boundary.dispatch('chat', call(first.id, fresh.revision))).events), /3 workshop seats cost/)
+      const app = await demo.boundary.dispatch('app', { id: first.id, revision: fresh.revision, approved: true })
+      assert.equal(app.result.structuredContent.total, 75)
+      assert.equal((await demo.boundary.dispatch('app-call', call(first.id, fresh.revision))).structuredContent.total, 75)
+    }
+  } finally { await demo.close() }
+})
+
 test('removes bearer tokens and Authorization references through URL-scoped OAuth logout', { timeout: 120000 }, async () => {
   const demo = await startDemo({ ui: false })
   const previous = process.env.DEMO_REMOVE_AUTH

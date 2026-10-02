@@ -130,9 +130,14 @@ export class DemoBoundary {
     return item
   }
   async connect(item, auth = false) {
-    if (auth) item.revision = randomUUID()
-    item.lastCheck = { status: 'failed', tools: 0 }
-    this.serverTools.delete(item.id)
+    // Pi shares OAuth credentials by URL, so sign-in revokes every matching approval.
+    const affected = auth && item.definition.url
+      ? this.state.items.filter(entry => entry.definition.url === item.definition.url) : [item]
+    for (const entry of affected) {
+      if (auth) entry.revision = randomUUID()
+      entry.lastCheck = { status: 'failed', tools: 0 }
+      this.serverTools.delete(entry.id)
+    }
     await this.save()
     const options = await this.profile(item)
     if (auth) {
