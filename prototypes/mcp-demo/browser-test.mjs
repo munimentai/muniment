@@ -81,10 +81,57 @@ try {
   await page.getByLabel('Candidate exposure').selectOption('direct')
   await page.getByRole('button', { name: 'Run candidate chat' }).click()
   await page.locator('.reply').filter({ hasText: '3 workshop seats cost $75.' }).waitFor()
-  const id = (await demo.boundary.dispatch('read')).items[0].id
-  const raw = await demo.boundary.dispatch('app', { id, approved: true, args: { seats: 3 } })
-  const candidate = await demo.boundary.dispatch('chat', { id, approved: true, tool: 'quote', args: { seats: 3 }, exposure: 'direct' })
+  const { id, revision } = (await demo.boundary.dispatch('read')).items[0]
+  const raw = await demo.boundary.dispatch('app', { id, revision, approved: true, args: { seats: 3 } })
+  const candidate = await demo.boundary.dispatch('chat', { id, revision, approved: true, tool: 'quote', args: { seats: 3 }, exposure: 'direct' })
   await writeFile(join(evidence, 'boundary.json'), `${JSON.stringify({ tool: raw.tool, rawResult: raw.result, candidate }, null, 2)}\n`)
+
+  const second = await browser.newPage()
+  second.setDefaultTimeout(15000)
+  second.on('pageerror', error => errors.push(error.message))
+  second.on('dialog', dialog => dialog.accept())
+  await second.goto(demo.origin)
+  await second.getByRole('searchbox', { name: 'Search MCP servers' }).fill('Workshop')
+  async function replaceInSecondTab(definition) {
+    await second.getByRole('region', { name: 'Settings Extend' }).getByRole('button', { name: 'Details', exact: true }).click()
+    await second.getByRole('dialog', { name: 'Workshop', exact: true }).getByRole('button', { name: 'Configure', exact: true }).click()
+    const editor = second.getByRole('dialog', { name: 'Add MCP server' })
+    await editor.getByText('Local command or advanced configuration', { exact: true }).click()
+    await editor.getByLabel('Server configuration').fill(JSON.stringify(definition))
+    await editor.getByRole('button', { name: 'Save server', exact: true }).click()
+    await editor.waitFor({ state: 'hidden' })
+    await second.getByRole('button', { name: 'Connect and list tools' }).click()
+    await second.getByLabel('Allow this tool call and fixture quote updates.').waitFor({ state: 'visible' })
+    await second.waitForFunction(() => !document.querySelector('.approval input').disabled)
+  }
+  for (const action of ['chat', 'app', 'app-call']) {
+    if (action === 'app-call') {
+      await page.getByRole('button', { name: 'Open comparison app' }).click()
+      await app.getByText('3 seats at $25 each.', { exact: true }).waitFor()
+    }
+    await replaceInSecondTab(demo.fixture.http)
+    assert.equal(await page.getByLabel('Allow this tool call and fixture quote updates.').isChecked(), true)
+    const rejected = page.waitForResponse(async response => response.url().endsWith('/api/command') && response.request().postDataJSON().action === action)
+    if (action === 'app-call') {
+      await app.getByLabel('Seats', { exact: true }).fill('6')
+      await app.getByRole('button', { name: 'Update quote' }).click()
+    } else {
+      await page.getByRole('button', { name: action === 'chat' ? 'Run candidate chat' : 'Open comparison app' }).click()
+    }
+    assert.equal((await rejected).status(), 400)
+    await page.getByRole('alert').filter({ hasText: 'The server changed. Connect again and approve a fresh tool call.' }).waitFor()
+    await page.locator('iframe').waitFor({ state: 'detached' })
+    assert.equal(await page.getByLabel('Allow this tool call and fixture quote updates.').isChecked(), false)
+    assert.equal(await page.getByRole('button', { name: 'Run candidate chat' }).isDisabled(), true)
+    await page.getByRole('button', { name: 'Connect and list tools' }).click()
+    await page.getByLabel('Allow this tool call and fixture quote updates.').check()
+    await page.getByRole('button', { name: 'Run candidate chat' }).click()
+    await page.locator('.reply').filter({ hasText: '3 workshop seats cost $75.' }).waitFor()
+    await replaceInSecondTab(demo.fixture.stdio)
+    await page.getByRole('button', { name: 'Connect and list tools' }).click()
+    await page.getByLabel('Allow this tool call and fixture quote updates.').check()
+  }
+  await second.close()
 
   await catalog.getByRole('button', { name: 'Details', exact: true }).click()
   const savedDetails = page.getByRole('dialog', { name: 'Workshop', exact: true })

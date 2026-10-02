@@ -6,7 +6,7 @@ import { startDemo } from './server.mjs'
 import { validateDefinition, runPi, chatFlags } from './boundary.mjs'
 
 const save = (demo, definition = demo.fixture.stdio, name = 'Workshop') => demo.boundary.dispatch('server', { name, definition })
-const call = (id, exposure = 'direct', args = { seats: 3 }) => ({ id, approved: true, tool: 'quote', exposure, args })
+const call = (id, revision, exposure = 'direct', args = { seats: 3 }) => ({ id, revision, approved: true, tool: 'quote', exposure, args })
 
 test('freezes registry integrity and one Pi version across the probe graph', async () => {
   const manifest = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'))
@@ -84,18 +84,113 @@ test('preserves custom entries, credentials, toggles, and failed connection stat
   } finally { const root = demo.boundary.root; await demo.close(); await assert.rejects(access(root)) }
 })
 
+test('binds tool approval to the connected server revision', { timeout: 120000 }, async () => {
+  const demo = await startDemo({ ui: false })
+  try {
+    const id = (await save(demo)).items[0].id
+    const first = await demo.boundary.dispatch('test', { id })
+    assert.equal(typeof first.revision, 'string')
+    const stale = call(id, first.revision)
+    const rejectStale = async () => {
+      for (const action of ['chat', 'app', 'app-call']) {
+        await assert.rejects(demo.boundary.dispatch(action, stale), /server changed/)
+      }
+    }
+    await demo.boundary.dispatch('server', { id, name: 'Replacement', definition: demo.fixture.http })
+    let connected = await demo.boundary.dispatch('test', { id })
+    assert.notEqual(connected.revision, first.revision)
+    await rejectStale()
+    for (const revision of [undefined, null, '', 1, {}]) {
+      await assert.rejects(demo.boundary.dispatch('chat', call(id, revision)), /server changed/)
+    }
+    assert.equal((await demo.boundary.dispatch('app-call', call(id, connected.revision))).structuredContent.total, 75)
+    for (const token of ['disposable-first', 'disposable-replacement']) {
+      stale.revision = connected.revision
+      await demo.boundary.dispatch('server', { id, name: 'Replacement', definition: demo.fixture.http, token })
+      connected = await demo.boundary.dispatch('test', { id })
+      assert.notEqual(connected.revision, stale.revision)
+      await rejectStale()
+    }
+    stale.revision = connected.revision
+    await demo.boundary.dispatch('server', { id, name: 'Replacement', definition: { ...demo.fixture.http, auth: 'oauth' } })
+    connected = await demo.boundary.dispatch('test', { id })
+    await rejectStale()
+    stale.revision = connected.revision
+    connected = await demo.boundary.dispatch('auth', { id })
+    assert.notEqual(connected.revision, stale.revision)
+    await rejectStale()
+    stale.revision = connected.revision
+    await demo.boundary.dispatch('toggle', { id, enabled: false })
+    await demo.boundary.dispatch('toggle', { id, enabled: true })
+    await rejectStale()
+    connected = await demo.boundary.dispatch('test', { id })
+    await assert.rejects(demo.boundary.dispatch('chat', { ...call(id, connected.revision), approved: false }), /Approve/)
+    const result = await demo.boundary.dispatch('chat', call(id, connected.revision))
+    assert.match(JSON.stringify(result.events), /3 workshop seats cost/)
+  } finally { await demo.close() }
+})
+
+test('removes bearer tokens and Authorization references through URL-scoped OAuth logout', { timeout: 120000 }, async () => {
+  const demo = await startDemo({ ui: false })
+  const previous = process.env.DEMO_REMOVE_AUTH
+  try {
+    const authPath = join(demo.boundary.root, 'agent/mcp-auth.json')
+    const unrelated = { 'https://other.example/mcp': { tokens: { access_token: 'disposable-unrelated' } } }
+    const credentials = { ...unrelated, [demo.fixture.http.url]: { tokens: { access_token: 'disposable-oauth' } } }
+    for (const header of [null, 'Authorization', 'aUtHoRiZaTiOn']) {
+      process.env.DEMO_REMOVE_AUTH = 'Bearer disposable-reference'
+      const definition = header ? { ...demo.fixture.http, headers: { [header]: '${DEMO_REMOVE_AUTH}' } } : demo.fixture.http
+      const token = header ? undefined : 'disposable-bearer'
+      const item = (await demo.boundary.dispatch('server', { name: 'HTTP workshop', definition, token })).items.at(-1)
+      await demo.boundary.dispatch('test', { id: item.id })
+      delete process.env.DEMO_REMOVE_AUTH
+      await writeFile(authPath, JSON.stringify(credentials), { mode: 0o600 })
+      await demo.boundary.dispatch('remove', { id: item.id })
+      assert.equal((await demo.boundary.dispatch('read')).items.length, 0)
+      assert.equal(demo.boundary.tokens.has(item.id), false)
+      assert.equal(demo.boundary.serverTools.has(item.id), false)
+      assert.deepEqual(JSON.parse(await readFile(authPath, 'utf8')), unrelated)
+    }
+    const one = (await save(demo, demo.fixture.http)).items[0]
+    const two = (await save(demo, demo.fixture.http)).items.at(-1)
+    await writeFile(authPath, JSON.stringify(credentials))
+    await demo.boundary.dispatch('remove', { id: one.id })
+    assert.deepEqual(JSON.parse(await readFile(authPath, 'utf8')), credentials)
+    await demo.boundary.dispatch('remove', { id: two.id })
+    assert.deepEqual(JSON.parse(await readFile(authPath, 'utf8')), unrelated)
+
+    const item = (await demo.boundary.dispatch('server', { name: 'Retry', definition: demo.fixture.http, token: 'disposable-retry' })).items[0]
+    await demo.boundary.dispatch('test', { id: item.id })
+    const before = await demo.boundary.dispatch('read')
+    await writeFile(authPath, '{invalid')
+    await assert.rejects(demo.boundary.dispatch('remove', { id: item.id }), /could not clear its OAuth credentials/)
+    assert.deepEqual(await demo.boundary.dispatch('read'), before)
+    assert.equal(demo.boundary.tokens.get(item.id), 'disposable-retry')
+    assert.ok(demo.boundary.serverTools.has(item.id))
+    assert.equal(await readFile(authPath, 'utf8'), '{invalid')
+    await writeFile(authPath, JSON.stringify(credentials))
+    await demo.boundary.dispatch('remove', { id: item.id })
+    assert.equal((await demo.boundary.dispatch('read')).items.length, 0)
+    assert.deepEqual(JSON.parse(await readFile(authPath, 'utf8')), unrelated)
+  } finally {
+    if (previous === undefined) delete process.env.DEMO_REMOVE_AUTH
+    else process.env.DEMO_REMOVE_AUTH = previous
+    await demo.close()
+  }
+})
+
 test('runs real candidate chat and exposes the app metadata loss on both transports', { timeout: 120000 }, async () => {
   const demo = await startDemo({ ui: false })
   try {
     for (const definition of [demo.fixture.stdio, demo.fixture.http]) {
       const id = (await save(demo, definition)).items.at(-1).id
-      await demo.boundary.dispatch('test', { id })
-      const app = await demo.boundary.dispatch('app', { id, approved: true, args: { seats: 3 } })
+      let { revision } = await demo.boundary.dispatch('test', { id })
+      const app = await demo.boundary.dispatch('app', { id, revision, approved: true, args: { seats: 3 } })
       assert.equal(app.tool._meta.ui.resourceUri, 'ui://muniment-demo/quote.html')
       assert.equal(app.result.structuredContent.total, 75)
       assert.match(app.resource.contents[0].text, /Update quote/)
       for (const exposure of ['direct', 'codemode']) {
-        const result = await demo.boundary.dispatch('chat', call(id, exposure))
+        const result = await demo.boundary.dispatch('chat', call(id, revision, exposure))
         const ends = result.events.filter(event => event.type === 'tool_execution_end')
         assert.ok(ends.length >= 1)
         assert.ok(ends.every(event => !event.isError), JSON.stringify(ends))
@@ -103,16 +198,20 @@ test('runs real candidate chat and exposes the app metadata loss on both transpo
         assert.doesNotMatch(JSON.stringify(ends), /fixtureMarker|ui:\/\//)
         assert.equal(result.events.at(-1).message.stopReason, 'stop')
       }
-      const update = await demo.boundary.dispatch('app-call', { id, approved: true, tool: 'quote', args: { seats: 5 } })
+      const update = await demo.boundary.dispatch('app-call', { id, revision, approved: true, tool: 'quote', args: { seats: 5 } })
       assert.equal(update.structuredContent.total, 125)
-      if (definition.url) assert.equal((await demo.boundary.dispatch('auth', { id })).status, 'connected')
-      const failed = await demo.boundary.dispatch('chat', call(id, 'direct', { seats: 3, fail: true }))
+      if (definition.url) {
+        const auth = await demo.boundary.dispatch('auth', { id })
+        assert.equal(auth.status, 'connected')
+        revision = auth.revision
+      }
+      const failed = await demo.boundary.dispatch('chat', call(id, revision, 'direct', { seats: 3, fail: true }))
       assert.equal(failed.events.find(event => event.type === 'tool_execution_end').isError, true)
       for (const seats of [0, 21, 1.5]) {
-        const invalid = await demo.boundary.dispatch('app-call', { id, approved: true, tool: 'quote', args: { seats } })
+        const invalid = await demo.boundary.dispatch('app-call', { id, revision, approved: true, tool: 'quote', args: { seats } })
         assert.equal(invalid.isError, true)
       }
-      await assert.rejects(demo.boundary.dispatch('app-call', { id, approved: true, tool: 'bash', args: {} }), /only quote/)
+      await assert.rejects(demo.boundary.dispatch('app-call', { id, revision, approved: true, tool: 'bash', args: {} }), /only quote/)
     }
   } finally { await demo.close() }
 })
@@ -138,8 +237,8 @@ test('blocks cross-origin control and keeps project configuration untrusted', { 
     assert.deepEqual(list.servers.map(server => server.name), [item.id])
     assert.equal(list.servers[0].resources, 0)
     assert.match(list.note, /trust/i)
-    await demo.boundary.dispatch('test', { id: item.id })
-    const chat = await demo.boundary.dispatch('chat', call(item.id))
+    const { revision } = await demo.boundary.dispatch('test', { id: item.id })
+    const chat = await demo.boundary.dispatch('chat', call(item.id, revision))
     const tool = chat.events.find(event => event.type === 'tool_execution_end').toolName
     const deniedOptions = await demo.boundary.profile(item, 'direct')
     deniedOptions.env.MUNIMENT_DEMO_APPROVAL = JSON.stringify({ tool, args: { seats: 2 }, code: '' })

@@ -117,12 +117,16 @@ The demo confirms that difference before saving a token.
 Changing the endpoint or choosing OAuth clears the demo bearer token.
 Official OAuth stores credentials inside the disposable agent directory.
 Uninstall clears its OAuth credentials when no other demo entry uses that URL.
+The cleanup profile omits Authorization headers, including bearer tokens and environment references.
+A cleanup error keeps the saved server for a retry.
 No credential migration or system credential-store integration occurs.
 Skills, plugins, favicon acquisition, and the desktop permission UI stay outside this MCP demo.
 
 The API binds only to loopback and checks the host, origin, and per-launch request token.
 It serializes mutations and tool calls against one disposable profile.
-The comparison blocks concurrent connection edits and rejects stale, disabled, removed, or untested servers.
+The comparison binds approval to the connected server revision and rejects stale, disabled, removed, or untested servers.
+Configuration changes, credential changes, and sign-in invalidate approval across tabs.
+After a stale request, connect again and approve a fresh tool call.
 
 ## Review the evidence.
 
@@ -157,8 +161,9 @@ The build checks the browser bundle. The Node server supplies runtime APIs, so d
 
 The focused tests cover both transports, direct and Codemode chat, metadata loss, connection failures, custom edits, saved state, and credential scope.
 They also cover permission denial, project trust, invalid inputs, serialized saves, failed writes, timeouts, disabled servers, and cross-origin rejection.
+The focused tests cover token removal, Authorization references, shared OAuth credentials, and cleanup failures.
 The browser check covers catalog Details, provider save, canceled sign-in, Custom save, reload, configure, uninstall, and connection recovery.
-It also verifies permission revocation and a live app tool call.
+It also verifies permission revocation, a live app tool call, and stale approvals across two tabs.
 It checks the iframe boundary and exercises Custom HTTP sign-in without private credentials.
 
 This demo pins the MCP probe graph only. It does not install the four optional extension packages or the adapter.

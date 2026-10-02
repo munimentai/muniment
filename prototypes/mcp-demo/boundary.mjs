@@ -102,7 +102,7 @@ export class DemoBoundary {
     await writeFile(`${path}.tmp`, JSON.stringify(this.state, null, 2), { mode: 0o600 })
     await rename(`${path}.tmp`, path)
   }
-  async profile(item, exposure = 'codemode') {
+  async profile(item, exposure = 'codemode', { oauthOnly = false } = {}) {
     const env = { PATH: process.env.PATH, HOME: this.root, USERPROFILE: this.root,
       XDG_CONFIG_HOME: this.root, XDG_CACHE_HOME: this.root, APPDATA: this.root, LOCALAPPDATA: this.root,
       TMPDIR: this.root, TMP: this.root, TEMP: this.root, PI_CODING_AGENT_DIR: join(this.root, 'agent'), PI_OFFLINE: '1',
@@ -113,7 +113,10 @@ export class DemoBoundary {
     }
     const definition = { ...item.definition, exposure }
     const token = this.tokens.get(item.id)
-    if (token) {
+    if (oauthOnly) {
+      // Pi clears URL-scoped OAuth credentials only without an Authorization header.
+      definition.headers = Object.fromEntries(Object.entries(definition.headers || {}).filter(([key]) => key.toLowerCase() !== 'authorization'))
+    } else if (token) {
       env.DEMO_BEARER = token
       definition.headers = { ...definition.headers, Authorization: 'Bearer ${DEMO_BEARER}' }
     }
@@ -127,6 +130,7 @@ export class DemoBoundary {
     return item
   }
   async connect(item, auth = false) {
+    if (auth) item.revision = randomUUID()
     item.lastCheck = { status: 'failed', tools: 0 }
     this.serverTools.delete(item.id)
     await this.save()
@@ -149,7 +153,7 @@ export class DemoBoundary {
     item.lastCheck = { status: 'connected', tools: server.tools.length }
     this.serverTools.set(item.id, server.tools)
     await this.save()
-    return { status: 'connected', tools: server.tools.map(name => ({ name })) }
+    return { status: 'connected', revision: item.revision, tools: server.tools.map(name => ({ name })) }
   }
   async action(action, data) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Enter an action object.')
@@ -161,7 +165,7 @@ export class DemoBoundary {
       const old = data.id ? this.item(data.id) : this.state.items.find(item => data.source && item.source === data.source)
       if (data.token && (!definition.url || typeof data.token !== 'string' || data.token.length > 8192 || /[\r\n]/.test(data.token))) throw new Error('Use a bearer token for an HTTP server only.')
       if (data.token && (data.definition.auth === 'oauth' || Object.keys(definition.headers || {}).some(key => key.toLowerCase() === 'authorization'))) throw new Error('Choose one authentication method.')
-      const item = { id: old?.id || `demo-${randomUUID()}`, name: data.name.trim(), kind: 'mcp',
+      const item = { id: old?.id || `demo-${randomUUID()}`, revision: randomUUID(), name: data.name.trim(), kind: 'mcp',
         source: typeof data.source === 'string' ? data.source : '', description: typeof data.description === 'string' ? data.description : '',
         definition, enabled: old?.enabled ?? true }
       // A new endpoint must never inherit credentials from the old endpoint.
@@ -174,14 +178,16 @@ export class DemoBoundary {
     }
     if (action === 'toggle') {
       if (typeof data.enabled !== 'boolean') throw new Error('Choose an enabled state.')
-      this.item(data.id).enabled = data.enabled
+      const item = this.item(data.id)
+      if (item.enabled !== data.enabled) item.revision = randomUUID()
+      item.enabled = data.enabled
       await this.save()
       return structuredClone(this.state)
     }
     if (action === 'remove') {
       const item = this.item(data.id)
       if (item.definition.url && !this.state.items.some(other => other.id !== item.id && other.definition.url === item.definition.url)) {
-        const result = await runPi(['mcp', 'logout', item.id], await this.profile(item))
+        const result = await runPi(['mcp', 'logout', item.id], await this.profile(item, 'codemode', { oauthOnly: true }))
         if (result.code !== 0) throw new Error('The demo could not clear its OAuth credentials. Try uninstalling again.')
       }
       this.state.items = this.state.items.filter(item => item.id !== data.id)
@@ -196,6 +202,7 @@ export class DemoBoundary {
     if (action === 'chat' || action === 'app' || action === 'app-call') {
       if (data.approved !== true) throw new Error('Approve this tool call first.')
       if (!item.enabled) throw new Error('Enable this server before calling a tool.')
+      if (typeof data.revision !== 'string' || data.revision !== item.revision) throw new Error('The server changed. Connect again and approve a fresh tool call.')
       if (!item.lastCheck || item.lastCheck.status !== 'connected') throw new Error('Test the connection before calling a tool.')
       if (action === 'chat') return this.chat(item, data)
       if (action === 'app-call' && data.tool !== 'quote') throw new Error('The comparison app can call only quote.')

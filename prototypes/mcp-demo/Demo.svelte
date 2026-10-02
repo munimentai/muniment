@@ -6,7 +6,7 @@
   let args = $state('{"seats":3}'), exposure = $state('codemode'), approved = $state(false)
   let busy = $state(false), error = $state(''), events = $state([]), appData = $state(null), frame = $state(), bridge
   let appCalls = $state(0), appReady = $state(false)
-  let connectionBusy = $state(false)
+  let connectionBusy = $state(false), revision = $state('')
   const token = document.querySelector('meta[name=demo-token]').content
   const reply = $derived(events.filter(event => event.type === 'message_end' && event.message.role === 'assistant').at(-1)?.message.content.filter(block => block.type === 'text').map(block => block.text).join('\n'))
   const results = $derived(events.filter(event => event.type === 'tool_execution_end'))
@@ -19,6 +19,12 @@
   async function refresh() {
     items = (await request('read')).items
     if (!items.some(item => item.id === selected)) selected = items[0]?.id || ''
+    if (revision && items.find(item => item.id === selected)?.revision !== revision) await resetApproval()
+  }
+  async function resetApproval() { revision = ''; approved = false; tools = []; await closeApp() }
+  async function approvedRequest(action, data) {
+    try { return await request(action, data) }
+    catch (e) { error = e.message; await resetApproval(); await refresh(); throw e }
   }
   async function closeApp() { const closing = bridge; bridge = null; appData = null; appReady = false; await closing?.close() }
   const tauri = { invoke: async (_, { action, data }) => {
@@ -27,30 +33,30 @@
     if (['auth', 'test'].includes(action) && !window.confirm('Connect to this server from the disposable demo profile?')) throw new Error('The demo did not connect to the server.')
     connectionBusy = true
     try { return await request(action, data) }
-    finally { try { await refresh(); if (action !== 'read') { tools = []; approved = false; await closeApp() } } finally { connectionBusy = false } }
+    finally { try { await refresh(); if (action !== 'read') await resetApproval() } finally { connectionBusy = false } }
   } }
   async function work(fn) { busy = true; error = ''; try { await fn() } catch (e) { error = e.message } finally { busy = false } }
   async function connect() {
-    await closeApp(); approved = false; tools = []
+    await resetApproval()
     const result = await request('test', { id: selected })
-    tools = result.tools; tool = tools[0]?.name || ''; await refresh()
+    revision = result.revision; tools = result.tools; tool = tools[0]?.name || ''; await refresh()
   }
   async function chat() {
     events = []
-    const result = await request('chat', { id: selected, tool, args: JSON.parse(args), exposure, approved })
+    const result = await approvedRequest('chat', { id: selected, revision, tool, args: JSON.parse(args), exposure, approved })
     events = result.events
   }
   async function openApp() {
     await closeApp()
-    const openedId = selected, openedArgs = JSON.parse(args)
-    const opened = await request('app', { id: openedId, args: openedArgs, approved })
+    const openedId = selected, openedRevision = revision, openedArgs = JSON.parse(args)
+    const opened = await approvedRequest('app', { id: openedId, revision: openedRevision, args: openedArgs, approved })
     appData = opened; appCalls = 0
     await tick()
     const nextBridge = new AppBridge(null, { name: 'Muniment comparison host', version: '0.0.1' }, { serverTools: {} }, { hostContext: { theme: 'light' } })
     bridge = nextBridge
     nextBridge.oncalltool = async params => {
-      if (!approved || selected !== openedId || bridge !== nextBridge) throw new Error('Approve this tool call first.')
-      const result = await request('app-call', { id: openedId, tool: params.name, args: params.arguments, approved })
+      if (!approved || selected !== openedId || revision !== openedRevision || bridge !== nextBridge) throw new Error('Approve this tool call first.')
+      const result = await approvedRequest('app-call', { id: openedId, revision: openedRevision, tool: params.name, args: params.arguments, approved })
       if (bridge === nextBridge) appCalls++
       return result
     }
@@ -91,7 +97,7 @@
         </details>
       {/if}
       <fieldset class="controls" disabled={connectionBusy}>
-        <label>Saved server<select aria-label="Saved server" bind:value={selected} disabled={busy} onchange={() => { tools = []; approved = false; events = []; void closeApp() }}><option value="">Choose a server</option>{#each items as item}<option value={item.id}>{item.name}{item.enabled ? '' : ' (disabled)'}</option>{/each}</select></label>
+        <label>Saved server<select aria-label="Saved server" bind:value={selected} disabled={busy} onchange={() => { events = []; void resetApproval() }}><option value="">Choose a server</option>{#each items as item}<option value={item.id}>{item.name}{item.enabled ? '' : ' (disabled)'}</option>{/each}</select></label>
         <button disabled={busy || !selected} onclick={() => work(connect)}>Connect and list tools</button>
         <label>Tool<select aria-label="Tool" bind:value={tool} disabled={busy || !tools.length} onchange={() => approved = false}>{#each tools as entry}<option value={entry.name}>{entry.name}</option>{/each}</select></label>
         <label>Tool arguments<textarea bind:value={args} rows="2" disabled={busy} oninput={() => approved = false}></textarea></label>
