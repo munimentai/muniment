@@ -14,6 +14,11 @@ import { featureChecks, featureFailure } from './e2e/support/subscription-accept
 const nonce = 'MUNIMENT-' + 'a'.repeat(32)
 const fileNonce = 'MUNIMENT-' + 'b'.repeat(32)
 const mcpNonce = 'MUNIMENT-' + 'c'.repeat(32)
+const mcpApproval = {
+  gateId: 'mcp-gate', kind: 'select',
+  title: 'MCP: extend-release-acceptance wants to run acceptance_token\n\nArguments:\n{}\n\nAllow server for this session permits all tools and arguments on this server until reload or session/branch change. Other security and UI consent checks still apply.',
+  options: ['Allow once', 'Allow for session', 'Allow server for this session', 'Deny'],
+}
 async function probe(failure, fault = () => {}) {
   const plan = { nonce, fileNonce, mcpNonce, mcpReceipt: '/tmp/mcp-receipt.json', models: [{ family: 'openai', id: 'route-model' }, { family: 'openai', id: 'model' }], fixtureFile: '/tmp/fixture.txt',
     fixtureDirectory: '/tmp', mcpCommand: 'node', mcpScript: '/tmp/mcp.mjs',
@@ -42,7 +47,7 @@ async function probe(failure, fault = () => {}) {
   }] }
   const invoke = async (command, data = {}) => {
     state.commands.push(command)
-    fault(command, data)
+    fault(command, data, state)
     if (command === failure) throw new Error('private provider error')
     if (command === 'subscription_probe_update') return
     if (command === 'model_router_settings') return structuredClone({ accounts: state.accounts, routes: [], fallback: state.fallback ?? null, min_confidence: 0.6 })
@@ -103,6 +108,17 @@ async function probe(failure, fault = () => {}) {
       const text = terminalRead ? '' : `echo ${nonce}\r\n${failure === 'echo-only' ? '' : nonce + '\r\n'}`
       terminalRead = true
       return { bytes: [...Buffer.from(text)] }
+    }
+    if (command === 'chat_answer_permission') {
+      const entry = state.entries.find(entry => entry.runId === data.runId)
+      assert.equal(entry.phase, 'pending-permission')
+      assert.equal(entry.pendingPermission.gateId, data.gateId)
+      assert.deepEqual(JSON.parse(JSON.stringify(data.answer)), { type: 'select', value: 'Allow once' })
+      state.answers = [...(state.answers ?? []), data]
+      entry.phase = 'complete'
+      delete entry.pendingPermission
+      fault('permission-answered', entry, state)
+      return
     }
     if (command === 'chat_thread_open') return structuredClone({ entries: state.entries })
     if (command === 'extend_command') {
@@ -213,7 +229,8 @@ for (const feature of ['tools', 'mcp']) {
   test(`the ${feature} tool turn reports fixed reply sub-reasons without provider text`, async () => {
     const name = feature === 'tools' ? 'read' : 'mcp__acceptance_token'
     const cases = [
-      ...['failed', 'cancelled', 'interrupted', 'pending-permission'].map(phase => [{ phase }, 'reply-phase']),
+      ...['failed', 'cancelled', 'interrupted', 'pending-permission'].map(phase => [{ phase }, `reply-phase-${phase}`]),
+      [{ phase: 'private provider phase' }, 'timeout'],
       [{ text: 'private provider text' }, 'reply-text'], [{ text: '' }, 'reply-text'], [{ text: null }, 'reply-text'],
       [{ receipt: undefined }, 'receipt-tool'], [{ receipt: { tools: [] } }, 'receipt-tool'],
       [{ receipt: { tools: {} } }, 'receipt-tool'],
@@ -237,8 +254,73 @@ for (const feature of ['tools', 'mcp']) {
   })
 }
 
+test('the MCP probe answers its approval through the native one-shot path', async () => {
+  let staleReads = 0
+  const result = await probe(undefined, (command, data, state) => {
+    if (command === 'mcp-reply') Object.assign(data, { phase: 'pending-permission', pendingPermission: structuredClone(mcpApproval) })
+    if (command === 'permission-answered') Object.assign(data, { phase: 'pending-permission', pendingPermission: structuredClone(mcpApproval) })
+    if (command === 'chat_thread_open' && state.answers?.length) {
+      if (++staleReads === 1) state.entries.unshift({ runId: 'other-run', phase: 'pending-permission', pendingPermission: mcpApproval })
+      if (staleReads === 3) state.entries.at(-1).phase = 'complete'
+    }
+  })
+  assert.deepEqual(result.initial.mcp, featureChecks.mcp)
+  assert.equal(result.state.answers.length, 1)
+  assert.equal(result.state.answers[0].runId, result.state.entries.at(-1).runId)
+  assert.equal(result.state.answers[0].gateId, mcpApproval.gateId)
+})
+
+test('the MCP probe rejects unrelated or malformed approval requests', async () => {
+  for (const gate of [undefined, null, {},
+    ...[{ kind: 'confirm' }, { gateId: '' }, { gateId: 42 }, { options: undefined }, { options: 'Allow once' },
+      { options: ['Allow for session', 'Allow server for this session'] },
+      { title: mcpApproval.title.replace('extend-release-acceptance', 'other-server') },
+      { title: mcpApproval.title.replace('acceptance_token', 'other-tool') },
+      { title: mcpApproval.title.replace('{}', '{"write":true}') },
+      { title: `${mcpApproval.title}\nprivate provider text` },
+    ].map(change => ({ ...mcpApproval, ...change })),
+  ]) {
+    const result = await probe(undefined, (command, data) => {
+      if (command === 'mcp-reply') Object.assign(data, { phase: 'pending-permission', pendingPermission: gate })
+    })
+    assert.deepEqual(result.initial.mcp, ['failed', 'tool-turn', 'reply-phase-pending-permission'])
+    assert.equal(result.state.commands.includes('chat_answer_permission'), false)
+    assert.equal(JSON.stringify(result.initial).includes('private'), false)
+  }
+})
+
+for (const mode of ['answer-rejected', 'still-pending', 'new-gate', 'failed', 'cancelled', 'interrupted', 'no-receipt', 'wrong-token']) {
+  test(`the MCP approval does not pass a ${mode} turn`, async () => {
+    const result = await probe(undefined, (command, data) => {
+      if (command === 'mcp-reply') Object.assign(data, { phase: 'pending-permission', pendingPermission: structuredClone(mcpApproval) })
+      if (command === 'chat_answer_permission' && mode === 'answer-rejected') throw new Error('private provider text')
+      if (command === 'permission-answered') {
+        if (['still-pending', 'new-gate'].includes(mode)) Object.assign(data, { phase: 'pending-permission',
+          pendingPermission: { ...mcpApproval, gateId: mode === 'new-gate' ? 'new-gate' : mcpApproval.gateId } })
+        if (['failed', 'cancelled', 'interrupted'].includes(mode)) data.phase = mode
+        if (mode === 'no-receipt') delete data.receipt
+        if (mode === 'wrong-token') data.text = 'private provider text'
+      }
+    })
+    const reason = mode === 'no-receipt' ? 'receipt-tool' : mode === 'wrong-token' ? 'reply-text'
+      : `reply-phase-${['failed', 'cancelled', 'interrupted'].includes(mode) ? mode : 'pending-permission'}`
+    assert.deepEqual(result.initial.mcp, ['failed', 'tool-turn', reason])
+    assert.equal(result.state.commands.filter(command => command === 'chat_answer_permission').length, 1)
+    assert.equal(JSON.stringify(result.initial).includes('private'), false)
+  })
+}
+
+test('the tools probe never answers an MCP approval', async () => {
+  const result = await probe(undefined, (command, data) => {
+    if (command === 'tools-reply') Object.assign(data, { phase: 'pending-permission', pendingPermission: mcpApproval })
+  })
+  assert.deepEqual(result.initial.tools, ['failed', 'check', 'reply-phase-pending-permission'])
+  assert.equal(result.state.commands.includes('chat_answer_permission'), false)
+})
+
 test('the MCP probe rejects provider errors that claim a local reply sub-reason', async () => {
-  for (const errorClass of ['reply-phase', 'reply-text', 'receipt-tool']) {
+  for (const errorClass of ['reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
+    'reply-phase-pending-permission', 'reply-text', 'receipt-tool']) {
     const result = await probe(undefined, name => {
       if (name === 'mcp-tool-turn') throw Object.assign(new Error('private provider error'), { errorClass })
     })
