@@ -12,8 +12,10 @@
 // captures window contents, which is the one CGWindowList operation that grant
 // covers.
 //
-// Usage: macos-window-count <pid>. The probe prints the count on stdout and
-// exits 0. Every failure prints a message on stderr and exits nonzero.
+// Usage: macos-window-count <pid> [--id | --capture-info].
+// The default mode prints the count. --id prints one window ID.
+// --capture-info adds a noninteractive permission check and numeric window metadata.
+// It never requests consent or captures pixels.
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -64,8 +66,9 @@ static bool has_area(CFDictionaryRef window) {
 
 int main(int argc, char **argv) {
   bool print_id = argc == 3 && strcmp(argv[2], "--id") == 0;
-  if (argc != 2 && !print_id) {
-    fprintf(stderr, "usage: macos-window-count <pid> [--id]\n");
+  bool capture_info = argc == 3 && strcmp(argv[2], "--capture-info") == 0;
+  if (argc != 2 && !print_id && !capture_info) {
+    fprintf(stderr, "usage: macos-window-count <pid> [--id | --capture-info]\n");
     return 2;
   }
   errno = 0;
@@ -88,12 +91,16 @@ int main(int argc, char **argv) {
 
   CFArrayRef windows = CGWindowListCopyWindowInfo(
       kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+  bool capture_access = capture_info && CGPreflightScreenCaptureAccess();
   alarm(0);
   if (windows == NULL) {
     fprintf(stderr, "window probe could not read the on-screen window list\n");
     return 1;
   }
 
+  if (capture_info) {
+    printf("{\"screen_capture_access\":%s,\"windows\":[", capture_access ? "true" : "false");
+  }
   long count = 0;
   long window_id = 0;
   CFIndex total = CFArrayGetCount(windows);
@@ -111,12 +118,29 @@ int main(int argc, char **argv) {
     if (!read_number(window, kCGWindowLayer, &layer) || layer != 0) continue;
     if (!on_screen(window) || !has_area(window)) continue;
     count++;
-    if (print_id && !read_number(window, kCGWindowNumber, &window_id)) {
+    if ((print_id || capture_info) && !read_number(window, kCGWindowNumber, &window_id)) {
       CFRelease(windows);
       return 1;
     }
+    if (capture_info) {
+      CGRect rect;
+      if (!CGRectMakeWithDictionaryRepresentation(CFDictionaryGetValue(window, kCGWindowBounds), &rect)) {
+        CFRelease(windows);
+        return 1;
+      }
+      long sharing = -1;
+      read_number(window, kCGWindowSharingState, &sharing);
+      printf("%s{\"id\":%ld,\"pid\":%ld,\"layer\":%ld,\"onscreen\":true,"
+             "\"x\":%.17g,\"y\":%.17g,\"width\":%.17g,\"height\":%.17g,\"sharing_state\":%ld}",
+             count > 1 ? "," : "", window_id, owner, layer,
+             rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, sharing);
+    }
   }
   CFRelease(windows);
+  if (capture_info) {
+    printf("]}\n");
+    return 0;
+  }
   if (print_id && count != 1) return 1;
   printf("%ld\n", print_id ? window_id : count);
   return 0;

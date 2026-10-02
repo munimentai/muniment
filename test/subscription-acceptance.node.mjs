@@ -1,6 +1,7 @@
 import './subscription-features.node.mjs'
 import './subscription-diagnostics.node.mjs'
 import './subscription-linux-sandbox.node.mjs'
+import './subscription-screenshot.node.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

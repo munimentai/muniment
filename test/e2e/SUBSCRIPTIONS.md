@@ -22,6 +22,33 @@ Use a disposable GUI login or a disposable VM on each platform:
 - macOS ARM64 needs the installed signed ARM64 app, its signed update archive, Xcode command-line tools, and Screen Recording permission.
 - macOS x64 needs the installed signed x64 app and the same macOS tools and permission.
 
+### macOS capture capability
+
+The Intel `desktop-ci macos` runner must supply an unlocked disposable GUI login with an active WindowServer display.
+Its capture process needs Screen Recording authorization in that login, not in the owner's login.
+The job must support `CGPreflightScreenCaptureAccess()` and `/usr/sbin/screencapture -x -l<window-id>` from the same process chain as `runner/subscriptions.mjs`.
+Grant access to the responsible capture process, not just the installed app.
+Do not edit the owner's privacy database.
+Do not request consent during the probe.
+
+The screenshot log records a noninteractive permission check and numeric metadata for the installed app's visible, normal-layer windows.
+It omits window titles and owner names.
+The helper's permission check describes the helper, so a denied check does not veto a successful `screencapture` command.
+After a capture failure, the runner checks permission and window metadata again to detect a closed or replaced window.
+
+- `permission-denied` means the capture failed and the helper lacks Screen Recording permission.
+- `window-unavailable` means the granted check found no unique, stable window for the installed app.
+- `window-uncapturable` means permission passed and the same window remained, but `screencapture` could not create its image.
+- `diagnostics-unavailable` means the compiler or window probe failed, so the runner cannot classify the capture failure.
+- `capture-failed` covers other capture command failures, including a missing tool or timeout.
+
+For `window-uncapturable`, the runner owner must provide a display that supplies backing images for the installed CEF window.
+Check the app log for GPU initialization errors in the disposable VM.
+A hypervisor screendump does not replace the installed-window screenshot.
+The screenshot gate remains mandatory.
+
+### Other tools
+
 Node must support the repository's ESM scripts.
 OpenSSL supplies a disposable TLS certificate for the loopback update fixture.
 Windows uses OpenSSL from `C:\Program Files\Git\usr\bin\openssl.exe`.
