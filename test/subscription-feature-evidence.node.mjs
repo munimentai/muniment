@@ -17,7 +17,7 @@ const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value), { mo
 const mcpFailure = ['failed', 'connection-test', 'timeout']
 const artifactFailure = ['failed', 'save', 'check-failed']
 
-async function scenario(t, { featureFailures = {}, failAt, updateFailure = false } = {}) {
+async function scenario(t, { featureFailures = {}, failAt, updateFailure = false, screenshotError } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-evidence-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const output = path.join(root, 'output')
@@ -74,7 +74,7 @@ async function scenario(t, { featureFailures = {}, failAt, updateFailure = false
       if (failAt === 'cleanup') throw new Error('The update server did not close.')
     } }),
     screenshot: (_platform, _pid, file) => {
-      if (failAt === 'screenshot') throw new Error('The screenshot failed.')
+      if (failAt === 'screenshot') throw screenshotError ?? new Error('The screenshot failed.')
       fs.writeFileSync(file, 'capture')
     },
     execute: (_command, args) => { fs.cpSync(args[1], args[2], { recursive: true }) },
@@ -124,6 +124,17 @@ for (const failAt of ['restart', 'update', 'screenshot', 'cleanup']) {
       assert.equal(result.checkpoints[phase].cases.find(item => item.feature === 'artifacts').failure_stage, 'save')
       assert.ok(result.checkpoints[phase].cases.every(item => item.status === 'blocked'))
     }
+  })
+}
+
+for (const [code, reason] of Object.entries(runner.screenshotReasons)) {
+  test(`the runner and collector retain the ${code} screenshot reason`, async t => {
+    const result = await scenario(t, { failAt: 'screenshot', featureFailures: { mcp: mcpFailure },
+      screenshotError: new runner.ScreenshotError(code, 'The native capture failed.') })
+    assert.equal(result.status, 1)
+    assert.equal(result.evidence.reason, reason)
+    assert.ok(result.proof.cases.every(item => item.status === 'blocked' && item.reason === reason))
+    assertFailure(result, 'mcp', mcpFailure)
   })
 }
 
