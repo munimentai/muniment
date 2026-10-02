@@ -242,6 +242,8 @@ jobs:
       - name: Frontend unit tests
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
         run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends sudo passwd util-linux python3
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
           npm test

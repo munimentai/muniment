@@ -177,11 +177,52 @@ time.sleep(10)
   assert.match(result.stdout, /\[subscription-host\] timeout=slot-wait\n$/)
 })
 
+function sudoFixture(remote, output) {
+  const config = { encoding: 'utf8', timeout: 10_000, input: 'private-stdin\n' }
+  if (process.getuid() !== 0) return spawnSync('sh', ['-c', remote], config)
+
+  const user = path.basename(output).replace('subscription-host-test-', 'subhost-').toLowerCase()
+  const policy = `/etc/sudoers.d/${user}`
+  const command = path.join(output, 'command')
+  function checked(program, args) {
+    const result = spawnSync(program, args, { encoding: 'utf8', timeout: 10_000 })
+    assert.equal(result.error, undefined)
+    assert.equal(result.status, 0, result.stderr + result.stdout)
+    return result
+  }
+
+  // Only this root-owned command may cross the fixture's privilege boundary.
+  assert.ok(remote.startsWith('sudo -n '))
+  fs.chmodSync(output, 0o755)
+  fs.writeFileSync(command, `#!/bin/sh\nPATH=/usr/bin:/bin\nexport PATH\nexec ${remote.slice('sudo -n '.length)}\n`, { mode: 0o755 })
+  checked('useradd', ['--system', '--no-create-home', '--no-user-group', '--no-log-init', '--shell', '/usr/sbin/nologin', user])
+  let policyCreated = false
+  try {
+    fs.writeFileSync(policy, `${user} ALL=(root) NOPASSWD: ${command} ""\n`, { mode: 0o440, flag: 'wx' })
+    policyCreated = true
+    checked('visudo', ['-cf', policy])
+    const uid = checked('runuser', ['-u', user, '--', 'id', '-u'])
+    assert.notEqual(Number(uid.stdout.trim()), 0)
+    const denied = spawnSync('runuser', ['-u', user, '--', 'sudo', '-n', '/usr/bin/true'], config)
+    assert.equal(denied.error, undefined)
+    assert.notEqual(denied.status, 0, 'The fixture must not allow unrelated sudo commands.')
+    return spawnSync('runuser', ['-u', user, '--', 'sudo', '-n', command], {
+      ...config, cwd: output, env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin' },
+    })
+  } finally {
+    try {
+      if (policyCreated) fs.rmSync(policy, { force: true })
+    } finally {
+      checked('userdel', [user])
+    }
+  }
+}
+
 for (const parentExits of [false, true]) {
   test(`sudo cleanup stops the root driver and its child when the driver ${parentExits ? 'exits' : 'ignores SIGTERM'}`, () => temporary(output => {
-    assert.notEqual(process.getuid(), 0, 'Run this test as an unprivileged user with passwordless sudo.')
     const script = `import os, signal, sys, time
 assert os.geteuid() == 0
+assert int(os.environ["SUDO_UID"]) != 0
 assert sys.stdin.read() == "private-stdin\\n"
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 child = os.fork()
@@ -206,9 +247,10 @@ print("guest started", flush=True)
     } })
     remote = remote.replace(` ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} `, ' 0.8 1.6 0.3 ')
       .replace(' desktop-ci windows', ` python3 -u '${driver}' windows`)
-    const result = spawnSync('sh', ['-c', remote], {
-      encoding: 'utf8', timeout: 10_000, input: 'private-stdin\n',
-    })
+    const result = sudoFixture(remote, output)
+    const privileged = (command, args, config) => process.getuid() === 0
+      ? spawnSync(command, args, config)
+      : spawnSync('sudo', ['-n', command, ...args], config)
     const pids = result.stdout?.match(/driver=(\d+) child=(\d+)/)?.slice(1) ?? []
     try {
       assert.equal(result.error, undefined)
@@ -216,7 +258,7 @@ print("guest started", flush=True)
       assert.match(result.stdout, /\[subscription-host\] timeout=slot-wait\n$/)
       assert.doesNotMatch(result.stdout, /guest started/)
       assert.equal(pids.length, 2)
-      const check = spawnSync('sudo', ['-n', 'python3', '-c', `import pathlib, sys, time
+      const check = privileged('python3', ['-c', `import pathlib, sys, time
 for pid in sys.argv[1:]:
     status = pathlib.Path(f"/proc/{pid}/status")
     for _ in range(100):
@@ -233,7 +275,7 @@ for pid in sys.argv[1:]:
       assert.equal(check.error, undefined)
       assert.equal(check.status, 0, check.stderr)
     } finally {
-      if (pids.length) spawnSync('sudo', ['-n', 'kill', '-KILL', '--', ...pids], { timeout: 5000 })
+      if (pids.length) privileged('kill', ['-KILL', '--', ...pids], { timeout: 5000 })
     }
   }))
 }
