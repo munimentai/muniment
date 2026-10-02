@@ -3332,14 +3332,15 @@ describe('The installed specs use first-run selectors.', () => {
   })
 })
 
-describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
+const msiDiagnosticTimeout = 30_000
+describe('Windows build MSI diagnostics', { timeout: msiDiagnosticTimeout }, () => {
   const script = fs.readFileSync(path.join(root, 'test/windows-installers.ps1'), 'utf8')
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
   const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
   const registration = fs.readFileSync(path.join(root, 'test/windows-msi-registration.ps1'), 'utf8')
   const cefCheck = script.slice(script.indexOf('function Assert-CefInstallation'), script.indexOf('\nfunction Write-MsiProperties'))
   const helpers = registration + '\n' + cefCheck + '\n' + script.slice(script.indexOf('function Write-MsiScopeLog'), script.indexOf('\n$machineKey ='))
-  const invoke = (body, args = []) => {
+  const invoke = (body, args = [], timeout = msiDiagnosticTimeout) => {
     const file = path.join(temp(), 'diagnostics.ps1')
     // Replace COM identity and release calls. The fixture runs the registration helper and its property getters.
     const fixtureHelpers = helpers.replaceAll(
@@ -3348,10 +3349,22 @@ describe('Windows build MSI diagnostics', { timeout: 30_000 }, () => {
       '(Join-Path $PSScriptRoot "windows-msi-payload.mjs")', `'${path.join(root, 'test/windows-msi-payload.mjs').replaceAll("'", "''")}'`,
     )
     fs.writeFileSync(file, `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${fixtureHelpers}\n${body}\n`)
-    return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
-      encoding: 'utf8', timeout: 15_000,
+    // Give the lifecycle fixture the suite's full budget under CI contention.
+    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
+      encoding: 'utf8', timeout,
     })
+    if (result.error) {
+      throw new Error(`The MSI diagnostic process failed: ${result.error.message}\n${result.stdout ?? ''}${result.stderr ?? ''}`, { cause: result.error })
+    }
+    return result
   }
+
+  it.skipIf(!hasPowerShell)('Reports a diagnostic process timeout.', () => {
+    expect(() => invoke('Start-Sleep -Seconds 60', [], 100)).toThrow(expect.objectContaining({
+      message: expect.stringContaining('The MSI diagnostic process failed:'),
+      cause: expect.objectContaining({ code: 'ETIMEDOUT' }),
+    }))
+  })
 
   const comFixture = `
 $script:fixtureInstalled = $true
