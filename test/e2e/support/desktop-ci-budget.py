@@ -8,7 +8,7 @@ import sys
 import time
 
 
-# Run under sudo on the SSH host so both signals reach the driver and its process group.
+# Keep the wrapper unprivileged. Sudo relays signals to the driver.
 def run(slot_seconds, run_seconds, cleanup_seconds, command):
     child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              start_new_session=True)
@@ -20,6 +20,7 @@ def run(slot_seconds, run_seconds, cleanup_seconds, command):
     pending = b""
     failure = None
     interrupted = False
+    escalated = False
 
     def interrupt(signum, frame):
         nonlocal interrupted
@@ -29,8 +30,15 @@ def run(slot_seconds, run_seconds, cleanup_seconds, command):
     signal.signal(signal.SIGHUP, interrupt)
 
     def stop(signum):
+        nonlocal escalated
         try:
-            os.killpg(child.pid, signum)
+            if command[0] == "sudo":
+                # SIGKILL cannot reach the root driver through sudo. SIGALRM asks sudo to escalate.
+                if not escalated and child.poll() is None:
+                    escalated = signum == signal.SIGKILL
+                    os.kill(child.pid, signal.SIGALRM if escalated else signum)
+            else:
+                os.killpg(child.pid, signum)
         except ProcessLookupError:
             pass
 
