@@ -231,6 +231,13 @@ pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(
         .map_err(|error| error.probe_code().into())
 }
 
+pub(crate) fn model_save(provider: &str, model: &str, outcome: &str, os_error: Option<i32>) {
+    let Ok(root) = root() else { return };
+    let _ = muniment_core::model_router::subscription_probe::record_model_save(
+        &root, provider, model, outcome, os_error,
+    );
+}
+
 #[tauri::command]
 pub(crate) fn subscription_probe_progress(
     stage: String,
