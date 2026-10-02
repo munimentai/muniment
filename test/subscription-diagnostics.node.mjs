@@ -68,6 +68,52 @@ test('blocked diagnostics name the turn and provider outcome without replies or 
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+test('inventory timeouts keep model save results, OS codes, and saved defaults', () => temporary(root => {
+  const env = { MUNIMENT_STATE_DIR: root }
+  const file = path.join(root, 'subscription-probe-progress.jsonl')
+  const base = { phase: 'chat', turn: 1, requested: 'terra', error_class: 'none' }
+  const inventory = { ...base, stage: 'inventory', transport: 'not-started', error_class: 'timeout',
+    settings_read: true, defaultProvider: 'muniment-router', defaultModel: 'openai-codex/luna' }
+  const current = rows => {
+    fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n')
+    const text = probeProgress(env, 'chat/verify-result', 'chat')
+    assert.ok(!text.includes('PRIVATE'))
+    return JSON.parse(text.split('\n').at(-1).slice('probe-current='.length))
+  }
+  for (const [transport, code, rejected] of [['pending', null, null], ['complete', null, false], ['failed', 32, true], ['failed', 1175, true], ['failed', null, true]]) {
+    const row = current([{ ...base, stage: 'model-save', transport, os_error: code, message: 'PRIVATE path and token' }, inventory])
+    assert.equal(row.model_save_status, transport)
+    assert.equal(row.model_save_rejected, rejected)
+    assert.equal(row.os_error, code)
+    assert.equal(row.defaultProvider, 'muniment-router')
+    assert.equal(row.defaultModel, 'openai-codex/luna')
+    assert.equal(row.settings_read, true)
+    assert.equal(probeFailure(env), 'product')
+  }
+  const stale = { ...base, stage: 'model-save', transport: 'failed', os_error: 32 }
+  for (const change of [{ turn: 0 }, { requested: 'luna' }, { phase: 'features' }]) {
+    const row = current([{ ...stale, ...change }, inventory])
+    assert.equal(row.model_save_status, 'not-started')
+    assert.equal(row.model_save_rejected, null)
+    assert.equal(row.os_error, null)
+  }
+  const row = current([stale, { ...stale, transport: 'complete', os_error: 32 }, inventory])
+  assert.equal(row.model_save_rejected, false)
+  assert.equal(row.os_error, null)
+  for (const code of ['PRIVATE', '32', 1.5, 2147483648, -2147483649, {}]) {
+    assert.equal(current([{ ...stale, os_error: code }, inventory]).os_error, null)
+  }
+  for (const value of ['C:/PRIVATE', 'C:\\PRIVATE', '/PRIVATE', '../PRIVATE', 'PRIVATE\nTOKEN', 'PRIVATE\n', 'PRIVATE\r', {}, 4]) {
+    const row = current([{ ...inventory, defaultProvider: value, defaultModel: value }])
+    assert.equal(row.defaultProvider, '[redacted]')
+    assert.equal(row.defaultModel, '[redacted]')
+  }
+  const empty = current([{ ...inventory, settings_read: false, defaultProvider: null, defaultModel: null }])
+  assert.equal(empty.settings_read, false)
+  assert.equal(empty.defaultProvider, null)
+  assert.equal(empty.defaultModel, null)
+}))
+
 test('Windows artifacts keep redacted transport details at chat/verify-result', t => temporary(root => {
   t.mock.method(console, 'error', () => {})
   const env = { MUNIMENT_STATE_DIR: root }

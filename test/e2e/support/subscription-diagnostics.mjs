@@ -120,7 +120,7 @@ export function processStatus(child) {
   return `pid=${child.pid} exit=${child.exitCode ?? 'none'} signal=${child.signalCode ?? 'none'}`
 }
 
-const probeStages = ['composer', 'runtime', 'selection', 'inventory', 'send', 'reply', 'render', 'complete', 'restore', 'features', 'result', 'transport']
+const probeStages = ['composer', 'runtime', 'selection', 'model-save', 'inventory', 'send', 'reply', 'render', 'complete', 'restore', 'features', 'result', 'transport']
 const probeErrors = ['none', 'timeout', 'command-timeout', 'command-failed', 'reply-failed', 'context-mismatch', 'auth', 'quota', 'http', 'network', 'stream',
   'update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address', 'update-builder', 'update-check',
   'update-download', 'update-unavailable', 'update-not-prepared', 'update-package-digest', 'update-tamper-rejection',
@@ -144,6 +144,22 @@ function transportDetail(row) {
   return { transport_kind: row.transport_kind, host }
 }
 
+function modelSaveDetail(row) {
+  if (row.stage === 'model-save') {
+    const rejected = row.transport === 'failed' ? true : row.transport === 'complete' ? false : null
+    return { model_save_rejected: rejected,
+      os_error: rejected && Number.isInteger(row.os_error) && row.os_error >= -2147483648 && row.os_error <= 2147483647 ? row.os_error : null }
+  }
+  if (row.stage !== 'inventory') return {}
+  const identifier = '[A-Za-z0-9][A-Za-z0-9._-]{0,127}'
+  const provider = new RegExp(`^${identifier}$`)
+  const model = new RegExp(`^(?:${identifier}/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+  const safe = (value, pattern) => value === null ? null
+    : typeof value === 'string' && !/[\x00-\x1f\x7f]/.test(value) && pattern.test(value) ? value : '[redacted]'
+  return { settings_read: row.settings_read === true,
+    defaultProvider: safe(row.defaultProvider, provider), defaultModel: safe(row.defaultModel, model) }
+}
+
 export function readProbeProgress(env, transport = false) {
   try {
     const file = path.join(env.MUNIMENT_STATE_DIR, transport ? 'subscription-probe-transport-progress.jsonl' : 'subscription-probe-progress.jsonl')
@@ -165,7 +181,7 @@ export function readProbeProgress(env, transport = false) {
             !(row.turn === null && row.requested === null || Number.isInteger(row.turn) && row.turn >= 0 && row.turn < 4 &&
               typeof row.requested === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(row.requested))) return []
         return [{ phase: row.phase, stage: row.stage, turn: row.turn, requested: row.requested,
-          transport: row.transport, error_class: row.error_class, ...transportDetail(row) }]
+          transport: row.transport, error_class: row.error_class, ...transportDetail(row), ...modelSaveDetail(row) }]
       } catch { return [] }
     })
   } catch { return [] }
@@ -191,11 +207,17 @@ export function probeProgress(env, step, phase) {
   const progress = readProbeProgress(env).filter(row => row.phase === phase)
   const transports = readProbeProgress(env, true).filter(row => row.phase === phase)
   const current = progress.at(-1)
+  const save = progress.filter(row => row.stage === 'model-save' && row.turn === current?.turn && row.requested === current?.requested).at(-1)
+  const selection = current?.stage === 'inventory' ? {
+    model_save_status: save?.transport || 'not-started',
+    model_save_rejected: save?.model_save_rejected ?? null,
+    os_error: save?.os_error ?? null,
+  } : {}
   const transport = transports.filter(row => row.turn === current?.turn && row.requested === current?.requested).at(-1)
   return `step=${step}\nphase=${phase}` +
     progress.map(row => `\nprobe-progress=${JSON.stringify(row)}`).join('') +
     transports.map(row => `\nprovider-progress=${JSON.stringify(row)}`).join('') +
-    (current ? `\nprobe-current=${JSON.stringify({ ...current,
+    (current ? `\nprobe-current=${JSON.stringify({ ...current, ...selection,
       provider_transport: transport?.transport || 'not-started', provider_error_class: transport?.error_class || 'none',
       ...(transport?.transport_kind ? { provider_transport_kind: transport.transport_kind, provider_host: transport.host } : {}) })}` : '')
 }
