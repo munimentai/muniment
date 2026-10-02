@@ -14,6 +14,67 @@ const cleanups = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
 
 describe.skipIf(!executable || !packages)('shipped Pi and extension compatibility', () => {
+  it('calls a new lazy MCP server by scope before its tools enter the cache', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'muniment-mcp-test-'))
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }))
+    const token = `MUNIMENT-${'c'.repeat(32)}`
+    const receipt = join(root, 'receipt.json')
+    // Earlier chat turns create the cache before the user adds the server.
+    writeFileSync(join(root, 'mcp-cache.json'), JSON.stringify({ version: 1, servers: {} }))
+    writeFileSync(join(root, 'mcp.json'), JSON.stringify({ settings: { jev: false }, mcpServers: {
+      'extend-release-acceptance': { command: process.execPath,
+        args: [resolve('test/e2e/support/subscription-mcp.mjs'), token, receipt], lifecycle: 'lazy' },
+    } }))
+    const calls = [
+      { tool: 'acceptance_token', args: {} },
+      { server: 'extend-release-acceptance', tool: 'acceptance_token', args: {} },
+    ]
+    let requests = 0
+    const server = createServer((request, response) => {
+      request.resume()
+      request.on('end', () => {
+        const args = calls[requests++]
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        const chunks = args ? [
+          { delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call-${requests}`, type: 'function',
+            function: { name: 'mcp', arguments: JSON.stringify(args) } }] }, finish_reason: null },
+          { delta: {}, finish_reason: 'tool_calls' },
+        ] : [{ delta: { role: 'assistant', content: token }, finish_reason: null }, { delta: {}, finish_reason: 'stop' }]
+        for (const chunk of chunks) response.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', model: 'fixture', choices: [{ index: 0, ...chunk }] })}\n\n`)
+        response.end('data: [DONE]\n\n')
+      })
+    })
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(() => new Promise(resolve => server.close(resolve)))
+    writeFileSync(join(root, 'models.json'), JSON.stringify({ providers: { fixture: {
+      baseUrl: `http://127.0.0.1:${server.address().port}/v1`, api: 'openai-completions', apiKey: 'fixture',
+      models: [{ id: 'fixture', contextWindow: 128000, maxTokens: 8192, input: ['text'] }],
+    } } }))
+    const result = await new Promise((resolveResult, reject) => {
+      const child = spawn(executable, ['-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills', '--no-context-files',
+        '-e', resolve(packages, 'node_modules/pi-mcp-adapter/index.ts'), '--provider', 'fixture', '--model', 'fixture', 'Call the MCP tool.'], {
+        cwd: root, env: { PATH: process.env.PATH, HOME: root, TMPDIR: root, PI_CODING_AGENT_DIR: root, PI_OFFLINE: '1', PI_MCP_CONFIG_MODE: 'exclusive' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let stdout = '', stderr = ''
+      const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('The MCP test timed out.')) }, 30000)
+      child.stdout.on('data', data => { stdout += data })
+      child.stderr.on('data', data => { stderr += data })
+      child.on('error', error => { clearTimeout(timer); reject(error) })
+      child.on('close', code => { clearTimeout(timer); resolveResult({ code, stdout, stderr }) })
+    })
+    expect(result.stderr).not.toMatch(/Failed to load extension|extension.*error/i)
+    expect(result.code, result.stderr).toBe(0)
+    const events = result.stdout.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line))
+    const results = events.filter(event => event.type === 'tool_execution_end')
+    expect(results).toHaveLength(2)
+    expect(results[0].result.details.error, JSON.stringify(results)).toBe('tool_not_found')
+    expect(results[1].result.content).toContainEqual({ type: 'text', text: token })
+    expect(results[1].isError).toBe(false)
+    expect(JSON.parse(readFileSync(receipt, 'utf8'))).toEqual({ token })
+    expect(requests).toBe(3)
+  }, 40000)
+
   it('loads every extension and completes streamed replies with cache usage for four selected models', async () => {
     expect(execFileSync(executable, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim()).toBe(readPins().pi)
     const root = mkdtempSync(join(tmpdir(), 'muniment-pi-test-'))
