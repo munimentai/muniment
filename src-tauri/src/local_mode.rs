@@ -419,10 +419,16 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
 pub(crate) fn read_json_for_update(
     path: &Path,
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    read_json_for_update_io(path).map_err(|_| SAVE_SETTINGS_ERROR.to_string())
+}
+
+fn read_json_for_update_io(
+    path: &Path,
+) -> std::io::Result<serde_json::Map<String, serde_json::Value>> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| SAVE_SETTINGS_ERROR.to_string()),
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(std::io::Error::other),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
-        Err(_) => Err(SAVE_SETTINGS_ERROR.into()),
+        Err(error) => Err(error),
     }
 }
 
@@ -430,7 +436,14 @@ pub(crate) fn write_json_for_update(
     path: &Path,
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(root).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+    write_json_for_update_io(path, root).map_err(|_| SAVE_SETTINGS_ERROR.to_string())
+}
+
+fn write_json_for_update_io(
+    path: &Path,
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec_pretty(root)?;
     let temporary = path.with_extension(format!("tmp-{}", Uuid::new_v4()));
     let result = (|| {
         let mut options = OpenOptions::new();
@@ -443,12 +456,14 @@ pub(crate) fn write_json_for_update(
         let mut file = options.open(&temporary)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
+        // ReplaceFileW opens the replacement without sharing access.
+        drop(file);
         muniment_core::atomic_file::replace(&temporary, path)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    result.map_err(|_| SAVE_SETTINGS_ERROR.into())
+    result
 }
 
 #[tauri::command]
@@ -1033,16 +1048,19 @@ fn set_default_model(agent: &Path, provider: &str, model: &str) -> Result<(), St
     if !valid_identifier(provider, 128) || !valid_identifier(model, 512) {
         return Err("Choose a provider and a model.".into());
     }
+    save_default_model(agent, provider, model).map_err(|_| SAVE_SETTINGS_ERROR.to_string())
+}
+
+fn save_default_model(agent: &Path, provider: &str, model: &str) -> std::io::Result<()> {
     let settings_file = pi_settings_file(&pi_models_file(agent));
-    fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let lock = muniment_core::pi_settings::lock_settings(&settings_file)
-        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let mut settings = read_json_for_update(&settings_file)?;
+    fs::create_dir_all(agent)?;
+    let lock = muniment_core::pi_settings::lock_settings(&settings_file)?;
+    let mut settings = read_json_for_update_io(&settings_file)?;
     settings.insert("defaultProvider".into(), provider.into());
     settings.insert("defaultModel".into(), model.into());
     merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
-    lock.check().map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    write_json_for_update(&settings_file, &settings)
+    lock.check()?;
+    write_json_for_update_io(&settings_file, &settings)
 }
 
 /// Native Pi compaction settings apply when the next message starts.
@@ -1491,8 +1509,22 @@ pub(crate) fn local_mode_set_default_model(
     provider: String,
     model: String,
 ) -> Result<(), String> {
-    let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
-    set_default_model(&agent, &provider, &model)
+    crate::subscription_probe::model_save(&provider, &model, "pending", None);
+    let result = (|| {
+        if !valid_identifier(&provider, 128) || !valid_identifier(&model, 512) {
+            return Err(("Choose a provider and a model.".to_string(), None));
+        }
+        let agent = harness_agent_directory(SAVE_SETTINGS_ERROR).map_err(|error| (error, None))?;
+        save_default_model(&agent, &provider, &model)
+            .map_err(|error| (SAVE_SETTINGS_ERROR.to_string(), error.raw_os_error()))
+    })();
+    crate::subscription_probe::model_save(
+        &provider,
+        &model,
+        if result.is_ok() { "complete" } else { "failed" },
+        result.as_ref().err().and_then(|(_, code)| *code),
+    );
+    result.map_err(|(message, _)| message)
 }
 
 #[tauri::command]
@@ -1791,6 +1823,48 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         assert_eq!(inventory.default_provider.as_deref(), Some("ollama"));
         assert_eq!(inventory.default_model.as_deref(), Some("llama3.2:3b"));
         assert_eq!(inventory.hidden, vec!["anthropic/claude-haiku-4-5"]);
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn switching_four_router_models_replaces_existing_settings() {
+        let agent = temporary_directory();
+        let path = agent.join("settings.json");
+        fs::write(&path, r#"{"theme":"dark","compaction":{"enabled":false}}"#).unwrap();
+        for model in [
+            "gpt-5.6-luna",
+            "gpt-5.6-terra",
+            "gpt-5.6-sol",
+            "gpt-5.6-astra",
+        ] {
+            let model = format!("openai-codex/{model}");
+            set_default_model(&agent, "muniment-router", &model).unwrap();
+            let settings = read_json_for_update(&path).unwrap();
+            assert_eq!(settings["defaultProvider"], "muniment-router");
+            assert_eq!(settings["defaultModel"], model);
+            assert_eq!(settings["theme"], "dark");
+            assert_eq!(settings["compaction"]["enabled"], false);
+            assert!(!fs::read_dir(&agent).unwrap().any(|entry| entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|extension| extension.to_string_lossy().starts_with("tmp-"))));
+        }
+        for (provider, model) in [
+            ("", "x"),
+            ("muniment-router", ""),
+            ("muniment-router", " x"),
+            ("muniment-router", "x\n"),
+        ] {
+            let before = fs::read(&path).unwrap();
+            assert!(set_default_model(&agent, provider, model).is_err());
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+        fs::write(&path, b"invalid JSON").unwrap();
+        assert!(
+            set_default_model(&agent, "muniment-router", "openai-codex/gpt-5.6-terra").is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"invalid JSON");
         fs::remove_dir_all(agent).unwrap();
     }
 
