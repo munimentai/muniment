@@ -17,6 +17,7 @@ const desktopCiReasons = Object.freeze({
   run: 'The desktop-CI guest and artifact collection exceeded their 60-minute limit.',
   startup: 'The desktop-CI driver did not start within the 60-minute limit.',
   client: 'The desktop-CI SSH session exceeded its 125-minute limit.',
+  'sudo-denied': 'The desktop-CI host denied permission to start the driver.',
 })
 const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`
 
@@ -26,6 +27,8 @@ function desktopCiFailure(ssh) {
   const transcript = `${ssh.stdout ?? ''}\n${ssh.stderr ?? ''}`
   const timeout = transcript.match(/^\[subscription-host\] timeout=(slot-wait|run|startup)$/m)
   if (ssh.status === 124 && timeout) return timeout[1]
+  if (!/^\[desktop-ci \d{2}:\d{2}:\d{2}\]/m.test(transcript) &&
+      /^(?:sudo:.*(?:password is required|not allowed|not in the sudoers|[Pp]ermission denied)|Sorry, user .* is not allowed to execute|.* is not in the sudoers file|(?:sh|bash):.*[Pp]ermission denied)/m.test(transcript)) return 'sudo-denied'
   if (/^\[desktop-ci \d{2}:\d{2}:\d{2}\] BUILD FAILED \((linux|windows|macos)\) rc=124\r?$/m.test(transcript)) return 'guest'
   if (ssh.status === 124 && !transcript.includes('BUILD GREEN') &&
       /^\[desktop-ci \d{2}:\d{2}:\d{2}\] SSH up; starting repo build \(timeout 2400s\)\r?$/m.test(transcript)) return 'guest'
@@ -58,7 +61,7 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
     const extra = platform === 'windows' ? ' --console-user' : platform === 'macos' ? ' --screendump' : ''
     const ref = /^[a-f0-9]{40}$/.test(harnessSha ?? '') ? harnessSha : sourceSha
     const wrapper = fs.readFileSync(new URL('../support/desktop-ci-budget.py', import.meta.url), 'utf8')
-    const remote = `sudo -n python3 -c ${shellQuote(wrapper)} ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} desktop-ci ${platform}${extra} --repo 'https://github.com/${repository}.git' --ref '${ref}' --cmd '${cmd}' --env-stdin --memory 8192 --build-timeout ${desktopCiBudget.build} --collect-artifacts`
+    const remote = `python3 -c ${shellQuote(wrapper)} ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} sudo -n desktop-ci ${platform}${extra} --repo 'https://github.com/${repository}.git' --ref '${ref}' --cmd '${cmd}' --env-stdin --memory 8192 --build-timeout ${desktopCiBudget.build} --collect-artifacts`
     const input = [
       'MUNIMENT_PI_CANDIDATE=1',
       `GH_TOKEN=${token}`,

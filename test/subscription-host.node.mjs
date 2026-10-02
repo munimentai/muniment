@@ -11,6 +11,7 @@ const waiting = '[desktop-ci 21:21:56] waiting for a desktop-CI slot (lock)...\n
 const acquired = '[desktop-ci 22:01:56] slot 0 acquired\n'
 const building = '[desktop-ci 22:02:56] SSH up; starting repo build (timeout 2400s)\n'
 const unavailable = 'The native desktop-ci runner for this platform is unavailable.'
+const sudoDenied = 'The desktop-CI host denied permission to start the driver.'
 const sourceSha = 'a'.repeat(40)
 const leases = JSON.stringify([{ provider: 'openai-codex', access: 'private-access', account_id: 'private-account', expires_ms: Date.now() + 4 * 60 * 60_000 }])
 const models = JSON.stringify(Array.from({ length: 4 }, (_, i) => ({ family: 'openai', id: `model-${i}` })))
@@ -28,6 +29,14 @@ for (const [name, ssh, reason] of [
   ['run timeout', { status: 124, stdout: waiting + acquired + '[subscription-host] timeout=run\n' }, 'The desktop-CI guest and artifact collection exceeded their 60-minute limit.'],
   ['startup timeout', { status: 124, stdout: '[subscription-host] timeout=startup\n' }, 'The desktop-CI driver did not start within the 60-minute limit.'],
   ['client timeout', { status: 255, error: Object.assign(new Error('spawnSync ssh ETIMEDOUT'), { code: 'ETIMEDOUT' }) }, 'The desktop-CI SSH session exceeded its 125-minute limit.'],
+  ['sudo password refusal', { status: 1, stderr: 'sudo: a password is required\n' }, sudoDenied],
+  ['merged sudo refusal', { status: 1, stdout: 'sudo: a password is required\n' }, sudoDenied],
+  ['sudo policy refusal', { status: 1, stderr: "Sorry, user desktopci is not allowed to execute '/usr/bin/desktop-ci windows' as root on host.\n" }, sudoDenied],
+  ['sudoers refusal', { status: 1, stderr: 'desktopci is not in the sudoers file.\n' }, sudoDenied],
+  ['driver permission refusal', { status: 1, stderr: 'sudo: unable to execute /usr/bin/desktop-ci: Permission denied\n' }, sudoDenied],
+  ['shell permission refusal', { status: 126, stderr: 'sh: 1: python3: Permission denied\n' }, sudoDenied],
+  ['guest sudo refusal', { status: 1, stdout: acquired + building, stderr: 'sudo: a password is required\n' }, unavailable],
+  ['successful sudo diagnostic', { status: 0, stderr: 'sudo: a password is required\n' }, unavailable],
   ['unreachable host', { status: 255, stderr: 'ssh: connect to host 10.1.10.10 port 22: Connection timed out\n' }, unavailable],
   ['missing ssh', { status: null, error: Object.assign(new Error('spawnSync ssh ENOENT'), { code: 'ENOENT' }) }, unavailable],
   ['disconnect during the slot wait', { status: 255, stdout: waiting, stderr: 'Connection closed\n' }, unavailable],
@@ -86,8 +95,8 @@ test('the client and native jobs leave time for the slot, guest, artifacts, and 
     if (command === 'ssh') {
       assert.equal(config.timeout, desktopCiBudget.client * 1000)
       assert.ok(args.includes('ConnectTimeout=30'))
-      assert.ok(args.at(-1).startsWith('sudo -n python3 -c '))
-      assert.ok(args.at(-1).includes(` ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} desktop-ci windows`))
+      assert.ok(args.at(-1).startsWith('python3 -c '))
+      assert.ok(args.at(-1).includes(` ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} sudo -n desktop-ci windows`))
       assert.ok(args.at(-1).includes(`--build-timeout ${desktopCiBudget.build} --collect-artifacts`))
       return { status: 0 }
     }
@@ -95,9 +104,12 @@ test('the client and native jobs leave time for the slot, guest, artifacts, and 
   } }), { status: 0 })
 }))
 
-test('the remote shell preserves driver arguments and secret stdin', () => temporary(output => {
+test('the remote shell elevates only desktop-ci and preserves driver arguments and secret stdin', () => temporary(output => {
   const sudo = path.join(output, 'sudo')
-  fs.writeFileSync(sudo, '#!/usr/bin/env python3\nimport os, sys\nassert sys.argv[1] == "-n"\nos.execvp(sys.argv[2], sys.argv[2:])\n', { mode: 0o700 })
+  fs.writeFileSync(sudo, '#!/usr/bin/env python3\nimport os, sys\nif sys.argv[1:3] != ["-n", "desktop-ci"]:\n    sys.stderr.write("sudo: a password is required\\n")\n    sys.exit(1)\nos.execvp(sys.argv[2], sys.argv[2:])\n', { mode: 0o700 })
+  const denied = spawnSync(sudo, ['-n', 'python3', '-c', 'print("unexpected")'], { encoding: 'utf8', timeout: 10_000 })
+  assert.equal(denied.status, 1)
+  assert.equal(denied.stdout, '')
   fs.writeFileSync(path.join(output, 'desktop-ci'), '#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps({"args": ["desktop-ci", *sys.argv[1:]], "input": sys.stdin.read()}))\n', { mode: 0o700 })
   let transported
   assert.deepEqual(runDesktopCi({ ...options, output, platform: 'linux', spawnProcess(command, args, config) {
@@ -177,13 +189,39 @@ time.sleep(10)
   assert.match(result.stdout, /\[subscription-host\] timeout=slot-wait\n$/)
 })
 
-function sudoFixture(remote, output) {
-  const config = { encoding: 'utf8', timeout: 10_000, input: 'private-stdin\n' }
-  if (process.getuid() !== 0) return spawnSync('sh', ['-c', remote], config)
+test('the wrapper sends SIGTERM and escalates through the sudo process', () => temporary(output => {
+  const escalation = path.join(output, 'escalation')
+  fs.writeFileSync(path.join(output, 'sudo'), `#!/usr/bin/env python3
+import signal, sys, time
+assert sys.argv[1:3] == ["-n", "desktop-ci"]
+signal.signal(signal.SIGTERM, lambda *_: print("sudo received SIGTERM", flush=True))
+def escalate(*_):
+    with open(${JSON.stringify(escalation)}, "w") as event:
+        event.write("SIGALRM")
+    sys.exit(0)
+signal.signal(signal.SIGALRM, escalate)
+print(${JSON.stringify(waiting)}, end="", flush=True)
+time.sleep(10)
+`, { mode: 0o700 })
+  const result = spawnSync('python3', ['test/e2e/support/desktop-ci-budget.py', '0.8', '1.6', '0.3', 'sudo', '-n', 'desktop-ci'], {
+    encoding: 'utf8', timeout: 10_000, env: { ...process.env, PATH: `${output}:${process.env.PATH}` },
+  })
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 124, result.stderr + result.stdout)
+  assert.match(result.stdout, /sudo received SIGTERM\n/)
+  assert.match(result.stdout, /\[subscription-host\] timeout=slot-wait\n/)
+  assert.equal(fs.readFileSync(escalation, 'utf8'), 'SIGALRM')
+}))
+
+function sudoFixture(remote, output, privilegedWrapper = false, input = 'private-stdin\n') {
+  const config = { encoding: 'utf8', timeout: 10_000, input }
+  if (process.getuid() !== 0) return spawnSync('sh', ['-c', remote], {
+    ...config, env: { ...process.env, PATH: `${output}:${process.env.PATH}` },
+  })
 
   const user = path.basename(output).replace('subscription-host-test-', 'subhost-').toLowerCase()
   const policy = `/etc/sudoers.d/${user}`
-  const command = path.join(output, 'command')
+  const command = path.join(output, privilegedWrapper ? 'command' : 'desktop-ci')
   function checked(program, args) {
     const result = spawnSync(program, args, { encoding: 'utf8', timeout: 10_000 })
     assert.equal(result.error, undefined)
@@ -192,13 +230,15 @@ function sudoFixture(remote, output) {
   }
 
   // Only this root-owned command may cross the fixture's privilege boundary.
-  assert.ok(remote.startsWith('sudo -n '))
   fs.chmodSync(output, 0o755)
-  fs.writeFileSync(command, `#!/bin/sh\nPATH=/usr/bin:/bin\nexport PATH\nexec ${remote.slice('sudo -n '.length)}\n`, { mode: 0o755 })
+  if (privilegedWrapper) {
+    assert.ok(remote.startsWith('sudo -n '))
+    fs.writeFileSync(command, `#!/bin/sh\nPATH=/usr/bin:/bin\nexport PATH\nexec ${remote.slice('sudo -n '.length)}\n`, { mode: 0o755 })
+  }
   checked('useradd', ['--system', '--no-create-home', '--no-user-group', '--no-log-init', '--shell', '/usr/sbin/nologin', user])
   let policyCreated = false
   try {
-    fs.writeFileSync(policy, `${user} ALL=(root) NOPASSWD: ${command} ""\n`, { mode: 0o440, flag: 'wx' })
+    fs.writeFileSync(policy, `Defaults:${user} secure_path="${output}:/usr/sbin:/usr/bin:/sbin:/bin"\n${user} ALL=(root) NOPASSWD: ${command}${privilegedWrapper ? ' ""' : ''}\n`, { mode: 0o440, flag: 'wx' })
     policyCreated = true
     checked('visudo', ['-cf', policy])
     const uid = checked('runuser', ['-u', user, '--', 'id', '-u'])
@@ -206,8 +246,12 @@ function sudoFixture(remote, output) {
     const denied = spawnSync('runuser', ['-u', user, '--', 'sudo', '-n', '/usr/bin/true'], config)
     assert.equal(denied.error, undefined)
     assert.notEqual(denied.status, 0, 'The fixture must not allow unrelated sudo commands.')
-    return spawnSync('runuser', ['-u', user, '--', 'sudo', '-n', command], {
-      ...config, cwd: output, env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin' },
+    const deniedPython = spawnSync('runuser', ['-u', user, '--', 'sudo', '-n', 'python3', '-c', 'print("unexpected")'], config)
+    assert.equal(deniedPython.error, undefined)
+    assert.notEqual(deniedPython.status, 0, 'The fixture must not elevate Python.')
+    const invocation = privilegedWrapper ? ['sudo', '-n', command] : ['sh', '-c', remote]
+    return spawnSync('runuser', ['-u', user, '--', ...invocation], {
+      ...config, cwd: output, env: { PATH: `${output}:/usr/sbin:/usr/bin:/sbin:/bin` },
     })
   } finally {
     try {
@@ -218,8 +262,49 @@ function sudoFixture(remote, output) {
   }
 }
 
+for (const mode of ['success', 'cleanup', 'escalation']) {
+  test(`the unprivileged wrapper runs with desktop-ci-only sudoers during ${mode}`, () => temporary(output => {
+    fs.writeFileSync(path.join(output, 'desktop-ci'), `#!/usr/bin/python3
+import os, signal, sys, time
+assert os.geteuid() == 0
+assert int(os.environ["SUDO_UID"]) != 0
+assert sys.stdin.read().startswith("MUNIMENT_PI_CANDIDATE=1\\n")
+assert sys.argv[1:3] == ["windows", "--console-user"]
+print(f"guest reached driver={os.getpid()}", flush=True)
+if ${JSON.stringify(mode)} == "success":
+    sys.exit(0)
+def cleanup(*_):
+    print("cleanup", flush=True)
+    sys.exit(0)
+signal.signal(signal.SIGTERM, cleanup if ${JSON.stringify(mode)} == "cleanup" else signal.SIG_IGN)
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+print(${JSON.stringify(waiting)}, end="", flush=True)
+time.sleep(10)
+print("driver survived", flush=True)
+`, { mode: 0o755 })
+    assert.deepEqual(runDesktopCi({ ...options, output, spawnProcess(command, args, config) {
+      if (command !== 'ssh') return { status: 0 }
+      const remote = args.at(-1).replace(
+        ` ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} `, ' 0.8 1.6 0.3 ')
+      const result = sudoFixture(remote, output, false, config.input)
+      assert.equal(result.error, undefined)
+      assert.equal(result.status, mode === 'success' ? 0 : 124, result.stderr + result.stdout)
+      assert.match(result.stdout, /guest reached driver=\d+\n/)
+      assert.doesNotMatch(result.stdout + result.stderr, /driver survived|PermissionError/)
+      const pid = result.stdout.match(/driver=(\d+)/)[1]
+      const state = `/proc/${pid}/status`
+      if (fs.existsSync(state)) assert.match(fs.readFileSync(state, 'utf8'), /State:\s+Z/)
+      if (mode !== 'success') {
+        assert.match(result.stdout, /\[subscription-host\] timeout=slot-wait\n/)
+        if (mode === 'cleanup') assert.match(result.stdout, /cleanup\n/)
+      }
+      return result
+    } }), mode === 'success' ? { status: 0 } : { status: 1, failure: 'slot-wait' })
+  }))
+}
+
 for (const parentExits of [false, true]) {
-  test(`sudo cleanup stops the root driver and its child when the driver ${parentExits ? 'exits' : 'ignores SIGTERM'}`, () => temporary(output => {
+  test(`direct privileged cleanup stops the root driver and its child when the driver ${parentExits ? 'exits' : 'ignores SIGTERM'}`, () => temporary(output => {
     const script = `import os, signal, sys, time
 assert os.geteuid() == 0
 assert int(os.environ["SUDO_UID"]) != 0
@@ -246,8 +331,8 @@ print("guest started", flush=True)
       return { status: 0 }
     } })
     remote = remote.replace(` ${desktopCiBudget.slot} ${desktopCiBudget.run} ${desktopCiBudget.cleanup} `, ' 0.8 1.6 0.3 ')
-      .replace(' desktop-ci windows', ` python3 -u '${driver}' windows`)
-    const result = sudoFixture(remote, output)
+      .replace(' sudo -n desktop-ci windows', ` python3 -u '${driver}' windows`)
+    const result = sudoFixture(`sudo -n ${remote}`, output, true)
     const privileged = (command, args, config) => process.getuid() === 0
       ? spawnSync(command, args, config)
       : spawnSync('sudo', ['-n', command, ...args], config)
