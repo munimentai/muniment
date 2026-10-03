@@ -115,6 +115,7 @@ impl Lifecycle {
         endpoint: Option<&std::path::Path>,
     ) {
         let starting = self.snapshot.last_event == RuntimeEvent::Starting;
+        let elapsed = now.saturating_duration_since(self.outage.unwrap_or(now));
         self.observe(connected, !connected, now);
         if starting && self.snapshot.last_event == RuntimeEvent::StartFailed {
             let endpoint = match endpoint {
@@ -125,7 +126,8 @@ impl Lifecycle {
                 None => "The desktop could not resolve the runtime endpoint.".to_owned(),
             };
             self.snapshot.cause = Some(format!(
-                "The desktop client did not connect within 10 seconds. {endpoint}"
+                "The desktop client did not connect within 10 seconds. {endpoint} Startup elapsed: {} ms. Startup bound: 10000 ms.",
+                elapsed.as_millis()
             ));
         }
     }
@@ -443,7 +445,7 @@ mod tests {
                     assert_eq!(
                         snapshot.cause,
                         Some(format!(
-                            "The desktop client did not connect within 10 seconds. {detail}"
+                            "The desktop client did not connect within 10 seconds. {detail} Startup elapsed: 10000 ms. Startup bound: 10000 ms."
                         ))
                     );
                     assert_eq!(snapshot.revision, 1);
@@ -467,6 +469,17 @@ mod tests {
             });
             assert_eq!(runtime_state(app.state()).cause, None);
         }
+    }
+
+    #[test]
+    fn endpoint_timeout_reports_the_elapsed_time_after_a_delayed_observation() {
+        let now = Instant::now();
+        let mut state = Lifecycle::default();
+        state.observe_endpoint(false, now, None);
+        state.observe_endpoint(false, now + Duration::from_secs(13), None);
+        let cause = state.snapshot.cause.unwrap();
+        assert!(cause.contains("Startup elapsed: 13000 ms."));
+        assert!(cause.contains("Startup bound: 10000 ms."));
     }
 
     #[test]
