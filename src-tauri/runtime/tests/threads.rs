@@ -99,6 +99,7 @@ fn creates_a_thread_for_a_run_and_rejects_invalid_inputs_without_events() {
     let page = thread_page(
         &profile,
         Arc::clone(&storage),
+        &std::sync::Mutex::new(None),
         Some("owner".into()),
         thread_id,
         10,
@@ -109,6 +110,61 @@ fn creates_a_thread_for_a_run_and_rejects_invalid_inputs_without_events() {
     assert_eq!(page.entries[0].run_id, run_id);
 
     drop(storage);
+}
+
+#[test]
+fn thread_history_uses_runtime_ownership_for_an_open_effect() {
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let temporary = TemporaryProfile::new("thread-live-effect", false);
+    let storage = open_profile_storage(&temporary.profile).unwrap();
+    let run_id = "01900000-0000-7000-8000-000000000009";
+    let thread_id = prepare_run(&storage, run_id, "owner");
+    {
+        let mut storage = storage.lock().unwrap();
+        let mut event = storage.journal.events(run_id).unwrap().remove(0);
+        event.extra.clear();
+        event.event_id = "01900000-0000-7000-8000-000000000010".into();
+        event.run_seq = 2;
+        event.event_type = "tool.effect.started".into();
+        event.payload = muniment_core::journal::EventPayload::Inline {
+            payload_json: muniment_core::serde_json::json!({"effect_id": "mcp-1"}),
+        };
+        storage.journal.append(1, &event).unwrap();
+    }
+    let activity = muniment_core::attach::RuntimeActivityRegistry::default();
+    let active = std::sync::Mutex::new(Some(muniment_core::run_start::ActiveRun {
+        id: run_id.into(),
+        workspace: "workspace-a".into(),
+        cancelled: Default::default(),
+        transport: Default::default(),
+        adapter: Default::default(),
+        permission_answers: Default::default(),
+        _activity: activity.mark_active_run(),
+    }));
+    let read = || {
+        thread_page(
+            &temporary.profile,
+            Arc::clone(&storage),
+            &active,
+            Some("owner".into()),
+            thread_id.clone(),
+            10,
+            None,
+        )
+        .unwrap()
+        .entries
+        .remove(0)
+    };
+    assert_eq!(read().phase, "thinking");
+    assert!(read().failure_reason.is_none());
+    muniment_core::chat_resume::clear_active_run(&active, run_id);
+    let interrupted = read();
+    assert_eq!(interrupted.phase, "interrupted");
+    assert_eq!(
+        interrupted.failure_reason.as_deref(),
+        Some("unknown-effect-outcome")
+    );
+    assert!(!interrupted.resumable);
 }
 
 #[test]
@@ -136,6 +192,7 @@ fn lists_threads_and_opens_the_selected_thread() {
     let page = thread_page(
         &profile,
         Arc::clone(&storage),
+        &std::sync::Mutex::new(None),
         Some("owner".into()),
         first_thread,
         10,
@@ -176,6 +233,7 @@ fn thread_operations_report_the_poisoned_storage_lock() {
         thread_page(
             &profile.profile,
             Arc::clone(&storage),
+            &std::sync::Mutex::new(None),
             None,
             "thread".into(),
             10,
@@ -205,6 +263,7 @@ fn history_and_ownership_keep_the_underlying_journal_error() {
     let history = thread_page(
         &profile.profile,
         Arc::clone(&storage),
+        &std::sync::Mutex::new(None),
         Some("owner".into()),
         thread_id,
         10,
@@ -237,9 +296,17 @@ fn rejects_a_thread_owned_by_another_subject() {
     let storage = open_profile_storage(&profile).unwrap();
     let thread_id = prepare_run(&storage, "01900000-0000-7000-8000-000000000003", "owner");
 
-    let error = thread_page(&profile, storage, Some("other".into()), thread_id, 10, None)
-        .err()
-        .unwrap();
+    let error = thread_page(
+        &profile,
+        storage,
+        &std::sync::Mutex::new(None),
+        Some("other".into()),
+        thread_id,
+        10,
+        None,
+    )
+    .err()
+    .unwrap();
 
     assert_eq!(
         error,

@@ -11,7 +11,7 @@ import path from 'node:path'
 import vm from 'node:vm'
 import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
-import { AcceptanceError, acceptance, blocked, chatTransports, checkIdentity, hash, platforms, subscriptionAccounts, features, featureChecks, chatFeatures } from './e2e/support/subscription-acceptance.mjs'
+import { AcceptanceError, acceptance, blocked, chatTransports, checkIdentity, hash, platforms, subscriptionAccounts, features, featureChecks, chatFeatures, interruptionErrors } from './e2e/support/subscription-acceptance.mjs'
 import { assertAttachSocketPath, disposableProfilePrefix, installedExecutable, isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } from './e2e/runner/subscriptions.mjs'
 import { collect } from './e2e/runner/collect-subscriptions.mjs'
 import { signUpdaterBytes, decodePublicKey } from '../.github/lib/updater-signature.mjs'
@@ -158,7 +158,7 @@ test('the proof includes only fixed failure stages and error codes', () => {
     ['mcp', ['failed', 'server-add', 'private-provider-text'], {}],
     ['mcp', ['failed', 'tool-turn', 'reply-phase-private-provider-text'], {}],
     ...['reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
-      'reply-phase-pending-permission', 'reply-text', 'receipt-tool'].flatMap(reason => [
+      'reply-phase-pending-permission', 'reply-text', 'receipt-tool', ...interruptionErrors].flatMap(reason => [
       ['mcp', ['failed', 'tool-turn', reason], { failure_stage: 'tool-turn', error_class: reason }],
       ['tools', ['failed', 'check', reason], { failure_stage: 'check', error_class: reason }],
       ['mcp', ['failed', 'server-add', reason], {}],

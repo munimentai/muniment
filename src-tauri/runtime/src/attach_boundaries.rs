@@ -1076,6 +1076,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         service::thread_page(
             &self.profile_directory,
             Arc::clone(&self.storage),
+            &self.active,
             subject,
             request.thread_id,
             usize::from(request.limit),
