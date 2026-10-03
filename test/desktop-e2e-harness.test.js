@@ -3365,8 +3365,12 @@ describe('Windows build MSI diagnostics', { timeout: POWERSHELL_TEST_TIMEOUT }, 
       '[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(', '[void](Release-FixtureComObject ',
     ).replaceAll('[Runtime.InteropServices.Marshal]::IsComObject(', '(Test-FixtureComObject ').replace(
       '(Join-Path $PSScriptRoot "windows-msi-payload.mjs")', `'${path.join(root, 'test/windows-msi-payload.mjs').replaceAll("'", "''")}'`,
+    ).replace(
+      "(Join-Path $PSScriptRoot '..\\scripts\\windows-update-target.ps1')", `'${path.join(root, 'scripts/windows-update-target.ps1').replaceAll("'", "''")}'`,
     )
-    fs.writeFileSync(file, `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${fixtureHelpers}\n${body}\n`)
+    // Share mock state across script scopes in this isolated PowerShell process.
+    const fixture = `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${fixtureHelpers}\n${body}\n`
+    fs.writeFileSync(file, fixture.replaceAll('$script:', '$global:'))
     const result = spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], { timeout })
     expect(result.error, result.stdout + result.stderr).toBeUndefined()
     return result
@@ -3392,14 +3396,17 @@ $script:comReflector | Add-Member ScriptMethod InvokeMember {
   if ([Reflection.BindingFlags]$Flags -ne [Reflection.BindingFlags]::GetProperty -or $null -ne $Binder -or
       $Target.Tag -ne 'product') { throw 'Invalid COM getter arguments.' }
   if ($Name -eq 'InstallProperty') {
-    if ($Arguments.Count -ne 1 -or $Arguments[0] -ne 'State') { throw 'Invalid MSI state arguments.' }
+    if ($Arguments.Count -ne 1 -or $Arguments[0] -notin @('State', 'InstallLocation')) { throw 'Invalid MSI property arguments.' }
   } elseif ($null -ne $Arguments) { throw 'Invalid COM property arguments.' }
   $script:getters += $Name
   switch ($Name) {
     'ProductCode' { return '{12345678-1234-ABCD-EF12-34567890ABCD}' }
     'Context' { return $script:fixtureContext }
     'UserSid' { return $script:fixtureSid }
-    'InstallProperty' { return $script:fixtureState }
+    'InstallProperty' {
+      if ($Arguments[0] -eq 'InstallLocation') { return Split-Path $userRuntime }
+      return $script:fixtureState
+    }
     default { throw "Unexpected COM property: $Name" }
   }
 }
@@ -3430,7 +3437,7 @@ $script:comInstaller | Add-Member ScriptMethod OpenDatabase {
 }
 $script:comInstaller | Add-Member ScriptMethod ProductsEx {
   param($Code, $Sid, $Context)
-  if ($Code -ne '{12345678-1234-ABCD-EF12-34567890ABCD}' -or $Sid -ne 'S-1-5-21-123' -or $Context -ne 7) {
+  if ($Code -ne '{12345678-1234-ABCD-EF12-34567890ABCD}' -or $Sid -notin @('S-1-5-21-123', '') -or $Context -ne 7) {
     throw 'Invalid MSI registration scope.'
   }
   if (-not $script:fixtureInstalled) { Write-Host 'MSI product cleanup check.' }
@@ -3640,6 +3647,20 @@ function Test-Path($Path, $LiteralPath, $PathType) {
   return Microsoft.PowerShell.Management\\Test-Path $Path
 }
 function Get-ItemPropertyValue($Path, $Name) { return $script:applicationValues[$Name] }
+function Get-ItemProperty($Path, $ErrorAction) {
+  $hive = switch ($Path) {
+    'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' { ${hkcu} }
+    'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' { ${hklm} }
+    default { throw 'Unexpected uninstall registry query.' }
+  }
+  if ($script:fixtureInstalled) {
+    @([PSCustomObject]@{
+      DisplayName = 'muniment'; WindowsInstaller = 1
+      PSChildName = '{12345678-1234-ABCD-EF12-34567890ABCD}'
+      InstallLocation = Split-Path $userRuntime
+    }) * $hive
+  }
+}
 function Get-UserRegistrations($Hive) {
   if ($Hive -eq "HKCU:") { @("fixture") * ${hkcu} } else { @("fixture") * ${hku} }
 }
