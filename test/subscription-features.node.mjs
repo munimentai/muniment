@@ -9,7 +9,7 @@ import https from 'node:https'
 import { spawnSync } from 'node:child_process'
 import { updateFixture } from './e2e/runner/subscription-update.mjs'
 import { awaitUpdateResult, verifyUpdateResult, verifyMcpReceipt } from './e2e/runner/subscriptions.mjs'
-import { featureChecks, featureFailure } from './e2e/support/subscription-acceptance.mjs'
+import { featureChecks, featureFailure, interruptionErrors } from './e2e/support/subscription-acceptance.mjs'
 
 const nonce = 'MUNIMENT-' + 'a'.repeat(32)
 const fileNonce = 'MUNIMENT-' + 'b'.repeat(32)
@@ -333,7 +333,8 @@ for (const feature of ['tools', 'mcp']) {
   test(`the ${feature} tool turn reports fixed reply sub-reasons without provider text`, async () => {
     const name = feature === 'tools' ? 'read' : 'mcp__acceptance_token'
     const cases = [
-      ...['failed', 'cancelled', 'interrupted', 'pending-permission'].map(phase => [{ phase }, `reply-phase-${phase}`]),
+      ...['failed', 'cancelled', 'pending-permission'].map(phase => [{ phase }, `reply-phase-${phase}`]),
+      [{ phase: 'interrupted' }, 'reply-interrupted-missing-reason-unapproved'],
       [{ phase: 'private provider phase' }, feature === 'tools' ? 'reply-complete' : 'timeout'],
       [{ text: 'private provider text' }, 'reply-text'], [{ text: '' }, 'reply-text'], [{ text: null }, 'reply-text'],
       [{ receipt: undefined }, 'receipt-tool'], [{ receipt: { tools: [] } }, 'receipt-tool'],
@@ -407,12 +408,35 @@ for (const mode of ['answer-rejected', 'still-pending', 'new-gate', 'failed', 'c
       }
     })
     const reason = mode === 'no-receipt' ? 'receipt-tool' : mode === 'wrong-token' ? 'reply-text'
-      : `reply-phase-${['failed', 'cancelled', 'interrupted'].includes(mode) ? mode : 'pending-permission'}`
+      : mode === 'interrupted' ? 'reply-interrupted-missing-reason-approved'
+        : `reply-phase-${['failed', 'cancelled'].includes(mode) ? mode : 'pending-permission'}`
     assert.deepEqual(result.initial.mcp, ['failed', 'tool-turn', reason])
     assert.equal(result.state.commands.filter(command => command === 'chat_answer_permission').length, 1)
     assert.equal(JSON.stringify(result.initial).includes('private'), false)
   })
 }
+
+test('the MCP probe reports journal reasons and the approval state without provider text', async () => {
+  for (const approved of [false, true]) {
+    for (const [failureReason, reason] of [
+      ['unknown-effect-outcome', 'unknown-effect-outcome'], ['interrupted', 'interrupted'],
+      ['unspecified', 'unspecified'], ['private provider text', 'recorded'],
+      [undefined, 'missing-reason'], [null, 'missing-reason'],
+    ]) {
+      const result = await probe(undefined, (command, data) => {
+        if (command === 'mcp-reply') Object.assign(data, approved
+          ? { phase: 'pending-permission', pendingPermission: structuredClone(mcpApproval) }
+          : { phase: 'interrupted', failureReason })
+        if (command === 'permission-answered') Object.assign(data, { phase: 'interrupted', failureReason })
+      })
+      const code = `reply-interrupted-${reason}-${approved ? 'approved' : 'unapproved'}`
+      assert.deepEqual(result.initial.mcp, ['failed', 'tool-turn', code])
+      assert.deepEqual(featureFailure('mcp', result.initial.mcp), { failure_stage: 'tool-turn', error_class: code })
+      assert.equal(result.state.answers?.length ?? 0, approved ? 1 : 0)
+      assert.equal(JSON.stringify(result.initial).includes('private'), false)
+    }
+  }
+})
 
 test('the tools probe never answers an MCP approval', async () => {
   const result = await probe(undefined, (command, data) => {
@@ -424,7 +448,7 @@ test('the tools probe never answers an MCP approval', async () => {
 
 test('the MCP probe rejects provider errors that claim a local reply sub-reason', async () => {
   for (const errorClass of ['reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
-    'reply-phase-pending-permission', 'reply-text', 'receipt-tool']) {
+    'reply-phase-pending-permission', 'reply-text', 'receipt-tool', ...interruptionErrors]) {
     const result = await probe(undefined, name => {
       if (name === 'mcp-tool-turn') throw Object.assign(new Error('private provider error'), { errorClass })
     })

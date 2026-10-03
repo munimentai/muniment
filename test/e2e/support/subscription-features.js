@@ -236,7 +236,13 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
         if (!entry) return false
         runId = entry.runId
         phase = entry.phase
-        for (const terminal of ['failed', 'cancelled', 'interrupted']) {
+        if (phase === 'interrupted') {
+          // Export only fixed journal reasons. Keep provider text out of the evidence.
+          const reason = ['unknown-effect-outcome', 'interrupted', 'unspecified'].includes(entry.failureReason)
+            ? entry.failureReason : entry.failureReason ? 'recorded' : 'missing-reason'
+          check(false, `reply-interrupted-${reason}-${approvedGate ? 'approved' : 'unapproved'}`)
+        }
+        for (const terminal of ['failed', 'cancelled']) {
           check(phase !== terminal, `reply-phase-${terminal}`)
         }
         if (phase === 'pending-permission') {
