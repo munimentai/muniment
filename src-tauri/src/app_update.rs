@@ -23,7 +23,7 @@ pub enum UpdateFailure {
     State,
     Address,
     Builder,
-    Check,
+    Check(UpdateCheckFailure),
     Download,
     Busy,
     NotPrepared,
@@ -40,7 +40,7 @@ impl UpdateFailure {
             Self::State => "update-state",
             Self::Address => "update-address",
             Self::Builder => "update-builder",
-            Self::Check => "update-check",
+            Self::Check(failure) => failure.probe_code(),
             Self::Download => "update-download",
             Self::Busy => "update-busy",
             Self::NotPrepared => "update-not-prepared",
@@ -56,13 +56,55 @@ impl UpdateFailure {
             Self::State => "Update state is unavailable.",
             Self::Address => "The update address is invalid.",
             Self::Builder => "Updates are unavailable.",
-            Self::Check => "Updates could not be checked.",
+            Self::Check(_) => "Updates could not be checked.",
             Self::Download => "The update could not be downloaded or verified.",
             Self::Busy => "Finish the current action before updating.",
             Self::NotPrepared => "No verified update is ready.",
             Self::InstallTask => "The update could not be installed.",
             Self::Install => "The update could not be installed. Try again.",
             Self::Restart => "The updated app did not restart.",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum UpdateCheckFailure {
+    Network,
+    TargetNotFound,
+    ManifestParse,
+    ReleaseNotFound,
+    Version,
+    Address,
+    Other,
+}
+
+impl UpdateCheckFailure {
+    fn probe_code(&self) -> &'static str {
+        match self {
+            Self::Network => "update-check-network",
+            Self::TargetNotFound => "update-check-target-not-found",
+            Self::ManifestParse => "update-check-manifest-parse",
+            Self::ReleaseNotFound => "update-check-release-not-found",
+            Self::Version => "update-check-version",
+            Self::Address => "update-check-address",
+            Self::Other => "update-check-other",
+        }
+    }
+}
+
+impl From<tauri_plugin_updater::Error> for UpdateCheckFailure {
+    fn from(error: tauri_plugin_updater::Error) -> Self {
+        use tauri_plugin_updater::Error;
+        match error {
+            // The updater reads JSON through reqwest before it parses the release.
+            Error::Reqwest(error) if error.is_decode() => Self::ManifestParse,
+            Error::Reqwest(_) | Error::Network(_) => Self::Network,
+            Error::TargetNotFound(_) | Error::TargetsNotFound(_) => Self::TargetNotFound,
+            Error::Serialization(_) => Self::ManifestParse,
+            Error::ReleaseNotFound => Self::ReleaseNotFound,
+            Error::Semver(_) => Self::Version,
+            Error::UrlParse(_) => Self::Address,
+            _ => Self::Other,
         }
     }
 }
@@ -110,7 +152,11 @@ pub async fn app_update_prepare(
     let updater = crate::subscription_probe::update_builder(builder)?
         .build()
         .map_err(|_| UpdateFailure::Builder)?;
-    let Some(mut update) = updater.check().await.map_err(|_| UpdateFailure::Check)? else {
+    let Some(mut update) = updater
+        .check()
+        .await
+        .map_err(|error| UpdateFailure::Check(error.into()))?
+    else {
         return Ok(None);
     };
     crate::subscription_probe::check_update_download(&update)
@@ -192,7 +238,7 @@ fn windows_update_target() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_install, UpdateFailure};
+    use super::{finish_install, UpdateCheckFailure, UpdateFailure};
     use std::sync::Mutex;
 
     #[test]
@@ -214,8 +260,8 @@ mod tests {
                 "Updates are unavailable.",
             ),
             (
-                UpdateFailure::Check,
-                "update-check",
+                UpdateFailure::Check(UpdateCheckFailure::Other),
+                "update-check-other",
                 "Updates could not be checked.",
             ),
             (
@@ -263,6 +309,197 @@ mod tests {
             assert_eq!(serde_json::to_value(&failure).unwrap(), message);
             assert!(!failure.probe_code().contains("PRIVATE"));
         }
+    }
+
+    #[test]
+    fn update_check_errors_drop_private_details() {
+        use tauri_plugin_updater::Error;
+        for (error, code) in [
+            (Error::Network("PRIVATE".into()), "update-check-network"),
+            (
+                Error::TargetNotFound("PRIVATE".into()),
+                "update-check-target-not-found",
+            ),
+            (
+                Error::TargetsNotFound(vec!["PRIVATE".into()]),
+                "update-check-target-not-found",
+            ),
+            (
+                Error::Serialization(
+                    serde_json::from_str::<serde_json::Value>("PRIVATE").unwrap_err(),
+                ),
+                "update-check-manifest-parse",
+            ),
+            (Error::ReleaseNotFound, "update-check-release-not-found"),
+            (
+                Error::Semver(semver::Version::parse("PRIVATE").unwrap_err()),
+                "update-check-version",
+            ),
+            (
+                Error::UrlParse(url::Url::parse("PRIVATE").unwrap_err()),
+                "update-check-address",
+            ),
+            (
+                Error::Io(std::io::Error::other("PRIVATE")),
+                "update-check-other",
+            ),
+        ] {
+            let failure = UpdateFailure::Check(error.into());
+            assert_eq!(failure.probe_code(), code);
+            assert_eq!(
+                serde_json::to_value(&failure).unwrap(),
+                "Updates could not be checked."
+            );
+            assert!(!format!("{failure:?}").contains("PRIVATE"));
+        }
+    }
+
+    #[test]
+    fn updater_request_errors_keep_only_fixed_codes() {
+        use super::UpdaterExt;
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({"pubkey": "", "requireSignedVersion": true}),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .unwrap();
+        for (tls, code) in [
+            (false, "update-check-manifest-parse"),
+            (true, "update-check-network"),
+        ] {
+            let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+            let address = server.server_addr();
+            let mut responder = Some(std::thread::spawn(move || {
+                if !tls {
+                    server
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap()
+                        .unwrap()
+                        .respond(tiny_http::Response::from_string("PRIVATE"))
+                        .unwrap();
+                }
+            }));
+            // Close the TLS listener before the request. No remote host receives traffic.
+            if tls {
+                responder.take().unwrap().join().unwrap();
+            }
+            let scheme = if tls { "https" } else { "http" };
+            let updater = app
+                .updater_builder()
+                .endpoints(vec![format!("{scheme}://{address}/PRIVATE")
+                    .parse()
+                    .unwrap()])
+                .unwrap()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let error = tauri::async_runtime::block_on(updater.check())
+                .err()
+                .unwrap();
+            if let Some(responder) = responder {
+                responder.join().unwrap();
+            }
+            assert!(matches!(error, tauri_plugin_updater::Error::Reqwest(_)));
+            let failure = UpdateFailure::Check(error.into());
+            assert_eq!(failure.probe_code(), code);
+            assert_eq!(
+                serde_json::to_value(&failure).unwrap(),
+                "Updates could not be checked."
+            );
+            assert!(!format!("{failure:?}").contains("PRIVATE"));
+        }
+    }
+
+    #[test]
+    fn windows_target_checks_and_downloads_over_loopback_https() {
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+        use tauri_plugin_updater::{Error, UpdaterExt};
+
+        struct Fixture(std::process::Child);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                drop(self.0.stdin.take());
+                let _ = self.0.wait();
+            }
+        }
+        let mut fixture = Fixture(
+            Command::new("node")
+                .arg(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../test/e2e/support/subscription-update-fixture.mjs"
+                ))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let mut line = String::new();
+        std::io::BufReader::new(fixture.0.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let endpoint: url::Url = receipt["url"].as_str().unwrap().parse().unwrap();
+        assert_eq!(endpoint.scheme(), "https");
+        assert_eq!(endpoint.host_str(), Some("127.0.0.1"));
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({"pubkey": receipt["pubkey"], "requireSignedVersion": true}),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .unwrap();
+        let builder = || {
+            app.updater_builder()
+                .endpoints(vec![endpoint.clone()])
+                .unwrap()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(5))
+                .configure_client(|client| {
+                    client.danger_accept_invalid_certs(true).https_only(true)
+                })
+        };
+        tauri::async_runtime::block_on(async {
+            // An HKLM uninstall entry must not select the machine feed for a per-user MSI.
+            let wrong = builder()
+                .target("windows-x86_64-msi-machine")
+                .build()
+                .unwrap()
+                .check()
+                .await;
+            assert!(matches!(wrong, Err(Error::TargetNotFound(_))));
+            let mut update = builder()
+                .target("windows-x86_64-msi-user")
+                .build()
+                .unwrap()
+                .check()
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(update.download_url, endpoint.join("/package").unwrap());
+            update.timeout = Some(std::time::Duration::from_secs(5));
+            assert_eq!(
+                update.download(|_, _| {}, || {}).await.unwrap(),
+                b"signed update test package"
+            );
+            update.download_url = endpoint.join("/tampered").unwrap();
+            assert!(matches!(
+                update.download(|_, _| {}, || {}).await,
+                Err(Error::Minisign(_))
+            ));
+            update.download_url = endpoint.join("/package").unwrap();
+            update.version = "999999.0.0".into();
+            assert!(matches!(
+                update.download(|_, _| {}, || {}).await,
+                Err(Error::SignedVersionMismatch { .. })
+            ));
+        });
     }
 
     #[test]
