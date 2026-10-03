@@ -13,9 +13,12 @@ export async function updateFixture(root, bytes, signature, version, platform) {
   }
   const key = path.join(root, 'update-key.pem')
   const cert = path.join(root, 'update-cert.pem')
+  const config = path.join(root, 'update-tls.cnf')
+  // Native TLS clients match IP addresses against the certificate's subject alternative names.
+  fs.writeFileSync(config, '[req]\ndistinguished_name=dn\nx509_extensions=server\n[dn]\n[server]\nsubjectAltName=IP:127.0.0.1\n', { mode: 0o600 })
   const openssl = process.platform === 'win32' ? 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe' : 'openssl'
   const result = spawnSync(openssl, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key,
-    '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore', timeout: 30_000 })
+    '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1', '-config', config], { stdio: 'ignore', timeout: 30_000 })
   if (result.error || result.status !== 0) throw new Error('Install OpenSSL for the disposable update server.')
   fs.chmodSync(key, 0o600)
   const damaged = Buffer.from(bytes)
