@@ -514,13 +514,16 @@ for (const [platform, target] of Object.entries({ linux: 'linux-x86_64', windows
     }
     assert.deepEqual(fs.readdirSync(root), [])
     server = await updateFixture(root, bytes, 'signature', '1.0.0', platform)
-    const get = url => new Promise((resolve, reject) => {
-      https.get(url, { ca: fs.readFileSync(path.join(root, 'update-cert.pem')) }, response => {
+    const ca = fs.readFileSync(path.join(root, 'update-cert.pem'))
+    const get = (url, options = {}) => new Promise((resolve, reject) => {
+      https.get(url, { ca, ...options }, response => {
         const chunks = []
         response.on('data', chunk => chunks.push(chunk))
         response.on('end', () => resolve(Buffer.concat(chunks)))
       }).on('error', reject)
     })
+    await assert.rejects(get(server.url, { ca: [] }), { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' })
+    await assert.rejects(get(server.url, { servername: 'localhost' }), { code: 'ERR_TLS_CERT_ALTNAME_INVALID' })
     const manifest = JSON.parse((await get(server.url)).toString())
     assert.equal(new URL(server.url).hostname, '127.0.0.1')
     assert.equal(manifest.version, '1.0.0')
