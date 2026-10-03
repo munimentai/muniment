@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { POWERSHELL_TEST_TIMEOUT, spawnFixture } from '../../test/e2e/support/fixture-process.mjs';
 const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
-const available = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0;
+const available = process.platform === 'win32' || spawnFixture(powershell, ['-NoProfile', '-Command', 'exit 0']).status === 0;
 const location = 'C:\\Apps\\muniment';
 const productCode = '{12345678-1234-ABCD-EF12-34567890ABCD}';
 const msi = { InstallLocation: location, WindowsInstaller: 1, DisplayName: 'muniment', PSChildName: productCode };
@@ -56,13 +56,13 @@ function runTarget(entries) {
   try {
     fs.writeFileSync(path.join(root, 'entries.json'), JSON.stringify(entries));
     fs.writeFileSync(path.join(root, 'fixture.ps1'), fixture);
-    return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-File', path.join(root, 'fixture.ps1')], {
-      timeout: 20_000, encoding: 'utf8', env: { ...process.env, MUNIMENT_UPDATE_INSTALL_DIR: location,
+    return spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-File', path.join(root, 'fixture.ps1')], {
+      env: { ...process.env, MUNIMENT_UPDATE_INSTALL_DIR: location,
         TEST_ENTRIES: path.join(root, 'entries.json'), TEST_SCRIPT: path.resolve('scripts/windows-update-target.ps1') },
     });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
-describe.skipIf(!available)('Windows updater package identity', { timeout: 30_000 }, () => {
+describe.skipIf(!available)('Windows updater package identity', { timeout: POWERSHELL_TEST_TIMEOUT }, () => {
   it.each([
     [{ user: [msi], machine: [], products: [product(2)] }, 'windows-x86_64-msi-user'],
     [{ user: [], machine: [msi], products: [product(4)] }, 'windows-x86_64-msi-machine'],

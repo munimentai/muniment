@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { POWERSHELL_TEST_TIMEOUT, spawnFixture } from '../../test/e2e/support/fixture-process.mjs';
 const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
-const available = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0;
+const available = process.platform === 'win32' || spawnFixture(powershell, ['-NoProfile', '-Command', 'exit 0']).status === 0;
 
-describe.skipIf(!available)('unmodified Windows installed smoke', { timeout: 30_000 }, () => {
+describe.skipIf(!available)('unmodified Windows installed smoke', { timeout: POWERSHELL_TEST_TIMEOUT }, () => {
   it.each(['connected', 'exited', 'no-window', 'disconnected', 'modified'])('checks the installed application: %s', (mode) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-installed-smoke-'));
     try {
@@ -30,7 +30,7 @@ function taskkill.exe {
 & $env:TEST_SCRIPT -AppBinary (Join-Path $env:TEST_ROOT 'app.exe') -AppLibrary (Join-Path $env:TEST_ROOT 'app.dll') -Diagnostics (Join-Path $env:TEST_ROOT 'diagnostics') -WaitSeconds 0
 if (-not $?) { exit 1 }
 `);
-      const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-File', path.join(root, 'fixture.ps1')], { timeout: 20_000, encoding: 'utf8', env: { ...process.env, TEST_ROOT: root, TEST_MODE: mode, TEST_SCRIPT: path.resolve('test/e2e/support/windows-installed-smoke.ps1') } });
+      const result = spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-File', path.join(root, 'fixture.ps1')], { env: { ...process.env, TEST_ROOT: root, TEST_MODE: mode, TEST_SCRIPT: path.resolve('test/e2e/support/windows-installed-smoke.ps1') } });
       expect(result.error, result.stderr).toBeUndefined();
       if (mode === 'connected') {
         expect(result.status, result.stderr).toBe(0);
