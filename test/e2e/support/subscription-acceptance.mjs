@@ -28,9 +28,19 @@ export function featureFailure(feature, observed) {
     : feature === 'artifacts' ? ['check', 'folders', 'new-file', 'save', 'publish', 'read', 'rename']
       : feature === 'signed-update' ? ['check', 'restore'] : ['check']
   const errors = ['check-failed', 'timeout']
+  if (observed?.[1] === 'check') {
+    const reasons = {
+      routing: ['model_router_settings', 'model_router_save_routes', 'model_router_test_route', 'model_router_update_account',
+        'routing-accounts', 'fallback-selected', 'empty-sample-rejected', 'invalid-fallback-rejected', 'unavailable-model-excluded'],
+      memory: ['memory_profile_read', 'memory_profile_save', 'profile-saved', 'profile-restored'],
+      terminal: ['terminal_start', 'terminal_write', 'terminal_read', 'terminal_close', 'shell-output', 'shell-closed'],
+      tools: ['chat_thread_open', 'composer-visible', 'composer-input', 'send-ready', 'send-click', 'reply-complete'],
+    }
+    if (Object.hasOwn(reasons, feature)) errors.push(...reasons[feature])
+  }
   if ((feature === 'tools' && observed?.[1] === 'check') || (feature === 'mcp' && observed?.[1] === 'tool-turn')) {
     errors.push('reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
-      'reply-phase-pending-permission', 'reply-text', 'receipt-tool', ...interruptionErrors)
+      'reply-phase-pending-permission', 'reply-text', 'receipt-tool', 'composer-visible', ...interruptionErrors)
   }
   if (!Object.hasOwn(featureChecks, feature) || !Array.isArray(observed) || observed.length !== 3 || observed[0] !== 'failed' ||
       !stages.includes(observed[1]) || !errors.includes(observed[2])) return {}

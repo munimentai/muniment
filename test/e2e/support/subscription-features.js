@@ -2,7 +2,7 @@
 window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, turns }) => {
   const features = {}
   const failures = new WeakMap()
-  const check = (value, reason = 'check-failed') => {
+  const check = (value, reason) => {
     if (value) return
     const error = new Error('The installed feature check failed.')
     failures.set(error, reason)
@@ -16,14 +16,16 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
   const run = async (name, action) => {
     features[name] = []
     let failure
-    const step = async (stage, action) => {
+    const step = async (stage, action, reason) => {
       try { return await action() } catch (error) {
         // Keep the first failure when cleanup also fails. Never copy provider text.
-        failure ??= ['failed', stage, failures.get(error) ?? (['timeout', 'command-timeout'].includes(error?.errorClass) ? 'timeout' : 'check-failed')]
+        failure ??= ['failed', stage, failures.get(error) ?? reason ?? (['timeout', 'command-timeout'].includes(error?.errorClass) ? 'timeout' : 'check-failed')]
         throw error
       }
     }
-    try { features[name] = await step('check', () => action(step)) } catch { features[name] = failure }
+    const inspect = (reason, action) => step('check', action, reason)
+    const command = (name, data) => inspect(name, () => invoke(name, data))
+    try { features[name] = await step('check', () => action(step, command, inspect)) } catch { features[name] = failure }
   }
   if (plan.phase === 'update') {
     const codes = ['update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address',
@@ -87,30 +89,31 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     check(saved.accounts.find(account => account.id === id)?.weight === 2)
     return ['account-edit-saved', 'invalid-edit-rejected']
   })
-  await run('routing', async () => {
-    const before = await invoke('model_router_settings')
+  await run('routing', async (_step, command, inspect) => {
+    const before = await command('model_router_settings')
     const model = plan.models[0]
     const fallback = `${model.family}/${model.id}`
+    const accounts = await inspect('routing-accounts', () => before.accounts.filter(account => account.family === model.family))
     try {
-      await invoke('model_router_save_routes', { routes: before.routes, fallback, minConfidence: 0.6 })
-      const decision = await invoke('model_router_test_route', { sample: 'Return the acceptance token.' })
-      check(decision.model === fallback && decision.fallback_reason && decision.eligible_models.includes(fallback))
-      await rejects(() => invoke('model_router_test_route', { sample: '' }))
-      await rejects(() => invoke('model_router_save_routes', { routes: before.routes, fallback: 'openai/nonexistent-acceptance-model' }))
-      for (const account of before.accounts.filter(account => account.family === model.family)) {
-        const models = account.models.filter(id => id !== model.id)
-        await invoke('model_router_update_account', { id: account.id, models, enabled: account.enabled && models.length > 0 })
+      await command('model_router_save_routes', { routes: before.routes, fallback, minConfidence: 0.6 })
+      const decision = await command('model_router_test_route', { sample: 'Return the acceptance token.' })
+      await inspect('fallback-selected', () => check(decision.model === fallback && decision.fallback_reason && decision.eligible_models.includes(fallback)))
+      await inspect('empty-sample-rejected', () => rejects(() => invoke('model_router_test_route', { sample: '' })))
+      await inspect('invalid-fallback-rejected', () => rejects(() => invoke('model_router_save_routes', { routes: before.routes, fallback: 'openai/nonexistent-acceptance-model' })))
+      for (const account of accounts) {
+        const models = await inspect('routing-accounts', () => account.models.filter(id => id !== model.id))
+        await command('model_router_update_account', { id: account.id, models, enabled: account.enabled && models.length > 0 })
       }
       const next = plan.models[1]
-      await invoke('model_router_save_routes', { routes: before.routes, fallback: `${next.family}/${next.id}` })
-      const after = await invoke('model_router_test_route', { sample: 'Return the acceptance token.' })
-      check(!after.eligible_models.includes(fallback) && after.model === `${next.family}/${next.id}`)
+      await command('model_router_save_routes', { routes: before.routes, fallback: `${next.family}/${next.id}` })
+      const after = await command('model_router_test_route', { sample: 'Return the acceptance token.' })
+      await inspect('unavailable-model-excluded', () => check(!after.eligible_models.includes(fallback) && after.model === `${next.family}/${next.id}`))
       return ['fallback-selected', 'empty-sample-rejected', 'unavailable-model-excluded']
     } finally {
-      for (const account of before.accounts.filter(account => account.family === model.family)) {
-        await invoke('model_router_update_account', { id: account.id, models: account.models, enabled: account.enabled })
+      for (const account of accounts) {
+        await command('model_router_update_account', { id: account.id, models: account.models, enabled: account.enabled })
       }
-      await invoke('model_router_save_routes', { routes: before.routes, fallback: before.fallback, minConfidence: before.min_confidence })
+      await command('model_router_save_routes', { routes: before.routes, fallback: before.fallback, minConfidence: before.min_confidence })
     }
   })
   await run('files', async () => {
@@ -129,12 +132,15 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     check((await invoke('project_list')).projects[id] === 'Renamed acceptance project')
     return ['project-created', 'project-renamed']
   })
-  await run('memory', async () => {
-    const before = await invoke('memory_profile_read')
-    await invoke('memory_profile_save', { content: '# Profile\n\nAcceptance profile.\n' })
-    check((await invoke('memory_profile_read')).includes('Acceptance profile.'))
-    await invoke('memory_profile_save', { content: before })
-    check(await invoke('memory_profile_read') === before)
+  await run('memory', async (_step, command, inspect) => {
+    const before = await command('memory_profile_read')
+    try {
+      await command('memory_profile_save', { content: '# Profile\n\nAcceptance profile.\n' })
+      await inspect('profile-saved', async () => check((await command('memory_profile_read')).includes('Acceptance profile.')))
+    } finally {
+      await command('memory_profile_save', { content: before })
+      await inspect('profile-restored', async () => check(await command('memory_profile_read') === before))
+    }
     return ['profile-saved', 'profile-restored']
   })
   await run('agents', async () => {
@@ -191,34 +197,39 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     }
     return ['local-page-rendered', 'unsafe-navigation-rejected', 'view-closed']
   })
-  await run('terminal', async () => {
-    const id = await invoke('terminal_start', { path: plan.fixtureDirectory, cols: 80, rows: 24 })
+  await run('terminal', async (_step, command, inspect) => {
+    const id = await command('terminal_start', { path: plan.fixtureDirectory, cols: 80, rows: 24 })
     try {
       // Ignore the echoed command. Require the shell's separate output line.
-      await invoke('terminal_write', { id, data: `echo ${plan.nonce}\r` })
+      await command('terminal_write', { id, data: `echo ${plan.nonce}\r` })
       let text = ''
-      await wait(async () => {
-        const output = await invoke('terminal_read', { id })
+      await inspect('shell-output', () => wait(async () => {
+        const output = await command('terminal_read', { id })
         text += String.fromCharCode(...output.bytes)
         return text.replace(/\r/g, '').split('\n').some(line => line === plan.nonce)
-      })
-    } finally { await invoke('terminal_close', { id }) }
-    await rejects(() => invoke('terminal_read', { id }))
+      }))
+    } finally { await command('terminal_close', { id }) }
+    await inspect('shell-closed', () => rejects(() => invoke('terminal_read', { id })))
     return ['shell-output', 'shell-closed']
   })
-  const toolTurn = async (prompt, tool, expected, approvalTitle) => {
+  const toolTurn = async (prompt, tool, expected, approvalTitle, inspect = (_reason, action) => action()) => {
     const thread = turns[0].thread
-    const before = await invoke('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
-    const composer = document.querySelector('textarea[placeholder="Ask anything"]')
-    setValue(composer, prompt)
-    const send = await wait(() => [...document.querySelectorAll('button')].find(button =>
-      (button.getAttribute('aria-label') === 'Send' || button.textContent.trim() === 'Send') && !button.disabled))
-    send.click()
+    const call = (name, data) => inspect(name, () => invoke(name, data))
+    const before = await call('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
+    const composer = await inspect('composer-visible', () => {
+      const element = document.querySelector('textarea[placeholder="Ask anything"]')
+      check(element, 'composer-visible')
+      return element
+    })
+    await inspect('composer-input', () => setValue(composer, prompt))
+    const send = await inspect('send-ready', () => wait(() => [...document.querySelectorAll('button')].find(button =>
+      (button.getAttribute('aria-label') === 'Send' || button.textContent.trim() === 'Send') && !button.disabled)))
+    await inspect('send-click', () => send.click())
     let runId, approvedGate, phase
     let entry
     try {
-      entry = await wait(async () => {
-        const page = await invoke('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
+      entry = await inspect('reply-complete', () => wait(async () => {
+        const page = await call('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
         const entry = page.entries.find(entry => runId ? entry.runId === runId : !before.entries.some(old => old.runId === entry.runId))
         if (!entry) return false
         runId = entry.runId
@@ -247,7 +258,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
           }
         }
         return phase === 'complete' && entry
-      })
+      }))
     } catch (error) {
       if (phase === 'pending-permission' && error?.errorClass === 'timeout') check(false, 'reply-phase-pending-permission')
       throw error
@@ -256,8 +267,8 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     check(Array.isArray(entry.receipt?.tools) && entry.receipt.tools.some(item =>
       typeof item?.name === 'string' && tool.test(item.name) && Number.isSafeInteger(item.calls) && item.calls > 0 && item.failed === 0), 'receipt-tool')
   }
-  await run('tools', async () => {
-    await toolTurn(`Use the read tool to read ${JSON.stringify(plan.fixtureFile)}. Reply with only its first line.`, /^(read|read_file)$/, plan.fileNonce)
+  await run('tools', async (_step, _command, inspect) => {
+    await toolTurn(`Use the read tool to read ${JSON.stringify(plan.fixtureFile)}. Reply with only its first line.`, /^(read|read_file)$/, plan.fileNonce, undefined, inspect)
     return ['file-tool-completed']
   })
   await run('mcp', async step => {

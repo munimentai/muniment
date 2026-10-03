@@ -30,22 +30,31 @@ async function probe(failure, fault = () => {}) {
   for (const account of state.accounts) { account.enabled = true; account.models = ['route-model', 'model'] }
   if (failure === 'unequal-shares') { state.accounts[0].requests = 3; state.accounts[1].requests = 1 }
   if (failure === 'active-reservation') state.accounts[0].active = 1
+  fault('setup', plan, state)
   let terminalOpen = false, terminalRead = false, prompt = ''
   const composer = {}
-  const document = { querySelector: selector => selector.startsWith('textarea') ? composer
-    : selector.startsWith('[role="switch"]') ? { click: () => { fault('mcp-toggle'); state.mcpSelected = true },
-      getAttribute: () => String(state.mcpSelected === true) } : { click() {} }, querySelectorAll: () => [{
-    getAttribute: () => 'Send', click() {
-      state.prompts.push(prompt)
-      if (prompt.includes('MCP')) fault('mcp-tool-turn')
-      const entry = { runId: `tool-${state.entries.length}`, text: failure === 'replayed-chat-token' ? nonce : prompt.includes('MCP') ? mcpNonce : fileNonce, phase: 'complete', receipt: {
-        tools: [{ name: prompt.includes('MCP') ? 'mcp__acceptance_token' : 'read', calls: failure === 'no-tool' ? 0 : 1, failed: 0 }],
-      } }
-      fault(prompt.includes('MCP') ? 'mcp-reply' : 'tools-reply', entry)
-      state.entries.push(entry)
-    },
-  }] }
-  const invoke = async (command, data = {}) => {
+  const document = { querySelector: selector => {
+    const result = { value: selector.startsWith('textarea') ? composer
+      : selector.startsWith('[role="switch"]') ? { click: () => { fault('mcp-toggle'); state.mcpSelected = true },
+        getAttribute: () => String(state.mcpSelected === true) } : { click() {} } }
+    fault('query-selector', result, state)
+    return result.value
+  }, querySelectorAll: () => {
+    fault('query-buttons', undefined, state)
+    return [{
+      getAttribute: () => 'Send', click() {
+        fault('send-click', undefined, state)
+        state.prompts.push(prompt)
+        if (prompt.includes('MCP')) fault('mcp-tool-turn')
+        const entry = { runId: `tool-${state.entries.length}`, text: failure === 'replayed-chat-token' ? nonce : prompt.includes('MCP') ? mcpNonce : fileNonce, phase: 'complete', receipt: {
+          tools: [{ name: prompt.includes('MCP') ? 'mcp__acceptance_token' : 'read', calls: failure === 'no-tool' ? 0 : 1, failed: 0 }],
+        } }
+        fault(prompt.includes('MCP') ? 'mcp-reply' : 'tools-reply', entry)
+        state.entries.push(entry)
+      },
+    }]
+  } }
+  const execute = async (command, data = {}) => {
     state.commands.push(command)
     fault(command, data, state)
     if (command === failure) throw new Error('private provider error')
@@ -102,7 +111,7 @@ async function probe(failure, fault = () => {}) {
     }
     if (command === 'terminal_start') { terminalOpen = true; return 'terminal' }
     if (command === 'terminal_write') return
-    if (command === 'terminal_close') { terminalOpen = false; return }
+    if (command === 'terminal_close') { terminalOpen = failure === 'unclosed-terminal'; return }
     if (command === 'terminal_read') {
       if (!terminalOpen) throw new Error('Closed terminal.')
       const text = terminalRead ? '' : `echo ${nonce}\r\n${failure === 'echo-only' ? '' : nonce + '\r\n'}`
@@ -129,6 +138,11 @@ async function probe(failure, fault = () => {}) {
     if (command === 'local_mode_provider_inventory') return { default_provider: 'muniment-router', default_model: 'openai/model' }
     throw new Error(`Unexpected command: ${command}`)
   }
+  const invoke = async (command, data) => {
+    const result = { value: await execute(command, data) }
+    fault(`result:${command}`, result, state)
+    return result.value
+  }
   const context = { window: {}, document, URL }
   vm.runInNewContext(fs.readFileSync('test/e2e/support/subscription-features.js', 'utf8'), context)
   const wait = async predicate => {
@@ -139,7 +153,7 @@ async function probe(failure, fault = () => {}) {
     throw Object.assign(new Error('The check timed out.'), { errorClass: 'timeout' })
   }
   const run = phase => context.window.__munimentSubscriptionFeatures({ plan: { ...plan, phase }, invoke, wait,
-    setValue: (_element, value) => { prompt = value }, turns: plan.turns })
+    setValue: (_element, value) => { fault('composer-input', undefined, state); prompt = value }, turns: plan.turns })
   const initial = { ...await run('chat'), ...await run('features') }
   const restart = await run('restart')
   await assert.rejects(run('update'))
@@ -189,6 +203,96 @@ for (const [failure, feature] of [
   if (feature !== 'projects') assert.deepEqual(result.initial.projects, featureChecks.projects)
 })
 
+for (const [feature, commands] of Object.entries({
+  routing: ['model_router_settings', 'model_router_save_routes', 'model_router_test_route', 'model_router_update_account'],
+  memory: ['memory_profile_read', 'memory_profile_save'],
+  terminal: ['terminal_start', 'terminal_write', 'terminal_read', 'terminal_close'],
+  tools: ['chat_thread_open'],
+})) {
+  for (const command of commands) test(`the ${feature} probe names a rejected ${command} command`, async () => {
+    for (const error of [undefined, null, 'C:\\private\\provider.txt', new Error('private provider text'),
+      { errorClass: 'command-timeout' }, { errorClass: 'profile-restored' }]) {
+      const result = await probe(undefined, name => { if (name === command) throw error })
+      assert.deepEqual(result.initial[feature], ['failed', 'check', command])
+      assert.deepEqual(featureFailure(feature, result.initial[feature]), { failure_stage: 'check', error_class: command })
+      assert.equal(JSON.stringify(result.initial).includes('private'), false)
+      assert.deepEqual(featureFailure(feature, ['failed', 'check', `${command}: C:\\private\\provider.txt`]), {})
+      assert.deepEqual(featureFailure('files', ['failed', 'check', command]), {})
+      assert.deepEqual(featureFailure(feature, ['failed', 'restore', command]), {})
+    }
+  })
+}
+
+for (const [feature, reason, hook, change] of [
+  ['routing', 'routing-accounts', 'result:model_router_settings', data => { data.value.accounts = null }],
+  ['routing', 'fallback-selected', 'result:model_router_test_route', data => { data.value = null }],
+  ['routing', 'empty-sample-rejected', 'model_router_test_route', data => { if (data.sample === '') data.sample = 'accepted' }],
+  ['routing', 'invalid-fallback-rejected', 'model_router_save_routes', data => {
+    if (data.fallback?.includes('nonexistent')) data.fallback = 'openai/model'
+  }],
+  ['routing', 'unavailable-model-excluded', 'result:model_router_test_route', data => {
+    if (data.value.model === 'openai/model') data.value.eligible_models.push('openai/route-model')
+  }],
+  ['memory', 'profile-saved', 'result:memory_profile_read', (data, state) => {
+    if (state.profile.includes('Acceptance profile.')) data.value = ''
+  }],
+  ['memory', 'profile-restored', 'memory_profile_save', data => { if (data.content === '') data.content = 'not restored' }],
+  ['tools', 'composer-visible', 'query-selector', data => { data.value = null }],
+  ['tools', 'composer-input', 'composer-input', () => { throw 'private provider text' }],
+  ['tools', 'send-ready', 'query-buttons', () => { throw 'private provider text' }],
+  ['tools', 'send-click', 'send-click', () => { throw 'private provider text' }],
+]) test(`the ${feature} probe names the ${reason} assertion`, async () => {
+  const result = await probe(undefined, (name, data, state) => { if (name === hook) change(data, state) })
+  assert.deepEqual(result.initial[feature], ['failed', 'check', reason])
+  assert.deepEqual(featureFailure(feature, result.initial[feature]), { failure_stage: 'check', error_class: reason })
+  assert.equal(JSON.stringify(result.initial).includes('private'), false)
+  assert.deepEqual(featureFailure('files', result.initial[feature]), {})
+  assert.deepEqual(featureFailure(feature, ['failed', 'check', `${reason}: private provider text`]), {})
+})
+
+for (const [failure, reason] of [['echo-only', 'shell-output'], ['unclosed-terminal', 'shell-closed']]) {
+  test(`the terminal probe names the ${reason} assertion`, async () => {
+    const result = await probe(failure)
+    assert.deepEqual(result.initial.terminal, ['failed', 'check', reason])
+    assert.deepEqual(featureFailure('terminal', result.initial.terminal), { failure_stage: 'check', error_class: reason })
+    assert.ok(result.state.commands.includes('terminal_close'))
+  })
+}
+
+test('the probes keep the first failure when cleanup also fails', async () => {
+  const result = await probe('echo-only', (name, data, state) => {
+    if (name === 'result:model_router_test_route') data.value.model = 'wrong'
+    if (name === 'model_router_update_account' && data.models) throw 'private cleanup error'
+    if (name === 'result:memory_profile_read' && state.profile) data.value = ''
+    if (name === 'memory_profile_save' && data.content === '') throw 'private cleanup error'
+    if (name === 'terminal_close') throw 'private cleanup error'
+  })
+  assert.deepEqual(result.initial.routing, ['failed', 'check', 'fallback-selected'])
+  assert.deepEqual(result.initial.memory, ['failed', 'check', 'profile-saved'])
+  assert.deepEqual(result.initial.terminal, ['failed', 'check', 'shell-output'])
+  assert.equal(JSON.stringify(result.initial).includes('private'), false)
+})
+
+test('the memory probe restores the profile after a failed save assertion', async () => {
+  const result = await probe(undefined, (name, data, state) => {
+    if (name === 'result:memory_profile_read' && state.profile) data.value = null
+  })
+  assert.deepEqual(result.initial.memory, ['failed', 'check', 'profile-saved'])
+  assert.equal(result.state.profile, '')
+})
+
+test('the memory probe requires an exact restore, including Windows line endings', async () => {
+  for (const normalize of [false, true]) {
+    const profile = '# Profile\r\n\r\nOriginal profile.\r\n'
+    const result = await probe(undefined, (name, data, state) => {
+      if (name === 'setup') state.profile = profile
+      if (normalize && name === 'memory_profile_save') data.content = data.content.replace(/\r\n/g, '\n')
+    })
+    assert.deepEqual(result.initial.memory, normalize ? ['failed', 'check', 'profile-restored'] : featureChecks.memory)
+    if (!normalize) assert.equal(result.state.profile, profile)
+  }
+})
+
 for (const failure of ['loading-once', 'loading-error-once']) {
   test(`the browser probe retries ${failure}`, async () => {
     const result = await probe(failure)
@@ -231,7 +335,7 @@ for (const feature of ['tools', 'mcp']) {
     const cases = [
       ...['failed', 'cancelled', 'pending-permission'].map(phase => [{ phase }, `reply-phase-${phase}`]),
       [{ phase: 'interrupted' }, 'reply-interrupted-missing-reason-unapproved'],
-      [{ phase: 'private provider phase' }, 'timeout'],
+      [{ phase: 'private provider phase' }, feature === 'tools' ? 'reply-complete' : 'timeout'],
       [{ text: 'private provider text' }, 'reply-text'], [{ text: '' }, 'reply-text'], [{ text: null }, 'reply-text'],
       [{ receipt: undefined }, 'receipt-tool'], [{ receipt: { tools: [] } }, 'receipt-tool'],
       [{ receipt: { tools: {} } }, 'receipt-tool'],
