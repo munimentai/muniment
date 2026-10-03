@@ -123,6 +123,8 @@ export function processStatus(child) {
 const probeStages = ['composer', 'runtime', 'selection', 'model-save', 'inventory', 'send', 'reply', 'render', 'complete', 'restore', 'features', 'result', 'transport']
 const probeErrors = ['none', 'timeout', 'command-timeout', 'command-failed', 'reply-failed', 'context-mismatch', 'auth', 'quota', 'http', 'network', 'stream',
   'update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address', 'update-builder', 'update-check',
+  'update-check-network', 'update-check-target-not-found', 'update-check-manifest-parse',
+  'update-check-release-not-found', 'update-check-version', 'update-check-address', 'update-check-other',
   'update-download', 'update-unavailable', 'update-not-prepared', 'update-package-digest', 'update-tamper-rejection',
   'update-version-rejection', 'update-active-work-refusal', 'update-checkpoint-encode', 'update-checkpoint-write',
   'update-busy', 'update-install-task', 'update-install', 'update-restart']

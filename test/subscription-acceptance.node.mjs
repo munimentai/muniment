@@ -745,7 +745,9 @@ test('The macOS probe resolves bundle symlinks before the updater caches the exe
 
 test('the update probe preserves each fixed failure code through the blocked report', async t => {
   const codes = ['update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address',
-    'update-builder', 'update-check', 'update-download', 'update-unavailable', 'update-not-prepared',
+    'update-builder', 'update-check',
+    'update-check-network', 'update-check-target-not-found', 'update-check-manifest-parse',
+    'update-check-release-not-found', 'update-check-version', 'update-check-address', 'update-check-other', 'update-download', 'update-unavailable', 'update-not-prepared',
     'update-package-digest', 'update-tamper-rejection', 'update-version-rejection', 'update-active-work-refusal',
     'update-checkpoint-encode', 'update-checkpoint-write', 'update-busy', 'update-install-task', 'update-install', 'update-restart']
   const featureScript = fs.readFileSync('test/e2e/support/subscription-features.js', 'utf8')
@@ -761,6 +763,8 @@ test('the update probe preserves each fixed failure code through the blocked rep
       ...codes.map(code => [code, code]),
       [undefined, 'update-restart'],
       ['PRIVATE TOKEN AND REPLY', 'command-failed'],
+      ['update-check-PRIVATE', 'command-failed'],
+      ['update-check-network https://PRIVATE/path?token=SECRET', 'command-failed'],
       [null, 'command-failed'],
       [{ errorClass: 'update-install', message: 'PRIVATE TOKEN' }, 'command-failed'],
       [{ errorClass: 'command-timeout' }, 'command-timeout'],
