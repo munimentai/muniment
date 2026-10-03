@@ -515,7 +515,7 @@ for (const [platform, target] of Object.entries({ linux: 'linux-x86_64', windows
     assert.deepEqual(fs.readdirSync(root), [])
     server = await updateFixture(root, bytes, 'signature', '1.0.0', platform)
     const get = url => new Promise((resolve, reject) => {
-      https.get(url, { rejectUnauthorized: false }, response => {
+      https.get(url, { ca: fs.readFileSync(path.join(root, 'update-cert.pem')) }, response => {
         const chunks = []
         response.on('data', chunk => chunks.push(chunk))
         response.on('end', () => resolve(Buffer.concat(chunks)))
