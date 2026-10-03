@@ -23,6 +23,19 @@ function Assert-CefInstallation([string]$Directory) {
   }
 }
 
+function Assert-UpdateTarget([string]$Directory, [string]$Expected) {
+  $previous = $env:MUNIMENT_UPDATE_INSTALL_DIR
+  try {
+    $env:MUNIMENT_UPDATE_INSTALL_DIR = $Directory
+    $target = @(& (Join-Path $PSScriptRoot '..\scripts\windows-update-target.ps1'))
+    if ($target.Count -ne 1 -or $target[0] -ne $Expected) {
+      throw 'The installed package selects the wrong update target.'
+    }
+  } finally {
+    $env:MUNIMENT_UPDATE_INSTALL_DIR = $previous
+  }
+}
+
 function Assert-MsiPayload($Package, $Directory) {
   $expanded = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
   New-Item -ItemType Directory -Path $expanded | Out-Null
@@ -137,6 +150,7 @@ if (-not (Test-Path $machineRuntime)) {
   throw "Machine MSI runtime not found at $machineRuntime"
 }
 Assert-CefInstallation (Split-Path $machineRuntime)
+Assert-UpdateTarget (Split-Path $machineRuntime) 'windows-x86_64-msi-machine'
 if (Test-Path "HKCU:\Software\Muniment\muniment") {
   throw "Per-machine MSI wrote application registration under HKCU"
 }
@@ -188,6 +202,7 @@ try {
   if (Test-Path $machineKey) { throw "The per-user MSI wrote application registration under HKLM." }
   if (-not (Test-Path $userRuntime)) { throw "Regular MSI runtime not found at $userRuntime" }
   Assert-CefInstallation (Split-Path $userRuntime)
+  Assert-UpdateTarget (Split-Path $userRuntime) 'windows-x86_64-msi-user'
   if (Test-Path (Join-Path (Split-Path $userRuntime) "Uninstall muniment.lnk")) {
     throw "The per-user MSI must keep the uninstall shortcut outside the install directory."
   }
