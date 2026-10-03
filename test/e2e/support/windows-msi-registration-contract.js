@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { spawnSync } from 'node:child_process'
+import { POWERSHELL_TEST_TIMEOUT, spawnFixture } from './fixture-process.mjs'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,7 +7,7 @@ import path from 'node:path'
 const helperPath = path.join(process.cwd(), 'test/windows-msi-registration.ps1')
 const helper = fs.readFileSync(helperPath, 'utf8')
 const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
-const hasPowerShell = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+const hasPowerShell = spawnFixture(powershell, ['-NoProfile', '-Command', 'exit 0']).status === 0
 const temporary = []
 afterEach(() => { for (const directory of temporary.splice(0)) fs.rmSync(directory, { recursive: true, force: true }) })
 const invoke = (body, args = []) => {
@@ -15,9 +15,7 @@ const invoke = (body, args = []) => {
   temporary.push(directory)
   const script = path.join(directory, 'test.ps1')
   fs.writeFileSync(script, `$ErrorActionPreference = 'Stop'\nSet-StrictMode -Version Latest\n${helper}\n${body}\n`)
-  return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, ...args], {
-    encoding: 'utf8', timeout: 15_000,
-  })
+  return spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, ...args])
 }
 const code = '{12345678-1234-ABCD-EF12-34567890ABCD}'
 const packed = '876543214321DCBAFE2143658709BADC'
@@ -48,7 +46,7 @@ Write-PerUserMsiRegistration $registration '${absent ? 'uninstalled' : 'installe
 Assert-PerUserMsiRegistration $registration '${local}' ${absent ? '-Absent' : ''}
 `, [JSON.stringify(registry)])
 
-describe('Per-user MSI registration checks', { timeout: 30_000 }, () => {
+describe('Per-user MSI registration checks', { timeout: POWERSHELL_TEST_TIMEOUT }, () => {
   it('Reads the ProductCode from the package and closes the MSI database.', () => {
     expect(helper).toContain("WHERE ``Property`` = 'ProductCode'")
     expect(helper).toContain('ConvertTo-PackedProductCode $code | Out-Null')
