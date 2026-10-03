@@ -156,6 +156,21 @@ for (const reason of ['reply-phase', 'reply-phase-failed', 'reply-phase-cancelle
   })
 }
 
+test('the runner preserves command and assertion reasons through collection', async t => {
+  for (const reasons of [
+    { routing: 'model_router_save_routes', memory: 'memory_profile_save', tools: 'chat_thread_open', terminal: 'terminal_read' },
+    { routing: 'fallback-selected', memory: 'profile-restored', tools: 'composer-visible', terminal: 'shell-output' },
+  ]) {
+    const featureFailures = Object.fromEntries(Object.entries(reasons).map(([feature, reason]) => [feature, ['failed', 'check', reason]]))
+    const result = await scenario(t, { featureFailures, failAt: 'update' })
+    assert.equal(result.status, 1)
+    for (const [feature, failure] of Object.entries(featureFailures)) {
+      assertFailure(result, feature, failure)
+      assert.equal(result.checkpoints.restart.cases.find(item => item.feature === feature).error_class, failure[2])
+    }
+  }
+})
+
 test('the runner still passes complete feature evidence', async t => {
   const result = await scenario(t)
   assert.equal(result.status, 0)
