@@ -25,6 +25,14 @@ pub struct AuthorizedCompanion {
 }
 
 impl AttachCompanionState {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn runtime_admission_failure_since(
+        &self,
+        since: std::time::Instant,
+    ) -> Option<serde_json::Value> {
+        self.desktop_client_holder.admission_failure_since(since)
+    }
+
     #[cfg(not(target_os = "linux"))]
     pub(crate) fn runtime_connected(&self) -> bool {
         let status = self.listener_status();

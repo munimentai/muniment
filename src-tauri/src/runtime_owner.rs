@@ -108,6 +108,23 @@ impl Lifecycle {
     }
 
     #[cfg(any(test, target_os = "macos"))]
+    fn observe_endpoint_with_failure(
+        &mut self,
+        connected: bool,
+        now: Instant,
+        endpoint: Option<&std::path::Path>,
+        failure: Option<serde_json::Value>,
+    ) {
+        let starting = self.snapshot.last_event == RuntimeEvent::Starting;
+        self.observe_endpoint(connected, now, endpoint);
+        if starting && self.snapshot.last_event == RuntimeEvent::StartFailed {
+            if let (Some(cause), Some(failure)) = (&mut self.snapshot.cause, failure) {
+                cause.push_str(&format!(" Attach failure: {failure}."));
+            }
+        }
+    }
+
+    #[cfg(any(test, target_os = "macos"))]
     fn observe_endpoint(
         &mut self,
         connected: bool,
@@ -401,7 +418,13 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             #[cfg(target_os = "linux")]
             state.observe_clients(desktop, chat_events, Instant::now());
             #[cfg(target_os = "macos")]
-            state.observe_endpoint(connected, Instant::now(), endpoint.as_deref());
+            state.observe_endpoint_with_failure(
+                connected,
+                Instant::now(),
+                endpoint.as_deref(),
+                companion
+                    .runtime_admission_failure_since(state.outage.unwrap_or_else(Instant::now)),
+            );
             #[cfg(target_os = "windows")]
             state.observe(connected, disconnected, Instant::now());
         });
@@ -469,6 +492,102 @@ mod tests {
             });
             assert_eq!(runtime_state(app.state()).cause, None);
         }
+    }
+
+    #[test]
+    fn endpoint_timeout_keeps_the_connect_failure_and_clears_it_on_recovery() {
+        let now = Instant::now();
+        let endpoint_path =
+            std::path::PathBuf::from(format!("/tmp/m1876-start-{}.sock", std::process::id()));
+        let endpoint = endpoint_path.as_path();
+        #[cfg(target_os = "macos")]
+        let failure = {
+            use muniment_attach::{
+                serve_desktop_client_at, DesktopClientHolder, DesktopClientStopHandle,
+            };
+            let stop = DesktopClientStopHandle::new();
+            let holder = DesktopClientHolder::new();
+            let worker_stop = stop.clone();
+            let worker_holder = holder.clone();
+            let worker_endpoint = endpoint_path.clone();
+            let worker = std::thread::spawn(move || {
+                serve_desktop_client_at(
+                    &worker_endpoint,
+                    "1.0.0",
+                    Duration::from_millis(50),
+                    Duration::from_millis(1),
+                    worker_stop,
+                    worker_holder,
+                    |_| panic!("the unavailable endpoint cannot connect"),
+                )
+            });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let failure = loop {
+                if let Some(failure) = holder.admission_failure_since(now) {
+                    break Some(failure);
+                }
+                if Instant::now() >= deadline {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            stop.stop();
+            worker.join().unwrap();
+            let failure = failure.expect("the supervisor must report its connect failure");
+            assert_eq!(failure["error"]["kind"], "NotFound");
+            assert_eq!(failure["code_check"], "not_run");
+            failure
+        };
+        #[cfg(not(target_os = "macos"))]
+        let failure = serde_json::json!({
+            "event": "macos_attach_admission", "phase": "connect",
+            "endpoint": endpoint, "requested_route": "desktop-client",
+            "error": {"kind": "NotFound", "os_error": 2},
+            "code_check": "not_run", "closed_by": "not_connected",
+            "connect_elapsed_ms": 1, "connect_bound": "supervisor_stop",
+        });
+        let mut state = Lifecycle::default();
+        state.observe_endpoint_with_failure(false, now, Some(endpoint), None);
+        state.observe_endpoint_with_failure(
+            false,
+            now + Duration::from_secs(10),
+            Some(endpoint),
+            Some(failure.clone()),
+        );
+        let cause = state.snapshot.cause.clone().unwrap();
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+        assert!(cause.contains("Startup elapsed: 10000 ms."));
+        assert!(cause.contains("Startup bound: 10000 ms."));
+        assert!(cause.contains(&format!("Attach failure: {failure}.")));
+        state.observe_endpoint_with_failure(
+            false,
+            now + Duration::from_secs(11),
+            Some(endpoint),
+            None,
+        );
+        assert_eq!(state.snapshot.cause.as_deref(), Some(cause.as_str()));
+        state.observe_endpoint_with_failure(
+            true,
+            now + Duration::from_secs(12),
+            Some(endpoint),
+            Some(failure.clone()),
+        );
+        assert_eq!(state.snapshot.cause, None);
+        state.started(RuntimeEvent::Starting);
+        state.observe_endpoint_with_failure(
+            false,
+            now + Duration::from_secs(13),
+            Some(endpoint),
+            None,
+        );
+        state.observe_endpoint_with_failure(
+            true,
+            now + Duration::from_secs(23),
+            Some(endpoint),
+            Some(failure),
+        );
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        assert_eq!(state.snapshot.cause, None);
     }
 
     #[test]
