@@ -37,7 +37,13 @@ fn process_trusted() -> bool {
     unsafe { AXIsProcessTrusted() }
 }
 
-type ConfirmLookups = Arc<Mutex<Vec<Vec<&'static str>>>>;
+#[derive(Clone, serde::Serialize)]
+struct ConfirmLookup {
+    failures: Vec<&'static str>,
+    candidates: Vec<accessibility::ConfirmCandidate>,
+}
+
+type ConfirmLookups = Arc<Mutex<Vec<ConfirmLookup>>>;
 
 struct Drive {
     panel: Retained<NSOpenPanel>,
@@ -106,11 +112,13 @@ fn press_confirm(
             return Err("The Home picker drive timed out before confirmation.".into());
         }
         let mut failures = Vec::new();
+        let mut candidates = Vec::new();
         let result = accessibility::confirm_button(
             &NativeAccessibility,
             &app,
             identifier,
             &mut failures,
+            &mut candidates,
             || {
                 if Instant::now() >= deadline {
                     Err(accessibility::ConfirmFailure::Deadline)
@@ -125,12 +133,13 @@ fn press_confirm(
         confirm_lookups
             .lock()
             .map_err(|_| "The Home picker lookup snapshot is unavailable.")?
-            .push(
-                failures
+            .push(ConfirmLookup {
+                failures: failures
                     .into_iter()
                     .map(|failure| failure.reason())
                     .collect(),
-            );
+                candidates,
+            });
         match result {
             Ok(Some(button)) => break button,
             Ok(None) => {}
@@ -361,7 +370,7 @@ pub(crate) struct FolderDialogSnapshot {
     app_active: bool,
     key_window: Option<WindowSnapshot>,
     system_prompt: Option<SystemPromptSnapshot>,
-    confirm_lookups: Vec<Vec<&'static str>>,
+    confirm_lookups: Vec<ConfirmLookup>,
 }
 
 #[tauri::command]

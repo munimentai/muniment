@@ -53,6 +53,7 @@ class ShadowContract(unittest.TestCase):
                 inspection = {key: value for key, value in request.items() if key != "observation"}
                 inspection["operation"] = "inspect"
                 eligible = router.exchange(EXECUTABLE, state, inspection)
+                self.assertNotIn("error", eligible)
                 request["observation"] = {
                     "revision": "kev-4b-test-1", "trace_id": request["job"]["trace_id"],
                     "eligible_digest": eligible["eligible_digest"], "request_digest": eligible["request_digest"],
