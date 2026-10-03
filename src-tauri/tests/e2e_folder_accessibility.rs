@@ -72,7 +72,14 @@ impl Tree {
 
     fn lookup(&self) -> (Result<Option<usize>, ConfirmFailure>, Vec<ConfirmFailure>) {
         let mut failures = Vec::new();
-        let result = confirm_button(self, &APP, IDENTIFIER, &mut failures, || Ok(()));
+        let result = confirm_button(
+            self,
+            &APP,
+            IDENTIFIER,
+            &mut failures,
+            &mut Vec::new(),
+            || Ok(()),
+        );
         if let Err(reason) = result {
             failures.push(reason);
         }
@@ -223,6 +230,166 @@ fn remote_panel_uses_its_title_and_prompt_below_a_group() {
 }
 
 #[test]
+fn focused_default_precedes_window_and_child_button_lookups() {
+    let mut tree = Tree::remote_panel(false);
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    tree.set(APP, "AXWindows", Value::Elements(vec![HOST]));
+    tree.0.remove(&(PANEL, "AXTitle"));
+    tree.set(PANEL, "AXDefaultButton", Value::Element(BUTTON));
+    assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+    let reads = tree.1.borrow();
+    let position = |element, attribute| {
+        reads
+            .iter()
+            .position(|(node, name)| *node == element && name == attribute)
+            .unwrap()
+    };
+    assert!(position(APP, "AXFocusedWindow") < position(APP, "AXWindows"));
+    assert!(position(PANEL, "AXDefaultButton") < position(HOST, "AXIdentifier"));
+    assert!(!reads
+        .iter()
+        .any(|(node, name)| *node == OTHER && name == "AXChildren"));
+}
+
+#[test]
+fn focused_window_requires_a_marker_and_valid_button_ownership() {
+    let mut tree = Tree::panel(false);
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    tree.0.remove(&(PANEL, "AXIdentifier"));
+    tree.set(BUTTON, "AXTitle", Value::String("Open".into()));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(BUTTON, "AXTitle", Value::String(IDENTIFIER.into()));
+    assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+    tree.set(BUTTON, "AXTopLevelUIElement", Value::Element(HOST));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
+    tree.set(BUTTON, "AXTopLevelUIElement", Value::Element(PANEL));
+    tree.set(BUTTON, "AXEnabled", Value::Boolean(false));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(BUTTON, "AXEnabled", Value::Boolean(true));
+    tree.set(HOST, "AXIdentifier", Value::String(IDENTIFIER.into()));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousPanel));
+}
+
+#[test]
+fn prompt_only_identity_rejects_a_changed_focus_or_default_button() {
+    struct ChangedAttribute {
+        tree: Tree,
+        attribute: &'static str,
+        reads: std::cell::Cell<usize>,
+    }
+    impl Accessibility for ChangedAttribute {
+        type Element = usize;
+
+        fn elements(&self, element: &usize, name: &str) -> Result<Vec<usize>, String> {
+            self.tree.elements(element, name)
+        }
+
+        fn element(&self, element: &usize, name: &str) -> Result<usize, String> {
+            if name == self.attribute {
+                self.reads.set(self.reads.get() + 1);
+                if self.reads.get() > 1 {
+                    return Ok(OTHER);
+                }
+            }
+            self.tree.element(element, name)
+        }
+
+        fn string(&self, element: &usize, name: &str) -> Result<String, String> {
+            self.tree.string(element, name)
+        }
+
+        fn boolean(&self, element: &usize, name: &str) -> Result<bool, String> {
+            self.tree.boolean(element, name)
+        }
+    }
+    for attribute in ["AXFocusedWindow", "AXDefaultButton"] {
+        let mut tree = Tree::panel(false);
+        tree.set(APP, "AXWindows", Value::Elements(vec![PANEL]));
+        tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+        tree.0.remove(&(PANEL, "AXIdentifier"));
+        tree.set(BUTTON, "AXTitle", Value::String(IDENTIFIER.into()));
+        tree.set(OTHER, "AXRole", Value::String("AXButton".into()));
+        tree.set(OTHER, "AXTitle", Value::String("Open".into()));
+        tree.set(OTHER, "AXTopLevelUIElement", Value::Element(PANEL));
+        tree.set(OTHER, "AXEnabled", Value::Boolean(true));
+        let ax = ChangedAttribute {
+            tree,
+            attribute,
+            reads: std::cell::Cell::new(0),
+        };
+        assert_eq!(
+            confirm_button(
+                &ax,
+                &APP,
+                IDENTIFIER,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                || Ok(())
+            ),
+            Ok(None)
+        );
+    }
+}
+
+#[test]
+fn unrelated_focus_does_not_override_a_marked_sheet() {
+    let mut tree = Tree::panel(true);
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    tree.set(HOST, "AXDefaultButton", Value::Element(OTHER));
+    tree.set(OTHER, "AXRole", Value::String("AXButton".into()));
+    tree.set(OTHER, "AXTitle", Value::String("Open".into()));
+    assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+}
+
+#[test]
+fn failed_lookup_lists_bounded_candidates_without_editable_values() {
+    let mut tree = Tree::panel(false);
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    tree.0.remove(&(PANEL, "AXIdentifier"));
+    tree.set(BUTTON, "AXTitle", Value::String("é".repeat(200)));
+    tree.set(BUTTON, "AXEnabled", Value::Boolean(false));
+    let mut candidates = Vec::new();
+    assert_eq!(
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut candidates,
+            || Ok(())
+        ),
+        Ok(None)
+    );
+    assert_eq!(candidates[0].source, "focused_window");
+    assert_eq!(candidates[0].role.as_deref(), Some("AXWindow"));
+    assert_eq!(candidates[0].identifier, None);
+    assert_eq!(candidates[1].source, "default_button");
+    assert_eq!(candidates[1].role.as_deref(), Some("AXButton"));
+    assert_eq!(candidates[1].enabled, Some(false));
+    assert_eq!(candidates[1].title.as_ref().unwrap().chars().count(), 128);
+    assert!(!tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
+
+    tree.set(APP, "AXWindows", Value::Elements((5..45).collect()));
+    for node in 5..45 {
+        tree.set(node, "AXRole", Value::String("AXWindow".into()));
+        tree.set(node, "AXChildren", Value::Elements(vec![]));
+    }
+    candidates.clear();
+    assert_eq!(
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut candidates,
+            || Ok(())
+        ),
+        Ok(None)
+    );
+    assert_eq!(candidates.len(), 32);
+}
+
+#[test]
 fn remote_button_can_replace_a_disabled_default_proxy() {
     let mut tree = Tree::remote_panel(false);
     tree.set(PANEL, "AXDefaultButton", Value::Element(5));
@@ -350,22 +517,34 @@ fn lookup_bounds_cycles_traversal_and_deadlines() {
     assert_eq!(tree.confirm(), Err(ConfirmFailure::ElementLimit));
     tree.1.borrow_mut().clear();
     assert_eq!(
-        confirm_button(&tree, &APP, IDENTIFIER, &mut Vec::new(), || {
-            Err(ConfirmFailure::Deadline)
-        }),
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            || { Err(ConfirmFailure::Deadline) }
+        ),
         Err(ConfirmFailure::Deadline)
     );
     assert!(tree.1.borrow().is_empty());
     let mut calls = 0;
     assert_eq!(
-        confirm_button(&tree, &APP, IDENTIFIER, &mut Vec::new(), || {
-            calls += 1;
-            if calls > 2 {
-                Err(ConfirmFailure::Deadline)
-            } else {
-                Ok(())
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            || {
+                calls += 1;
+                if calls > 2 {
+                    Err(ConfirmFailure::Deadline)
+                } else {
+                    Ok(())
+                }
             }
-        }),
+        ),
         Err(ConfirmFailure::Deadline)
     );
     assert!(calls < 10);
