@@ -27,7 +27,8 @@ export function featureFailure(feature, observed) {
       : feature === 'signed-update' ? ['check', 'restore'] : ['check']
   const errors = ['check-failed', 'timeout']
   if ((feature === 'tools' && observed?.[1] === 'check') || (feature === 'mcp' && observed?.[1] === 'tool-turn')) {
-    errors.push('reply-phase', 'reply-text', 'receipt-tool')
+    errors.push('reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
+      'reply-phase-pending-permission', 'reply-text', 'receipt-tool')
   }
   if (!Object.hasOwn(featureChecks, feature) || !Array.isArray(observed) || observed.length !== 3 || observed[0] !== 'failed' ||
       !stages.includes(observed[1]) || !errors.includes(observed[2])) return {}

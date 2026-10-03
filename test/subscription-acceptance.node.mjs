@@ -156,7 +156,9 @@ test('the proof includes only fixed failure stages and error codes', () => {
     ['settings', ['failed', 'check', 'check-failed'], { failure_stage: 'check', error_class: 'check-failed' }],
     ['mcp', ['failed', 'private-provider-text', 'check-failed'], {}],
     ['mcp', ['failed', 'server-add', 'private-provider-text'], {}],
-    ...['reply-phase', 'reply-text', 'receipt-tool'].flatMap(reason => [
+    ['mcp', ['failed', 'tool-turn', 'reply-phase-private-provider-text'], {}],
+    ...['reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
+      'reply-phase-pending-permission', 'reply-text', 'receipt-tool'].flatMap(reason => [
       ['mcp', ['failed', 'tool-turn', reason], { failure_stage: 'tool-turn', error_class: reason }],
       ['tools', ['failed', 'check', reason], { failure_stage: 'check', error_class: reason }],
       ['mcp', ['failed', 'server-add', reason], {}],
