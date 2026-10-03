@@ -415,6 +415,94 @@ mod tests {
     }
 
     #[test]
+    fn windows_target_checks_and_downloads_over_loopback_https() {
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+        use tauri_plugin_updater::{Error, UpdaterExt};
+
+        struct Fixture(std::process::Child);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                drop(self.0.stdin.take());
+                let _ = self.0.wait();
+            }
+        }
+        let mut fixture = Fixture(
+            Command::new("node")
+                .arg(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../test/e2e/support/subscription-update-fixture.mjs"
+                ))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let mut line = String::new();
+        std::io::BufReader::new(fixture.0.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let endpoint: url::Url = receipt["url"].as_str().unwrap().parse().unwrap();
+        assert_eq!(endpoint.scheme(), "https");
+        assert_eq!(endpoint.host_str(), Some("127.0.0.1"));
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({"pubkey": receipt["pubkey"], "requireSignedVersion": true}),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .unwrap();
+        let builder = || {
+            app.updater_builder()
+                .endpoints(vec![endpoint.clone()])
+                .unwrap()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(5))
+                .configure_client(|client| {
+                    client.danger_accept_invalid_certs(true).https_only(true)
+                })
+        };
+        tauri::async_runtime::block_on(async {
+            // An HKLM uninstall entry must not select the machine feed for a per-user MSI.
+            let wrong = builder()
+                .target("windows-x86_64-msi-machine")
+                .build()
+                .unwrap()
+                .check()
+                .await;
+            assert!(matches!(wrong, Err(Error::TargetNotFound(_))));
+            let mut update = builder()
+                .target("windows-x86_64-msi-user")
+                .build()
+                .unwrap()
+                .check()
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(update.download_url, endpoint.join("/package").unwrap());
+            update.timeout = Some(std::time::Duration::from_secs(5));
+            assert_eq!(
+                update.download(|_, _| {}, || {}).await.unwrap(),
+                b"signed update test package"
+            );
+            update.download_url = endpoint.join("/tampered").unwrap();
+            assert!(matches!(
+                update.download(|_, _| {}, || {}).await,
+                Err(Error::Minisign(_))
+            ));
+            update.download_url = endpoint.join("/package").unwrap();
+            update.version = "999999.0.0".into();
+            assert!(matches!(
+                update.download(|_, _| {}, || {}).await,
+                Err(Error::SignedVersionMismatch { .. })
+            ));
+        });
+    }
+
+    #[test]
     fn failed_install_preserves_candidate_without_restart() {
         let state = Mutex::new(None);
         let result = finish_install(&state, vec![1, 2, 3], Err(()), || {
