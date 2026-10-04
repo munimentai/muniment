@@ -14,11 +14,13 @@ use muniment_core::journal::thread_mutation::{
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 use muniment_core::owned_threads::chat_thread_summaries_page;
 use muniment_core::run_events::{ChatStorage, SharedStorage};
+use muniment_core::run_start::ActiveRun;
 use muniment_core::thread_history::{
-    chat_thread_open_page_without_prompts, load_page_prompts, ChatThreadOpenPage,
+    chat_thread_open_page_without_prompts, load_page_prompts, ChatThreadOpenPage, HistoryRuntime,
 };
 use muniment_core::thread_ownership::subject_owns_first_run;
 use std::path::Path;
+use std::sync::Mutex;
 
 fn lock_error(error: impl std::fmt::Display) -> String {
     format!("Conversation history lock failed: {error}")
@@ -154,6 +156,7 @@ pub fn apply_retention(
 pub fn thread_page(
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
+    active: &Mutex<Option<ActiveRun>>,
     subject: Option<String>,
     thread_id: String,
     limit: usize,
@@ -162,13 +165,18 @@ pub fn thread_page(
     let profile_directory = profile_directory.as_ref();
     let profile = ChatProfile::new(profile_directory);
     let mut page = {
+        // Keep ownership stable until the journal snapshot completes.
+        let active = active.lock().map_err(lock_error)?;
         let mut storage = storage.lock().map_err(lock_error)?;
         let ChatStorage { journal, cas } = &mut *storage;
         chat_thread_open_page_without_prompts(
             journal,
             Some(cas),
             subject.as_deref(),
-            &profile.pi_session_root(),
+            HistoryRuntime {
+                session_root: &profile.pi_session_root(),
+                active_run_id: active.as_ref().map(|run| run.id.as_str()),
+            },
             &thread_id,
             limit,
             cursor.as_deref(),

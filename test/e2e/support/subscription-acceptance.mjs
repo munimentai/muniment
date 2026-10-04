@@ -20,6 +20,8 @@ export const featureChecks = {
   browser: ['local-page-rendered', 'unsafe-navigation-rejected', 'view-closed'],
 }
 export const features = [...chatFeatures, ...Object.keys(featureChecks)]
+export const interruptionErrors = ['unknown-effect-outcome', 'interrupted', 'unspecified', 'recorded', 'missing-reason']
+  .flatMap(reason => ['approved', 'unapproved'].map(approval => `reply-interrupted-${reason}-${approval}`))
 // Failure arrays share the installed probe's bounded string-list wire format.
 export function featureFailure(feature, observed) {
   const stages = feature === 'mcp' ? ['check', 'server-add', 'connection-test', 'toggle', 'tool-turn', 'server-remove', 'receipt']
@@ -40,7 +42,7 @@ export function featureFailure(feature, observed) {
   }
   if ((feature === 'tools' && observed?.[1] === 'check') || (feature === 'mcp' && observed?.[1] === 'tool-turn')) {
     errors.push('reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
-      'reply-phase-pending-permission', 'reply-text', 'receipt-tool', 'composer-visible')
+      'reply-phase-pending-permission', 'reply-text', 'receipt-tool', 'composer-visible', ...interruptionErrors)
   }
   if (!Object.hasOwn(featureChecks, feature) || !Array.isArray(observed) || observed.length !== 3 || observed[0] !== 'failed' ||
       !stages.includes(observed[1]) || !errors.includes(observed[2])) return {}

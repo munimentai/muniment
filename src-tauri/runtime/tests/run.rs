@@ -431,6 +431,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let page = thread_page(
         &profile,
         Arc::clone(&storage),
+        &std::sync::Mutex::new(None),
         Some("owner".into()),
         thread_id,
         10,
