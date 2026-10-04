@@ -46,7 +46,7 @@ The boundary does not authorize wider reader access or a protocol change.
 `muniment_core::chat_launch::ChatGrant` is the launch value, and `ChatGrant::local` serves local mode.
 `chat_grant` issues cloud grants and fetches cloud receipts.
 The runtime's `PiLaunchBoundaries` renews grants, inspects the cloud session, and fetches receipts through it.
-The shell's launch boundaries answer that the cloud is unavailable.
+The shell's launch boundaries fetch receipts through it and answer that renewal and inspection are unavailable.
 `browser_control` reads Linux process identities through `muniment_core::process_reader`.
 The shell and the runtime register the Antigravity OAuth client with the router at startup.
 
