@@ -14,7 +14,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     try { await action() } catch { rejected = true }
     check(rejected)
   }
-  const run = async (name, action) => {
+  const run = async (name, action, diagnostics = () => []) => {
     features[name] = []
     let failure
     const step = async (stage, action, reason) => {
@@ -26,7 +26,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     }
     const inspect = (reason, action) => step('check', action, reason)
     const command = (name, data) => inspect(name, () => invoke(name, data))
-    try { features[name] = await step('check', () => action(step, command, inspect)) } catch { features[name] = failure }
+    try { features[name] = await step('check', () => action(step, command, inspect)) } catch { features[name] = [...failure, ...diagnostics()] }
   }
   if (plan.phase === 'update') {
     const codes = ['update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address',
@@ -208,21 +208,45 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     }
     return ['local-page-rendered', 'unsafe-navigation-rejected', 'view-closed']
   })
+  let terminalBytes = 0, terminalNonce = false, terminalVt = false, terminalTail = ''
   await run('terminal', async (_step, command, inspect) => {
     const id = await command('terminal_start', { path: plan.fixtureDirectory, cols: 80, rows: 24 })
+    let terminal
     try {
       // Ignore the echoed command. Require the shell's separate output line.
       await command('terminal_write', { id, data: `echo ${plan.nonce}\r` })
-      let text = ''
-      await inspect('shell-output', () => wait(async () => {
-        const output = await command('terminal_read', { id })
-        text += String.fromCharCode(...output.bytes)
-        return text.replace(/\r/g, '').split('\n').some(line => line === plan.nonce)
-      }))
-    } finally { await command('terminal_close', { id }) }
+      await inspect('shell-output', async () => {
+        terminal = await window.__munimentSubscriptionTerminal({ cols: 80, rows: 24, scrollback: 1000 })
+        const replies = []
+        terminal.onData(data => replies.push(data))
+        await wait(async () => {
+          const output = await command('terminal_read', { id })
+          terminalBytes += output.bytes.length
+          // Keep only a short tail for a nonce split across reads. Export no output.
+          for (const byte of output.bytes) {
+            terminalVt ||= byte === 0x1b
+            terminalTail = (terminalTail + String.fromCharCode(byte)).slice(-plan.nonce.length)
+            terminalNonce ||= terminalTail === plan.nonce
+          }
+          if (output.bytes.length) await new Promise(resolve => terminal.write(new Uint8Array(output.bytes), resolve))
+          for (const data of replies.splice(0)) await command('terminal_write', { id, data })
+          const buffer = terminal.buffer.active
+          for (let row = 0; row < buffer.length; row++) {
+            const line = buffer.getLine(row)
+            // A live row can still gain a suffix. A wrapped row can be part of the command.
+            if (row === buffer.baseY + buffer.cursorY || line.isWrapped || buffer.getLine(row + 1)?.isWrapped) continue
+            if (line.translateToString(true) === plan.nonce) return true
+          }
+          return false
+        })
+      })
+    } finally {
+      terminal?.dispose()
+      await command('terminal_close', { id })
+    }
     await inspect('shell-closed', () => rejects(() => invoke('terminal_read', { id })))
     return ['shell-output', 'shell-closed']
-  })
+  }, () => [`bytes-${terminalBytes}`, `received-${terminalBytes > 0}`, `nonce-${terminalNonce}`, `vt-${terminalVt}`])
   const toolTurn = async (prompt, tool, expected, approvalTitle, inspect = (_reason, action) => action()) => {
     const thread = turns[0].thread
     const call = (name, data) => inspect(name, () => invoke(name, data))

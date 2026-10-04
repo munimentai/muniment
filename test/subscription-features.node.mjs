@@ -1,5 +1,6 @@
 import './subscription-feature-evidence.node.mjs'
 import { test } from 'node:test'
+import xterm from '@xterm/xterm'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -14,6 +15,8 @@ import { featureChecks, featureFailure, interruptionErrors } from './e2e/support
 const nonce = 'MUNIMENT-' + 'a'.repeat(32)
 const fileNonce = 'MUNIMENT-' + 'b'.repeat(32)
 const mcpNonce = 'MUNIMENT-' + 'c'.repeat(32)
+const terminalFailure = (reason, text = '') => ['failed', 'check', reason,
+  `bytes-${Buffer.byteLength(text)}`, `received-${text.length > 0}`, `nonce-${text.includes(nonce)}`, `vt-${text.includes('\x1b')}`]
 const mcpApproval = {
   gateId: 'mcp-gate', kind: 'select',
   title: 'MCP: extend-release-acceptance wants to run acceptance_token\n\nArguments:\n{}\n\nAllow server for this session permits all tools and arguments on this server until reload or session/branch change. Other security and UI consent checks still apply.',
@@ -143,7 +146,7 @@ async function probe(failure, fault = () => {}) {
     fault(`result:${command}`, result, state)
     return result.value
   }
-  const context = { window: {}, document, URL }
+  const context = { window: { __munimentSubscriptionTerminal: async options => new xterm.Terminal(options) }, document, URL, Uint8Array }
   vm.runInNewContext(fs.readFileSync('test/e2e/support/subscription-features.js', 'utf8'), context)
   const wait = async predicate => {
     for (let attempt = 0; attempt < 10; attempt++) {
@@ -214,8 +217,12 @@ for (const [feature, commands] of Object.entries({
     for (const error of [undefined, null, 'C:\\private\\provider.txt', new Error('private provider text'),
       { errorClass: 'command-timeout' }, { errorClass: 'profile-restored' }]) {
       const result = await probe(undefined, name => { if (name === command) throw error })
-      assert.deepEqual(result.initial[feature], ['failed', 'check', command])
-      assert.deepEqual(featureFailure(feature, result.initial[feature]), { failure_stage: 'check', error_class: command })
+      const expected = feature === 'terminal' ? terminalFailure(command,
+        command === 'terminal_close' ? `echo ${nonce}\r\n${nonce}\r\n` : '') : ['failed', 'check', command]
+      assert.deepEqual(result.initial[feature], expected)
+      const { terminal_diagnostics, ...failure } = featureFailure(feature, result.initial[feature])
+      assert.deepEqual(failure, { failure_stage: 'check', error_class: command })
+      if (feature === 'terminal') assert.equal(terminal_diagnostics.byte_count, command === 'terminal_close' ? 91 : 0)
       assert.equal(JSON.stringify(result.initial).includes('private'), false)
       assert.deepEqual(featureFailure(feature, ['failed', 'check', `${command}: C:\\private\\provider.txt`]), {})
       assert.deepEqual(featureFailure('files', ['failed', 'check', command]), {})
@@ -308,11 +315,84 @@ for (const [feature, reason, hook, change] of [
 for (const [failure, reason] of [['echo-only', 'shell-output'], ['unclosed-terminal', 'shell-closed']]) {
   test(`the terminal probe names the ${reason} assertion`, async () => {
     const result = await probe(failure)
-    assert.deepEqual(result.initial.terminal, ['failed', 'check', reason])
-    assert.deepEqual(featureFailure('terminal', result.initial.terminal), { failure_stage: 'check', error_class: reason })
+    const text = `echo ${nonce}\r\n${failure === 'echo-only' ? '' : nonce + '\r\n'}`
+    assert.deepEqual(result.initial.terminal, terminalFailure(reason, text))
+    assert.deepEqual(featureFailure('terminal', result.initial.terminal), {
+      failure_stage: 'check', error_class: reason,
+      terminal_diagnostics: { byte_count: Buffer.byteLength(text), received: true, nonce_present: true, vt_present: false },
+    })
     assert.ok(result.state.commands.includes('terminal_close'))
   })
 }
+
+for (const [name, text, passed] of [
+  ['VT colors and erase sequences', `> echo ${nonce}\r\n\x1b[32m${nonce}\x1b[0m\x1b[K\r\n> `, true],
+  ['ConPTY cursor rows without newlines', `\x1b[2J\x1b[H> echo ${nonce}\x1b[2;1H${nonce}\x1b[K\x1b[3;1H> `, true],
+  ['a Unicode title', `\x1b]0;终端\x07> echo ${nonce}\r\n${nonce}\r\n> `, true],
+  ['an echoed command with VT sequences', `\x1b[H> echo \x1b[32m${nonce}\x1b[0m\r\n> `, false],
+  ['a wrapped echoed command', `${'p'.repeat(75)}echo ${nonce}\r\n> `, false],
+  ['a nonce in a title', `\x1b]0;${nonce}\x1b\\> `, false],
+  ['an output suffix', `${nonce}unexpected\r\n> `, false],
+  ['an overwritten row', `${nonce}\rwrong\x1b[K\r\n> `, false],
+  ['an unfinished row', nonce, false],
+  ['no bytes', '', false],
+  ['private output without a nonce', 'C:\\private\\secret.txt\r\n> ', false],
+]) test(`The terminal probe checks ${name}.`, async () => {
+  const result = await probe(undefined, (hook, data, state) => {
+    if (hook === 'result:terminal_read') {
+      data.value.bytes = [...Buffer.from(state.outputRead ? '' : text)]
+      state.outputRead = true
+    }
+  })
+  assert.deepEqual(result.initial.terminal, passed ? featureChecks.terminal : terminalFailure('shell-output', text))
+  assert.ok(result.state.commands.includes('terminal_close'))
+  assert.equal(JSON.stringify(result.initial).includes('private'), false)
+})
+
+test('The terminal probe parses VT sequences and the nonce across every byte boundary.', async () => {
+  const bytes = Buffer.from(`\x1b]0;终端\x1b\\> echo ${nonce}\x1b[2;1H${nonce}\x1b[K\x1b[3;1H> `)
+  for (let split = 1; split < bytes.length; split++) {
+    const chunks = [[], [...bytes.subarray(0, split)], [], [...bytes.subarray(split)]]
+    const result = await probe(undefined, (hook, data) => {
+      if (hook === 'result:terminal_read') data.value.bytes = chunks.shift() ?? []
+    })
+    assert.deepEqual(result.initial.terminal, featureChecks.terminal, `The split at byte ${split} must pass.`)
+  }
+})
+
+test('The terminal probe answers a cursor query before it checks the output.', async () => {
+  const writes = []
+  let reads = 0
+  const result = await probe(undefined, (hook, data) => {
+    if (hook === 'terminal_write') writes.push(data.data)
+    if (hook === 'result:terminal_read') {
+      const text = ++reads === 1 ? '\x1b[6n' : reads === 2 && writes.includes('\x1b[1;1R') ? `${nonce}\r\n> ` : ''
+      data.value.bytes = [...Buffer.from(text)]
+    }
+  })
+  assert.deepEqual(writes, [`echo ${nonce}\r`, '\x1b[1;1R'])
+  assert.deepEqual(result.initial.terminal, featureChecks.terminal)
+})
+
+test('The terminal probe rejects a nonce prefix before a later suffix arrives.', async () => {
+  const chunks = [nonce, 'suffix\r\n> ']
+  const result = await probe(undefined, (hook, data) => {
+    if (hook === 'result:terminal_read') data.value.bytes = [...Buffer.from(chunks.shift() ?? '')]
+  })
+  assert.deepEqual(result.initial.terminal, terminalFailure('shell-output', `${nonce}suffix\r\n> `))
+})
+
+test('The terminal probe records a split nonce without exporting output after a read failure.', async () => {
+  const chunks = [`\x1b[H> echo ${nonce.slice(0, 15)}`, nonce.slice(15)]
+  let reads = 0
+  const result = await probe(undefined, (hook, data) => {
+    if (hook === 'terminal_read' && ++reads === 3) throw new Error('private read error')
+    if (hook === 'result:terminal_read') data.value.bytes = [...Buffer.from(chunks.shift() ?? '')]
+    if (hook === 'terminal_close') throw new Error('private close error')
+  })
+  assert.deepEqual(result.initial.terminal, terminalFailure('terminal_read', `\x1b[H> echo ${nonce}`))
+  assert.equal(JSON.stringify(result.initial).includes('private'), false)
+})
 
 test('the probes keep the first failure when cleanup also fails', async () => {
   const result = await probe('echo-only', (name, data, state) => {
@@ -324,7 +404,7 @@ test('the probes keep the first failure when cleanup also fails', async () => {
   })
   assert.deepEqual(result.initial.routing, ['failed', 'check', 'fallback-selected'])
   assert.deepEqual(result.initial.memory, ['failed', 'check', 'profile-saved'])
-  assert.deepEqual(result.initial.terminal, ['failed', 'check', 'shell-output'])
+  assert.deepEqual(result.initial.terminal, terminalFailure('shell-output', `echo ${nonce}\r\n`))
   assert.equal(JSON.stringify(result.initial).includes('private'), false)
 })
 

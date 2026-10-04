@@ -44,9 +44,20 @@ export function featureFailure(feature, observed) {
     errors.push('reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
       'reply-phase-pending-permission', 'reply-text', 'receipt-tool', 'composer-visible', ...interruptionErrors)
   }
-  if (!Object.hasOwn(featureChecks, feature) || !Array.isArray(observed) || observed.length !== 3 || observed[0] !== 'failed' ||
+  if (!Object.hasOwn(featureChecks, feature) || !Array.isArray(observed) || observed[0] !== 'failed' ||
       !stages.includes(observed[1]) || !errors.includes(observed[2])) return {}
-  return { failure_stage: observed[1], error_class: observed[2] }
+  let terminalDiagnostics
+  if (feature === 'terminal' && observed.length === 7) {
+    if (typeof observed[3] !== 'string' || !/^bytes-(0|[1-9][0-9]{0,15})$/.test(observed[3])) return {}
+    const byteCount = Number(observed[3].slice(6))
+    if (!Number.isSafeInteger(byteCount) || observed[3] !== `bytes-${byteCount}` || observed[4] !== `received-${byteCount > 0}` ||
+        !['nonce-true', 'nonce-false'].includes(observed[5]) || !['vt-true', 'vt-false'].includes(observed[6]) ||
+        (byteCount === 0 && (observed[5] !== 'nonce-false' || observed[6] !== 'vt-false'))) return {}
+    terminalDiagnostics = { byte_count: byteCount, received: byteCount > 0,
+      nonce_present: observed[5] === 'nonce-true', vt_present: observed[6] === 'vt-true' }
+  } else if (observed.length !== 3) return {}
+  return { failure_stage: observed[1], error_class: observed[2],
+    ...(terminalDiagnostics ? { terminal_diagnostics: terminalDiagnostics } : {}) }
 }
 const providers = { openai: 'openai-codex', anthropic: 'anthropic', xai: 'xai', kimi: 'kimi' }
 const packageNames = {

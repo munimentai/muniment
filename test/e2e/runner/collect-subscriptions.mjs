@@ -58,7 +58,7 @@ export function collect(sourceSha, output, inputs, jobResults) {
         if (JSON.stringify(original) !== JSON.stringify(proof)) throw new Error('The platform proof does not match its runner results.')
         complete = false
         const features = Object.fromEntries(proof.cases.filter(item => item.failure_stage)
-          .map(item => [item.feature, ['failed', item.failure_stage, item.error_class]]))
+          .map(item => [item.feature, evidence.features[item.feature]]))
         evidence = { status: evidence.status, reason: redact(evidence.reason),
           ...(evidence.failure_kind ? { failure_kind: evidence.failure_kind } : {}),
           ...(Object.keys(features).length ? { features } : {}) }
