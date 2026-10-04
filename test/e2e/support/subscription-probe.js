@@ -26,7 +26,7 @@
       const rejected = isTimeout ? timedOut : failure('command-failed')
       if (command === 'browser_command' && payload?.request?.action === 'snapshot'
         && (error?.message ?? error) === 'The page is still loading.') browserLoading.add(rejected)
-      if (command === 'subscription_probe_update' && error !== rejected) rejected.cause = error
+      if (['subscription_probe_update', 'memory_profile_save'].includes(command) && error !== rejected) rejected.cause = error
       commandFailures.set(rejected, { command, kind: isTimeout ? 'timeout' : rejectionKind(error) })
       throw rejected
     } finally { clearTimeout(timer) }
