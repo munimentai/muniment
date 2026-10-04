@@ -6306,7 +6306,7 @@ describe('installed subscription probe reply DOM', () => {
       expect(container.querySelectorAll('.response[data-subscription-evidence]')).toHaveLength(count)
       expect(container.querySelectorAll('.response .assistant-markdown')).toHaveLength(count)
       if (phase === 'chat') {
-        expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', { stage: 'complete', turn: 0, errorClass: 'none' })
+        expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', { stage: 'complete', turn: 0, errorClass: 'none', commandFailure: null })
       } else {
         expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'thread-1' })
         expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
@@ -6319,7 +6319,7 @@ describe('installed subscription probe reply DOM', () => {
   ])('rejects an invalid restored reply DOM: %j', async options => {
     const { container, result } = await runProbe('restart', options)
     expect(result.passed).toBe(false)
-    expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', { stage: 'restore', turn: null, errorClass: 'timeout' })
+    expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', { stage: 'restore', turn: null, errorClass: 'timeout', commandFailure: null })
     expect(container.querySelector('[data-subscription-evidence]')).toBeNull()
   })
 })
