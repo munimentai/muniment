@@ -4,21 +4,38 @@
   if (window.__munimentSubscriptionProbeStarted) return
   window.__munimentSubscriptionProbeStarted = true
   const plan = window.__MUNIMENT_SUBSCRIPTION_PLAN__
+  const commandFailures = new WeakMap()
+  const browserLoading = new WeakSet()
+  const rejectionKind = error => {
+    if (error === 'Muniment is busy with another request. Try again.') return 'busy'
+    if (error === 'Conversation history is unavailable.' || error === 'Muniment cannot reach its background service.') return 'unavailable'
+    if (error === 'Authorization failed. Sign in again.' || error === 'The runtime refused the request as unauthorized. Enter local mode or sign in, then retry.') return 'unauthorized'
+    return 'rejected'
+  }
   const invoke = async (command, payload) => {
     let timer
     const timeout = command === 'subscription_probe_update' ? 300_000 : 180_000
+    const timedOut = failure('command-timeout')
     try {
       return await Promise.race([
         window.__TAURI__.core.invoke(command, payload),
-        new Promise((_, reject) => { timer = setTimeout(() => reject(failure('command-timeout')), timeout) }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(timedOut), timeout) }),
       ])
+    } catch (error) {
+      const isTimeout = error === timedOut || (command === 'subscription_probe_update' && error?.errorClass === 'command-timeout')
+      const rejected = isTimeout ? timedOut : failure('command-failed')
+      if (command === 'browser_command' && payload?.request?.action === 'snapshot'
+        && (error?.message ?? error) === 'The page is still loading.') browserLoading.add(rejected)
+      if (command === 'subscription_probe_update' && error !== rejected) rejected.cause = error
+      commandFailures.set(rejected, { command, kind: isTimeout ? 'timeout' : rejectionKind(error) })
+      throw rejected
     } finally { clearTimeout(timer) }
   }
   const failure = errorClass => Object.assign(new Error('The installed subscription probe failed.'), { errorClass })
   let stage = 'composer', turn = null
-  const progress = async (next, errorClass = 'none') => {
+  const progress = async (next, errorClass = 'none', commandFailure = null) => {
     stage = next
-    await invoke('subscription_probe_progress', { stage, turn, errorClass })
+    await invoke('subscription_probe_progress', { stage, turn, errorClass, commandFailure })
   }
   const restored = ['features', 'restart', 'update', 'update-restart'].includes(plan.phase)
   const turns = restored ? plan.turns : []
@@ -108,7 +125,8 @@
     }
     if (plan.acceptance) {
       await progress('features')
-      features = await window.__munimentSubscriptionFeatures({ plan, invoke, wait, setValue, turns })
+      features = await window.__munimentSubscriptionFeatures({ plan, invoke, wait, setValue, turns,
+        isBrowserLoading: error => browserLoading.has(error) })
       if (plan.phase === 'chat') features['local-startup'] = ['composer-visible', 'runtime-connected']
     }
     // Show only verified synthetic replies. Hide account details and tool output.
@@ -122,7 +140,8 @@
     await progress('result')
     await invoke('subscription_probe_observed', { turns, features, passed: true })
   } catch (error) {
-    try { await progress(stage, error?.errorClass || 'command-failed') } catch { /* Save the result even if progress fails. */ }
+    const commandFailure = commandFailures.get(error) || commandFailures.get(error?.cause) || null
+    try { await progress(stage, error?.errorClass || 'command-failed', commandFailure) } catch { /* Save the result even if progress fails. */ }
     await invoke('subscription_probe_observed', { turns, features, passed: false })
   }
 })()

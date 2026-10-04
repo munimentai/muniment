@@ -136,6 +136,20 @@ const probeErrors = ['none', 'timeout', 'command-timeout', 'command-failed', 're
   'update-download', 'update-unavailable', 'update-not-prepared', 'update-package-digest', 'update-tamper-rejection',
   'update-version-rejection', 'update-active-work-refusal', 'update-checkpoint-encode', 'update-checkpoint-write',
   'update-busy', 'update-install-task', 'update-install', 'update-restart']
+const probeCommands = ['attach_listener_status', 'local_mode_provider_inventory', 'chat_current_thread', 'chat_thread_open',
+  'chat_answer_permission', 'subscription_probe_progress', 'subscription_probe_observed', 'subscription_probe_update',
+  'workspace_read_text', 'workspace_save_text', 'workspace_folders', 'workspace_file_action',
+  'model_router_settings', 'model_router_update_account', 'model_router_save_routes', 'model_router_test_route',
+  'project_create', 'project_list', 'project_rename', 'memory_profile_read', 'memory_profile_save',
+  'agent_save', 'agent_list', 'agent_delete', 'artifact_from_file', 'artifact_read', 'artifact_edit', 'artifact_list',
+  'browser_view', 'browser_command', 'terminal_start', 'terminal_write', 'terminal_read', 'terminal_close', 'extend_command']
+
+function commandDetail(row) {
+  if (row.error_class === 'none' || row.stage === 'transport' || !probeCommands.includes(row.command) ||
+      !['busy', 'unavailable', 'unauthorized', 'timeout', 'rejected'].includes(row.command_error_class)) return {}
+  return { command: row.command, command_error_class: row.command_error_class }
+}
+
 const probePhases = ['chat', 'features', 'restart', 'update', 'update-restart']
 const transportKinds = ['dns', 'connect', 'tls', 'tls_certificate', 'proxy', 'timeout', 'other']
 
@@ -191,7 +205,7 @@ export function readProbeProgress(env, transport = false) {
             !(row.turn === null && row.requested === null || Number.isInteger(row.turn) && row.turn >= 0 && row.turn < 4 &&
               typeof row.requested === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(row.requested))) return []
         return [{ phase: row.phase, stage: row.stage, turn: row.turn, requested: row.requested,
-          transport: row.transport, error_class: row.error_class, ...transportDetail(row), ...modelSaveDetail(row) }]
+          transport: row.transport, error_class: row.error_class, ...transportDetail(row), ...modelSaveDetail(row), ...commandDetail(row) }]
       } catch { return [] }
     })
   } catch { return [] }

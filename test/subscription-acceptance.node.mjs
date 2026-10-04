@@ -611,7 +611,135 @@ test('the collector preserves blocked runner reasons and still fails', () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context', 'new-thread', 'onboarding-only', 'disabled-send', 'hung-inventory', 'command-failed', 'progress-failed']) {
+test('probe progress keeps command failures through the artifact reader without message text', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-command-'))
+  const env = { MUNIMENT_STATE_DIR: root }
+  try {
+    fs.writeFileSync(path.join(root, 'subscription-probe.json'), JSON.stringify({ phase: 'chat' }))
+    for (const [command, kind, accepted] of [
+      ['chat_current_thread', 'busy', true], ['chat_thread_open', 'unavailable', true],
+      ['chat_thread_open', 'timeout', true], ['PRIVATE', 'rejected', false],
+      ['chat_thread_open', 'PRIVATE', false], ['chat_thread_open\nPRIVATE', 'busy', false],
+      ['', '', false],
+    ]) {
+      const row = { phase: 'chat', stage: 'reply', turn: 2, requested: models[2].id,
+        transport: 'pending', error_class: 'command-failed', command, command_error_class: kind,
+        message: 'PRIVATE TOKEN AND REPLY', code: 'PRIVATE' }
+      fs.writeFileSync(path.join(root, 'subscription-probe-progress.jsonl'), `${JSON.stringify(row)}\n`)
+      const saved = readProbeProgress(env).at(-1)
+      assert.equal(saved.command, accepted ? command : undefined)
+      assert.equal(saved.command_error_class, accepted ? kind : undefined)
+      const detail = probeProgress(env, 'chat/verify-result', 'chat')
+      assert.ok(!detail.includes('PRIVATE'))
+      if (accepted) assert.ok(detail.includes(`"command":"${command}"`))
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+for (const mode of ['handled', 'cleanup', 'wrapped']) {
+  test(`the installed probe keeps command diagnostics scoped after ${mode}`, async () => {
+    const progress = []
+    let observed
+    await vm.runInNewContext(fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8'), {
+      window: {
+        __MUNIMENT_SUBSCRIPTION_PLAN__: { phase: 'chat', models: [], nonce, acceptance: true },
+        __TAURI__: { core: { invoke: async (command, payload) => {
+          if (command === 'subscription_probe_progress') { progress.push(payload); return }
+          if (command === 'subscription_probe_observed') { observed = payload; return }
+          if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
+          if (command === 'chat_thread_open') throw 'Conversation history is unavailable.'
+          return {}
+        } } },
+        __munimentSubscriptionFeatures: async ({ invoke }) => {
+          let rejected
+          try { await invoke('chat_thread_open') } catch (error) { rejected = error }
+          if (mode === 'handled') throw new Error('PRIVATE ASSERTION')
+          await invoke('local_mode_provider_inventory')
+          if (mode === 'wrapped') throw new Error('PRIVATE WRAPPER', { cause: rejected })
+          throw rejected
+        },
+      },
+      document: { querySelector: () => ({ getClientRects: () => [1] }) },
+      setTimeout() {}, clearTimeout() {},
+    })
+    assert.equal(observed.passed, false)
+    const failure = progress.at(-1).commandFailure
+    if (mode === 'handled') assert.equal(failure, null)
+    else {
+      assert.equal(failure.command, 'chat_thread_open')
+      assert.equal(failure.kind, 'unavailable')
+    }
+    assert.ok(!JSON.stringify(progress).includes('PRIVATE'))
+  })
+}
+
+for (const mode of ['loading-once', 'loading-error-once', 'loading-forever', 'rejected', 'forged-loading']) {
+  test(`the installed browser probe handles ${mode} through the invoke wrapper`, async () => {
+    const progress = [], actions = [], views = []
+    let observed, snapshots = 0, clock = 0
+    const turns = fixture().result.turns
+    const invoke = async (command, payload) => {
+      if (command === 'subscription_probe_progress') { progress.push(payload); return }
+      if (command === 'subscription_probe_observed') { observed = payload; return }
+      if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
+      if (command === 'chat_current_thread') return turns[0].thread
+      if (command === 'browser_view') { views.push(payload.label); return }
+      if (command === 'browser_command') {
+        const action = payload.request.action
+        actions.push(action)
+        if (action === 'close') return
+        if (action === 'navigate') throw 'PRIVATE UNSAFE URL'
+        assert.equal(action, 'snapshot')
+        snapshots++
+        if (mode === 'rejected') throw new Error('PRIVATE SNAPSHOT FAILURE')
+        if (mode === 'forged-loading') throw { browserLoading: true, errorClass: 'loading', message: 'PRIVATE' }
+        if (mode === 'loading-forever' || snapshots === 1) {
+          if (mode === 'loading-error-once') throw new Error('The page is still loading.')
+          throw 'The page is still loading.'
+        }
+        return JSON.stringify({ title: 'Docs', text: 'The local documentation page.', url: 'http://127.0.0.1:1234/docs/' })
+      }
+      throw new Error('PRIVATE UNRELATED FEATURE')
+    }
+    await vm.runInNewContext([
+      'test/e2e/support/subscription-features.js', 'test/e2e/support/subscription-probe.js',
+    ].map(file => fs.readFileSync(file, 'utf8')).join('\n'), {
+      window: { __MUNIMENT_SUBSCRIPTION_PLAN__: { phase: 'features', acceptance: true, turns, models, nonce },
+        __TAURI__: { core: { invoke } } },
+      document: { head: { append() {} }, createElement: () => ({}),
+        querySelector: () => ({ getClientRects: () => [1] }),
+        querySelectorAll: () => turns.map(() => ({ getClientRects: () => [1],
+          querySelector: () => ({ textContent: nonce }), setAttribute() {} })),
+      },
+      URL, clearTimeout() {},
+      setTimeout: (callback, ms) => { if (ms === 250) callback() },
+      Date: { now: () => { clock += 1000; return clock } },
+    })
+    const success = ['loading-once', 'loading-error-once'].includes(mode)
+    assert.deepEqual(Array.from(observed.features.browser), success
+      ? ['local-page-rendered', 'unsafe-navigation-rejected', 'view-closed']
+      : ['failed', 'check', mode === 'loading-forever' ? 'timeout' : 'check-failed'])
+    if (mode === 'loading-forever') assert.ok(snapshots > 2 && snapshots < 180)
+    else assert.equal(snapshots, success ? 2 : 1)
+    assert.equal(actions.includes('navigate'), success)
+    assert.equal(actions.at(-1), 'close')
+    assert.deepEqual(views, ['browser', ''])
+    assert.ok(progress.every(row => row.commandFailure === null))
+    assert.ok(!JSON.stringify({ progress, observed }).includes('PRIVATE'))
+    assert.ok(!JSON.stringify({ progress, observed }).includes('The page is still loading.'))
+  })
+}
+
+const commandRejections = {
+  'current-thread-busy': ['chat_current_thread', 'Muniment is busy with another request. Try again.', 'busy'],
+  'thread-open-busy': ['chat_thread_open', 'Muniment is busy with another request. Try again.', 'busy'],
+  'thread-open-unavailable': ['chat_thread_open', 'Conversation history is unavailable.', 'unavailable'],
+  'thread-open-unauthorized': ['chat_thread_open', 'Authorization failed. Sign in again.', 'unauthorized'],
+  'thread-open-private-message': ['chat_thread_open', new Error('PRIVATE TOKEN'), 'rejected'],
+  'thread-open-forged-class': ['chat_thread_open', { errorClass: 'PRIVATE', kind: 'PRIVATE', code: 'PRIVATE' }, 'rejected'],
+  'thread-open-null': ['chat_thread_open', null, 'rejected'],
+}
+for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context', 'new-thread', 'onboarding-only', 'disabled-send', 'hung-inventory', 'command-failed', 'progress-failed', ...Object.keys(commandRejections)]) {
   test(`the installed webview probe checks ${mode}`, async () => {
     let selected = 0, picker = false, observed, clock = 0, hung = false
     const prompts = [], entries = [], progress = []
@@ -639,6 +767,8 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
         progress.push(payload)
         return
       }
+      const rejection = commandRejections[mode]
+      if (selected === 2 && command === rejection?.[0]) throw rejection[1]
       if (command === 'local_mode_provider_inventory' && mode === 'command-failed') throw new Error('PRIVATE TOKEN AND REPLY')
       if (command === 'local_mode_provider_inventory' && mode === 'hung-inventory') { hung = true; return new Promise(() => {}) }
       if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
@@ -660,7 +790,21 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
     assert.ok(progress.length < 40)
     assert.ok(!JSON.stringify(progress).includes(nonce))
     assert.ok(!JSON.stringify({ progress, observed }).includes('PRIVATE'))
-    if (mode === 'command-failed') assert.equal(progress.at(-1).errorClass, 'command-failed')
+    if (commandRejections[mode]) {
+      const [command, , kind] = commandRejections[mode]
+      const row = progress.at(-1)
+      assert.equal(row.stage, 'reply')
+      assert.equal(row.turn, 2)
+      assert.equal(row.errorClass, 'command-failed')
+      assert.equal(row.commandFailure.command, command)
+      assert.equal(row.commandFailure.kind, kind)
+      assert.equal(observed.turns.length, 2)
+    }
+    if (mode === 'command-failed') {
+      assert.equal(progress.at(-1).errorClass, 'command-failed')
+      assert.equal(progress.at(-1).commandFailure.command, 'local_mode_provider_inventory')
+      assert.equal(progress.at(-1).commandFailure.kind, 'rejected')
+    }
     if (mode === 'onboarding-only') {
       assert.equal(prompts.length, 0)
       assert.equal(progress.at(-1).stage, 'composer')
@@ -673,6 +817,8 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
     if (mode === 'hung-inventory') {
       assert.equal(progress.at(-1).stage, 'inventory')
       assert.equal(progress.at(-1).errorClass, 'command-timeout')
+      assert.equal(progress.at(-1).commandFailure.command, 'local_mode_provider_inventory')
+      assert.equal(progress.at(-1).commandFailure.kind, 'timeout')
     }
     if (mode === 'success') {
       assert.deepEqual(progress.filter(row => row.stage === 'complete').map(row => row.turn), [0, 1, 2, 3])

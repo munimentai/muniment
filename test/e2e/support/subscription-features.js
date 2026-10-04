@@ -1,5 +1,6 @@
 // The installed webview exercises public commands with disposable data.
-window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, turns }) => {
+window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, turns,
+  isBrowserLoading = error => (error?.message ?? error) === 'The page is still loading.' }) => {
   const features = {}
   const failures = new WeakMap()
   const check = (value, reason) => {
@@ -38,8 +39,9 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
       await invoke('subscription_probe_update')
     } catch (error) {
       // Only fixed Rust codes enter the evidence. Never copy an unknown rejection.
-      const errorClass = codes.includes(error) ? error : error?.errorClass === 'command-timeout' ? 'command-timeout' : 'command-failed'
-      throw Object.assign(new Error('The installed update failed.'), { errorClass })
+      const code = error?.cause ?? error
+      const errorClass = codes.includes(code) ? code : error?.errorClass === 'command-timeout' ? 'command-timeout' : 'command-failed'
+      throw Object.assign(new Error('The installed update failed.'), { errorClass, cause: error })
     }
     throw Object.assign(new Error('The updated app did not restart.'), { errorClass: 'update-restart' })
   }
@@ -193,7 +195,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
         try {
           response = await invoke('browser_command', { request: { view: 'browser', action: 'snapshot' } })
         } catch (error) {
-          if ((error?.message ?? error) === 'The page is still loading.') return false
+          if (isBrowserLoading(error)) return false
           throw error
         }
         const snapshot = JSON.parse(response)
