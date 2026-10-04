@@ -13,6 +13,8 @@ import { awaitUpdateResult, verifyUpdateResult, verifyMcpReceipt } from './e2e/r
 import { featureChecks, featureFailure, interruptionErrors } from './e2e/support/subscription-acceptance.mjs'
 
 const nonce = 'MUNIMENT-' + 'a'.repeat(32)
+const terminalResponse = `${nonce}-terminal`
+const terminalCommand = `echo ${nonce}\\-terminal\r`
 const fileNonce = 'MUNIMENT-' + 'b'.repeat(32)
 const mcpNonce = 'MUNIMENT-' + 'c'.repeat(32)
 const terminalFailure = (reason, text = '') => ['failed', 'check', reason,
@@ -23,7 +25,7 @@ const mcpApproval = {
   options: ['Allow once', 'Allow for session', 'Allow server for this session', 'Deny'],
 }
 async function probe(failure, fault = () => {}) {
-  const plan = { nonce, fileNonce, mcpNonce, mcpReceipt: '/tmp/mcp-receipt.json', models: [{ family: 'openai', id: 'route-model' }, { family: 'openai', id: 'model' }], fixtureFile: '/tmp/fixture.txt',
+  const plan = { platform: 'linux', nonce, fileNonce, mcpNonce, mcpReceipt: '/tmp/mcp-receipt.json', models: [{ family: 'openai', id: 'route-model' }, { family: 'openai', id: 'model' }], fixtureFile: '/tmp/fixture.txt',
     fixtureDirectory: '/tmp', mcpCommand: 'node', mcpScript: '/tmp/mcp.mjs',
     turns: [{ thread: 'thread', run: 'chat' }] }
   const state = { content: fileNonce, revision: 'first', profile: '', projects: {},
@@ -113,11 +115,11 @@ async function probe(failure, fault = () => {}) {
       return {}
     }
     if (command === 'terminal_start') { terminalOpen = true; return 'terminal' }
-    if (command === 'terminal_write') return
+    if (command === 'terminal_write') { state.terminalWrites = [...(state.terminalWrites ?? []), data.data]; return }
     if (command === 'terminal_close') { terminalOpen = failure === 'unclosed-terminal'; return }
     if (command === 'terminal_read') {
       if (!terminalOpen) throw new Error('Closed terminal.')
-      const text = terminalRead ? '' : `echo ${nonce}\r\n${failure === 'echo-only' ? '' : nonce + '\r\n'}`
+      const text = terminalRead ? '' : `${state.terminalWrites[0]}\n${failure === 'echo-only' ? '' : terminalResponse + '\r\n'}`
       terminalRead = true
       return { bytes: [...Buffer.from(text)] }
     }
@@ -220,11 +222,12 @@ for (const [feature, commands] of Object.entries({
       const reason = command === 'memory_profile_save'
         ? error?.errorClass === 'command-timeout' ? 'memory-save-timeout' : 'memory-save-rejected' : command
       const expected = feature === 'terminal' ? terminalFailure(reason,
-        command === 'terminal_close' ? `echo ${nonce}\r\n${nonce}\r\n` : '') : ['failed', 'check', reason]
+        command === 'terminal_close' ? `${terminalCommand}\n${terminalResponse}\r\n` : '') : ['failed', 'check', reason]
       assert.deepEqual(result.initial[feature], expected)
       const { terminal_diagnostics, ...failure } = featureFailure(feature, result.initial[feature])
       assert.deepEqual(failure, { failure_stage: 'check', error_class: reason })
-      if (feature === 'terminal') assert.equal(terminal_diagnostics.byte_count, command === 'terminal_close' ? 91 : 0)
+      if (feature === 'terminal') assert.equal(terminal_diagnostics.byte_count,
+        command === 'terminal_close' ? Buffer.byteLength(`${terminalCommand}\n${terminalResponse}\r\n`) : 0)
       assert.equal(JSON.stringify(result.initial).includes('private'), false)
       assert.deepEqual(featureFailure(feature, ['failed', 'check', `${command}: C:\\private\\provider.txt`]), {})
       assert.deepEqual(featureFailure('files', ['failed', 'check', command]), {})
@@ -317,7 +320,7 @@ for (const [feature, reason, hook, change] of [
 for (const [failure, reason] of [['echo-only', 'shell-output'], ['unclosed-terminal', 'shell-closed']]) {
   test(`the terminal probe names the ${reason} assertion`, async () => {
     const result = await probe(failure)
-    const text = `echo ${nonce}\r\n${failure === 'echo-only' ? '' : nonce + '\r\n'}`
+    const text = `${terminalCommand}\n${failure === 'echo-only' ? '' : terminalResponse + '\r\n'}`
     assert.deepEqual(result.initial.terminal, terminalFailure(reason, text))
     assert.deepEqual(featureFailure('terminal', result.initial.terminal), {
       failure_stage: 'check', error_class: reason,
@@ -328,15 +331,16 @@ for (const [failure, reason] of [['echo-only', 'shell-output'], ['unclosed-termi
 }
 
 for (const [name, text, passed] of [
-  ['VT colors and erase sequences', `> echo ${nonce}\r\n\x1b[32m${nonce}\x1b[0m\x1b[K\r\n> `, true],
-  ['ConPTY cursor rows without newlines', `\x1b[2J\x1b[H> echo ${nonce}\x1b[2;1H${nonce}\x1b[K\x1b[3;1H> `, true],
-  ['a Unicode title', `\x1b]0;终端\x07> echo ${nonce}\r\n${nonce}\r\n> `, true],
-  ['an echoed command with VT sequences', `\x1b[H> echo \x1b[32m${nonce}\x1b[0m\r\n> `, false],
-  ['a wrapped echoed command', `${'p'.repeat(75)}echo ${nonce}\r\n> `, false],
-  ['a nonce in a title', `\x1b]0;${nonce}\x1b\\> `, false],
-  ['an output suffix', `${nonce}unexpected\r\n> `, false],
-  ['an overwritten row', `${nonce}\rwrong\x1b[K\r\n> `, false],
-  ['an unfinished row', nonce, false],
+  ['VT colors and erase sequences', `> ${terminalCommand}\n\x1b[32m${terminalResponse}\x1b[0m\x1b[K\r\n> `, true],
+  ['ConPTY cursor rows without newlines', `\x1b[2J\x1b[H> ${terminalCommand.trimEnd()}\x1b[2;1H${terminalResponse}\x1b[K\x1b[3;1H> `, true],
+  ['a Unicode title', `\x1b]0;终端\x07> ${terminalCommand}\n${terminalResponse}\r\n> `, true],
+  ['an echoed command with VT sequences', `\x1b[H> echo \x1b[32m${nonce}\\-terminal\x1b[0m\r\n> `, false],
+  ['a wrapped echoed command', `${'p'.repeat(75)}${terminalCommand}\n> `, false],
+  ['a cursor-positioned echoed command', `${'p'.repeat(75)}echo \x1b[2;1H${nonce}\x1b[3;1H> `, false],
+  ['a nonce in a title', `\x1b]0;${terminalResponse}\x1b\\> `, false],
+  ['an output suffix', `${terminalResponse}unexpected\r\n> `, false],
+  ['an overwritten row', `${terminalResponse}\rwrong\x1b[K\r\n> `, false],
+  ['an unfinished row', terminalResponse, false],
   ['no bytes', '', false],
   ['private output without a nonce', 'C:\\private\\secret.txt\r\n> ', false],
 ]) test(`The terminal probe checks ${name}.`, async () => {
@@ -351,8 +355,48 @@ for (const [name, text, passed] of [
   assert.equal(JSON.stringify(result.initial).includes('private'), false)
 })
 
+for (const platform of ['linux', 'macos-arm64', 'macos-x64', 'windows']) {
+  for (const layout of ['plain', 'wrapped', 'cursor-positioned']) {
+    for (const output of [false, true]) test(`The ${platform} terminal probe checks ${layout} command echo with output=${output}.`, async () => {
+      let text
+      const result = await probe(undefined, (hook, data, state) => {
+        if (hook === 'setup') data.platform = platform
+        if (hook === 'terminal_write') {
+          const escape = platform === 'windows' ? '^' : '\\'
+          assert.equal(data.data, `echo ${nonce}${escape}-terminal\r`)
+          assert.equal(data.data.includes(terminalResponse), false)
+          const command = data.data.trimEnd()
+          const echo = layout === 'plain' ? `> ${command}\r\n`
+            : layout === 'wrapped' ? `${'p'.repeat(75)}${command}\r\n`
+            : `${'p'.repeat(75)}echo \x1b[2;1H${command.slice(5)}\x1b[3;1H`
+          text = `${echo}${output ? `${terminalResponse}\x1b[4;1H` : ''}> `
+        }
+        if (hook === 'result:terminal_read') {
+          data.value.bytes = [...Buffer.from(state.outputRead ? '' : text)]
+          state.outputRead = true
+        }
+      })
+      assert.deepEqual(result.initial.terminal, output ? featureChecks.terminal : terminalFailure('shell-output', text))
+      assert.ok(result.state.commands.includes('terminal_close'))
+    })
+  }
+}
+
+test('The terminal command produces the response in the native shell.', async () => {
+  const windows = process.platform === 'win32'
+  const result = await probe(undefined, (hook, data) => {
+    if (hook === 'setup') data.platform = windows ? 'windows' : 'linux'
+  })
+  const command = result.state.terminalWrites[0]
+  const shell = spawnSync(windows ? 'cmd.exe' : '/bin/sh',
+    [...(windows ? ['/d', '/s', '/c'] : ['-c']), command.trimEnd()], { encoding: 'utf8' })
+  assert.equal(shell.status, 0, shell.stderr)
+  assert.equal(shell.stdout, `${terminalResponse}${windows ? '\r\n' : '\n'}`)
+  assert.equal(command.includes(terminalResponse), false)
+})
+
 test('The terminal probe parses VT sequences and the nonce across every byte boundary.', async () => {
-  const bytes = Buffer.from(`\x1b]0;终端\x1b\\> echo ${nonce}\x1b[2;1H${nonce}\x1b[K\x1b[3;1H> `)
+  const bytes = Buffer.from(`\x1b]0;终端\x1b\\> ${terminalCommand.trimEnd()}\x1b[2;1H${terminalResponse}\x1b[K\x1b[3;1H> `)
   for (let split = 1; split < bytes.length; split++) {
     const chunks = [[], [...bytes.subarray(0, split)], [], [...bytes.subarray(split)]]
     const result = await probe(undefined, (hook, data) => {
@@ -368,20 +412,20 @@ test('The terminal probe answers a cursor query before it checks the output.', a
   const result = await probe(undefined, (hook, data) => {
     if (hook === 'terminal_write') writes.push(data.data)
     if (hook === 'result:terminal_read') {
-      const text = ++reads === 1 ? '\x1b[6n' : reads === 2 && writes.includes('\x1b[1;1R') ? `${nonce}\r\n> ` : ''
+      const text = ++reads === 1 ? '\x1b[6n' : reads === 2 && writes.includes('\x1b[1;1R') ? `${terminalResponse}\r\n> ` : ''
       data.value.bytes = [...Buffer.from(text)]
     }
   })
-  assert.deepEqual(writes, [`echo ${nonce}\r`, '\x1b[1;1R'])
+  assert.deepEqual(writes, [terminalCommand, '\x1b[1;1R'])
   assert.deepEqual(result.initial.terminal, featureChecks.terminal)
 })
 
 test('The terminal probe rejects a nonce prefix before a later suffix arrives.', async () => {
-  const chunks = [nonce, 'suffix\r\n> ']
+  const chunks = [terminalResponse, 'suffix\r\n> ']
   const result = await probe(undefined, (hook, data) => {
     if (hook === 'result:terminal_read') data.value.bytes = [...Buffer.from(chunks.shift() ?? '')]
   })
-  assert.deepEqual(result.initial.terminal, terminalFailure('shell-output', `${nonce}suffix\r\n> `))
+  assert.deepEqual(result.initial.terminal, terminalFailure('shell-output', `${terminalResponse}suffix\r\n> `))
 })
 
 test('The terminal probe records a split nonce without exporting output after a read failure.', async () => {
@@ -406,7 +450,7 @@ test('the probes keep the first failure when cleanup also fails', async () => {
   })
   assert.deepEqual(result.initial.routing, ['failed', 'check', 'fallback-selected'])
   assert.deepEqual(result.initial.memory, ['failed', 'check', 'profile-saved'])
-  assert.deepEqual(result.initial.terminal, terminalFailure('shell-output', `echo ${nonce}\r\n`))
+  assert.deepEqual(result.initial.terminal, terminalFailure('shell-output', `${terminalCommand}\n`))
   assert.equal(JSON.stringify(result.initial).includes('private'), false)
 })
 

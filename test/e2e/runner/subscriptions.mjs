@@ -415,7 +415,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     reason = 'The disposable signed update server could not start. Install OpenSSL on the native runner.'
     step = 'update-server'
     updateServer = await updateFixture(root, bytes, fs.readFileSync(signatureFile, 'utf8').trim(), version, platform)
-    const plan = { models: candidate.models, nonce, fileNonce, mcpNonce, mcpReceipt,
+    const plan = { platform, models: candidate.models, nonce, fileNonce, mcpNonce, mcpReceipt,
       acceptance: true, phase: 'chat', fixtureFile, fixtureDirectory: root,
       mcpCommand: process.execPath, mcpScript: path.resolve('test/e2e/support/subscription-mcp.mjs'),
       updateUrl: updateServer.url, packageSha256: candidate.sha256 }

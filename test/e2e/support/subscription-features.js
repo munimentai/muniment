@@ -237,8 +237,10 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     const id = await command('terminal_start', { path: plan.fixtureDirectory, cols: 80, rows: 24 })
     let terminal
     try {
-      // Ignore the echoed command. Require the shell's separate output line.
-      await command('terminal_write', { id, data: `echo ${plan.nonce}\r` })
+      // The shell removes the escape. A cursor-positioned command continuation cannot contain the complete response.
+      const response = `${plan.nonce}-terminal`
+      const escape = plan.platform === 'windows' ? '^' : '\\'
+      await command('terminal_write', { id, data: `echo ${plan.nonce}${escape}-terminal\r` })
       await inspect('shell-output', async () => {
         terminal = await window.__munimentSubscriptionTerminal({ cols: 80, rows: 24, scrollback: 1000 })
         const replies = []
@@ -259,7 +261,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
             const line = buffer.getLine(row)
             // A live row can still gain a suffix. A wrapped row can be part of the command.
             if (row === buffer.baseY + buffer.cursorY || line.isWrapped || buffer.getLine(row + 1)?.isWrapped) continue
-            if (line.translateToString(true) === plan.nonce) return true
+            if (line.translateToString(true) === response) return true
           }
           return false
         })
