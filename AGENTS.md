@@ -58,3 +58,12 @@ roadmap phase is deleted, not marked done. Caps: `SPEC.md` 600 lines,
 `DESIGN.md` 250, `ROADMAP.md` 150, `AGENTS.md` 120. Issues track work and git holds history.
 `CONTRIBUTING.md`, `SECURITY.md` and `LICENSE.md` define public participation,
 private vulnerability reporting and licensing.
+
+## Commits
+
+- `feat:` → minor
+- `fix:` / `perf:` → patch
+- `feat!:` or `BREAKING CHANGE:` trailer → major
+- `chore:` / `docs:` / `test:` / `refactor:` → no release
+- Before a direct commit to `main`, run `git pull --rebase`. Push right after you commit.
+- Never force-push `main`. On a rebase conflict in an append-only file, keep both lines in time order.
