@@ -819,6 +819,56 @@ test('failure summaries handle missing, malformed, contradictory, and partial ev
   assertSafe(messages.join('\n'))
 }))
 
+test('The failure summary names failed features after a successful update restart.', t => temporary(output => {
+  const messages = []
+  t.mock.method(console, 'error', text => messages.push(text))
+  const platform = 'macos-arm64'
+  const evidenceFile = path.join(output, `${platform}-subscription.json`)
+  fs.writeFileSync(evidenceFile, JSON.stringify({ status: 'passed' }))
+  const reason = 'The installed feature check did not finish. Read the native runner log.'
+  // Match the saved native run without its profile paths or provider replies.
+  const cases = [
+    { platform, feature: 'chat', status: 'passed' },
+    { platform, feature: 'account-balancing', status: 'blocked', reason, failure_stage: 'check', error_class: 'check-failed' },
+    { platform, feature: 'mcp', status: 'blocked', reason, failure_stage: 'tool-turn', error_class: 'reply-phase' },
+    { platform, feature: 'restart-persistence', status: 'passed' },
+    { platform, feature: 'signed-update', status: 'passed' },
+  ]
+  const proofFile = path.join(output, 'release-acceptance.json')
+  fs.writeFileSync(proofFile, JSON.stringify({ cases }))
+  fs.writeFileSync(path.join(output, `${platform}-subscription.log`),
+    'account-balancing: blocked\nmcp: blocked\n' + 'runtime log\n'.repeat(2000) +
+    'muniment-runtime: macos peer read failed operation=LOCAL_PEERPID\n' +
+    'muniment-runtime: exit status=75 cause=upgrade refresh\nphase=update-restart\n')
+  const summary = 'reason="The installed feature checks failed: account-balancing (check/check-failed), mcp (tool-turn/reply-phase)."'
+  for (const status of [0, 1]) {
+    messages.length = 0
+    reportSubscriptionFailure(output, platform, status, redact)
+    assert.equal(messages[0], `platform=${platform} status=blocked\n${summary}`)
+    assert.match(messages[1], /phase=update-restart/)
+    assert.ok(messages[1].length < 20_000)
+    assert.equal(messages[1].includes('account-balancing'), false)
+  }
+
+  // Reject unknown codes, other platforms, and stale codes on passing cases.
+  cases.push({ platform, feature: 'files', status: 'blocked', failure_stage: 'check', error_class: 'private detail' },
+    { platform: 'linux', feature: 'tools', status: 'blocked', failure_stage: 'check', error_class: 'timeout' })
+  Object.assign(cases.at(4), { failure_stage: 'restore', error_class: 'check-failed' })
+  fs.writeFileSync(proofFile, JSON.stringify({ cases }))
+  messages.length = 0
+  reportSubscriptionFailure(output, platform, 1, redact)
+  assert.equal(messages[0], `platform=${platform} status=blocked\n${summary}`)
+
+  // An incomplete run keeps its own failure instead of a prior feature failure.
+  for (const status of ['blocked', 'failed']) {
+    const reason = 'The installed update failed or did not restore the disposable profile after relaunch.'
+    fs.writeFileSync(evidenceFile, JSON.stringify({ status, reason }))
+    messages.length = 0
+    reportSubscriptionFailure(output, platform, 1, redact)
+    assert.equal(messages[0], `platform=${platform} status=${status}\nreason=${JSON.stringify(reason)}`)
+  }
+}))
+
 test('collection prints every platform reason with lease-aware redaction', t => temporary(root => {
   const messages = []
   t.mock.method(console, 'error', text => messages.push(text))

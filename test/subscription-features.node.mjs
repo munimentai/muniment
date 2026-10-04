@@ -204,6 +204,7 @@ for (const [failure, feature] of [
 })
 
 for (const [feature, commands] of Object.entries({
+  'account-balancing': ['model_router_settings'],
   routing: ['model_router_settings', 'model_router_save_routes', 'model_router_test_route', 'model_router_update_account'],
   memory: ['memory_profile_read', 'memory_profile_save'],
   terminal: ['terminal_start', 'terminal_write', 'terminal_read', 'terminal_close'],
@@ -222,6 +223,60 @@ for (const [feature, commands] of Object.entries({
     }
   })
 }
+
+for (const [failure, reason] of [
+  ['single-account', 'multiple-accounts-served'],
+  ['unequal-shares', 'equal-weight-shares'],
+  ['active-reservation', 'no-active-reservations'],
+]) test(`The account-balancing probe names ${failure}.`, async () => {
+  const result = await probe(failure)
+  assert.deepEqual(result.initial['account-balancing'], ['failed', 'check', reason])
+  assert.deepEqual(featureFailure('account-balancing', result.initial['account-balancing']), {
+    failure_stage: 'check', error_class: reason,
+  })
+})
+
+for (const [name, change, reason = 'account-counters'] of [
+  ['empty accounts', state => { state.accounts = [] }],
+  ['missing accounts', state => { state.accounts = null }],
+  ['null account', state => { state.accounts[0] = null }],
+  ['duplicate IDs', state => { state.accounts[1].id = state.accounts[0].id }],
+  ['empty ID', state => { state.accounts[0].id = '' }],
+  ['missing family', state => { delete state.accounts[0].family }],
+  ['invalid enabled flag', state => { state.accounts[0].enabled = 'true' }],
+  ['unequal weights', state => { state.accounts[0].weight = 2 }, 'equal-account-weights'],
+  ['provider errors', state => { state.accounts[0].errors = 1 }, 'account-errors'],
+  ['different families', state => { state.accounts[1].family = 'anthropic' }, 'multiple-accounts-served'],
+  ['unused accounts', state => { state.accounts.forEach(account => { account.requests = 0 }) }, 'multiple-accounts-served'],
+]) test(`The account-balancing probe rejects ${name}.`, async () => {
+  const result = await probe(undefined, (hook, _data, state) => { if (hook === 'setup') change(state) })
+  const observed = result.initial['account-balancing']
+  assert.deepEqual(observed, ['failed', 'check', reason])
+  assert.deepEqual(featureFailure('account-balancing', observed), { failure_stage: 'check', error_class: reason })
+  assert.deepEqual(featureFailure('files', observed), {})
+  assert.deepEqual(featureFailure('account-balancing', ['failed', 'restore', reason]), {})
+  assert.deepEqual(featureFailure('account-balancing', ['failed', 'check', `${reason}: private account data`]), {})
+})
+
+for (const field of ['requests', 'active', 'errors', 'weight']) {
+  for (const value of [undefined, null, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, '2']) {
+    test(`The account-balancing probe rejects ${field}=${String(value)}.`, async () => {
+      const result = await probe(undefined, (hook, _data, state) => {
+        if (hook === 'setup') state.accounts[0][field] = value
+      })
+      assert.deepEqual(result.initial['account-balancing'], ['failed', 'check', 'account-counters'])
+    })
+  }
+}
+
+test('The account-balancing probe waits for active reservations to end.', async () => {
+  let reads = 0
+  const result = await probe(undefined, (hook, data) => {
+    if (hook === 'result:model_router_settings' && ++reads === 1) data.value.accounts[0].active = 1
+  })
+  assert.deepEqual(result.initial['account-balancing'], featureChecks['account-balancing'])
+  assert.ok(reads > 1)
+})
 
 for (const [feature, reason, hook, change] of [
   ['routing', 'routing-accounts', 'result:model_router_settings', data => { data.value.accounts = null }],

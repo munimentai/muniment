@@ -66,19 +66,26 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     return features
   }
   if (plan.phase === 'chat') {
-    await run('account-balancing', async () => {
-      const settings = await wait(async () => {
-        const settings = await invoke('model_router_settings')
+    await run('account-balancing', async (_step, command, inspect) => {
+      const settings = await inspect('no-active-reservations', () => wait(async () => {
+        const settings = await command('model_router_settings')
+        check(Array.isArray(settings?.accounts) && settings.accounts.length > 0 && settings.accounts.every(account =>
+          account && typeof account.id === 'string' && account.id.length > 0 &&
+          typeof account.family === 'string' && account.family.length > 0 &&
+          ['requests', 'active', 'errors', 'weight'].every(key => Number.isSafeInteger(account[key]) && account[key] >= 0) &&
+          typeof account.enabled === 'boolean'), 'account-counters')
+        check(new Set(settings.accounts.map(account => account.id)).size === settings.accounts.length, 'account-counters')
         return settings.accounts.every(account => account.active === 0) && settings
-      })
+      }))
       const used = settings.accounts.filter(account => account.source === 'account' && account.requests > 0)
-      check(used.some(account => used.some(other => other.id !== account.id && other.family === account.family)))
+      check(used.some(account => used.some(other => other.id !== account.id && other.family === account.family)), 'multiple-accounts-served')
       for (const account of used) {
         const pool = settings.accounts.filter(other => other.family === account.family && other.enabled)
-        check(pool.every(other => other.weight === 1))
-        check(Math.max(...pool.map(other => other.requests)) - Math.min(...pool.map(other => other.requests)) <= 1)
+        check(pool.length > 0 && pool.every(other => other.weight === 1), 'equal-account-weights')
+        check(Math.max(...pool.map(other => other.requests)) - Math.min(...pool.map(other => other.requests)) <= 1, 'equal-weight-shares')
       }
-      check(settings.accounts.every(account => account.active === 0 && account.errors === 0))
+      check(settings.accounts.every(account => account.active === 0), 'no-active-reservations')
+      check(settings.accounts.every(account => account.errors === 0), 'account-errors')
       return ['multiple-accounts-served', 'equal-weight-shares', 'no-active-reservations']
     })
     return features

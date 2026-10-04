@@ -30,6 +30,8 @@ export function featureFailure(feature, observed) {
   const errors = ['check-failed', 'timeout']
   if (observed?.[1] === 'check') {
     const reasons = {
+      'account-balancing': ['model_router_settings', 'account-counters', 'multiple-accounts-served',
+        'equal-account-weights', 'equal-weight-shares', 'no-active-reservations', 'account-errors'],
       routing: ['model_router_settings', 'model_router_save_routes', 'model_router_test_route', 'model_router_update_account',
         'routing-accounts', 'fallback-selected', 'empty-sample-rejected', 'invalid-fallback-rejected', 'unavailable-model-excluded'],
       memory: ['memory_profile_read', 'memory_profile_save', 'profile-saved', 'profile-restored'],
