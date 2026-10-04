@@ -207,6 +207,13 @@ impl RuntimeOwner {
         let before = state.snapshot.clone();
         update(&mut state);
         if state.snapshot != before {
+            #[cfg(windows)]
+            if state.snapshot.last_event != before.last_event {
+                crate::subscription_probe::runtime_admission(
+                    state.snapshot.last_event == RuntimeEvent::Connected,
+                    state.snapshot.last_event == RuntimeEvent::StartFailed,
+                );
+            }
             if state.snapshot.cause != before.cause || (before.busy && !state.snapshot.busy) {
                 if let Some(cause) = &state.snapshot.cause {
                     eprintln!("The runtime start failed. {cause}");
@@ -303,12 +310,19 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     };
     #[cfg(target_os = "windows")]
     {
-        let result = muniment_runtime::profile_directory()
-            .map_err(|error| format!("Runtime state lookup failed: {error}"))
-            .and_then(|directory| {
-                crate::windows_runtime_service::register_runtime_task_at_startup(&directory)?;
-                crate::windows_runtime_service::start_runtime_task_at_startup(&directory)
-            });
+        // The runner owns the disposable runtime, including recovery after MSI file replacement.
+        // Task Scheduler does not inherit the probe profile or its process job.
+        let result = if crate::subscription_probe::runtime_managed_by_runner() {
+            crate::subscription_probe::runtime_admission(false, false);
+            Ok(())
+        } else {
+            muniment_runtime::profile_directory()
+                .map_err(|error| format!("Runtime state lookup failed: {error}"))
+                .and_then(|directory| {
+                    crate::windows_runtime_service::register_runtime_task_at_startup(&directory)?;
+                    crate::windows_runtime_service::start_runtime_task_at_startup(&directory)
+                })
+        };
         owner.update(app, |state| state.windows_start_finished(result));
     }
     #[cfg(target_os = "linux")]

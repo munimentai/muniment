@@ -64,10 +64,13 @@ public sealed class SubscriptionJob : IDisposable
     static extern IntPtr GetStdHandle(int kind);
     [DllImport("kernel32.dll")]
     static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetExitCodeProcess(IntPtr process, out uint code);
 
     IntPtr job, root;
     public int Pid { get; private set; }
     public bool Exited { get { return WaitForSingleObject(root, 0) == 0; } }
+    public uint ExitCode { get { uint code; Check(GetExitCodeProcess(root, out code)); return code; } }
 
     static void Check(bool success) {
         if (!success) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -141,5 +144,52 @@ public sealed class SubscriptionJob : IDisposable
     public void Dispose() {
         if (job != IntPtr.Zero) { CloseHandle(job); job = IntPtr.Zero; }
         if (root != IntPtr.Zero) { CloseHandle(root); root = IntPtr.Zero; }
+    }
+}
+
+// Retain a verified process handle before the app restores its profile or joins the job.
+public sealed class SubscriptionProcess : IDisposable
+{
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+    [DllImport("kernel32.dll")]
+    static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll")]
+    static extern bool TerminateProcess(IntPtr process, uint code);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr handle);
+    IntPtr process;
+    public int Pid { get; private set; }
+    public bool Exited { get { return WaitForSingleObject(process, 0) == 0; } }
+    public uint ExitCode {
+        get {
+            uint code;
+            if (!GetExitCodeProcess(process, out code)) throw new InvalidOperationException("The probe exit code is unavailable.");
+            return code;
+        }
+    }
+    public SubscriptionProcess(int pid, string executable) {
+        if (pid <= 0) throw new ArgumentException("The probe process ID is invalid.");
+        process = OpenProcess(0x100000 | 0x1000 | 1, false, pid);
+        if (process == IntPtr.Zero) throw new InvalidOperationException("The probe process handle is unavailable.");
+        try {
+            uint size = 32768;
+            var name = new StringBuilder((int)size);
+            if (!QueryFullProcessImageName(process, 0, name, ref size) ||
+                !String.Equals(System.IO.Path.GetFullPath(name.ToString()), System.IO.Path.GetFullPath(executable), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The probe process identity does not match.");
+            Pid = pid;
+        } catch { Dispose(); throw; }
+    }
+    public void Stop() {
+        if (!Exited && (!TerminateProcess(process, 1) || WaitForSingleObject(process, 15000) != 0))
+            throw new InvalidOperationException("The observed probe process did not stop.");
+    }
+    public void Dispose() {
+        if (process != IntPtr.Zero) { CloseHandle(process); process = IntPtr.Zero; }
     }
 }

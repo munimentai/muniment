@@ -3,6 +3,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(windows, test))]
+#[path = "subscription_probe_diagnostics.rs"]
+mod diagnostics;
+
 fn root() -> Result<PathBuf, &'static str> {
     if !std::env::args_os().any(|arg| arg == "--probe-subscription-chat")
         || std::env::var("MUNIMENT_SUBSCRIPTION_PROBE").as_deref() != Ok("1")
@@ -39,31 +43,99 @@ pub(crate) fn restore_profile() {
     if !std::env::args_os().any(|arg| arg == "--probe-subscription-chat") {
         return;
     }
+    #[cfg(windows)]
+    if std::env::args_os()
+        .filter(|arg| {
+            arg.to_string_lossy()
+                .starts_with("--probe-subscription-profile=")
+        })
+        .count()
+        != 1
+    {
+        eprintln!("The subscription probe failed with code profile-missing.");
+        std::process::exit(1);
+    }
     for arg in std::env::args() {
         if let Some(directory) = arg.strip_prefix("--probe-subscription-profile=") {
             let path = PathBuf::from(directory);
             #[cfg(windows)]
-            if !path.is_absolute() || !path.join("subscription-probe.json").is_file() {
-                eprintln!("The subscription probe requires its disposable profile.");
-                std::process::exit(1);
-            }
-            if path.is_absolute() && path.join("subscription-probe.json").is_file() {
-                #[cfg(windows)]
-                if join_probe_job(&path).is_err() {
-                    eprintln!("The subscription probe could not join its process job.");
+            {
+                let result = observe_start(&path)
+                    .and_then(|()| diagnostics::restore(&path, || join_probe_job(&path)));
+                if let Err(code) = result {
+                    if path.is_absolute() && path.is_dir() {
+                        let _ = diagnostics::record(&path, code);
+                    }
+                    eprintln!("The subscription probe failed with code {}.", code.as_str());
                     std::process::exit(1);
                 }
-                std::env::set_var("MUNIMENT_STATE_DIR", &path);
-                std::env::set_var("PI_CODING_AGENT_DIR", path.join("agent"));
-                std::env::set_var("MUNIMENT_SUBSCRIPTION_PROBE", "1");
+            }
+            #[cfg(not(windows))]
+            if !path.is_absolute() || !path.join("subscription-probe.json").is_file() {
+                continue;
+            }
+            std::env::set_var("MUNIMENT_STATE_DIR", &path);
+            std::env::set_var("PI_CODING_AGENT_DIR", path.join("agent"));
+            std::env::set_var("MUNIMENT_SUBSCRIPTION_PROBE", "1");
+            #[cfg(windows)]
+            if diagnostics::record(&path, diagnostics::Code::ProfileRestored).is_err() {
+                eprintln!("The subscription probe failed with code diagnostic-write-failed.");
+                std::process::exit(1);
             }
         }
     }
 }
 
+// Keep the process alive until the supervisor holds its handle, even if profile restoration fails.
+#[cfg(windows)]
+fn observe_start(root: &std::path::Path) -> Result<(), diagnostics::Code> {
+    use diagnostics::Code;
+    if !root.is_absolute() || !root.is_dir() {
+        return Err(Code::ProfileMissing);
+    }
+    diagnostics::record(root, Code::Started).map_err(|_| Code::DiagnosticWriteFailed)?;
+    let pid = std::process::id().to_string();
+    let temporary = root.join(format!("subscription-probe-start-{pid}.tmp"));
+    std::fs::write(&temporary, &pid).map_err(|_| Code::DiagnosticWriteFailed)?;
+    std::fs::rename(
+        temporary,
+        root.join(format!("subscription-probe-start-{pid}")),
+    )
+    .map_err(|_| Code::DiagnosticWriteFailed)?;
+    let receipt = root.join(format!("subscription-probe-observed-{pid}"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if std::fs::read_to_string(&receipt).ok().as_deref() == Some(pid.as_str()) {
+            let _ = std::fs::remove_file(receipt);
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    Err(Code::ObserverTimedOut)
+}
+
+#[cfg(windows)]
+pub(crate) fn runtime_managed_by_runner() -> bool {
+    root().is_ok()
+}
+
+#[cfg(windows)]
+pub(crate) fn runtime_admission(connected: bool, failed: bool) {
+    let Ok(root) = root() else { return };
+    let code = if connected {
+        diagnostics::Code::RuntimeConnected
+    } else if failed {
+        diagnostics::Code::RuntimeFailed
+    } else {
+        diagnostics::Code::RuntimeWaiting
+    };
+    let _ = diagnostics::record(&root, code);
+}
+
 // Join before CEF or the runtime can spawn descendants, including after an MSI restart.
 #[cfg(windows)]
-fn join_probe_job(root: &std::path::Path) -> Result<(), ()> {
+fn join_probe_job(root: &std::path::Path) -> Result<(), diagnostics::Code> {
+    use diagnostics::Code;
     use windows_sys::Win32::{
         Foundation::CloseHandle,
         System::{
@@ -72,14 +144,16 @@ fn join_probe_job(root: &std::path::Path) -> Result<(), ()> {
             Threading::GetCurrentProcess,
         },
     };
-    let bytes = std::fs::read(root.join("subscription-probe-job.json")).map_err(|_| ())?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| ())?;
-    let name = value["name"].as_str().ok_or(())?;
+    let bytes =
+        std::fs::read(root.join("subscription-probe-job.json")).map_err(|_| Code::JobReadFailed)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| Code::JobReadFailed)?;
+    let name = value["name"].as_str().ok_or(Code::JobNameInvalid)?;
     let id = name
         .strip_prefix(r"Local\MunimentSubscription-")
-        .ok_or(())?;
+        .ok_or(Code::JobNameInvalid)?;
     if id.len() != 36 || uuid::Uuid::parse_str(id).is_err() {
-        return Err(());
+        return Err(Code::JobNameInvalid);
     }
     let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
     // The supervisor owns the job lifetime. This handle only admits the current process.
@@ -90,7 +164,7 @@ fn join_probe_job(root: &std::path::Path) -> Result<(), ()> {
             name.as_ptr(),
         );
         if job.is_null() {
-            return Err(());
+            return Err(Code::JobOpenFailed);
         }
         let process = GetCurrentProcess();
         let mut member = 0;
@@ -100,7 +174,7 @@ fn join_probe_job(root: &std::path::Path) -> Result<(), ()> {
         if joined {
             Ok(())
         } else {
-            Err(())
+            Err(Code::JobAssignFailed)
         }
     }
 }
@@ -148,7 +222,7 @@ pub(crate) fn update_builder(
         .map_err(|_| "The update endpoint is invalid.")?;
     // Reinstall the exact candidate rather than inventing a signed version.
     #[cfg(windows)]
-    let builder = builder.installer_args(["REINSTALL=ALL", "REINSTALLMODE=vomus"]);
+    let builder = builder.installer_args(diagnostics::installer_arguments(&root()?)?);
     Ok(builder)
 }
 

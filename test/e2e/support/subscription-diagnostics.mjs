@@ -285,7 +285,8 @@ export function linuxRuntimeStatus(env) {
   } catch { return 'The runtime identity is unreadable. exit=unavailable' }
 }
 
-export function readDiagnosticLog(file, root, redact) {
+export function readDiagnosticLog(file, root, redact, limit = 16_384) {
+  limit = Number.isSafeInteger(limit) ? Math.min(4 * 1024 * 1024, Math.max(16_384, limit)) : 16_384
   try {
     if (!fs.existsSync(file)) return 'No log exists.\n'
     const relative = path.relative(fs.realpathSync(root), fs.realpathSync(file))
@@ -300,7 +301,7 @@ export function readDiagnosticLog(file, root, redact) {
       const header = Buffer.alloc(2)
       fs.readSync(fd, header, 0, 2, 0)
       const utf16 = header[0] === 0xff && header[1] === 0xfe
-      let offset = Math.max(0, opened.size - 65_536)
+      let offset = Math.max(0, opened.size - limit * 4)
       if (utf16) offset -= offset % 2
       const bytes = Buffer.alloc(opened.size - offset)
       const length = fs.readSync(fd, bytes, 0, bytes.length, offset)
@@ -310,7 +311,7 @@ export function readDiagnosticLog(file, root, redact) {
     } finally { fs.closeSync(fd) }
     // A live process can leave half a secret at EOF. Keep only complete lines.
     const complete = text.slice(0, text.lastIndexOf('\n') + 1)
-    return diagnosticTail(complete, redact) + (complete.length < text.length ? '\nThe redactor omits the final incomplete line.\n' : '\n')
+    return diagnosticTail(complete, redact, limit) + (complete.length < text.length ? '\nThe redactor omits the final incomplete line.\n' : '\n')
   } catch (error) { return `${redact(error.message)}\n` }
 }
 
