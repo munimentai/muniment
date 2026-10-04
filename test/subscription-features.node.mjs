@@ -214,8 +214,10 @@ for (const [feature, commands] of Object.entries({
     for (const error of [undefined, null, 'C:\\private\\provider.txt', new Error('private provider text'),
       { errorClass: 'command-timeout' }, { errorClass: 'profile-restored' }]) {
       const result = await probe(undefined, name => { if (name === command) throw error })
-      assert.deepEqual(result.initial[feature], ['failed', 'check', command])
-      assert.deepEqual(featureFailure(feature, result.initial[feature]), { failure_stage: 'check', error_class: command })
+      const reason = command === 'memory_profile_save'
+        ? error?.errorClass === 'command-timeout' ? 'memory-save-timeout' : 'memory-save-rejected' : command
+      assert.deepEqual(result.initial[feature], ['failed', 'check', reason])
+      assert.deepEqual(featureFailure(feature, result.initial[feature]), { failure_stage: 'check', error_class: reason })
       assert.equal(JSON.stringify(result.initial).includes('private'), false)
       assert.deepEqual(featureFailure(feature, ['failed', 'check', `${command}: C:\\private\\provider.txt`]), {})
       assert.deepEqual(featureFailure('files', ['failed', 'check', command]), {})
@@ -326,6 +328,77 @@ test('the probes keep the first failure when cleanup also fails', async () => {
   assert.deepEqual(result.initial.memory, ['failed', 'check', 'profile-saved'])
   assert.deepEqual(result.initial.terminal, ['failed', 'check', 'shell-output'])
   assert.equal(JSON.stringify(result.initial).includes('private'), false)
+})
+
+for (const [message, reason] of [
+  ['Memory is unavailable.', 'memory-save-unavailable'],
+  ['Memory is busy.', 'memory-save-busy'],
+  ['The Home folder is unavailable.', 'memory-save-home'],
+  ['The saved Home location could not be read.', 'memory-save-home'],
+  ['The saved Home location is invalid.', 'memory-save-home'],
+  ['The memory path is invalid.', 'memory-save-path'],
+  ['The memory path must not be a symbolic link.', 'memory-save-path'],
+  ['The memory folder cannot be created.', 'memory-save-folder'],
+  ['The memory file could not be saved.', 'memory-save-write'],
+  ['Keep the memory file under 64 KB.', 'memory-save-size'],
+  ['Remove credentials before saving this memory.', 'memory-save-secret'],
+  ['The memory file could not be saved. C:\\private\\profile.md', 'memory-save-rejected'],
+  ['toString', 'memory-save-rejected'],
+]) test(`The memory probe records ${reason} without rejection text.`, async () => {
+  for (const error of [message, new Error(message), { errorClass: 'command-failed', cause: message }]) {
+    const result = await probe(undefined, (name, data) => {
+      if (name === 'memory_profile_save' && data.content !== '') throw error
+    })
+    assert.deepEqual(result.initial.memory, ['failed', 'check', reason])
+    assert.deepEqual(featureFailure('memory', result.initial.memory), { failure_stage: 'check', error_class: reason })
+    assert.deepEqual(featureFailure('files', result.initial.memory), {})
+    assert.deepEqual(featureFailure('memory', ['failed', 'restore', reason]), {})
+    assert.deepEqual(featureFailure('memory', ['failed', 'check', `${reason}: private content`]), {})
+    assert.equal(JSON.stringify(result.initial).includes(message), false)
+    assert.equal(result.state.profile, '')
+  }
+})
+
+test('The memory probe keeps the save sub-code when restoration also rejects.', async () => {
+  const result = await probe(undefined, (name, data) => {
+    if (name === 'memory_profile_save') throw data.content === '' ? 'Memory is busy.' : 'The memory file could not be saved.'
+  })
+  assert.deepEqual(result.initial.memory, ['failed', 'check', 'memory-save-write'])
+})
+
+test('The memory probe reports a rejected restoration after a successful save.', async () => {
+  const result = await probe(undefined, (name, data) => {
+    if (name === 'memory_profile_save' && data.content === '') throw 'Memory is busy.'
+  })
+  assert.deepEqual(result.initial.memory, ['failed', 'check', 'memory-save-busy'])
+  assert.equal(result.state.profile, '# Profile\n\nAcceptance profile.\n')
+})
+
+test('The installed invoke wrapper keeps the memory rejection for fixed-code classification.', async () => {
+  const rejection = 'The memory file could not be saved.'
+  let observed, caught
+  const context = { window: {
+    __MUNIMENT_SUBSCRIPTION_PLAN__: { phase: 'chat', models: [], acceptance: true },
+    __TAURI__: { core: { invoke: async (command, data) => {
+      if (command === 'memory_profile_save') throw rejection
+      if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
+      if (command === 'subscription_probe_observed') observed = data
+    } } },
+    __munimentSubscriptionFeatures: async ({ invoke }) => {
+      try { await invoke('memory_profile_save', { content: '' }) } catch (error) { caught = error }
+      return {}
+    },
+  }, document: {
+    querySelector: () => ({ getClientRects: () => [1] }), querySelectorAll: () => [],
+    createElement: () => ({}), head: { append() {} },
+  }, setTimeout, clearTimeout }
+  await vm.runInNewContext(fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8'), context)
+  assert.equal(caught.errorClass, 'command-failed')
+  assert.equal(caught.cause, rejection)
+  assert.equal(observed.passed, true)
+  assert.equal(JSON.stringify(observed).includes(rejection), false)
+  const result = await probe(undefined, name => { if (name === 'memory_profile_save') throw caught })
+  assert.deepEqual(result.initial.memory, ['failed', 'check', 'memory-save-write'])
 })
 
 test('the memory probe restores the profile after a failed save assertion', async () => {

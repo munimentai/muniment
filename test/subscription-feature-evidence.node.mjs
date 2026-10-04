@@ -171,6 +171,17 @@ test('the runner preserves command and assertion reasons through collection', as
   }
 })
 
+for (const reason of ['memory-save-unavailable', 'memory-save-busy', 'memory-save-home', 'memory-save-path',
+  'memory-save-folder', 'memory-save-write', 'memory-save-size', 'memory-save-secret', 'memory-save-timeout', 'memory-save-rejected']) {
+  test(`The collector preserves the ${reason} sub-code.`, async t => {
+    const failure = ['failed', 'check', reason]
+    const result = await scenario(t, { featureFailures: { memory: failure }, failAt: 'update' })
+    assert.equal(result.status, 1)
+    assertFailure(result, 'memory', failure)
+    assert.equal(result.checkpoints.restart.cases.find(item => item.feature === 'memory').error_class, reason)
+  })
+}
+
 test('the runner still passes complete feature evidence', async t => {
   const result = await scenario(t)
   assert.equal(result.status, 0)
