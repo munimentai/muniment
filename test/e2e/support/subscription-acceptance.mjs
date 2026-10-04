@@ -34,7 +34,9 @@ export function featureFailure(feature, observed) {
         'equal-account-weights', 'equal-weight-shares', 'no-active-reservations', 'account-errors'],
       routing: ['model_router_settings', 'model_router_save_routes', 'model_router_test_route', 'model_router_update_account',
         'routing-accounts', 'fallback-selected', 'empty-sample-rejected', 'invalid-fallback-rejected', 'unavailable-model-excluded'],
-      memory: ['memory_profile_read', 'memory_profile_save', 'profile-saved', 'profile-restored'],
+      memory: ['memory_profile_read', 'memory_profile_save', 'profile-saved', 'profile-restored',
+        'memory-save-unavailable', 'memory-save-busy', 'memory-save-home', 'memory-save-path', 'memory-save-folder',
+        'memory-save-write', 'memory-save-size', 'memory-save-secret', 'memory-save-timeout', 'memory-save-rejected'],
       terminal: ['terminal_start', 'terminal_write', 'terminal_read', 'terminal_close', 'shell-output', 'shell-closed'],
       tools: ['chat_thread_open', 'composer-visible', 'composer-input', 'send-ready', 'send-click', 'reply-complete'],
     }

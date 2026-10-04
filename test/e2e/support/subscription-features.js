@@ -25,7 +25,31 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
       }
     }
     const inspect = (reason, action) => step('check', action, reason)
-    const command = (name, data) => inspect(name, () => invoke(name, data))
+    const command = (name, data) => inspect(name, async () => {
+      try { return await invoke(name, data) } catch (error) {
+        if (name !== 'memory_profile_save') throw error
+        // Match only fixed messages. Never copy a path or memory content into evidence.
+        const codes = new Map([
+          ['Memory is unavailable.', 'memory-save-unavailable'],
+          ['Memory is busy.', 'memory-save-busy'],
+          ['The Home folder is unavailable.', 'memory-save-home'],
+          ['The saved Home location could not be read.', 'memory-save-home'],
+          ['The saved Home location is invalid.', 'memory-save-home'],
+          ['The memory path is invalid.', 'memory-save-path'],
+          ['The memory path must not be a symbolic link.', 'memory-save-path'],
+          ['The memory folder cannot be created.', 'memory-save-folder'],
+          ['The memory file could not be saved.', 'memory-save-write'],
+          ['Keep the memory file under 64 KB.', 'memory-save-size'],
+          ['Remove credentials before saving this memory.', 'memory-save-secret'],
+        ])
+        const cause = error?.cause ?? error
+        const reason = error?.errorClass === 'command-timeout' ? 'memory-save-timeout'
+          : codes.get(cause?.message ?? cause) ?? 'memory-save-rejected'
+        const rejected = new Error('The memory save failed.')
+        failures.set(rejected, reason)
+        throw rejected
+      }
+    })
     try { features[name] = await step('check', () => action(step, command, inspect)) } catch { features[name] = [...failure, ...diagnostics()] }
   }
   if (plan.phase === 'update') {
