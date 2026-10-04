@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { redactText } from './redact-text.mjs'
+import { featureChecks, featureFailure } from './subscription-acceptance.mjs'
 
 // Register secrets before parsing leases so parser errors cannot expose their values.
 export function subscriptionRedactor({ leases, values = [] } = {}) {
@@ -56,8 +57,15 @@ export function reportSubscriptionFailure(output, platform, status, redact) {
   } catch { /* Report missing or malformed evidence without parser excerpts. */ }
   const cases = Array.isArray(proof?.cases) ? proof.cases.filter(item => item?.platform === platform) : []
   if (status === 0 && evidence?.status === 'passed' && cases.length && cases.every(item => item?.status === 'passed')) return
-  const reason = evidence?.reason || cases.find(item => item?.status !== 'passed')?.reason ||
-    'The native check did not produce passing evidence.'
+  // Report feature failures before the bounded tail drops them behind restart logs.
+  const failures = Object.keys(featureChecks).flatMap(feature => {
+    const item = cases.find(item => item.feature === feature && item.status !== 'passed')
+    const failure = featureFailure(feature, ['failed', item?.failure_stage, item?.error_class])
+    return failure.failure_stage ? [`${feature} (${failure.failure_stage}/${failure.error_class})`] : []
+  })
+  const reason = evidence?.reason || (evidence?.status === 'passed' && failures.length
+    ? `The installed feature checks failed: ${failures.join(', ')}.` : undefined) ||
+    cases.find(item => item?.status !== 'passed')?.reason || 'The native check did not produce passing evidence.'
   let diagnostics = 'No diagnostic log exists.'
   try { diagnostics = fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8') }
   catch { /* Keep the summary when the log is missing or unreadable. */ }
