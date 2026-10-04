@@ -145,13 +145,40 @@ test('the runner keeps the feature failure gate when later phases pass', async t
   assert.equal(result.proof.cases.find(item => item.feature === 'signed-update').status, 'passed')
 })
 
-for (const reason of ['reply-phase', 'reply-text', 'receipt-tool']) {
+for (const reason of ['reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
+  'reply-phase-pending-permission', 'reply-text', 'receipt-tool', ...acceptance.interruptionErrors]) {
   test(`the runner preserves the MCP ${reason} sub-reason through collection`, async t => {
     const failure = ['failed', 'tool-turn', reason]
     const result = await scenario(t, { featureFailures: { mcp: failure }, failAt: 'update' })
     assert.equal(result.status, 1)
     assertFailure(result, 'mcp', failure)
     assert.equal(result.checkpoints.restart.cases.find(item => item.feature === 'mcp').error_class, reason)
+  })
+}
+
+test('the runner preserves command and assertion reasons through collection', async t => {
+  for (const reasons of [
+    { routing: 'model_router_save_routes', memory: 'memory_profile_save', tools: 'chat_thread_open', terminal: 'terminal_read' },
+    { routing: 'fallback-selected', memory: 'profile-restored', tools: 'composer-visible', terminal: 'shell-output' },
+  ]) {
+    const featureFailures = Object.fromEntries(Object.entries(reasons).map(([feature, reason]) => [feature, ['failed', 'check', reason]]))
+    const result = await scenario(t, { featureFailures, failAt: 'update' })
+    assert.equal(result.status, 1)
+    for (const [feature, failure] of Object.entries(featureFailures)) {
+      assertFailure(result, feature, failure)
+      assert.equal(result.checkpoints.restart.cases.find(item => item.feature === feature).error_class, failure[2])
+    }
+  }
+})
+
+for (const reason of ['memory-save-unavailable', 'memory-save-busy', 'memory-save-home', 'memory-save-path',
+  'memory-save-folder', 'memory-save-write', 'memory-save-size', 'memory-save-secret', 'memory-save-timeout', 'memory-save-rejected']) {
+  test(`The collector preserves the ${reason} sub-code.`, async t => {
+    const failure = ['failed', 'check', reason]
+    const result = await scenario(t, { featureFailures: { memory: failure }, failAt: 'update' })
+    assert.equal(result.status, 1)
+    assertFailure(result, 'memory', failure)
+    assert.equal(result.checkpoints.restart.cases.find(item => item.feature === 'memory').error_class, reason)
   })
 }
 

@@ -14,7 +14,163 @@ pub fn record(
     outcome: &str,
     error_class: &str,
 ) -> Result<(), &'static str> {
-    record_progress(root, stage, turn, outcome, error_class, None)
+    record_progress(root, stage, turn, outcome, error_class, None, None)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandFailure {
+    pub command: String,
+    pub kind: String,
+}
+
+impl CommandFailure {
+    fn valid(&self) -> bool {
+        matches!(
+            self.command.as_str(),
+            "attach_listener_status"
+                | "local_mode_provider_inventory"
+                | "chat_current_thread"
+                | "chat_thread_open"
+                | "chat_answer_permission"
+                | "subscription_probe_progress"
+                | "subscription_probe_observed"
+                | "subscription_probe_update"
+                | "workspace_read_text"
+                | "workspace_save_text"
+                | "workspace_folders"
+                | "workspace_file_action"
+                | "model_router_settings"
+                | "model_router_update_account"
+                | "model_router_save_routes"
+                | "model_router_test_route"
+                | "project_create"
+                | "project_list"
+                | "project_rename"
+                | "memory_profile_read"
+                | "memory_profile_save"
+                | "agent_save"
+                | "agent_list"
+                | "agent_delete"
+                | "artifact_from_file"
+                | "artifact_read"
+                | "artifact_edit"
+                | "artifact_list"
+                | "browser_view"
+                | "browser_command"
+                | "terminal_start"
+                | "terminal_write"
+                | "terminal_read"
+                | "terminal_close"
+                | "extend_command"
+        ) && matches!(
+            self.kind.as_str(),
+            "busy" | "unavailable" | "unauthorized" | "timeout" | "rejected"
+        )
+    }
+}
+
+pub fn record_command(
+    root: &Path,
+    stage: &str,
+    turn: Option<usize>,
+    outcome: &str,
+    error_class: &str,
+    command: Option<&CommandFailure>,
+) -> Result<(), &'static str> {
+    record_progress_with_detail(
+        root,
+        stage,
+        turn,
+        outcome,
+        error_class,
+        command.map(FailureDetail::Command),
+        None,
+    )
+}
+
+pub fn record_model_save(
+    root: &Path,
+    provider: &str,
+    model: &str,
+    outcome: &str,
+    os_error: Option<i32>,
+) -> Result<(), &'static str> {
+    if provider != "muniment-router" || !matches!(outcome, "pending" | "complete" | "failed") {
+        return Err("The probe model save is invalid.");
+    }
+    let plan: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("subscription-probe.json"))
+            .map_err(|_| "The probe plan is missing.")?,
+    )
+    .map_err(|_| "The probe plan is invalid.")?;
+    let turn = plan["models"]
+        .as_array()
+        .and_then(|models| {
+            models.iter().position(|entry| {
+                model
+                    == format!(
+                        "{}/{}",
+                        entry["family"].as_str().unwrap_or(""),
+                        entry["id"].as_str().unwrap_or("")
+                    )
+            })
+        })
+        .ok_or("The probe model save is invalid.")?;
+    record_progress(
+        root,
+        "model-save",
+        Some(turn),
+        outcome,
+        "none",
+        None,
+        os_error,
+    )
+}
+
+fn saved_default(
+    value: &serde_json::Value,
+    plan: &serde_json::Value,
+    provider: bool,
+) -> serde_json::Value {
+    if value.is_null() {
+        return serde_json::Value::Null;
+    }
+    let allowed = value.as_str().is_some_and(|value| {
+        if provider && value == "muniment-router" {
+            return true;
+        }
+        plan["models"].as_array().is_some_and(|models| {
+            models.iter().any(|entry| {
+                let family = entry["family"].as_str().unwrap_or("");
+                let id = entry["id"].as_str().unwrap_or("");
+                let identifier = |text: &str, model: bool| {
+                    text.len() <= 128
+                        && text
+                            .bytes()
+                            .next()
+                            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+                        && text.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric()
+                                || b"._-".contains(&byte)
+                                || (model && byte == b':')
+                        })
+                };
+                identifier(family, false)
+                    && identifier(id, true)
+                    && if provider {
+                        value == family
+                    } else {
+                        value == id || value == format!("{family}/{id}")
+                    }
+            })
+        })
+    });
+    if allowed {
+        value.clone()
+    } else {
+        "[redacted]".into()
+    }
 }
 
 fn record_progress(
@@ -24,12 +180,49 @@ fn record_progress(
     outcome: &str,
     error_class: &str,
     failure: Option<&TransportFailure>,
+    os_error: Option<i32>,
 ) -> Result<(), &'static str> {
+    record_progress_with_detail(
+        root,
+        stage,
+        turn,
+        outcome,
+        error_class,
+        failure.map(FailureDetail::Transport),
+        os_error,
+    )
+}
+
+enum FailureDetail<'a> {
+    Transport(&'a TransportFailure),
+    Command(&'a CommandFailure),
+}
+
+fn record_progress_with_detail(
+    root: &Path,
+    stage: &str,
+    turn: Option<usize>,
+    outcome: &str,
+    error_class: &str,
+    detail: Option<FailureDetail<'_>>,
+    os_error: Option<i32>,
+) -> Result<(), &'static str> {
+    let (failure, command) = match detail {
+        Some(FailureDetail::Transport(failure)) => (Some(failure), None),
+        Some(FailureDetail::Command(command)) => (None, Some(command)),
+        None => (None, None),
+    };
+    if command
+        .is_some_and(|command| !command.valid() || error_class == "none" || stage == "transport")
+    {
+        return Err("The probe command failure is invalid.");
+    }
     if !matches!(
         stage,
         "composer"
             | "runtime"
             | "selection"
+            | "model-save"
             | "inventory"
             | "send"
             | "reply"
@@ -62,6 +255,13 @@ fn record_progress(
             | "update-address"
             | "update-builder"
             | "update-check"
+            | "update-check-network"
+            | "update-check-target-not-found"
+            | "update-check-manifest-parse"
+            | "update-check-release-not-found"
+            | "update-check-version"
+            | "update-check-address"
+            | "update-check-other"
             | "update-download"
             | "update-unavailable"
             | "update-not-prepared"
@@ -110,6 +310,29 @@ fn record_progress(
         "phase": phase, "stage": stage, "turn": turn, "requested": requested,
         "transport": outcome, "error_class": error_class,
     });
+    if let Some(command) = command {
+        row["command"] = command.command.clone().into();
+        row["command_error_class"] = command.kind.clone().into();
+    }
+    if stage == "model-save" {
+        row["model_save_rejected"] = match outcome {
+            "complete" => false.into(),
+            "failed" => true.into(),
+            _ => serde_json::Value::Null,
+        };
+        row["os_error"] = serde_json::json!(os_error.filter(|_| outcome == "failed"));
+    }
+    if stage == "inventory" {
+        // Read the file without inventory adoption so diagnostics cannot change the saved choice.
+        let settings = std::fs::read(root.join("agent/settings.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .filter(serde_json::Value::is_object);
+        row["settings_read"] = settings.is_some().into();
+        let settings = settings.unwrap_or_default();
+        row["defaultProvider"] = saved_default(&settings["defaultProvider"], &plan, true);
+        row["defaultModel"] = saved_default(&settings["defaultModel"], &plan, false);
+    }
     if let Some(failure) = failure {
         row["transport_kind"] = failure.kind.into();
         row["host"] = serde_json::json!(failure.host);
@@ -429,7 +652,7 @@ fn transport_progress(
             .position(|entry| entry["id"].as_str() == Some(model))
     });
     if turn.is_some() {
-        let _ = record_progress(root, "transport", turn, outcome, error_class, failure);
+        let _ = record_progress(root, "transport", turn, outcome, error_class, failure, None);
     }
 }
 
@@ -475,6 +698,82 @@ pub fn event_error(event: &serde_json::Value) -> &'static str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn command_progress_keeps_only_allowed_names_and_classes() {
+        let directory =
+            std::env::temp_dir().join(format!("subscription-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(
+            directory.join("subscription-probe.json"),
+            r#"{"phase":"chat","models":[{"id":"one"},{"id":"two"},{"id":"three"}]}"#,
+        )
+        .unwrap();
+        for command in ["chat_current_thread", "chat_thread_open"] {
+            for kind in ["busy", "unavailable", "unauthorized", "timeout", "rejected"] {
+                record_command(
+                    &directory,
+                    "reply",
+                    Some(2),
+                    "pending",
+                    "command-failed",
+                    Some(&CommandFailure {
+                        command: command.into(),
+                        kind: kind.into(),
+                    }),
+                )
+                .unwrap();
+            }
+        }
+        let path = directory.join("subscription-probe-progress.jsonl");
+        let before = std::fs::read_to_string(&path).unwrap();
+        for (command, kind) in [
+            ("PRIVATE", "busy"),
+            ("chat_thread_open", "PRIVATE"),
+            ("", "rejected"),
+            ("chat_thread_open\nPRIVATE", "busy"),
+        ] {
+            assert!(record_command(
+                &directory,
+                "reply",
+                Some(2),
+                "pending",
+                "command-failed",
+                Some(&CommandFailure {
+                    command: command.into(),
+                    kind: kind.into()
+                }),
+            )
+            .is_err());
+        }
+        for (stage, error_class) in [("transport", "command-failed"), ("reply", "none")] {
+            assert!(record_command(
+                &directory,
+                stage,
+                Some(2),
+                "pending",
+                error_class,
+                Some(&CommandFailure {
+                    command: "chat_thread_open".into(),
+                    kind: "busy".into()
+                }),
+            )
+            .is_err());
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        let rows = before
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 10);
+        assert_eq!(rows[0]["command"], "chat_current_thread");
+        assert_eq!(rows[0]["command_error_class"], "busy");
+        assert_eq!(rows[5]["command"], "chat_thread_open");
+        assert_eq!(rows[5]["turn"], 2);
+        assert_eq!(rows[5]["requested"], "three");
+        assert!(!before.contains("PRIVATE"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     fn assert_artifact(failure: &TransportFailure, kind: &str, host: Option<&str>) {
         let directory =
             std::env::temp_dir().join(format!("subscription-probe-{}", uuid::Uuid::new_v4()));
@@ -491,6 +790,7 @@ mod tests {
             "failed",
             "network",
             Some(failure),
+            None,
         )
         .unwrap();
         let text =
@@ -904,6 +1204,7 @@ mod tests {
                 "failed",
                 "network",
                 Some(&failure),
+                None,
             )
             .unwrap();
             let text = std::fs::read_to_string(
@@ -984,6 +1285,88 @@ mod tests {
     }
 
     #[test]
+    fn model_save_and_inventory_diagnostics_keep_codes_and_saved_defaults() {
+        let root =
+            std::env::temp_dir().join(format!("subscription-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("agent")).unwrap();
+        std::fs::write(root.join("subscription-probe.json"), r#"{"phase":"chat","models":[{"family":"openai-codex","id":"luna"},{"family":"openai-codex","id":"terra"}]}"#).unwrap();
+        let settings = root.join("agent/settings.json");
+        let bytes = br#"{"defaultProvider":"muniment-router","defaultModel":"openai-codex/luna","token":"PRIVATE"}"#;
+        std::fs::write(&settings, bytes).unwrap();
+        let last = || {
+            let text =
+                std::fs::read_to_string(root.join("subscription-probe-progress.jsonl")).unwrap();
+            assert!(!text.contains("PRIVATE"));
+            serde_json::from_str::<serde_json::Value>(text.lines().last().unwrap()).unwrap()
+        };
+        for (outcome, code, rejected) in [
+            ("pending", None, serde_json::Value::Null),
+            ("failed", Some(32), true.into()),
+            ("failed", Some(1175), true.into()),
+            ("failed", None, true.into()),
+            ("complete", None, false.into()),
+        ] {
+            record_model_save(
+                &root,
+                "muniment-router",
+                "openai-codex/terra",
+                outcome,
+                code,
+            )
+            .unwrap();
+            let row = last();
+            assert_eq!(row["turn"], 1);
+            assert_eq!(row["requested"], "terra");
+            assert_eq!(row["model_save_rejected"], rejected);
+            assert_eq!(row["os_error"], serde_json::json!(code));
+        }
+        record(&root, "inventory", Some(1), "not-started", "timeout").unwrap();
+        let row = last();
+        assert_eq!(row["settings_read"], true);
+        assert_eq!(row["defaultProvider"], "muniment-router");
+        assert_eq!(row["defaultModel"], "openai-codex/luna");
+        assert_eq!(std::fs::read(&settings).unwrap(), bytes);
+        for value in [
+            serde_json::json!("C:/PRIVATE"),
+            serde_json::json!("/PRIVATE"),
+            serde_json::json!("PRIVATE"),
+            serde_json::json!({"token":"PRIVATE"}),
+        ] {
+            std::fs::write(
+                &settings,
+                serde_json::json!({"defaultProvider":value, "defaultModel":value}).to_string(),
+            )
+            .unwrap();
+            record(&root, "inventory", Some(1), "not-started", "timeout").unwrap();
+            assert_eq!(last()["defaultProvider"], "[redacted]");
+            assert_eq!(last()["defaultModel"], "[redacted]");
+        }
+        std::fs::write(&settings, b"{}").unwrap();
+        record(&root, "inventory", Some(1), "not-started", "timeout").unwrap();
+        assert_eq!(last()["settings_read"], true);
+        assert!(last()["defaultModel"].is_null());
+        for bytes in [b"invalid".as_slice(), b"null".as_slice()] {
+            std::fs::write(&settings, bytes).unwrap();
+            record(&root, "inventory", Some(1), "not-started", "timeout").unwrap();
+            assert_eq!(last()["settings_read"], false);
+        }
+        std::fs::remove_file(&settings).unwrap();
+        record(&root, "inventory", Some(1), "not-started", "timeout").unwrap();
+        assert_eq!(last()["settings_read"], false);
+        assert!(record_model_save(&root, "PRIVATE", "openai-codex/terra", "failed", None).is_err());
+        assert!(record_model_save(&root, "muniment-router", "PRIVATE", "failed", None).is_err());
+        assert!(record_model_save(
+            &root,
+            "muniment-router",
+            "openai-codex/terra",
+            "PRIVATE",
+            None
+        )
+        .is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn progress_exports_only_bounded_metadata() {
         let directory =
             std::env::temp_dir().join(format!("subscription-probe-{}", uuid::Uuid::new_v4()));
@@ -1030,6 +1413,13 @@ mod tests {
                 "update-address",
                 "update-builder",
                 "update-check",
+                "update-check-network",
+                "update-check-target-not-found",
+                "update-check-manifest-parse",
+                "update-check-release-not-found",
+                "update-check-version",
+                "update-check-address",
+                "update-check-other",
                 "update-download",
                 "update-unavailable",
                 "update-not-prepared",
@@ -1053,14 +1443,13 @@ mod tests {
                 assert_eq!(row["error_class"], code);
                 assert_eq!(row["phase"], phase);
             }
-            assert!(record(
-                &directory,
-                "features",
-                None,
-                "not-started",
-                "update-PRIVATE"
-            )
-            .is_err());
+            for code in [
+                "update-PRIVATE",
+                "update-check-PRIVATE",
+                "update-check-network https://PRIVATE/path?token=SECRET",
+            ] {
+                assert!(record(&directory, "features", None, "not-started", code).is_err());
+            }
         }
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -6,12 +6,33 @@ import { createServer } from 'node:net'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import './e2e/support/windows-msi-registration-contract.js'
+import { POWERSHELL_TEST_TIMEOUT, spawnFixture } from './e2e/support/fixture-process.mjs'
 
 const root = process.cwd()
 const temporary = []
 const temp = () => { const value = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-e2e-test-'))); temporary.push(value); return value }
 afterEach(() => { for (const value of temporary.splice(0)) fs.rmSync(value, { recursive: true, force: true }) })
 const runNode = (script, args, options = {}) => spawnSync(process.execPath, [path.join(root, script), ...args], { encoding: 'utf8', ...options })
+
+describe('Fixture spawn diagnostics', () => {
+  it.each([0, 1])('Preserves exit code %s and the output.', (status) => {
+    const result = spawnFixture(process.execPath, ['-e', `console.log('fixture stdout'); console.error('fixture stderr'); process.exit(${status})`])
+    expect(result.status).toBe(status)
+    expect(result.stdout).toContain('fixture stdout')
+    expect(result.stderr).toContain('fixture stderr')
+  })
+
+  it('Reports a timeout before an exit-code assertion.', () => {
+    expect(() => spawnFixture(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeout: 100 }))
+      .toThrow('The fixture process timed out after 100 ms:')
+  })
+
+  it('Keeps a missing executable distinct from a timeout.', () => {
+    const result = spawnFixture(path.join(temp(), 'missing-powershell'), [])
+    expect(result.error.code).toBe('ENOENT')
+    expect(result.status).toBeNull()
+  })
+})
 
 describe('installed onboarding spec contract', () => {
   const onboardingSpec = fs.readFileSync(path.join(root, 'test/e2e/specs/onboarding.spec.js'), 'utf8')
@@ -1706,7 +1727,7 @@ ${identity}
   })
 })
 
-describe('Windows finalizer contract', { timeout: 30_000 }, () => { // A PowerShell spawn costs about 3.5 seconds, and the slowest observed test took 6993ms.
+describe('Windows finalizer contract', { timeout: POWERSHELL_TEST_TIMEOUT }, () => {
   const runnerPath = path.join(root, 'test/e2e/runner/windows.ps1')
   const runner = fs.readFileSync(runnerPath, 'utf8')
   const bodyBoundary = runner.indexOf('\ntry {\n  # desktop-ci')
@@ -2003,7 +2024,7 @@ exit 0
   )
 
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
-  const hasPowerShell = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+  const hasPowerShell = spawnFixture(powershell, ['-NoProfile', '-Command', 'exit 0']).status === 0
 
   it.skipIf(!hasPowerShell).each(['missing', 'directory', 'file'])('The bootstrap checks the %s artifact path before dependency installation.', (state) => {
     const directory = temp()
@@ -2013,8 +2034,7 @@ exit 0
     const script = path.join(directory, 'bootstrap.ps1')
     const bootstrap = runner.slice(0, runner.indexOf('$diagnostic = $null'))
     fs.writeFileSync(script, `${bootstrap}\nStop-Transcript -ErrorAction SilentlyContinue | Out-Null\nWrite-Output 'Bootstrap reached dependency installation.'\n`)
-    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
-      encoding: 'utf8', timeout: 15_000,
+    const result = spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
       env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: artifacts },
     })
     expect(result.status, result.stdout + result.stderr).toBe(state === 'file' ? 1 : 0)
@@ -2033,8 +2053,7 @@ exit 0
     const cli = path.join(root, 'node_modules/@tauri-apps/cli/tauri.js')
     const installedCli = fs.readFileSync(cli)
     fs.writeFileSync(blockedPath, 'blocked')
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
-      encoding: 'utf8', timeout: 15_000,
+    const result = spawnFixture('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath], {
       env: { ...process.env, TEMP: directory, TMP: directory, DCI_ARTIFACTS_DIR: blockedPath },
     })
     expect(result.status).not.toBe(0)
@@ -3332,36 +3351,34 @@ describe('The installed specs use first-run selectors.', () => {
   })
 })
 
-const msiDiagnosticTimeout = 30_000
-describe('Windows build MSI diagnostics', { timeout: msiDiagnosticTimeout }, () => {
+describe('Windows build MSI diagnostics', { timeout: POWERSHELL_TEST_TIMEOUT }, () => {
   const script = fs.readFileSync(path.join(root, 'test/windows-installers.ps1'), 'utf8')
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
-  const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+  const hasPowerShell = process.platform === 'win32' || spawnFixture(powershell, ['-NoProfile', '-Command', 'exit 0']).status === 0
   const registration = fs.readFileSync(path.join(root, 'test/windows-msi-registration.ps1'), 'utf8')
   const cefCheck = script.slice(script.indexOf('function Assert-CefInstallation'), script.indexOf('\nfunction Write-MsiProperties'))
   const helpers = registration + '\n' + cefCheck + '\n' + script.slice(script.indexOf('function Write-MsiScopeLog'), script.indexOf('\n$machineKey ='))
-  const invoke = (body, args = [], timeout = msiDiagnosticTimeout) => {
+  const invoke = (body, args = [], timeout = POWERSHELL_TEST_TIMEOUT) => {
     const file = path.join(temp(), 'diagnostics.ps1')
     // Replace COM identity and release calls. The fixture runs the registration helper and its property getters.
     const fixtureHelpers = helpers.replaceAll(
       '[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(', '[void](Release-FixtureComObject ',
     ).replaceAll('[Runtime.InteropServices.Marshal]::IsComObject(', '(Test-FixtureComObject ').replace(
       '(Join-Path $PSScriptRoot "windows-msi-payload.mjs")', `'${path.join(root, 'test/windows-msi-payload.mjs').replaceAll("'", "''")}'`,
+    ).replace(
+      "(Join-Path $PSScriptRoot '..\\scripts\\windows-update-target.ps1')", `'${path.join(root, 'scripts/windows-update-target.ps1').replaceAll("'", "''")}'`,
     )
-    fs.writeFileSync(file, `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${fixtureHelpers}\n${body}\n`)
-    // Give the lifecycle fixture the suite's full budget under CI contention.
-    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
-      encoding: 'utf8', timeout,
-    })
-    if (result.error) {
-      throw new Error(`The MSI diagnostic process failed: ${result.error.message}\n${result.stdout ?? ''}${result.stderr ?? ''}`, { cause: result.error })
-    }
+    // Share mock state across script scopes in this isolated PowerShell process.
+    const fixture = `$ErrorActionPreference = "Stop"\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n${fixtureHelpers}\n${body}\n`
+    fs.writeFileSync(file, fixture.replaceAll('$script:', '$global:'))
+    const result = spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], { timeout })
+    expect(result.error, result.stdout + result.stderr).toBeUndefined()
     return result
   }
 
   it.skipIf(!hasPowerShell)('Reports a diagnostic process timeout.', () => {
     expect(() => invoke('Start-Sleep -Seconds 60', [], 100)).toThrow(expect.objectContaining({
-      message: expect.stringContaining('The MSI diagnostic process failed:'),
+      message: expect.stringContaining('The fixture process timed out after 100 ms:'),
       cause: expect.objectContaining({ code: 'ETIMEDOUT' }),
     }))
   })
@@ -3386,14 +3403,17 @@ $script:comReflector | Add-Member ScriptMethod InvokeMember {
   if ([Reflection.BindingFlags]$Flags -ne [Reflection.BindingFlags]::GetProperty -or $null -ne $Binder -or
       $Target.Tag -ne 'product') { throw 'Invalid COM getter arguments.' }
   if ($Name -eq 'InstallProperty') {
-    if ($Arguments.Count -ne 1 -or $Arguments[0] -ne 'State') { throw 'Invalid MSI state arguments.' }
+    if ($Arguments.Count -ne 1 -or $Arguments[0] -notin @('State', 'InstallLocation')) { throw 'Invalid MSI property arguments.' }
   } elseif ($null -ne $Arguments) { throw 'Invalid COM property arguments.' }
   $script:getters += $Name
   switch ($Name) {
     'ProductCode' { return '{12345678-1234-ABCD-EF12-34567890ABCD}' }
     'Context' { return $script:fixtureContext }
     'UserSid' { return $script:fixtureSid }
-    'InstallProperty' { return $script:fixtureState }
+    'InstallProperty' {
+      if ($Arguments[0] -eq 'InstallLocation') { return Split-Path $userRuntime }
+      return $script:fixtureState
+    }
     default { throw "Unexpected COM property: $Name" }
   }
 }
@@ -3424,7 +3444,7 @@ $script:comInstaller | Add-Member ScriptMethod OpenDatabase {
 }
 $script:comInstaller | Add-Member ScriptMethod ProductsEx {
   param($Code, $Sid, $Context)
-  if ($Code -ne '{12345678-1234-ABCD-EF12-34567890ABCD}' -or $Sid -ne 'S-1-5-21-123' -or $Context -ne 7) {
+  if ($Code -ne '{12345678-1234-ABCD-EF12-34567890ABCD}' -or $Sid -notin @('S-1-5-21-123', '') -or $Context -ne 7) {
     throw 'Invalid MSI registration scope.'
   }
   if (-not $script:fixtureInstalled) { Write-Host 'MSI product cleanup check.' }
@@ -3599,6 +3619,7 @@ $argsPath = $args[0]
     const sequence = script.slice(script.indexOf('\n', script.indexOf('Remove-Item $upgradeBaseMsi -Force'))).replace(
       '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value', '"S-1-5-21-123"',
     ).replace("[Environment]::GetFolderPath('Programs')", "(Join-Path $env:LOCALAPPDATA 'Programs')")
+    // The full lifecycle runs two payload checks and both installers under CI load.
     const result = invoke(`
 ${comFixture}
 $regularMsi = @([PSCustomObject]@{ FullName = $args[0] })
@@ -3633,6 +3654,20 @@ function Test-Path($Path, $LiteralPath, $PathType) {
   return Microsoft.PowerShell.Management\\Test-Path $Path
 }
 function Get-ItemPropertyValue($Path, $Name) { return $script:applicationValues[$Name] }
+function Get-ItemProperty($Path, $ErrorAction) {
+  $hive = switch ($Path) {
+    'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' { ${hkcu} }
+    'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' { ${hklm} }
+    default { throw 'Unexpected uninstall registry query.' }
+  }
+  if ($script:fixtureInstalled) {
+    @([PSCustomObject]@{
+      DisplayName = 'muniment'; WindowsInstaller = 1
+      PSChildName = '{12345678-1234-ABCD-EF12-34567890ABCD}'
+      InstallLocation = Split-Path $userRuntime
+    }) * $hive
+  }
+}
 function Get-UserRegistrations($Hive) {
   if ($Hive -eq "HKCU:") { @("fixture") * ${hkcu} } else { @("fixture") * ${hku} }
 }
@@ -3701,7 +3736,7 @@ function Start-Process($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThr
   }
   return [PSCustomObject]@{ ExitCode = ${code} }
 }
-${sequence}`, [msi, runtime])
+${sequence}`, [msi, runtime], 90_000)
     expect(result.status, result.stdout + result.stderr).toBe(context === 2 && count === 1 && hkcu + hklm === 1 && code === 0 && !invalid ? 0 : 1)
     expect(result.stdout).toContain('Property(S): UserSID = S-1-5-21-456')
     expect(result.stdout).toContain(`hkcu=${hkcu} HKU\\S-1-5-21-123=${hku} hklm=${hklm}`)
@@ -3739,7 +3774,7 @@ ${sequence}`, [msi, runtime])
         expect(JSON.parse(retained[1])).toEqual({ '': path.dirname(runtime) })
       }
     }
-  })
+  }, 90_000)
 
   it.skipIf(!hasPowerShell)('Returns only registration rows before and after uninstall.', () => {
     const msi = path.join(temp(), 'fixture.msi')
@@ -3889,13 +3924,13 @@ describe('installed model settings controls', () => {
   })
 })
 
-describe('Windows desktop executable lookup', { timeout: 30_000 }, () => {
+describe('Windows desktop executable lookup', { timeout: POWERSHELL_TEST_TIMEOUT }, () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
   const start = runner.lastIndexOf('\n  Install-Product') + '\n  Install-Product'.length
   const lookup = runner.slice(start, runner.indexOf('\n  & (Join-Path $repoRoot "test/e2e/support/windows-installed-smoke.ps1")', start))
   const native = runner.slice(runner.indexOf('function Resolve-NativeCommand'), runner.indexOf('function Get-UninstallEntries'))
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
-  const hasPowerShell = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+  const hasPowerShell = process.platform === 'win32' || spawnFixture(powershell, ['-NoProfile', '-Command', 'exit 0']).status === 0
 
   it('Checks the shipped sandbox host and application library.', () => {
     const cargo = fs.readFileSync(path.join(root, 'src-tauri/Cargo.toml'), 'utf8')
@@ -3970,9 +4005,9 @@ ${lookup}
   Stop-Transcript | Out-Null
 }
 `)
-    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+    const result = spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
       installed, icon, transcript, path.join(directory, 'installer.log'), fixture], {
-      cwd: root, encoding: 'utf8', timeout: 20_000,
+      cwd: root,
     })
     expect(result.status, result.stdout + result.stderr).toBe(status)
     const evidence = fs.readFileSync(transcript, 'utf8')
@@ -4101,7 +4136,7 @@ describe('Windows onboarding profile isolation', () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
   const functions = runner.slice(runner.indexOf('function Get-E2eProfileDirectory'), runner.indexOf('function Remove-AuthHandler'))
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
-  const hasPowerShell = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+  const hasPowerShell = spawnFixture(powershell, ['-NoProfile', '-Command', 'exit 0']).status === 0
 
   it('Logs the app profile directory before the first render check.', () => {
     const onboardingSpec = fs.readFileSync(path.join(root, 'test/e2e/specs/onboarding.spec.js'), 'utf8')
@@ -4168,9 +4203,8 @@ function Invoke-NativeCommand {
 try { Invoke-E2e (Join-Path $raw 'spec.log') 'The fixture spec failed.' -ProfileState $ProfileState }
 catch { Write-Output $_.Exception.Message; exit 1 }
 `)
-    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+    const result = spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
       directory, profile, profileState, String(stopFails), state], {
-      encoding: 'utf8', timeout: 20_000,
       env: { ...process.env, APPDATA: path.dirname(redirected), MUNIMENT_E2E_FINALIZER_TEST_MODE: '0', MUNIMENT_E2E_FINALIZER_TEST_FAIL: '' },
     })
     expect(result.status, result.stdout + result.stderr).toBe(starts ? 0 : 1)
@@ -4188,13 +4222,13 @@ catch { Write-Output $_.Exception.Message; exit 1 }
       const log = fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8')
       expect(log).toContain(`profile_directory=${profile} profile_state=${profileState}`)
     }
-  }, 30_000)
+  }, POWERSHELL_TEST_TIMEOUT)
 })
 
 describe('Windows sign-in clock', () => {
   const helper = path.join(root, 'test/e2e/support/windows-clock.ps1')
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
-  const hasPowerShell = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+  const hasPowerShell = spawnFixture(powershell, ['-NoProfile', '-Command', 'exit 0']).status === 0
 
   it('checks the clock after process cleanup and before the sign-in spec', () => {
     const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
@@ -4240,7 +4274,7 @@ function Set-Date {
 try { Sync-SignInClock (Join-Path $Directory 'clock.log'); exit 0 }
 catch { Write-Output $_.Exception.Message; exit 1 }
 `)
-    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, helper, directory], { encoding: 'utf8', timeout: 20_000 })
+    const result = spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, helper, directory])
     expect(result.status, result.stdout + result.stderr).toBe(status)
     expect(fs.existsSync(path.join(directory, 'set-date'))).toBe(setsClock)
     const log = fs.readFileSync(path.join(directory, 'clock.log'), 'utf8')
@@ -4251,7 +4285,7 @@ catch { Write-Output $_.Exception.Message; exit 1 }
     } else {
       expect(log).toContain('clock failure=')
     }
-  }, 30_000)
+  }, POWERSHELL_TEST_TIMEOUT)
 })
 
 describe.skipIf(process.platform === 'win32')('macOS WDIO spec homes', () => {
@@ -4286,7 +4320,7 @@ ${sequence}
 
 describe('CEF build-tool downloads', () => {
   const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
-  const available = process.platform === 'win32' || spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0'], { timeout: 15_000 }).status === 0
+  const available = process.platform === 'win32' || spawnFixture(powershell, ['-NoProfile', '-Command', 'exit 0']).status === 0
   const prepare = fs.readFileSync(path.join(root, 'scripts/prepare-cef-windows.ps1'), 'utf8')
   const install = prepare.slice(0, prepare.indexOf("\nInstall-Tool 'cmake-"))
 
@@ -4347,8 +4381,8 @@ catch { $failure = $_.Exception.Message }
   pathAdded = $env:PATH.StartsWith((Split-Path -Parent $binary) + ';')
 } | ConvertTo-Json -Compress
 `)
-    const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
-      encoding: 'utf8', timeout: 20_000, env: { ...process.env, TEST_ROOT: directory },
+    const result = spawnFixture(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
+      env: { ...process.env, TEST_ROOT: directory },
     })
     expect(result.error, result.stderr).toBeUndefined()
     expect(result.status, result.stdout + result.stderr).toBe(0)
@@ -4358,7 +4392,7 @@ catch { $failure = $_.Exception.Message }
     expect(report.timeouts).toEqual(Array(attempts).fill(120))
     if (!corrupt) expect(report.archive).toBe(false)
     if (!error) expect(report.content).toBe(cached ? 'cached tool' : 'verified tool')
-  }, 30_000)
+  }, POWERSHELL_TEST_TIMEOUT)
 })
 
 describe('Windows folder dialog diagnostics', () => {

@@ -104,6 +104,7 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
     let page = thread_page(
         &temporary.profile,
         Arc::clone(&reopened),
+        &std::sync::Mutex::new(None),
         None,
         thread_id.unwrap(),
         10,
@@ -263,6 +264,7 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
     let page = thread_page(
         &temporary.profile,
         Arc::clone(&reopened),
+        &std::sync::Mutex::new(None),
         None,
         thread_id,
         10,

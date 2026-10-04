@@ -231,23 +231,32 @@ pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(
         .map_err(|error| error.probe_code().into())
 }
 
+pub(crate) fn model_save(provider: &str, model: &str, outcome: &str, os_error: Option<i32>) {
+    let Ok(root) = root() else { return };
+    let _ = muniment_core::model_router::subscription_probe::record_model_save(
+        &root, provider, model, outcome, os_error,
+    );
+}
+
 #[tauri::command]
 pub(crate) fn subscription_probe_progress(
     stage: String,
     turn: Option<usize>,
     error_class: String,
+    command_failure: Option<muniment_core::model_router::subscription_probe::CommandFailure>,
 ) -> Result<(), &'static str> {
     let outcome = match stage.as_str() {
         "reply" => "pending",
         "render" | "complete" => "complete",
         _ => "not-started",
     };
-    muniment_core::model_router::subscription_probe::record(
+    muniment_core::model_router::subscription_probe::record_command(
         &root()?,
         &stage,
         turn,
         outcome,
         &error_class,
+        command_failure.as_ref(),
     )
 }
 
@@ -268,10 +277,20 @@ pub(crate) fn subscription_probe_observed(
     features: std::collections::BTreeMap<String, Vec<String>>,
 ) -> Result<(), &'static str> {
     let root = root()?;
+    write_observed(&root, turns, passed, features, &update_plan()?)
+}
+
+fn write_observed(
+    root: &std::path::Path,
+    turns: Vec<Turn>,
+    passed: bool,
+    mut features: std::collections::BTreeMap<String, Vec<String>>,
+    plan: &serde_json::Value,
+) -> Result<(), &'static str> {
     if turns.len() > 4 {
         return Err("The subscription probe returned too many turns.");
     }
-    if features.len() > 20
+    let invalid_features = features.len() > 20
         || features.iter().any(|(name, checks)| {
             name.len() > 40
                 || checks.len() > 10
@@ -280,23 +299,27 @@ pub(crate) fn subscription_probe_observed(
                         || value.len() > 64
                         || !value
                             .bytes()
-                            .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+                            .all(|byte| byte.is_ascii_lowercase() || matches!(byte, b'-' | b'_'))
                 })
-        })
-    {
-        return Err("The subscription probe returned invalid feature checks.");
+        });
+    // Publish a bounded failure instead of making the runner wait for a missing result.
+    // Do not copy invalid feature data into the evidence.
+    if invalid_features {
+        features.clear();
     }
-    let plan = update_plan()?;
-    let result = serde_json::json!({
+    let mut result = serde_json::json!({
         "pid": std::process::id(),
         "update_parent_pid": plan["updateParentPid"],
         "phase": plan["phase"],
-        "passed": passed,
+        "passed": passed && !invalid_features,
         "turns": turns,
         "features": features,
         "source_sha": env!("MUNIMENT_BUILD_SOURCE_SHA"),
         "webdriver": cfg!(feature = "e2e-webdriver"),
     });
+    if invalid_features {
+        result["error_class"] = "invalid-feature-checks".into();
+    }
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -319,4 +342,157 @@ pub(crate) fn subscription_probe_observed(
     drop(file);
     std::fs::rename(temporary, destination)
         .map_err(|_| "The subscription probe could not publish its result.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    struct Profile(PathBuf);
+
+    impl Profile {
+        fn new() -> Self {
+            let root =
+                std::env::temp_dir().join(format!("subscription-probe-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+
+        fn result(&self) -> serde_json::Value {
+            serde_json::from_slice(
+                &std::fs::read(self.0.join("subscription-probe-result.json")).unwrap(),
+            )
+            .unwrap()
+        }
+    }
+
+    impl Drop for Profile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn feature(name: &str, checks: &[&str]) -> BTreeMap<String, Vec<String>> {
+        BTreeMap::from([(
+            name.into(),
+            checks.iter().map(|value| (*value).into()).collect(),
+        )])
+    }
+
+    #[test]
+    fn observed_preserves_command_reasons_and_result_identity() {
+        for reason in [
+            "model_router_settings",
+            "model_router_save_routes",
+            "model_router_test_route",
+            "model_router_update_account",
+            "memory_profile_read",
+            "memory_profile_save",
+            "terminal_start",
+            "terminal_write",
+            "terminal_read",
+            "terminal_close",
+            "chat_thread_open",
+        ] {
+            for passed in [true, false] {
+                let profile = Profile::new();
+                let features = feature("routing", &["failed", "check", reason]);
+                let plan = serde_json::json!({ "phase": "features", "updateParentPid": 123 });
+                write_observed(&profile.0, vec![], passed, features.clone(), &plan).unwrap();
+                let result = profile.result();
+                assert_eq!(result["features"], serde_json::json!(features));
+                assert_eq!(result["passed"], passed);
+                assert!(result.get("error_class").is_none());
+                assert_eq!(result["phase"], "features");
+                assert_eq!(result["update_parent_pid"], 123);
+                assert_eq!(result["source_sha"], env!("MUNIMENT_BUILD_SOURCE_SHA"));
+                assert_eq!(result["webdriver"], cfg!(feature = "e2e-webdriver"));
+                assert!(
+                    write_observed(&profile.0, vec![], !passed, BTreeMap::new(), &plan).is_err()
+                );
+                assert_eq!(profile.result(), result);
+                assert!(!profile.0.join("subscription-probe-result.tmp").exists());
+            }
+        }
+    }
+
+    #[test]
+    fn observed_publishes_invalid_features_as_a_bounded_failure() {
+        let mut invalid = vec![
+            feature("", &["check"]),
+            feature(&"a".repeat(41), &["check"]),
+            feature("routing", &[""]),
+            feature("routing", &[&"a".repeat(65)]),
+            feature("routing", &["check"; 11]),
+            (1..=21)
+                .map(|length| ("a".repeat(length), vec![]))
+                .collect(),
+        ];
+        for value in [
+            "PRIVATE",
+            "two words",
+            "line\nbreak",
+            "é",
+            "reason1",
+            "path/to/file",
+            "bad.reason",
+        ] {
+            invalid.push(feature(value, &["check"]));
+            invalid.push(feature("routing", &[value]));
+        }
+        for features in invalid {
+            for passed in [true, false] {
+                let profile = Profile::new();
+                write_observed(
+                    &profile.0,
+                    vec![],
+                    passed,
+                    features.clone(),
+                    &serde_json::json!({}),
+                )
+                .unwrap();
+                let result = profile.result();
+                assert_eq!(result["passed"], false);
+                assert_eq!(result["error_class"], "invalid-feature-checks");
+                assert_eq!(result["features"], serde_json::json!({}));
+                assert!(!profile.0.join("subscription-probe-result.tmp").exists());
+            }
+        }
+    }
+
+    #[test]
+    fn observed_keeps_empty_states_and_exact_bounds() {
+        for features in [
+            BTreeMap::new(),
+            feature("routing", &[]),
+            feature(&"a".repeat(40), &["a".repeat(64).as_str(); 10]),
+            (1..=20)
+                .map(|length| ("a".repeat(length), vec![]))
+                .collect(),
+        ] {
+            let profile = Profile::new();
+            let turns = (0..4)
+                .map(|index| Turn {
+                    index,
+                    thread: uuid::Uuid::now_v7(),
+                    run: uuid::Uuid::now_v7(),
+                    rendered: true,
+                    context: true,
+                })
+                .collect();
+            write_observed(
+                &profile.0,
+                turns,
+                true,
+                features.clone(),
+                &serde_json::json!({}),
+            )
+            .unwrap();
+            let result = profile.result();
+            assert_eq!(result["passed"], true);
+            assert_eq!(result["features"], serde_json::json!(features));
+            assert_eq!(result["turns"].as_array().unwrap().len(), 4);
+        }
+    }
 }

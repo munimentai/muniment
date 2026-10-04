@@ -84,17 +84,58 @@ impl ConfirmFailure {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(target_os = "macos", derive(serde::Serialize))]
+pub(super) struct ConfirmCandidate {
+    pub(super) source: &'static str,
+    pub(super) role: Option<String>,
+    pub(super) title: Option<String>,
+    pub(super) identifier: Option<String>,
+    pub(super) enabled: Option<bool>,
+}
+
+fn record_candidate<A: Accessibility>(
+    ax: &A,
+    element: &A::Element,
+    source: &'static str,
+    candidates: &mut Vec<ConfirmCandidate>,
+) {
+    // Bound the snapshot. Read labels alone, never editable values or AX error payloads.
+    if candidates.len() == 32 {
+        return;
+    }
+    let label = |name| {
+        ax.string(element, name)
+            .ok()
+            .map(|text| text.chars().take(128).collect())
+    };
+    candidates.push(ConfirmCandidate {
+        source,
+        role: label("AXRole"),
+        title: label("AXTitle"),
+        identifier: label("AXIdentifier"),
+        enabled: ax.boolean(element, "AXEnabled").ok(),
+    });
+}
+
 pub(super) fn confirm_button<A: Accessibility>(
     ax: &A,
     app: &A::Element,
     identifier: &str,
     failures: &mut Vec<ConfirmFailure>,
+    candidates: &mut Vec<ConfirmCandidate>,
     mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
 ) -> Result<Option<A::Element>, ConfirmFailure> {
     use ConfirmFailure::*;
     let read = |_| AttributeUnavailable;
     check_deadline()?;
+    // The remote Open panel can be absent from AXWindows but remain the focused window.
+    let focused = ax.element(app, "AXFocusedWindow").ok();
+    check_deadline()?;
     let mut pending = ax.elements(app, "AXWindows").map_err(read)?;
+    if let Some(panel) = &focused {
+        pending.push(panel.clone());
+    }
     let mut visited = Vec::new();
     let mut panels = Vec::new();
     let mut identifier_found = false;
@@ -108,6 +149,18 @@ pub(super) fn confirm_button<A: Accessibility>(
             return Err(ElementLimit);
         }
         visited.push(element.clone());
+        let is_focused = focused.as_ref() == Some(&element);
+        record_candidate(
+            ax,
+            &element,
+            if is_focused {
+                "focused_window"
+            } else {
+                "window_or_sheet"
+            },
+            candidates,
+        );
+        check_deadline()?;
         let role = ax.string(&element, "AXRole").map_err(read)?;
         if !matches!(role.as_str(), "AXWindow" | "AXSheet") {
             return Err(WrongTopLevelElement);
@@ -115,10 +168,35 @@ pub(super) fn confirm_button<A: Accessibility>(
         let matches_identifier =
             ax.string(&element, "AXIdentifier").ok().as_deref() == Some(identifier);
         identifier_found |= matches_identifier;
-        // NSSavePanel forwards its title to remote panel content, unlike an AX identifier.
-        if matches_identifier || ax.string(&element, "AXTitle").ok().as_deref() == Some(identifier)
-        {
-            panels.push(element.clone());
+        check_deadline()?;
+        let default = ax.element(&element, "AXDefaultButton").ok();
+        if let Some(button) = &default {
+            record_candidate(ax, button, "default_button", candidates);
+        }
+        check_deadline()?;
+        // The prompt identifies the focused panel even when its title and identifier do not propagate.
+        // Never trust focus alone or a generic Open label.
+        let matches_prompt = is_focused
+            && default.as_ref().is_some_and(|button| {
+                ax.string(button, "AXTitle").ok().as_deref() == Some(identifier)
+            });
+        let matches_title = ax.string(&element, "AXTitle").ok().as_deref() == Some(identifier);
+        let matches_panel = matches_identifier || matches_title || matches_prompt;
+        let child_prompt = if is_focused && !matches_panel {
+            child_confirm_button(
+                ax,
+                &element,
+                identifier,
+                failures,
+                candidates,
+                &mut check_deadline,
+            )?
+        } else {
+            None
+        };
+        if matches_panel || child_prompt.is_some() {
+            // Keep child-only identity separate. It cannot authorize a different default button.
+            panels.push((element.clone(), child_prompt));
         }
         // AppKit exposes attached sheets as children, not necessarily as windows.
         for child in ax.elements(&element, "AXChildren").map_err(read)? {
@@ -134,12 +212,44 @@ pub(super) fn confirm_button<A: Accessibility>(
     if panels.len() > 1 {
         return Err(AmbiguousPanel);
     }
-    let Some(panel) = panels.first() else {
+    let Some((panel, child_identity)) = panels.first() else {
         return Ok(None);
     };
     check_deadline()?;
+    if let Some(expected) = child_identity {
+        // Recheck the live child tree and focus before trusting child-only prompt identity.
+        let button = child_confirm_button(
+            ax,
+            panel,
+            identifier,
+            failures,
+            candidates,
+            &mut check_deadline,
+        )?;
+        check_deadline()?;
+        if button.as_ref() != Some(expected)
+            || ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(panel)
+        {
+            failures.push(PromptNotFound);
+            return Ok(None);
+        }
+        return Ok(button);
+    }
     match ax.element(panel, "AXDefaultButton") {
         Ok(button) => {
+            // Recheck prompt-only identity because focus or the default button can change during the scan.
+            if ax.string(panel, "AXIdentifier").ok().as_deref() != Some(identifier)
+                && ax.string(panel, "AXTitle").ok().as_deref() != Some(identifier)
+            {
+                check_deadline()?;
+                if ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(panel)
+                    || ax.string(&button, "AXTitle").ok().as_deref() != Some(identifier)
+                {
+                    failures.push(PromptNotFound);
+                    return Ok(None);
+                }
+            }
+            check_deadline()?;
             if enabled_button(ax, &button, panel)? {
                 return Ok(Some(button));
             }
@@ -148,8 +258,29 @@ pub(super) fn confirm_button<A: Accessibility>(
         Err(_) => failures.push(NoDefaultButton),
     }
 
+    child_confirm_button(
+        ax,
+        panel,
+        identifier,
+        failures,
+        candidates,
+        &mut check_deadline,
+    )
+}
+
+fn child_confirm_button<A: Accessibility>(
+    ax: &A,
+    panel: &A::Element,
+    identifier: &str,
+    failures: &mut Vec<ConfirmFailure>,
+    candidates: &mut Vec<ConfirmCandidate>,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<Option<A::Element>, ConfirmFailure> {
+    use ConfirmFailure::*;
+    let read = |_| AttributeUnavailable;
     // Remote panels can expose the live button below an AXGroup instead of AXDefaultButton.
     // Match the prompt set on this panel, never a localized or generic "Open" label.
+    check_deadline()?;
     let mut pending = ax.elements(panel, "AXChildren").map_err(read)?;
     let mut visited = vec![panel.clone()];
     let mut buttons = Vec::new();
@@ -164,6 +295,8 @@ pub(super) fn confirm_button<A: Accessibility>(
         visited.push(element.clone());
         let role = ax.string(&element, "AXRole").map_err(read)?;
         if role == "AXButton" {
+            record_candidate(ax, &element, "child_button", candidates);
+            check_deadline()?;
             if ax.string(&element, "AXTitle").ok().as_deref() == Some(identifier) {
                 buttons.push(element);
             }

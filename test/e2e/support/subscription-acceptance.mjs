@@ -20,14 +20,31 @@ export const featureChecks = {
   browser: ['local-page-rendered', 'unsafe-navigation-rejected', 'view-closed'],
 }
 export const features = [...chatFeatures, ...Object.keys(featureChecks)]
+export const interruptionErrors = ['unknown-effect-outcome', 'interrupted', 'unspecified', 'recorded', 'missing-reason']
+  .flatMap(reason => ['approved', 'unapproved'].map(approval => `reply-interrupted-${reason}-${approval}`))
 // Failure arrays share the installed probe's bounded string-list wire format.
 export function featureFailure(feature, observed) {
   const stages = feature === 'mcp' ? ['check', 'server-add', 'connection-test', 'toggle', 'tool-turn', 'server-remove', 'receipt']
     : feature === 'artifacts' ? ['check', 'folders', 'new-file', 'save', 'publish', 'read', 'rename']
       : feature === 'signed-update' ? ['check', 'restore'] : ['check']
   const errors = ['check-failed', 'timeout']
+  if (observed?.[1] === 'check') {
+    const reasons = {
+      'account-balancing': ['model_router_settings', 'account-counters', 'multiple-accounts-served',
+        'equal-account-weights', 'equal-weight-shares', 'no-active-reservations', 'account-errors'],
+      routing: ['model_router_settings', 'model_router_save_routes', 'model_router_test_route', 'model_router_update_account',
+        'routing-accounts', 'fallback-selected', 'empty-sample-rejected', 'invalid-fallback-rejected', 'unavailable-model-excluded'],
+      memory: ['memory_profile_read', 'memory_profile_save', 'profile-saved', 'profile-restored',
+        'memory-save-unavailable', 'memory-save-busy', 'memory-save-home', 'memory-save-path', 'memory-save-folder',
+        'memory-save-write', 'memory-save-size', 'memory-save-secret', 'memory-save-timeout', 'memory-save-rejected'],
+      terminal: ['terminal_start', 'terminal_write', 'terminal_read', 'terminal_close', 'shell-output', 'shell-closed'],
+      tools: ['chat_thread_open', 'composer-visible', 'composer-input', 'send-ready', 'send-click', 'reply-complete'],
+    }
+    if (Object.hasOwn(reasons, feature)) errors.push(...reasons[feature])
+  }
   if ((feature === 'tools' && observed?.[1] === 'check') || (feature === 'mcp' && observed?.[1] === 'tool-turn')) {
-    errors.push('reply-phase', 'reply-text', 'receipt-tool')
+    errors.push('reply-phase', 'reply-phase-failed', 'reply-phase-cancelled', 'reply-phase-interrupted',
+      'reply-phase-pending-permission', 'reply-text', 'receipt-tool', 'composer-visible', ...interruptionErrors)
   }
   if (!Object.hasOwn(featureChecks, feature) || !Array.isArray(observed) || observed.length !== 3 || observed[0] !== 'failed' ||
       !stages.includes(observed[1]) || !errors.includes(observed[2])) return {}

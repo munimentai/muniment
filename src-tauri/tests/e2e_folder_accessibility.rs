@@ -72,7 +72,14 @@ impl Tree {
 
     fn lookup(&self) -> (Result<Option<usize>, ConfirmFailure>, Vec<ConfirmFailure>) {
         let mut failures = Vec::new();
-        let result = confirm_button(self, &APP, IDENTIFIER, &mut failures, || Ok(()));
+        let result = confirm_button(
+            self,
+            &APP,
+            IDENTIFIER,
+            &mut failures,
+            &mut Vec::new(),
+            || Ok(()),
+        );
         if let Err(reason) = result {
             failures.push(reason);
         }
@@ -81,6 +88,15 @@ impl Tree {
 
     fn confirm(&self) -> Result<Option<usize>, ConfirmFailure> {
         self.lookup().0
+    }
+
+    fn focused_remote_sheet() -> Self {
+        let mut tree = Self::remote_panel(true);
+        tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+        tree.set(HOST, "AXChildren", Value::Elements(vec![]));
+        tree.set(PANEL, "AXIdentifier", Value::String("open-panel".into()));
+        tree.0.remove(&(PANEL, "AXTitle"));
+        tree
     }
 
     fn remote_panel(sheet: bool) -> Self {
@@ -223,6 +239,369 @@ fn remote_panel_uses_its_title_and_prompt_below_a_group() {
 }
 
 #[test]
+fn focused_remote_sheet_uses_only_its_marker_child() {
+    for role in ["AXGroup", "AXSplitGroup", "AXScrollArea"] {
+        let mut tree = Tree::focused_remote_sheet();
+        tree.set(OTHER, "AXRole", Value::String(role.into()));
+        assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+        // A generic default button cannot inherit the child's prompt identity.
+        tree.set(PANEL, "AXDefaultButton", Value::Element(5));
+        tree.set(5, "AXRole", Value::String("AXButton".into()));
+        tree.set(5, "AXTitle", Value::String("Open".into()));
+        tree.set(5, "AXTopLevelUIElement", Value::Element(PANEL));
+        tree.set(5, "AXEnabled", Value::Boolean(true));
+        assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+    }
+}
+
+#[test]
+fn remote_child_identity_requires_focus_and_an_unambiguous_panel() {
+    let mut tree = Tree::focused_remote_sheet();
+    tree.set(HOST, "AXChildren", Value::Elements(vec![PANEL]));
+    tree.0.remove(&(APP, "AXFocusedWindow"));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    tree.set(HOST, "AXIdentifier", Value::String(IDENTIFIER.into()));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousPanel));
+}
+
+#[test]
+fn focused_remote_child_rejects_ambiguous_disabled_and_foreign_buttons() {
+    let mut tree = Tree::focused_remote_sheet();
+    tree.set(OTHER, "AXChildren", Value::Elements(vec![BUTTON, 5]));
+    tree.set(5, "AXRole", Value::String("AXButton".into()));
+    tree.set(5, "AXTitle", Value::String(IDENTIFIER.into()));
+    tree.set(5, "AXTopLevelUIElement", Value::Element(PANEL));
+    tree.set(5, "AXEnabled", Value::Boolean(true));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousButton));
+    tree.set(OTHER, "AXChildren", Value::Elements(vec![BUTTON]));
+    tree.set(BUTTON, "AXEnabled", Value::Boolean(false));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(BUTTON, "AXEnabled", Value::Boolean(true));
+    tree.set(BUTTON, "AXTopLevelUIElement", Value::Element(HOST));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
+    for name in ["AXTopLevelUIElement", "AXEnabled"] {
+        let mut tree = Tree::focused_remote_sheet();
+        tree.0.remove(&(BUTTON, name));
+        assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+        tree.set(BUTTON, name, Value::String("invalid".into()));
+        assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+    }
+}
+
+#[test]
+fn focused_child_scan_bounds_cycles_elements_and_deadlines() {
+    let mut tree = Tree::focused_remote_sheet();
+    tree.set(
+        OTHER,
+        "AXChildren",
+        Value::Elements(vec![OTHER, PANEL, BUTTON, BUTTON]),
+    );
+    assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+    tree.set(OTHER, "AXRole", Value::String("AXSheet".into()));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(OTHER, "AXRole", Value::String("AXGroup".into()));
+    tree.set(OTHER, "AXChildren", Value::Elements((5..=261).collect()));
+    for node in 5..=261 {
+        tree.set(node, "AXRole", Value::String("AXButton".into()));
+    }
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::ElementLimit));
+    tree.1.borrow_mut().clear();
+    let mut candidates = Vec::new();
+    assert_eq!(
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut candidates,
+            || {
+                if tree.1.borrow().iter().any(|(node, _)| *node >= 5) {
+                    Err(ConfirmFailure::Deadline)
+                } else {
+                    Ok(())
+                }
+            }
+        ),
+        Err(ConfirmFailure::Deadline)
+    );
+    assert_eq!(candidates[0].source, "focused_window");
+    assert_eq!(candidates[1].source, "child_button");
+}
+
+#[test]
+fn unmatched_focused_sheet_records_child_buttons_without_editable_values() {
+    for title in ["Open", "Ouvrir", "", "muniment-e2e-home-other"] {
+        let mut tree = Tree::focused_remote_sheet();
+        tree.set(BUTTON, "AXTitle", Value::String(title.into()));
+        let mut candidates = Vec::new();
+        assert_eq!(
+            confirm_button(
+                &tree,
+                &APP,
+                IDENTIFIER,
+                &mut Vec::new(),
+                &mut candidates,
+                || Ok(())
+            ),
+            Ok(None)
+        );
+        assert_eq!(candidates[0].source, "focused_window");
+        assert_eq!(candidates[0].role.as_deref(), Some("AXSheet"));
+        assert_eq!(candidates[0].identifier.as_deref(), Some("open-panel"));
+        assert_eq!(candidates[0].title, None);
+        assert_eq!(candidates[1].source, "child_button");
+        assert_eq!(candidates[1].title.as_deref(), Some(title));
+        assert_eq!(candidates[1].enabled, Some(true));
+        assert!(!tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
+    }
+}
+
+#[test]
+fn child_prompt_identity_rechecks_focus_and_the_live_tree() {
+    struct ChangedTree {
+        initial: Tree,
+        changed: Tree,
+        scans: std::cell::Cell<usize>,
+    }
+    impl ChangedTree {
+        fn current(&self) -> &Tree {
+            if self.scans.get() > 1 {
+                &self.changed
+            } else {
+                &self.initial
+            }
+        }
+    }
+    impl Accessibility for ChangedTree {
+        type Element = usize;
+
+        fn elements(&self, element: &usize, name: &str) -> Result<Vec<usize>, String> {
+            if *element == OTHER && name == "AXChildren" {
+                self.scans.set(self.scans.get() + 1);
+            }
+            self.current().elements(element, name)
+        }
+
+        fn element(&self, element: &usize, name: &str) -> Result<usize, String> {
+            self.current().element(element, name)
+        }
+
+        fn string(&self, element: &usize, name: &str) -> Result<String, String> {
+            self.current().string(element, name)
+        }
+
+        fn boolean(&self, element: &usize, name: &str) -> Result<bool, String> {
+            self.current().boolean(element, name)
+        }
+    }
+    for (element, name, value, expected) in [
+        (APP, "AXFocusedWindow", Value::Element(HOST), Ok(None)),
+        (OTHER, "AXChildren", Value::Elements(vec![]), Ok(None)),
+        (OTHER, "AXChildren", Value::Elements(vec![5]), Ok(None)),
+        (
+            OTHER,
+            "AXChildren",
+            Value::Elements(vec![BUTTON, 5]),
+            Err(ConfirmFailure::AmbiguousButton),
+        ),
+        (BUTTON, "AXTitle", Value::String("Open".into()), Ok(None)),
+        (BUTTON, "AXEnabled", Value::Boolean(false), Ok(None)),
+        (
+            BUTTON,
+            "AXTopLevelUIElement",
+            Value::Element(HOST),
+            Err(ConfirmFailure::WrongTopLevelElement),
+        ),
+    ] {
+        let mut changed = Tree::focused_remote_sheet();
+        changed.set(5, "AXRole", Value::String("AXButton".into()));
+        changed.set(5, "AXTitle", Value::String(IDENTIFIER.into()));
+        changed.set(5, "AXTopLevelUIElement", Value::Element(PANEL));
+        changed.set(5, "AXEnabled", Value::Boolean(true));
+        changed.set(element, name, value);
+        let ax = ChangedTree {
+            initial: Tree::focused_remote_sheet(),
+            changed,
+            scans: std::cell::Cell::new(0),
+        };
+        assert_eq!(
+            confirm_button(
+                &ax,
+                &APP,
+                IDENTIFIER,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                || Ok(())
+            ),
+            expected
+        );
+    }
+}
+
+#[test]
+fn focused_default_precedes_window_and_child_button_lookups() {
+    let mut tree = Tree::remote_panel(false);
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    tree.set(APP, "AXWindows", Value::Elements(vec![HOST]));
+    tree.0.remove(&(PANEL, "AXTitle"));
+    tree.set(PANEL, "AXDefaultButton", Value::Element(BUTTON));
+    assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+    let reads = tree.1.borrow();
+    let position = |element, attribute| {
+        reads
+            .iter()
+            .position(|(node, name)| *node == element && name == attribute)
+            .unwrap()
+    };
+    assert!(position(APP, "AXFocusedWindow") < position(APP, "AXWindows"));
+    assert!(position(PANEL, "AXDefaultButton") < position(HOST, "AXIdentifier"));
+    assert!(!reads
+        .iter()
+        .any(|(node, name)| *node == OTHER && name == "AXChildren"));
+}
+
+#[test]
+fn focused_window_requires_a_marker_and_valid_button_ownership() {
+    let mut tree = Tree::panel(false);
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    tree.0.remove(&(PANEL, "AXIdentifier"));
+    tree.set(BUTTON, "AXTitle", Value::String("Open".into()));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(BUTTON, "AXTitle", Value::String(IDENTIFIER.into()));
+    assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+    tree.set(BUTTON, "AXTopLevelUIElement", Value::Element(HOST));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
+    tree.set(BUTTON, "AXTopLevelUIElement", Value::Element(PANEL));
+    tree.set(BUTTON, "AXEnabled", Value::Boolean(false));
+    assert_eq!(tree.confirm(), Ok(None));
+    tree.set(BUTTON, "AXEnabled", Value::Boolean(true));
+    tree.set(HOST, "AXIdentifier", Value::String(IDENTIFIER.into()));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousPanel));
+}
+
+#[test]
+fn prompt_only_identity_rejects_a_changed_focus_or_default_button() {
+    struct ChangedAttribute {
+        tree: Tree,
+        attribute: &'static str,
+        reads: std::cell::Cell<usize>,
+    }
+    impl Accessibility for ChangedAttribute {
+        type Element = usize;
+
+        fn elements(&self, element: &usize, name: &str) -> Result<Vec<usize>, String> {
+            self.tree.elements(element, name)
+        }
+
+        fn element(&self, element: &usize, name: &str) -> Result<usize, String> {
+            if name == self.attribute {
+                self.reads.set(self.reads.get() + 1);
+                if self.reads.get() > 1 {
+                    return Ok(OTHER);
+                }
+            }
+            self.tree.element(element, name)
+        }
+
+        fn string(&self, element: &usize, name: &str) -> Result<String, String> {
+            self.tree.string(element, name)
+        }
+
+        fn boolean(&self, element: &usize, name: &str) -> Result<bool, String> {
+            self.tree.boolean(element, name)
+        }
+    }
+    for attribute in ["AXFocusedWindow", "AXDefaultButton"] {
+        let mut tree = Tree::panel(false);
+        tree.set(APP, "AXWindows", Value::Elements(vec![PANEL]));
+        tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+        tree.0.remove(&(PANEL, "AXIdentifier"));
+        tree.set(BUTTON, "AXTitle", Value::String(IDENTIFIER.into()));
+        tree.set(OTHER, "AXRole", Value::String("AXButton".into()));
+        tree.set(OTHER, "AXTitle", Value::String("Open".into()));
+        tree.set(OTHER, "AXTopLevelUIElement", Value::Element(PANEL));
+        tree.set(OTHER, "AXEnabled", Value::Boolean(true));
+        let ax = ChangedAttribute {
+            tree,
+            attribute,
+            reads: std::cell::Cell::new(0),
+        };
+        assert_eq!(
+            confirm_button(
+                &ax,
+                &APP,
+                IDENTIFIER,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                || Ok(())
+            ),
+            Ok(None)
+        );
+    }
+}
+
+#[test]
+fn unrelated_focus_does_not_override_a_marked_sheet() {
+    let mut tree = Tree::panel(true);
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    tree.set(HOST, "AXDefaultButton", Value::Element(OTHER));
+    tree.set(OTHER, "AXRole", Value::String("AXButton".into()));
+    tree.set(OTHER, "AXTitle", Value::String("Open".into()));
+    assert_eq!(tree.confirm(), Ok(Some(BUTTON)));
+}
+
+#[test]
+fn failed_lookup_lists_bounded_candidates_without_editable_values() {
+    let mut tree = Tree::panel(false);
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    tree.0.remove(&(PANEL, "AXIdentifier"));
+    tree.set(BUTTON, "AXTitle", Value::String("é".repeat(200)));
+    tree.set(BUTTON, "AXEnabled", Value::Boolean(false));
+    let mut candidates = Vec::new();
+    assert_eq!(
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut candidates,
+            || Ok(())
+        ),
+        Ok(None)
+    );
+    assert_eq!(candidates[0].source, "focused_window");
+    assert_eq!(candidates[0].role.as_deref(), Some("AXWindow"));
+    assert_eq!(candidates[0].identifier, None);
+    assert_eq!(candidates[1].source, "default_button");
+    assert_eq!(candidates[1].role.as_deref(), Some("AXButton"));
+    assert_eq!(candidates[1].enabled, Some(false));
+    assert_eq!(candidates[1].title.as_ref().unwrap().chars().count(), 128);
+    assert!(!tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
+
+    tree.set(APP, "AXWindows", Value::Elements((5..45).collect()));
+    for node in 5..45 {
+        tree.set(node, "AXRole", Value::String("AXWindow".into()));
+        tree.set(node, "AXChildren", Value::Elements(vec![]));
+    }
+    candidates.clear();
+    assert_eq!(
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut candidates,
+            || Ok(())
+        ),
+        Ok(None)
+    );
+    assert_eq!(candidates.len(), 32);
+}
+
+#[test]
 fn remote_button_can_replace_a_disabled_default_proxy() {
     let mut tree = Tree::remote_panel(false);
     tree.set(PANEL, "AXDefaultButton", Value::Element(5));
@@ -350,22 +729,34 @@ fn lookup_bounds_cycles_traversal_and_deadlines() {
     assert_eq!(tree.confirm(), Err(ConfirmFailure::ElementLimit));
     tree.1.borrow_mut().clear();
     assert_eq!(
-        confirm_button(&tree, &APP, IDENTIFIER, &mut Vec::new(), || {
-            Err(ConfirmFailure::Deadline)
-        }),
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            || { Err(ConfirmFailure::Deadline) }
+        ),
         Err(ConfirmFailure::Deadline)
     );
     assert!(tree.1.borrow().is_empty());
     let mut calls = 0;
     assert_eq!(
-        confirm_button(&tree, &APP, IDENTIFIER, &mut Vec::new(), || {
-            calls += 1;
-            if calls > 2 {
-                Err(ConfirmFailure::Deadline)
-            } else {
-                Ok(())
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            || {
+                calls += 1;
+                if calls > 2 {
+                    Err(ConfirmFailure::Deadline)
+                } else {
+                    Ok(())
+                }
             }
-        }),
+        ),
         Err(ConfirmFailure::Deadline)
     );
     assert!(calls < 10);

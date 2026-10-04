@@ -68,6 +68,52 @@ test('blocked diagnostics name the turn and provider outcome without replies or 
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+test('inventory timeouts keep model save results, OS codes, and saved defaults', () => temporary(root => {
+  const env = { MUNIMENT_STATE_DIR: root }
+  const file = path.join(root, 'subscription-probe-progress.jsonl')
+  const base = { phase: 'chat', turn: 1, requested: 'terra', error_class: 'none' }
+  const inventory = { ...base, stage: 'inventory', transport: 'not-started', error_class: 'timeout',
+    settings_read: true, defaultProvider: 'muniment-router', defaultModel: 'openai-codex/luna' }
+  const current = rows => {
+    fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n')
+    const text = probeProgress(env, 'chat/verify-result', 'chat')
+    assert.ok(!text.includes('PRIVATE'))
+    return JSON.parse(text.split('\n').at(-1).slice('probe-current='.length))
+  }
+  for (const [transport, code, rejected] of [['pending', null, null], ['complete', null, false], ['failed', 32, true], ['failed', 1175, true], ['failed', null, true]]) {
+    const row = current([{ ...base, stage: 'model-save', transport, os_error: code, message: 'PRIVATE path and token' }, inventory])
+    assert.equal(row.model_save_status, transport)
+    assert.equal(row.model_save_rejected, rejected)
+    assert.equal(row.os_error, code)
+    assert.equal(row.defaultProvider, 'muniment-router')
+    assert.equal(row.defaultModel, 'openai-codex/luna')
+    assert.equal(row.settings_read, true)
+    assert.equal(probeFailure(env), 'product')
+  }
+  const stale = { ...base, stage: 'model-save', transport: 'failed', os_error: 32 }
+  for (const change of [{ turn: 0 }, { requested: 'luna' }, { phase: 'features' }]) {
+    const row = current([{ ...stale, ...change }, inventory])
+    assert.equal(row.model_save_status, 'not-started')
+    assert.equal(row.model_save_rejected, null)
+    assert.equal(row.os_error, null)
+  }
+  const row = current([stale, { ...stale, transport: 'complete', os_error: 32 }, inventory])
+  assert.equal(row.model_save_rejected, false)
+  assert.equal(row.os_error, null)
+  for (const code of ['PRIVATE', '32', 1.5, 2147483648, -2147483649, {}]) {
+    assert.equal(current([{ ...stale, os_error: code }, inventory]).os_error, null)
+  }
+  for (const value of ['C:/PRIVATE', 'C:\\PRIVATE', '/PRIVATE', '../PRIVATE', 'PRIVATE\nTOKEN', 'PRIVATE\n', 'PRIVATE\r', {}, 4]) {
+    const row = current([{ ...inventory, defaultProvider: value, defaultModel: value }])
+    assert.equal(row.defaultProvider, '[redacted]')
+    assert.equal(row.defaultModel, '[redacted]')
+  }
+  const empty = current([{ ...inventory, settings_read: false, defaultProvider: null, defaultModel: null }])
+  assert.equal(empty.settings_read, false)
+  assert.equal(empty.defaultProvider, null)
+  assert.equal(empty.defaultModel, null)
+}))
+
 test('Windows artifacts keep redacted transport details at chat/verify-result', t => temporary(root => {
   t.mock.method(console, 'error', () => {})
   const env = { MUNIMENT_STATE_DIR: root }
@@ -771,6 +817,56 @@ test('failure summaries handle missing, malformed, contradictory, and partial ev
   assert.match(messages[0], /Final reason\./)
   assert.ok(messages[0].length < 2200)
   assertSafe(messages.join('\n'))
+}))
+
+test('The failure summary names failed features after a successful update restart.', t => temporary(output => {
+  const messages = []
+  t.mock.method(console, 'error', text => messages.push(text))
+  const platform = 'macos-arm64'
+  const evidenceFile = path.join(output, `${platform}-subscription.json`)
+  fs.writeFileSync(evidenceFile, JSON.stringify({ status: 'passed' }))
+  const reason = 'The installed feature check did not finish. Read the native runner log.'
+  // Match the saved native run without its profile paths or provider replies.
+  const cases = [
+    { platform, feature: 'chat', status: 'passed' },
+    { platform, feature: 'account-balancing', status: 'blocked', reason, failure_stage: 'check', error_class: 'check-failed' },
+    { platform, feature: 'mcp', status: 'blocked', reason, failure_stage: 'tool-turn', error_class: 'reply-phase' },
+    { platform, feature: 'restart-persistence', status: 'passed' },
+    { platform, feature: 'signed-update', status: 'passed' },
+  ]
+  const proofFile = path.join(output, 'release-acceptance.json')
+  fs.writeFileSync(proofFile, JSON.stringify({ cases }))
+  fs.writeFileSync(path.join(output, `${platform}-subscription.log`),
+    'account-balancing: blocked\nmcp: blocked\n' + 'runtime log\n'.repeat(2000) +
+    'muniment-runtime: macos peer read failed operation=LOCAL_PEERPID\n' +
+    'muniment-runtime: exit status=75 cause=upgrade refresh\nphase=update-restart\n')
+  const summary = 'reason="The installed feature checks failed: account-balancing (check/check-failed), mcp (tool-turn/reply-phase)."'
+  for (const status of [0, 1]) {
+    messages.length = 0
+    reportSubscriptionFailure(output, platform, status, redact)
+    assert.equal(messages[0], `platform=${platform} status=blocked\n${summary}`)
+    assert.match(messages[1], /phase=update-restart/)
+    assert.ok(messages[1].length < 20_000)
+    assert.equal(messages[1].includes('account-balancing'), false)
+  }
+
+  // Reject unknown codes, other platforms, and stale codes on passing cases.
+  cases.push({ platform, feature: 'files', status: 'blocked', failure_stage: 'check', error_class: 'private detail' },
+    { platform: 'linux', feature: 'tools', status: 'blocked', failure_stage: 'check', error_class: 'timeout' })
+  Object.assign(cases.at(4), { failure_stage: 'restore', error_class: 'check-failed' })
+  fs.writeFileSync(proofFile, JSON.stringify({ cases }))
+  messages.length = 0
+  reportSubscriptionFailure(output, platform, 1, redact)
+  assert.equal(messages[0], `platform=${platform} status=blocked\n${summary}`)
+
+  // An incomplete run keeps its own failure instead of a prior feature failure.
+  for (const status of ['blocked', 'failed']) {
+    const reason = 'The installed update failed or did not restore the disposable profile after relaunch.'
+    fs.writeFileSync(evidenceFile, JSON.stringify({ status, reason }))
+    messages.length = 0
+    reportSubscriptionFailure(output, platform, 1, redact)
+    assert.equal(messages[0], `platform=${platform} status=${status}\nreason=${JSON.stringify(reason)}`)
+  }
 }))
 
 test('collection prints every platform reason with lease-aware redaction', t => temporary(root => {

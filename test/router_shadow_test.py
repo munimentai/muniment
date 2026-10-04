@@ -16,6 +16,8 @@ router = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = router
 spec.loader.exec_module(router)
 EXECUTABLE = Path(os.environ.get("ROUTER_SHADOW_BIN", ROOT / "src-tauri/target/debug/muniment-router-shadow"))
+# Contract fixtures allow scheduler slack without changing the production deadline.
+FIXTURE_TIMEOUT = 30.0
 
 
 class ShadowContract(unittest.TestCase):
@@ -27,11 +29,11 @@ class ShadowContract(unittest.TestCase):
 
     def test_fixture_restart_and_release(self):
         original = copy.deepcopy(self.request)
-        first = router.evaluate(EXECUTABLE, self.state, self.request)
+        first = router.evaluate(EXECUTABLE, self.state, self.request, timeout=FIXTURE_TIMEOUT)
         self.assertNotIn("error", first.evidence)
         self.assertEqual(first.live_selection, original["job"]["baseline"])
         self.assertNotEqual(first.evidence["selected"], first.live_selection)
-        retry = router.evaluate(EXECUTABLE, self.state, self.request)
+        retry = router.evaluate(EXECUTABLE, self.state, self.request, timeout=FIXTURE_TIMEOUT)
         self.assertTrue(retry.evidence["reused"])
         self.assertEqual(first.evidence["selected"], retry.evidence["selected"])
         self.assertEqual(self.request, original)
@@ -39,7 +41,7 @@ class ShadowContract(unittest.TestCase):
             "version": router.VERSION, "operation": "release", "outcome": "success",
             **{key: self.request["job"][key] for key in ("job_id", "session_id", "trace_id")},
         }
-        result = router.exchange(EXECUTABLE, self.state, release)
+        result = router.exchange(EXECUTABLE, self.state, release, timeout=FIXTURE_TIMEOUT)
         self.assertEqual(result["outcome"], "success")
         self.assertEqual(result["trace_id"], self.request["job"]["trace_id"])
         self.assertNotIn(self.request["job"]["task_context"], json.dumps(result))
@@ -52,13 +54,14 @@ class ShadowContract(unittest.TestCase):
                 request = copy.deepcopy(self.request)
                 inspection = {key: value for key, value in request.items() if key != "observation"}
                 inspection["operation"] = "inspect"
-                eligible = router.exchange(EXECUTABLE, state, inspection)
+                eligible = router.exchange(EXECUTABLE, state, inspection, timeout=FIXTURE_TIMEOUT)
+                self.assertNotIn("error", eligible)
                 request["observation"] = {
                     "revision": "kev-4b-test-1", "trace_id": request["job"]["trace_id"],
                     "eligible_digest": eligible["eligible_digest"], "request_digest": eligible["request_digest"],
                     **{key: case[key] for key in ("status", "elapsed_ms", "answer")},
                 }
-                result = router.evaluate(EXECUTABLE, state, request)
+                result = router.evaluate(EXECUTABLE, state, request, timeout=FIXTURE_TIMEOUT)
                 self.assertEqual(result.evidence["fallback"], case["fallback"])
                 self.assertEqual(result.live_selection, self.request["job"]["baseline"])
 
@@ -67,8 +70,9 @@ class ShadowContract(unittest.TestCase):
             (subprocess.TimeoutExpired("router", 3, stderr=b"secret"), "timeout"),
             (FileNotFoundError("secret"), "unavailable"),
         ]:
-            with self.subTest(cause=cause), patch.object(router.subprocess, "run", side_effect=error):
+            with self.subTest(cause=cause), patch.object(router.subprocess, "run", side_effect=error) as run:
                 result = router.evaluate(EXECUTABLE, self.state, self.request)
+                self.assertEqual(run.call_args.kwargs["timeout"], 3.0)
                 self.assertEqual(result.live_selection, self.request["job"]["baseline"])
                 self.assertEqual(result.evidence["error"], cause)
                 self.assertNotIn("secret", json.dumps(result.evidence))
@@ -86,7 +90,7 @@ class ShadowContract(unittest.TestCase):
         for key in ("mode", "provider_token"):
             request = copy.deepcopy(self.request)
             request[key] = "live-secret"
-            result = router.evaluate(EXECUTABLE, self.state, request)
+            result = router.evaluate(EXECUTABLE, self.state, request, timeout=FIXTURE_TIMEOUT)
             self.assertEqual(result.live_selection, self.request["job"]["baseline"])
             self.assertEqual(result.evidence["error"], "invalid_request")
 

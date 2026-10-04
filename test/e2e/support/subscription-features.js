@@ -1,8 +1,9 @@
 // The installed webview exercises public commands with disposable data.
-window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, turns }) => {
+window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, turns,
+  isBrowserLoading = error => (error?.message ?? error) === 'The page is still loading.' }) => {
   const features = {}
   const failures = new WeakMap()
-  const check = (value, reason = 'check-failed') => {
+  const check = (value, reason) => {
     if (value) return
     const error = new Error('The installed feature check failed.')
     failures.set(error, reason)
@@ -16,26 +17,55 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
   const run = async (name, action) => {
     features[name] = []
     let failure
-    const step = async (stage, action) => {
+    const step = async (stage, action, reason) => {
       try { return await action() } catch (error) {
         // Keep the first failure when cleanup also fails. Never copy provider text.
-        failure ??= ['failed', stage, failures.get(error) ?? (['timeout', 'command-timeout'].includes(error?.errorClass) ? 'timeout' : 'check-failed')]
+        failure ??= ['failed', stage, failures.get(error) ?? reason ?? (['timeout', 'command-timeout'].includes(error?.errorClass) ? 'timeout' : 'check-failed')]
         throw error
       }
     }
-    try { features[name] = await step('check', () => action(step)) } catch { features[name] = failure }
+    const inspect = (reason, action) => step('check', action, reason)
+    const command = (name, data) => inspect(name, async () => {
+      try { return await invoke(name, data) } catch (error) {
+        if (name !== 'memory_profile_save') throw error
+        // Match only fixed messages. Never copy a path or memory content into evidence.
+        const codes = new Map([
+          ['Memory is unavailable.', 'memory-save-unavailable'],
+          ['Memory is busy.', 'memory-save-busy'],
+          ['The Home folder is unavailable.', 'memory-save-home'],
+          ['The saved Home location could not be read.', 'memory-save-home'],
+          ['The saved Home location is invalid.', 'memory-save-home'],
+          ['The memory path is invalid.', 'memory-save-path'],
+          ['The memory path must not be a symbolic link.', 'memory-save-path'],
+          ['The memory folder cannot be created.', 'memory-save-folder'],
+          ['The memory file could not be saved.', 'memory-save-write'],
+          ['Keep the memory file under 64 KB.', 'memory-save-size'],
+          ['Remove credentials before saving this memory.', 'memory-save-secret'],
+        ])
+        const cause = error?.cause ?? error
+        const reason = error?.errorClass === 'command-timeout' ? 'memory-save-timeout'
+          : codes.get(cause?.message ?? cause) ?? 'memory-save-rejected'
+        const rejected = new Error('The memory save failed.')
+        failures.set(rejected, reason)
+        throw rejected
+      }
+    })
+    try { features[name] = await step('check', () => action(step, command, inspect)) } catch { features[name] = failure }
   }
   if (plan.phase === 'update') {
     const codes = ['update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address',
-      'update-builder', 'update-check', 'update-download', 'update-unavailable', 'update-not-prepared',
+      'update-builder', 'update-check',
+      'update-check-network', 'update-check-target-not-found', 'update-check-manifest-parse',
+      'update-check-release-not-found', 'update-check-version', 'update-check-address', 'update-check-other', 'update-download', 'update-unavailable', 'update-not-prepared',
       'update-package-digest', 'update-tamper-rejection', 'update-version-rejection', 'update-active-work-refusal',
       'update-checkpoint-encode', 'update-checkpoint-write', 'update-busy', 'update-install-task', 'update-install', 'update-restart']
     try {
       await invoke('subscription_probe_update')
     } catch (error) {
       // Only fixed Rust codes enter the evidence. Never copy an unknown rejection.
-      const errorClass = codes.includes(error) ? error : error?.errorClass === 'command-timeout' ? 'command-timeout' : 'command-failed'
-      throw Object.assign(new Error('The installed update failed.'), { errorClass })
+      const code = error?.cause ?? error
+      const errorClass = codes.includes(code) ? code : error?.errorClass === 'command-timeout' ? 'command-timeout' : 'command-failed'
+      throw Object.assign(new Error('The installed update failed.'), { errorClass, cause: error })
     }
     throw Object.assign(new Error('The updated app did not restart.'), { errorClass: 'update-restart' })
   }
@@ -60,19 +90,26 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     return features
   }
   if (plan.phase === 'chat') {
-    await run('account-balancing', async () => {
-      const settings = await wait(async () => {
-        const settings = await invoke('model_router_settings')
+    await run('account-balancing', async (_step, command, inspect) => {
+      const settings = await inspect('no-active-reservations', () => wait(async () => {
+        const settings = await command('model_router_settings')
+        check(Array.isArray(settings?.accounts) && settings.accounts.length > 0 && settings.accounts.every(account =>
+          account && typeof account.id === 'string' && account.id.length > 0 &&
+          typeof account.family === 'string' && account.family.length > 0 &&
+          ['requests', 'active', 'errors', 'weight'].every(key => Number.isSafeInteger(account[key]) && account[key] >= 0) &&
+          typeof account.enabled === 'boolean'), 'account-counters')
+        check(new Set(settings.accounts.map(account => account.id)).size === settings.accounts.length, 'account-counters')
         return settings.accounts.every(account => account.active === 0) && settings
-      })
+      }))
       const used = settings.accounts.filter(account => account.source === 'account' && account.requests > 0)
-      check(used.some(account => used.some(other => other.id !== account.id && other.family === account.family)))
+      check(used.some(account => used.some(other => other.id !== account.id && other.family === account.family)), 'multiple-accounts-served')
       for (const account of used) {
         const pool = settings.accounts.filter(other => other.family === account.family && other.enabled)
-        check(pool.every(other => other.weight === 1))
-        check(Math.max(...pool.map(other => other.requests)) - Math.min(...pool.map(other => other.requests)) <= 1)
+        check(pool.length > 0 && pool.every(other => other.weight === 1), 'equal-account-weights')
+        check(Math.max(...pool.map(other => other.requests)) - Math.min(...pool.map(other => other.requests)) <= 1, 'equal-weight-shares')
       }
-      check(settings.accounts.every(account => account.active === 0 && account.errors === 0))
+      check(settings.accounts.every(account => account.active === 0), 'no-active-reservations')
+      check(settings.accounts.every(account => account.errors === 0), 'account-errors')
       return ['multiple-accounts-served', 'equal-weight-shares', 'no-active-reservations']
     })
     return features
@@ -87,30 +124,31 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     check(saved.accounts.find(account => account.id === id)?.weight === 2)
     return ['account-edit-saved', 'invalid-edit-rejected']
   })
-  await run('routing', async () => {
-    const before = await invoke('model_router_settings')
+  await run('routing', async (_step, command, inspect) => {
+    const before = await command('model_router_settings')
     const model = plan.models[0]
     const fallback = `${model.family}/${model.id}`
+    const accounts = await inspect('routing-accounts', () => before.accounts.filter(account => account.family === model.family))
     try {
-      await invoke('model_router_save_routes', { routes: before.routes, fallback, minConfidence: 0.6 })
-      const decision = await invoke('model_router_test_route', { sample: 'Return the acceptance token.' })
-      check(decision.model === fallback && decision.fallback_reason && decision.eligible_models.includes(fallback))
-      await rejects(() => invoke('model_router_test_route', { sample: '' }))
-      await rejects(() => invoke('model_router_save_routes', { routes: before.routes, fallback: 'openai/nonexistent-acceptance-model' }))
-      for (const account of before.accounts.filter(account => account.family === model.family)) {
-        const models = account.models.filter(id => id !== model.id)
-        await invoke('model_router_update_account', { id: account.id, models, enabled: account.enabled && models.length > 0 })
+      await command('model_router_save_routes', { routes: before.routes, fallback, minConfidence: 0.6 })
+      const decision = await command('model_router_test_route', { sample: 'Return the acceptance token.' })
+      await inspect('fallback-selected', () => check(decision.model === fallback && decision.fallback_reason && decision.eligible_models.includes(fallback)))
+      await inspect('empty-sample-rejected', () => rejects(() => invoke('model_router_test_route', { sample: '' })))
+      await inspect('invalid-fallback-rejected', () => rejects(() => invoke('model_router_save_routes', { routes: before.routes, fallback: 'openai/nonexistent-acceptance-model' })))
+      for (const account of accounts) {
+        const models = await inspect('routing-accounts', () => account.models.filter(id => id !== model.id))
+        await command('model_router_update_account', { id: account.id, models, enabled: account.enabled && models.length > 0 })
       }
       const next = plan.models[1]
-      await invoke('model_router_save_routes', { routes: before.routes, fallback: `${next.family}/${next.id}` })
-      const after = await invoke('model_router_test_route', { sample: 'Return the acceptance token.' })
-      check(!after.eligible_models.includes(fallback) && after.model === `${next.family}/${next.id}`)
+      await command('model_router_save_routes', { routes: before.routes, fallback: `${next.family}/${next.id}` })
+      const after = await command('model_router_test_route', { sample: 'Return the acceptance token.' })
+      await inspect('unavailable-model-excluded', () => check(!after.eligible_models.includes(fallback) && after.model === `${next.family}/${next.id}`))
       return ['fallback-selected', 'empty-sample-rejected', 'unavailable-model-excluded']
     } finally {
-      for (const account of before.accounts.filter(account => account.family === model.family)) {
-        await invoke('model_router_update_account', { id: account.id, models: account.models, enabled: account.enabled })
+      for (const account of accounts) {
+        await command('model_router_update_account', { id: account.id, models: account.models, enabled: account.enabled })
       }
-      await invoke('model_router_save_routes', { routes: before.routes, fallback: before.fallback, minConfidence: before.min_confidence })
+      await command('model_router_save_routes', { routes: before.routes, fallback: before.fallback, minConfidence: before.min_confidence })
     }
   })
   await run('files', async () => {
@@ -129,12 +167,15 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     check((await invoke('project_list')).projects[id] === 'Renamed acceptance project')
     return ['project-created', 'project-renamed']
   })
-  await run('memory', async () => {
-    const before = await invoke('memory_profile_read')
-    await invoke('memory_profile_save', { content: '# Profile\n\nAcceptance profile.\n' })
-    check((await invoke('memory_profile_read')).includes('Acceptance profile.'))
-    await invoke('memory_profile_save', { content: before })
-    check(await invoke('memory_profile_read') === before)
+  await run('memory', async (_step, command, inspect) => {
+    const before = await command('memory_profile_read')
+    try {
+      await command('memory_profile_save', { content: '# Profile\n\nAcceptance profile.\n' })
+      await inspect('profile-saved', async () => check((await command('memory_profile_read')).includes('Acceptance profile.')))
+    } finally {
+      await command('memory_profile_save', { content: before })
+      await inspect('profile-restored', async () => check(await command('memory_profile_read') === before))
+    }
     return ['profile-saved', 'profile-restored']
   })
   await run('agents', async () => {
@@ -178,7 +219,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
         try {
           response = await invoke('browser_command', { request: { view: 'browser', action: 'snapshot' } })
         } catch (error) {
-          if ((error?.message ?? error) === 'The page is still loading.') return false
+          if (isBrowserLoading(error)) return false
           throw error
         }
         const snapshot = JSON.parse(response)
@@ -191,41 +232,78 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
     }
     return ['local-page-rendered', 'unsafe-navigation-rejected', 'view-closed']
   })
-  await run('terminal', async () => {
-    const id = await invoke('terminal_start', { path: plan.fixtureDirectory, cols: 80, rows: 24 })
+  await run('terminal', async (_step, command, inspect) => {
+    const id = await command('terminal_start', { path: plan.fixtureDirectory, cols: 80, rows: 24 })
     try {
       // Ignore the echoed command. Require the shell's separate output line.
-      await invoke('terminal_write', { id, data: `echo ${plan.nonce}\r` })
+      await command('terminal_write', { id, data: `echo ${plan.nonce}\r` })
       let text = ''
-      await wait(async () => {
-        const output = await invoke('terminal_read', { id })
+      await inspect('shell-output', () => wait(async () => {
+        const output = await command('terminal_read', { id })
         text += String.fromCharCode(...output.bytes)
         return text.replace(/\r/g, '').split('\n').some(line => line === plan.nonce)
-      })
-    } finally { await invoke('terminal_close', { id }) }
-    await rejects(() => invoke('terminal_read', { id }))
+      }))
+    } finally { await command('terminal_close', { id }) }
+    await inspect('shell-closed', () => rejects(() => invoke('terminal_read', { id })))
     return ['shell-output', 'shell-closed']
   })
-  const toolTurn = async (prompt, tool, expected) => {
+  const toolTurn = async (prompt, tool, expected, approvalTitle, inspect = (_reason, action) => action()) => {
     const thread = turns[0].thread
-    const before = await invoke('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
-    const composer = document.querySelector('textarea[placeholder="Ask anything"]')
-    setValue(composer, prompt)
-    const send = await wait(() => [...document.querySelectorAll('button')].find(button =>
-      (button.getAttribute('aria-label') === 'Send' || button.textContent.trim() === 'Send') && !button.disabled))
-    send.click()
-    const entry = await wait(async () => {
-      const page = await invoke('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
-      const entry = page.entries.find(entry => !before.entries.some(old => old.runId === entry.runId))
-      check(!entry || !['failed', 'cancelled', 'interrupted', 'pending-permission'].includes(entry.phase), 'reply-phase')
-      return entry?.phase === 'complete' && entry
+    const call = (name, data) => inspect(name, () => invoke(name, data))
+    const before = await call('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
+    const composer = await inspect('composer-visible', () => {
+      const element = document.querySelector('textarea[placeholder="Ask anything"]')
+      check(element, 'composer-visible')
+      return element
     })
+    await inspect('composer-input', () => setValue(composer, prompt))
+    const send = await inspect('send-ready', () => wait(() => [...document.querySelectorAll('button')].find(button =>
+      (button.getAttribute('aria-label') === 'Send' || button.textContent.trim() === 'Send') && !button.disabled)))
+    await inspect('send-click', () => send.click())
+    let runId, approvedGate, phase
+    let entry
+    try {
+      entry = await inspect('reply-complete', () => wait(async () => {
+        const page = await call('chat_thread_open', { threadId: thread, limit: 20, cursor: null })
+        const entry = page.entries.find(entry => runId ? entry.runId === runId : !before.entries.some(old => old.runId === entry.runId))
+        if (!entry) return false
+        runId = entry.runId
+        phase = entry.phase
+        if (phase === 'interrupted') {
+          // Export only fixed journal reasons. Keep provider text out of the evidence.
+          const reason = ['unknown-effect-outcome', 'interrupted', 'unspecified'].includes(entry.failureReason)
+            ? entry.failureReason : entry.failureReason ? 'recorded' : 'missing-reason'
+          check(false, `reply-interrupted-${reason}-${approvedGate ? 'approved' : 'unapproved'}`)
+        }
+        for (const terminal of ['failed', 'cancelled']) {
+          check(phase !== terminal, `reply-phase-${terminal}`)
+        }
+        if (phase === 'pending-permission') {
+          const gate = entry.pendingPermission
+          // Approve only this fixture call, once. Keep every other gate closed.
+          check(approvalTitle && gate?.kind === 'select' && gate.title === approvalTitle &&
+            typeof gate.gateId === 'string' && gate.gateId.length > 0 &&
+            Array.isArray(gate.options) && gate.options.includes('Allow once') &&
+            (!approvedGate || approvedGate === gate.gateId), 'reply-phase-pending-permission')
+          if (!approvedGate) {
+            approvedGate = gate.gateId
+            try {
+              await invoke('chat_answer_permission', { runId, gateId: gate.gateId, answer: { type: 'select', value: 'Allow once' } })
+            } catch { check(false, 'reply-phase-pending-permission') }
+          }
+        }
+        return phase === 'complete' && entry
+      }))
+    } catch (error) {
+      if (phase === 'pending-permission' && error?.errorClass === 'timeout') check(false, 'reply-phase-pending-permission')
+      throw error
+    }
     check(typeof entry.text === 'string' && entry.text.trim() === expected, 'reply-text')
     check(Array.isArray(entry.receipt?.tools) && entry.receipt.tools.some(item =>
       typeof item?.name === 'string' && tool.test(item.name) && Number.isSafeInteger(item.calls) && item.calls > 0 && item.failed === 0), 'receipt-tool')
   }
-  await run('tools', async () => {
-    await toolTurn(`Use the read tool to read ${JSON.stringify(plan.fixtureFile)}. Reply with only its first line.`, /^(read|read_file)$/, plan.fileNonce)
+  await run('tools', async (_step, _command, inspect) => {
+    await toolTurn(`Use the read tool to read ${JSON.stringify(plan.fixtureFile)}. Reply with only its first line.`, /^(read|read_file)$/, plan.fileNonce, undefined, inspect)
     return ['file-tool-completed']
   })
   await run('mcp', async step => {
@@ -249,7 +327,8 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
         extensions.click()
       })
       // A new lazy server has no cached tool names. Scope the call to that server.
-      await step('tool-turn', () => toolTurn(`Call the MCP gateway tool mcp with {"server":"extend-${id}","tool":"acceptance_token","args":{}}. Reply with only the token from its result.`, /acceptance_token|^mcp/, plan.mcpNonce))
+      const approvalTitle = `MCP: extend-${id} wants to run acceptance_token\n\nArguments:\n{}\n\nAllow server for this session permits all tools and arguments on this server until reload or session/branch change. Other security and UI consent checks still apply.`
+      await step('tool-turn', () => toolTurn(`Call the MCP gateway tool mcp with {"server":"extend-${id}","tool":"acceptance_token","args":{}}. Reply with only the token from its result.`, /acceptance_token|^mcp/, plan.mcpNonce, approvalTitle))
       return ['server-connected', 'tool-discovered', 'tool-completed']
     } finally { await step('server-remove', () => call('remove', { id })) }
   })

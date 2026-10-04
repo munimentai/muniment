@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { redactText } from './redact-text.mjs'
+import { featureChecks, featureFailure } from './subscription-acceptance.mjs'
 
 // Register secrets before parsing leases so parser errors cannot expose their values.
 export function subscriptionRedactor({ leases, values = [] } = {}) {
@@ -56,8 +57,15 @@ export function reportSubscriptionFailure(output, platform, status, redact) {
   } catch { /* Report missing or malformed evidence without parser excerpts. */ }
   const cases = Array.isArray(proof?.cases) ? proof.cases.filter(item => item?.platform === platform) : []
   if (status === 0 && evidence?.status === 'passed' && cases.length && cases.every(item => item?.status === 'passed')) return
-  const reason = evidence?.reason || cases.find(item => item?.status !== 'passed')?.reason ||
-    'The native check did not produce passing evidence.'
+  // Report feature failures before the bounded tail drops them behind restart logs.
+  const failures = Object.keys(featureChecks).flatMap(feature => {
+    const item = cases.find(item => item.feature === feature && item.status !== 'passed')
+    const failure = featureFailure(feature, ['failed', item?.failure_stage, item?.error_class])
+    return failure.failure_stage ? [`${feature} (${failure.failure_stage}/${failure.error_class})`] : []
+  })
+  const reason = evidence?.reason || (evidence?.status === 'passed' && failures.length
+    ? `The installed feature checks failed: ${failures.join(', ')}.` : undefined) ||
+    cases.find(item => item?.status !== 'passed')?.reason || 'The native check did not produce passing evidence.'
   let diagnostics = 'No diagnostic log exists.'
   try { diagnostics = fs.readFileSync(path.join(output, `${platform}-subscription.log`), 'utf8') }
   catch { /* Keep the summary when the log is missing or unreadable. */ }
@@ -120,12 +128,28 @@ export function processStatus(child) {
   return `pid=${child.pid} exit=${child.exitCode ?? 'none'} signal=${child.signalCode ?? 'none'}`
 }
 
-const probeStages = ['composer', 'runtime', 'selection', 'inventory', 'send', 'reply', 'render', 'complete', 'restore', 'features', 'result', 'transport']
+const probeStages = ['composer', 'runtime', 'selection', 'model-save', 'inventory', 'send', 'reply', 'render', 'complete', 'restore', 'features', 'result', 'transport']
 const probeErrors = ['none', 'timeout', 'command-timeout', 'command-failed', 'reply-failed', 'context-mismatch', 'auth', 'quota', 'http', 'network', 'stream',
   'update-profile', 'update-plan', 'update-phase', 'update-state', 'update-address', 'update-builder', 'update-check',
+  'update-check-network', 'update-check-target-not-found', 'update-check-manifest-parse',
+  'update-check-release-not-found', 'update-check-version', 'update-check-address', 'update-check-other',
   'update-download', 'update-unavailable', 'update-not-prepared', 'update-package-digest', 'update-tamper-rejection',
   'update-version-rejection', 'update-active-work-refusal', 'update-checkpoint-encode', 'update-checkpoint-write',
   'update-busy', 'update-install-task', 'update-install', 'update-restart']
+const probeCommands = ['attach_listener_status', 'local_mode_provider_inventory', 'chat_current_thread', 'chat_thread_open',
+  'chat_answer_permission', 'subscription_probe_progress', 'subscription_probe_observed', 'subscription_probe_update',
+  'workspace_read_text', 'workspace_save_text', 'workspace_folders', 'workspace_file_action',
+  'model_router_settings', 'model_router_update_account', 'model_router_save_routes', 'model_router_test_route',
+  'project_create', 'project_list', 'project_rename', 'memory_profile_read', 'memory_profile_save',
+  'agent_save', 'agent_list', 'agent_delete', 'artifact_from_file', 'artifact_read', 'artifact_edit', 'artifact_list',
+  'browser_view', 'browser_command', 'terminal_start', 'terminal_write', 'terminal_read', 'terminal_close', 'extend_command']
+
+function commandDetail(row) {
+  if (row.error_class === 'none' || row.stage === 'transport' || !probeCommands.includes(row.command) ||
+      !['busy', 'unavailable', 'unauthorized', 'timeout', 'rejected'].includes(row.command_error_class)) return {}
+  return { command: row.command, command_error_class: row.command_error_class }
+}
+
 const probePhases = ['chat', 'features', 'restart', 'update', 'update-restart']
 const transportKinds = ['dns', 'connect', 'tls', 'tls_certificate', 'proxy', 'timeout', 'other']
 
@@ -142,6 +166,22 @@ function transportDetail(row) {
     } catch { /* Invalid hosts cannot appear in diagnostics. */ }
   }
   return { transport_kind: row.transport_kind, host }
+}
+
+function modelSaveDetail(row) {
+  if (row.stage === 'model-save') {
+    const rejected = row.transport === 'failed' ? true : row.transport === 'complete' ? false : null
+    return { model_save_rejected: rejected,
+      os_error: rejected && Number.isInteger(row.os_error) && row.os_error >= -2147483648 && row.os_error <= 2147483647 ? row.os_error : null }
+  }
+  if (row.stage !== 'inventory') return {}
+  const identifier = '[A-Za-z0-9][A-Za-z0-9._-]{0,127}'
+  const provider = new RegExp(`^${identifier}$`)
+  const model = new RegExp(`^(?:${identifier}/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+  const safe = (value, pattern) => value === null ? null
+    : typeof value === 'string' && !/[\x00-\x1f\x7f]/.test(value) && pattern.test(value) ? value : '[redacted]'
+  return { settings_read: row.settings_read === true,
+    defaultProvider: safe(row.defaultProvider, provider), defaultModel: safe(row.defaultModel, model) }
 }
 
 export function readProbeProgress(env, transport = false) {
@@ -165,7 +205,7 @@ export function readProbeProgress(env, transport = false) {
             !(row.turn === null && row.requested === null || Number.isInteger(row.turn) && row.turn >= 0 && row.turn < 4 &&
               typeof row.requested === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(row.requested))) return []
         return [{ phase: row.phase, stage: row.stage, turn: row.turn, requested: row.requested,
-          transport: row.transport, error_class: row.error_class, ...transportDetail(row) }]
+          transport: row.transport, error_class: row.error_class, ...transportDetail(row), ...modelSaveDetail(row), ...commandDetail(row) }]
       } catch { return [] }
     })
   } catch { return [] }
@@ -191,11 +231,17 @@ export function probeProgress(env, step, phase) {
   const progress = readProbeProgress(env).filter(row => row.phase === phase)
   const transports = readProbeProgress(env, true).filter(row => row.phase === phase)
   const current = progress.at(-1)
+  const save = progress.filter(row => row.stage === 'model-save' && row.turn === current?.turn && row.requested === current?.requested).at(-1)
+  const selection = current?.stage === 'inventory' ? {
+    model_save_status: save?.transport || 'not-started',
+    model_save_rejected: save?.model_save_rejected ?? null,
+    os_error: save?.os_error ?? null,
+  } : {}
   const transport = transports.filter(row => row.turn === current?.turn && row.requested === current?.requested).at(-1)
   return `step=${step}\nphase=${phase}` +
     progress.map(row => `\nprobe-progress=${JSON.stringify(row)}`).join('') +
     transports.map(row => `\nprovider-progress=${JSON.stringify(row)}`).join('') +
-    (current ? `\nprobe-current=${JSON.stringify({ ...current,
+    (current ? `\nprobe-current=${JSON.stringify({ ...current, ...selection,
       provider_transport: transport?.transport || 'not-started', provider_error_class: transport?.error_class || 'none',
       ...(transport?.transport_kind ? { provider_transport_kind: transport.transport_kind, provider_host: transport.host } : {}) })}` : '')
 }
