@@ -146,7 +146,7 @@ const DIAGNOSTICS = new Map([
     "join(ctx.cwd, '.pi', 'tasks', runId); join('.pi', 'tasks', runId);", 'Output is written to .pi/tasks',
   ]],
   // The test stub writes the same upstream source lines, so branding finds them.
-  ['bin/sidecar-test-stub.rs', [
+  ['/src-tauri/examples/sidecar-test-stub.rs', [
     'You can close this page and return to Pi.',
     String.raw`export function getAppName(): string {\n  const name = readPiConfig()?.name\n  return typeof name === \"string\" && name.trim() ? name.trim() : \"pi\"\n}`,
     "'.pi'", "parts[0] === '.pi'",
@@ -167,7 +167,7 @@ const DIAGNOSTICS = new Map([
     'Pi cancellation did not finish', 'timed out waiting for Pi stream', 'Pi process stream ended',
   ]],
   ['sidecar/pi_install.rs', ['Pi installation failed: {:?}']],
-].map(([file, messages]) => [`/core/src/${file}`, new Set(messages)]))
+].map(([file, messages]) => [file.startsWith('/') ? file : `/core/src/${file}`, new Set(messages)]))
 
 export function forbiddenHarnessCopy(source, file = '<fixture>') {
   const normalizedFile = `/${file.replaceAll('\\', '/')}`
@@ -187,7 +187,7 @@ export function forbiddenHarnessCopy(source, file = '<fixture>') {
     // Paths and runtime protocol identifiers are not prose.
     if (value === 'acquiring-pi' || (/^[\w./~:@{}-]+$/.test(value) && value.includes('/'))) return false
     if (file.endsWith('.rs') && /^[a-z0-9_.:@{}-]+$/.test(value) && /[-.:@{}]/.test(value)) return false
-    if (normalizedFile.includes('/core/src/') && value === 'pi') return false
+    if ((normalizedFile.includes('/core/src/') || normalizedFile.endsWith('/examples/sidecar-test-stub.rs')) && value === 'pi') return false
     if (normalizedFile.endsWith('/core/src/memory_runtime.rs') && (
       /function \($/.test(copy.slice(token.index, match.index)) || copy.slice(match.index).startsWith('pi.registerTool')
     )) return false

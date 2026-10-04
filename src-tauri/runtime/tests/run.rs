@@ -10,7 +10,6 @@ use std::time::Duration;
 use muniment_core::active_run::cancel_active_run;
 use muniment_core::attach::linux::{CompanionProvenance, RunResumeRequest, ThreadListService};
 use muniment_core::attach::{ErrorCode, Id, RuntimeActivityRegistry};
-use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::chat_resume::clear_active_run;
 use muniment_core::pi_execution::{coordinate_prepared_prompt, PiRuntime};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
@@ -20,6 +19,7 @@ use muniment_core::run_preparation::{
 use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::validate_pi_session;
+use muniment_desktop_integration::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_runtime::{
     accept_prompt, drive_prompt, open_profile_storage, run_prompt, thread_page, RuntimeAttachState,
     RuntimeChatEventTarget,

@@ -32,12 +32,8 @@ use muniment_core::attach::{CompanionRecord, EntitlementSnapshotResult};
 use muniment_core::attach::{
     CompanionRegistry, RuntimeActivityGuard, RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
-use muniment_core::auth::{BrowserOpenError, BrowserOpener, EntitlementSnapshotTracker, TokenSet};
-#[cfg(any(unix, target_os = "windows"))]
-use muniment_core::auth::{NativeDeviceListError, PairingError};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::cas::ContentHash;
-use muniment_core::chat_grant::{ChatGrant, FetchGrantError};
 use muniment_core::chat_resume::{clear_active_run, install_active_run};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reducer::ChatProjector;
@@ -64,6 +60,12 @@ use muniment_core::run_start::{ActiveRun, RunStartBoundaries, RunStartError, Run
 use muniment_core::serde_json;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
+use muniment_desktop_integration::auth::{
+    BrowserOpenError, BrowserOpener, EntitlementSnapshotTracker, TokenSet,
+};
+#[cfg(any(unix, target_os = "windows"))]
+use muniment_desktop_integration::auth::{NativeDeviceListError, PairingError};
+use muniment_desktop_integration::chat_grant::{ChatGrant, FetchGrantError};
 
 use crate::service::{self, ConfigureRunError};
 #[cfg(any(unix, target_os = "windows"))]
@@ -769,10 +771,12 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         )
         .map_err(RunStartError::InvalidRequest)
     }
-    fn session_status(&self) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+    fn session_status(
+        &self,
+    ) -> Result<muniment_desktop_integration::auth::AuthStatus, ProtocolError> {
         // Local mode holds no cloud session, so its status read never opens the keychain.
         if self.local_mode() {
-            return Ok(muniment_core::auth::AuthStatus {
+            return Ok(muniment_desktop_integration::auth::AuthStatus {
                 signed_in: false,
                 subject: None,
                 expires_at: None,
@@ -792,7 +796,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
     fn sign_in(
         &self,
         _provenance: Provenance,
-    ) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+    ) -> Result<muniment_desktop_integration::auth::AuthStatus, ProtocolError> {
         // The desktop leaves local mode before requesting sign-in. Returning to
         // local mode cancels the browser wait without another socket request.
         let _permit = SignInPermit::acquire(Arc::clone(&self.sign_in_running))
@@ -809,7 +813,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
     fn sign_out(
         &self,
         _provenance: Provenance,
-    ) -> Result<muniment_core::auth::AuthStatus, ProtocolError> {
+    ) -> Result<muniment_desktop_integration::auth::AuthStatus, ProtocolError> {
         self.clear_workspace();
         // A companion approved under this account keeps no live connection past sign-out.
         let revoked = self.companion_registry.revoke_live_connections();
@@ -831,7 +835,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         muniment_core::attach::account_approval_subject(&snapshot.org_id, &snapshot.user_id)
     }
 
-    fn list_devices(&self) -> Result<muniment_core::auth::NativeDeviceList, ProtocolError> {
+    fn list_devices(
+        &self,
+    ) -> Result<muniment_desktop_integration::auth::NativeDeviceList, ProtocolError> {
         let access_token = self
             .fresh_tokens()
             .map_err(|error| error.protocol_error())?
@@ -839,7 +845,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         service::list_devices(&access_token).map_err(device_list_protocol_error)
     }
 
-    fn pairing_status(&self) -> Result<muniment_core::auth::PairingStatusView, ProtocolError> {
+    fn pairing_status(
+        &self,
+    ) -> Result<muniment_desktop_integration::auth::PairingStatusView, ProtocolError> {
         let access_token = self
             .fresh_tokens()
             .map_err(|error| error.protocol_error())?
@@ -851,7 +859,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
     fn create_pairing_challenge(
         &self,
         _provenance: Provenance,
-    ) -> Result<muniment_core::auth::PairingChallengeView, ProtocolError> {
+    ) -> Result<muniment_desktop_integration::auth::PairingChallengeView, ProtocolError> {
         let access_token = self
             .fresh_tokens()
             .map_err(|error| error.protocol_error())?
@@ -861,9 +869,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
 
     fn revoke_pairing(
         &self,
-        pair_id: muniment_core::auth::PairId,
+        pair_id: muniment_desktop_integration::auth::PairId,
         _provenance: Provenance,
-    ) -> Result<muniment_core::auth::PairingRevokeView, ProtocolError> {
+    ) -> Result<muniment_desktop_integration::auth::PairingRevokeView, ProtocolError> {
         let access_token = self
             .fresh_tokens()
             .map_err(|error| error.protocol_error())?
@@ -1441,9 +1449,11 @@ fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-fn sign_in_protocol_error(error: muniment_core::auth::NativeSignInError) -> ProtocolError {
+fn sign_in_protocol_error(
+    error: muniment_desktop_integration::auth::NativeSignInError,
+) -> ProtocolError {
     match error {
-        muniment_core::auth::NativeSignInError::Authorization(_) => {
+        muniment_desktop_integration::auth::NativeSignInError::Authorization(_) => {
             ProtocolError::authorization_failed(error.to_string())
         }
         _ => ProtocolError::persistence_failed_with_reason(error.to_string()),
@@ -1517,10 +1527,12 @@ mod tests {
 
     #[test]
     fn sign_in_authorization_failure_keeps_its_code_in_the_rpc() {
-        let error = sign_in_protocol_error(muniment_core::auth::NativeSignInError::Authorization(
-            "HttpStatus status=400 error_code=invalid_device_proof cf_ray=0123456789abcdef-IAD"
-                .into(),
-        ));
+        let error = sign_in_protocol_error(
+            muniment_desktop_integration::auth::NativeSignInError::Authorization(
+                "HttpStatus status=400 error_code=invalid_device_proof cf_ray=0123456789abcdef-IAD"
+                    .into(),
+            ),
+        );
         assert_eq!(
             error.code(),
             muniment_core::attach::ErrorCode::AuthorizationFailed

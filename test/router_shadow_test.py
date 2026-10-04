@@ -15,7 +15,9 @@ spec = importlib.util.spec_from_file_location("router_shadow", ROOT / "scripts/r
 router = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = router
 spec.loader.exec_module(router)
-EXECUTABLE = Path(os.environ.get("ROUTER_SHADOW_BIN", ROOT / "src-tauri/target/debug/muniment-router-shadow"))
+# CI builds the binary from the muniment-core checkout into this target directory.
+EXECUTABLE = Path(os.environ.get(
+    "ROUTER_SHADOW_BIN", ROOT / "src-tauri/target/muniment-core/debug/muniment-router-shadow"))
 # Contract fixtures allow scheduler slack without changing the production deadline.
 FIXTURE_TIMEOUT = 30.0
 

@@ -19,8 +19,8 @@ use muniment_core::attach::thread_service::{
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::ProtocolError;
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
-use muniment_core::auth::TokenSet;
-use muniment_core::chat_grant::ChatGrant;
+use muniment_desktop_integration::auth::TokenSet;
+use muniment_desktop_integration::chat_grant::ChatGrant;
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
 use muniment_core::journal::reducer::ChatProjector;
 #[cfg(target_os = "linux")]

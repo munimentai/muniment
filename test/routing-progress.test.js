@@ -1,5 +1,7 @@
+// @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest'
-import routingProgress from '../src-tauri/core/src/routing_progress.mjs'
+import { corePath } from '../scripts/muniment-core.mjs'
+const { default: routingProgress } = await import(/* @vite-ignore */ corePath('crates/core/src/routing_progress.mjs'))
 
 const contexts = []
 afterEach(async () => {

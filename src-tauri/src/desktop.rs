@@ -60,6 +60,7 @@ fn restart_muniment(app: tauri::AppHandle) {
 }
 
 pub fn run() {
+    muniment_desktop_integration::provider_clients::register_provider_clients();
     subscription_probe::restore_profile();
     #[cfg(feature = "cef-smoke")]
     for arg in std::env::args() {

@@ -1,15 +1,12 @@
-import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import semver from 'semver'
+import { readCorePins } from './muniment-core.mjs'
 
-const root = new URL('../', import.meta.url)
+// The pins come from pins/pins.toml in the muniment-core release Cargo resolves.
 export function readPins() {
-  const read = path => readFileSync(new URL(path, root), 'utf8')
-  const packages = Object.fromEntries([...read('src-tauri/core/src/pi_packages.rs').split('];')[0]
-    .matchAll(/\("(pi-[^"]+)", "([^"]+)"\)/g)].map(match => [match[1], match[2]]))
-  const pi = read('src-tauri/core/src/sidecar/pi_install.rs').match(/PI_RELEASE_BASE:.*\/v([\d.]+)"/)[1]
-  const claude = read('src-tauri/core/src/model_router/transport.rs').match(/claude-cli\/([\d.]+)/)[1]
-  return { pi, packages, claude }
+  const pins = readCorePins()
+  const packages = Object.fromEntries(pins.packages.map(({ name, version }) => [name, version]))
+  return { pi: pins.pi.version, packages, claude: pins.claude_code.version }
 }
 
 export function assess(name, pinned, manifest, pi) {

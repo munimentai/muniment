@@ -8,6 +8,7 @@ import path from 'node:path'
 import vm from 'node:vm'
 import https from 'node:https'
 import { spawnSync } from 'node:child_process'
+import { corePath } from '../scripts/muniment-core.mjs'
 import { updateFixture } from './e2e/runner/subscription-update.mjs'
 import { awaitUpdateResult, verifyUpdateResult, verifyMcpReceipt } from './e2e/runner/subscriptions.mjs'
 import { featureChecks, featureFailure, interruptionErrors } from './e2e/support/subscription-acceptance.mjs'
@@ -835,7 +836,7 @@ test('the MCP bridge saves a new stdio server and preserves only matching icons'
   const definition = { command: process.execPath, args: ['fixture.mjs'] }
   const inventory = path.join(root, 'extensions', 'inventory.json')
   const call = data => {
-    const result = spawnSync(process.execPath, ['src-tauri/core/src/extend_bridge.mjs'], {
+    const result = spawnSync(process.execPath, [corePath('crates/core/src/extend_bridge.mjs')], {
       env: { ...process.env, MUNIMENT_EXTEND_ROOT: root }, input: JSON.stringify({ action: 'server', data }),
       encoding: 'utf8', timeout: 10_000,
     })

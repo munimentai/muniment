@@ -10,10 +10,11 @@ Phase two adds cloud availability with paid accounts. Cloud development does
 not block the desktop release. The company record and graph remain a separate,
 hidden feature while the desktop harness earns adoption.
 
-This repo contains the Tauri v2 shell, Rust runtime, Pi sidecar and on-device
-voice stack. Existing company data and cloud credentials remain on disk when
-those features are hidden. The release license is FSL-1.1-Apache-2.0. Each version converts to
-Apache 2.0 two years after its release. Third-party notices ship with the app.
+This repo contains the Tauri v2 shell, Rust runtime, Pi sidecar and on-device voice stack.
+The shared core, model router and runtime pins come from one `munimentai/muniment-core` release tag.
+`muniment-desktop-integration` holds cloud sign-in, cloud chat grants and browser control ([ADR 0030](docs/decisions/0030-public-core-boundary.md)).
+Existing company data and cloud credentials remain on disk when those features are hidden.
+The release license is FSL-1.1-Apache-2.0. Each version converts to Apache 2.0 two years after its release. Third-party notices ship with the app.
 
 ## Feature availability
 
@@ -451,14 +452,13 @@ governs executable acquisition and rollback.
 
 ### Production pin and candidate
 
-The **production pin** is the exact Pi version and extension versions a shipped
-desktop carries. The **candidate** is the exact versions the nightly exercises
-ahead of production, and only passing nightly evidence on Linux, macOS and
-Windows qualifies it for promotion. Neither track follows npm `latest`, a
-semver range, or a mutable release manifest. The pin moves to the version the
-factory runs and keeps one verified predecessor for rollback. The production
-executable pin and the candidate are both 0.87.1, with 0.85.1 as the verified
-predecessor. Each run passes `--approve`, so Pi loads a project's `.pi` files.
+The **production pin** is the exact Pi version and extension versions a shipped desktop carries.
+`pins/pins.toml` in the `muniment-core` tag holds every pin: the Pi release and its rollback, each platform
+archive with size and SHA-256, the extension packages, and the Claude Code version. The factory reads the same file.
+The **candidate** is the exact versions the nightly exercises ahead of production, and only passing nightly
+evidence on Linux, macOS and Windows qualifies it for promotion. Neither track follows npm `latest`, a
+semver range, or a mutable release manifest. The executable pin and the candidate are one version, and
+`rollback_version` names the verified predecessor. Each run passes `--approve`, so Pi loads a project's `.pi` files.
 The nightly and local builds select the candidate with `MUNIMENT_PI_CANDIDATE=1`.
 
 The harness installs only packages listed on [pi.dev/packages](https://pi.dev/packages)

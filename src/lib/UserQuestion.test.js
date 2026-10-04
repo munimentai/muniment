@@ -4,6 +4,7 @@ import '@testing-library/jest-dom/vitest'
 import UserQuestion from './UserQuestion.svelte'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
+import { corePath } from '../../scripts/muniment-core.mjs'
 afterEach(cleanup)
 beforeAll(() => {
   HTMLDialogElement.prototype.showModal = function () { this.open = true }
@@ -32,7 +33,7 @@ it('preserves answers when closed, requires explicit answers, and submits struct
 })
 it('registers a waiting Pi tool and returns answers without a timeout or inferred defaults', async () => {
   let tool
-  vm.runInNewContext(readFileSync('src-tauri/core/src/extensions/ask-user-question.js','utf8'), {pi:{registerTool:value=>{tool=value}}})
+  vm.runInNewContext(readFileSync(corePath('crates/core/src/extensions/ask-user-question.js'),'utf8'), {pi:{registerTool:value=>{tool=value}}})
   expect(tool.name).toBe('ask_user_question')
   let resolve
   const editor = vi.fn(() => new Promise(done=>{resolve=done}))
@@ -49,7 +50,7 @@ it('registers a waiting Pi tool and returns answers without a timeout or inferre
 
 it('stops a question tool while its editor still awaits a response', async () => {
   let tool
-  vm.runInNewContext(readFileSync('src-tauri/core/src/extensions/ask-user-question.js', 'utf8'), {pi: {registerTool: value => { tool = value }}})
+  vm.runInNewContext(readFileSync(corePath('crates/core/src/extensions/ask-user-question.js'), 'utf8'), {pi: {registerTool: value => { tool = value }}})
   const controller = new AbortController()
   const editor = vi.fn(() => new Promise(() => {}))
   const result = tool.execute('id', {questions}, controller.signal, null, {ui: {editor}})

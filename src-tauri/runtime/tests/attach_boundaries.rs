@@ -15,10 +15,6 @@ use muniment_core::attach::linux::{
 use muniment_core::attach::{
     ErrorCode, Id, ProtocolError, RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
-use muniment_core::auth::{
-    BrowserOpenError, EntitlementSnapshotTracker, KeyringNativeCredentialStore,
-    NativeCredentialStore,
-};
 use muniment_core::journal::{CasReference, EventEnvelope, EventPayload, Provenance};
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
@@ -29,6 +25,10 @@ use muniment_core::run_preparation::{
 };
 use muniment_core::run_start::{ActiveRun, RunAttachBoundaries, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
+use muniment_desktop_integration::auth::{
+    BrowserOpenError, EntitlementSnapshotTracker, KeyringNativeCredentialStore,
+    NativeCredentialStore,
+};
 use muniment_runtime::{
     open_companion_registry, open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState,
 };

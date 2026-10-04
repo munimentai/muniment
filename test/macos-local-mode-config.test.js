@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { corePath } from '../scripts/muniment-core.mjs'
 
 const temporary = []
 afterEach(() => {
@@ -30,7 +31,7 @@ describe('macOS local mode config', () => {
   it('keeps the desktop, the runtime and the harness on one state root', () => {
     const desktop = fs.readFileSync('src-tauri/src/local_mode.rs', 'utf8')
     const runtime = fs.readFileSync('src-tauri/runtime/src/directories.rs', 'utf8')
-    const core = fs.readFileSync('src-tauri/core/src/state_root.rs', 'utf8')
+    const core = fs.readFileSync(corePath('crates/core/src/state_root.rs'), 'utf8')
     const resolver = desktop.slice(desktop.indexOf('fn config_directory'), desktop.indexOf('pub(crate) fn is_active'))
     expect(resolver).toContain('muniment_runtime::profile_directory()')
     expect(desktop).toMatch(/is_local_mode\(&config_directory\(\s*app,?\s*\)\?\)/)

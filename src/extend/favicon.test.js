@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { expect, it, vi } from 'vitest'
-import { serviceFavicon } from '../../src-tauri/core/src/extend_favicon.mjs'
+import { corePath } from '../../scripts/muniment-core.mjs'
+const { serviceFavicon } = await import(/* @vite-ignore */ corePath('crates/core/src/extend_favicon.mjs'))
 it('requests only the origin icon and caches its image data', async () => {
   const fetch = vi.fn(async () => new Response(new Uint8Array([1,2,3]), {headers:{'content-type':'image/x-icon'}}))
   expect(await serviceFavicon('https://service.example/private/mcp?token=secret',fetch)).toBe('data:image/x-icon;base64,AQID')

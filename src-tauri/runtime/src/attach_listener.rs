@@ -17,7 +17,7 @@ use muniment_core::attach::{
     serve_approval_presenter, ApprovalCoordinator, ApprovalPresenterConnection, ApprovalRequest,
     AttachConnectionRoute, CompanionRegistry, SignedWorkspaceApproval,
 };
-use muniment_core::browser_control::ProcReader;
+use muniment_desktop_integration::browser_control::ProcReader;
 
 const PRESENTER_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
 

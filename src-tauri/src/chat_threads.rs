@@ -912,7 +912,7 @@ mod tests {
             attach_state: AttachCompanionState,
         ) -> (tauri::App<tauri::test::MockRuntime>, String) {
             use muniment_core::attach::RuntimeActivityRegistry;
-            use muniment_core::auth::TokenSet;
+            use muniment_desktop_integration::auth::TokenSet;
             use tauri::Manager;
 
             let app = tauri::test::mock_app();

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { corePath } from '../scripts/muniment-core.mjs'
 
 import { forbiddenEmDashes, forbiddenHarnessCopy, forbiddenUiCopy, lintEmDashes, lintUiCopy } from './ui-copy-lint.mjs'
 
@@ -131,7 +132,7 @@ describe('UI copy lint', () => {
   })
 
   it('accepts the scan registry without exempting other Rust UI copy', () => {
-    const file = 'src-tauri/core/src/harness_scan.rs'
+    const file = corePath('crates/core/src/harness_scan.rs')
     expect(forbiddenHarnessCopy(fs.readFileSync(file, 'utf8'), file)).toEqual([])
     expect(forbiddenHarnessCopy('const COPY: &str = "Pi";', 'src-tauri/src/status.rs')).toHaveLength(1)
   })

@@ -18,13 +18,13 @@ use muniment_core::attach::{
     ApprovalCoordinator, ApprovalRequest, CompanionRegistry, ProtocolError,
     SignedWorkspaceApproval, CAPABILITY_IDLE_LIFETIME,
 };
-use muniment_core::auth::AuthStatus;
-use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
 use muniment_core::retention_record::{write_retention_choice, RetentionChoice};
 use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
 use muniment_core::run_start::{ActiveRun, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
+use muniment_desktop_integration::auth::AuthStatus;
+use muniment_desktop_integration::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_runtime::{open_profile_storage, RuntimeAttachState};
 use muniment_runtime::{run_attach_listener, AttachListenerInputs};
 
