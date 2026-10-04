@@ -485,7 +485,7 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(native).toMatch(/spawn_blocking\(move \|\| \{\s*press_confirm\(&identifier, deadline, confirm_lookups\)/)
     const confirm = native.split('fn press_confirm')[1].split('fn panel_directory')[0]
     expect(lookup).toMatch(/if panels.len\(\) > 1 \{\s*return Err\(AmbiguousPanel\);/)
-    expect(lookup).toMatch(/let Some\(panel\) = panels.first\(\) else \{\s*return Ok\(None\);/)
+    expect(lookup).toMatch(/let Some\(\(panel, child_identity\)\) = panels.first\(\) else \{\s*return Ok\(None\);/)
     expect(lookup).toContain('failures.push(IdentifierNotFound)')
     expect(lookup).toContain('Err(_) => failures.push(NoDefaultButton)')
     expect(lookup).toContain('failures.push(ButtonDisabled)')
