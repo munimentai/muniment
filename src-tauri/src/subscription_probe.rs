@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(windows, test))]
-#[path = "subscription_probe_diagnostics.rs"]
 mod diagnostics;
 
 fn root() -> Result<PathBuf, &'static str> {
