@@ -1,5 +1,6 @@
 // The installed webview exercises public commands with disposable data.
-window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, turns }) => {
+window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, turns,
+  isBrowserLoading = error => (error?.message ?? error) === 'The page is still loading.' }) => {
   const features = {}
   const failures = new WeakMap()
   const check = (value, reason) => {
@@ -187,7 +188,7 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
         try {
           response = await invoke('browser_command', { request: { view: 'browser', action: 'snapshot' } })
         } catch (error) {
-          if ((error?.message ?? error) === 'The page is still loading.') return false
+          if (isBrowserLoading(error)) return false
           throw error
         }
         const snapshot = JSON.parse(response)

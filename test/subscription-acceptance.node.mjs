@@ -673,6 +673,63 @@ for (const mode of ['handled', 'cleanup', 'wrapped']) {
   })
 }
 
+for (const mode of ['loading-once', 'loading-error-once', 'loading-forever', 'rejected', 'forged-loading']) {
+  test(`the installed browser probe handles ${mode} through the invoke wrapper`, async () => {
+    const progress = [], actions = [], views = []
+    let observed, snapshots = 0, clock = 0
+    const turns = fixture().result.turns
+    const invoke = async (command, payload) => {
+      if (command === 'subscription_probe_progress') { progress.push(payload); return }
+      if (command === 'subscription_probe_observed') { observed = payload; return }
+      if (command === 'attach_listener_status') return { supervisor_running: true, connected: true }
+      if (command === 'chat_current_thread') return turns[0].thread
+      if (command === 'browser_view') { views.push(payload.label); return }
+      if (command === 'browser_command') {
+        const action = payload.request.action
+        actions.push(action)
+        if (action === 'close') return
+        if (action === 'navigate') throw 'PRIVATE UNSAFE URL'
+        assert.equal(action, 'snapshot')
+        snapshots++
+        if (mode === 'rejected') throw new Error('PRIVATE SNAPSHOT FAILURE')
+        if (mode === 'forged-loading') throw { browserLoading: true, errorClass: 'loading', message: 'PRIVATE' }
+        if (mode === 'loading-forever' || snapshots === 1) {
+          if (mode === 'loading-error-once') throw new Error('The page is still loading.')
+          throw 'The page is still loading.'
+        }
+        return JSON.stringify({ title: 'Docs', text: 'The local documentation page.', url: 'http://127.0.0.1:1234/docs/' })
+      }
+      throw new Error('PRIVATE UNRELATED FEATURE')
+    }
+    await vm.runInNewContext([
+      'test/e2e/support/subscription-features.js', 'test/e2e/support/subscription-probe.js',
+    ].map(file => fs.readFileSync(file, 'utf8')).join('\n'), {
+      window: { __MUNIMENT_SUBSCRIPTION_PLAN__: { phase: 'features', acceptance: true, turns, models, nonce },
+        __TAURI__: { core: { invoke } } },
+      document: { head: { append() {} }, createElement: () => ({}),
+        querySelector: () => ({ getClientRects: () => [1] }),
+        querySelectorAll: () => turns.map(() => ({ getClientRects: () => [1],
+          querySelector: () => ({ textContent: nonce }), setAttribute() {} })),
+      },
+      URL, clearTimeout() {},
+      setTimeout: (callback, ms) => { if (ms === 250) callback() },
+      Date: { now: () => { clock += 1000; return clock } },
+    })
+    const success = ['loading-once', 'loading-error-once'].includes(mode)
+    assert.deepEqual(Array.from(observed.features.browser), success
+      ? ['local-page-rendered', 'unsafe-navigation-rejected', 'view-closed']
+      : ['failed', 'check', mode === 'loading-forever' ? 'timeout' : 'check-failed'])
+    if (mode === 'loading-forever') assert.ok(snapshots > 2 && snapshots < 180)
+    else assert.equal(snapshots, success ? 2 : 1)
+    assert.equal(actions.includes('navigate'), success)
+    assert.equal(actions.at(-1), 'close')
+    assert.deepEqual(views, ['browser', ''])
+    assert.ok(progress.every(row => row.commandFailure === null))
+    assert.ok(!JSON.stringify({ progress, observed }).includes('PRIVATE'))
+    assert.ok(!JSON.stringify({ progress, observed }).includes('The page is still loading.'))
+  })
+}
+
 const commandRejections = {
   'current-thread-busy': ['chat_current_thread', 'Muniment is busy with another request. Try again.', 'busy'],
   'thread-open-busy': ['chat_thread_open', 'Muniment is busy with another request. Try again.', 'busy'],

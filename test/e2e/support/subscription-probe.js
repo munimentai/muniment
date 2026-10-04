@@ -5,6 +5,7 @@
   window.__munimentSubscriptionProbeStarted = true
   const plan = window.__MUNIMENT_SUBSCRIPTION_PLAN__
   const commandFailures = new WeakMap()
+  const browserLoading = new WeakSet()
   const rejectionKind = error => {
     if (error === 'Muniment is busy with another request. Try again.') return 'busy'
     if (error === 'Conversation history is unavailable.' || error === 'Muniment cannot reach its background service.') return 'unavailable'
@@ -23,6 +24,8 @@
     } catch (error) {
       const isTimeout = error === timedOut || (command === 'subscription_probe_update' && error?.errorClass === 'command-timeout')
       const rejected = isTimeout ? timedOut : failure('command-failed')
+      if (command === 'browser_command' && payload?.request?.action === 'snapshot'
+        && (error?.message ?? error) === 'The page is still loading.') browserLoading.add(rejected)
       if (command === 'subscription_probe_update' && error !== rejected) rejected.cause = error
       commandFailures.set(rejected, { command, kind: isTimeout ? 'timeout' : rejectionKind(error) })
       throw rejected
@@ -122,7 +125,8 @@
     }
     if (plan.acceptance) {
       await progress('features')
-      features = await window.__munimentSubscriptionFeatures({ plan, invoke, wait, setValue, turns })
+      features = await window.__munimentSubscriptionFeatures({ plan, invoke, wait, setValue, turns,
+        isBrowserLoading: error => browserLoading.has(error) })
       if (plan.phase === 'chat') features['local-startup'] = ['composer-visible', 'runtime-connected']
     }
     // Show only verified synthetic replies. Hide account details and tool output.
