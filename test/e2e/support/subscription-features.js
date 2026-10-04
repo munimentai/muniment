@@ -38,8 +38,9 @@ window.__munimentSubscriptionFeatures = async ({ plan, invoke, wait, setValue, t
       await invoke('subscription_probe_update')
     } catch (error) {
       // Only fixed Rust codes enter the evidence. Never copy an unknown rejection.
-      const errorClass = codes.includes(error) ? error : error?.errorClass === 'command-timeout' ? 'command-timeout' : 'command-failed'
-      throw Object.assign(new Error('The installed update failed.'), { errorClass })
+      const code = error?.cause ?? error
+      const errorClass = codes.includes(code) ? code : error?.errorClass === 'command-timeout' ? 'command-timeout' : 'command-failed'
+      throw Object.assign(new Error('The installed update failed.'), { errorClass, cause: error })
     }
     throw Object.assign(new Error('The updated app did not restart.'), { errorClass: 'update-restart' })
   }

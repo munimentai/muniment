@@ -243,18 +243,20 @@ pub(crate) fn subscription_probe_progress(
     stage: String,
     turn: Option<usize>,
     error_class: String,
+    command_failure: Option<muniment_core::model_router::subscription_probe::CommandFailure>,
 ) -> Result<(), &'static str> {
     let outcome = match stage.as_str() {
         "reply" => "pending",
         "render" | "complete" => "complete",
         _ => "not-started",
     };
-    muniment_core::model_router::subscription_probe::record(
+    muniment_core::model_router::subscription_probe::record_command(
         &root()?,
         &stage,
         turn,
         outcome,
         &error_class,
+        command_failure.as_ref(),
     )
 }
 
