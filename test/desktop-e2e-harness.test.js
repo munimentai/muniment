@@ -3376,6 +3376,13 @@ describe('Windows build MSI diagnostics', { timeout: POWERSHELL_TEST_TIMEOUT }, 
     return result
   }
 
+  it.skipIf(!hasPowerShell)('Reports a diagnostic process timeout.', () => {
+    expect(() => invoke('Start-Sleep -Seconds 60', [], 100)).toThrow(expect.objectContaining({
+      message: expect.stringContaining('The fixture process timed out after 100 ms:'),
+      cause: expect.objectContaining({ code: 'ETIMEDOUT' }),
+    }))
+  })
+
   const comFixture = `
 $script:fixtureInstalled = $true
 $script:fixtureContext = 2
