@@ -367,13 +367,30 @@ fn write_observed(
         || features.iter().any(|(name, checks)| {
             name.len() > 40
                 || checks.len() > 10
-                || std::iter::once(name).chain(checks.iter()).any(|value| {
-                    value.is_empty()
-                        || value.len() > 64
-                        || !value
-                            .bytes()
-                            .all(|byte| byte.is_ascii_lowercase() || matches!(byte, b'-' | b'_'))
-                })
+                || std::iter::once(name)
+                    .chain(checks.iter())
+                    .enumerate()
+                    .any(|(index, value)| {
+                        // Only the terminal failure's byte count accepts digits.
+                        let byte_count = name == "terminal"
+                            && checks.len() == 7
+                            && checks[0] == "failed"
+                            && index == 4
+                            && value.strip_prefix("bytes-").is_some_and(|count| {
+                                !count.is_empty()
+                                    && (count == "0" || !count.starts_with('0'))
+                                    && count.bytes().all(|byte| byte.is_ascii_digit())
+                                    && count
+                                        .parse::<u64>()
+                                        .is_ok_and(|count| count <= 9_007_199_254_740_991)
+                            });
+                        value.is_empty()
+                            || value.len() > 64
+                            || (!byte_count
+                                && !value.bytes().all(|byte| {
+                                    byte.is_ascii_lowercase() || matches!(byte, b'-' | b'_')
+                                }))
+                    })
         });
     // Publish a bounded failure instead of making the runner wait for a missing result.
     // Do not copy invalid feature data into the evidence.
@@ -487,6 +504,99 @@ mod tests {
                 assert_eq!(profile.result(), result);
                 assert!(!profile.0.join("subscription-probe-result.tmp").exists());
             }
+        }
+    }
+
+    #[test]
+    fn observed_preserves_bounded_terminal_diagnostics() {
+        for count in ["0", "4096", "9007199254740991"] {
+            let profile = Profile::new();
+            let features = feature(
+                "terminal",
+                &[
+                    "failed",
+                    "check",
+                    "shell-output",
+                    &format!("bytes-{count}"),
+                    if count == "0" {
+                        "received-false"
+                    } else {
+                        "received-true"
+                    },
+                    "nonce-false",
+                    "vt-false",
+                ],
+            );
+            write_observed(
+                &profile.0,
+                vec![],
+                true,
+                features.clone(),
+                &serde_json::json!({}),
+            )
+            .unwrap();
+            assert_eq!(profile.result()["features"], serde_json::json!(features));
+            assert!(profile.result().get("error_class").is_none());
+        }
+    }
+
+    #[test]
+    fn observed_rejects_numeric_data_outside_the_terminal_byte_count() {
+        let mut invalid = vec![];
+        for count in [
+            "-1",
+            "01",
+            "1.5",
+            "1e3",
+            "9007199254740992",
+            "18446744073709551616",
+            "0\n",
+        ] {
+            invalid.push(feature(
+                "terminal",
+                &[
+                    "failed",
+                    "check",
+                    "shell-output",
+                    &format!("bytes-{count}"),
+                    "received-true",
+                    "nonce-false",
+                    "vt-false",
+                ],
+            ));
+        }
+        for name in ["terminal", "files"] {
+            invalid.push(feature(name, &["failed", "check", "bytes-10"]));
+        }
+        invalid.push(feature(
+            "files",
+            &[
+                "failed",
+                "check",
+                "shell-output",
+                "bytes-10",
+                "received-true",
+                "nonce-false",
+                "vt-false",
+            ],
+        ));
+        invalid.push(feature(
+            "terminal",
+            &[
+                "failed",
+                "check",
+                "shell-output",
+                "bytes-10",
+                "received-1",
+                "nonce-false",
+                "vt-false",
+            ],
+        ));
+        for features in invalid {
+            let profile = Profile::new();
+            write_observed(&profile.0, vec![], true, features, &serde_json::json!({})).unwrap();
+            assert_eq!(profile.result()["error_class"], "invalid-feature-checks");
+            assert_eq!(profile.result()["features"], serde_json::json!({}));
         }
     }
 

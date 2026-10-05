@@ -305,7 +305,7 @@ export function writeBlocked(output, sourceSha, platform, reason, detail = '', r
   fs.mkdirSync(output, { recursive: true, mode: 0o700 })
   const proof = blocked(sourceSha, platform, reason, featureFailures)
   const features = Object.fromEntries(proof.cases.filter(item => item.failure_stage)
-    .map(item => [item.feature, ['failed', item.failure_stage, item.error_class]]))
+    .map(item => [item.feature, featureFailures[item.feature]]))
   save(path.join(output, 'release-acceptance.json'), proof)
   save(path.join(output, `${platform}-subscription.json`), { status: failureKind === 'product' ? 'failed' : 'blocked', reason,
     ...(failureKind ? { failure_kind: failureKind } : {}), ...(condition ? { condition } : {}),
@@ -358,10 +358,10 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     for (const feature of Object.keys(featureChecks)) {
       const failure = featureFailure(feature, result?.features?.[feature])
       if (failure.failure_stage && !featureFailures[feature]) {
-        featureFailures[feature] = ['failed', failure.failure_stage, failure.error_class]
+        featureFailures[feature] = [...result.features[feature]]
       }
     }
-    // Keep only fixed failure codes until every phase and cleanup check passes.
+    // Keep only validated failure codes and counts until every phase and cleanup check passes.
     reportBlocked()
   }
   let evidence, proof, finalDiagnostics
@@ -422,7 +422,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     reason = 'The disposable signed update server could not start. Install OpenSSL on the native runner.'
     step = 'update-server'
     updateServer = await updateFixture(root, bytes, fs.readFileSync(signatureFile, 'utf8').trim(), version, platform)
-    const plan = { models: candidate.models, nonce, fileNonce, mcpNonce, mcpReceipt,
+    const plan = { platform, models: candidate.models, nonce, fileNonce, mcpNonce, mcpReceipt,
       acceptance: true, phase: 'chat', fixtureFile, fixtureDirectory: root,
       mcpCommand: process.execPath, mcpScript: path.resolve('test/e2e/support/subscription-mcp.mjs'),
       updateUrl: updateServer.url, packageSha256: candidate.sha256 }

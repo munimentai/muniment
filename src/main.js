@@ -12,6 +12,11 @@ applyTheme(document.documentElement, readStoredTheme())
 applyType(document.documentElement, readStoredType())
 const query = new URLSearchParams(location.search)
 if (query.has('workspace-menu')) document.documentElement.classList.add('workspace-popup-window')
+// The installed probe loads after the page. Reuse the terminal workspace's VT parser on demand.
+window.__munimentSubscriptionTerminal = async options => {
+  const { Terminal } = await import('@xterm/xterm')
+  return new Terminal(options)
+}
 // Each window loads only its own root component, so the launcher and the
 // workspace popup never load the main window's code.
 const { default: Root } = await (query.has('workspace-menu')

@@ -171,6 +171,49 @@ test('the runner preserves command and assertion reasons through collection', as
   }
 })
 
+test('The runner preserves terminal diagnostics through restart, update failure, and collection.', async t => {
+  const failure = ['failed', 'check', 'shell-output', 'bytes-4096', 'received-true', 'nonce-true', 'vt-true']
+  const result = await scenario(t, { featureFailures: { terminal: failure }, failAt: 'update' })
+  assertFailure(result, 'terminal', failure)
+  const expected = { byte_count: 4096, received: true, nonce_present: true, vt_present: true }
+  assert.deepEqual(result.proof.cases.find(item => item.feature === 'terminal').terminal_diagnostics, expected)
+  assert.deepEqual(result.checkpoints.restart.cases.find(item => item.feature === 'terminal').terminal_diagnostics, expected)
+})
+
+test('The terminal diagnostic grammar rejects invalid counts, flags, and extra text.', () => {
+  const valid = ['failed', 'check', 'shell-output', 'bytes-0', 'received-false', 'nonce-false', 'vt-false']
+  assert.deepEqual(acceptance.featureFailure('terminal', valid).terminal_diagnostics,
+    { byte_count: 0, received: false, nonce_present: false, vt_present: false })
+  for (const count of ['1', '9007199254740991']) {
+    assert.equal(acceptance.featureFailure('terminal', [...valid.slice(0, 3), `bytes-${count}`, 'received-true', 'nonce-false', 'vt-false'])
+      .terminal_diagnostics.byte_count, Number(count))
+  }
+  for (const [index, values] of [
+    [3, ['bytes--1', 'bytes-01', 'bytes-1.5', 'bytes-1e3', 'bytes-NaN', 'bytes-Infinity', 'bytes-9007199254740992', 'bytes-0\n', 0, null, {}]],
+    [4, ['received-true', 'received-false private', false]],
+    [5, ['nonce-true', 'nonce-false private', false]],
+    [6, ['vt-true', 'vt-false private', false]],
+  ]) {
+    for (const value of values) {
+      const invalid = [...valid]
+      invalid[index] = value
+      assert.deepEqual(acceptance.featureFailure('terminal', invalid), {})
+    }
+  }
+  for (const invalid of [valid.slice(0, -1), [...valid, 'private'], ['failed', 'restore', ...valid.slice(2)]]) {
+    assert.deepEqual(acceptance.featureFailure('terminal', invalid), {})
+  }
+  assert.deepEqual(acceptance.featureFailure('files', valid), {})
+})
+
+test('The runner drops invalid terminal diagnostics from the evidence.', async t => {
+  const result = await scenario(t, { failAt: 'update', featureFailures: {
+    terminal: ['failed', 'check', 'shell-output', 'bytes-123', 'received-true', 'nonce-true', 'vt-true private'],
+  } })
+  assert.equal(result.evidence.features, undefined)
+  assert.equal(JSON.stringify(result).includes('vt-true private'), false)
+})
+
 for (const reason of ['memory-save-unavailable', 'memory-save-busy', 'memory-save-home', 'memory-save-path',
   'memory-save-folder', 'memory-save-write', 'memory-save-size', 'memory-save-secret', 'memory-save-timeout', 'memory-save-rejected']) {
   test(`The collector preserves the ${reason} sub-code.`, async t => {
