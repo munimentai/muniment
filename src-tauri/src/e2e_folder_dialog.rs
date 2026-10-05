@@ -170,6 +170,16 @@ fn press_confirm(
 
 struct NativeAccessibility;
 
+impl NativeAccessibility {
+    fn validate_element(value: CFType) -> Result<CFType, String> {
+        // SAFETY: AXUIElementGetTypeID takes no arguments and returns the AX element type ID.
+        if value.type_of() != unsafe { AXUIElementGetTypeID() } {
+            return Err("The Home picker needs an Accessibility element.".into());
+        }
+        Ok(value)
+    }
+}
+
 impl accessibility::Accessibility for NativeAccessibility {
     type Element = CFType;
 
@@ -185,7 +195,7 @@ impl accessibility::Accessibility for NativeAccessibility {
     }
 
     fn element(&self, element: &CFType, name: &str) -> Result<CFType, String> {
-        ax_attribute(element, name)
+        Self::validate_element(ax_attribute(element, name)?)
     }
 
     fn string(&self, element: &CFType, name: &str) -> Result<String, String> {
@@ -200,6 +210,36 @@ impl accessibility::Accessibility for NativeAccessibility {
             .downcast::<CFBoolean>()
             .map(bool::from)
             .ok_or_else(|| format!("The Home picker needs a boolean for {name}."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_element_validation_rejects_non_elements() {
+        for value in [
+            CFString::new("private AX text").as_CFType(),
+            CFBoolean::true_value().as_CFType(),
+        ] {
+            assert_eq!(
+                NativeAccessibility::validate_element(value).unwrap_err(),
+                "The Home picker needs an Accessibility element."
+            );
+        }
+    }
+
+    #[test]
+    fn native_element_validation_preserves_ax_elements() {
+        // SAFETY: The current process exists, and Create returns an owned AX element.
+        let element = unsafe {
+            CFType::wrap_under_create_rule(AXUIElementCreateApplication(std::process::id() as i32))
+        };
+        assert_eq!(
+            NativeAccessibility::validate_element(element.clone()).unwrap(),
+            element
+        );
     }
 }
 

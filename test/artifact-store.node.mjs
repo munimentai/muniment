@@ -301,12 +301,16 @@ fs.copyFileSync(local(source), local(target));
   const env = { ...process.env, AWS_CLI: cli, AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test',
     STORE: join(f.root, 'store'), GITHUB_REPOSITORY: id.repository, GITHUB_RUN_ID: String(id.run),
     GITHUB_RUN_ATTEMPT: String(id.attempt), SOURCE_SHA: id.source }
-  for (const mode of ['upload', 'collect']) {
-    const temp = join(f.root, mode)
+  const run = (mode, label, extra = {}) => {
+    const temp = join(f.root, label)
     mkdirSync(temp)
-    const result = spawnSync(process.execPath, ['.github/lib/artifact-store-probe.mjs', mode], {
-      env: { ...env, RUNNER_TEMP: temp }, encoding: 'utf8', timeout: 60_000,
+    return spawnSync(process.execPath, ['.github/lib/artifact-store-probe.mjs', mode], {
+      env: { ...env, RUNNER_TEMP: temp, UPLOAD_ATTEMPT: String(id.attempt), ...extra },
+      encoding: 'utf8', timeout: 60_000,
     })
+  }
+  for (const mode of ['upload', 'collect']) {
+    const result = run(mode, mode)
     assert.equal(result.status, 0, result.stderr)
   }
   const objectRoot = join(env.STORE, 'factory-ci-artifacts/muniment-desktop/42')
@@ -314,6 +318,27 @@ fs.copyFileSync(local(source), local(target));
   assert.equal(uploaded.length, 64 * 1024 * 1024)
   assert.ok(readFileSync(join(objectRoot, 'transport-probe-diagnostics-collection/attempt-2/diagnostics.bin')).equals(uploaded))
   assert.ok(readFileSync(join(f.root, 'collect/artifact-store-probe-2/diagnostics/attempt-2/diagnostics.bin')).equals(uploaded))
+
+  // A collector-only rerun uses the successful upload job's attempt, not its own attempt.
+  const rerun = run('collect', 'rerun', { GITHUB_RUN_ATTEMPT: '3' })
+  assert.equal(rerun.status, 0, rerun.stderr)
+  assert.ok(readFileSync(join(f.root, 'rerun/artifact-store-probe-3/diagnostics/attempt-2/diagnostics.bin')).equals(uploaded))
+  for (const name of ['transport-probe-diagnostics-collection', 'transport-probe-collection']) {
+    const manifest = JSON.parse(readFileSync(join(objectRoot, name, 'manifest.json')))
+    assert.equal(manifest.attempt, 3)
+    assert.equal(manifest.source, id.source)
+  }
+
+  for (const [index, attempt] of [undefined, '', '0', '-1', '1.5', '02', 'NaN', '9007199254740992', '4', '3', '1'].entries()) {
+    const result = run('collect', `invalid-${index}`, { GITHUB_RUN_ATTEMPT: '3', UPLOAD_ATTEMPT: attempt })
+    assert.equal(result.status, 1, result.stderr)
+    assert.match(result.stderr, /The upload attempt must be positive|Artifact identity mismatch/)
+    assert.equal(existsSync(join(f.root, `invalid-${index}/artifact-store-probe-3`)), false)
+  }
+  const stale = run('collect', 'stale', { GITHUB_RUN_ATTEMPT: '3', SOURCE_SHA: 'b'.repeat(40) })
+  assert.equal(stale.status, 1)
+  assert.match(stale.stderr, /Artifact identity mismatch/)
+  assert.equal(existsSync(join(f.root, 'stale/artifact-store-probe-3')), false)
 })
 
 function checkArtifactSetup(text, label, stepIndent = 6) {
@@ -405,5 +430,9 @@ test('Every workflow uses MinIO while native tests and public distribution keep 
   assert.match(probe, /runs-on: macos-15/)
   assert.match(probe, /artifact-store-probe.mjs upload/)
   assert.match(probe, /artifact-store-probe.mjs collect/)
+  assert.ok(probe.includes('attempt: ${{ steps.upload.outputs.attempt }}'))
+  assert.match(probe, /id: upload/)
+  assert.ok(probe.includes('printf \'attempt=%s\\n\' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"'))
+  assert.ok(probe.includes('UPLOAD_ATTEMPT: ${{ needs.upload.outputs.attempt }}'))
   assert.doesNotMatch(probe, /SUBSCRIPTION_LEASES|continue-on-error/)
 })
