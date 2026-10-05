@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { platforms, subscriptionAccounts } from '../support/subscription-acceptance.mjs'
 import { writeBlocked } from './subscriptions.mjs'
+import { copyWindowsUpdate } from '../support/subscription-windows-update.mjs'
 import { subscriptionRedactor, diagnosticTail, nativeFailure, transcriptText, reportPayloadDifferences, reportSubscriptionFailure } from '../support/subscription-diagnostics.mjs'
 
 const desktopCiName = platform => platform === 'macos-x64' ? 'macos' : platform
@@ -111,6 +112,9 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
   const redact = subscriptionRedactor({ leases, values: [token, sshKey] })
   let status = 1
   fs.rmSync(path.join(output, `${platform}-subscription.log`), { force: true })
+  if (platform === 'windows') {
+    for (const name of ['windows-subscription-msi.log', 'windows-subscription-relaunch.json']) fs.rmSync(path.join(output, name), { force: true })
+  }
   writeBlocked(output, sourceSha, platform, reason)
   try {
     if (!String(leases ?? '').trim()) throw new Error(missingLeases)
@@ -129,6 +133,7 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
           leases: compactLeases, models: compactModels, repository, token, sshKey, knownHosts, harnessSha,
         })
       } finally {
+        if (platform === 'windows') copyWindowsUpdate(artifacts, output)
         const log = path.join(artifacts, `${platform}-subscription.log`)
         if (fs.existsSync(log) && fs.lstatSync(log).isFile()) {
           fs.writeFileSync(path.join(output, `${platform}-subscription.log`), redact(fs.readFileSync(log, 'utf8')), { mode: 0o600 })
