@@ -1,0 +1,201 @@
+{
+  "tool": {
+    "name": "quote",
+    "description": "Quote workshop seats at $25 each.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "seats": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "fail": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "seats"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "openWorldHint": false
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://muniment-demo/quote.html"
+      }
+    }
+  },
+  "rawResult": {
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://muniment-demo/quote.html"
+      },
+      "fixtureMarker": "Only the app host receives this metadata."
+    },
+    "content": [
+      {
+        "type": "text",
+        "text": "3 workshop seats cost $75."
+      }
+    ],
+    "structuredContent": {
+      "seats": 3,
+      "total": 75
+    }
+  },
+  "candidate": {
+    "events": [
+      {
+        "type": "message_end",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Call quote with {\"seats\":3}."
+            }
+          ],
+          "timestamp": 1790947437107
+        }
+      },
+      {
+        "type": "message_end",
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "demo-call",
+              "name": "mcp__demo-9b877f41-ea5e-456b-b72c-73201bd6f70f__quote",
+              "arguments": {
+                "seats": 3
+              }
+            }
+          ],
+          "api": "openai-completions",
+          "provider": "fixture",
+          "model": "fixture",
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 1790947437128,
+          "responseId": "demo",
+          "rawStopReason": "tool_calls",
+          "thinkingLevel": "off"
+        }
+      },
+      {
+        "type": "tool_execution_start",
+        "toolCallId": "demo-call",
+        "toolName": "mcp__demo-9b877f41-ea5e-456b-b72c-73201bd6f70f__quote",
+        "args": {
+          "seats": 3
+        }
+      },
+      {
+        "type": "tool_execution_end",
+        "toolCallId": "demo-call",
+        "toolName": "mcp__demo-9b877f41-ea5e-456b-b72c-73201bd6f70f__quote",
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "3 workshop seats cost $75."
+            }
+          ],
+          "details": {
+            "server": "demo-9b877f41-ea5e-456b-b72c-73201bd6f70f",
+            "tool": "quote"
+          },
+          "structuredContent": {
+            "content": [
+              {
+                "type": "text",
+                "text": "3 workshop seats cost $75."
+              }
+            ],
+            "structuredContent": {
+              "seats": 3,
+              "total": 75
+            }
+          }
+        },
+        "isError": false
+      },
+      {
+        "type": "message_end",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "demo-call",
+          "toolName": "mcp__demo-9b877f41-ea5e-456b-b72c-73201bd6f70f__quote",
+          "content": [
+            {
+              "type": "text",
+              "text": "3 workshop seats cost $75."
+            }
+          ],
+          "details": {
+            "server": "demo-9b877f41-ea5e-456b-b72c-73201bd6f70f",
+            "tool": "quote"
+          },
+          "isError": false,
+          "timestamp": 1790947437188
+        }
+      },
+      {
+        "type": "message_end",
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "3 workshop seats cost $75."
+            }
+          ],
+          "api": "openai-completions",
+          "provider": "fixture",
+          "model": "fixture",
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "timestamp": 1790947437192,
+          "responseId": "demo",
+          "rawStopReason": "stop",
+          "thinkingLevel": "off"
+        }
+      }
+    ]
+  }
+}
