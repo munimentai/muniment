@@ -11,13 +11,13 @@ import { subscriptionRedactor, diagnosticTail, nativeFailure, transcriptText, re
 const desktopCiName = platform => platform === 'macos-x64' ? 'macos' : platform
 
 // Allow setup, artifact collection, and cleanup outside the guest build budget.
-export const desktopCiBudget = Object.freeze({ slot: 3600, build: 2400, run: 3600, cleanup: 30, client: 7500 })
+export const desktopCiBudget = Object.freeze({ slot: 7200, build: 2400, run: 3600, cleanup: 30, client: 11100 })
 const desktopCiReasons = Object.freeze({
-  'slot-wait': 'The desktop-CI slot stayed busy for the 60-minute wait limit.',
+  'slot-wait': 'The desktop-CI slot stayed busy for the 120-minute wait limit.',
   guest: 'The desktop-CI guest exceeded its 40-minute build timeout.',
   run: 'The desktop-CI guest and artifact collection exceeded their 60-minute limit.',
-  startup: 'The desktop-CI driver did not start within the 60-minute limit.',
-  client: 'The desktop-CI SSH session exceeded its 125-minute limit.',
+  startup: 'The desktop-CI driver did not report a slot result within the 180-minute limit.',
+  client: 'The desktop-CI SSH session exceeded its 185-minute limit.',
   'sudo-denied': 'The desktop-CI host denied permission to start the driver.',
 })
 const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`

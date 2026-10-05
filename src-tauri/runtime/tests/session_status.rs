@@ -4,7 +4,7 @@ use std::net::TcpListener;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use common::credentials_with_expiry;
-use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
+use muniment_desktop_integration::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
 use muniment_runtime::session_status;
 
 fn unix_time() -> u64 {

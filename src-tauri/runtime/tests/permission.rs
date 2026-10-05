@@ -5,12 +5,12 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::attach::{RuntimeActivityRegistry, SignedWorkspaceApproval};
-use muniment_core::auth::EntitlementSnapshotTracker;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::run_start::ActiveRun;
 use muniment_core::run_start::RunAttachBoundaries;
 use muniment_core::session_thread::SessionThread;
+use muniment_desktop_integration::auth::EntitlementSnapshotTracker;
 use muniment_runtime::{
     answer_permission, open_companion_registry, open_profile_storage, run_prompt,
     RuntimeAttachBoundaries, RuntimeChatEventTarget,

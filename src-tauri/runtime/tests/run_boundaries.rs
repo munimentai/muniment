@@ -8,9 +8,6 @@ use std::time::{Duration, Instant};
 
 use muniment_core::attach::linux::{CompanionProvenance, RunSubmitRequest, ThreadListService};
 use muniment_core::attach::{Id, RuntimeActivityRegistry, SignedWorkspaceApproval};
-use muniment_core::auth::{
-    EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
-};
 use muniment_core::chat_view::SelectedFile;
 use muniment_core::journal::thread_mutation::create_thread_now;
 use muniment_core::journal::Provenance;
@@ -20,6 +17,9 @@ use muniment_core::run_start::{
     prepare_desktop_run, RunStartBoundaries, RunStartError, RunStartRequest,
 };
 use muniment_core::session_thread::SessionThread;
+use muniment_desktop_integration::auth::{
+    EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
+};
 use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState};
 
 mod common;

@@ -9,6 +9,7 @@ import { writeBlocked } from './e2e/runner/subscriptions.mjs'
 
 const waiting = '[desktop-ci 21:21:56] waiting for a desktop-CI slot (lock)...\n'
 const acquired = '[desktop-ci 22:01:56] slot 0 acquired\n'
+const expired = '[desktop-ci 23:21:56] FATAL: no slot after 7200s\n'
 const building = '[desktop-ci 22:02:56] SSH up; starting repo build (timeout 2400s)\n'
 const unavailable = 'The native desktop-ci runner for this platform is unavailable.'
 const sudoDenied = 'The desktop-CI host denied permission to start the driver.'
@@ -23,12 +24,12 @@ function temporary(work) {
 }
 
 for (const [name, ssh, reason] of [
-  ['slot wait', { status: 124, stdout: waiting + '[subscription-host] timeout=slot-wait\n' }, 'The desktop-CI slot stayed busy for the 60-minute wait limit.'],
+  ['slot wait', { status: 124, stdout: waiting + '[subscription-host] timeout=slot-wait\n' }, 'The desktop-CI slot stayed busy for the 120-minute wait limit.'],
   ['guest timeout', { status: 124, stdout: waiting + acquired + building }, 'The desktop-CI guest exceeded its 40-minute build timeout.'],
   ['driver guest timeout', { status: 1, stdout: waiting + acquired + building + '[desktop-ci 22:42:56] BUILD FAILED (windows) rc=124\n' }, 'The desktop-CI guest exceeded its 40-minute build timeout.'],
   ['run timeout', { status: 124, stdout: waiting + acquired + '[subscription-host] timeout=run\n' }, 'The desktop-CI guest and artifact collection exceeded their 60-minute limit.'],
-  ['startup timeout', { status: 124, stdout: '[subscription-host] timeout=startup\n' }, 'The desktop-CI driver did not start within the 60-minute limit.'],
-  ['client timeout', { status: 255, error: Object.assign(new Error('spawnSync ssh ETIMEDOUT'), { code: 'ETIMEDOUT' }) }, 'The desktop-CI SSH session exceeded its 125-minute limit.'],
+  ['startup timeout', { status: 124, stdout: '[subscription-host] timeout=startup\n' }, 'The desktop-CI driver did not report a slot result within the 180-minute limit.'],
+  ['client timeout', { status: 255, error: Object.assign(new Error('spawnSync ssh ETIMEDOUT'), { code: 'ETIMEDOUT' }) }, 'The desktop-CI SSH session exceeded its 185-minute limit.'],
   ['sudo password refusal', { status: 1, stderr: 'sudo: a password is required\n' }, sudoDenied],
   ['merged sudo refusal', { status: 1, stdout: 'sudo: a password is required\n' }, sudoDenied],
   ['sudo policy refusal', { status: 1, stderr: "Sorry, user desktopci is not allowed to execute '/usr/bin/desktop-ci windows' as root on host.\n" }, sudoDenied],
@@ -77,7 +78,7 @@ test('a slot timeout replaces stale passing evidence', t => temporary(output => 
     return { status: 1, failure: 'slot-wait' }
   } }), 1)
   assert.equal(JSON.parse(fs.readFileSync(path.join(output, 'windows-subscription.json'))).reason,
-    'The desktop-CI slot stayed busy for the 60-minute wait limit.')
+    'The desktop-CI slot stayed busy for the 120-minute wait limit.')
 }))
 
 test('the client and native jobs leave time for the slot, guest, artifacts, and cleanup', () => temporary(output => {
@@ -136,10 +137,12 @@ function budgetProcess(script, budgets = ['0.8', '1.6', '0.3']) {
   })
 }
 
-test('the remote slot deadline stops the queued process and drains cleanup output', () => {
+test('the driver slot deadline stops the queued process and drains cleanup output', () => {
   const result = budgetProcess(`import signal, sys, time
 signal.signal(signal.SIGTERM, lambda *_: (print("cleanup", flush=True), sys.exit(0)))
 print(${JSON.stringify(waiting)}, end="", flush=True)
+time.sleep(0.8)
+print(${JSON.stringify(expired)}, end="", flush=True)
 time.sleep(10)
 print("guest started", flush=True)
 `)
@@ -183,6 +186,8 @@ test('the remote deadline kills a driver that ignores SIGTERM', () => {
   const result = budgetProcess(`import signal, time
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 print(${JSON.stringify(waiting)}, end="", flush=True)
+time.sleep(0.8)
+print(${JSON.stringify(expired)}, end="", flush=True)
 time.sleep(10)
 `)
   assert.equal(result.error, undefined)
@@ -202,6 +207,8 @@ def escalate(*_):
     sys.exit(0)
 signal.signal(signal.SIGALRM, escalate)
 print(${JSON.stringify(waiting)}, end="", flush=True)
+time.sleep(0.8)
+print(${JSON.stringify(expired)}, end="", flush=True)
 time.sleep(10)
 `, { mode: 0o700 })
   const result = spawnSync('python3', ['test/e2e/support/desktop-ci-budget.py', '0.8', '1.6', '0.3', 'sudo', '-n', 'desktop-ci'], {
@@ -280,6 +287,8 @@ def cleanup(*_):
 signal.signal(signal.SIGTERM, cleanup if ${JSON.stringify(mode)} == "cleanup" else signal.SIG_IGN)
 signal.signal(signal.SIGHUP, signal.SIG_IGN)
 print(${JSON.stringify(waiting)}, end="", flush=True)
+time.sleep(0.8)
+print(${JSON.stringify(expired)}, end="", flush=True)
 time.sleep(10)
 print("driver survived", flush=True)
 `, { mode: 0o755 })
@@ -321,6 +330,8 @@ print(f"driver={os.getpid()} child={child}", flush=True)
 if ${parentExits ? 'True' : 'False'}:
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 print(${JSON.stringify(waiting)}, end="", flush=True)
+time.sleep(0.8)
+print(${JSON.stringify(expired)}, end="", flush=True)
 time.sleep(10)
 print("guest started", flush=True)
 `

@@ -6,27 +6,28 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("boundary", "scripts/check-core-boundary.py")
 boundary = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(boundary)
 
+TAG = "git+https://github.com/munimentai/muniment-core?tag=v1.2.3#" + "0" * 40
+
 
 class CoreBoundaryTests(unittest.TestCase):
     def test_inventory_reads_both_tables(self):
         tables = boundary.inventory(boundary.ADR.read_text())
-        self.assertIn("muniment-runtime", tables["Port"]["crate"])
-        self.assertIn("journal", tables["Port"]["module"])
-        self.assertEqual(tables["Stay"]["crate"], {"muniment-desktop"})
-        self.assertEqual(tables["Stay"]["module"], {"auth", "browser_control", "chat_grant"})
+        self.assertIn("muniment-core", tables["Shared"])
+        self.assertIn("muniment-router", tables["Shared"])
+        self.assertIn("muniment-runtime", tables["Desktop"])
+        self.assertIn("muniment-desktop-integration", tables["Desktop"])
 
     def test_inventory_rejects_empty_duplicate_and_invalid_rows(self):
         text = boundary.ADR.read_text()
         for invalid in (
-            "", text.replace("## Stay", "## Other"),
-            text.replace("## Stay", "| module | auth | It duplicates a module. |\n\n## Stay"),
-            text.replace("| crate | muniment-core |", "| package | muniment-core |"),
+            "", text.replace("## Desktop", "## Other"),
+            text.replace("## Desktop", "| crate | muniment-core | It duplicates a crate. |\n\n## Desktop"),
+            text.replace("| crate | muniment-core |", "| module | muniment-core |"),
             text.replace("muniment-core | It holds the local runtime logic and storage contracts.",
                          "muniment-core | "),
             text.replace("| crate | muniment-core |", "| crate | --all |"),
@@ -34,93 +35,45 @@ class CoreBoundaryTests(unittest.TestCase):
             with self.subTest(invalid=invalid[:60]), self.assertRaises(ValueError):
                 boundary.inventory(invalid)
 
-    def test_inventory_rejects_unclassified_items_and_missing_gates(self):
+    def test_workspace_must_match_the_desktop_table(self):
         tables = boundary.inventory(boundary.ADR.read_text())
-        packages = {name: {} for group in tables.values() for name in group["crate"]}
-        packages[boundary.CORE] = {"features": {"default": ["desktop-integration"], "desktop-integration": []}}
-        lib = Path("src-tauri/core/src/lib.rs").read_text()
-        boundary.check_inventory(tables, packages, lib)
-        for changed in (lib + "\npub mod unknown;", lib + " mod unknown {}",
-                        lib.replace('''#[cfg(feature = "desktop-integration")]
-pub mod auth;''', "pub mod auth;"),
-                        lib.replace("pub mod cas;", "")):
-            with self.subTest(changed=changed[-40:]), self.assertRaises(ValueError):
-                boundary.check_inventory(tables, packages, changed)
-        with self.assertRaises(ValueError):
-            boundary.check_inventory(tables, {**packages, "unknown": {}}, lib)
-        packages[boundary.CORE]["features"]["default"].append("tls")
-        with self.assertRaises(ValueError):
-            boundary.check_inventory(tables, packages, lib)
+        boundary.check_workspace(tables, set(tables["Desktop"]))
+        for members in (tables["Desktop"] | {"muniment-core"}, tables["Desktop"] - {"muniment-cli"}):
+            with self.assertRaises(ValueError):
+                boundary.check_workspace(tables, members)
 
-    def test_tree_rejects_staying_packages_and_tauri_variants(self):
-        for forbidden in ("tauri", "tauri-build", "tauri-plugin-dialog", "muniment-desktop", "private-crate"):
+    def test_shared_crates_come_from_one_release_tag(self):
+        tables = {"Shared": {"muniment-core", "muniment-attach"}, "Desktop": set()}
+        packages = [{"name": "muniment-core", "source": TAG}, {"name": "muniment-attach", "source": TAG}]
+        self.assertEqual(boundary.check_sources(tables, packages), "v1.2.3")
+        for changed in (
+            [packages[0], {"name": "muniment-attach", "source": None}],
+            [packages[0], {"name": "muniment-attach", "source": TAG.replace("v1.2.3", "v1.2.4")}],
+            [packages[0], {"name": "muniment-attach", "source": TAG.replace("?tag=", "?branch=")}],
+            [packages[0], {"name": "muniment-attach",
+                           "source": "git+https://github.com/someone/muniment-core?tag=v1.2.3#" + "0" * 40}],
+            [packages[0]],
+        ):
+            with self.subTest(changed=changed[-1]), self.assertRaises(ValueError):
+                boundary.check_sources(tables, changed)
+
+    def test_integration_declares_every_desktop_only_module(self):
+        lib = "pub mod auth;\n#[cfg(unix)]\npub mod browser_control;\npub mod chat_grant;\n"
+        boundary.check_modules(lib)
+        for name in boundary.DESKTOP_ONLY_MODULES:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                boundary.check_modules(lib.replace(f"pub mod {name};", ""))
+
+    def test_tree_rejects_the_shell_and_tauri_variants(self):
+        for forbidden in ("tauri", "tauri-build", "tauri-plugin-dialog", "muniment-desktop"):
             with self.subTest(forbidden=forbidden), self.assertRaises(ValueError):
-                boundary.check_tree(f"muniment-cli v1|\n{forbidden} v1|",
-                                    {"muniment-desktop", "private-crate"}, "muniment-cli")
+                boundary.check_tree(f"muniment-cli v1\n{forbidden} v1", {"muniment-desktop"}, "muniment-cli")
+        boundary.check_tree("muniment-cli v1\nmuniment-desktop-integration v1",
+                            {"muniment-desktop"}, "muniment-cli")
 
     def test_tree_requires_a_root(self):
         with self.assertRaises(ValueError):
             boundary.check_tree("", set(), "muniment-cli")
-
-    def test_feature_exceptions_apply_only_to_named_roots(self):
-        core = "muniment-core v1|desktop-integration,keyring"
-        boundary.check_tree(core, set(), "muniment-core")
-        boundary.check_tree("muniment-runtime v1|\n" + core + ",default", set(), "muniment-runtime")
-        for tree, root in ((core + ",default", "muniment-core"),
-                           (core + ",new-staying-feature", "muniment-core"),
-                           ("muniment-acp v1|\n" + core, "muniment-acp")):
-            with self.subTest(root=root), self.assertRaises(ValueError):
-                boundary.check_tree(tree, set(), root)
-
-    def test_new_and_stale_edges_fail(self):
-        edge = ("src-tauri/core/src/pi_launch.rs", "chat_grant")
-        with patch.object(boundary, "SOURCE_EXCEPTIONS", {edge}):
-            boundary.check_edges({edge})
-            for edges in (set(), {edge, ("new.rs", "auth")}):
-                with self.assertRaises(ValueError):
-                    boundary.check_edges(edges)
-
-    def test_literals_and_nested_comments_do_not_create_edges(self):
-        code = '''// auth
-/* browser_control /* nested */ chat_grant */
-let a = r###"auth \" browser_control"###;
-let b = b"chat_grant";
-let c = "auth \\\" browser_control";
-let d = 'a';
-use crate::{r#auth as session};
-'''
-        result = boundary.rust_code(code)
-        self.assertIn("r#auth as session", result)
-        self.assertNotIn("browser_control", result)
-        self.assertNotIn("chat_grant", result)
-
-    def test_scan_covers_grouped_aliases_tests_and_inactive_platforms(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "src").mkdir()
-            (root / "tests").mkdir()
-            (root / "src/lib.rs").write_text('''#[cfg(windows)]
-use muniment_core::{auth as session, browser_control::{ProcReader}};
-''')
-            (root / "tests/probe.rs").write_text("use muniment_core::r#chat_grant::ChatGrant;")
-            packages = [{"name": "muniment-runtime", "manifest_path": str(root / "Cargo.toml")}]
-            with patch.object(Path, "cwd", return_value=root):
-                edges = boundary.source_edges(packages, {"auth", "browser_control", "chat_grant"})
-                self.assertEqual(edges, {("src/lib.rs", "auth"), ("src/lib.rs", "browser_control"),
-                                         ("tests/probe.rs", "chat_grant")})
-                for code, failure in (
-                    ("use muniment_core::*;", "root glob"),
-                    ("use muniment_core::{journal, *};", "root glob"),
-                    ("use muniment_core as c; use c::*;", "root alias"),
-                    ('include!("auth/mod.rs");', "source include"),
-                ):
-                    (root / "src/lib.rs").write_text(code)
-                    with self.assertRaisesRegex(ValueError, failure):
-                        boundary.source_edges(packages, {"auth"})
-                (root / "src/lib.rs").write_text('#[path = "../../core/src/auth/mod.rs"] mod session;')
-                (root / "custom_target.rs").write_text("use muniment_core::browser_control::ProcReader;")
-                edges = boundary.source_edges(packages, {"auth", "browser_control"})
-                self.assertEqual(edges, {("src/lib.rs", "auth"), ("custom_target.rs", "browser_control")})
 
     def test_real_tree_finds_a_transitive_windows_dependency(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -143,7 +96,7 @@ use muniment_core::{auth as session, browser_control::{ProcReader}};
             tree = subprocess.check_output([
                 "cargo", "tree", "--manifest-path", str(root / "Cargo.toml"), "--package", "muniment-cli",
                 "--locked", "--offline", "--target", "all", "--edges", "normal,build,dev",
-                "--prefix", "none", "--format", "{p}|{f}"], text=True)
+                "--prefix", "none", "--format", "{p}"], text=True)
             with self.assertRaisesRegex(ValueError, "tauri"):
                 boundary.check_tree(tree, {"muniment-desktop"}, "muniment-cli")
 

@@ -12,6 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
 import { spawnSync } from 'node:child_process'
+import { corePath } from '../scripts/muniment-core.mjs'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { AcceptanceError, acceptance, blocked, chatTransports, checkIdentity, hash, platforms, subscriptionAccounts, features, featureChecks, chatFeatures, interruptionErrors } from './e2e/support/subscription-acceptance.mjs'
 import { assertAttachSocketPath, disposableProfilePrefix, installedExecutable, isolatedEnvironment, run, tree, updaterPublicKeyFile, writeBlocked } from './e2e/runner/subscriptions.mjs'
@@ -900,7 +901,7 @@ test('the update probe preserves each fixed failure code through the blocked rep
     'update-checkpoint-encode', 'update-checkpoint-write', 'update-busy', 'update-install-task', 'update-install', 'update-restart']
   const featureScript = fs.readFileSync('test/e2e/support/subscription-features.js', 'utf8')
   const probeScript = fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8')
-  const rust = fs.readFileSync('src-tauri/core/src/model_router/subscription_probe.rs', 'utf8')
+  const rust = fs.readFileSync(corePath('crates/router/src/subscription_probe.rs'), 'utf8')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-update-errors-'))
   const env = { MUNIMENT_STATE_DIR: root }
   const turns = fixture().result.turns.map(({ requested, expected, ...turn }) => turn)

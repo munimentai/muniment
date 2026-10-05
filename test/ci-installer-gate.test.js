@@ -179,8 +179,8 @@ it.each(remoteSteps.map((script, index) => [index, script]))('keeps clone creden
   }
 })
 
-it('covers the fixture and native CI command steps', () => {
-  expect(remoteSteps).toHaveLength(2)
+it('covers the native CI command step', () => {
+  expect(remoteSteps).toHaveLength(1)
 })
 
 it.each(['linux', 'windows', 'macos'])('uses one VM and gates packaging on preflight success for %s', (platform) => {

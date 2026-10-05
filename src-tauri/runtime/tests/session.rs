@@ -1,5 +1,5 @@
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::auth::{
+use muniment_desktop_integration::auth::{
     FreshNativeSessionError, KeyringNativeCredentialStore, NativeCredentialStore,
 };
 use muniment_runtime::ensure_native_session;

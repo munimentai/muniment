@@ -1,5 +1,5 @@
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::auth::{
+use muniment_desktop_integration::auth::{
     EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
 };
 use muniment_runtime::{entitlement_snapshot, EntitlementSnapshotError};

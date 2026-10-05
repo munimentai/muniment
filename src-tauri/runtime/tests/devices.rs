@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use muniment_core::auth::{NativeDeviceListError, NativeDevicePlatform};
+use muniment_desktop_integration::auth::{NativeDeviceListError, NativeDevicePlatform};
 use muniment_runtime::list_devices;
 
 mod common;

@@ -28,6 +28,7 @@ const assignments = {
     'macos-arm64': 'macos-15', 'macos-x64': 'muniment-release', collect: 'muniment-checks',
   },
   'release.yml': { promote: 'muniment-release', 'draft-winget-pr': 'muniment-release' },
+  'muniment-core-update.yml': { update: 'self-hosted' },
 }
 
 test('Every workflow keeps bounded checks separate from native and resource-heavy work.', () => {

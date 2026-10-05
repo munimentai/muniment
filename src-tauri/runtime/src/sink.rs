@@ -7,12 +7,15 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use muniment_core::attach::SignedWorkspaceApproval;
+use muniment_core::chat_launch::{ChatGrant, FetchGrantError, FetchReceiptError};
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{PiLaunchBoundaries, PiLaunchError};
 use muniment_core::run_events::{ChatEvent, ChatEventSink, ChatEventSubscription};
 use muniment_core::runtime_eprintln as eprintln;
+use muniment_core::sidecar::pi_chat::Receipt;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
+use muniment_desktop_integration::chat_grant;
 
 pub const CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 
@@ -326,6 +329,23 @@ impl ChatEventSink for RuntimeChatEventSink {
 }
 
 impl PiLaunchBoundaries for RuntimeChatEventSink {
+    fn renew_chat_grant(&self, access_token: &str) -> Result<ChatGrant, FetchGrantError> {
+        chat_grant::renew_native_grant(access_token)
+    }
+
+    fn inspect_chat_session(&self, access_token: &str) -> Result<String, FetchGrantError> {
+        chat_grant::inspect_native_chat_session(access_token)
+    }
+
+    fn fetch_receipt(
+        &self,
+        grant: &ChatGrant,
+        access_token: &str,
+        run_id: &str,
+    ) -> Result<Receipt, FetchReceiptError> {
+        chat_grant::fetch_receipt(&grant.receipt_url, access_token, run_id)
+    }
+
     fn extension_thread_id(&self) -> Option<String> {
         Some(self.thread_id.clone())
     }

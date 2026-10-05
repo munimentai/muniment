@@ -1,7 +1,8 @@
 import { expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { corePath } from '../scripts/muniment-core.mjs'
 // The real harness wire tests cover the bundled import. Unit tests inject completion.
-const source = readFileSync('src-tauri/core/src/assistant_identity.mjs', 'utf8').replace(/^import \{ completeSimple \}[^\n]*\n/m, '')
+const source = readFileSync(corePath('crates/core/src/assistant_identity.mjs'), 'utf8').replace(/^import \{ completeSimple \}[^\n]*\n/m, '')
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
 const { nameFirstThread, threadName } = await import(/* @vite-ignore */ moduleUrl)
 

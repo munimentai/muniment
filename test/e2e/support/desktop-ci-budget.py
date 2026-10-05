@@ -14,7 +14,9 @@ def run(slot_seconds, run_seconds, cleanup_seconds, command):
                              start_new_session=True)
     selector = selectors.DefaultSelector()
     selector.register(child.stdout, selectors.EVENT_READ)
-    deadline = time.monotonic() + slot_seconds
+    # The driver bounds its lock wait. Only it can choose acquisition or expiry atomically.
+    # Keep a full guest budget in reserve even if the acquisition marker arrives late.
+    deadline = time.monotonic() + slot_seconds + run_seconds
     waiting = False
     acquired = False
     pending = b""
@@ -45,7 +47,6 @@ def run(slot_seconds, run_seconds, cleanup_seconds, command):
     try:
         while selector.get_map() or child.poll() is None:
             remaining = deadline - time.monotonic()
-            # Read a queued acquisition marker before checking the slot deadline.
             events = selector.select(max(0, min(remaining, 0.1)))
             for key, _ in events:
                 chunk = os.read(key.fd, 65536)
@@ -64,12 +65,18 @@ def run(slot_seconds, run_seconds, cleanup_seconds, command):
                             rb"\[desktop-ci \d{2}:\d{2}:\d{2}\] slot \d+ acquired\r?", line):
                         acquired = True
                         deadline = time.monotonic() + run_seconds
+                    if waiting and not acquired and failure is None and re.fullmatch(
+                            rb"\[desktop-ci \d{2}:\d{2}:\d{2}\] FATAL: no slot after \d+s\r?", line):
+                        # The driver exits this lock loop without starting a guest.
+                        failure = "slot-wait"
+                        stop(signal.SIGTERM)
+                        deadline = time.monotonic() + cleanup_seconds
             if interrupted or time.monotonic() >= deadline:
                 if failure is not None:
                     stop(signal.SIGKILL)
                     break
                 failure = "interrupted" if interrupted else (
-                    "run" if acquired else "slot-wait" if waiting else "startup")
+                    "run" if acquired else "startup")
                 interrupted = False
                 stop(signal.SIGTERM)
                 deadline = time.monotonic() + cleanup_seconds

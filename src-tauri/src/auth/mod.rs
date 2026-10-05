@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
-use muniment_core::auth::{self, AuthStatus, EntitlementSnapshotTracker};
+use muniment_desktop_integration::auth::{self, AuthStatus, EntitlementSnapshotTracker};
 #[cfg(any(unix, target_os = "windows"))]
 use serde::Deserialize;
 use serde::Serialize;
@@ -28,7 +28,7 @@ pub struct AuthState {
     entitlement_snapshot_tracker: EntitlementSnapshotTracker,
     runtime_activity: RuntimeActivityRegistry,
     #[cfg(test)]
-    test_tokens: Option<muniment_core::auth::TokenSet>,
+    test_tokens: Option<muniment_desktop_integration::auth::TokenSet>,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -47,7 +47,7 @@ struct EntitlementSnapshotResponse {
 pub(crate) fn fresh_tokens<R: tauri::Runtime>(
     state: &AuthState,
     app: &tauri::AppHandle<R>,
-) -> Result<muniment_core::auth::TokenSet, String> {
+) -> Result<muniment_desktop_integration::auth::TokenSet, String> {
     #[cfg(test)]
     if let Some(tokens) = &state.test_tokens {
         return Ok(tokens.clone());
@@ -61,7 +61,7 @@ pub(crate) fn fresh_tokens<R: tauri::Runtime>(
 pub(crate) async fn fresh_tokens_async<R: tauri::Runtime>(
     state: &AuthState,
     app: &tauri::AppHandle<R>,
-) -> Result<muniment_core::auth::TokenSet, String> {
+) -> Result<muniment_desktop_integration::auth::TokenSet, String> {
     let session = app.state::<AttachCompanionState>().desktop_client_session();
     let status = state
         .marked_refresh(move || runtime_status(session))
@@ -84,7 +84,7 @@ impl AuthState {
     #[cfg(test)]
     pub(crate) fn with_test_tokens(
         runtime_activity: RuntimeActivityRegistry,
-        tokens: muniment_core::auth::TokenSet,
+        tokens: muniment_desktop_integration::auth::TokenSet,
     ) -> Self {
         let mut state = Self::new(runtime_activity);
         state.test_tokens = Some(tokens);

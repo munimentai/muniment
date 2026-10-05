@@ -1,9 +1,13 @@
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { coreRoot } from './muniment-core.mjs'
 
 if (process.allowedNodeEnvironmentFlags.has('--no-experimental-webstorage')) {
   process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --no-experimental-webstorage`.trim()
 }
+
+// Resolve the muniment-core checkout once. The test processes inherit its path.
+coreRoot()
 
 const subscriptions = spawnSync(process.execPath, ['--test', 'test/subscription-acceptance.node.mjs'], { stdio: 'inherit' })
 if (subscriptions.error) throw subscriptions.error

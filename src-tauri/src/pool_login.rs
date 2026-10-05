@@ -288,7 +288,7 @@ fn antigravity(app: &AppHandle, flag: &AtomicBool) -> Result<(Credential, Option
         })?;
     let state = native_auth::state();
     let redirect = native_auth::antigravity_redirect_uri();
-    let url = native_auth::antigravity_auth_url(&state, &redirect);
+    let url = native_auth::antigravity_auth_url(&state, &redirect)?;
     emit(
         app,
         "antigravity",

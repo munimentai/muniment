@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # M0 structure smoke (runs on the shared runners — no GUI/build here).
 set -eu
+# The shared crates and their pins live in the muniment-core checkout Cargo resolves.
+core_root=$(scripts/muniment-core-root.sh)
 grep -q '"identifier": "ai.muniment.desktop"' src-tauri/tauri.conf.json
 grep -q 'tauri_build::try_build' src-tauri/build.rs
 grep -q 'generate_context' src-tauri/src/desktop.rs
@@ -50,7 +52,7 @@ while IFS= read -r windows_test; do
   fi
 done < <(
   grep -RlF '#![cfg(target_os = "windows")]' \
-    src-tauri/core/tests src-tauri/runtime/tests | sort
+    src-tauri/integration/tests src-tauri/runtime/tests | sort
 )
 test "$(grep -Fc 'apt-get install -y -qq --no-install-recommends libasound2-dev' "$ci")" -eq 1
 # Shared-host and guest setup failures can close SSH before desktop-ci returns
@@ -59,10 +61,12 @@ grep -Fq '[ "$status" -ne 3 ] && [ "$status" -ne 255 ]' "$ci"
 test "$(grep -Fc '[ "$PLATFORM" != "windows" ]' "$ci")" -eq 0
 test/desktop-build-retry.sh
 test -f src-tauri/Cargo.lock
-# The candidate switch leaves every production descriptor at 0.87.1.
-pi_install=src-tauri/core/src/sidecar/pi_install.rs
-test "$(awk '/pub const PI_ARTIFACT: / { pin = 1; next } pin && /version: "0.87.1"/ { count++; pin = 0 } END { print count }' "$pi_install")" -eq 5
-grep -Fq 'https://github.com/earendil-works/pi/releases/download/v0.87.1' "$pi_install"
+# The candidate switch leaves every production descriptor at the pinned Pi version.
+pins="$core_root/pins/pins.toml"
+pi_version=$(awk '/^\[pi\]$/ { pi = 1; next } /^\[/ { pi = 0 } pi && /^version = / { gsub(/"/, "", $3); print $3; exit }' "$pins")
+test -n "$pi_version"
+test "$(awk -v pin="version = \"$pi_version\"" '/^\[\[pi.assets\]\]$/ { asset = 1; next } asset && $0 == pin { count++; asset = 0 } END { print count }' "$pins")" -eq 5
+grep -Fq "release_base = \"https://github.com/earendil-works/pi/releases/download/v$pi_version\"" "$pins"
 for lane in build linux-e2e windows-e2e macos-e2e; do
   awk -v lane="$lane" '
     /^  [a-z0-9-]+:$/ { selected = ($0 == "  " lane ":") }
@@ -96,7 +100,7 @@ grep -Fq '0013-desktop-e2e-harness.md' README.md
 test -z "$(grep -RilE \
   --exclude='*.test.js' \
   'llama-server|RESIDENT_MODEL|required_model_acquisition_status|dictation_polish|dictation_transform|onboarding_triage' \
-  src src-tauri/src src-tauri/core/src test/probe 2>/dev/null)"
+  src src-tauri/src src-tauri/integration/src "$core_root/crates/core/src" "$core_root/crates/router/src" test/probe 2>/dev/null)"
 grep -Fq -- '- Status: superseded by the 2026-07-29 cloud ingress ruling' \
   docs/decisions/0017-resident-model-artifact-pin.md
 grep -Fq 'The desktop sends no classification metadata.' SPEC.md
@@ -107,13 +111,13 @@ grep -Fq 'The desktop sends no classification metadata.' SPEC.md
 test -z "$(grep -RilE \
   --exclude='chat_grant.rs' \
   'routing_?label|routing_?tier|task_?tier|signals_?version|keyword-code-v1' \
-  src src-tauri/src src-tauri/core/src test/probe 2>/dev/null)"
+  src src-tauri/src src-tauri/integration/src "$core_root/crates/core/src" "$core_root/crates/router/src" test/probe 2>/dev/null)"
 grep -Fq 'fn the_grant_request_carries_no_client_classification' \
-  src-tauri/core/src/chat_grant.rs
+  src-tauri/integration/src/chat_grant.rs
 grep -Fq 'fn the_receipt_request_carries_only_the_run_id' \
-  src-tauri/core/src/chat_grant.rs
+  src-tauri/integration/src/chat_grant.rs
 classifier_adr=docs/decisions/0028-bundled-router-classifier.md
-classifier_module=src-tauri/core/src/router_classifier.rs
+classifier_module="$core_root/crates/core/src/router_classifier.rs"
 test -f "$classifier_adr"
 test -f "$classifier_module"
 grep -Fq 'This artifact has no download, no lifecycle pointer, and no user opt-in.' \
@@ -143,30 +147,29 @@ test -z "$(grep -ril 'resident local gemma' docs/)"
 # The public core boundary names both sets and runs in the smoke job.
 boundary_adr=docs/decisions/0030-public-core-boundary.md
 test -f "$boundary_adr"
-grep -Fxq '## Port' "$boundary_adr"
-grep -Fxq '## Stay' "$boundary_adr"
+grep -Fxq '## Shared' "$boundary_adr"
+grep -Fxq '## Desktop' "$boundary_adr"
 grep -Fq '| crate | muniment-core |' "$boundary_adr"
 grep -Fq '| crate | muniment-desktop |' "$boundary_adr"
-grep -Fq '| module | auth |' "$boundary_adr"
+grep -Fq '| crate | muniment-desktop-integration |' "$boundary_adr"
 test -x scripts/check-core-boundary.sh
 grep -Fq 'run: scripts/check-core-boundary.sh' "$ci"
 python3 -B test/core-boundary.py
 # companion workspace and its path-scoped CI lane
-grep -Fq 'members = [".", "core", "attach", "code-diff", "cli", "acp", "runtime"]' src-tauri/Cargo.toml
+grep -Fq 'members = [".", "integration", "cli", "acp", "runtime"]' src-tauri/Cargo.toml
 grep -Fq 'resolver = "2"' src-tauri/Cargo.toml
-test -f src-tauri/attach/Cargo.toml
-test -f src-tauri/attach/src/lib.rs
+test -f src-tauri/integration/Cargo.toml
+test -f src-tauri/integration/src/lib.rs
 test -f src-tauri/cli/Cargo.toml
 test -f src-tauri/cli/src/main.rs
-grep -Fq 'muniment-attach = { path = "../attach", default-features = false, features = ["client"] }' src-tauri/cli/Cargo.toml
+grep -Eq '^muniment-attach = \{ git = "https://github.com/munimentai/muniment-core", tag = "v[0-9]+\.[0-9]+\.[0-9]+", default-features = false, features = \["client"\] \}$' src-tauri/cli/Cargo.toml
 grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' "$ci"
-grep -Fq 'src-tauri/attach/*|src-tauri/attach/**)' "$ci"
+grep -Fq 'src-tauri/integration/*|src-tauri/integration/**)' "$ci"
 grep -Fq 'protocol-fixtures/*|protocol-fixtures/**)' "$ci"
 grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
 grep -Fq "needs.changes.outputs.companion == 'true'" "$ci"
-grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --check' "$ci"
-grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --all-targets --locked -- -D warnings' "$ci"
-grep -Fq 'cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --locked --features client' "$ci"
+grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-cli --package muniment-acp --check' "$ci"
+grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-cli --all-targets --locked -- -D warnings' "$ci"
 grep -Fq 'run: test/cli-dependency-boundary.sh' "$ci"
 test -f src-tauri/runtime/Cargo.toml
 test -f src-tauri/runtime/src/main.rs
@@ -176,13 +179,11 @@ grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-r
 grep -Fq 'run: test/runtime-dependency-boundary.sh' "$ci"
 test -d protocol-fixtures/muniment.attach/1
 grep -Fq 'name: attach-fixtures-current' "$ci"
-grep -Fq 'run: cargo run -p muniment-attach --bin export-attach-fixtures -- ../protocol-fixtures --check' "$ci"
+grep -Fq -- '--package muniment-attach --bin export-attach-fixtures -- "$PWD/protocol-fixtures" --check' "$ci"
 grep -Fq 'attach-fixtures-current:' "$ci"
-test -f src-tauri/code-diff/Cargo.toml
-test -f src-tauri/code-diff/src/lib.rs
 test -d protocol-fixtures/code-diff/1
 grep -Fq 'name: code-diff-fixtures-current' "$ci"
-grep -Fq 'run: cargo run -p muniment-code-diff --bin export-code-diff-fixtures -- ../protocol-fixtures --check' "$ci"
+grep -Fq -- '--package muniment-code-diff --bin export-code-diff-fixtures -- "$PWD/protocol-fixtures" --check' "$ci"
 test -f protocol-fixtures/muniment.attach/1/negotiation-hello.json
 test -x test/cli-dependency-boundary.sh
 grep -Fq -- '--locked --target all --prefix none' test/cli-dependency-boundary.sh

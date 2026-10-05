@@ -8,11 +8,13 @@ import sys
 # Leave time for VM setup and artifact collection after the slot opens.
 COLLECTION_SECONDS = 1200
 CLEANUP_SECONDS = 30
+# The host driver sets LOCK_WAIT=7200 in mikeydiamonds/homelab/scripts/desktop-ci.sh.
+DRIVER_SLOT_SECONDS = 7200
 
 
 def command(slot_seconds, remote):
-    if not slot_seconds.isascii() or not slot_seconds.isdecimal() or int(slot_seconds) <= 0:
-        raise ValueError("Provide a positive slot-wait budget in seconds.")
+    if not slot_seconds.isascii() or not slot_seconds.isdecimal() or int(slot_seconds) < DRIVER_SLOT_SECONDS:
+        raise ValueError("Allow at least 7200 seconds for the desktop-CI driver's bounded slot wait.")
     args = shlex.split(remote)
     if args[:2] != ["sudo", "desktop-ci"] or args.count("--build-timeout") != 1:
         raise ValueError("Provide a desktop-CI command with one guest build timeout.")

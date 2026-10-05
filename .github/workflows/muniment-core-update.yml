@@ -1,0 +1,152 @@
+name: muniment-core update
+
+# Moves every muniment-core git dependency to the newest release tag and opens
+# or refreshes one pull request. A pull request or a push from the workflow
+# token starts no workflow, so this dispatches the required checks on the
+# branch. Their check runs attach to the head commit, and the PR merges itself
+# after they pass. A muniment-core change that needs desktop code keeps it open.
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: muniment-core-update
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+env:
+  BRANCH: muniment-core-update
+  CORE_REPOSITORY: munimentai/muniment-core
+
+jobs:
+  update:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Rust toolchain (bootstrap if missing)
+        run: |
+          if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            bash .github/bootstrap-rustup.sh
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: GitHub CLI (bootstrap if missing)
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then
+            exit 0
+          fi
+          version=2.102.0
+          # The SHA-256 values are the ones in the release's gh_2.102.0_checksums.txt.
+          case "$(uname -m)" in
+            x86_64) arch=amd64; sha256=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386 ;;
+            aarch64|arm64) arch=arm64; sha256=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484 ;;
+            *) printf 'unsupported GitHub CLI architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
+          esac
+          archive="$RUNNER_TEMP/gh.tar.gz"
+          curl --proto '=https' --tlsv1.2 -sSfL --retry 3 -o "$archive" \
+            "https://github.com/cli/cli/releases/download/v${version}/gh_${version}_linux_${arch}.tar.gz"
+          printf '%s  %s\n' "$sha256" "$archive" | sha256sum --check --quiet
+          mkdir -p "$RUNNER_TEMP/gh"
+          tar -xzf "$archive" --strip-components=1 -C "$RUNNER_TEMP/gh"
+          echo "$RUNNER_TEMP/gh/bin" >> "$GITHUB_PATH"
+
+      - name: Find the newest muniment-core release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(git ls-remote --tags --refs "https://github.com/$CORE_REPOSITORY" 'v*' \
+            | awk '{ sub("refs/tags/", "", $2); print $2 }' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          current=$(grep -ohE "git = \"https://github.com/$CORE_REPOSITORY\", tag = \"v[0-9]+\.[0-9]+\.[0-9]+\"" src-tauri/Cargo.toml \
+            | head -n 1 | sed -E 's/.*tag = "(v[^"]+)"/\1/')
+          test -n "$tag" && test -n "$current"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          if [ "$(printf '%s\n%s\n' "$current" "$tag" | sort -V | tail -n 1)" = "$current" ]; then
+            echo "The desktop already depends on muniment-core $current."
+            echo "newer=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "newer=true" >> "$GITHUB_OUTPUT"
+          # The release notes list every commit subject since the previous tag.
+          notes="$RUNNER_TEMP/notes.md"
+          : > "$notes"
+          for release in $(git ls-remote --tags --refs "https://github.com/$CORE_REPOSITORY" 'v*' \
+              | awk '{ sub("refs/tags/", "", $2); print $2 }' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V); do
+            if [ "$(printf '%s\n%s\n' "$release" "$current" | sort -V | tail -n 1)" = "$release" ] \
+                && [ "$release" != "$current" ] \
+                && [ "$(printf '%s\n%s\n' "$release" "$tag" | sort -V | tail -n 1)" = "$tag" ]; then
+              printf '## %s\n\n' "$release" >> "$notes"
+              gh release view "$release" --repo "$CORE_REPOSITORY" --json body --jq .body >> "$notes"
+              printf '\n' >> "$notes"
+            fi
+          done
+          prefix=chore
+          if grep -qE '^- fix(\([^)]*\))?!?: |^- perf(\([^)]*\))?!?: ' "$notes"; then
+            prefix=fix
+          fi
+          if grep -qE '^- feat(\([^)]*\))?!?: ' "$notes"; then
+            prefix=feat
+          fi
+          echo "title=$prefix: update muniment-core to $tag" >> "$GITHUB_OUTPUT"
+          echo "notes=$notes" >> "$GITHUB_OUTPUT"
+
+      - name: Update the dependency and the lockfile
+        if: steps.release.outputs.newer == 'true'
+        run: scripts/update-muniment-core.sh "${{ steps.release.outputs.tag }}"
+
+      - name: Open or refresh the pull request
+        if: steps.release.outputs.newer == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          TITLE: ${{ steps.release.outputs.title }}
+          NOTES: ${{ steps.release.outputs.notes }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add -A -- '*Cargo.toml' '*Cargo.lock' THIRD_PARTY_RUST_NOTICES.md
+          git commit -m "$TITLE"
+          git push --force origin "$BRANCH"
+          body="$RUNNER_TEMP/body.md"
+          {
+            printf 'Moves every muniment-core git dependency to `%s` and updates `src-tauri/Cargo.lock` and the Rust notices.\n\n' "$TAG"
+            printf 'Release notes since the current tag:\n\n'
+            cat "$NOTES"
+          } > "$body"
+          number=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --title "$TITLE" --body-file "$body"
+          else
+            gh pr create --head "$BRANCH" --base main --title "$TITLE" --body-file "$body"
+            number=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number')
+          fi
+          # The required checks, smoke and gitleaks, come from these workflows.
+          for workflow in ci.yml secret-scan.yml; do
+            gh workflow run "$workflow" --ref "$BRANCH"
+          done
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .allow_auto_merge)" != true ]; then
+            echo "::warning::The repository does not allow auto-merge. PR #$number waits for a manual merge."
+            exit 0
+          fi
+          # Squash when the repository allows it, else use its merge commits.
+          method=--squash
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .allow_squash_merge)" != true ]; then
+            method=--merge
+          fi
+          gh pr merge "$number" --auto "$method"

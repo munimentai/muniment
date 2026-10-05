@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn, execFileSync } from 'node:child_process'
 import { readPins } from '../scripts/check-agent-dependencies.mjs'
+import { corePath } from '../scripts/muniment-core.mjs'
 
 // Run against an isolated frozen package install, never the user's profile.
 const executable = process.env.PI_TEST_BINARY
@@ -114,7 +115,7 @@ describe.skipIf(!executable || !packages)('shipped Pi and extension compatibilit
       expect(manifest.version).toBe(version)
       for (const entry of manifest.pi.extensions) extensions.push('-e', resolve(path, entry))
     }
-    extensions.push('-e', resolve('src-tauri/core/src/assistant_identity.mjs'), '-e', resolve('src-tauri/core/src/routing_progress.mjs'))
+    extensions.push('-e', corePath('crates/core/src/assistant_identity.mjs'), '-e', corePath('crates/core/src/routing_progress.mjs'))
     for (const model of models) {
       const result = await new Promise((resolveResult, reject) => {
         const child = spawn(executable, ['-p', '--mode', 'json', '--no-session', '--no-extensions', '--no-skills', '--no-context-files', '--no-tools', ...extensions, '--provider', 'muniment-router', '--model', model, 'What is 6 + 6?'], {
