@@ -67,13 +67,13 @@ function safePath(path) {
 
 // The CLI signs each request. Never print its output or pass credentials as arguments.
 export function transport(env = process.env, execute = execFileSync) {
-  const request = args => {
+  const request = (args, timeout = 180_000) => {
     if (!env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) throw new ArtifactStoreError('Missing MinIO credentials.')
     try {
       execute(env.AWS_CLI || 'aws', ['--endpoint-url', endpoint,
         '--cli-connect-timeout', '15', '--cli-read-timeout', '120', ...args],
       { env: { ...env, AWS_DEFAULT_REGION: 'us-east-1', AWS_EC2_METADATA_DISABLED: 'true' },
-        stdio: 'pipe', timeout: 180_000, maxBuffer: 4096 })
+        stdio: 'pipe', timeout, maxBuffer: 4096 })
     } catch (error) { throw transferError(error) }
   }
   return {
@@ -82,7 +82,9 @@ export function transport(env = process.env, execute = execFileSync) {
       try {
         const file = join(work, 'payload')
         writeFileSync(file, bytes, { mode: 0o600 })
-        request(['s3', 'cp', file, key, '--only-show-errors'])
+        // Allow 256 KiB per second beyond setup time, with a ten-minute cap.
+        const timeout = Math.min(600_000, 180_000 + Math.ceil(bytes.length / (256 * 1024)) * 1000)
+        request(['s3', 'cp', file, key, '--only-show-errors'], timeout)
       } finally { rmSync(work, { recursive: true, force: true }) }
     },
     get(key, limit) {

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, lstatSync, readFileSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -141,6 +141,48 @@ else if (args[8].startsWith('s3://')) {
   assert.throws(() => store.get(prefix + 'file', 7), /size limit/)
   assert.throws(() => transport({ ...env, FAIL: '1' }).get(prefix + 'file', 100), /^Error: MinIO transfer failed: CLI exited with status 1\.$/)
   assert.throws(() => transport({ ...env, AWS_SECRET_ACCESS_KEY: '' }).get(prefix + 'file', 100), /Missing MinIO credentials/)
+})
+
+test('Uploads allow bounded transfer time for slow links without changing the read timeout.', () => {
+  const env = { AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }
+  for (const [size, expected] of [
+    [0, 180_000], [1, 181_000], [256 * 1024, 181_000], [256 * 1024 + 1, 182_000],
+    [64 * 1024 * 1024, 436_000], [256 * 1024 * 1024, 600_000],
+  ]) {
+    let call
+    const store = transport(env, (_cli, args, options) => {
+      call = { args, options, size: lstatSync(args[8]).size }
+    })
+    store.put(prefix + 'diagnostics.bin', Buffer.alloc(size))
+    assert.equal(call.size, size)
+    assert.equal(call.options.timeout, expected)
+    assert.equal(call.options.stdio, 'pipe')
+    assert.equal(call.options.maxBuffer, 4096)
+    assert.deepEqual(call.args.slice(2, 6), ['--cli-connect-timeout', '15', '--cli-read-timeout', '120'])
+    assert.equal(existsSync(call.args[8]), false)
+  }
+  const store = transport(env, (_cli, args, options) => {
+    assert.equal(args[7], 'get-object')
+    assert.equal(options.timeout, 180_000)
+    writeFileSync(args[12], '')
+  })
+  assert.equal(store.get(prefix + 'diagnostics.bin', 64 * 1024 * 1024).length, 0)
+})
+
+test('An upload timeout still blocks the manifest and removes the temporary payload.', t => {
+  const f = fixture(t)
+  let file
+  let calls = 0
+  const store = transport({ AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }, (_cli, args) => {
+    calls++
+    assert.equal(args[7], 'cp')
+    file = args[8]
+    assert.equal(args[9], prefix + 'proof.json')
+    throw Object.assign(new Error('private-message'), { code: 'ETIMEDOUT' })
+  })
+  assert.throws(() => upload(id, 'evidence', f.input, store), /^Error: MinIO transfer failed: timeout\.$/)
+  assert.equal(calls, 1)
+  assert.equal(existsSync(file), false)
 })
 
 test('Transport errors expose only a fixed class and a validated exit status.', () => {
