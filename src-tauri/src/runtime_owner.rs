@@ -57,6 +57,8 @@ struct Lifecycle {
     snapshot: Snapshot,
     read_status: bool,
     outage: Option<Instant>,
+    #[cfg(any(test, target_os = "macos"))]
+    startup_attempt: Option<Instant>,
     awaiting_disconnect: bool,
 }
 
@@ -114,7 +116,7 @@ impl Lifecycle {
         now: Instant,
         endpoint: Option<&std::path::Path>,
         failure: Option<serde_json::Value>,
-        admissions: Vec<serde_json::Value>,
+        admissions: impl FnOnce(Instant) -> Vec<serde_json::Value>,
     ) {
         if self.awaiting_disconnect && (clients.0 || clients.1) {
             return;
@@ -127,7 +129,7 @@ impl Lifecycle {
                     " Desktop client connected: {}. Chat events connected: {}. Admissions: {}.",
                     clients.0,
                     clients.1,
-                    serde_json::Value::Array(admissions)
+                    serde_json::Value::Array(admissions(self.startup_attempt.unwrap_or(now)))
                 ));
             }
         }
@@ -214,6 +216,17 @@ impl Lifecycle {
         true
     }
 
+    fn start_attempt(&mut self) -> bool {
+        if !self.start() {
+            return false;
+        }
+        #[cfg(any(test, target_os = "macos"))]
+        {
+            self.startup_attempt = Some(Instant::now());
+        }
+        true
+    }
+
     fn started(&mut self, event: RuntimeEvent) {
         self.awaiting_disconnect = event == RuntimeEvent::Stopped;
         self.snapshot.busy = self.awaiting_disconnect;
@@ -233,7 +246,10 @@ impl RuntimeOwner {
         let revision = self.state.lock().unwrap().snapshot.revision;
         let requires_approval = query();
         self.update(app, |state| {
-            if state.snapshot.revision != revision || state.snapshot.busy {
+            if state.snapshot.revision != revision
+                || state.snapshot.busy
+                || state.snapshot.last_event == RuntimeEvent::Connected
+            {
                 return;
             }
             if requires_approval == Some(true) {
@@ -341,10 +357,14 @@ pub(crate) async fn runtime_start(app: tauri::AppHandle) -> Result<(), &'static 
 fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let owner = app.state::<RuntimeOwner>();
     let mut claimed = false;
-    owner.update(app, |state| claimed = state.start());
-    if !claimed {
-        return;
+    owner.update(app, |state| claimed = state.start_attempt());
+    if claimed {
+        finish_start(app);
     }
+}
+
+fn finish_start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let owner = app.state::<RuntimeOwner>();
     #[cfg(all(target_os = "macos", feature = "local-runtime"))]
     let event = crate::macos_runtime_service::start_child(&owner);
     #[cfg(all(target_os = "macos", not(feature = "local-runtime")))]
@@ -421,6 +441,10 @@ pub(crate) async fn runtime_stop(app: tauri::AppHandle) -> Result<(), &'static s
 pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     app.manage(RuntimeOwner::default());
     app.manage(crate::attach_service::AttachCompanionState::default());
+    // Capture the attempt before the supervisors can complete an admission.
+    app.state::<RuntimeOwner>().update(app, |state| {
+        state.start_attempt();
+    });
     #[cfg(target_os = "linux")]
     crate::attach_service::start_runtime_clients(app);
     #[cfg(target_os = "windows")]
@@ -431,7 +455,7 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     #[cfg(target_os = "macos")]
     crate::attach_service::start_desktop_client(app);
     let start_app = app.clone();
-    std::thread::spawn(move || start(&start_app));
+    std::thread::spawn(move || finish_start(&start_app));
     let app = app.clone();
     #[cfg(target_os = "macos")]
     let endpoint = muniment_runtime::profile_directory()
@@ -484,14 +508,14 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 (desktop, chat_events),
                 Instant::now(),
                 endpoint.as_deref(),
-                companion
-                    .runtime_admission_failure_since(state.outage.unwrap_or_else(Instant::now)),
-                endpoint.as_deref().map_or_else(Vec::new, |endpoint| {
-                    muniment_core::attach::macos_admissions_since(
-                        endpoint,
-                        state.outage.unwrap_or_else(Instant::now),
-                    )
-                }),
+                companion.runtime_admission_failure_since(
+                    state.startup_attempt.unwrap_or_else(Instant::now),
+                ),
+                |since| {
+                    endpoint.as_deref().map_or_else(Vec::new, |endpoint| {
+                        muniment_core::attach::macos_admissions_since(endpoint, since)
+                    })
+                },
             );
             #[cfg(target_os = "windows")]
             state.observe(connected, disconnected, Instant::now());
@@ -659,6 +683,122 @@ mod tests {
     }
 
     #[test]
+    fn approval_queries_do_not_replace_a_connected_runtime() {
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        let now = Instant::now();
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients((true, true), now, None, None, |_| vec![]);
+        });
+        let connected = runtime_state(app.state());
+        for requires_approval in [Some(true), Some(true), None, Some(false), Some(true)] {
+            owner.poll_approval(app.handle(), || requires_approval);
+            assert_eq!(runtime_state(app.state()), connected);
+            owner.update(app.handle(), |state| {
+                state.observe_endpoint_clients((true, true), now, None, None, |_| vec![]);
+            });
+            assert_eq!(runtime_state(app.state()), connected);
+        }
+
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients((false, false), now, None, None, |_| vec![]);
+        });
+        owner.poll_approval(app.handle(), || Some(true));
+        let approval = runtime_state(app.state());
+        assert_eq!(approval.last_event, RuntimeEvent::RequiresApproval);
+        assert!(approval.visible);
+        owner.poll_approval(app.handle(), || None);
+        assert_eq!(runtime_state(app.state()), approval);
+        owner.poll_approval(app.handle(), || Some(false));
+        assert_eq!(
+            runtime_state(app.state()).last_event,
+            RuntimeEvent::Approved
+        );
+        owner.update(app.handle(), |state| {
+            assert!(state.start_attempt());
+        });
+        let busy = runtime_state(app.state());
+        owner.poll_approval(app.handle(), || Some(true));
+        assert_eq!(runtime_state(app.state()), busy);
+    }
+
+    #[test]
+    fn subscription_timeout_keeps_admissions_from_busy_startup_but_not_a_previous_attempt() {
+        let mut state = Lifecycle::default();
+        assert!(state.start_attempt());
+        let attempt = state.startup_attempt.unwrap();
+        let admitted = Instant::now();
+        let history = [
+            (
+                attempt - Duration::from_secs(1),
+                serde_json::json!({"elapsed_ms": 999}),
+            ),
+            (
+                admitted,
+                serde_json::json!({"requested_route": "desktop-client", "elapsed_ms": 1641}),
+            ),
+        ];
+        state.observe_endpoint_clients((true, false), admitted, None, None, |_| {
+            panic!("A busy startup cannot time out.")
+        });
+        assert!(state.snapshot.busy);
+        assert_eq!(state.outage, None);
+        assert!(!state.start_attempt());
+        assert_eq!(state.startup_attempt, Some(attempt));
+        state.started(RuntimeEvent::Starting);
+        let observing = admitted + Duration::from_secs(2);
+        state.observe_endpoint_clients((true, false), observing, None, None, |_| vec![]);
+        state.observe_endpoint_clients(
+            (true, false),
+            observing + Duration::from_secs(10),
+            None,
+            None,
+            |since| {
+                assert_eq!(since, attempt);
+                history
+                    .iter()
+                    .filter(|(at, _)| *at >= since)
+                    .map(|(_, value)| value.clone())
+                    .collect()
+            },
+        );
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+        let cause = state.snapshot.cause.as_deref().unwrap();
+        assert!(cause.contains("Desktop client connected: true. Chat events connected: false."));
+        assert!(cause.contains("\"elapsed_ms\":1641"));
+        assert!(!cause.contains("999"));
+        assert!(cause.contains("Startup elapsed: 10000 ms. Startup bound: 10000 ms."));
+
+        assert!(state.start_attempt());
+        let retry = state.startup_attempt.unwrap();
+        assert!(retry > admitted);
+        state.started(RuntimeEvent::Starting);
+        state.observe_endpoint_clients((true, false), retry, None, None, |_| vec![]);
+        state.observe_endpoint_clients(
+            (true, false),
+            retry + Duration::from_secs(10),
+            None,
+            None,
+            |since| {
+                assert_eq!(since, retry);
+                history
+                    .iter()
+                    .filter(|(at, _)| *at >= since)
+                    .map(|(_, value)| value.clone())
+                    .collect()
+            },
+        );
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+        assert!(state
+            .snapshot
+            .cause
+            .as_deref()
+            .unwrap()
+            .contains("Admissions: []."));
+    }
+
+    #[test]
     fn late_subscription_recovers_while_a_native_status_query_is_pending() {
         use std::sync::mpsc;
 
@@ -667,7 +807,7 @@ mod tests {
         let owner = app.state::<RuntimeOwner>();
         let now = Instant::now();
         owner.update(app.handle(), |state| {
-            state.observe_endpoint_clients((true, false), now, None, None, vec![]);
+            state.observe_endpoint_clients((true, false), now, None, None, |_| vec![]);
         });
         let (entered, entered_rx) = mpsc::channel();
         let (release, release_rx) = mpsc::channel();
@@ -688,7 +828,7 @@ mod tests {
                 now + Duration::from_secs(10),
                 None,
                 None,
-                vec![serde_json::json!({"requested_route": "desktop-client", "elapsed_ms": 1641})],
+                |_| vec![serde_json::json!({"requested_route": "desktop-client", "elapsed_ms": 1641})],
             );
         });
         let failed = runtime_state(app.state());
@@ -702,7 +842,7 @@ mod tests {
                 now + Duration::from_secs(11),
                 None,
                 None,
-                vec![],
+                |_| vec![],
             );
         });
         assert_eq!(
@@ -723,14 +863,14 @@ mod tests {
                 now + Duration::from_secs(12),
                 None,
                 None,
-                vec![],
+                |_| vec![],
             );
             state.observe_endpoint_clients(
                 (false, false),
                 now + Duration::from_secs(14),
                 None,
                 None,
-                vec![],
+                |_| vec![],
             );
         });
         let disconnected = runtime_state(app.state());
@@ -743,13 +883,13 @@ mod tests {
         let now = Instant::now();
         for missing in [(true, false), (false, true), (false, false)] {
             let mut state = Lifecycle::default();
-            state.observe_endpoint_clients(missing, now, None, None, vec![]);
+            state.observe_endpoint_clients(missing, now, None, None, |_| vec![]);
             state.observe_endpoint_clients(
                 missing,
                 now + Duration::from_millis(9999),
                 None,
                 None,
-                vec![],
+                |_| vec![],
             );
             assert_eq!(state.snapshot.last_event, RuntimeEvent::Starting);
             state.observe_endpoint_clients(
@@ -757,7 +897,7 @@ mod tests {
                 now + Duration::from_secs(10),
                 None,
                 None,
-                vec![],
+                |_| vec![],
             );
             assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
             state.observe_endpoint_clients(
@@ -765,7 +905,7 @@ mod tests {
                 now + Duration::from_secs(20),
                 None,
                 None,
-                vec![],
+                |_| vec![],
             );
             assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
             state.observe_endpoint_clients(
@@ -773,26 +913,26 @@ mod tests {
                 now + Duration::from_secs(21),
                 None,
                 None,
-                vec![],
+                |_| vec![],
             );
             assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
         }
         let mut state = Lifecycle::default();
-        state.observe_endpoint_clients((true, false), now, None, None, vec![]);
+        state.observe_endpoint_clients((true, false), now, None, None, |_| vec![]);
         state.observe_endpoint_clients(
             (true, true),
             now + Duration::from_secs(10),
             None,
             None,
-            vec![],
+            |_| vec![],
         );
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
         state.started(RuntimeEvent::Stopped);
         for partial in [(true, false), (false, true)] {
-            state.observe_endpoint_clients(partial, now, None, None, vec![]);
+            state.observe_endpoint_clients(partial, now, None, None, |_| vec![]);
             assert!(state.snapshot.busy);
         }
-        state.observe_endpoint_clients((false, false), now, None, None, vec![]);
+        state.observe_endpoint_clients((false, false), now, None, None, |_| vec![]);
         assert!(!state.snapshot.busy);
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Stopped);
     }
