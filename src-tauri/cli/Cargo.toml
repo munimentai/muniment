@@ -4,6 +4,6 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-muniment-attach = { git = "https://github.com/munimentai/muniment-core", tag = "v1.1.0", default-features = false, features = ["client"] }
-muniment-code-diff = { git = "https://github.com/munimentai/muniment-core", tag = "v1.1.0" }
+muniment-attach = { git = "https://github.com/munimentai/muniment-core", tag = "v1.2.0", default-features = false, features = ["client"] }
+muniment-code-diff = { git = "https://github.com/munimentai/muniment-core", tag = "v1.2.0" }
 serde_json = "1"
