@@ -120,12 +120,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
-          git add -A -- '*Cargo.toml' '*Cargo.lock'
+          git add -A -- '*Cargo.toml' '*Cargo.lock' THIRD_PARTY_RUST_NOTICES.md
           git commit -m "$TITLE"
           git push --force origin "$BRANCH"
           body="$RUNNER_TEMP/body.md"
           {
-            printf 'Moves every muniment-core git dependency to `%s` and updates `src-tauri/Cargo.lock`.\n\n' "$TAG"
+            printf 'Moves every muniment-core git dependency to `%s` and updates `src-tauri/Cargo.lock` and the Rust notices.\n\n' "$TAG"
             printf 'Release notes since the current tag:\n\n'
             cat "$NOTES"
           } > "$body"

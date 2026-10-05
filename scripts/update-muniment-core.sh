@@ -39,4 +39,6 @@ for package in $packages; do
   arguments+=(--package "$package")
 done
 cargo update --manifest-path src-tauri/Cargo.toml "${arguments[@]}"
+# The notices record every locked crate, including those a new core release adds.
+python3 -B scripts/update-rust-notices.py
 printf 'muniment-core %s: %s\n' "$tag" "${manifests//$'\n'/ }"
