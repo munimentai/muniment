@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { launchWindowsTree, stopWindowsTree, windowsTreeAlive } from './e2e/support/subscription-windows-process.mjs'
 import { removeProbeProfile } from './e2e/runner/subscriptions.mjs'
 import { readDiagnosticLog, subscriptionRedactor } from './e2e/support/subscription-diagnostics.mjs'
+import { windowsUpdateDiagnostics } from './e2e/support/subscription-windows-update.mjs'
 
 const waitFor = async condition => {
   const deadline = Date.now() + 15_000
@@ -230,6 +231,60 @@ try {
           fs.closeSync(log)
           await removeProbeProfile(root)
         }
+      }
+    }
+  })
+}
+
+for (const mode of ['exit', 'live']) {
+  test(`Windows observes an MSI relaunch before job admission in ${mode} mode`, {
+    skip: process.platform !== 'win32', timeout: 60_000,
+  }, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription observer-'))
+    const profile = path.join(root, 'profile')
+    fs.mkdirSync(profile)
+    const log = fs.openSync(path.join(root, 'observer.log'), 'a')
+    let job, child
+    try {
+      job = await launchWindowsTree(process.execPath, [], { ...process.env, TMPDIR: root }, log, profile)
+      await waitFor(() => !windowsTreeAlive(job))
+      const fixture = path.join(root, 'relaunch.cjs')
+      fs.writeFileSync(fixture, `const fs = require('node:fs')
+const path = require('node:path')
+const profile = path.join(__dirname, 'profile')
+fs.appendFileSync(path.join(profile, 'subscription-probe-startup.log'), 'pid=' + process.pid + ' code=started\\n')
+fs.writeFileSync(path.join(profile, 'subscription-probe-start-' + process.pid + '.tmp'), String(process.pid))
+fs.renameSync(path.join(profile, 'subscription-probe-start-' + process.pid + '.tmp'), path.join(profile, 'subscription-probe-start-' + process.pid))
+const deadline = Date.now() + 12000
+const timer = setInterval(() => {
+  if (Date.now() > deadline) process.exit(99)
+  if (!fs.existsSync(path.join(profile, 'subscription-probe-observed-' + process.pid))) return
+  clearInterval(timer)
+  fs.appendFileSync(path.join(profile, 'subscription-probe-startup.log'), 'pid=' + process.pid + ' code=job-open-failed\\n')
+  if (process.argv[2] === 'exit') process.exit(23)
+  setInterval(() => {}, 1000)
+}, 25)
+`)
+      // This child never joins the app job. The observer must still retain its exit code and stop it.
+      child = spawn(process.execPath, [fixture, mode], { stdio: ['ignore', log, log] })
+      const closed = new Promise(resolve => { child.once('exit', resolve); child.once('error', resolve) })
+      await waitFor(() => windowsUpdateDiagnostics(profile, job.probePid).startup.some(row => row.code === 'job-open-failed'))
+      if (mode === 'exit') await waitFor(() => windowsUpdateDiagnostics(profile, job.probePid).processes.some(row => row.pid === child.pid && row.exit_code === 23))
+      const before = windowsUpdateDiagnostics(profile, job.probePid)
+      assert.equal(before.relaunch_started, true)
+      assert.equal(before.processes.find(row => row.pid === job.probePid).exit_code, 0)
+      assert.equal(before.processes.find(row => row.pid === child.pid).observed, true)
+      await stopWindowsTree(job)
+      await closed
+      const after = windowsUpdateDiagnostics(profile, job.probePid).processes.find(row => row.pid === child.pid)
+      assert.equal(after.cleanup, mode === 'live')
+      assert.equal(after.exit_code, mode === 'exit' ? 23 : 1)
+    } finally {
+      try { if (job) await stopWindowsTree(job) }
+      finally {
+        if (child?.exitCode === null) child.kill()
+        fs.closeSync(log)
+        await removeProbeProfile(root)
       }
     }
   })

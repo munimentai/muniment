@@ -158,6 +158,16 @@ It hides account details, prompts, and tool output.
 The existing screenshot redactor strips metadata before publication.
 The runner does not publish raw provider errors, account files, conversation logs, or native stderr.
 
+The Windows probe writes a verbose MSI log inside its disposable profile.
+The runner exports fixed MSI action and result fields to `windows-subscription-msi.log` beside `windows-subscription.log`.
+It exports process IDs, exit codes, profile failure codes, and runtime admission codes to `windows-subscription-relaunch.json`.
+The `cleanup` field distinguishes runner shutdown from a natural exit.
+The supervisor retains each app handle before profile restoration, including when job admission fails.
+
+The Windows probe uses the runner runtime instead of Task Scheduler, which does not inherit the disposable profile.
+If MSI closes that runtime, the runner restarts it after the MSI-launched app restores its profile.
+The runner never launches a replacement app to satisfy the update check.
+
 A missing native runner, package, or lease blocks every platform case and returns a nonzero exit code.
 A missing feature observation blocks that feature, even when chat passes.
 A failed reply, changed payload, wrong model, or cleanup failure also returns a nonzero exit code.

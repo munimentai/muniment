@@ -720,6 +720,31 @@ for (const mode of ['missing-envelope', 'blocked-guest', 'ssh-throw']) {
   }))
 }
 
+for (const mode of ['failed', 'throw']) {
+  test(`Windows update diagnostics survive a ${mode} guest and collection`, t => temporary(root => {
+    t.mock.method(console, 'error', () => {})
+    const output = path.join(root, 'host'), combined = path.join(root, 'combined')
+    const startup = [{ pid: 456, code: 'started' }, { pid: 456, code: 'job-open-failed' }]
+    assert.equal(host({ sourceSha, platform: 'windows', output, leases, models, token, sshKey: key, knownHosts: 'host',
+      invoke: ({ output: artifacts }) => {
+        writeBlocked(artifacts, sourceSha, 'windows', 'The updated app did not restart.')
+        fs.writeFileSync(path.join(artifacts, 'windows-subscription-relaunch.json'), JSON.stringify({ parent_pid: 123,
+          startup, processes: [{ pid: 456, observed: true, exit_code: 1, cleanup: false }], secret: privateValues.join(' ') }) + '\n')
+        fs.writeFileSync(path.join(artifacts, 'windows-subscription-msi.log'), 'action=LaunchApplication state=ended result=1\nmsiexec_result=0\n')
+        if (mode === 'throw') throw new Error('The native transport failed.')
+        return { status: 1 }
+      },
+    }), 1)
+    assert.equal(collect(sourceSha, combined, [output]), 1)
+    const result = JSON.parse(fs.readFileSync(path.join(combined, 'windows-subscription-relaunch.json')))
+    assert.deepEqual(result.startup, startup)
+    assert.equal(result.relaunch_started, true)
+    assert.equal(result.processes[0].exit_code, 1)
+    assertSafe(JSON.stringify(result))
+    assert.equal(fs.readFileSync(path.join(combined, 'windows-subscription-msi.log'), 'utf8'), 'action=LaunchApplication state=ended result=1\nmsiexec_result=0\n')
+  }))
+}
+
 test('SSH diagnostic tails exclude artifact and screenshot envelopes', () => {
   const transcript = 'native failure\n-----DESKTOP-CI-ARTIFACTS-BEGIN-----\nsecret archive\n-----DESKTOP-CI-ARTIFACTS-END-----\n' +
     '-----DESKTOP-CI-SCREENDUMP-BEGIN-----\nsecret pixels\n-----DESKTOP-CI-SCREENDUMP-END-----\nexit=1'
