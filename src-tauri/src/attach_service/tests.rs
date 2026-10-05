@@ -661,9 +661,9 @@ mod cases {
         assert!(state.chat_events.lock().unwrap().is_none());
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn chat_event_supervisor_reports_disconnect_after_stream_ends() {
+    fn chat_event_supervisor_recovers_a_late_subscription_and_reports_disconnect() {
         use muniment_core::attach::reconnect_welcome;
         use std::io::{Read, Write};
         use std::os::unix::net::UnixListener;
@@ -680,6 +680,9 @@ mod cases {
 
         let endpoint = socket_temp_path();
         let listener = UnixListener::bind(&endpoint).unwrap();
+        let (pending, pending_rx) = mpsc::channel();
+        let (subscribe, subscribe_rx) = mpsc::channel();
+        let (close, close_rx) = mpsc::channel();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             assert_eq!(read_value(&mut stream)["client"]["kind"], "desktop-client");
@@ -701,6 +704,8 @@ mod cases {
                 )
                 .unwrap();
             let request = read_value(&mut stream);
+            pending.send(()).unwrap();
+            subscribe_rx.recv_timeout(Duration::from_secs(5)).unwrap();
             let request_id = Id::new(request["request_id"].as_str().unwrap()).unwrap();
             stream
                 .write_all(
@@ -724,9 +729,12 @@ mod cases {
                     .unwrap(),
                 )
                 .unwrap();
+            close_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         });
 
-        let state = AttachCompanionState::default();
+        let state = Arc::new(AttachCompanionState::default());
+        state.record_connected(true);
+        let observer_state = state.clone();
         let worker_endpoint = endpoint.clone();
         let (delivered, received) = mpsc::channel();
         let (observed, observations) = mpsc::channel();
@@ -738,18 +746,27 @@ mod cases {
                     Duration::from_secs(1),
                     Duration::from_millis(10),
                     stop,
-                    move |connected| observed.send(connected).unwrap(),
+                    move |connected| {
+                        observer_state.record_chat_events_connected(connected);
+                        observed.send(connected).unwrap();
+                    },
                     move |event| delivered.send(event).unwrap(),
                 )
             })
         });
+        pending_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(state.runtime_client_connections(), (true, false));
+        subscribe.send(()).unwrap();
         assert_eq!(
             received.recv_timeout(Duration::from_secs(1)).unwrap(),
             json!({"phase": "running", "text": "forwarded"})
         );
         assert!(observations.recv_timeout(Duration::from_secs(1)).unwrap());
+        assert_eq!(state.runtime_client_connections(), (true, true));
+        close.send(()).unwrap();
         let disconnected = observations.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(!disconnected);
+        assert_eq!(state.runtime_client_connections(), (true, false));
         state.stop_chat_events();
         assert!(state.chat_events.lock().unwrap().is_none());
         server.join().unwrap();

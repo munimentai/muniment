@@ -19,9 +19,9 @@ pub(crate) enum RuntimeEvent {
     #[cfg(any(test, target_os = "linux", target_os = "macos"))]
     Exited,
     StartFailed,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     RequiresApproval,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     Approved,
     #[cfg(target_os = "macos")]
     NotFound,
@@ -108,6 +108,32 @@ impl Lifecycle {
     }
 
     #[cfg(any(test, target_os = "macos"))]
+    fn observe_endpoint_clients(
+        &mut self,
+        clients: (bool, bool),
+        now: Instant,
+        endpoint: Option<&std::path::Path>,
+        failure: Option<serde_json::Value>,
+        admissions: Vec<serde_json::Value>,
+    ) {
+        if self.awaiting_disconnect && (clients.0 || clients.1) {
+            return;
+        }
+        let starting = self.snapshot.last_event == RuntimeEvent::Starting;
+        self.observe_endpoint_with_failure(clients.0 && clients.1, now, endpoint, failure);
+        if starting && self.snapshot.last_event == RuntimeEvent::StartFailed {
+            if let Some(cause) = &mut self.snapshot.cause {
+                cause.push_str(&format!(
+                    " Desktop client connected: {}. Chat events connected: {}. Admissions: {}.",
+                    clients.0,
+                    clients.1,
+                    serde_json::Value::Array(admissions)
+                ));
+            }
+        }
+    }
+
+    #[cfg(any(test, target_os = "macos"))]
     fn observe_endpoint_with_failure(
         &mut self,
         connected: bool,
@@ -143,7 +169,7 @@ impl Lifecycle {
                 None => "The desktop could not resolve the runtime endpoint.".to_owned(),
             };
             self.snapshot.cause = Some(format!(
-                "The desktop client did not connect within 10 seconds. {endpoint} Startup elapsed: {} ms. Startup bound: 10000 ms.",
+                "The runtime clients did not connect within 10 seconds. {endpoint} Startup elapsed: {} ms. Startup bound: 10000 ms.",
                 elapsed.as_millis()
             ));
         }
@@ -198,6 +224,28 @@ impl Lifecycle {
 }
 
 impl RuntimeOwner {
+    #[cfg(any(test, target_os = "macos"))]
+    fn poll_approval<R: tauri::Runtime>(
+        &self,
+        app: &tauri::AppHandle<R>,
+        query: impl FnOnce() -> Option<bool>,
+    ) {
+        let revision = self.state.lock().unwrap().snapshot.revision;
+        let requires_approval = query();
+        self.update(app, |state| {
+            if state.snapshot.revision != revision || state.snapshot.busy {
+                return;
+            }
+            if requires_approval == Some(true) {
+                state.change(RuntimeEvent::RequiresApproval, true);
+            } else if requires_approval == Some(false)
+                && state.snapshot.last_event == RuntimeEvent::RequiresApproval
+            {
+                state.change(RuntimeEvent::Approved, true);
+            }
+        });
+    }
+
     fn update<R: tauri::Runtime>(
         &self,
         app: &tauri::AppHandle<R>,
@@ -389,6 +437,19 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let endpoint = muniment_runtime::profile_directory()
         .ok()
         .map(|profile| profile.join("muniment/attach-v1.sock"));
+    #[cfg(target_os = "macos")]
+    {
+        let approval_app = app.clone();
+        // Native service queries can block. They must not delay client observations.
+        std::thread::spawn(move || loop {
+            let owner = approval_app.state::<RuntimeOwner>();
+            owner.poll_approval(
+                &approval_app,
+                crate::macos_runtime_service::requires_approval,
+            );
+            std::thread::sleep(Duration::from_secs(1));
+        });
+    }
     std::thread::spawn(move || loop {
         let owner = app.state::<RuntimeOwner>();
         let revision = owner.state.lock().unwrap().snapshot.revision;
@@ -406,38 +467,31 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             }
         }
         let companion = app.state::<crate::attach_service::AttachCompanionState>();
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
         let connected = companion.runtime_connected();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let (desktop, chat_events) = companion.runtime_client_connections();
         #[cfg(target_os = "windows")]
         let disconnected = !connected;
-        #[cfg(target_os = "macos")]
-        let requires_approval = crate::macos_runtime_service::requires_approval();
         owner.update(&app, |state| {
             if state.snapshot.revision != revision {
                 return;
             }
-            #[cfg(target_os = "macos")]
-            if requires_approval == Some(true) && !state.snapshot.busy {
-                state.change(RuntimeEvent::RequiresApproval, true);
-                return;
-            }
-            #[cfg(target_os = "macos")]
-            if requires_approval == Some(false)
-                && state.snapshot.last_event == RuntimeEvent::RequiresApproval
-            {
-                state.change(RuntimeEvent::Approved, true);
-            }
             #[cfg(target_os = "linux")]
             state.observe_clients(desktop, chat_events, Instant::now());
             #[cfg(target_os = "macos")]
-            state.observe_endpoint_with_failure(
-                connected,
+            state.observe_endpoint_clients(
+                (desktop, chat_events),
                 Instant::now(),
                 endpoint.as_deref(),
                 companion
                     .runtime_admission_failure_since(state.outage.unwrap_or_else(Instant::now)),
+                endpoint.as_deref().map_or_else(Vec::new, |endpoint| {
+                    muniment_core::attach::macos_admissions_since(
+                        endpoint,
+                        state.outage.unwrap_or_else(Instant::now),
+                    )
+                }),
             );
             #[cfg(target_os = "windows")]
             state.observe(connected, disconnected, Instant::now());
@@ -482,7 +536,7 @@ mod tests {
                     assert_eq!(
                         snapshot.cause,
                         Some(format!(
-                            "The desktop client did not connect within 10 seconds. {detail} Startup elapsed: 10000 ms. Startup bound: 10000 ms."
+                            "The runtime clients did not connect within 10 seconds. {detail} Startup elapsed: 10000 ms. Startup bound: 10000 ms."
                         ))
                     );
                     assert_eq!(snapshot.revision, 1);
@@ -602,6 +656,145 @@ mod tests {
         );
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
         assert_eq!(state.snapshot.cause, None);
+    }
+
+    #[test]
+    fn late_subscription_recovers_while_a_native_status_query_is_pending() {
+        use std::sync::mpsc;
+
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        let now = Instant::now();
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients((true, false), now, None, None, vec![]);
+        });
+        let (entered, entered_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let query_app = app.handle().clone();
+        let query = std::thread::spawn(move || {
+            query_app
+                .state::<RuntimeOwner>()
+                .poll_approval(&query_app, || {
+                    entered.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Some(true)
+                });
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients(
+                (true, false),
+                now + Duration::from_secs(10),
+                None,
+                None,
+                vec![serde_json::json!({"requested_route": "desktop-client", "elapsed_ms": 1641})],
+            );
+        });
+        let failed = runtime_state(app.state());
+        assert_eq!(failed.last_event, RuntimeEvent::StartFailed);
+        let cause = failed.cause.unwrap();
+        assert!(cause.contains("Desktop client connected: true. Chat events connected: false."));
+        assert!(cause.contains("\"elapsed_ms\":1641"));
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients(
+                (true, true),
+                now + Duration::from_secs(11),
+                None,
+                None,
+                vec![],
+            );
+        });
+        assert_eq!(
+            runtime_state(app.state()).last_event,
+            RuntimeEvent::Connected
+        );
+        assert_eq!(runtime_state(app.state()).cause, None);
+        assert!(!runtime_state(app.state()).visible);
+        release.send(()).unwrap();
+        query.join().unwrap();
+        assert_eq!(
+            runtime_state(app.state()).last_event,
+            RuntimeEvent::Connected
+        );
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients(
+                (true, false),
+                now + Duration::from_secs(12),
+                None,
+                None,
+                vec![],
+            );
+            state.observe_endpoint_clients(
+                (false, false),
+                now + Duration::from_secs(14),
+                None,
+                None,
+                vec![],
+            );
+        });
+        let disconnected = runtime_state(app.state());
+        assert_eq!(disconnected.last_event, RuntimeEvent::Disconnected);
+        assert!(disconnected.visible);
+    }
+
+    #[test]
+    fn endpoint_clients_require_both_connections_and_keep_the_startup_bound() {
+        let now = Instant::now();
+        for missing in [(true, false), (false, true), (false, false)] {
+            let mut state = Lifecycle::default();
+            state.observe_endpoint_clients(missing, now, None, None, vec![]);
+            state.observe_endpoint_clients(
+                missing,
+                now + Duration::from_millis(9999),
+                None,
+                None,
+                vec![],
+            );
+            assert_eq!(state.snapshot.last_event, RuntimeEvent::Starting);
+            state.observe_endpoint_clients(
+                missing,
+                now + Duration::from_secs(10),
+                None,
+                None,
+                vec![],
+            );
+            assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+            state.observe_endpoint_clients(
+                missing,
+                now + Duration::from_secs(20),
+                None,
+                None,
+                vec![],
+            );
+            assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+            state.observe_endpoint_clients(
+                (true, true),
+                now + Duration::from_secs(21),
+                None,
+                None,
+                vec![],
+            );
+            assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        }
+        let mut state = Lifecycle::default();
+        state.observe_endpoint_clients((true, false), now, None, None, vec![]);
+        state.observe_endpoint_clients(
+            (true, true),
+            now + Duration::from_secs(10),
+            None,
+            None,
+            vec![],
+        );
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        state.started(RuntimeEvent::Stopped);
+        for partial in [(true, false), (false, true)] {
+            state.observe_endpoint_clients(partial, now, None, None, vec![]);
+            assert!(state.snapshot.busy);
+        }
+        state.observe_endpoint_clients((false, false), now, None, None, vec![]);
+        assert!(!state.snapshot.busy);
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Stopped);
     }
 
     #[test]
