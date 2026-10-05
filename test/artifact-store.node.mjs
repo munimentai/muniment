@@ -177,6 +177,61 @@ test('Transport errors expose only a fixed class and a validated exit status.', 
   assert.throws(() => store.get(prefix + 'file', 100), /^Error: MinIO transfer failed: timeout\.$/)
 })
 
+test('A slow 64 MiB upload verifies its readback before the store publishes its manifest.', t => {
+  const f = fixture(t)
+  const bytes = Buffer.alloc(64 * 1024 * 1024, 42)
+  writeFileSync(join(f.input, 'proof.json'), bytes)
+  const objects = new Map()
+  const calls = []
+  const env = { AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }
+  const store = transport(env, (_cli, args, options) => {
+    const put = args[6] === 's3'
+    const key = put ? args[9] : `s3://${args[9]}/${args[11]}`
+    calls.push([put ? 'put' : 'get', key])
+    if (put) {
+      const payload = readFileSync(args[8])
+      // Model a four-minute upload without a four-minute test delay.
+      if (payload.length === bytes.length && options.timeout < 240_000) {
+        throw Object.assign(new Error('The upload exceeded its deadline.'), { code: 'ETIMEDOUT' })
+      }
+      objects.set(key, payload)
+    } else {
+      writeFileSync(args[12], objects.get(key))
+    }
+  })
+  const manifest = upload(id, 'evidence', f.input, store)
+  assert.equal(manifest.files[0].size, bytes.length)
+  assert.ok(readArtifact(id, 'evidence', store).get('proof.json').equals(bytes))
+  assert.deepEqual(calls.slice(0, 4), [
+    ['put', prefix + 'proof.json'], ['get', prefix + 'proof.json'],
+    ['put', prefix + 'manifest.json'], ['get', prefix + 'manifest.json'],
+  ])
+})
+
+test('The transport caps size-based upload deadlines and rejects stalled uploads.', t => {
+  const f = fixture(t)
+  const env = { AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }
+  for (const [size, deadline] of [[0, 180_000], [1, 181_000], [64 * 1024 * 1024, 436_000], [128 * 1024 * 1024, 600_000]]) {
+    let path
+    const store = transport(env, (_cli, args, options) => {
+      path = args[8]
+      assert.equal(options.timeout, deadline)
+      assert.deepEqual(args.slice(2, 6), ['--cli-connect-timeout', '15', '--cli-read-timeout', '120'])
+      assert.equal(readFileSync(path).length, size)
+      throw Object.assign(new Error('The upload stalled.'), { code: 'ETIMEDOUT' })
+    })
+    assert.throws(() => store.put(prefix + 'file', Buffer.alloc(size)), /^Error: MinIO transfer failed: timeout\.$/)
+    assert.equal(existsSync(path), false)
+  }
+  const calls = []
+  const store = transport(env, (_cli, args) => {
+    calls.push(args[9])
+    throw Object.assign(new Error('The upload stalled.'), { code: 'ETIMEDOUT' })
+  })
+  assert.throws(() => upload(id, 'evidence', f.input, store), /MinIO transfer failed: timeout/)
+  assert.deepEqual(calls, [prefix + 'proof.json'])
+})
+
 test('S3 failures expose only bounded, allow-listed codes and operations.', () => {
   const env = { AWS_ACCESS_KEY_ID: 'private-access', AWS_SECRET_ACCESS_KEY: 'private-secret' }
   const diagnostic = (code, operation = 'CreateMultipartUpload') =>
