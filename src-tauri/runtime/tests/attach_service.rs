@@ -13,10 +13,10 @@ use muniment_core::attach::{
     save_client_credentials, ClientCredential, Id, ProtocolError, RuntimeActivityRegistry,
     SignedWorkspaceApproval, COMPANION_CREDENTIAL_FILE_NAME,
 };
-use muniment_core::auth::EntitlementSnapshotTracker;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::session_thread::SessionThread;
+use muniment_desktop_integration::auth::EntitlementSnapshotTracker;
 use muniment_runtime::{
     compose_attach_service, open_companion_registry, open_profile_storage, revoke_companion,
     run_attach_listener, AttachListenerInputs, RuntimeAttachBoundaries, RuntimeAttachState,

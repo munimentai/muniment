@@ -5,7 +5,7 @@ mod pairing_tests;
 
 pub use muniment_core::attach::EntitlementSnapshotResult;
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::auth::{
+use muniment_desktop_integration::auth::{
     api_base_url, create_pairing_challenge, ensure_native_session as ensure_core_native_session,
     list_native_devices, native_status, read_pairing, revoke_pairing, run_native_sign_in_while,
     sign_out_native_session, AuthStatus, BrowserOpener, EntitlementSnapshotTracker,

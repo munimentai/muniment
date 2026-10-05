@@ -11,6 +11,9 @@ on:
   push:
     branches:
       - main
+  # The muniment-core update dispatches the full checks on its branch, because
+  # a pull request a workflow token opens starts no workflow.
+  workflow_dispatch:
 
 # A PR refresh cancels only that PR. Each main run keeps its acceptance proof.
 concurrency:
@@ -57,7 +60,6 @@ jobs:
       installer: ${{ steps.changes.outputs.installer }}
       release_tooling: ${{ steps.changes.outputs.release_tooling }}
       release_only: ${{ steps.changes.outputs.release_only }}
-      resident_model_adr: ${{ steps.changes.outputs.resident_model_adr }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -94,8 +96,7 @@ jobs:
           installer=false
           release_tooling=false
           release_only=true
-          resident_model_adr=false
-          if [ "${GITHUB_EVENT_NAME:-pull_request}" = push ]; then
+          if [ "${GITHUB_EVENT_NAME:-pull_request}" != pull_request ]; then
             docs_only=false
             companion=true
             attach_fixtures=true
@@ -116,15 +117,6 @@ jobs:
             esac
             release_only=false
             case "$path" in
-              docs/decisions/0017-*.md)
-                # Markdown, so this stays a docs-only PR for the native build
-                # gates. But ADR 0017's pinned table is asserted field by field
-                # against RESIDENT_MODEL by
-                # src-tauri/core/tests/resident_model_adr.rs, and that guard is
-                # worthless if it skips the case it exists for: the record
-                # changing on its own.
-                resident_model_adr=true
-                ;;
               *.md) ;;
               src-tauri/cli/*|src-tauri/cli/**|src-tauri/runtime/*|src-tauri/runtime/**)
                 docs_only=false
@@ -147,17 +139,10 @@ jobs:
                 companion=true
                 attach_fixtures=true
                 ;;
-              src-tauri/attach/*|src-tauri/attach/**)
+              src-tauri/integration/*|src-tauri/integration/**)
                 docs_only=false
                 companion=true
                 desktop=true
-                attach_fixtures=true
-                ;;
-              src-tauri/code-diff/*|src-tauri/code-diff/**)
-                docs_only=false
-                companion=true
-                desktop=true
-                code_diff_fixtures=true
                 ;;
               src-tauri/acp/*|src-tauri/acp/**)
                 docs_only=false
@@ -183,7 +168,7 @@ jobs:
                 installer=true
                 ;;
             esac
-          done < <(if [ "${GITHUB_EVENT_NAME:-pull_request}" != push ]; then git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA"; fi)
+          done < <(if [ "${GITHUB_EVENT_NAME:-pull_request}" = pull_request ]; then git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA"; fi)
           [ "$release_tooling" = true ] || release_only=false
           echo "release_tooling=$release_tooling" >> "$GITHUB_OUTPUT"
           echo "release_only=$release_only" >> "$GITHUB_OUTPUT"
@@ -193,7 +178,6 @@ jobs:
           echo "code_diff_fixtures=$code_diff_fixtures" >> "$GITHUB_OUTPUT"
           echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
           echo "installer=$installer" >> "$GITHUB_OUTPUT"
-          echo "resident_model_adr=$resident_model_adr" >> "$GITHUB_OUTPUT"
 
 
   smoke:
@@ -233,6 +217,26 @@ jobs:
           fi
           echo "$HOME/.local/node-24/bin" >> "$GITHUB_PATH"
 
+      # The desktop-only crates are kept free of Tauri on purpose: compiling the
+      # tauri crate needs the GUI dev stack (webkit2gtk etc.) that only the
+      # desktop-ci build VMs carry. The frontend tests and the structure smoke
+      # read the muniment-core checkout that Cargo resolves, so the toolchain
+      # comes first. The runner container persists, so the rustup bootstrap
+      # below is a one-time cost.
+      - name: Rust toolchain (bootstrap if missing)
+        if: needs.changes.outputs.reuse != 'true'
+        run: |
+          if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            bash .github/bootstrap-rustup.sh
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" component add rustfmt clippy
+          # rustc needs a C linker even for dependency-free crates
+          if ! command -v cc >/dev/null 2>&1; then
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends gcc libc6-dev
+          fi
+
       - name: Release tooling tests
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.release_tooling == 'true' && needs.changes.outputs.desktop != 'true')
         run: |
@@ -256,25 +260,6 @@ jobs:
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
         run: npm ci --prefix browser-control --no-audit --no-fund && npm run browser-control
 
-      # Unit tests cover src-tauri/core (muniment-core), which is kept free of
-      # Tauri on purpose: compiling the tauri crate needs the GUI dev stack
-      # (webkit2gtk etc.) that only the desktop-ci build VMs carry, while the
-      # core crate compiles anywhere. The runner container persists, so the
-      # rustup bootstrap below is a one-time cost.
-      - name: Rust toolchain (bootstrap if missing)
-        if: needs.changes.outputs.reuse != 'true'
-        run: |
-          if ! command -v cargo >/dev/null 2>&1 && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-            bash .github/bootstrap-rustup.sh
-          fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          "$HOME/.cargo/bin/rustup" component add rustfmt clippy
-          # rustc needs a C linker even for dependency-free crates
-          if ! command -v cc >/dev/null 2>&1; then
-            apt-get update -qq
-            apt-get install -y -qq --no-install-recommends gcc libc6-dev
-          fi
-
       - name: Structure smoke
         if: needs.changes.outputs.reuse != 'true'
         run: test/smoke.sh
@@ -287,41 +272,36 @@ jobs:
 
       - name: Rust formatting
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
-        run: cargo fmt --manifest-path src-tauri/core/Cargo.toml --check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --check
 
-      - name: Core and ACP lint
+      - name: Integration and ACP lint
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-core --package muniment-acp --all-targets --locked -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --package muniment-acp --all-targets --locked --features muniment-desktop-integration/keyring -- -D warnings
 
-      - name: Rust unit tests
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.resident_model_adr == 'true' || github.event_name != 'pull_request')
+      # muniment-core runs the shared crate tests. These cover the desktop-only contracts.
+      - name: Integration tests
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
         # The shared runner can starve stub child processes under default test parallelism.
-        run: cargo test --manifest-path src-tauri/core/Cargo.toml --locked --features network-tests -- --test-threads=1
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --locked --features keyring -- --test-threads=1
 
-      - name: Core default-feature tests
+      - name: Integration default-feature tests
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
-        # Match the serial core run above so deadline tests do not starve each other.
-        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --locked -- --test-threads=1
-
-      - name: Core permission history tests
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
-        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --test permission_history --features keyring --locked
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --locked -- --test-threads=1
 
       - name: Rust shadow router Python contract
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
-        run: python3 -B test/router_shadow_test.py
+        run: |
+          core_root=$(scripts/muniment-core-root.sh)
+          CARGO_TARGET_DIR=src-tauri/target/muniment-core cargo build --manifest-path "$core_root/Cargo.toml" --locked --package muniment-router --bin muniment-router-shadow
+          python3 -B test/router_shadow_test.py
 
       - name: Companion formatting
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.companion == 'true')
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --package muniment-acp --check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-cli --package muniment-acp --check
 
       - name: Companion lint
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.companion == 'true')
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-attach --package muniment-code-diff --package muniment-cli --all-targets --locked -- -D warnings
-
-      - name: Attach client-feature tests
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.companion == 'true')
-        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --locked --features client
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-cli --all-targets --locked -- -D warnings
 
       - name: CLI dependency boundary
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.companion == 'true')
@@ -391,43 +371,11 @@ jobs:
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      # The desktop fixtures must match what the pinned muniment-core release exports.
       - name: Check canonical fixtures
-        working-directory: src-tauri
-        run: cargo run -p muniment-attach --bin export-attach-fixtures -- ../protocol-fixtures --check
-
-      - name: Windows fixture publication
-        env:
-          REPO_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          REF: ${{ github.head_ref || github.ref_name }}
-          SOURCE_SHA: ${{ github.sha }}
-          DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
         run: |
-          set -u
-          case "$REF" in
-            ''|*[!A-Za-z0-9._/-]*)
-              printf 'error: unsafe branch ref for desktop-ci: %s\n' "$REF" >&2
-              exit 1
-              ;;
-          esac
-
-          umask 077
-          key="$RUNNER_TEMP/desktop_ci_key"
-          known_hosts="$RUNNER_TEMP/desktop_ci_known_hosts"
-          printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
-          trap 'rm -f "$key" "$known_hosts"' EXIT
-          printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" > "$known_hosts"
-
-          case "$SOURCE_SHA" in
-            *[!0-9a-f]*|'') echo 'Invalid source SHA' >&2; exit 1 ;;
-          esac
-          repo_url="https://github.com/${REPOSITORY}"
-          cmd='cargo test --manifest-path src-tauri/Cargo.toml --package muniment-attach --locked && cargo run --manifest-path src-tauri/Cargo.toml --package muniment-attach --bin export-attach-fixtures -- protocol-fixtures --check'
-          cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && $cmd"
-          ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
-              -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-              desktopci@10.1.10.10 \
-              "sudo desktop-ci windows --repo '$repo_url' --ref '$REF' --cmd '$cmd' --env-stdin" <<<"GH_TOKEN=$REPO_TOKEN"
+          core_root=$(scripts/muniment-core-root.sh)
+          CARGO_TARGET_DIR=src-tauri/target/muniment-core cargo run --manifest-path "$core_root/Cargo.toml" --locked --package muniment-attach --bin export-attach-fixtures -- "$PWD/protocol-fixtures" --check
 
   code-diff-fixtures-current:
     name: code-diff-fixtures-current
@@ -446,8 +394,9 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Check canonical fixtures
-        working-directory: src-tauri
-        run: cargo run -p muniment-code-diff --bin export-code-diff-fixtures -- ../protocol-fixtures --check
+        run: |
+          core_root=$(scripts/muniment-core-root.sh)
+          CARGO_TARGET_DIR=src-tauri/target/muniment-core cargo run --manifest-path "$core_root/Cargo.toml" --locked --package muniment-code-diff --bin export-code-diff-fixtures -- "$PWD/protocol-fixtures" --check
 
   desktop-compile:
     name: Desktop compile preflight (${{ matrix.platform }})
@@ -491,7 +440,7 @@ jobs:
             cmd='sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev cmake ninja-build zlib1g-dev libzstd-dev -o DPkg::Lock::Timeout=300 && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-acp --release --locked && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --release --locked && bash .github/build-reader.sh src-tauri/target/release/muniment-reader && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           fi
           if [ "$PLATFORM" = "windows" ]; then
-            cmd='npm ci --ignore-scripts --no-audit --no-fund && npx vitest run --root . test/desktop-e2e-harness.test.js .github/lib/windows-update-target.test.js .github/lib/windows-installed-smoke.test.js && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_identity && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test browser_control_windows_transport && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test windows_known_folders && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test windows_sid && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test windows_task_service && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --lib windows_task_service && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_listener && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_instance_lock && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_connect && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_credential && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_stream && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_peer_native && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_route_native && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test attach_windows_session && cargo test --manifest-path src-tauri/core/Cargo.toml --locked --lib windows_user_diagnostics && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --locked --lib agents::tests && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --locked --lib memory_files::tests && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --locked --lib atomic_file::tests && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-core --locked --lib pi_settings::tests && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --lib && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --test windows_acl && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --test windows_attach_acceptor && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --release --locked && powershell.exe -NoProfile -ExecutionPolicy Bypass -File .github/build-reader.ps1 src-tauri/target/release/muniment-reader.exe && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check-cef-windows.ps1'
+            cmd='npm ci --ignore-scripts --no-audit --no-fund && cargo fetch --manifest-path src-tauri/Cargo.toml --locked && npx vitest run --root . test/desktop-e2e-harness.test.js .github/lib/windows-update-target.test.js .github/lib/windows-installed-smoke.test.js && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --locked --test browser_control_windows_identity && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --locked --test browser_control_windows_transport && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --locked --lib && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --lib && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --test windows_acl && cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --test windows_attach_acceptor && cargo build --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --release --locked && powershell.exe -NoProfile -ExecutionPolicy Bypass -File .github/build-reader.ps1 src-tauri/target/release/muniment-reader.exe && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check-cef-windows.ps1'
           fi
           # macOS ships a universal app — preflight the arm64 cross slice too.
           # The E2E window probe is C that only the macOS SDK can build, and the

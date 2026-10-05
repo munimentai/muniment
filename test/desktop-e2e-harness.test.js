@@ -5,6 +5,7 @@ import os from 'node:os'
 import { createServer } from 'node:net'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { corePath } from '../scripts/muniment-core.mjs'
 import './e2e/support/windows-msi-registration-contract.js'
 import { POWERSHELL_TEST_TIMEOUT, spawnFixture } from './e2e/support/fixture-process.mjs'
 
@@ -3950,7 +3951,7 @@ describe('Windows desktop executable lookup', { timeout: POWERSHELL_TEST_TIMEOUT
   })
 
   it('Keeps WebDriver at the installed path that the runtime admits.', () => {
-    const payload = fs.readFileSync(path.join(root, 'src-tauri/core/src/windows_payload.rs'), 'utf8')
+    const payload = fs.readFileSync(corePath('crates/core/src/windows_payload.rs'), 'utf8')
     expect(payload).toContain('const DESKTOP_FILE_NAME: &str = "muniment-desktop.exe";')
     const build = runner.indexOf('  $webdriverBinary = ')
     const launch = runner.indexOf('  $env:MUNIMENT_E2E_APP_BINARY = $appBinary', build)

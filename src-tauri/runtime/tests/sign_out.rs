@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::auth::{
-    EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
-};
 use muniment_core::journal::Provenance;
 use muniment_core::run_start::RunAttachBoundaries;
+use muniment_desktop_integration::auth::{
+    EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
+};
 use muniment_runtime::{sign_out, RuntimeAttachState};
 
 mod common;

@@ -603,6 +603,22 @@ impl PiLaunchBoundaries for FakeCoordinateSink {
     ) -> Result<(), PiLaunchError> {
         Ok(())
     }
+
+    fn fetch_receipt(
+        &self,
+        grant: &ChatGrant,
+        access_token: &str,
+        run_id: &str,
+    ) -> Result<
+        muniment_core::sidecar::pi_chat::Receipt,
+        muniment_core::chat_launch::FetchReceiptError,
+    > {
+        muniment_desktop_integration::chat_grant::fetch_receipt(
+            &grant.receipt_url,
+            access_token,
+            run_id,
+        )
+    }
 }
 
 #[cfg(target_os = "linux")]

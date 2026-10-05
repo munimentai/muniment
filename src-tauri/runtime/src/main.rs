@@ -39,6 +39,7 @@ Options:
   --version   Print version";
 
 fn main() {
+    muniment_desktop_integration::provider_clients::register_provider_clients();
     match handle_arguments() {
         Ok(true) => return,
         Ok(false) => {}

@@ -4,13 +4,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { corePath } from '../../scripts/muniment-core.mjs'
 const roots=[]
 afterEach(()=>{for(const root of roots.splice(0))fs.rmSync(root,{recursive:true,force:true})})
 function fixture(){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'muniment-extend-'));roots.push(root)
  const source=path.join(root,'source');fs.mkdirSync(source);fs.writeFileSync(path.join(source,'SKILL.md'),'---\nname: review\ndescription: Review code\n---\nReview the user request.\n')
  const call=(action,data={})=>{
-  const result=spawnSync(process.execPath,[path.resolve('src-tauri/core/src/extend_bridge.mjs')],{env:{...process.env,MUNIMENT_EXTEND_ROOT:root},input:JSON.stringify({action,data}),encoding:'utf8',timeout:10000})
+  const result=spawnSync(process.execPath,[corePath('crates/core/src/extend_bridge.mjs')],{env:{...process.env,MUNIMENT_EXTEND_ROOT:root},input:JSON.stringify({action,data}),encoding:'utf8',timeout:10000})
   if(result.error)throw result.error
   return JSON.parse(result.stdout.split('MUNIMENT_EXTEND_RESULT=')[1])
  }

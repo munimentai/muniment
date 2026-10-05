@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use muniment_core::attach::{evaluate_quiesce, QuiesceError, RuntimeActivityRegistry};
-use muniment_core::auth::{
+use muniment_desktop_integration::auth::{
     BrowserOpenError, EntitlementSnapshotTracker, KeyringNativeCredentialStore,
     NativeCredentialStore,
 };

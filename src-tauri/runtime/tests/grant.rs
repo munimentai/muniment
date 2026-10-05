@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use muniment_core::chat_grant::FetchGrantError;
+use muniment_desktop_integration::chat_grant::FetchGrantError;
 use muniment_runtime::{configure_run, ConfigureRunError};
 
 mod common;

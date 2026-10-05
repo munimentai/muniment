@@ -4,11 +4,7 @@ use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatQueueRequest,
 };
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::auth::{api_base_url, TokenSet};
 use muniment_core::chat_coordinate::coordinate;
-use muniment_core::chat_grant::{
-    fetch_native_grant, grant_authorizes_workspace, validate_grant, ChatGrant, FetchGrantError,
-};
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::chat_resume::{
     clear_active_run, install_active_run, install_resume_run, resumable_context,
@@ -27,6 +23,10 @@ use muniment_core::run_preparation::{
 use muniment_core::run_start::{accepted_time_now, ActiveRun};
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
+use muniment_desktop_integration::auth::{api_base_url, TokenSet};
+use muniment_desktop_integration::chat_grant::{
+    fetch_native_grant, grant_authorizes_workspace, validate_grant, ChatGrant, FetchGrantError,
+};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;

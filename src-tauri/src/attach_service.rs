@@ -59,7 +59,7 @@ use muniment_core::attach::{
     RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
 #[cfg(target_os = "linux")]
-use muniment_core::browser_control::ProcReader;
+use muniment_desktop_integration::browser_control::ProcReader;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), test))]
 use serde_json::json;
 #[cfg(any(unix, target_os = "windows"))]

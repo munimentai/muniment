@@ -12,12 +12,12 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::auth::{
+use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
+use muniment_desktop_integration::auth::{
     AuthStatus, EntitlementSnapshotTracker, InstallationRecord, NativeCredentials, TokenSet,
 };
-use muniment_core::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
-use muniment_core::chat_grant::ChatGrant;
-use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
+use muniment_desktop_integration::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
+use muniment_desktop_integration::chat_grant::ChatGrant;
 
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
 static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -76,7 +76,7 @@ pub fn remove_journal_tables(profile: &Path, tables: &[&str]) {
             "--quiet",
             "--locked",
             "--package",
-            "muniment-core",
+            "muniment-desktop-integration",
             "--example",
             "remove-journal-tables",
             "--target-dir",

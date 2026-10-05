@@ -3,12 +3,12 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
 
 use muniment_core::attach::SignedWorkspaceApproval;
-use muniment_core::chat_grant::ChatGrant;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_launch::{
     pi_launch_config, pi_launch_config_for_executable, PiLaunchBoundaries, PiLaunchError,
 };
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
+use muniment_desktop_integration::chat_grant::ChatGrant;
 use muniment_runtime::{
     open_profile_storage, RuntimeChatEventBroadcast, RuntimeChatEventSink,
     CHAT_EVENT_SUBSCRIBER_QUEUE_CAPACITY,

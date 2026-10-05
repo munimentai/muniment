@@ -10,11 +10,11 @@ use muniment_core::attach::{
     CompanionRegistry, DesktopAttachService, DrainState, ProtocolError, RuntimeActivityRegistry,
     SignedWorkspaceApproval,
 };
-use muniment_core::auth::EntitlementSnapshotTracker;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::pi_execution::PiRuntime;
 use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
+use muniment_desktop_integration::auth::EntitlementSnapshotTracker;
 
 use crate::service::{open_companion_registry, open_profile_storage};
 use crate::{compose_attach_service, RuntimeAttachBoundaries, RuntimeChatEventBroadcast};
