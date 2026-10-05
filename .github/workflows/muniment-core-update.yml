@@ -1,8 +1,10 @@
 name: muniment-core update
 
 # Moves every muniment-core git dependency to the newest release tag and opens
-# or refreshes one pull request. The PR merges itself after the required checks
-# pass. A muniment-core change that needs desktop code keeps the PR open.
+# or refreshes one pull request. A pull request or a push from the workflow
+# token starts no workflow, so this dispatches the required checks on the
+# branch. Their check runs attach to the head commit, and the PR merges itself
+# after they pass. A muniment-core change that needs desktop code keeps it open.
 
 on:
   schedule:
@@ -14,6 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -29,9 +32,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-          # A PR that a workflow token opens runs no checks, so the update
-          # pushes with MUNIMENT_CORE_UPDATE_TOKEN when the repository has one.
-          token: ${{ secrets.MUNIMENT_CORE_UPDATE_TOKEN || github.token }}
 
       - name: Rust toolchain (bootstrap if missing)
         run: |
@@ -111,7 +111,7 @@ jobs:
       - name: Open or refresh the pull request
         if: steps.release.outputs.newer == 'true'
         env:
-          GH_TOKEN: ${{ secrets.MUNIMENT_CORE_UPDATE_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           TITLE: ${{ steps.release.outputs.title }}
           NOTES: ${{ steps.release.outputs.notes }}
@@ -135,6 +135,14 @@ jobs:
           else
             gh pr create --head "$BRANCH" --base main --title "$TITLE" --body-file "$body"
             number=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number')
+          fi
+          # The required checks, smoke and gitleaks, come from these workflows.
+          for workflow in ci.yml secret-scan.yml; do
+            gh workflow run "$workflow" --ref "$BRANCH"
+          done
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .allow_auto_merge)" != true ]; then
+            echo "::warning::The repository does not allow auto-merge. PR #$number waits for a manual merge."
+            exit 0
           fi
           # Squash when the repository allows it, else use its merge commits.
           method=--squash

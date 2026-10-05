@@ -11,6 +11,9 @@ on:
   push:
     branches:
       - main
+  # The muniment-core update dispatches the full checks on its branch, because
+  # a pull request a workflow token opens starts no workflow.
+  workflow_dispatch:
 
 # A PR refresh cancels only that PR. Each main run keeps its acceptance proof.
 concurrency:
@@ -93,7 +96,7 @@ jobs:
           installer=false
           release_tooling=false
           release_only=true
-          if [ "${GITHUB_EVENT_NAME:-pull_request}" = push ]; then
+          if [ "${GITHUB_EVENT_NAME:-pull_request}" != pull_request ]; then
             docs_only=false
             companion=true
             attach_fixtures=true
@@ -165,7 +168,7 @@ jobs:
                 installer=true
                 ;;
             esac
-          done < <(if [ "${GITHUB_EVENT_NAME:-pull_request}" != push ]; then git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA"; fi)
+          done < <(if [ "${GITHUB_EVENT_NAME:-pull_request}" = pull_request ]; then git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA"; fi)
           [ "$release_tooling" = true ] || release_only=false
           echo "release_tooling=$release_tooling" >> "$GITHUB_OUTPUT"
           echo "release_only=$release_only" >> "$GITHUB_OUTPUT"
