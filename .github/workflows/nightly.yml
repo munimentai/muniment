@@ -84,7 +84,10 @@ jobs:
     if: needs.prepare.outputs.reuse != 'true'
     needs: prepare
     runs-on: muniment-release
-    timeout-minutes: 90
+    # Allow 120 minutes for the slot, 100 for the guest and collection, and 15 for cleanup and upload.
+    timeout-minutes: 235
+    env:
+      DESKTOP_CI_SLOT_SECONDS: 7200
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -162,7 +165,8 @@ jobs:
             cmd="macos_build_seconds=$build_timeout && "'macos_build_started=$(date +%s) && '"$cmd"
           fi
           repo_url="https://github.com/${REPOSITORY}.git"
-          ssh_cmd="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd' --build-timeout '$build_timeout'"
+          ssh_cmd="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref 'main' --cmd '$cmd' --build-timeout '$build_timeout' --env-stdin"
+          ssh_cmd=$(python3 .github/desktop-ci-command.py "$DESKTOP_CI_SLOT_SECONDS" "$ssh_cmd")
 
           # Signing secrets travel as one hex line that the desktop-ci preamble
           # skips, so they never enter the build environment. The first build
@@ -195,7 +199,7 @@ jobs:
           { printf '%s\n' "GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1"; if [ -n "$signing_env" ]; then printf '%s\n' "$signing_env"; fi; } \
           | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-                desktopci@10.1.10.10 "$ssh_cmd --env-stdin"
+                desktopci@10.1.10.10 "$ssh_cmd"
 
       # The updater key stays on the runner in this one step, which runs only
       # this repository's code and Node's crypto, makes no tool download, and
@@ -299,8 +303,10 @@ jobs:
       (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' ||
       github.event.inputs.platform == 'linux')
     runs-on: self-hosted
-    timeout-minutes: 45
+    # Allow the slot, guest, collection, cleanup, and upload to finish.
+    timeout-minutes: 195
     env:
+      DESKTOP_CI_SLOT_SECONDS: 7200
       SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
       REPOSITORY: ${{ github.repository }}
       RELEASE_TOKEN: ${{ github.token }}
@@ -332,6 +338,7 @@ jobs:
 
           cmd='bash test/e2e/runner/linux.sh'
           remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
+          remote=$(python3 .github/desktop-ci-command.py "$DESKTOP_CI_SLOT_SECONDS" "$remote")
           set +e
           printf '%s\n' \
             "MUNIMENT_PI_CANDIDATE=1" \
@@ -386,8 +393,10 @@ jobs:
       github.event.inputs.platform == 'windows') &&
       (github.event.inputs.platform == 'windows' || needs.linux-e2e.result != 'skipped')
     runs-on: self-hosted
-    timeout-minutes: 45
+    # Allow the slot, guest, collection, cleanup, and upload to finish.
+    timeout-minutes: 195
     env:
+      DESKTOP_CI_SLOT_SECONDS: 7200
       SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
       REPOSITORY: ${{ github.repository }}
       RELEASE_TOKEN: ${{ github.token }}
@@ -419,6 +428,7 @@ jobs:
 
           cmd='powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/e2e/runner/windows.ps1'
           remote="sudo desktop-ci windows --console-user --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
+          remote=$(python3 .github/desktop-ci-command.py "$DESKTOP_CI_SLOT_SECONDS" "$remote")
           set +e
           printf '%s\n' \
             "MUNIMENT_PI_CANDIDATE=1" \
@@ -471,8 +481,10 @@ jobs:
       github.event.inputs.platform == 'macos') &&
       (github.event.inputs.platform == 'macos' || needs.windows-e2e.result != 'skipped')
     runs-on: self-hosted
-    timeout-minutes: 45
+    # Allow the slot, guest, collection, cleanup, and upload to finish.
+    timeout-minutes: 195
     env:
+      DESKTOP_CI_SLOT_SECONDS: 7200
       SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
       REPOSITORY: ${{ github.repository }}
       RELEASE_TOKEN: ${{ github.token }}
@@ -504,6 +516,7 @@ jobs:
 
           cmd='bash test/e2e/support/macos-keychain-session.sh bash test/e2e/runner/macos.sh >/tmp/muniment-macos-smoke-artifacts && bash test/e2e/support/macos-keychain-session.sh bash test/e2e/runner/macos-wdio.sh'
           remote="sudo desktop-ci macos --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts --screendump"
+          remote=$(python3 .github/desktop-ci-command.py "$DESKTOP_CI_SLOT_SECONDS" "$remote")
           set +e
           printf '%s\n' \
             "MUNIMENT_PI_CANDIDATE=1" \

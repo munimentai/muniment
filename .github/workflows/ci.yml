@@ -403,13 +403,18 @@ jobs:
     if: needs.changes.outputs.desktop == 'true'
     needs: changes
     runs-on: self-hosted
-    # Packaging shares the preflight VM, including its dependency and build cache.
-    timeout-minutes: ${{ needs.changes.outputs.installer == 'true' && 120 || 45 }}
+    # Budget both attempts, including each slot wait, guest, collection, and cleanup.
+    timeout-minutes: ${{ needs.changes.outputs.installer == 'true' && 475 || 415 }}
+    env:
+      DESKTOP_CI_SLOT_SECONDS: 7200
     strategy:
       fail-fast: false
       matrix:
         platform: [linux, windows, macos]
     steps:
+      - name: Check out desktop-CI budget helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
       - name: Check (${{ matrix.platform }}) via desktop-ci
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -472,13 +477,15 @@ jobs:
 
           cmd="git fetch --depth 1 origin $SOURCE_SHA && git checkout --detach $SOURCE_SHA && $cmd"
 
+          remote="sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd' --build-timeout '$build_timeout' --env-stdin"
+          remote=$(python3 .github/desktop-ci-command.py "$DESKTOP_CI_SLOT_SECONDS" "$remote")
           attempt=1
           while true; do
             attempt_log="$RUNNER_TEMP/desktop-ci-$PLATFORM-$attempt.log"
             if ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
                    -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
                    desktopci@10.1.10.10 \
-                   "sudo desktop-ci $PLATFORM --repo '$repo_url' --ref '$REF' --cmd '$cmd' --build-timeout '$build_timeout' --env-stdin" <<<"GH_TOKEN=$REPO_TOKEN" \
+                   "$remote" <<<"GH_TOKEN=$REPO_TOKEN" \
                    2>&1 | tee "$attempt_log"; then
               status=0
             else
