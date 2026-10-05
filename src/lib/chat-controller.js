@@ -5,6 +5,7 @@ const historyPageLimit = 100
 const signaledThreadCap = 256
 const signaledRunCap = 256
 const liveTextCap = 256
+const desktopBusy = 'Muniment is busy with another request. Try again.'
 
 function historyReadError(error) {
   const cause = typeof error === 'string' ? error : error?.message
@@ -45,6 +46,9 @@ export function createChatController({
   onFollow = () => {},
   onFocus = () => {},
   onSend = () => {},
+  prepareSubmit = () => {},
+  onSubmitted = () => {},
+  onSubmission = () => {},
   onSignInLink = () => {},
 }) {
   const buffered = new Map()
@@ -768,6 +772,28 @@ export function createChatController({
     return submitPrompt(context, selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })))
   }
 
+  async function submitWhenAvailable(payload) {
+    const deadline = Date.now() + 30_000
+    for (;;) {
+      try {
+        onSubmission({ invoke: 'pending', error: 'none' })
+        const result = await invoke('chat_submit', payload)
+        onSubmission({ invoke: 'accepted', error: 'none' })
+        return result
+      } catch (error) {
+        const kind = error === desktopBusy ? 'busy'
+          : error === 'Muniment cannot reach its background service.' ? 'unavailable'
+            : ['Authorization failed. Sign in again.', 'The runtime refused the request as unauthorized. Enter local mode or sign in, then retry.'].includes(error) ? 'unauthorized' : 'rejected'
+        onSubmission({ invoke: 'rejected', error: kind })
+        // DesktopBusy means the holder sent no request. History can hold that connection during a send.
+        // Never retry a transport failure because the runtime might already own the run.
+        if (error !== desktopBusy || Date.now() >= deadline || destroyed) throw error
+        await new Promise(resolve => setTimeout(resolve, 100))
+        if (destroyed) throw error
+      }
+    }
+  }
+
   async function submitPrompt(prompt, files, preserveDraft = false) {
     onSend()
     onSubmitError('')
@@ -780,11 +806,12 @@ export function createChatController({
     onFollow()
     holdBuffer()
     try {
-      const run = await invoke('chat_submit', {
-        prompt,
-        files,
-      })
+      const preparation = prepareSubmit({ prompt, files })
+      if (preparation) await preparation
       if (destroyed || submissionId !== submissionSequence) return
+      const run = await submitWhenAvailable({ prompt, files })
+      if (destroyed || submissionId !== submissionSequence) return
+      onSubmitted()
       if (!preserveDraft) {
         onDraft('')
         onFiles([])

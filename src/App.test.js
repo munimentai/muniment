@@ -14,6 +14,18 @@ vi.mock('./feature-flags.js', () => ({featureFlags: {cloud: true, companyRecord:
 
 import { historyMessages } from './lib/chat-state.js'
 
+const extensionInstances = vi.hoisted(() => [])
+vi.mock('./extend/ComposerExtensions.svelte', async (importOriginal) => {
+  const original = await importOriginal()
+  return { default: (anchor, props) => {
+    const component = original.default(anchor, props)
+    vi.spyOn(component, 'prepare')
+    vi.spyOn(component, 'submitted')
+    extensionInstances.push(component)
+    return component
+  } }
+})
+
 const appSource = fs.readFileSync(path.join(process.cwd(), 'src/App.svelte'), 'utf8')
 const appStyles = appSource.match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
 const appRules = new Map([...appStyles
@@ -237,6 +249,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  extensionInstances.length = 0
   // Each test represents a fresh app, including its bridge-scoped account cache.
   window.__TAURI__.core = { ...window.__TAURI__.core }
   Object.assign(featureFlags, {cloud: true, companyRecord: true})
@@ -6275,7 +6288,12 @@ describe('installed subscription probe reply DOM', () => {
     const styles = new Set(document.head.querySelectorAll('style'))
     try {
       await vm.runInNewContext(source, {
-        window: { __TAURI__: window.__TAURI__, __MUNIMENT_SUBSCRIPTION_PLAN__: { phase, nonce, models: [model], turns } },
+        window: {
+          __TAURI__: window.__TAURI__,
+          __MUNIMENT_SUBSCRIPTION_PLAN__: { phase, nonce, models: [model], turns },
+          addEventListener: window.addEventListener.bind(window),
+          removeEventListener: window.removeEventListener.bind(window),
+        },
         document, Event,
         Date: { now: () => { clock += 1000; return clock } },
         setTimeout: (callback, ms) => ms === 250 ? setTimeout(callback, 0) : undefined,
@@ -6306,10 +6324,19 @@ describe('installed subscription probe reply DOM', () => {
       expect(container.querySelectorAll('.response[data-subscription-evidence]')).toHaveLength(count)
       expect(container.querySelectorAll('.response .assistant-markdown')).toHaveLength(count)
       if (phase === 'chat') {
-        expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', { stage: 'complete', turn: 0, errorClass: 'none', commandFailure: null })
+        expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', {
+          stage: 'complete', turn: 0, errorClass: 'none', commandFailure: null,
+          sendState: {
+            invoke: 'accepted', error: 'none', draftPresent: false,
+            sendPresent: false, sendDisabled: false, stopPresent: false,
+          },
+        })
       } else {
         expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'thread-1' })
         expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+        expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', {
+          stage: 'restore', turn: null, errorClass: 'none', commandFailure: null, sendState: null,
+        })
       }
     })
   })
@@ -6319,7 +6346,9 @@ describe('installed subscription probe reply DOM', () => {
   ])('rejects an invalid restored reply DOM: %j', async options => {
     const { container, result } = await runProbe('restart', options)
     expect(result.passed).toBe(false)
-    expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', { stage: 'restore', turn: null, errorClass: 'timeout', commandFailure: null })
+    expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', {
+      stage: 'restore', turn: null, errorClass: 'timeout', commandFailure: null, sendState: null,
+    })
     expect(container.querySelector('[data-subscription-evidence]')).toBeNull()
   })
 })
@@ -7998,6 +8027,74 @@ describe('release feature flags', () => {
       view.unmount()
     }
   })
+})
+
+it('prepares and routes extensions once across repeated busy refusals', async () => {
+  const original = invoke.getMockImplementation()
+  const accepted = deferred()
+  const submit = vi.fn()
+    .mockRejectedValueOnce('Muniment is busy with another request. Try again.')
+    .mockRejectedValueOnce('Muniment is busy with another request. Try again.')
+    .mockReturnValueOnce(accepted.promise)
+  invoke.mockImplementation((command, args) => {
+    if (command === 'extend_command') return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }] })
+    if (command === 'chat_current_thread') return Promise.resolve('thread-1')
+    if (command === 'chat_submit') return submit(args)
+    return original(command, args)
+  })
+  render(App)
+  const composer = await findReadyWorkspaceComposer()
+  await fireEvent.click(screen.getByRole('button', { name: 'Extensions', exact: true }))
+  await fireEvent.click(screen.getByRole('button', { name: 'MCPs', exact: true }))
+  await fireEvent.click(screen.getByRole('switch', { name: 'Auto-select for this turn' }))
+  await fireEvent.input(composer, { target: { value: 'Search for the answer' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Send', exact: true }))
+  await waitFor(() => expect(submit).toHaveBeenCalledTimes(3))
+  const extensions = extensionInstances.at(-1)
+  expect(extensions.prepare).toHaveBeenCalledExactlyOnceWith('Search for the answer')
+  expect(invoke.mock.calls.filter(([command, args]) => command === 'extend_command' && args.action === 'turn')).toEqual([
+    ['extend_command', { action: 'turn', data: { threadId: 'thread-1', selected: [], disabled: [], automatic: true } }],
+  ])
+  expect(invoke.mock.calls.filter(([command, args]) => command === 'extend_command' && args.action === 'route')).toEqual([
+    ['extend_command', { action: 'route', data: { threadId: 'thread-1', prompt: 'Search for the answer' } }],
+  ])
+  expect(extensions.submitted).not.toHaveBeenCalled()
+  expect(composer).toHaveValue('Search for the answer')
+  accepted.resolve({ runId: 'extension-turn', attachments: [] })
+  await waitFor(() => expect(extensions.submitted).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(composer).toHaveValue(''))
+  expect(submit.mock.calls).toEqual(Array(3).fill([{ prompt: 'Search for the answer', files: [] }]))
+})
+
+it.each(['preparation', 'submission'])('keeps extension selection after a failed %s without retrying preparation', async (stage) => {
+  const original = invoke.getMockImplementation()
+  const error = stage === 'preparation'
+    ? 'Muniment is busy with another request. Try again.'
+    : 'Muniment cannot reach its background service.'
+  invoke.mockImplementation((command, args) => {
+    if (command === 'extend_command') {
+      if (args.action === 'route' && stage === 'preparation') return Promise.reject(error)
+      return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }] })
+    }
+    if (command === 'chat_current_thread') return Promise.resolve('thread-1')
+    if (command === 'chat_submit') return Promise.reject(error)
+    return original(command, args)
+  })
+  render(App)
+  const composer = await findReadyWorkspaceComposer()
+  await fireEvent.click(screen.getByRole('button', { name: 'Extensions', exact: true }))
+  await fireEvent.click(screen.getByRole('button', { name: 'MCPs', exact: true }))
+  await fireEvent.click(screen.getByRole('switch', { name: 'Auto-select for this turn' }))
+  await fireEvent.input(composer, { target: { value: 'Search for the answer' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Send', exact: true }))
+  await screen.findAllByText(error.replace(' Try again.', ''))
+  const extensions = extensionInstances.at(-1)
+  expect(extensions.prepare).toHaveBeenCalledTimes(1)
+  expect(extensions.submitted).not.toHaveBeenCalled()
+  expect(invoke.mock.calls.filter(([command, args]) => command === 'extend_command' && args.action === 'route')).toHaveLength(1)
+  expect(invoke.mock.calls.filter(([command]) => command === 'chat_submit')).toHaveLength(stage === 'preparation' ? 0 : 1)
+  expect(composer).toHaveValue('Search for the answer')
+  expect(screen.getByRole('switch', { name: 'Auto-select for this turn' })).toBeChecked()
 })
 
 it('inserts and colors skill commands in the message and prepares them for one turn', async () => {

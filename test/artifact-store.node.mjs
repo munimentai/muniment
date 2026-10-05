@@ -55,6 +55,61 @@ test('The store rejects failed readbacks and partial uploads.', t => {
   assert.throws(() => readArtifact(id, 'evidence', f.store))
 })
 
+test('The store republishes acknowledged uploads when GetObject reports NoSuchKey.', t => {
+  const f = fixture(t)
+  const bytes = Buffer.alloc(64 * 1024 * 1024, 7)
+  writeFileSync(join(f.input, 'diagnostics.bin'), bytes)
+  const attempts = new Map()
+  const store = transport({ AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }, (_cli, args) => {
+    if (args[6] === 's3') {
+      const key = args[9]
+      const attempt = (attempts.get(key) ?? 0) + 1
+      attempts.set(key, attempt)
+      // The CLI acknowledges the first two uploads without storing the object.
+      if (attempt === 3) f.objects.set(key, readFileSync(args[8]))
+    } else {
+      const key = `s3://${args[9]}/${args[11]}`
+      if (!f.objects.has(key)) {
+        throw Object.assign(new Error('Missing object.'), { status: 254,
+          stderr: 'An error occurred (NoSuchKey) when calling the GetObject operation: Missing object.' })
+      }
+      writeFileSync(args[12], f.objects.get(key))
+    }
+  })
+  upload(id, 'evidence', f.input, store)
+  download(id, 'evidence', join(f.root, 'output'), store)
+  assert.ok(readFileSync(join(f.root, 'output/diagnostics.bin')).equals(bytes))
+  assert.equal(readFileSync(join(f.root, 'output/proof.json'), 'utf8'), '{"passed":true}')
+  assert.deepEqual([...attempts.values()], [3, 3, 3])
+})
+
+test('Readback retries stay bounded and do not retry other failures.', t => {
+  const f = fixture(t)
+  for (const [code, operation, expected] of [
+    ['NoSuchKey', 'GetObject', 3], ['NoSuchKey', 'PutObject', 1],
+    ['AccessDenied', 'GetObject', 1], ['InternalError', 'GetObject', 1],
+  ]) {
+    let puts = 0
+    const store = transport({ AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }, (_cli, args) => {
+      if (args[6] === 's3') {
+        assert.equal(args[9], prefix + 'proof.json')
+        puts++
+        if (operation !== 'PutObject') return
+      }
+      throw Object.assign(new Error('Transfer failed.'), { status: 254,
+        stderr: `An error occurred (${code}) when calling the ${operation} operation: Transfer failed.` })
+    })
+    assert.throws(() => upload(id, 'evidence', f.input, store), new RegExp(`S3 error: ${code}`))
+    assert.equal(puts, expected)
+  }
+  let puts = 0
+  assert.throws(() => upload(id, 'evidence', f.input, {
+    put(key) { assert.equal(key, prefix + 'proof.json'); puts++ }, get() { return Buffer.from('corrupt') },
+  }), /readback mismatch/)
+  assert.equal(puts, 1)
+  assert.equal(f.objects.has(prefix + 'manifest.json'), false)
+})
+
 test('The store rejects empty directories, links and invalid identities.', t => {
   const f = fixture(t)
   for (const change of [{ repository: 'other/muniment' }, { run: 0 }, { run: -1 }, { run: 1.5 },
@@ -282,7 +337,7 @@ if (source.startsWith('s3://')) {
   assert.equal(oversized.stderr, 'Artifact exceeds the size limit.\n')
 })
 
-test('Trusted CI proves upload, readback and collection without account credentials.', t => {
+for (const missingReadbacks of [0, 2]) test(`Trusted CI verifies collection after ${missingReadbacks} missing readbacks.`, t => {
   const f = fixture(t)
   const cli = join(f.root, 'aws')
   writeFileSync(cli, `#!/usr/bin/env node
@@ -295,12 +350,22 @@ if (args[6] === 's3' && source.startsWith('s3://')) {
   process.exit(1);
 }
 const local = value => value.startsWith('s3://') ? path.join(process.env.STORE, value.slice(5)) : value;
+if (target.includes('/transport-probe-diagnostics-collection/') && target.endsWith('/diagnostics.bin')) {
+  const record = path.join(process.env.STORE, 'collection-attempts');
+  const attempt = fs.existsSync(record) ? Number(fs.readFileSync(record, 'utf8')) + 1 : 1;
+  fs.writeFileSync(record, String(attempt));
+  if (attempt <= Number(process.env.MISSING_READBACKS)) process.exit(0);
+}
+if (!fs.existsSync(local(source))) {
+  console.error('An error occurred (NoSuchKey) when calling the GetObject operation: Missing object.');
+  process.exit(254);
+}
 fs.mkdirSync(path.dirname(local(target)), { recursive: true });
 fs.copyFileSync(local(source), local(target));
 `, { mode: 0o755 })
   const env = { ...process.env, AWS_CLI: cli, AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test',
     STORE: join(f.root, 'store'), GITHUB_REPOSITORY: id.repository, GITHUB_RUN_ID: String(id.run),
-    GITHUB_RUN_ATTEMPT: String(id.attempt), SOURCE_SHA: id.source }
+    GITHUB_RUN_ATTEMPT: String(id.attempt), SOURCE_SHA: id.source, MISSING_READBACKS: String(missingReadbacks) }
   for (const mode of ['upload', 'collect']) {
     const temp = join(f.root, mode)
     mkdirSync(temp)
@@ -314,6 +379,7 @@ fs.copyFileSync(local(source), local(target));
   assert.equal(uploaded.length, 64 * 1024 * 1024)
   assert.ok(readFileSync(join(objectRoot, 'transport-probe-diagnostics-collection/attempt-2/diagnostics.bin')).equals(uploaded))
   assert.ok(readFileSync(join(f.root, 'collect/artifact-store-probe-2/diagnostics/attempt-2/diagnostics.bin')).equals(uploaded))
+  assert.equal(Number(readFileSync(join(env.STORE, 'collection-attempts'), 'utf8')), missingReadbacks + 1)
 })
 
 function checkArtifactSetup(text, label, stepIndent = 6) {

@@ -123,8 +123,17 @@ export function upload(id, name, input, store = transport()) {
   const manifest = { schema: 1, repository: id.repository, run: id.run, attempt: id.attempt,
     source: id.source, name, files: [] }
   const publish = (key, bytes) => {
-    store.put(key, bytes)
-    if (!bytes.equals(store.get(key, bytes.length))) throw new ArtifactStoreError('Artifact readback mismatch.')
+    for (let attempt = 1; ; attempt++) {
+      store.put(key, bytes)
+      try {
+        if (!bytes.equals(store.get(key, bytes.length))) throw new ArtifactStoreError('Artifact readback mismatch.')
+        return
+      } catch (error) {
+        // Retry an acknowledged upload only when its readback reports a missing object.
+        if (attempt >= 3 || !(error instanceof ArtifactStoreError) ||
+            !error.message.endsWith(' S3 error: NoSuchKey (GetObject).')) throw error
+      }
+    }
   }
   for (const { path, bytes } of files) {
     publish(root + path, bytes)

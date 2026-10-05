@@ -222,6 +222,31 @@ export function probeFailure(env) {
   return 'product'
 }
 
+function readSendState(env, current) {
+  if (!current || current.phase !== 'chat') return {}
+  try {
+    const file = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe-send.json')
+    const stat = fs.lstatSync(file)
+    if (!stat.isFile() || stat.size > 2048) return {}
+    const fd = fs.openSync(file, 'r')
+    let snapshot
+    try {
+      const bytes = Buffer.alloc(2049)
+      const size = fs.readSync(fd, bytes, 0, bytes.length, 0)
+      if (size > 2048) return {}
+      snapshot = JSON.parse(bytes.subarray(0, size).toString('utf8'))
+    } finally { fs.closeSync(fd) }
+    if (snapshot.phase !== current.phase || snapshot.turn !== current.turn || snapshot.requested !== current.requested) return {}
+    const send = snapshot.send
+    if (!send || !['not-started', 'pending', 'accepted', 'rejected'].includes(send.invoke) ||
+        !['none', 'busy', 'unavailable', 'unauthorized', 'rejected'].includes(send.error) ||
+        (send.invoke === 'rejected') === (send.error === 'none')) return {}
+    const flags = ['draftPresent', 'sendPresent', 'sendDisabled', 'stopPresent']
+    if (!flags.every(key => typeof send[key] === 'boolean') || (send.sendDisabled && !send.sendPresent)) return {}
+    return { send: { invoke: send.invoke, error: send.error, ...Object.fromEntries(flags.map(key => [key, send[key]])) } }
+  } catch { return {} }
+}
+
 export function probeProgress(env, step, phase) {
   try {
     const checkpoint = path.join(env.MUNIMENT_STATE_DIR, 'subscription-probe.json')
@@ -241,7 +266,7 @@ export function probeProgress(env, step, phase) {
   return `step=${step}\nphase=${phase}` +
     progress.map(row => `\nprobe-progress=${JSON.stringify(row)}`).join('') +
     transports.map(row => `\nprovider-progress=${JSON.stringify(row)}`).join('') +
-    (current ? `\nprobe-current=${JSON.stringify({ ...current, ...selection,
+    (current ? `\nprobe-current=${JSON.stringify({ ...current, ...selection, ...readSendState(env, current),
       provider_transport: transport?.transport || 'not-started', provider_error_class: transport?.error_class || 'none',
       ...(transport?.transport_kind ? { provider_transport_kind: transport.transport_kind, provider_host: transport.host } : {}) })}` : '')
 }
