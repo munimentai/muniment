@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { acceptance, blocked, platforms } from '../support/subscription-acceptance.mjs'
 import { subscriptionRedactor, reportSubscriptionSummary } from '../support/subscription-diagnostics.mjs'
+import { copyWindowsUpdate } from '../support/subscription-windows-update.mjs'
 
 function redactScreenshot(bytes, name) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-screenshot-'))
@@ -25,6 +26,7 @@ export function collect(sourceSha, output, inputs, jobResults) {
   const canonical = directory => fs.existsSync(directory) ? fs.realpathSync(directory) : path.resolve(directory)
   if (inputs.some(input => canonical(input) === canonical(output))) throw new Error('Keep the collection output separate from platform evidence.')
   fs.mkdirSync(output, { recursive: true, mode: 0o700 })
+  for (const name of ['windows-subscription-msi.log', 'windows-subscription-relaunch.json']) fs.rmSync(path.join(output, name), { force: true })
   const combined = { schema: 1, source_sha: sourceSha, packages: {}, cases: [] }
   fs.writeFileSync(path.join(output, 'release-acceptance.json'), JSON.stringify({ ...combined,
     cases: platforms.flatMap(platform => blocked(sourceSha, platform, 'The native evidence collection has not finished.').cases),
@@ -41,6 +43,7 @@ export function collect(sourceSha, output, inputs, jobResults) {
     try {
       if (matches.length !== 1) throw new Error('The platform evidence is missing or duplicated.')
       const input = matches[0]
+      if (platform === 'windows') copyWindowsUpdate(input, output)
       const read = name => {
         const file = path.join(input, name)
         if (!fs.lstatSync(file).isFile()) throw new Error('The evidence file is not a regular file.')

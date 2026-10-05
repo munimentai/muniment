@@ -1,4 +1,5 @@
 import './subscription-features.node.mjs'
+import './subscription-windows-update.node.mjs'
 import './subscription-diagnostics.node.mjs'
 import './subscription-linux-sandbox.node.mjs'
 import './subscription-host.node.mjs'

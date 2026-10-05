@@ -9,6 +9,7 @@ import { verifyUpdaterSignature } from '../../../.github/lib/updater-signature.m
 import { updateFixture } from './subscription-update.mjs'
 import { subscriptionRedactor, nativeFailure, processStatus, profileLogs, linuxRuntimeStatus, probeProgress, probeFailure, payloadDifferenceDetail, reportPayloadDifferences } from '../support/subscription-diagnostics.mjs'
 import { launchWindowsTree, stopWindowsTree, windowsTreeAlive } from '../support/subscription-windows-process.mjs'
+import { collectWindowsUpdate, updateRuntimeRecovery, windowsStartup } from '../support/subscription-windows-update.mjs'
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const nativePlatform = () => process.platform === 'darwin' ? `macos-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
@@ -259,9 +260,10 @@ export async function awaitProbeResult(readResult, alive, { now = Date.now, wait
   throw new Error('The installed probe timed out before the result.')
 }
 
-export async function awaitUpdateResult(readResult, { now = Date.now, wait = delay, timeout = 300_000 } = {}) {
+export async function awaitUpdateResult(readResult, { now = Date.now, wait = delay, timeout = 300_000, recover = async () => {} } = {}) {
   const deadline = now() + timeout
   while (now() < deadline) {
+    await recover()
     const result = readResult()
     if (result) return result
     await wait(250)
@@ -324,6 +326,11 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
   // Write a blocked result first so a killed runner cannot leave stale passing evidence.
   let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
   fs.rmSync(path.join(output, `${platform}-subscription.log`), { force: true })
+  if (platform === 'windows') {
+    for (const name of ['windows-subscription-msi.log', 'windows-subscription-relaunch.json']) {
+      fs.rmSync(path.join(output, name), { force: true })
+    }
+  }
   writeBlocked(output, sourceSha, platform, reason)
   let redact = subscriptionRedactor()
   let step = 'prerequisites', phase = 'not started'
@@ -440,9 +447,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
         return child
       } finally { fs.closeSync(log) }
     }
-    const launch = async (updating = false) => {
-      phase = json(path.join(state, 'subscription-probe.json')).phase
-      step = `${phase}/runtime-start`
+    const startRuntime = async () => {
       if (platform !== 'linux') {
         const runtimeFile = platform === 'windows' ? path.join(path.dirname(executable), 'muniment-runtime.exe')
           : path.resolve(executable, '../../Library/LaunchServices/muniment-runtime')
@@ -452,6 +457,11 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
         if (!runtime.pid || runtime.exitCode !== null || runtime.signalCode !== null ||
             (platform === 'windows' && !windowsTreeAlive(runtime))) throw new Error('The installed runtime could not start with the disposable profile.')
       }
+    }
+    const launch = async (updating = false) => {
+      phase = json(path.join(state, 'subscription-probe.json')).phase
+      step = `${phase}/runtime-start`
+      await startRuntime()
       step = `${phase}/app-start`
       app = await spawnLogged(executable, ['--probe-subscription-chat', `--probe-subscription-profile=${state}`], 'app')
       let appError = false
@@ -461,7 +471,17 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
       })
       step = `${phase}/wait-result`
       if (updating) {
-        const result = await awaitUpdateResult(() => fs.existsSync(resultFile) && json(resultFile))
+        let recovered = false
+        const result = await awaitUpdateResult(() => fs.existsSync(resultFile) && json(resultFile), {
+          recover: async () => {
+            if (platform !== 'windows' || !updateRuntimeRecovery({ parentPid: app.probePid,
+              startup: windowsStartup(state), appAlive: windowsTreeAlive(app), runtimeAlive: windowsTreeAlive(runtime), recovered })) return
+            // MSI can close the harness runtime during file replacement. Restart only after profile restoration.
+            await stop(runtime, runtimeClosed)
+            recovered = true
+            await startRuntime()
+          },
+        })
         if (platform !== 'windows' && Number.isSafeInteger(result.pid) && result.pid > 0 && result.pid <= 2147483647 && result.pid !== app.pid) {
           relaunchedPid = result.pid
         }
@@ -585,6 +605,12 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     } catch (error) {
       cleanupFailed = true
       reportBlocked(`step=cleanup/update-server\nerror=${error.message}`)
+    }
+    try {
+      if (platform === 'windows') collectWindowsUpdate(env?.MUNIMENT_STATE_DIR, output, app?.probePid)
+    } catch {
+      cleanupFailed = true
+      reportBlocked('step=cleanup/update-diagnostics\nerror=The update diagnostics could not be saved.')
     }
     try {
       if (root) await removeProbeProfile(root)
