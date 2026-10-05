@@ -1,5 +1,3 @@
-#[cfg(target_os = "macos")]
-use muniment_core::attach::interruptible_connect_with_state;
 #[cfg(all(target_os = "linux", test))]
 use muniment_core::attach::save_client_credentials as persist_client_credentials;
 #[cfg(target_os = "linux")]

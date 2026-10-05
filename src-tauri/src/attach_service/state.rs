@@ -33,13 +33,13 @@ impl AttachCompanionState {
         self.desktop_client_holder.admission_failure_since(since)
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     pub(crate) fn runtime_connected(&self) -> bool {
         let status = self.listener_status();
         status.connected && status.chat_events_connected
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn runtime_client_connections(&self) -> (bool, bool) {
         let desktop = self
             .connected

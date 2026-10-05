@@ -275,6 +275,8 @@ pub(super) fn serve_chat_events_at(
 ) {
     #[cfg(target_os = "linux")]
     let mut diagnostic = muniment_core::attach::LinuxConnectDiagnostic::default();
+    #[cfg(target_os = "macos")]
+    let mut diagnostic = muniment_core::attach::MacosConnectDiagnostic::default();
     loop {
         #[cfg(target_os = "linux")]
         {
@@ -304,27 +306,27 @@ pub(super) fn serve_chat_events_at(
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .stream = None;
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
-            let stream = interruptible_connect_with_state(endpoint, &stop.inner);
-            if let Some(stream) = stream {
-                if let Ok(mut client) =
-                    handshake_desktop_client_stream(stream, client_version, io_timeout)
-                {
-                    if client.subscribe_chat_events().is_ok() {
-                        observe(true);
-                        while let Ok(event) = client.read_chat_event() {
-                            deliver(event);
-                        }
-                        observe(false);
-                    }
+            if let Some(mut client) =
+                diagnostic.connect(endpoint, "chat-events", &stop.inner, io_timeout, |stream| {
+                    let mut client =
+                        handshake_desktop_client_stream(stream, client_version, io_timeout)?;
+                    client.subscribe_chat_events()?;
+                    Ok(client)
+                })
+            {
+                observe(true);
+                while let Ok(event) = client.read_chat_event() {
+                    deliver(event);
                 }
-                stop.inner
-                    .0
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .stream = None;
+                observe(false);
             }
+            stop.inner
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .stream = None;
         }
 
         let (state, wake) = &*stop.inner;
