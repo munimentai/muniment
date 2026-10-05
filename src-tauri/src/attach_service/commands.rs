@@ -83,7 +83,7 @@ pub(super) fn observe_chat_event_subscription<R: tauri::Runtime>(
 ) {
     app.state::<AttachCompanionState>()
         .record_chat_events_connected(connected);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     eprintln!("Chat events connected: {connected}.");
     let status = app.state::<AttachCompanionState>().listener_status();
     let _ = app.emit("desktop-client-status-changed", status);
