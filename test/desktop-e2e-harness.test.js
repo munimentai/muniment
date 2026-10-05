@@ -2988,6 +2988,14 @@ try {
 describe('Windows toolchain and failure evidence', { timeout: 30_000 }, () => {
   const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
 
+  it('Fetches the locked crates before the Windows contract tests.', () => {
+    const fetch = runner.indexOf('\n  Invoke-NativeCommand "cargo" "fetch --manifest-path src-tauri/Cargo.toml --locked" $installerLog')
+    const tests = runner.indexOf('\n  Invoke-NativeCommand "npx.cmd" "vitest run --root . test/desktop-e2e-harness.test.js"')
+    expect(fetch).toBeGreaterThan(-1)
+    expect(tests).toBeGreaterThan(-1)
+    expect(fetch).toBeLessThan(tests)
+  })
+
   it('Uses the local CLI and records each toolchain boundary.', () => {
     expect(runner).toContain('$startInfo.WorkingDirectory = (Get-Location).ProviderPath')
     expect(runner).toContain('Set-Location -LiteralPath $repoRoot')

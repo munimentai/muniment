@@ -28,7 +28,7 @@ const ALLOWED = {
   'test/desktop-e2e-harness.test.js:1383:20': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/desktop-e2e-harness.test.js:1468:19': "describe.skipIf(process.platform === 'win32')('macOS installed launch harness')",
   'test/desktop-e2e-harness.test.js:2220:20': "describe.skipIf(process.platform === 'win32')('Linux early abort reporting')",
-  'test/desktop-e2e-harness.test.js:4300:20': "describe.skipIf(process.platform === 'win32')('macOS WDIO spec homes')",
+  'test/desktop-e2e-harness.test.js:4308:20': "describe.skipIf(process.platform === 'win32')('macOS WDIO spec homes')",
   'test/desktop-e2e-harness.test.js:2229:19': "describe.skipIf(process.platform === 'win32')('Linux early abort reporting')",
   'test/desktop-e2e-harness.test.js:2263:20': "describe.skipIf(process.platform === 'win32')('runner setup causes')",
   'test/desktop-e2e-harness.test.js:2274:19': "describe.skipIf(process.platform === 'win32')('runner setup causes')",
