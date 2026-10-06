@@ -691,20 +691,17 @@
   let composerExtensions = $state()
   let extensionCommandNames = $state([])
   const chatController = createChatController({
-    invoke: (command, args) => {
-      const submit = () => {
-        const preparation = command === 'chat_submit' ? composerExtensions?.prepare(args.prompt) : null
-        const send = () => tauri.invoke(command, ...(args === undefined ? [] : [args]))
-        return preparation ? preparation.then(send).then(result => { composerExtensions?.submitted(); return result }) : send()
-      }
-      if (command !== 'chat_submit' || !pendingCreation) return submit()
-      return tauri.invoke('creation_save', { creation: pendingCreation }).then(plan => {
+    invoke: (command, args) => tauri.invoke(command, ...(args === undefined ? [] : [args])),
+    prepareSubmit: async ({ prompt }) => {
+      if (pendingCreation) {
+        const plan = await tauri.invoke('creation_save', { creation: pendingCreation })
         creationsRevision += 1
         creations = [...creations.filter(item => item.threadId !== plan.threadId), plan]
         pendingCreation = null
-        return submit()
-      })
+      }
+      await composerExtensions?.prepare(prompt)
     },
+    onSubmitted: () => composerExtensions?.submitted(),
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
     readMessages: () => messages,
     readActive: () => active,
@@ -736,6 +733,7 @@
     onFollow: followNewContent,
     onFocus: () => tick().then(() => composer?.focus()),
     onSend: () => { retryReview = null },
+    onSubmission: (detail) => window.dispatchEvent(new CustomEvent('muniment-chat-submit', { detail })),
     onSignInLink: (link) => { if (auth.name === 'signing-in') auth = { ...auth, link } },
   })
 

@@ -4,6 +4,7 @@
   if (window.__munimentSubscriptionProbeStarted) return
   window.__munimentSubscriptionProbeStarted = true
   const plan = window.__MUNIMENT_SUBSCRIPTION_PLAN__
+  const restored = ['features', 'restart', 'update', 'update-restart'].includes(plan.phase)
   const commandFailures = new WeakMap()
   const browserLoading = new WeakSet()
   const rejectionKind = error => {
@@ -33,11 +34,28 @@
   }
   const failure = errorClass => Object.assign(new Error('The installed subscription probe failed.'), { errorClass })
   let stage = 'composer', turn = null
+  let submission = null
+  const observeSubmission = ({ detail }) => {
+    if (submission && ['pending', 'accepted', 'rejected'].includes(detail?.invoke)
+      && ['none', 'busy', 'unavailable', 'unauthorized', 'rejected'].includes(detail?.error)) {
+      submission = { invoke: detail.invoke, error: detail.error }
+    }
+  }
+  if (!restored && plan.models.length) window.addEventListener('muniment-chat-submit', observeSubmission)
   const progress = async (next, errorClass = 'none', commandFailure = null) => {
     stage = next
-    await invoke('subscription_probe_progress', { stage, turn, errorClass, commandFailure })
+    let sendState = null
+    if (submission) {
+      const buttons = [...document.querySelectorAll('button')]
+      const send = buttons.find(button => button.getAttribute('aria-label') === 'Send' && visible(button))
+      sendState = { ...submission,
+        draftPresent: Boolean(document.querySelector('textarea#composer-message')?.value?.trim()),
+        sendPresent: Boolean(send),
+        sendDisabled: Boolean(send && (send.disabled || send.getAttribute('aria-disabled') === 'true')),
+        stopPresent: buttons.some(button => button.getAttribute('aria-label') === 'Stop' && visible(button)) }
+    }
+    await invoke('subscription_probe_progress', { stage, turn, errorClass, commandFailure, sendState })
   }
-  const restored = ['features', 'restart', 'update', 'update-restart'].includes(plan.phase)
   const turns = restored ? plan.turns : []
   let features = {}
   const visible = element => element && element.getClientRects().length > 0
@@ -65,6 +83,7 @@
     for (let index = 0; !restored && index < plan.models.length; index++) {
       const model = plan.models[index]
       turn = index
+      submission = null
       await progress('selection')
       if (index > 0) {
         const chip = await wait(() => document.querySelector('.model-chip'))
@@ -79,6 +98,7 @@
         const inventory = await invoke('local_mode_provider_inventory')
         return inventory.default_provider === 'muniment-router' && inventory.default_model === `${model.family}/${model.id}`
       })
+      submission = { invoke: 'not-started', error: 'none' }
       await progress('send')
       const composer = document.querySelector('textarea#composer-message')
       const prompt = index === 0
@@ -143,5 +163,7 @@
     const commandFailure = commandFailures.get(error) || commandFailures.get(error?.cause) || null
     try { await progress(stage, error?.errorClass || 'command-failed', commandFailure) } catch { /* Save the result even if progress fails. */ }
     await invoke('subscription_probe_observed', { turns, features, passed: false })
+  } finally {
+    if (!restored && plan.models.length) window.removeEventListener('muniment-chat-submit', observeSubmission)
   }
 })()

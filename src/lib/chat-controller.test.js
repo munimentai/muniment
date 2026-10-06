@@ -32,6 +32,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
   const onFocus = vi.fn()
   const onFollow = vi.fn()
   const onSignInLink = vi.fn()
+  const onSubmission = vi.fn()
   const controller = createChatController({
     invoke,
     listen: vi.fn(async (_, callback) => {
@@ -63,6 +64,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     onFocus,
     onFollow,
     onSignInLink,
+    onSubmission,
   })
   return {
     controller,
@@ -83,6 +85,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     onFocus,
     onFollow,
     onSignInLink,
+    onSubmission,
     summaries: () => threadSummaries,
     setActive: (next) => { active = next },
     setDraft: (next) => { draft = next },
@@ -92,6 +95,121 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     setThreadId: (next) => { openThreadId = next },
   }
 }
+
+describe('submission admission', () => {
+  const busy = 'Muniment is busy with another request. Try again.'
+
+  it('submits four model switches in one thread while history holds the connection', async () => {
+    vi.useFakeTimers()
+    const entries = []
+    const accepted = []
+    let model
+    let history
+    let polling = false
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'model_select') { model = args.model; return }
+      if (command === 'chat_thread_open') {
+        polling = true
+        const snapshot = structuredClone(entries)
+        await history.promise
+        polling = false
+        return { entries: snapshot, nextCursor: null }
+      }
+      if (command === 'chat_submit') {
+        if (polling) await new Promise(resolve => setTimeout(resolve, 100))
+        if (polling) throw busy
+        const runId = `run-${accepted.length}`
+        accepted.push({ runId, model, prompt: args.prompt })
+        return { runId }
+      }
+      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-1' }] }
+      throw new Error(`Unexpected command: ${command}`)
+    })
+    const context = setup(invoke, { threadId: 'thread-1', summaries: [{ threadId: 'thread-1' }] })
+    try {
+      await context.start()
+      for (const model of ['luna', 'terra', 'sol', 'fourth']) {
+        await invoke('model_select', { model })
+        history = deferred()
+        const refresh = context.controller.refreshOpenThread()
+        context.setDraft(`Reply with ${model}`)
+        const submission = context.controller.send()
+        await vi.advanceTimersByTimeAsync(250)
+        expect(accepted).toHaveLength(entries.length)
+        expect(context.active()?.id).toBe('pending')
+        const calls = invoke.mock.calls.length
+        await context.controller.send()
+        expect(invoke).toHaveBeenCalledTimes(calls)
+        // The overlapping page predates this submission and must not replace it.
+        history.resolve()
+        await refresh
+        await vi.advanceTimersByTimeAsync(250)
+        expect(await submission).toBe(true)
+        const runId = accepted.at(-1).runId
+        context.event({ runId, threadId: 'thread-1', phase: 'complete', text: model })
+        entries.push({ runId, prompt: `Reply with ${model}`, phase: 'complete', text: model })
+        expect(context.active()).toBeNull()
+      }
+      expect(context.onSubmission.mock.calls.filter(([state]) => state.invoke === 'accepted')).toHaveLength(4)
+      expect(context.onSubmission).toHaveBeenCalledWith({ invoke: 'rejected', error: 'busy' })
+      expect(accepted.map(run => run.model)).toEqual(['luna', 'terra', 'sol', 'fourth'])
+      expect(context.messages().filter(message => message.role === 'assistant')).toHaveLength(4)
+    } finally {
+      context.controller.cleanup()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['The message could not be sent.', 'Muniment cannot reach its background service.',
+    'The background service did not answer in time. Try again.', 'Authorization failed. Sign in again.',
+    null, { message: busy }])('does not retry an ambiguous or terminal refusal: %s', async (error) => {
+    const invoke = vi.fn().mockRejectedValue(error)
+    const context = setup(invoke)
+    expect(await context.controller.send()).toBe(false)
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(context.draft()).toBe('Hello')
+    expect(context.active()).toBeNull()
+    context.controller.cleanup()
+  })
+
+  it('bounds contention and keeps the draft after admission fails', async () => {
+    vi.useFakeTimers()
+    const invoke = vi.fn().mockRejectedValue(busy)
+    const context = setup(invoke)
+    try {
+      const submission = context.controller.send()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(await submission).toBe(false)
+      expect(context.messages().at(-1).run.failureReason).toBe(busy)
+      expect(context.draft()).toBe('Hello')
+      expect(context.active()).toBeNull()
+      const calls = invoke.mock.calls.length
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(invoke).toHaveBeenCalledTimes(calls)
+    } finally {
+      context.controller.cleanup()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not submit after cleanup cancels an admission wait', async () => {
+    vi.useFakeTimers()
+    const invoke = vi.fn().mockRejectedValueOnce(busy).mockResolvedValue({ runId: 'late' })
+    const context = setup(invoke)
+    try {
+      const submission = context.controller.send()
+      await vi.advanceTimersByTimeAsync(0)
+      context.controller.cleanup()
+      await vi.advanceTimersByTimeAsync(30_000)
+      await submission
+      expect(invoke).toHaveBeenCalledTimes(1)
+    } finally {
+      context.controller.cleanup()
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('sign-in link', () => {
   it('hands the announced sign-in link to the shell and touches no run', async () => {

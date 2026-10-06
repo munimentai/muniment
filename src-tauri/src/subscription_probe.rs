@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(any(windows, test))]
 mod diagnostics;
+mod send_state;
 
 fn root() -> Result<PathBuf, &'static str> {
     if !std::env::args_os().any(|arg| arg == "--probe-subscription-chat")
@@ -317,14 +318,19 @@ pub(crate) fn subscription_probe_progress(
     turn: Option<usize>,
     error_class: String,
     command_failure: Option<muniment_core::model_router::subscription_probe::CommandFailure>,
+    send_state: Option<send_state::SendState>,
 ) -> Result<(), &'static str> {
+    let root = root()?;
+    if let Some(state) = send_state {
+        send_state::record(&root, turn, &state)?;
+    }
     let outcome = match stage.as_str() {
         "reply" => "pending",
         "render" | "complete" => "complete",
         _ => "not-started",
     };
     muniment_core::model_router::subscription_probe::record_command(
-        &root()?,
+        &root,
         &stage,
         turn,
         outcome,

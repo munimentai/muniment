@@ -68,6 +68,34 @@ test('blocked diagnostics name the turn and provider outcome without replies or 
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+test('reply timeouts retain only matching, bounded send diagnostics', () => temporary(root => {
+  const env = { MUNIMENT_STATE_DIR: root }
+  const current = { phase: 'chat', stage: 'reply', turn: 2, requested: 'sol', transport: 'pending', error_class: 'timeout' }
+  fs.writeFileSync(path.join(root, 'subscription-probe-progress.jsonl'), JSON.stringify(current) + '\n')
+  const file = path.join(root, 'subscription-probe-send.json')
+  const send = { invoke: 'rejected', error: 'busy', draftPresent: true, sendPresent: true, sendDisabled: false, stopPresent: false }
+  const snapshot = { phase: 'chat', turn: 2, requested: 'sol', send }
+  const read = value => {
+    fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value))
+    const detail = probeProgress(env, 'chat/verify-result', 'chat')
+    assert.ok(!detail.includes('PRIVATE'))
+    return JSON.parse(detail.split('\n').at(-1).slice('probe-current='.length)).send
+  }
+  for (const [invoke, error] of [['not-started', 'none'], ['pending', 'none'], ['accepted', 'none'], ['rejected', 'busy'], ['rejected', 'rejected']]) {
+    const expected = { ...send, invoke, error }
+    assert.deepEqual(read({ ...snapshot, send: { ...expected, prompt: 'PRIVATE', message: 'PRIVATE' } }), expected)
+  }
+  for (const change of [{ phase: 'restart' }, { turn: 1 }, { turn: '2' }, { requested: 'terra' }]) {
+    assert.equal(read({ ...snapshot, ...change }), undefined)
+  }
+  for (const change of [{ invoke: 'PRIVATE' }, { error: 'PRIVATE' }, { invoke: 'accepted' }, { error: 'none' },
+    { draftPresent: 1 }, { sendPresent: null }, { stopPresent: 'true' }, { sendPresent: false, sendDisabled: true }]) {
+    assert.equal(read({ ...snapshot, send: { ...send, ...change } }), undefined)
+  }
+  assert.equal(read('{'), undefined)
+  assert.equal(read('x'.repeat(2049)), undefined)
+}))
+
 test('inventory timeouts keep model save results, OS codes, and saved defaults', () => temporary(root => {
   const env = { MUNIMENT_STATE_DIR: root }
   const file = path.join(root, 'subscription-probe-progress.jsonl')

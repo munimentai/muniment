@@ -742,16 +742,29 @@ const commandRejections = {
   'thread-open-forged-class': ['chat_thread_open', { errorClass: 'PRIVATE', kind: 'PRIVATE', code: 'PRIVATE' }, 'rejected'],
   'thread-open-null': ['chat_thread_open', null, 'rejected'],
 }
-for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context', 'new-thread', 'onboarding-only', 'disabled-send', 'hung-inventory', 'command-failed', 'progress-failed', ...Object.keys(commandRejections)]) {
+for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context', 'new-thread', 'onboarding-only', 'disabled-send', 'hung-inventory', 'command-failed', 'progress-failed', 'submit-busy', 'submit-pending', 'send-dropped', 'submit-accepted-no-run', ...Object.keys(commandRejections)]) {
   test(`the installed webview probe checks ${mode}`, async () => {
     let selected = 0, picker = false, observed, clock = 0, hung = false
     const prompts = [], entries = [], progress = []
+    const core = {}
+    let submissionListener
+    const missingRun = ['submit-busy', 'submit-pending', 'send-dropped', 'submit-accepted-no-run'].includes(mode)
     const composer = { value: '', dispatchEvent() {}, getClientRects: () => [1] }
     const responses = () => entries.map(entry => ({ getClientRects: () => [1], querySelector: selector =>
       selector === '.assistant-markdown' ? { textContent: entry.text } : selector === '.provenance' ? {} : null }))
     const send = { textContent: 'Send', getAttribute: name => name === 'aria-label' ? 'Send' : mode === 'disabled-send' ? 'true' : null,
       getClientRects: () => [1], click: () => {
       prompts.push(composer.value)
+      if (missingRun) {
+        if (mode !== 'send-dropped') {
+          submissionListener({ detail: { invoke: 'pending', error: 'none' } })
+          void core.invoke('chat_submit', { prompt: composer.value }).then(
+            () => submissionListener({ detail: { invoke: 'accepted', error: 'none' } }),
+            () => submissionListener({ detail: { invoke: 'rejected', error: 'busy' } }),
+          )
+        }
+        return
+      }
       entries.push({ runId: `22222222-2222-4222-8222-22222222222${entries.length}`,
         phase: mode === 'failed-reply' ? 'failed' : 'complete', text: mode === 'lost-context' ? 'unknown' : nonce })
     } }
@@ -770,6 +783,11 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
         progress.push(payload)
         return
       }
+      if (command === 'chat_submit') {
+        if (mode === 'submit-busy') throw 'Muniment is busy with another request. Try again.'
+        if (mode === 'submit-pending') return new Promise(() => {})
+        return { runId: 'accepted-without-run-start' }
+      }
       const rejection = commandRejections[mode]
       if (selected === 2 && command === rejection?.[0]) throw rejection[1]
       if (command === 'local_mode_provider_inventory' && mode === 'command-failed') throw new Error('PRIVATE TOKEN AND REPLY')
@@ -783,13 +801,29 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
       if (command === 'subscription_probe_observed') { observed = payload; return }
       throw new Error('Unexpected probe command.')
     }
+    core.invoke = invoke
     await vm.runInNewContext(fs.readFileSync('test/e2e/support/subscription-probe.js', 'utf8'), {
-      window: { __MUNIMENT_SUBSCRIPTION_PLAN__: { models, nonce }, __TAURI__: { core: { invoke } } },
+      window: { __MUNIMENT_SUBSCRIPTION_PLAN__: { models, nonce }, __TAURI__: { core },
+        addEventListener: (name, listener) => { assert.equal(name, 'muniment-chat-submit'); submissionListener = listener },
+        removeEventListener: (name, listener) => { assert.equal(name, 'muniment-chat-submit'); assert.equal(listener, submissionListener); submissionListener = null } },
       document, Event: class {}, clearTimeout() {},
       setTimeout: (callback, ms) => { if (ms === 250 || hung) { hung = false; callback() } },
       Date: { now: () => { clock += 1000; return clock } },
     })
     assert.equal(observed.passed, mode === 'success')
+    assert.equal(core.invoke, invoke)
+    assert.equal(submissionListener, null)
+    if (missingRun) {
+      const state = progress.at(-1).sendState
+      assert.equal(progress.at(-1).stage, 'reply')
+      assert.equal(progress.at(-1).errorClass, 'timeout')
+      assert.equal(state.invoke, { 'submit-busy': 'rejected', 'submit-pending': 'pending',
+        'send-dropped': 'not-started', 'submit-accepted-no-run': 'accepted' }[mode])
+      assert.equal(state.error, mode === 'submit-busy' ? 'busy' : 'none')
+      assert.equal(state.draftPresent, true)
+      assert.equal(state.sendPresent, true)
+      assert.equal(state.sendDisabled, false)
+    }
     assert.ok(progress.length < 40)
     assert.ok(!JSON.stringify(progress).includes(nonce))
     assert.ok(!JSON.stringify({ progress, observed }).includes('PRIVATE'))
