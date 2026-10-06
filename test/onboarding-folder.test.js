@@ -537,7 +537,7 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(drive).toContain('!drive.navigation_committed.load(Ordering::Acquire)')
     expect(drive).toContain('!selection::matches_home(panel_directory(&drive.panel).as_deref(), &home)')
     expect(drive.indexOf('drive.step = 2;')).toBeLessThan(drive.indexOf('Ok(Progress::Confirm('))
-    expect(native).toMatch(/navigate\(&identifier, &home, deadline, confirm_lookups\)\?;\s*committed.store\(true, Ordering::Release\)/)
+    expect(native).toMatch(/navigate\(\s*&identifier,\s*&home,\s*deadline,\s*confirm_lookups,\s*navigation_events,?\s*\)\?;\s*committed\.store\(true, Ordering::Release\)/)
     const selection = await readFile(new URL('../src-tauri/src/e2e_folder_dialog/selection.rs', import.meta.url), 'utf8')
     expect(selection).toContain('expected.is_some() && selected.and_then(canonical) == expected')
     const main = await readFile(new URL('../src-tauri/src/desktop.rs', import.meta.url), 'utf8')
