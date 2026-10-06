@@ -19,7 +19,7 @@ enum Value {
     Boolean(bool),
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Tree(
     HashMap<(usize, &'static str), Value>,
     std::cell::RefCell<Vec<(usize, String)>>,
@@ -96,6 +96,14 @@ impl Tree {
         tree.set(HOST, "AXChildren", Value::Elements(vec![]));
         tree.set(PANEL, "AXIdentifier", Value::String("open-panel".into()));
         tree.0.remove(&(PANEL, "AXTitle"));
+        tree
+    }
+
+    fn focused_remote_sheet_with_parent_chain() -> Self {
+        let mut tree = Self::focused_remote_sheet();
+        tree.0.remove(&(BUTTON, "AXTopLevelUIElement"));
+        tree.set(BUTTON, "AXParent", Value::Element(OTHER));
+        tree.set(OTHER, "AXParent", Value::Element(PANEL));
         tree
     }
 
@@ -269,7 +277,7 @@ fn remote_child_identity_requires_focus_and_an_unambiguous_panel() {
 
 #[test]
 fn focused_remote_child_rejects_ambiguous_disabled_and_foreign_buttons() {
-    let mut tree = Tree::focused_remote_sheet();
+    let mut tree = Tree::focused_remote_sheet_with_parent_chain();
     tree.set(OTHER, "AXChildren", Value::Elements(vec![BUTTON, 5]));
     tree.set(5, "AXRole", Value::String("AXButton".into()));
     tree.set(5, "AXTitle", Value::String(IDENTIFIER.into()));
@@ -282,12 +290,163 @@ fn focused_remote_child_rejects_ambiguous_disabled_and_foreign_buttons() {
     tree.set(BUTTON, "AXEnabled", Value::Boolean(true));
     tree.set(BUTTON, "AXTopLevelUIElement", Value::Element(HOST));
     assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
-    for name in ["AXTopLevelUIElement", "AXEnabled"] {
-        let mut tree = Tree::focused_remote_sheet();
-        tree.0.remove(&(BUTTON, name));
-        assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
-        tree.set(BUTTON, name, Value::String("invalid".into()));
-        assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+    let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+    tree.0.remove(&(BUTTON, "AXEnabled"));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+    tree.set(BUTTON, "AXEnabled", Value::String("invalid".into()));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+}
+
+#[test]
+fn focused_sheet_confirms_a_marker_child_with_parent_ownership() {
+    for role in ["AXGroup", "AXSplitGroup", "AXScrollArea"] {
+        let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+        tree.set(OTHER, "AXRole", Value::String(role.into()));
+        tree.set(BUTTON, "AXIdentifier", Value::String("OKButton".into()));
+        for invalid_top_level in [false, true] {
+            if invalid_top_level {
+                tree.set(
+                    BUTTON,
+                    "AXTopLevelUIElement",
+                    Value::String("private AX text".into()),
+                );
+            }
+            let (result, failures) = tree.lookup();
+            assert_eq!(result, Ok(Some(BUTTON)));
+            assert_eq!(
+                failures,
+                vec![
+                    ConfirmFailure::TopLevelAttributeUnavailable,
+                    ConfirmFailure::IdentifierNotFound,
+                    ConfirmFailure::TopLevelAttributeUnavailable,
+                ]
+            );
+            assert_eq!(failures[0].reason(), "AXTopLevelUIElement_unavailable");
+            assert!(!tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
+        }
+    }
+}
+
+#[test]
+fn parent_ownership_rejects_missing_foreign_and_invalid_chains() {
+    for node in [BUTTON, OTHER] {
+        let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+        tree.0.remove(&(node, "AXParent"));
+        for invalid_parent in [false, true] {
+            if invalid_parent {
+                tree.set(node, "AXParent", Value::String("private AX text".into()));
+            }
+            assert_eq!(
+                tree.lookup(),
+                (
+                    Err(ConfirmFailure::AttributeUnavailable),
+                    vec![
+                        ConfirmFailure::TopLevelAttributeUnavailable,
+                        ConfirmFailure::ParentAttributeUnavailable,
+                        ConfirmFailure::AttributeUnavailable,
+                    ],
+                )
+            );
+            assert_eq!(
+                ConfirmFailure::ParentAttributeUnavailable.reason(),
+                "AXParent_unavailable"
+            );
+        }
+    }
+    for owner in [HOST, BUTTON, OTHER] {
+        let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+        tree.set(OTHER, "AXParent", Value::Element(owner));
+        assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
+    }
+    let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+    tree.set(BUTTON, "AXParent", Value::Element(5));
+    tree.set(5, "AXParent", Value::Element(PANEL));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+    for role in ["AXWindow", "AXSheet", "AXButton", "AXTextField", ""] {
+        let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+        tree.set(BUTTON, "AXParent", Value::Element(5));
+        tree.set(5, "AXRole", Value::String(role.into()));
+        tree.set(5, "AXParent", Value::Element(PANEL));
+        assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
+    }
+}
+
+#[test]
+fn parent_ownership_keeps_default_window_and_unfocused_paths_strict() {
+    let mut default = Tree::focused_remote_sheet_with_parent_chain();
+    default.set(PANEL, "AXDefaultButton", Value::Element(BUTTON));
+    let mut window = Tree::focused_remote_sheet_with_parent_chain();
+    window.set(PANEL, "AXRole", Value::String("AXWindow".into()));
+    let mut unfocused = Tree::focused_remote_sheet_with_parent_chain();
+    unfocused.0.remove(&(APP, "AXFocusedWindow"));
+    unfocused.set(HOST, "AXChildren", Value::Elements(vec![PANEL]));
+    unfocused.set(PANEL, "AXTitle", Value::String(IDENTIFIER.into()));
+    for mut tree in [default, window, unfocused] {
+        for invalid_top_level in [false, true] {
+            if invalid_top_level {
+                tree.set(
+                    BUTTON,
+                    "AXTopLevelUIElement",
+                    Value::String("private AX text".into()),
+                );
+            }
+            assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+            assert!(!tree.1.borrow().iter().any(|(_, name)| name == "AXParent"));
+        }
+    }
+}
+
+#[test]
+fn parent_ownership_bounds_traversal_and_checks_the_deadline() {
+    for groups in [0, 255, 256] {
+        let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+        tree.set(
+            BUTTON,
+            "AXParent",
+            Value::Element(if groups == 0 { PANEL } else { 5 }),
+        );
+        for node in 5..5 + groups {
+            tree.set(node, "AXRole", Value::String("AXGroup".into()));
+            tree.set(
+                node,
+                "AXParent",
+                Value::Element(if node == 4 + groups { PANEL } else { node + 1 }),
+            );
+        }
+        assert_eq!(
+            tree.confirm(),
+            if groups < 256 {
+                Ok(Some(BUTTON))
+            } else {
+                Err(ConfirmFailure::ElementLimit)
+            }
+        );
+        tree.1.borrow_mut().clear();
+        assert_eq!(
+            confirm_button(
+                &tree,
+                &APP,
+                IDENTIFIER,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                || {
+                    if tree.1.borrow().iter().any(|(_, name)| name == "AXParent") {
+                        Err(ConfirmFailure::Deadline)
+                    } else {
+                        Ok(())
+                    }
+                },
+            ),
+            Err(ConfirmFailure::Deadline)
+        );
+        assert_eq!(
+            tree.1
+                .borrow()
+                .iter()
+                .filter(|(_, name)| name == "AXParent")
+                .count(),
+            1
+        );
     }
 }
 
@@ -416,14 +575,40 @@ fn child_prompt_identity_rechecks_focus_and_the_live_tree() {
             Err(ConfirmFailure::WrongTopLevelElement),
         ),
     ] {
-        let mut changed = Tree::focused_remote_sheet();
-        changed.set(5, "AXRole", Value::String("AXButton".into()));
-        changed.set(5, "AXTitle", Value::String(IDENTIFIER.into()));
-        changed.set(5, "AXTopLevelUIElement", Value::Element(PANEL));
-        changed.set(5, "AXEnabled", Value::Boolean(true));
-        changed.set(element, name, value);
+        for initial in [
+            Tree::focused_remote_sheet(),
+            Tree::focused_remote_sheet_with_parent_chain(),
+        ] {
+            let mut changed = initial.clone();
+            changed.set(5, "AXRole", Value::String("AXButton".into()));
+            changed.set(5, "AXTitle", Value::String(IDENTIFIER.into()));
+            changed.set(5, "AXTopLevelUIElement", Value::Element(PANEL));
+            changed.set(5, "AXEnabled", Value::Boolean(true));
+            changed.set(element, name, value.clone());
+            let ax = ChangedTree {
+                initial,
+                changed,
+                scans: std::cell::Cell::new(0),
+            };
+            assert_eq!(
+                confirm_button(
+                    &ax,
+                    &APP,
+                    IDENTIFIER,
+                    &mut Vec::new(),
+                    &mut Vec::new(),
+                    || Ok(())
+                ),
+                expected
+            );
+        }
+    }
+    for owner in [HOST, BUTTON] {
+        let initial = Tree::focused_remote_sheet_with_parent_chain();
+        let mut changed = initial.clone();
+        changed.set(OTHER, "AXParent", Value::Element(owner));
         let ax = ChangedTree {
-            initial: Tree::focused_remote_sheet(),
+            initial,
             changed,
             scans: std::cell::Cell::new(0),
         };
@@ -434,9 +619,9 @@ fn child_prompt_identity_rechecks_focus_and_the_live_tree() {
                 IDENTIFIER,
                 &mut Vec::new(),
                 &mut Vec::new(),
-                || Ok(())
+                || Ok(()),
             ),
-            expected
+            Err(ConfirmFailure::WrongTopLevelElement)
         );
     }
 }
