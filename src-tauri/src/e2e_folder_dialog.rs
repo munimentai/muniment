@@ -59,6 +59,18 @@ struct ConfirmLookup {
 }
 
 type ConfirmLookups = Arc<Mutex<Vec<ConfirmLookup>>>;
+type NavigationEvents = Arc<Mutex<Vec<accessibility::NavigationEvent>>>;
+
+fn record_navigation(
+    events: &NavigationEvents,
+    event: accessibility::NavigationEvent,
+) -> Result<(), String> {
+    let mut events = events
+        .lock()
+        .map_err(|_| "The Home picker navigation snapshot is unavailable.")?;
+    event.record(&mut events);
+    Ok(())
+}
 
 struct Drive {
     panel: Retained<NSOpenPanel>,
@@ -68,13 +80,21 @@ struct Drive {
     deadline: Instant,
     identifier: String,
     confirm_lookups: ConfirmLookups,
+    navigation_events: NavigationEvents,
     navigation_committed: Arc<AtomicBool>,
 }
 
 enum Progress {
     Waiting,
     Complete,
-    Navigate(String, String, Instant, ConfirmLookups, Arc<AtomicBool>),
+    Navigate(
+        String,
+        String,
+        Instant,
+        ConfirmLookups,
+        NavigationEvents,
+        Arc<AtomicBool>,
+    ),
     Confirm(String, Instant, ConfirmLookups),
 }
 
@@ -239,7 +259,13 @@ fn navigate(
     home: &str,
     deadline: Instant,
     confirm_lookups: ConfirmLookups,
+    navigation_events: NavigationEvents,
 ) -> Result<(), String> {
+    use accessibility::NavigationEvent;
+    record_navigation(
+        &navigation_events,
+        NavigationEvent::stage("navigation_started"),
+    )?;
     let app = ax_app();
     let ax = NativeAccessibility;
     let button = lookup_confirm(&app, identifier, deadline, &confirm_lookups)?;
@@ -253,7 +279,13 @@ fn navigate(
         CGEventFlags::CGEventFlagCommand | CGEventFlags::CGEventFlagShift,
         deadline,
     )?;
+    record_navigation(&navigation_events, NavigationEvent::stage("key_posted"))?;
     let field = loop {
+        ax_deadline(deadline).map_err(navigation_error)?;
+        record_navigation(
+            &navigation_events,
+            NavigationEvent::focused_window(&ax, &app),
+        )?;
         match accessibility::go_to_folder_field(&ax, &app, &panel, || ax_deadline(deadline)) {
             Ok(Some(field)) => break field,
             Ok(None) | Err(accessibility::ConfirmFailure::AttributeUnavailable) => {}
@@ -261,6 +293,7 @@ fn navigate(
         }
         std::thread::sleep(Duration::from_millis(100));
     };
+    record_navigation(&navigation_events, NavigationEvent::stage("field_found"))?;
     let attribute = CFString::new("AXValue");
     let value = CFString::new(home);
     ax_deadline(deadline).map_err(navigation_error)?;
@@ -278,6 +311,7 @@ fn navigate(
             "The Home picker could not enter its path. Accessibility returned {status}."
         ));
     }
+    record_navigation(&navigation_events, NavigationEvent::stage("value_set"))?;
     // Let the remote field process its edit before Return commits the path.
     std::thread::sleep(Duration::from_millis(100));
     // Read only this drive's field. Never log editable values or use Return on the Open panel.
@@ -290,20 +324,32 @@ fn navigate(
         return Err("The Home picker lost its Go to Folder field before navigation.".into());
     }
     post_key(KeyCode::RETURN, CGEventFlags::CGEventFlagNull, deadline)?;
+    record_navigation(&navigation_events, NavigationEvent::stage("return_posted"))?;
     // One Return commits navigation. A second Return could select the default directory.
     loop {
         ax_deadline(deadline).map_err(navigation_error)?;
+        record_navigation(
+            &navigation_events,
+            NavigationEvent::focused_window(&ax, &app),
+        )?;
         let sheet_closed = match accessibility::has_sheet(&ax, &panel, || ax_deadline(deadline)) {
             Ok(open) => !open,
             Err(accessibility::ConfirmFailure::AttributeUnavailable) => false,
             Err(reason) => return Err(navigation_error(reason)),
         };
+        if sheet_closed {
+            record_navigation(&navigation_events, NavigationEvent::stage("sheet_closed"))?;
+        }
         if sheet_closed
             && accessibility::focused_panel(&ax, &app, &button, || ax_deadline(deadline))
                 .ok()
                 .as_ref()
                 == Some(&panel)
         {
+            record_navigation(
+                &navigation_events,
+                NavigationEvent::stage("panel_refocused"),
+            )?;
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -442,6 +488,7 @@ fn poll(home: String) -> Result<Progress, String> {
                 deadline,
                 identifier,
                 confirm_lookups: Arc::default(),
+                navigation_events: Arc::default(),
                 navigation_committed: Arc::default(),
             });
         }
@@ -482,6 +529,7 @@ fn poll(home: String) -> Result<Progress, String> {
                 home,
                 drive.deadline,
                 Arc::clone(&drive.confirm_lookups),
+                Arc::clone(&drive.navigation_events),
                 Arc::clone(&drive.navigation_committed),
             ));
         }
@@ -558,6 +606,7 @@ pub(crate) struct FolderDialogSnapshot {
     key_window: Option<WindowSnapshot>,
     system_prompt: Option<SystemPromptSnapshot>,
     confirm_lookups: Vec<ConfirmLookup>,
+    navigation_events: Vec<accessibility::NavigationEvent>,
 }
 
 #[tauri::command]
@@ -597,6 +646,19 @@ pub(crate) async fn e2e_folder_dialog_snapshot(
                 app_active: app.isActive(),
                 key_window: app.keyWindow().map(|window| window_snapshot(&window)),
                 system_prompt: None,
+                navigation_events: DRIVE.with(|slot| {
+                    slot.borrow()
+                        .as_ref()
+                        .map(|drive| {
+                            drive
+                                .navigation_events
+                                .lock()
+                                .map(|events| events.clone())
+                                .map_err(|_| "The Home picker navigation snapshot is unavailable.")
+                        })
+                        .transpose()
+                        .map(Option::unwrap_or_default)
+                })?,
                 confirm_lookups: DRIVE.with(|slot| {
                     slot.borrow()
                         .as_ref()
@@ -654,9 +716,22 @@ pub(crate) async fn e2e_drive_folder_dialog(app: tauri::AppHandle) -> Result<boo
     match receiver.recv().map_err(|error| error.to_string())?? {
         Progress::Waiting => Ok(false),
         Progress::Complete => Ok(true),
-        Progress::Navigate(identifier, home, deadline, confirm_lookups, committed) => {
+        Progress::Navigate(
+            identifier,
+            home,
+            deadline,
+            confirm_lookups,
+            navigation_events,
+            committed,
+        ) => {
             tauri::async_runtime::spawn_blocking(move || {
-                navigate(&identifier, &home, deadline, confirm_lookups)?;
+                navigate(
+                    &identifier,
+                    &home,
+                    deadline,
+                    confirm_lookups,
+                    navigation_events,
+                )?;
                 committed.store(true, Ordering::Release);
                 Ok::<_, String>(())
             })

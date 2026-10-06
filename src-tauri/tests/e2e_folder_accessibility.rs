@@ -217,7 +217,7 @@ fn go_to_folder_requires_its_own_identifiers_not_a_generic_text_field() {
     tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
     assert_eq!(
         accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
-        Ok(None)
+        Ok(Some(6))
     );
     tree.set(APP, "AXFocusedWindow", Value::Element(5));
     tree.set(6, "AXEnabled", Value::Boolean(false));
@@ -229,6 +229,124 @@ fn go_to_folder_requires_its_own_identifiers_not_a_generic_text_field() {
     assert_eq!(
         accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
         Err(ConfirmFailure::AttributeUnavailable)
+    );
+}
+
+#[test]
+fn go_to_folder_accepts_field_focus_while_the_remote_panel_keeps_window_focus() {
+    for role in ["AXSheet", "AXWindow"] {
+        let mut tree = navigation_tree();
+        tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+        tree.set(5, "AXRole", Value::String(role.into()));
+        assert_eq!(
+            accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+            Ok(Some(6))
+        );
+        // Window focus on the panel does not authorize confirmation while its sheet remains open.
+        assert_eq!(accessibility::has_sheet(&tree, &PANEL, || Ok(())), Ok(true));
+        assert!(!tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
+    }
+}
+
+#[test]
+fn panel_window_focus_does_not_authorize_a_foreign_or_invalid_navigation_field() {
+    for (node, attribute, value) in [
+        (APP, "AXFocusedWindow", Value::Element(HOST)),
+        (APP, "AXFocusedUIElement", Value::Element(BUTTON)),
+        (5, "AXParent", Value::Element(HOST)),
+        (5, "AXParent", Value::Element(5)),
+        (5, "AXIdentifier", Value::String("search".into())),
+        (5, "AXRole", Value::String("AXGroup".into())),
+        (5, "AXChildren", Value::Elements(vec![])),
+        (6, "AXParent", Value::Element(PANEL)),
+        (6, "AXParent", Value::Element(6)),
+        (6, "AXRole", Value::String("AXButton".into())),
+        (6, "AXIdentifier", Value::String("search".into())),
+        (6, "AXEnabled", Value::Boolean(false)),
+    ] {
+        let mut tree = navigation_tree();
+        tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+        tree.set(node, attribute, value);
+        assert!(
+            !matches!(
+                accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+                Ok(Some(_))
+            ),
+            "The lookup accepted {node} with an invalid {attribute}."
+        );
+    }
+    for (node, attribute) in [(6, "AXParent"), (5, "AXParent"), (6, "AXEnabled")] {
+        let mut tree = navigation_tree();
+        tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+        tree.0.remove(&(node, attribute));
+        assert_eq!(
+            accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+            Err(ConfirmFailure::AttributeUnavailable)
+        );
+    }
+}
+
+#[test]
+fn navigation_diagnostics_read_bounded_window_labels_without_editable_values() {
+    use accessibility::NavigationEvent;
+    let mut tree = navigation_tree();
+    tree.set(5, "AXValue", Value::String("private path".into()));
+    tree.set(5, "AXTitle", Value::String("private title".into()));
+    let snapshot = NavigationEvent::focused_window(&tree, &APP);
+    assert_eq!(snapshot.stage, "focused_window");
+    assert_eq!(snapshot.role.as_deref(), Some("AXSheet"));
+    assert_eq!(snapshot.identifier.as_deref(), Some("GoToWindow"));
+    assert_eq!(
+        *tree.1.borrow(),
+        vec![
+            (APP, "AXFocusedWindow".into()),
+            (5, "AXRole".into()),
+            (5, "AXIdentifier".into()),
+        ]
+    );
+    tree.set(5, "AXIdentifier", Value::String("é".repeat(200)));
+    assert_eq!(
+        NavigationEvent::focused_window(&tree, &APP)
+            .identifier
+            .unwrap()
+            .chars()
+            .count(),
+        128
+    );
+    tree.0.remove(&(APP, "AXFocusedWindow"));
+    assert_eq!(
+        NavigationEvent::focused_window(&tree, &APP),
+        NavigationEvent::stage("focused_window")
+    );
+}
+
+#[test]
+fn navigation_diagnostics_keep_milestones_after_focus_changes_fill_the_limit() {
+    use accessibility::NavigationEvent;
+    let mut events = Vec::new();
+    NavigationEvent::stage("key_posted").record(&mut events);
+    for index in 0..100 {
+        let event = NavigationEvent {
+            stage: "focused_window",
+            role: Some("AXSheet".into()),
+            identifier: Some(index.to_string()),
+        };
+        event.clone().record(&mut events);
+        event.record(&mut events);
+    }
+    assert_eq!(events.len(), 64);
+    assert_eq!(events[0].stage, "key_posted");
+    for stage in ["field_found", "value_set", "return_posted", "sheet_closed"] {
+        NavigationEvent::stage(stage).record(&mut events);
+        NavigationEvent::stage(stage).record(&mut events);
+    }
+    assert_eq!(events.len(), 68);
+    assert_eq!(
+        events[64..]
+            .iter()
+            .map(|event| event.stage)
+            .collect::<Vec<_>>(),
+        vec!["field_found", "value_set", "return_posted", "sheet_closed"]
     );
 }
 
@@ -363,16 +481,20 @@ fn navigation_rechecks_focus_before_it_acts() {
         accessibility::focused_panel(&ax, &APP, &BUTTON, || Ok(())),
         Err(ConfirmFailure::WrongTopLevelElement)
     );
-    let ax = ChangedFocus {
-        tree: navigation_tree(),
-        attribute: "AXFocusedWindow",
-        reads: std::cell::Cell::new(0),
-    };
-    assert_eq!(
-        accessibility::go_to_folder_field(&ax, &APP, &PANEL, || Ok(())),
-        Ok(None)
-    );
-    assert!(!ax.tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
+    for window in [PANEL, 5] {
+        let mut tree = navigation_tree();
+        tree.set(APP, "AXFocusedWindow", Value::Element(window));
+        let ax = ChangedFocus {
+            tree,
+            attribute: "AXFocusedWindow",
+            reads: std::cell::Cell::new(0),
+        };
+        assert_eq!(
+            accessibility::go_to_folder_field(&ax, &APP, &PANEL, || Ok(())),
+            Ok(None)
+        );
+        assert!(!ax.tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
+    }
 }
 
 #[test]
