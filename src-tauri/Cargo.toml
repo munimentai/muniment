@@ -12,7 +12,7 @@ default = []
 local-runtime = []
 cef-smoke = ["local-runtime"]
 browser-agent = []
-e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver", "dep:core-foundation", "objc2-app-kit/NSOpenPanel", "objc2-app-kit/NSSavePanel", "objc2-app-kit/NSGraphicsContext", "objc2-app-kit/NSAccessibilityProtocols", "objc2-app-kit/NSWorkspace", "objc2-app-kit/libc"]
+e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver", "dep:core-foundation", "core-graphics/elcapitan", "objc2-app-kit/NSOpenPanel", "objc2-app-kit/NSSavePanel", "objc2-app-kit/NSGraphicsContext", "objc2-app-kit/NSAccessibilityProtocols", "objc2-app-kit/NSWorkspace", "objc2-app-kit/libc"]
 
 [workspace]
 members = [".", "integration", "cli", "acp", "runtime"]

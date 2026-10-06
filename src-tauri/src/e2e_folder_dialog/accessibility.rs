@@ -275,6 +275,150 @@ pub(super) fn confirm_button<A: Accessibility>(
     )
 }
 
+// Keyboard navigation needs the marked panel to own focus, not just a visible button.
+pub(super) fn focused_panel<A: Accessibility>(
+    ax: &A,
+    app: &A::Element,
+    button: &A::Element,
+    mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<A::Element, ConfirmFailure> {
+    check_deadline()?;
+    let panel = ax
+        .element(app, "AXFocusedWindow")
+        .map_err(|_| ConfirmFailure::AttributeUnavailable)?;
+    let role = ax
+        .string(&panel, "AXRole")
+        .map_err(|_| ConfirmFailure::AttributeUnavailable)?;
+    if !matches!(role.as_str(), "AXSheet" | "AXWindow") {
+        return Err(ConfirmFailure::WrongTopLevelElement);
+    }
+    if !enabled_button(
+        ax,
+        button,
+        &panel,
+        role == "AXSheet",
+        &mut Vec::new(),
+        &mut check_deadline,
+    )? {
+        return Err(ConfirmFailure::ButtonDisabled);
+    }
+    check_deadline()?;
+    if ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(&panel) {
+        return Err(ConfirmFailure::WrongTopLevelElement);
+    }
+    Ok(panel)
+}
+
+pub(super) fn has_sheet<A: Accessibility>(
+    ax: &A,
+    panel: &A::Element,
+    mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<bool, ConfirmFailure> {
+    use ConfirmFailure::*;
+    check_deadline()?;
+    let mut pending = ax
+        .elements(panel, "AXChildren")
+        .map_err(|_| AttributeUnavailable)?;
+    let mut visited = vec![panel.clone()];
+    while let Some(element) = pending.pop() {
+        check_deadline()?;
+        if visited.contains(&element) {
+            continue;
+        }
+        if visited.len() == 256 {
+            return Err(ElementLimit);
+        }
+        visited.push(element.clone());
+        match ax
+            .string(&element, "AXRole")
+            .map_err(|_| AttributeUnavailable)?
+            .as_str()
+        {
+            "AXSheet" => return Ok(true),
+            "AXGroup" | "AXSplitGroup" | "AXScrollArea" => {
+                pending.extend(
+                    ax.elements(&element, "AXChildren")
+                        .map_err(|_| AttributeUnavailable)?,
+                );
+            }
+            _ => {}
+        }
+    }
+    Ok(false)
+}
+
+// AppKit exposes Go to Folder as GoToWindow with a direct PathTextField child.
+// Match these identifiers, never a generic text field or a localized label.
+pub(super) fn go_to_folder_field<A: Accessibility>(
+    ax: &A,
+    app: &A::Element,
+    panel: &A::Element,
+    mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<Option<A::Element>, ConfirmFailure> {
+    use ConfirmFailure::*;
+    check_deadline()?;
+    let Ok(sheet) = ax.element(app, "AXFocusedWindow") else {
+        return Ok(None);
+    };
+    if sheet == *panel || ax.string(&sheet, "AXIdentifier").ok().as_deref() != Some("GoToWindow") {
+        return Ok(None);
+    }
+    if !matches!(
+        ax.string(&sheet, "AXRole").ok().as_deref(),
+        Some("AXSheet" | "AXWindow")
+    ) {
+        return Err(WrongTopLevelElement);
+    }
+    let children = ax
+        .elements(&sheet, "AXChildren")
+        .map_err(|_| AttributeUnavailable)?;
+    if children.len() > 256 {
+        return Err(ElementLimit);
+    }
+    let mut fields = Vec::new();
+    for child in children {
+        check_deadline()?;
+        if ax.string(&child, "AXIdentifier").ok().as_deref() == Some("PathTextField")
+            && !fields.contains(&child)
+        {
+            fields.push(child);
+        }
+    }
+    if fields.len() > 1 {
+        return Err(AttributeUnavailable);
+    }
+    let Some(field) = fields.pop() else {
+        return Ok(None);
+    };
+    check_deadline()?;
+    if ax.string(&field, "AXRole").ok().as_deref() != Some("AXTextField")
+        || ax
+            .element(&field, "AXParent")
+            .map_err(|_| AttributeUnavailable)?
+            != sheet
+    {
+        return Err(WrongTopLevelElement);
+    }
+    if !ax
+        .boolean(&field, "AXEnabled")
+        .map_err(|_| AttributeUnavailable)?
+        || ax.element(app, "AXFocusedUIElement").ok().as_ref() != Some(&field)
+        || ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(&sheet)
+    {
+        return Ok(None);
+    }
+    // Both the edit and Return require this sheet to belong to the marked panel.
+    check_deadline()?;
+    if ax
+        .element(&sheet, "AXParent")
+        .map_err(|_| AttributeUnavailable)?
+        != *panel
+    {
+        return Err(WrongTopLevelElement);
+    }
+    Ok(Some(field))
+}
+
 fn child_confirm_button<A: Accessibility>(
     ax: &A,
     panel: &A::Element,

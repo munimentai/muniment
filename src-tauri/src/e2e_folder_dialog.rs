@@ -1,22 +1,32 @@
-// The E2E drive navigates the validated panel and presses its Accessibility button.
-// It sends no keyboard events and does not need app activation.
+// The E2E drive uses Go to Folder, then presses the panel's Accessibility button.
+// Keyboard events target this process alone after the drive checks panel ownership.
 use core_foundation::{
     array::CFArray,
     base::{CFType, CFTypeRef, TCFType},
     boolean::CFBoolean,
     string::{CFString, CFStringRef},
 };
+use core_graphics::{
+    event::{CGEvent, CGEventFlags, KeyCode},
+    event_source::{CGEventSource, CGEventSourceStateID},
+};
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_app_kit::{NSAccessibility, NSApplication, NSOpenPanel, NSWindow, NSWorkspace};
-use objc2_foundation::{NSString, NSURL};
+use objc2_foundation::NSString;
 use std::{
     cell::RefCell,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
 mod accessibility;
+mod selection;
+
+use accessibility::Accessibility;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -27,6 +37,11 @@ extern "C" {
         element: CFTypeRef,
         attribute: CFStringRef,
         value: *mut CFTypeRef,
+    ) -> i32;
+    fn AXUIElementSetAttributeValue(
+        element: CFTypeRef,
+        attribute: CFStringRef,
+        value: CFTypeRef,
     ) -> i32;
     fn AXUIElementPerformAction(element: CFTypeRef, action: CFStringRef) -> i32;
     fn AXUIElementSetMessagingTimeout(element: CFTypeRef, timeout: f32) -> i32;
@@ -53,11 +68,13 @@ struct Drive {
     deadline: Instant,
     identifier: String,
     confirm_lookups: ConfirmLookups,
+    navigation_committed: Arc<AtomicBool>,
 }
 
 enum Progress {
     Waiting,
     Complete,
+    Navigate(String, String, Instant, ConfirmLookups, Arc<AtomicBool>),
     Confirm(String, Instant, ConfirmLookups),
 }
 
@@ -97,17 +114,20 @@ fn ax_attribute(element: &CFType, name: &str) -> Result<CFType, String> {
     Ok(unsafe { CFType::wrap_under_create_rule(value) })
 }
 
-fn press_confirm(
+fn ax_app() -> CFType {
+    // SAFETY: The current process exists, and Create returns an owned AX element.
+    unsafe {
+        CFType::wrap_under_create_rule(AXUIElementCreateApplication(std::process::id() as i32))
+    }
+}
+
+fn lookup_confirm(
+    app: &CFType,
     identifier: &str,
     deadline: Instant,
-    confirm_lookups: ConfirmLookups,
-) -> Result<(), String> {
-    // Run AX client calls off the AppKit thread so the app can answer them.
-    // SAFETY: The current process exists, and Create returns an owned AX element.
-    let app = unsafe {
-        CFType::wrap_under_create_rule(AXUIElementCreateApplication(std::process::id() as i32))
-    };
-    let button = loop {
+    confirm_lookups: &ConfirmLookups,
+) -> Result<CFType, String> {
+    loop {
         if Instant::now() >= deadline {
             return Err("The Home picker drive timed out before confirmation.".into());
         }
@@ -115,7 +135,7 @@ fn press_confirm(
         let mut candidates = Vec::new();
         let result = accessibility::confirm_button(
             &NativeAccessibility,
-            &app,
+            app,
             identifier,
             &mut failures,
             &mut candidates,
@@ -141,7 +161,7 @@ fn press_confirm(
                 candidates,
             });
         match result {
-            Ok(Some(button)) => break button,
+            Ok(Some(button)) => return Ok(button),
             Ok(None) => {}
             Err(reason) => {
                 return Err(format!(
@@ -151,7 +171,26 @@ fn press_confirm(
             }
         }
         std::thread::sleep(Duration::from_millis(100));
-    };
+    }
+}
+
+fn press_confirm(
+    identifier: &str,
+    deadline: Instant,
+    confirm_lookups: ConfirmLookups,
+) -> Result<(), String> {
+    // Run AX client calls off the AppKit thread so the app can answer them.
+    let app = ax_app();
+    let button = lookup_confirm(&app, identifier, deadline, &confirm_lookups)?;
+    let panel = accessibility::focused_panel(&NativeAccessibility, &app, &button, || {
+        ax_deadline(deadline)
+    })
+    .map_err(navigation_error)?;
+    if accessibility::has_sheet(&NativeAccessibility, &panel, || ax_deadline(deadline))
+        .map_err(navigation_error)?
+    {
+        return Err("The Home picker still has a navigation sheet.".into());
+    }
     if Instant::now() >= deadline {
         return Err("The Home picker drive timed out before confirmation.".into());
     }
@@ -166,6 +205,109 @@ fn press_confirm(
         return Err(format!("The Home picker could not press its confirmation button. Accessibility returned {status}."));
     }
     Ok(())
+}
+
+fn ax_deadline(deadline: Instant) -> Result<(), accessibility::ConfirmFailure> {
+    if Instant::now() >= deadline {
+        Err(accessibility::ConfirmFailure::Deadline)
+    } else {
+        Ok(())
+    }
+}
+
+fn navigation_error(reason: accessibility::ConfirmFailure) -> String {
+    format!("The Home picker navigation failed: {}.", reason.reason())
+}
+
+fn post_key(key: u16, flags: CGEventFlags, deadline: Instant) -> Result<(), String> {
+    let source = CGEventSource::new(CGEventSourceStateID::Private)
+        .map_err(|_| "The Home picker could not create a keyboard source.")?;
+    let down = CGEvent::new_keyboard_event(source.clone(), key, true)
+        .map_err(|_| "The Home picker could not create a key press.")?;
+    let up = CGEvent::new_keyboard_event(source, key, false)
+        .map_err(|_| "The Home picker could not create a key release.")?;
+    ax_deadline(deadline).map_err(navigation_error)?;
+    for event in [down, up] {
+        event.set_flags(flags);
+        event.post_to_pid(std::process::id() as i32);
+    }
+    Ok(())
+}
+
+fn navigate(
+    identifier: &str,
+    home: &str,
+    deadline: Instant,
+    confirm_lookups: ConfirmLookups,
+) -> Result<(), String> {
+    let app = ax_app();
+    let ax = NativeAccessibility;
+    let button = lookup_confirm(&app, identifier, deadline, &confirm_lookups)?;
+    let panel = accessibility::focused_panel(&ax, &app, &button, || ax_deadline(deadline))
+        .map_err(navigation_error)?;
+    if accessibility::has_sheet(&ax, &panel, || ax_deadline(deadline)).map_err(navigation_error)? {
+        return Err("The Home picker already has a navigation sheet.".into());
+    }
+    post_key(
+        KeyCode::ANSI_G,
+        CGEventFlags::CGEventFlagCommand | CGEventFlags::CGEventFlagShift,
+        deadline,
+    )?;
+    let field = loop {
+        match accessibility::go_to_folder_field(&ax, &app, &panel, || ax_deadline(deadline)) {
+            Ok(Some(field)) => break field,
+            Ok(None) | Err(accessibility::ConfirmFailure::AttributeUnavailable) => {}
+            Err(reason) => return Err(navigation_error(reason)),
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let attribute = CFString::new("AXValue");
+    let value = CFString::new(home);
+    ax_deadline(deadline).map_err(navigation_error)?;
+    // SAFETY: The lookup validates field as this panel's focused Go to Folder control.
+    // Both Core Foundation strings stay alive throughout the call.
+    let status = unsafe {
+        AXUIElementSetAttributeValue(
+            field.as_CFTypeRef(),
+            attribute.as_concrete_TypeRef(),
+            value.as_CFTypeRef(),
+        )
+    };
+    if status != 0 {
+        return Err(format!(
+            "The Home picker could not enter its path. Accessibility returned {status}."
+        ));
+    }
+    // Let the remote field process its edit before Return commits the path.
+    std::thread::sleep(Duration::from_millis(100));
+    // Read only this drive's field. Never log editable values or use Return on the Open panel.
+    if ax.string(&field, "AXValue")?.as_str() != home
+        || accessibility::go_to_folder_field(&ax, &app, &panel, || ax_deadline(deadline))
+            .map_err(navigation_error)?
+            .as_ref()
+            != Some(&field)
+    {
+        return Err("The Home picker lost its Go to Folder field before navigation.".into());
+    }
+    post_key(KeyCode::RETURN, CGEventFlags::CGEventFlagNull, deadline)?;
+    // One Return commits navigation. A second Return could select the default directory.
+    loop {
+        ax_deadline(deadline).map_err(navigation_error)?;
+        let sheet_closed = match accessibility::has_sheet(&ax, &panel, || ax_deadline(deadline)) {
+            Ok(open) => !open,
+            Err(accessibility::ConfirmFailure::AttributeUnavailable) => false,
+            Err(reason) => return Err(navigation_error(reason)),
+        };
+        if sheet_closed
+            && accessibility::focused_panel(&ax, &app, &button, || ax_deadline(deadline))
+                .ok()
+                .as_ref()
+                == Some(&panel)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 struct NativeAccessibility;
@@ -290,9 +432,8 @@ fn poll(home: String) -> Result<Progress, String> {
             // These public panel properties reach the out-of-process Open panel.
             panel.setTitle(Some(&marker));
             panel.setPrompt(Some(&marker));
-            panel.setDirectoryURL(Some(&NSURL::fileURLWithPath_isDirectory(
-                &NSString::from_str(&home), true,
-            )));
+            // directoryURL only supports configuration before presentation.
+            // Setting it here changes the local proxy, not the remote panel's directory.
             *slot = Some(Drive {
                 panel,
                 home: home.clone(),
@@ -301,6 +442,7 @@ fn poll(home: String) -> Result<Progress, String> {
                 deadline,
                 identifier,
                 confirm_lookups: Arc::default(),
+                navigation_committed: Arc::default(),
             });
         }
         let drive = slot
@@ -312,7 +454,7 @@ fn poll(home: String) -> Result<Progress, String> {
         if Instant::now() < drive.next {
             return Ok(Progress::Waiting);
         }
-        if drive.step == 1 {
+        if drive.step == 2 {
             if drive.panel.isVisible() {
                 return Ok(Progress::Waiting);
             }
@@ -320,11 +462,7 @@ fn poll(home: String) -> Result<Progress, String> {
             let selected = (urls.len() == 1)
                 .then(|| urls.objectAtIndex(0).path().map(|path| path.to_string()))
                 .flatten();
-            // The panel answers a resolved path, so compare canonical forms.
-            let canonical = |path: &str| std::fs::canonicalize(path).ok();
-            if selected.as_deref().and_then(canonical) != canonical(&home)
-                || canonical(&home).is_none()
-            {
+            if !selection::matches_home(selected.as_deref(), &home) {
                 return Err(format!(
                     "The NSOpenPanel did not select the isolated Home. The panel selected {selected:?} and the drive expected {home}."
                 ));
@@ -336,15 +474,24 @@ fn poll(home: String) -> Result<Progress, String> {
         if !drive.panel.isVisible() {
             return Err("The NSOpenPanel closed before the picker drive finished.".into());
         }
-        let expected = std::fs::canonicalize(&home).map_err(|error| error.to_string())?;
-        if panel_directory(&drive.panel)
-            .and_then(|path| std::fs::canonicalize(path).ok())
-            .as_ref() != Some(&expected)
+        if drive.step == 0 {
+            // Reserve navigation before the worker starts so concurrent polls cannot repeat it.
+            drive.step = 1;
+            return Ok(Progress::Navigate(
+                drive.identifier.clone(),
+                home,
+                drive.deadline,
+                Arc::clone(&drive.confirm_lookups),
+                Arc::clone(&drive.navigation_committed),
+            ));
+        }
+        if !drive.navigation_committed.load(Ordering::Acquire)
+            || !selection::matches_home(panel_directory(&drive.panel).as_deref(), &home)
         {
             return Ok(Progress::Waiting);
         }
         // Mark confirmation before the AX call so concurrent polls cannot press twice.
-        drive.step = 1;
+        drive.step = 2;
         Ok(Progress::Confirm(
             drive.identifier.clone(),
             drive.deadline,
@@ -507,6 +654,16 @@ pub(crate) async fn e2e_drive_folder_dialog(app: tauri::AppHandle) -> Result<boo
     match receiver.recv().map_err(|error| error.to_string())?? {
         Progress::Waiting => Ok(false),
         Progress::Complete => Ok(true),
+        Progress::Navigate(identifier, home, deadline, confirm_lookups, committed) => {
+            tauri::async_runtime::spawn_blocking(move || {
+                navigate(&identifier, &home, deadline, confirm_lookups)?;
+                committed.store(true, Ordering::Release);
+                Ok::<_, String>(())
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            Ok(false)
+        }
         Progress::Confirm(identifier, deadline, confirm_lookups) => {
             tauri::async_runtime::spawn_blocking(move || {
                 press_confirm(&identifier, deadline, confirm_lookups)
