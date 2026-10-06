@@ -1,5 +1,5 @@
 // The E2E app uses Accessibility to press its own NSOpenPanel button.
-// The drive needs Accessibility trust, but not app activation or keyboard focus.
+// The drive checks focus before it sends navigation keys to the app process.
 export async function snapshotMacosFolder() {
   return browser.execute(async () => {
     let timer
