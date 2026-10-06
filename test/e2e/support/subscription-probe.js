@@ -38,7 +38,9 @@
   const observeSubmission = ({ detail }) => {
     if (submission && ['pending', 'accepted', 'rejected'].includes(detail?.invoke)
       && ['none', 'busy', 'unavailable', 'unauthorized', 'rejected'].includes(detail?.error)) {
-      submission = { invoke: detail.invoke, error: detail.error }
+      const source = ['none', 'unknown', 'local-mode', 'auth', 'thread', 'submit'].includes(detail.source)
+        ? detail.source : detail.invoke === 'rejected' ? 'unknown' : 'none'
+      submission = { invoke: detail.invoke, error: detail.error, source }
     }
   }
   if (!restored && plan.models.length) window.addEventListener('muniment-chat-submit', observeSubmission)
@@ -98,7 +100,7 @@
         const inventory = await invoke('local_mode_provider_inventory')
         return inventory.default_provider === 'muniment-router' && inventory.default_model === `${model.family}/${model.id}`
       })
-      submission = { invoke: 'not-started', error: 'none' }
+      submission = { invoke: 'not-started', error: 'none', source: 'none' }
       await progress('send')
       const composer = document.querySelector('textarea#composer-message')
       const prompt = index === 0

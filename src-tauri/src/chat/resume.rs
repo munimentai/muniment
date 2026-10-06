@@ -67,6 +67,19 @@ pub(super) fn attach_permission_answer(answer: ChatPermissionAnswer) -> AttachCh
     }
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmissionError {
+    source: &'static str,
+    message: String,
+}
+
+impl SubmissionError {
+    fn at(source: &'static str) -> impl FnOnce(String) -> Self {
+        move |message| Self { source, message }
+    }
+}
+
 #[tauri::command]
 pub async fn chat_submit(
     app: tauri::AppHandle,
@@ -74,7 +87,7 @@ pub async fn chat_submit(
     state: tauri::State<'_, ChatState>,
     prompt: String,
     files: Option<Vec<SelectedFile>>,
-) -> Result<SubmitResult, String> {
+) -> Result<SubmitResult, SubmissionError> {
     #[cfg(any(unix, target_os = "windows"))]
     {
         let session: RunCommandSession<_> = app
@@ -82,14 +95,17 @@ pub async fn chat_submit(
             .desktop_client_session()
             .into();
         let subject = if matches!(session, RunCommandSession::Connected(_))
-            && !crate::local_mode::is_active(&app)?
+            && !crate::local_mode::is_active(&app).map_err(SubmissionError::at("local-mode"))?
         {
-            let tokens = auth::fresh_tokens_async(&auth_state, &app).await?;
+            let tokens = auth::fresh_tokens_async(&auth_state, &app)
+                .await
+                .map_err(SubmissionError::at("auth"))?;
             tokens.subject
         } else {
             None
         };
-        crate::projects::prepare_thread(&app, &state, subject.as_deref(), None, false)?;
+        crate::projects::prepare_thread(&app, &state, subject.as_deref(), None, false)
+            .map_err(SubmissionError::at("thread"))?;
         let selected_files = files.unwrap_or_default();
         #[cfg(target_os = "linux")]
         let local_prompt = prompt.clone();
@@ -104,7 +120,8 @@ pub async fn chat_submit(
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             |_| async { Err(auth::background_service_error()) },
         )
-        .await;
+        .await
+        .map_err(SubmissionError::at("submit"));
     }
 }
 

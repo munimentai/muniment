@@ -166,6 +166,140 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
 }
 
 #[test]
+fn four_model_switches_complete_in_one_thread_with_compiled_task_paths() {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let temporary = TemporaryProfile::new("four-model-switches", false);
+    let profile = &temporary.profile;
+    muniment_core::home::confirm_home(profile, &temporary.root.join("home")).unwrap();
+    let previous_state = std::env::var_os("MUNIMENT_STATE_DIR");
+    std::env::set_var("MUNIMENT_STATE_DIR", profile);
+    let descriptor = stage_pi_stub(&temporary.root);
+    let executable = muniment_core::chat_profile::ChatProfile::new(&temporary.root)
+        .pi_install_root()
+        .join("revisions")
+        .join(descriptor.version)
+        .join(descriptor.executable);
+    muniment_core::pi_settings::prepare_pi_settings(descriptor, &executable).unwrap();
+    let agent = muniment_core::state_root::agent_directory(profile);
+    let package = agent.join("npm/node_modules/pi-background-tasks");
+    let manifest_path = package.join("package.json");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains("./fixture.js"));
+    fs::write(
+        manifest_path,
+        manifest.replace("./fixture.js", "./dist/extensions/background-tasks.js"),
+    )
+    .unwrap();
+    fs::create_dir_all(package.join("dist/src/core")).unwrap();
+    fs::create_dir_all(package.join("dist/extensions")).unwrap();
+    fs::write(
+        package.join("dist/extensions/background-tasks.js"),
+        "export { default } from '../src/extension.js';",
+    )
+    .unwrap();
+    for (file, source) in [
+        ("core/registry.js", "join(cwd, '.pi', 'tasks')"),
+        ("extension.js", "Output is written to .pi/tasks"),
+        (
+            "core/attested-pi-run.js",
+            "parts[0] === '.pi' && parts[1] === 'tasks'",
+        ),
+    ] {
+        fs::write(package.join("dist/src").join(file), source).unwrap();
+    }
+    let captured_args = temporary.root.join("args");
+    std::env::set_var("PI_RESUME_STUB_ARGS", &captured_args);
+    let storage = open_profile_storage(profile).unwrap();
+    let runtime = Arc::new(Mutex::new(None));
+    let active = Arc::new(Mutex::new(None));
+    let activity = RuntimeActivityRegistry::new();
+    let session = SessionThread::default();
+    let mut thread = None;
+    for (index, model) in ["luna", "terra", "sol", "fourth"].into_iter().enumerate() {
+        let settings_path = agent.join("settings.json");
+        fs::write(
+            settings_path,
+            format!(r#"{{"defaultProvider":"openai","defaultModel":"{model}"}}"#),
+        )
+        .unwrap();
+        // The desktop checks the existing workspace before it sends RunSubmit.
+        if let Some(thread) = thread.as_deref() {
+            muniment_core::projects::workspace(profile, thread).unwrap();
+        }
+        let run_id = format!("018f0000-0000-7000-8000-00000000003{index}");
+        let (accepted, launch) = accept_prompt(
+            profile,
+            Arc::clone(&storage),
+            Arc::clone(&runtime),
+            &activity,
+            profile,
+            run_id.clone(),
+            "Reply with the test token.".into(),
+            thread.clone(),
+            &session,
+            true,
+            String::new(),
+            None,
+            Vec::new(),
+            muniment_desktop_integration::chat_grant::ChatGrant::local(),
+            Arc::clone(&active),
+            RuntimeChatEventTarget::Subscriber(None),
+            Some(descriptor),
+        )
+        .unwrap();
+        if let Some(thread) = &thread {
+            assert_eq!(&accepted.thread_id, thread);
+        }
+        thread = Some(accepted.thread_id);
+        drive_prompt(launch);
+        let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        assert_eq!(events.first().unwrap().event_type, "run.started");
+        assert_eq!(
+            events.last().unwrap().event_type,
+            "run.completed",
+            "{events:?}"
+        );
+        assert!(active.lock().unwrap().is_none());
+        let args = fs::read_to_string(&captured_args).unwrap();
+        assert!(args
+            .lines()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| pair == ["--model", model]));
+        // Model the compiled registry's session-start directory creation, even without a tool call.
+        let registry = fs::read_to_string(package.join("dist/src/core/registry.js")).unwrap();
+        let metadata = match registry.as_str() {
+            "join(cwd, '.pi', 'tasks')" => ".pi",
+            "join(cwd, '.muniment', 'tasks')" => ".muniment",
+            _ => panic!("The compiled registry fixture has an unknown path."),
+        };
+        let workspace =
+            muniment_core::projects::workspace(profile, thread.as_deref().unwrap()).unwrap();
+        fs::create_dir_all(workspace.join(metadata).join("tasks").join(&run_id)).unwrap();
+    }
+    assert_eq!(
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .thread_run_ids(thread.as_deref().unwrap(), 10, None)
+            .unwrap()
+            .run_ids
+            .len(),
+        4
+    );
+    drop(runtime);
+    std::env::remove_var("PI_RESUME_STUB_ARGS");
+    std::env::remove_var("MUNIMENT_PI_ROOT");
+    if let Some(previous) = previous_state {
+        std::env::set_var("MUNIMENT_STATE_DIR", previous);
+    } else {
+        std::env::remove_var("MUNIMENT_STATE_DIR");
+    }
+}
+
+#[test]
 fn session_thread_continues_two_prompts() {
     let (first_thread_id, second_thread_id) = accept_two_prompts_with_session_thread(true);
 

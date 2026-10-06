@@ -83,12 +83,18 @@ test('reply timeouts retain only matching, bounded send diagnostics', () => temp
   }
   for (const [invoke, error] of [['not-started', 'none'], ['pending', 'none'], ['accepted', 'none'], ['rejected', 'busy'], ['rejected', 'rejected']]) {
     const expected = { ...send, invoke, error }
-    assert.deepEqual(read({ ...snapshot, send: { ...expected, prompt: 'PRIVATE', message: 'PRIVATE' } }), expected)
+    assert.deepEqual(read({ ...snapshot, send: { ...expected, prompt: 'PRIVATE', message: 'PRIVATE' } }),
+      { ...expected, source: invoke === 'rejected' ? 'unknown' : 'none' })
+  }
+  for (const source of ['unknown', 'local-mode', 'auth', 'thread', 'submit']) {
+    assert.deepEqual(read({ ...snapshot, send: { ...send, source } }), { ...send, source })
   }
   for (const change of [{ phase: 'restart' }, { turn: 1 }, { turn: '2' }, { requested: 'terra' }]) {
     assert.equal(read({ ...snapshot, ...change }), undefined)
   }
-  for (const change of [{ invoke: 'PRIVATE' }, { error: 'PRIVATE' }, { invoke: 'accepted' }, { error: 'none' },
+  for (const change of [{ invoke: 'PRIVATE' }, { error: 'PRIVATE' }, { source: 'PRIVATE' }, { source: null },
+    { source: 'none' }, { source: 1 }, { invoke: 'accepted', error: 'none', source: 'submit' },
+    { invoke: 'accepted' }, { error: 'none' },
     { draftPresent: 1 }, { sendPresent: null }, { stopPresent: 'true' }, { sendPresent: false, sendDisabled: true }]) {
     assert.equal(read({ ...snapshot, send: { ...send, ...change } }), undefined)
   }
