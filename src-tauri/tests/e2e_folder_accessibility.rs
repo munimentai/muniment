@@ -170,6 +170,154 @@ fn navigation_tree() -> Tree {
     tree
 }
 
+fn posted_navigation_key(
+    tree: &Tree,
+    field: Option<&usize>,
+    check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
+) -> (Result<(), ConfirmFailure>, usize) {
+    let mut posts = 0;
+    let result =
+        accessibility::post_navigation_key(tree, &APP, &PANEL, field, check_deadline, || {
+            posts += 1
+        });
+    (result, posts)
+}
+
+#[test]
+fn keyboard_delivery_requires_foreground_ownership_for_both_keys() {
+    for field in [None, Some(&6)] {
+        let mut tree = if field.is_some() {
+            navigation_tree()
+        } else {
+            Tree::focused_remote_sheet_with_parent_chain()
+        };
+        // An app can retain AX window focus while another app owns session focus.
+        assert_eq!(
+            posted_navigation_key(&tree, field, || Ok(())),
+            (Err(ConfirmFailure::AttributeUnavailable), 0)
+        );
+        tree.set(APP, "AXFrontmost", Value::Boolean(false));
+        assert_eq!(
+            posted_navigation_key(&tree, field, || Ok(())),
+            (Err(ConfirmFailure::KeyboardFocusLost), 0)
+        );
+        tree.set(APP, "AXFrontmost", Value::Boolean(true));
+        assert_eq!(posted_navigation_key(&tree, field, || Ok(())), (Ok(()), 1));
+        tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+        assert_eq!(
+            posted_navigation_key(&tree, field, || Ok(())),
+            (Err(ConfirmFailure::KeyboardFocusLost), 0)
+        );
+    }
+}
+
+#[test]
+fn keyboard_delivery_rejects_an_open_sheet_or_a_stale_field() {
+    let mut tree = navigation_tree();
+    tree.set(APP, "AXFrontmost", Value::Boolean(true));
+    for window in [PANEL, 5] {
+        tree.set(APP, "AXFocusedWindow", Value::Element(window));
+        assert_eq!(
+            posted_navigation_key(&tree, None, || Ok(())),
+            (Err(ConfirmFailure::KeyboardFocusLost), 0)
+        );
+        assert_eq!(
+            posted_navigation_key(&tree, Some(&OTHER), || Ok(())),
+            (Err(ConfirmFailure::KeyboardFocusLost), 0)
+        );
+        assert_eq!(
+            posted_navigation_key(&tree, Some(&6), || Ok(())),
+            (Ok(()), 1)
+        );
+    }
+    tree.set(6, "AXEnabled", Value::Boolean(false));
+    assert_eq!(
+        posted_navigation_key(&tree, Some(&6), || Ok(())),
+        (Err(ConfirmFailure::KeyboardFocusLost), 0)
+    );
+}
+
+#[test]
+fn keyboard_delivery_rechecks_session_focus_after_target_validation() {
+    struct LostForeground(Tree, std::cell::Cell<bool>);
+    impl Accessibility for LostForeground {
+        type Element = usize;
+
+        fn elements(&self, element: &usize, name: &str) -> Result<Vec<usize>, String> {
+            self.0.elements(element, name)
+        }
+
+        fn element(&self, element: &usize, name: &str) -> Result<usize, String> {
+            self.0.element(element, name)
+        }
+
+        fn string(&self, element: &usize, name: &str) -> Result<String, String> {
+            self.0.string(element, name)
+        }
+
+        fn boolean(&self, element: &usize, name: &str) -> Result<bool, String> {
+            if *element == APP && name == "AXFrontmost" {
+                return Ok(self.1.replace(false));
+            }
+            self.0.boolean(element, name)
+        }
+    }
+    for field in [None, Some(&6)] {
+        let tree = if field.is_some() {
+            navigation_tree()
+        } else {
+            Tree::focused_remote_sheet_with_parent_chain()
+        };
+        let ax = LostForeground(tree, std::cell::Cell::new(true));
+        assert_eq!(
+            accessibility::post_navigation_key(
+                &ax,
+                &APP,
+                &PANEL,
+                field,
+                || Ok(()),
+                || {
+                    panic!("The drive must not post after another app takes focus.");
+                }
+            ),
+            Err(ConfirmFailure::KeyboardFocusLost)
+        );
+    }
+}
+
+#[test]
+fn keyboard_delivery_checks_the_deadline_after_accessibility_calls() {
+    for field in [None, Some(&6)] {
+        let mut tree = if field.is_some() {
+            navigation_tree()
+        } else {
+            Tree::focused_remote_sheet_with_parent_chain()
+        };
+        tree.set(APP, "AXFrontmost", Value::Boolean(true));
+        assert_eq!(
+            posted_navigation_key(&tree, field, || Err(ConfirmFailure::Deadline)),
+            (Err(ConfirmFailure::Deadline), 0)
+        );
+        assert!(tree.1.borrow().is_empty());
+        assert_eq!(
+            posted_navigation_key(&tree, field, || {
+                let reads = tree.1.borrow();
+                if reads
+                    .iter()
+                    .filter(|(_, name)| name == "AXFrontmost")
+                    .count()
+                    == 2
+                {
+                    Err(ConfirmFailure::Deadline)
+                } else {
+                    Ok(())
+                }
+            }),
+            (Err(ConfirmFailure::Deadline), 0)
+        );
+    }
+}
+
 #[test]
 fn navigation_requires_the_marked_buttons_own_focused_panel() {
     let mut tree = Tree::focused_remote_sheet_with_parent_chain();
