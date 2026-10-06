@@ -672,6 +672,8 @@ try {
   New-Item -Path $httpsCommandKey -Force | Out-Null
   Set-ItemProperty $httpsCommandKey -Name '(default)' -Value "`"powershell.exe`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$launcher`" `"%1`""
 
+  # Resolve pins before the specs isolate the profile.
+  $env:MUNIMENT_CORE_ROOT = (Invoke-NativeCommand "node" "scripts/muniment-core.mjs" $installerLog "Core pins resolution failed.").Trim()
   $env:MUNIMENT_E2E_APP_BINARY = $appBinary
   $env:MUNIMENT_E2E_RAW_DIR = $raw
   $env:MUNIMENT_E2E_AUTH_URL_FILE = $authUrlFile

@@ -321,6 +321,9 @@ installed_desktop=/usr/bin/muniment-desktop
 sudo install -m 0755 "$e2e_app_binary" "$installed_desktop" || { runner_failure 'installed desktop path could not use the E2E build'; exit; }
 cmp -s "$e2e_app_binary" "$installed_desktop" || { runner_failure 'installed desktop path does not contain the E2E build'; exit; }
 app_binary=$installed_desktop
+# Resolve pins before the specs isolate the profile.
+MUNIMENT_CORE_ROOT=$(run_setup node scripts/muniment-core.mjs) || { status=1; exit; }
+export MUNIMENT_CORE_ROOT
 export MUNIMENT_E2E_APP_BINARY="$app_binary" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
 export MUNIMENT_E2E_IMAGE_PATH="$image_fixture"

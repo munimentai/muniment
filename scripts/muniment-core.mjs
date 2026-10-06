@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Test environments that replace the global URL still pass import.meta.url as a string.
 const repository = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -20,6 +20,11 @@ export function coreRoot() {
   root = dirname(dirname(dirname(pins.manifest_path)))
   process.env.MUNIMENT_CORE_ROOT = root
   return root
+}
+
+// The installed E2E runners export this path before they isolate the spec home.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  console.log(coreRoot())
 }
 
 export const corePath = (...parts) => join(coreRoot(), ...parts)
