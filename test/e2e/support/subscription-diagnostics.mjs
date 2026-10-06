@@ -241,9 +241,12 @@ function readSendState(env, current) {
     if (!send || !['not-started', 'pending', 'accepted', 'rejected'].includes(send.invoke) ||
         !['none', 'busy', 'unavailable', 'unauthorized', 'rejected'].includes(send.error) ||
         (send.invoke === 'rejected') === (send.error === 'none')) return {}
+    const source = send.source === undefined ? (send.invoke === 'rejected' ? 'unknown' : 'none') : send.source
+    if (!['none', 'unknown', 'local-mode', 'auth', 'thread', 'submit'].includes(source) ||
+        (send.invoke === 'rejected') === (source === 'none')) return {}
     const flags = ['draftPresent', 'sendPresent', 'sendDisabled', 'stopPresent']
     if (!flags.every(key => typeof send[key] === 'boolean') || (send.sendDisabled && !send.sendPresent)) return {}
-    return { send: { invoke: send.invoke, error: send.error, ...Object.fromEntries(flags.map(key => [key, send[key]])) } }
+    return { send: { invoke: send.invoke, error: send.error, source, ...Object.fromEntries(flags.map(key => [key, send[key]])) } }
   } catch { return {} }
 }
 

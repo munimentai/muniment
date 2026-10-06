@@ -353,6 +353,14 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         self.pi_artifact
     }
 
+    fn prepare_pi_settings(
+        &self,
+        artifact: PiArtifactDescriptor,
+        executable: &Path,
+    ) -> Result<(), PiLaunchError> {
+        muniment_desktop_integration::pi_settings::prepare_pi_settings(artifact, executable)
+    }
+
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
         Ok(self.profile.pi_session_root())
     }

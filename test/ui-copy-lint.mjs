@@ -151,6 +151,16 @@ const DIAGNOSTICS = new Map([
     String.raw`export function getAppName(): string {\n  const name = readPiConfig()?.name\n  return typeof name === \"string\" && name.trim() ? name.trim() : \"pi\"\n}`,
     "'.pi'", "parts[0] === '.pi'",
   ]],
+  // Exact package source and manifest fixtures. Other copy in this module still gets checked.
+  ['/src-tauri/integration/src/pi_settings.rs', [
+    "'.pi'", "parts[0] === '.pi'", "['.pi', '.muniment'].includes(parts[0])",
+    "join(cwd, '.pi', 'tasks'); join('.pi', 'tasks');",
+    "join(options.cwd, '.pi', 'delegate', runDirName); join('.pi', 'delegate', runDirName, options.taskId);",
+    "join(options.cwd, '.pi', 'fusion', sessionDirName, runId); join('.pi', 'fusion', sessionDirName, runId);",
+    'Output is written to .pi/tasks', "parts[0] === '.pi' && parts[1] === 'tasks'",
+    "['.pi', '.muniment'].includes(parts[0]) && parts[1] === 'tasks'",
+    '{"pi":{"extensions":["./dist/extensions/background-tasks.js"]}}',
+  ]],
   ['provider_models.rs', ['{url}?types=chat&pi-version={}', 'pi-version=']],
   ['pi_settings.rs', ['The Pi directory URL is invalid.', 'Cannot locate the Pi home directory.', 'Pi settings lock changed owners.']],
   ['sidecar/io.rs', ['timed out writing Pi RPC stdin', 'Pi stderr {index}', 'Pi stderr 5']],
@@ -181,9 +191,12 @@ export function forbiddenHarnessCopy(source, file = '<fixture>') {
     const token = strings.find((token) => match.index >= token.index && match.index < token.index + token[0].length)
     if (!token) return file === '<fixture>' || file.endsWith('.svelte')
     if (token.rendered) return true
-    const value = token[0].slice(1, -1)
+    const value = token[0].match(/^r(#+)"([\s\S]*)"\1$/)?.[2] ?? token[0].slice(1, -1)
     if (/\bevent=[\w.-]+/.test(value)) return false
     if (diagnostics?.has(value)) return false
+    // The package manifest key identifies its extension protocol, not a customer label.
+    if (normalizedFile.endsWith('/src-tauri/integration/src/pi_settings.rs') && value === 'pi' &&
+      /\bmanifest\[\s*$/.test(copy.slice(0, token.index)) && /^\s*\]/.test(copy.slice(token.index + token[0].length))) return false
     // Paths and runtime protocol identifiers are not prose.
     if (value === 'acquiring-pi' || (/^[\w./~:@{}-]+$/.test(value) && value.includes('/'))) return false
     if (file.endsWith('.rs') && /^[a-z0-9_.:@{}-]+$/.test(value) && /[-.:@{}]/.test(value)) return false

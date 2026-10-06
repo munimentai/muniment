@@ -131,6 +131,41 @@ describe('UI copy lint', () => {
     expect(forbiddenHarnessCopy(source, 'src-tauri/src/local_mode.rs')).toHaveLength(1)
   })
 
+  it('accepts package protocol keys and exact upstream source without exempting customer copy', () => {
+    const file = 'src-tauri/integration/src/pi_settings.rs'
+    const literals = [
+      `"'.pi'"`,
+      `"parts[0] === '.pi'"`,
+      `"['.pi', '.muniment'].includes(parts[0])"`,
+      `"join(cwd, '.pi', 'tasks'); join('.pi', 'tasks');"`,
+      `"join(options.cwd, '.pi', 'delegate', runDirName); join('.pi', 'delegate', runDirName, options.taskId);"`,
+      `"join(options.cwd, '.pi', 'fusion', sessionDirName, runId); join('.pi', 'fusion', sessionDirName, runId);"`,
+      '"Output is written to .pi/tasks"',
+      `"parts[0] === '.pi' && parts[1] === 'tasks'"`,
+      `"['.pi', '.muniment'].includes(parts[0]) && parts[1] === 'tasks'"`,
+      'r#"{"pi":{"extensions":["./dist/extensions/background-tasks.js"]}}"#',
+    ]
+    for (const literal of literals) {
+      expect(forbiddenHarnessCopy(`let source = ${literal};`, file)).toEqual([])
+      expect(forbiddenHarnessCopy(`let source = ${literal};`, 'src-tauri/src/status.rs').length).toBeGreaterThan(0)
+      expect(forbiddenHarnessCopy(`let source = ${literal}; return Err("Pi failed.".into());`, file)).toEqual([
+        { file, line: 1, word: 'Pi' },
+      ])
+    }
+    expect(forbiddenHarnessCopy('let entries = manifest["pi"]["extensions"].as_array();', file)).toEqual([])
+    for (const source of [
+      'return Err("Pi failed.".into());',
+      'let label = "pi";',
+      'return Err(r#"Pi failed."#.into());',
+      'let label = "Use Pi to continue.";',
+      'let source = "Output is written to .pi/tasks. Ask Pi for help.";',
+      'let source = "manifest["; let label = "pi";',
+    ]) {
+      expect(forbiddenHarnessCopy(source, file).length).toBeGreaterThan(0)
+    }
+    expect(forbiddenHarnessCopy('<p>Output is written to .pi/tasks</p>', 'src/App.svelte')).toHaveLength(1)
+  })
+
   it('accepts the scan registry without exempting other Rust UI copy', () => {
     const file = corePath('crates/core/src/harness_scan.rs')
     expect(forbiddenHarnessCopy(fs.readFileSync(file, 'utf8'), file)).toEqual([])
