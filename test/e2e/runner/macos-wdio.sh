@@ -296,6 +296,10 @@ run_step sign-webdriver-app log_command "$raw/installer.log" codesign --force --
 run_step verify-webdriver-signature log_command "$raw/installer.log" codesign --verify --deep --strict "$installed_bundle" || exit
 unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
 
+# Resolve pins while Cargo still has the login home's toolchain and checkout.
+MUNIMENT_CORE_ROOT=$(run_step resolve-core-root node scripts/muniment-core.mjs) || { first_failed_step=resolve-core-root; status=1; exit; }
+export MUNIMENT_CORE_ROOT
+
 export MUNIMENT_E2E_APP_BINARY="$PWD/test/e2e/support/macos-wdio-app.sh" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_REAL_APP_BINARY="$installed_desktop"
 export MUNIMENT_E2E_AUTH_URL_FILE="$auth_url_file" BROWSER="$PWD/test/e2e/support/browser-launcher.sh"
