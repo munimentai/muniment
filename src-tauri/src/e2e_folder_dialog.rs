@@ -1,5 +1,5 @@
 // The E2E drive uses Go to Folder, then presses the panel's Accessibility button.
-// Keyboard events target this process alone after the drive checks panel ownership.
+// HID keyboard events reach the remote panel after the drive checks foreground ownership.
 use core_foundation::{
     array::CFArray,
     base::{CFType, CFTypeRef, TCFType},
@@ -7,7 +7,7 @@ use core_foundation::{
     string::{CFString, CFStringRef},
 };
 use core_graphics::{
-    event::{CGEvent, CGEventFlags, KeyCode},
+    event::{CGEvent, CGEventFlags, CGEventTapLocation, KeyCode},
     event_source::{CGEventSource, CGEventSourceStateID},
 };
 use objc2::{rc::Retained, MainThreadMarker};
@@ -239,19 +239,36 @@ fn navigation_error(reason: accessibility::ConfirmFailure) -> String {
     format!("The Home picker navigation failed: {}.", reason.reason())
 }
 
-fn post_key(key: u16, flags: CGEventFlags, deadline: Instant) -> Result<(), String> {
+fn post_key(
+    key: u16,
+    flags: CGEventFlags,
+    deadline: Instant,
+    app: &CFType,
+    panel: &CFType,
+    field: Option<&CFType>,
+) -> Result<(), String> {
     let source = CGEventSource::new(CGEventSourceStateID::Private)
         .map_err(|_| "The Home picker could not create a keyboard source.")?;
     let down = CGEvent::new_keyboard_event(source.clone(), key, true)
         .map_err(|_| "The Home picker could not create a key press.")?;
     let up = CGEvent::new_keyboard_event(source, key, false)
         .map_err(|_| "The Home picker could not create a key release.")?;
-    ax_deadline(deadline).map_err(navigation_error)?;
-    for event in [down, up] {
-        event.set_flags(flags);
-        event.post_to_pid(std::process::id() as i32);
-    }
-    Ok(())
+    down.set_flags(flags);
+    up.set_flags(flags);
+    accessibility::post_navigation_key(
+        &NativeAccessibility,
+        app,
+        panel,
+        field,
+        || ax_deadline(deadline),
+        || {
+            // PID delivery bypasses session routing to the remote Open panel.
+            for event in [down, up] {
+                event.post(CGEventTapLocation::HID);
+            }
+        },
+    )
+    .map_err(navigation_error)
 }
 
 fn navigate(
@@ -278,6 +295,9 @@ fn navigate(
         KeyCode::ANSI_G,
         CGEventFlags::CGEventFlagCommand | CGEventFlags::CGEventFlagShift,
         deadline,
+        &app,
+        &panel,
+        None,
     )?;
     record_navigation(&navigation_events, NavigationEvent::stage("key_posted"))?;
     let field = loop {
@@ -323,7 +343,14 @@ fn navigate(
     {
         return Err("The Home picker lost its Go to Folder field before navigation.".into());
     }
-    post_key(KeyCode::RETURN, CGEventFlags::CGEventFlagNull, deadline)?;
+    post_key(
+        KeyCode::RETURN,
+        CGEventFlags::CGEventFlagNull,
+        deadline,
+        &app,
+        &panel,
+        Some(&field),
+    )?;
     record_navigation(&navigation_events, NavigationEvent::stage("return_posted"))?;
     // One Return commits navigation. A second Return could select the default directory.
     loop {

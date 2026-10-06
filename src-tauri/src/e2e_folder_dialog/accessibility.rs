@@ -66,6 +66,7 @@ pub(super) enum ConfirmFailure {
     ParentAttributeUnavailable,
     ElementLimit,
     Deadline,
+    KeyboardFocusLost,
 }
 
 impl ConfirmFailure {
@@ -84,6 +85,7 @@ impl ConfirmFailure {
             Self::ParentAttributeUnavailable => "AXParent_unavailable",
             Self::ElementLimit => "element_limit",
             Self::Deadline => "deadline",
+            Self::KeyboardFocusLost => "keyboard_focus_lost",
         }
     }
 }
@@ -307,6 +309,43 @@ pub(super) fn focused_panel<A: Accessibility>(
         return Err(ConfirmFailure::WrongTopLevelElement);
     }
     Ok(panel)
+}
+
+// HID events follow session focus, not the app PID. Recheck ownership before each key pair.
+pub(super) fn post_navigation_key<A: Accessibility>(
+    ax: &A,
+    app: &A::Element,
+    panel: &A::Element,
+    field: Option<&A::Element>,
+    mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
+    post_pair: impl FnOnce(),
+) -> Result<(), ConfirmFailure> {
+    use ConfirmFailure::*;
+    check_deadline()?;
+    let frontmost = || {
+        ax.boolean(app, "AXFrontmost")
+            .map_err(|_| AttributeUnavailable)
+    };
+    if !frontmost()? {
+        return Err(KeyboardFocusLost);
+    }
+    if let Some(field) = field {
+        if go_to_folder_field(ax, app, panel, &mut check_deadline)?.as_ref() != Some(field) {
+            return Err(KeyboardFocusLost);
+        }
+    } else if has_sheet(ax, panel, &mut check_deadline)?
+        || ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(panel)
+    {
+        return Err(KeyboardFocusLost);
+    }
+    // AX calls can outlast the deadline or let another app take focus.
+    if !frontmost()? {
+        return Err(KeyboardFocusLost);
+    }
+    check_deadline()?;
+    // Keep key down and key up together. Never leave a key held after a focus change.
+    post_pair();
+    Ok(())
 }
 
 pub(super) fn has_sheet<A: Accessibility>(
