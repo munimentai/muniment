@@ -1,5 +1,7 @@
 #[path = "../src/e2e_folder_dialog/accessibility.rs"]
 mod accessibility;
+#[path = "../src/e2e_folder_dialog/selection.rs"]
+mod selection;
 
 use accessibility::{confirm_button, Accessibility, ConfirmFailure};
 use std::collections::HashMap;
@@ -149,6 +151,290 @@ impl Accessibility for Tree {
             Value::Boolean(value) => Ok(value),
             _ => Err(format!("The test needs a boolean for {name}.")),
         }
+    }
+}
+
+fn navigation_tree() -> Tree {
+    let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+    tree.set(PANEL, "AXChildren", Value::Elements(vec![OTHER, 5]));
+    tree.set(5, "AXRole", Value::String("AXSheet".into()));
+    tree.set(5, "AXParent", Value::Element(PANEL));
+    tree.set(5, "AXIdentifier", Value::String("GoToWindow".into()));
+    tree.set(5, "AXChildren", Value::Elements(vec![6]));
+    tree.set(6, "AXIdentifier", Value::String("PathTextField".into()));
+    tree.set(6, "AXRole", Value::String("AXTextField".into()));
+    tree.set(6, "AXParent", Value::Element(5));
+    tree.set(6, "AXEnabled", Value::Boolean(true));
+    tree.set(APP, "AXFocusedUIElement", Value::Element(6));
+    tree.set(APP, "AXFocusedWindow", Value::Element(5));
+    tree
+}
+
+#[test]
+fn navigation_requires_the_marked_buttons_own_focused_panel() {
+    let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+    assert_eq!(
+        accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+        Ok(PANEL)
+    );
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    assert_eq!(
+        accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+        Err(ConfirmFailure::AttributeUnavailable)
+    );
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    tree.set(BUTTON, "AXEnabled", Value::Boolean(false));
+    assert_eq!(
+        accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+        Err(ConfirmFailure::ButtonDisabled)
+    );
+}
+
+#[test]
+fn go_to_folder_requires_its_own_identifiers_not_a_generic_text_field() {
+    let mut tree = navigation_tree();
+    for role in ["AXSheet", "AXWindow"] {
+        tree.set(5, "AXRole", Value::String(role.into()));
+        assert_eq!(
+            accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+            Ok(Some(6))
+        );
+    }
+    tree.set(5, "AXRole", Value::String("AXGroup".into()));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Err(ConfirmFailure::WrongTopLevelElement)
+    );
+    tree.set(5, "AXRole", Value::String("AXSheet".into()));
+    for (node, identifier) in [(5, "GoToWindow"), (6, "PathTextField")] {
+        tree.set(node, "AXIdentifier", Value::String("search".into()));
+        assert_eq!(
+            accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+            Ok(None)
+        );
+        tree.set(node, "AXIdentifier", Value::String(identifier.into()));
+    }
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Ok(None)
+    );
+    tree.set(APP, "AXFocusedWindow", Value::Element(5));
+    tree.set(6, "AXEnabled", Value::Boolean(false));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Ok(None)
+    );
+    tree.0.remove(&(6, "AXEnabled"));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Err(ConfirmFailure::AttributeUnavailable)
+    );
+}
+
+#[test]
+fn go_to_folder_rejects_foreign_missing_and_cyclic_owners() {
+    for owner in [HOST, PANEL, 6] {
+        let mut tree = navigation_tree();
+        tree.set(6, "AXParent", Value::Element(owner));
+        assert_eq!(
+            accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+            Err(ConfirmFailure::WrongTopLevelElement)
+        );
+    }
+    let mut tree = navigation_tree();
+    tree.0.remove(&(6, "AXParent"));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Err(ConfirmFailure::AttributeUnavailable)
+    );
+    tree.set(6, "AXParent", Value::String("invalid".into()));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Err(ConfirmFailure::AttributeUnavailable)
+    );
+}
+
+#[test]
+fn go_to_folder_rejects_ambiguity_and_bounds_the_scan() {
+    let mut tree = navigation_tree();
+    tree.set(5, "AXChildren", Value::Elements(vec![6, 6]));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Ok(Some(6))
+    );
+    tree.set(5, "AXChildren", Value::Elements(vec![6, 7]));
+    tree.set(7, "AXIdentifier", Value::String("PathTextField".into()));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Err(ConfirmFailure::AttributeUnavailable)
+    );
+    tree.set(5, "AXChildren", Value::Elements((6..263).collect()));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Err(ConfirmFailure::ElementLimit)
+    );
+    tree.1.borrow_mut().clear();
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Err(ConfirmFailure::Deadline)),
+        Err(ConfirmFailure::Deadline)
+    );
+    assert!(tree.1.borrow().is_empty());
+}
+
+#[test]
+fn navigation_rechecks_focus_before_it_acts() {
+    struct ChangedFocus {
+        tree: Tree,
+        attribute: &'static str,
+        reads: std::cell::Cell<usize>,
+    }
+    impl Accessibility for ChangedFocus {
+        type Element = usize;
+
+        fn elements(&self, element: &usize, name: &str) -> Result<Vec<usize>, String> {
+            self.tree.elements(element, name)
+        }
+
+        fn element(&self, element: &usize, name: &str) -> Result<usize, String> {
+            if name == self.attribute {
+                self.reads.set(self.reads.get() + 1);
+                if self.reads.get() > 1 {
+                    return Ok(HOST);
+                }
+            }
+            self.tree.element(element, name)
+        }
+
+        fn string(&self, element: &usize, name: &str) -> Result<String, String> {
+            self.tree.string(element, name)
+        }
+
+        fn boolean(&self, element: &usize, name: &str) -> Result<bool, String> {
+            self.tree.boolean(element, name)
+        }
+    }
+    let ax = ChangedFocus {
+        tree: Tree::focused_remote_sheet_with_parent_chain(),
+        attribute: "AXFocusedWindow",
+        reads: std::cell::Cell::new(0),
+    };
+    assert_eq!(
+        accessibility::focused_panel(&ax, &APP, &BUTTON, || Ok(())),
+        Err(ConfirmFailure::WrongTopLevelElement)
+    );
+    let ax = ChangedFocus {
+        tree: navigation_tree(),
+        attribute: "AXFocusedWindow",
+        reads: std::cell::Cell::new(0),
+    };
+    assert_eq!(
+        accessibility::go_to_folder_field(&ax, &APP, &PANEL, || Ok(())),
+        Ok(None)
+    );
+    assert!(!ax.tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
+}
+
+#[test]
+fn a_navigation_sheet_blocks_confirmation_even_after_the_field_loses_focus() {
+    let mut tree = navigation_tree();
+    assert_eq!(accessibility::has_sheet(&tree, &PANEL, || Ok(())), Ok(true));
+    tree.set(APP, "AXFocusedUIElement", Value::Element(BUTTON));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Ok(None)
+    );
+    assert_eq!(accessibility::has_sheet(&tree, &PANEL, || Ok(())), Ok(true));
+    tree.set(PANEL, "AXChildren", Value::Elements(vec![OTHER]));
+    assert_eq!(
+        accessibility::has_sheet(&tree, &PANEL, || Ok(())),
+        Ok(false)
+    );
+    assert_eq!(
+        accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+        Err(ConfirmFailure::WrongTopLevelElement)
+    );
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    assert_eq!(
+        accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+        Ok(PANEL)
+    );
+}
+
+#[test]
+fn navigation_sheet_scan_bounds_cycles_elements_and_deadlines() {
+    let mut tree = navigation_tree();
+    tree.set(PANEL, "AXChildren", Value::Elements(vec![OTHER]));
+    tree.set(
+        OTHER,
+        "AXChildren",
+        Value::Elements(vec![OTHER, PANEL, BUTTON, 5]),
+    );
+    assert_eq!(accessibility::has_sheet(&tree, &PANEL, || Ok(())), Ok(true));
+    tree.set(
+        OTHER,
+        "AXChildren",
+        Value::Elements(vec![OTHER, PANEL, BUTTON]),
+    );
+    assert_eq!(
+        accessibility::has_sheet(&tree, &PANEL, || Ok(())),
+        Ok(false)
+    );
+    tree.set(OTHER, "AXChildren", Value::Elements((7..263).collect()));
+    for node in 7..263 {
+        tree.set(node, "AXRole", Value::String("AXButton".into()));
+    }
+    assert_eq!(
+        accessibility::has_sheet(&tree, &PANEL, || Ok(())),
+        Err(ConfirmFailure::ElementLimit)
+    );
+    tree.1.borrow_mut().clear();
+    assert_eq!(
+        accessibility::has_sheet(&tree, &PANEL, || Err(ConfirmFailure::Deadline)),
+        Err(ConfirmFailure::Deadline)
+    );
+    assert!(tree.1.borrow().is_empty());
+    tree.0.remove(&(PANEL, "AXChildren"));
+    assert_eq!(
+        accessibility::has_sheet(&tree, &PANEL, || Ok(())),
+        Err(ConfirmFailure::AttributeUnavailable)
+    );
+}
+
+#[test]
+fn a_default_directory_result_cannot_pass_as_the_isolated_home() {
+    struct Temporary(std::path::PathBuf);
+    impl Drop for Temporary {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    let root = Temporary(std::env::temp_dir().join(format!(
+        "muniment-picker-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    )));
+    let home = root.0.join("Home space café");
+    let documents = root.0.join("Documents");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir(&documents).unwrap();
+    let home = home.to_str().unwrap();
+    // A matching proxy directory cannot authorize a different result from URLs().
+    assert!(selection::matches_home(Some(home), home));
+    assert!(!selection::matches_home(documents.to_str(), home));
+    for selected in [None, Some(""), root.0.join("absent").to_str()] {
+        assert!(!selection::matches_home(selected, home));
+    }
+    let absent = root.0.join("absent");
+    assert!(!selection::matches_home(
+        absent.to_str(),
+        absent.to_str().unwrap()
+    ));
+    #[cfg(unix)]
+    {
+        let alias = root.0.join("alias");
+        std::os::unix::fs::symlink(home, &alias).unwrap();
+        assert!(selection::matches_home(alias.to_str(), home));
     }
 }
 
