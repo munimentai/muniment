@@ -152,7 +152,7 @@ describe('submission admission', () => {
         expect(context.active()).toBeNull()
       }
       expect(context.onSubmission.mock.calls.filter(([state]) => state.invoke === 'accepted')).toHaveLength(4)
-      expect(context.onSubmission).toHaveBeenCalledWith({ invoke: 'rejected', error: 'busy' })
+      expect(context.onSubmission).toHaveBeenCalledWith({ invoke: 'rejected', error: 'busy', source: 'unknown' })
       expect(accepted.map(run => run.model)).toEqual(['luna', 'terra', 'sol', 'fourth'])
       expect(context.messages().filter(message => message.role === 'assistant')).toHaveLength(4)
     } finally {
@@ -171,6 +171,36 @@ describe('submission admission', () => {
     expect(context.draft()).toBe('Hello')
     expect(context.active()).toBeNull()
     context.controller.cleanup()
+  })
+
+  it.each(['local-mode', 'auth', 'thread', 'submit', 'PRIVATE', null])('records only a bounded submission source: %s', async source => {
+    const error = { source, message: 'PRIVATE token, path, and prompt' }
+    const invoke = vi.fn().mockRejectedValue(error)
+    const context = setup(invoke)
+    expect(await context.controller.send()).toBe(false)
+    expect(context.onSubmission).toHaveBeenLastCalledWith({
+      invoke: 'rejected', error: 'rejected', source: ['PRIVATE', null].includes(source) ? 'unknown' : source,
+    })
+    expect(JSON.stringify(context.onSubmission.mock.calls)).not.toContain('PRIVATE')
+    expect(invoke).toHaveBeenCalledTimes(1)
+    if (!['PRIVATE', null].includes(source)) expect(context.messages().at(-1).run.failureReason).toBe(error.message)
+    context.controller.cleanup()
+  })
+
+  it('retries a structured busy refusal and clears its source after acceptance', async () => {
+    vi.useFakeTimers()
+    const invoke = vi.fn().mockRejectedValueOnce({ source: 'auth', message: busy }).mockResolvedValue({ runId: 'run-1' })
+    const context = setup(invoke)
+    try {
+      const submission = context.controller.send()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(await submission).toBe(true)
+      expect(context.onSubmission).toHaveBeenCalledWith({ invoke: 'rejected', error: 'busy', source: 'auth' })
+      expect(context.onSubmission).toHaveBeenLastCalledWith({ invoke: 'accepted', error: 'none', source: 'none' })
+    } finally {
+      context.controller.cleanup()
+      vi.useRealTimers()
+    }
   })
 
   it('bounds contention and keeps the draft after admission fails', async () => {

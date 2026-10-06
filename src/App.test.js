@@ -6327,7 +6327,7 @@ describe('installed subscription probe reply DOM', () => {
         expect(invoke).toHaveBeenCalledWith('subscription_probe_progress', {
           stage: 'complete', turn: 0, errorClass: 'none', commandFailure: null,
           sendState: {
-            invoke: 'accepted', error: 'none', draftPresent: false,
+            invoke: 'accepted', error: 'none', source: 'none', draftPresent: false,
             sendPresent: false, sendDisabled: false, stopPresent: false,
           },
         })
