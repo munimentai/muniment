@@ -11,3 +11,4 @@ pub mod browser_control;
 pub mod chat_grant;
 pub mod pi_settings;
 pub mod provider_clients;
+pub mod workspace_metadata;

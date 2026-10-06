@@ -167,6 +167,15 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
 
 #[test]
 fn four_model_switches_complete_in_one_thread_with_compiled_task_paths() {
+    four_model_switches_with_artifacts(false);
+}
+
+#[test]
+fn four_model_switches_recover_pre_repair_metadata_before_third_submission() {
+    four_model_switches_with_artifacts(true);
+}
+
+fn four_model_switches_with_artifacts(pre_repair: bool) {
     let _environment = ENVIRONMENT.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary = TemporaryProfile::new("four-model-switches", false);
@@ -191,21 +200,26 @@ fn four_model_switches_complete_in_one_thread_with_compiled_task_paths() {
         manifest.replace("./fixture.js", "./dist/extensions/background-tasks.js"),
     )
     .unwrap();
-    fs::create_dir_all(package.join("dist/src/core")).unwrap();
+    fs::create_dir_all(package.join("dist/src/core/delegate")).unwrap();
+    fs::create_dir_all(package.join("dist/src/core/fusion")).unwrap();
     fs::create_dir_all(package.join("dist/extensions")).unwrap();
     fs::write(
         package.join("dist/extensions/background-tasks.js"),
         "export { default } from '../src/extension.js';",
     )
     .unwrap();
-    for (file, source) in [
+    let artifact_sources = [
         ("core/registry.js", "join(cwd, '.pi', 'tasks')"),
+        ("core/delegate/artifacts.js", "join(cwd, '.pi', 'delegate')"),
+        ("core/fusion/artifacts.js", "join(cwd, '.pi', 'fusion')"),
+    ];
+    for (file, source) in artifact_sources.into_iter().chain([
         ("extension.js", "Output is written to .pi/tasks"),
         (
             "core/attested-pi-run.js",
             "parts[0] === '.pi' && parts[1] === 'tasks'",
         ),
-    ] {
+    ]) {
         fs::write(package.join("dist/src").join(file), source).unwrap();
     }
     let captured_args = temporary.root.join("args");
@@ -225,6 +239,13 @@ fn four_model_switches_complete_in_one_thread_with_compiled_task_paths() {
         .unwrap();
         // The desktop checks the existing workspace before it sends RunSubmit.
         if let Some(thread) = thread.as_deref() {
+            if pre_repair && index == 2 {
+                assert!(muniment_core::projects::workspace(profile, thread).is_err());
+            }
+            muniment_desktop_integration::workspace_metadata::recover_thread_metadata(
+                profile, thread,
+            )
+            .unwrap();
             muniment_core::projects::workspace(profile, thread).unwrap();
         }
         let run_id = format!("018f0000-0000-7000-8000-00000000003{index}");
@@ -267,16 +288,69 @@ fn four_model_switches_complete_in_one_thread_with_compiled_task_paths() {
             .collect::<Vec<_>>()
             .windows(2)
             .any(|pair| pair == ["--model", model]));
-        // Model the compiled registry's session-start directory creation, even without a tool call.
-        let registry = fs::read_to_string(package.join("dist/src/core/registry.js")).unwrap();
-        let metadata = match registry.as_str() {
-            "join(cwd, '.pi', 'tasks')" => ".pi",
-            "join(cwd, '.muniment', 'tasks')" => ".muniment",
-            _ => panic!("The compiled registry fixture has an unknown path."),
-        };
         let workspace =
             muniment_core::projects::workspace(profile, thread.as_deref().unwrap()).unwrap();
-        fs::create_dir_all(workspace.join(metadata).join("tasks").join(&run_id)).unwrap();
+        for (file, original) in artifact_sources {
+            // The first two legacy turns recreate the conflict from the installed package.
+            let source = if pre_repair && index < 2 {
+                original.to_owned()
+            } else {
+                fs::read_to_string(package.join("dist/src").join(file)).unwrap()
+            };
+            let script = format!(
+                "import {{ join }} from 'node:path';
+                 import {{ mkdirSync, writeFileSync }} from 'node:fs';
+                 const cwd = process.argv[1];
+                 const root = {source};
+                 mkdirSync(root, {{ recursive: true }});
+                 writeFileSync(join(root, 'turn-{index}'), 'artifact-{index}');
+                 writeFileSync(join(root, 'conflict'), 'artifact-{index}');"
+            );
+            let output = std::process::Command::new("node")
+                .args(["--input-type=module", "--eval", &script])
+                .arg(&workspace)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        if !pre_repair || index >= 2 {
+            assert!(!workspace.join(".pi").exists());
+            for tool in ["tasks", "delegate", "fusion"] {
+                assert!(workspace
+                    .join(".muniment")
+                    .join(tool)
+                    .join(format!("turn-{index}"))
+                    .is_file());
+            }
+        }
+        if pre_repair && index == 3 {
+            let recovered = fs::read_dir(workspace.join(".muniment"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("recovered-")
+                })
+                .unwrap();
+            for tool in ["tasks", "delegate", "fusion"] {
+                assert_eq!(
+                    fs::read_to_string(recovered.join("metadata").join(tool).join("conflict"))
+                        .unwrap(),
+                    "artifact-1"
+                );
+                assert_eq!(
+                    fs::read_to_string(workspace.join(".muniment").join(tool).join("turn-0"))
+                        .unwrap(),
+                    "artifact-0"
+                );
+            }
+        }
     }
     assert_eq!(
         storage

@@ -61,6 +61,12 @@ fn brand_compiled_background_tasks(npm: &Path) -> io::Result<()> {
     }
     for (relative, old, new) in [
         ("dist/src/core/registry.js", "'.pi'", "'.muniment'"),
+        (
+            "dist/src/core/delegate/artifacts.js",
+            "'.pi'",
+            "'.muniment'",
+        ),
+        ("dist/src/core/fusion/artifacts.js", "'.pi'", "'.muniment'"),
         ("dist/src/extension.js", ".pi/tasks", ".muniment/tasks"),
         (
             "dist/src/core/attested-pi-run.js",
@@ -93,7 +99,8 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("compiled-task-paths-{}", uuid::Uuid::new_v4()));
         let package = root.join("node_modules/pi-background-tasks");
-        fs::create_dir_all(package.join("dist/src/core")).unwrap();
+        fs::create_dir_all(package.join("dist/src/core/delegate")).unwrap();
+        fs::create_dir_all(package.join("dist/src/core/fusion")).unwrap();
         fs::write(
             package.join("package.json"),
             r#"{"pi":{"extensions":["./dist/extensions/background-tasks.js"]}}"#,
@@ -103,6 +110,14 @@ mod tests {
             (
                 "core/registry.js",
                 "join(cwd, '.pi', 'tasks'); join('.pi', 'tasks');",
+            ),
+            (
+                "core/delegate/artifacts.js",
+                "join(options.cwd, '.pi', 'delegate', runDirName); join('.pi', 'delegate', runDirName, options.taskId);",
+            ),
+            (
+                "core/fusion/artifacts.js",
+                "join(options.cwd, '.pi', 'fusion', sessionDirName, runId); join('.pi', 'fusion', sessionDirName, runId);",
             ),
             ("extension.js", "Output is written to .pi/tasks"),
             (
@@ -120,6 +135,13 @@ mod tests {
                 fs::read_to_string(package.join("dist/src/core/registry.js")).unwrap(),
                 "join(cwd, '.muniment', 'tasks'); join('.muniment', 'tasks');"
             );
+            for tool in ["delegate", "fusion"] {
+                let source =
+                    fs::read_to_string(package.join(format!("dist/src/core/{tool}/artifacts.js")))
+                        .unwrap();
+                assert!(!source.contains("'.pi'"));
+                assert_eq!(source.matches("'.muniment'").count(), 2);
+            }
             assert_eq!(
                 fs::read_to_string(package.join("dist/src/extension.js")).unwrap(),
                 "Output is written to .muniment/tasks"

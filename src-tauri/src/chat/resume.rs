@@ -104,6 +104,15 @@ pub async fn chat_submit(
         } else {
             None
         };
+        if let Some(thread) = state.session_thread.current(subject.as_deref()) {
+            let profile = muniment_runtime::profile_directory().map_err(|_| {
+                SubmissionError::at("thread")("The project catalog is unavailable.".into())
+            })?;
+            muniment_desktop_integration::workspace_metadata::recover_thread_metadata(
+                &profile, &thread,
+            )
+            .map_err(SubmissionError::at("thread"))?;
+        }
         crate::projects::prepare_thread(&app, &state, subject.as_deref(), None, false)
             .map_err(SubmissionError::at("thread"))?;
         let selected_files = files.unwrap_or_default();
