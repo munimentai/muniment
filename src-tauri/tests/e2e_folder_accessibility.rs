@@ -256,6 +256,46 @@ fn go_to_folder_rejects_foreign_missing_and_cyclic_owners() {
 }
 
 #[test]
+fn go_to_folder_rechecks_sheet_ownership_before_edit_and_return() {
+    for role in ["AXSheet", "AXWindow"] {
+        for owner in [
+            Some(Value::Element(HOST)),
+            Some(Value::Element(5)),
+            Some(Value::Element(6)),
+            None,
+            Some(Value::String("invalid".into())),
+        ] {
+            let mut tree = navigation_tree();
+            tree.set(5, "AXRole", Value::String(role.into()));
+            assert_eq!(
+                accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+                Ok(Some(6))
+            );
+            let expected = match owner {
+                Some(Value::Element(_)) => ConfirmFailure::WrongTopLevelElement,
+                _ => ConfirmFailure::AttributeUnavailable,
+            };
+            // The sheet can lose its owner after the edit and before Return.
+            match owner {
+                Some(value) => tree.set(5, "AXParent", value),
+                None => {
+                    tree.0.remove(&(5, "AXParent"));
+                }
+            }
+            assert_eq!(
+                accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+                Err(expected)
+            );
+            tree.set(5, "AXParent", Value::Element(PANEL));
+            assert_eq!(
+                accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+                Ok(Some(6))
+            );
+        }
+    }
+}
+
+#[test]
 fn go_to_folder_rejects_ambiguity_and_bounds_the_scan() {
     let mut tree = navigation_tree();
     tree.set(5, "AXChildren", Value::Elements(vec![6, 6]));

@@ -407,6 +407,15 @@ pub(super) fn go_to_folder_field<A: Accessibility>(
     {
         return Ok(None);
     }
+    // Both the edit and Return require this sheet to belong to the marked panel.
+    check_deadline()?;
+    if ax
+        .element(&sheet, "AXParent")
+        .map_err(|_| AttributeUnavailable)?
+        != *panel
+    {
+        return Err(WrongTopLevelElement);
+    }
     Ok(Some(field))
 }
 
