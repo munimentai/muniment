@@ -166,6 +166,214 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
 }
 
 #[test]
+fn four_model_switches_complete_in_one_thread_with_compiled_task_paths() {
+    four_model_switches_with_artifacts(false);
+}
+
+#[test]
+fn four_model_switches_recover_pre_repair_metadata_before_third_submission() {
+    four_model_switches_with_artifacts(true);
+}
+
+fn four_model_switches_with_artifacts(pre_repair: bool) {
+    let _environment = ENVIRONMENT.lock().unwrap();
+    muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    let temporary = TemporaryProfile::new("four-model-switches", false);
+    let profile = &temporary.profile;
+    muniment_core::home::confirm_home(profile, &temporary.root.join("home")).unwrap();
+    let previous_state = std::env::var_os("MUNIMENT_STATE_DIR");
+    std::env::set_var("MUNIMENT_STATE_DIR", profile);
+    let descriptor = stage_pi_stub(&temporary.root);
+    let executable = muniment_core::chat_profile::ChatProfile::new(&temporary.root)
+        .pi_install_root()
+        .join("revisions")
+        .join(descriptor.version)
+        .join(descriptor.executable);
+    muniment_core::pi_settings::prepare_pi_settings(descriptor, &executable).unwrap();
+    let agent = muniment_core::state_root::agent_directory(profile);
+    let package = agent.join("npm/node_modules/pi-background-tasks");
+    let manifest_path = package.join("package.json");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains("./fixture.js"));
+    fs::write(
+        manifest_path,
+        manifest.replace("./fixture.js", "./dist/extensions/background-tasks.js"),
+    )
+    .unwrap();
+    fs::create_dir_all(package.join("dist/src/core/delegate")).unwrap();
+    fs::create_dir_all(package.join("dist/src/core/fusion")).unwrap();
+    fs::create_dir_all(package.join("dist/extensions")).unwrap();
+    fs::write(
+        package.join("dist/extensions/background-tasks.js"),
+        "export { default } from '../src/extension.js';",
+    )
+    .unwrap();
+    let artifact_sources = [
+        ("core/registry.js", "join(cwd, '.pi', 'tasks')"),
+        ("core/delegate/artifacts.js", "join(cwd, '.pi', 'delegate')"),
+        ("core/fusion/artifacts.js", "join(cwd, '.pi', 'fusion')"),
+    ];
+    for (file, source) in artifact_sources.into_iter().chain([
+        ("extension.js", "Output is written to .pi/tasks"),
+        (
+            "core/attested-pi-run.js",
+            "parts[0] === '.pi' && parts[1] === 'tasks'",
+        ),
+    ]) {
+        fs::write(package.join("dist/src").join(file), source).unwrap();
+    }
+    let captured_args = temporary.root.join("args");
+    std::env::set_var("PI_RESUME_STUB_ARGS", &captured_args);
+    let storage = open_profile_storage(profile).unwrap();
+    let runtime = Arc::new(Mutex::new(None));
+    let active = Arc::new(Mutex::new(None));
+    let activity = RuntimeActivityRegistry::new();
+    let session = SessionThread::default();
+    let mut thread = None;
+    for (index, model) in ["luna", "terra", "sol", "fourth"].into_iter().enumerate() {
+        let settings_path = agent.join("settings.json");
+        fs::write(
+            settings_path,
+            format!(r#"{{"defaultProvider":"openai","defaultModel":"{model}"}}"#),
+        )
+        .unwrap();
+        // The desktop checks the existing workspace before it sends RunSubmit.
+        if let Some(thread) = thread.as_deref() {
+            if pre_repair && index == 2 {
+                assert!(muniment_core::projects::workspace(profile, thread).is_err());
+            }
+            muniment_desktop_integration::workspace_metadata::recover_thread_metadata(
+                profile, thread,
+            )
+            .unwrap();
+            muniment_core::projects::workspace(profile, thread).unwrap();
+        }
+        let run_id = format!("018f0000-0000-7000-8000-00000000003{index}");
+        let (accepted, launch) = accept_prompt(
+            profile,
+            Arc::clone(&storage),
+            Arc::clone(&runtime),
+            &activity,
+            profile,
+            run_id.clone(),
+            "Reply with the test token.".into(),
+            thread.clone(),
+            &session,
+            true,
+            String::new(),
+            None,
+            Vec::new(),
+            muniment_desktop_integration::chat_grant::ChatGrant::local(),
+            Arc::clone(&active),
+            RuntimeChatEventTarget::Subscriber(None),
+            Some(descriptor),
+        )
+        .unwrap();
+        if let Some(thread) = &thread {
+            assert_eq!(&accepted.thread_id, thread);
+        }
+        thread = Some(accepted.thread_id);
+        drive_prompt(launch);
+        let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        assert_eq!(events.first().unwrap().event_type, "run.started");
+        assert_eq!(
+            events.last().unwrap().event_type,
+            "run.completed",
+            "{events:?}"
+        );
+        assert!(active.lock().unwrap().is_none());
+        let args = fs::read_to_string(&captured_args).unwrap();
+        assert!(args
+            .lines()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| pair == ["--model", model]));
+        let workspace =
+            muniment_core::projects::workspace(profile, thread.as_deref().unwrap()).unwrap();
+        for (file, original) in artifact_sources {
+            // The first two legacy turns recreate the conflict from the installed package.
+            let source = if pre_repair && index < 2 {
+                original.to_owned()
+            } else {
+                fs::read_to_string(package.join("dist/src").join(file)).unwrap()
+            };
+            let script = format!(
+                "import {{ join }} from 'node:path';
+                 import {{ mkdirSync, writeFileSync }} from 'node:fs';
+                 const cwd = process.argv[1];
+                 const root = {source};
+                 mkdirSync(root, {{ recursive: true }});
+                 writeFileSync(join(root, 'turn-{index}'), 'artifact-{index}');
+                 writeFileSync(join(root, 'conflict'), 'artifact-{index}');"
+            );
+            let output = std::process::Command::new("node")
+                .args(["--input-type=module", "--eval", &script])
+                .arg(&workspace)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        if !pre_repair || index >= 2 {
+            assert!(!workspace.join(".pi").exists());
+            for tool in ["tasks", "delegate", "fusion"] {
+                assert!(workspace
+                    .join(".muniment")
+                    .join(tool)
+                    .join(format!("turn-{index}"))
+                    .is_file());
+            }
+        }
+        if pre_repair && index == 3 {
+            let recovered = fs::read_dir(workspace.join(".muniment"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("recovered-")
+                })
+                .unwrap();
+            for tool in ["tasks", "delegate", "fusion"] {
+                assert_eq!(
+                    fs::read_to_string(recovered.join("metadata").join(tool).join("conflict"))
+                        .unwrap(),
+                    "artifact-1"
+                );
+                assert_eq!(
+                    fs::read_to_string(workspace.join(".muniment").join(tool).join("turn-0"))
+                        .unwrap(),
+                    "artifact-0"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        storage
+            .lock()
+            .unwrap()
+            .journal
+            .thread_run_ids(thread.as_deref().unwrap(), 10, None)
+            .unwrap()
+            .run_ids
+            .len(),
+        4
+    );
+    drop(runtime);
+    std::env::remove_var("PI_RESUME_STUB_ARGS");
+    std::env::remove_var("MUNIMENT_PI_ROOT");
+    if let Some(previous) = previous_state {
+        std::env::set_var("MUNIMENT_STATE_DIR", previous);
+    } else {
+        std::env::remove_var("MUNIMENT_STATE_DIR");
+    }
+}
+
+#[test]
 fn session_thread_continues_two_prompts() {
     let (first_thread_id, second_thread_id) = accept_two_prompts_with_session_thread(true);
 

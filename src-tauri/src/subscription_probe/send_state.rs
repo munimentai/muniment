@@ -22,10 +22,22 @@ enum SendError {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum SendSource {
+    None,
+    Unknown,
+    LocalMode,
+    Auth,
+    Thread,
+    Submit,
+}
+
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SendState {
     invoke: InvokeState,
     error: SendError,
+    source: SendSource,
     draft_present: bool,
     send_present: bool,
     send_disabled: bool,
@@ -38,6 +50,7 @@ pub(super) fn record(
     state: &SendState,
 ) -> Result<(), &'static str> {
     if matches!(state.invoke, InvokeState::Rejected) == matches!(state.error, SendError::None)
+        || matches!(state.invoke, InvokeState::Rejected) == matches!(state.source, SendSource::None)
         || (state.send_disabled && !state.send_present)
     {
         return Err("The probe send state is invalid.");
@@ -89,6 +102,7 @@ mod tests {
         let mut state = SendState {
             invoke: InvokeState::Rejected,
             error: SendError::Busy,
+            source: SendSource::Submit,
             draft_present: true,
             send_present: true,
             send_disabled: false,
@@ -99,13 +113,19 @@ mod tests {
         let snapshot: serde_json::Value = serde_json::from_str(&saved).unwrap();
         assert_eq!(snapshot["send"]["invoke"], "rejected");
         assert_eq!(snapshot["send"]["error"], "busy");
+        assert_eq!(snapshot["send"]["source"], "submit");
         assert_eq!(snapshot["requested"], "sol");
         for turn in [None, Some(4), Some(usize::MAX)] {
             assert!(record(&root, turn, &state).is_err());
         }
+        state.source = SendSource::None;
+        assert!(record(&root, Some(0), &state).is_err());
+        state.source = SendSource::Thread;
         state.error = SendError::None;
         assert!(record(&root, Some(0), &state).is_err());
         state.invoke = InvokeState::Accepted;
+        assert!(record(&root, Some(0), &state).is_err());
+        state.source = SendSource::None;
         state.send_present = false;
         state.send_disabled = true;
         assert!(record(&root, Some(0), &state).is_err());
@@ -119,13 +139,15 @@ mod tests {
     #[test]
     fn send_state_rejects_unbounded_fields_and_wrong_types() {
         let valid = serde_json::json!({
-            "invoke": "pending", "error": "none", "draftPresent": true,
+            "invoke": "pending", "error": "none", "source": "none", "draftPresent": true,
             "sendPresent": false, "sendDisabled": false, "stopPresent": true,
         });
         assert!(serde_json::from_value::<SendState>(valid.clone()).is_ok());
         for (field, value) in [
             ("invoke", serde_json::json!("PRIVATE")),
             ("error", serde_json::json!("PRIVATE")),
+            ("source", serde_json::json!("PRIVATE")),
+            ("source", serde_json::json!(1)),
             ("draftPresent", serde_json::json!(1)),
             ("prompt", serde_json::json!("PRIVATE")),
         ] {

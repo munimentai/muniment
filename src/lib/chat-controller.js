@@ -6,6 +6,12 @@ const signaledThreadCap = 256
 const signaledRunCap = 256
 const liveTextCap = 256
 const desktopBusy = 'Muniment is busy with another request. Try again.'
+const submissionSources = ['local-mode', 'auth', 'thread', 'submit']
+
+function submissionFailure(error) {
+  const structured = error && submissionSources.includes(error.source) && typeof error.message === 'string'
+  return { source: structured ? error.source : 'unknown', message: structured ? error.message : error }
+}
 
 function historyReadError(error) {
   const cause = typeof error === 'string' ? error : error?.message
@@ -776,18 +782,19 @@ export function createChatController({
     const deadline = Date.now() + 30_000
     for (;;) {
       try {
-        onSubmission({ invoke: 'pending', error: 'none' })
+        onSubmission({ invoke: 'pending', error: 'none', source: 'none' })
         const result = await invoke('chat_submit', payload)
-        onSubmission({ invoke: 'accepted', error: 'none' })
+        onSubmission({ invoke: 'accepted', error: 'none', source: 'none' })
         return result
       } catch (error) {
-        const kind = error === desktopBusy ? 'busy'
-          : error === 'Muniment cannot reach its background service.' ? 'unavailable'
-            : ['Authorization failed. Sign in again.', 'The runtime refused the request as unauthorized. Enter local mode or sign in, then retry.'].includes(error) ? 'unauthorized' : 'rejected'
-        onSubmission({ invoke: 'rejected', error: kind })
+        const { source, message } = submissionFailure(error)
+        const kind = message === desktopBusy ? 'busy'
+          : message === 'Muniment cannot reach its background service.' ? 'unavailable'
+            : ['Authorization failed. Sign in again.', 'The runtime refused the request as unauthorized. Enter local mode or sign in, then retry.'].includes(message) ? 'unauthorized' : 'rejected'
+        onSubmission({ invoke: 'rejected', error: kind, source })
         // DesktopBusy means the holder sent no request. History can hold that connection during a send.
         // Never retry a transport failure because the runtime might already own the run.
-        if (error !== desktopBusy || Date.now() >= deadline || destroyed) throw error
+        if (message !== desktopBusy || Date.now() >= deadline || destroyed) throw error
         await new Promise(resolve => setTimeout(resolve, 100))
         if (destroyed) throw error
       }
@@ -837,7 +844,8 @@ export function createChatController({
         recoveryPending = true
         return false
       }
-      const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed', failureReason: typeof error === 'string' ? error : 'The message could not be sent.' }
+      const { message } = submissionFailure(error)
+      const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed', failureReason: typeof message === 'string' ? message : 'The message could not be sent.' }
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: failed } : message))
       if (submissionId !== submissionSequence) return
       onAnnounce(failed)
