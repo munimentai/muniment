@@ -335,6 +335,11 @@ pub(super) fn has_sheet<A: Accessibility>(
             .as_str()
         {
             "AXSheet" => return Ok(true),
+            "AXWindow"
+                if ax.string(&element, "AXIdentifier").ok().as_deref() == Some("GoToWindow") =>
+            {
+                return Ok(true);
+            }
             "AXGroup" | "AXSplitGroup" | "AXScrollArea" => {
                 pending.extend(
                     ax.elements(&element, "AXChildren")
@@ -347,8 +352,52 @@ pub(super) fn has_sheet<A: Accessibility>(
     Ok(false)
 }
 
-// AppKit exposes Go to Folder as GoToWindow with a direct PathTextField child.
-// Match these identifiers, never a generic text field or a localized label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(target_os = "macos", derive(serde::Serialize))]
+pub(super) struct NavigationEvent {
+    pub(super) stage: &'static str,
+    pub(super) role: Option<String>,
+    pub(super) identifier: Option<String>,
+}
+
+impl NavigationEvent {
+    pub(super) fn record(self, events: &mut Vec<Self>) {
+        // Keep milestones even when repeated focus changes fill the diagnostic limit.
+        let keep = if self.stage == "focused_window" {
+            events.last() != Some(&self) && events.len() < 64
+        } else {
+            !events.contains(&self)
+        };
+        if keep {
+            events.push(self);
+        }
+    }
+
+    pub(super) fn stage(stage: &'static str) -> Self {
+        Self {
+            stage,
+            role: None,
+            identifier: None,
+        }
+    }
+
+    pub(super) fn focused_window<A: Accessibility>(ax: &A, app: &A::Element) -> Self {
+        let window = ax.element(app, "AXFocusedWindow").ok();
+        let label = |name| {
+            window
+                .as_ref()
+                .and_then(|window| ax.string(window, name).ok())
+                .map(|text| text.chars().take(128).collect())
+        };
+        Self {
+            stage: "focused_window",
+            role: label("AXRole"),
+            identifier: label("AXIdentifier"),
+        }
+    }
+}
+
+// Match GoToWindow and PathTextField, never a generic text field or a localized label.
 pub(super) fn go_to_folder_field<A: Accessibility>(
     ax: &A,
     app: &A::Element,
@@ -357,8 +406,22 @@ pub(super) fn go_to_folder_field<A: Accessibility>(
 ) -> Result<Option<A::Element>, ConfirmFailure> {
     use ConfirmFailure::*;
     check_deadline()?;
-    let Ok(sheet) = ax.element(app, "AXFocusedWindow") else {
+    let Ok(window) = ax.element(app, "AXFocusedWindow") else {
         return Ok(None);
+    };
+    // A remote panel can retain window focus while its Go to Folder field has keyboard focus.
+    // Use the field's owner only when this drive's panel still owns window focus.
+    let sheet = if window == *panel {
+        let Ok(field) = ax.element(app, "AXFocusedUIElement") else {
+            return Ok(None);
+        };
+        if ax.string(&field, "AXIdentifier").ok().as_deref() != Some("PathTextField") {
+            return Ok(None);
+        }
+        ax.element(&field, "AXParent")
+            .map_err(|_| AttributeUnavailable)?
+    } else {
+        window.clone()
     };
     if sheet == *panel || ax.string(&sheet, "AXIdentifier").ok().as_deref() != Some("GoToWindow") {
         return Ok(None);
@@ -403,7 +466,7 @@ pub(super) fn go_to_folder_field<A: Accessibility>(
         .boolean(&field, "AXEnabled")
         .map_err(|_| AttributeUnavailable)?
         || ax.element(app, "AXFocusedUIElement").ok().as_ref() != Some(&field)
-        || ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(&sheet)
+        || ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(&window)
     {
         return Ok(None);
     }
