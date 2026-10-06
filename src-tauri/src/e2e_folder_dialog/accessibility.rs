@@ -62,6 +62,8 @@ pub(super) enum ConfirmFailure {
     AmbiguousPanel,
     AmbiguousButton,
     AttributeUnavailable,
+    TopLevelAttributeUnavailable,
+    ParentAttributeUnavailable,
     ElementLimit,
     Deadline,
 }
@@ -78,6 +80,8 @@ impl ConfirmFailure {
             Self::AmbiguousPanel => "ambiguous_panel",
             Self::AmbiguousButton => "ambiguous_button",
             Self::AttributeUnavailable => "attribute_unavailable",
+            Self::TopLevelAttributeUnavailable => "AXTopLevelUIElement_unavailable",
+            Self::ParentAttributeUnavailable => "AXParent_unavailable",
             Self::ElementLimit => "element_limit",
             Self::Deadline => "deadline",
         }
@@ -187,6 +191,7 @@ pub(super) fn confirm_button<A: Accessibility>(
                 ax,
                 &element,
                 identifier,
+                role == "AXSheet",
                 failures,
                 candidates,
                 &mut check_deadline,
@@ -222,6 +227,7 @@ pub(super) fn confirm_button<A: Accessibility>(
             ax,
             panel,
             identifier,
+            ax.string(panel, "AXRole").ok().as_deref() == Some("AXSheet"),
             failures,
             candidates,
             &mut check_deadline,
@@ -250,7 +256,7 @@ pub(super) fn confirm_button<A: Accessibility>(
                 }
             }
             check_deadline()?;
-            if enabled_button(ax, &button, panel)? {
+            if enabled_button(ax, &button, panel, false, failures, &mut check_deadline)? {
                 return Ok(Some(button));
             }
             failures.push(ButtonDisabled);
@@ -262,6 +268,7 @@ pub(super) fn confirm_button<A: Accessibility>(
         ax,
         panel,
         identifier,
+        false,
         failures,
         candidates,
         &mut check_deadline,
@@ -272,6 +279,7 @@ fn child_confirm_button<A: Accessibility>(
     ax: &A,
     panel: &A::Element,
     identifier: &str,
+    allow_parent_chain: bool,
     failures: &mut Vec<ConfirmFailure>,
     candidates: &mut Vec<ConfirmCandidate>,
     check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
@@ -312,7 +320,14 @@ fn child_confirm_button<A: Accessibility>(
         return Ok(None);
     };
     check_deadline()?;
-    if !enabled_button(ax, &button, panel)? {
+    if !enabled_button(
+        ax,
+        &button,
+        panel,
+        allow_parent_chain,
+        failures,
+        check_deadline,
+    )? {
         failures.push(ButtonDisabled);
         return Ok(None);
     }
@@ -323,6 +338,9 @@ fn enabled_button<A: Accessibility>(
     ax: &A,
     button: &A::Element,
     panel: &A::Element,
+    allow_parent_chain: bool,
+    failures: &mut Vec<ConfirmFailure>,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
 ) -> Result<bool, ConfirmFailure> {
     use ConfirmFailure::*;
     let read = |_| AttributeUnavailable;
@@ -330,8 +348,53 @@ fn enabled_button<A: Accessibility>(
         return Err(WrongButtonRole);
     }
     // AXWindow names the parent window even when the button belongs to a sheet.
-    if ax.element(button, "AXTopLevelUIElement").map_err(read)? != *panel {
-        return Err(WrongTopLevelElement);
+    match ax.element(button, "AXTopLevelUIElement") {
+        Ok(owner) if owner != *panel => return Err(WrongTopLevelElement),
+        Ok(_) => {}
+        Err(_) => {
+            failures.push(TopLevelAttributeUnavailable);
+            if !allow_parent_chain {
+                return Err(AttributeUnavailable);
+            }
+            // Only focused sheet children can use ancestry when the top-level attribute is unavailable.
+            parent_chain(ax, button, panel, failures, check_deadline)?;
+        }
     }
+    check_deadline()?;
     ax.boolean(button, "AXEnabled").map_err(read)
+}
+
+fn parent_chain<A: Accessibility>(
+    ax: &A,
+    button: &A::Element,
+    panel: &A::Element,
+    failures: &mut Vec<ConfirmFailure>,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<(), ConfirmFailure> {
+    use ConfirmFailure::*;
+    let mut current = button.clone();
+    let mut visited = vec![current.clone()];
+    for _ in 0..256 {
+        check_deadline()?;
+        let parent = ax.element(&current, "AXParent").map_err(|_| {
+            failures.push(ParentAttributeUnavailable);
+            AttributeUnavailable
+        })?;
+        if parent == *panel {
+            return Ok(());
+        }
+        if visited.contains(&parent) {
+            return Err(WrongTopLevelElement);
+        }
+        check_deadline()?;
+        let role = ax
+            .string(&parent, "AXRole")
+            .map_err(|_| AttributeUnavailable)?;
+        if !matches!(role.as_str(), "AXGroup" | "AXSplitGroup" | "AXScrollArea") {
+            return Err(WrongTopLevelElement);
+        }
+        visited.push(parent.clone());
+        current = parent;
+    }
+    Err(ElementLimit)
 }

@@ -232,6 +232,61 @@ test('Transport errors expose only a fixed class and a validated exit status.', 
   assert.throws(() => store.get(prefix + 'file', 100), /^Error: MinIO transfer failed: timeout\.$/)
 })
 
+test('A slow 64 MiB upload verifies its readback before the store publishes its manifest.', t => {
+  const f = fixture(t)
+  const bytes = Buffer.alloc(64 * 1024 * 1024, 42)
+  writeFileSync(join(f.input, 'proof.json'), bytes)
+  const objects = new Map()
+  const calls = []
+  const env = { AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }
+  const store = transport(env, (_cli, args, options) => {
+    const put = args[6] === 's3'
+    const key = put ? args[9] : `s3://${args[9]}/${args[11]}`
+    calls.push([put ? 'put' : 'get', key])
+    if (put) {
+      const payload = readFileSync(args[8])
+      // Model a four-minute upload without a four-minute test delay.
+      if (payload.length === bytes.length && options.timeout < 240_000) {
+        throw Object.assign(new Error('The upload exceeded its deadline.'), { code: 'ETIMEDOUT' })
+      }
+      objects.set(key, payload)
+    } else {
+      writeFileSync(args[12], objects.get(key))
+    }
+  })
+  const manifest = upload(id, 'evidence', f.input, store)
+  assert.equal(manifest.files[0].size, bytes.length)
+  assert.ok(readArtifact(id, 'evidence', store).get('proof.json').equals(bytes))
+  assert.deepEqual(calls.slice(0, 4), [
+    ['put', prefix + 'proof.json'], ['get', prefix + 'proof.json'],
+    ['put', prefix + 'manifest.json'], ['get', prefix + 'manifest.json'],
+  ])
+})
+
+test('The transport caps size-based upload deadlines and rejects stalled uploads.', t => {
+  const f = fixture(t)
+  const env = { AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }
+  for (const [size, deadline] of [[0, 180_000], [1, 181_000], [64 * 1024 * 1024, 436_000], [128 * 1024 * 1024, 600_000]]) {
+    let path
+    const store = transport(env, (_cli, args, options) => {
+      path = args[8]
+      assert.equal(options.timeout, deadline)
+      assert.deepEqual(args.slice(2, 6), ['--cli-connect-timeout', '15', '--cli-read-timeout', '120'])
+      assert.equal(readFileSync(path).length, size)
+      throw Object.assign(new Error('The upload stalled.'), { code: 'ETIMEDOUT' })
+    })
+    assert.throws(() => store.put(prefix + 'file', Buffer.alloc(size)), /^Error: MinIO transfer failed: timeout\.$/)
+    assert.equal(existsSync(path), false)
+  }
+  const calls = []
+  const store = transport(env, (_cli, args) => {
+    calls.push(args[9])
+    throw Object.assign(new Error('The upload stalled.'), { code: 'ETIMEDOUT' })
+  })
+  assert.throws(() => upload(id, 'evidence', f.input, store), /MinIO transfer failed: timeout/)
+  assert.deepEqual(calls, [prefix + 'proof.json'])
+})
+
 test('S3 failures expose only bounded, allow-listed codes and operations.', () => {
   const env = { AWS_ACCESS_KEY_ID: 'private-access', AWS_SECRET_ACCESS_KEY: 'private-secret' }
   const diagnostic = (code, operation = 'CreateMultipartUpload') =>
@@ -366,12 +421,16 @@ fs.copyFileSync(local(source), local(target));
   const env = { ...process.env, AWS_CLI: cli, AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test',
     STORE: join(f.root, 'store'), GITHUB_REPOSITORY: id.repository, GITHUB_RUN_ID: String(id.run),
     GITHUB_RUN_ATTEMPT: String(id.attempt), SOURCE_SHA: id.source, MISSING_READBACKS: String(missingReadbacks) }
-  for (const mode of ['upload', 'collect']) {
-    const temp = join(f.root, mode)
+  const run = (mode, label, extra = {}) => {
+    const temp = join(f.root, label)
     mkdirSync(temp)
-    const result = spawnSync(process.execPath, ['.github/lib/artifact-store-probe.mjs', mode], {
-      env: { ...env, RUNNER_TEMP: temp }, encoding: 'utf8', timeout: 60_000,
+    return spawnSync(process.execPath, ['.github/lib/artifact-store-probe.mjs', mode], {
+      env: { ...env, RUNNER_TEMP: temp, UPLOAD_ATTEMPT: String(id.attempt), ...extra },
+      encoding: 'utf8', timeout: 60_000,
     })
+  }
+  for (const mode of ['upload', 'collect']) {
+    const result = run(mode, mode)
     assert.equal(result.status, 0, result.stderr)
   }
   const objectRoot = join(env.STORE, 'factory-ci-artifacts/muniment-desktop/42')
@@ -380,6 +439,27 @@ fs.copyFileSync(local(source), local(target));
   assert.ok(readFileSync(join(objectRoot, 'transport-probe-diagnostics-collection/attempt-2/diagnostics.bin')).equals(uploaded))
   assert.ok(readFileSync(join(f.root, 'collect/artifact-store-probe-2/diagnostics/attempt-2/diagnostics.bin')).equals(uploaded))
   assert.equal(Number(readFileSync(join(env.STORE, 'collection-attempts'), 'utf8')), missingReadbacks + 1)
+
+  // A collector-only rerun uses the successful upload job's attempt, not its own attempt.
+  const rerun = run('collect', 'rerun', { GITHUB_RUN_ATTEMPT: '3' })
+  assert.equal(rerun.status, 0, rerun.stderr)
+  assert.ok(readFileSync(join(f.root, 'rerun/artifact-store-probe-3/diagnostics/attempt-2/diagnostics.bin')).equals(uploaded))
+  for (const name of ['transport-probe-diagnostics-collection', 'transport-probe-collection']) {
+    const manifest = JSON.parse(readFileSync(join(objectRoot, name, 'manifest.json')))
+    assert.equal(manifest.attempt, 3)
+    assert.equal(manifest.source, id.source)
+  }
+
+  for (const [index, attempt] of [undefined, '', '0', '-1', '1.5', '02', 'NaN', '9007199254740992', '4', '3', '1'].entries()) {
+    const result = run('collect', `invalid-${index}`, { GITHUB_RUN_ATTEMPT: '3', UPLOAD_ATTEMPT: attempt })
+    assert.equal(result.status, 1, result.stderr)
+    assert.match(result.stderr, /The upload attempt must be positive|Artifact identity mismatch/)
+    assert.equal(existsSync(join(f.root, `invalid-${index}/artifact-store-probe-3`)), false)
+  }
+  const stale = run('collect', 'stale', { GITHUB_RUN_ATTEMPT: '3', SOURCE_SHA: 'b'.repeat(40) })
+  assert.equal(stale.status, 1)
+  assert.match(stale.stderr, /Artifact identity mismatch/)
+  assert.equal(existsSync(join(f.root, 'stale/artifact-store-probe-3')), false)
 })
 
 function checkArtifactSetup(text, label, stepIndent = 6) {
@@ -471,5 +551,9 @@ test('Every workflow uses MinIO while native tests and public distribution keep 
   assert.match(probe, /runs-on: macos-15/)
   assert.match(probe, /artifact-store-probe.mjs upload/)
   assert.match(probe, /artifact-store-probe.mjs collect/)
+  assert.ok(probe.includes('attempt: ${{ steps.upload.outputs.attempt }}'))
+  assert.match(probe, /id: upload/)
+  assert.ok(probe.includes('printf \'attempt=%s\\n\' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"'))
+  assert.ok(probe.includes('UPLOAD_ATTEMPT: ${{ needs.upload.outputs.attempt }}'))
   assert.doesNotMatch(probe, /SUBSCRIPTION_LEASES|continue-on-error/)
 })
