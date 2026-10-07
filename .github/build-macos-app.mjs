@@ -8,7 +8,6 @@ import {
   codesignArguments,
   intermediateCertificateImportArguments,
   keychainSearchListArguments,
-  NOTARIZATION_DEADLINE_SECONDS,
   notarize,
   parseInstallerIdentity,
   productbuildArguments,
@@ -22,7 +21,7 @@ import {
 } from "./lib/macos-signing.mjs";
 import { prepareMacosVariants, packageMacosDmg } from "./lib/macos-variants.mjs";
 import { readSigningEnvironment } from "./lib/signing-env.mjs";
-import { macosBuildDeadline, remainingBuildMilliseconds } from "./lib/macos-build-budget.mjs";
+import { MACOS_NOTARIZATION_RESERVE_SECONDS, macosBuildDeadline, remainingBuildMilliseconds } from "./lib/macos-build-budget.mjs";
 
 const buildDeadline = macosBuildDeadline(process.env.MACOS_BUILD_REMAINING_SECONDS);
 console.log(`macOS build budget_seconds=${Math.floor(remainingBuildMilliseconds(buildDeadline) / 1000)}`);
@@ -201,7 +200,7 @@ for (const variant of variants) {
 }
 
 const mustNotarizeAll = async (archives) => {
-  const deadline = Math.min(buildDeadline, performance.now() + NOTARIZATION_DEADLINE_SECONDS * 1000);
+  const deadline = buildDeadline - MACOS_NOTARIZATION_RESERVE_SECONDS * 1000;
   console.log(`macOS notarization batch archives=${archives.length} budget_seconds=${Math.max(0, Math.floor((deadline - performance.now()) / 1000))}`);
   // Wait for every bounded request before cleanup removes the signing key.
   const results = await Promise.allSettled(archives.map(archive => notarize(signingConfig, archive, keyPath, deadline)));
