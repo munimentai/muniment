@@ -53,8 +53,11 @@ export function identity(env = process.env) {
     attempt: number(env.GITHUB_RUN_ATTEMPT), source: env.SOURCE_SHA }
 }
 
+// GitHub runs report the public repository and Forgejo runs report the record.
+const repositories = new Set(['munimentai/muniment', 'factory/muniment'])
+
 function prefix(id, name) {
-  if (id.repository !== 'munimentai/muniment' || !positive(id.run) || !positive(id.attempt) ||
+  if (!repositories.has(id.repository) || !positive(id.run) || !positive(id.attempt) ||
       !/^[a-f0-9]{40}$/.test(id.source ?? '') || !component(name)) throw new Error('Invalid artifact identity.')
   // Keep the factory release reader's run-scoped paths. The manifest binds the full identity.
   return `s3://factory-ci-artifacts/muniment-desktop/${id.run}/${name}/`

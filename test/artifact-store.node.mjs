@@ -119,6 +119,8 @@ test('The store rejects empty directories, links and invalid identities.', t => 
   for (const name of ['', '../escape', 'a/b', '.', '..']) {
     assert.throws(() => upload(id, name, f.input, f.store))
   }
+  const forgejo = { ...id, repository: 'factory/muniment' }
+  assert.equal(upload(forgejo, 'forgejo-evidence', f.input, f.store).repository, 'factory/muniment')
   rmSync(join(f.input, 'proof.json'))
   assert.throws(() => upload(id, 'evidence', f.input, f.store))
   symlinkSync(join(f.root, 'secret'), join(f.input, 'proof.json'))
