@@ -26,8 +26,9 @@ fetch_tool() {
     return 0
   fi
   local headers='Accept: application/octet-stream'
-  local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  local token="${GITHUB_API_TOKEN-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
   # CI shares an IP, so use its token instead of the anonymous API quota.
+  # An empty GITHUB_API_TOKEN marks a token from another host and calls anonymously.
   # Send the token through stdin, not argv, and only to the GitHub API.
   if [[ "$url" == https://api.github.com/* && -n "$token" ]]; then
     headers+=$'\n'"Authorization: Bearer $token"

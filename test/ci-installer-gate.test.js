@@ -152,8 +152,10 @@ const remoteSteps = workflow.split('        run: |\n').slice(1)
 
 it.each(remoteSteps.map((script, index) => [index, script]))('keeps clone credentials on stdin and preserves SSH failures in step %s', (_, script) => {
   expect(script).not.toContain('https://x-access-token:')
-  for (const status of [0, 37]) {
+  for (const [status, server] of [[0, 'https://github.com'], [37, 'https://github.com'], [0, 'http://forgejo.test']]) {
     const directory = fs.mkdtempSync(path.join(tmpdir(), 'muniment-ci-auth-'))
+    // Outside GitHub the guest also gets an empty GitHub API token.
+    const apiToken = server === 'https://github.com' ? '' : 'GITHUB_API_TOKEN='
     try {
       let actual = 0
       try {
@@ -165,10 +167,12 @@ it.each(remoteSteps.map((script, index) => [index, script]))('keeps clone creden
             [[ "$*" == *--env-stdin* ]] || exit 92
             IFS= read -r credential
             [[ $credential == "GH_TOKEN=$REPO_TOKEN" ]] || exit 93
+            IFS= read -r api || true
+            [[ $api == "${apiToken}" ]] || exit 94
             return ${status}
           }
           ${script}
-        `], { env: { ...process.env, REPO_TOKEN: 'fixture-only-secret', REPOSITORY: 'owner/repo',
+        `], { env: { ...process.env, SERVER_URL: server, REPO_TOKEN: 'fixture-only-secret', REPOSITORY: 'owner/repo',
           SOURCE_SHA: 'a'.repeat(40), REF: 'test-branch', PLATFORM: 'linux', INSTALLER: 'false', RUNNER_TEMP: directory, DESKTOP_CI_SSH_KEY: 'fixture-key',
           DESKTOP_CI_SLOT_SECONDS: '7200',
           DESKTOP_CI_KNOWN_HOSTS: '10.1.10.10 ssh-ed25519 fixture' },
@@ -188,7 +192,7 @@ it.each(['linux', 'windows', 'macos'])('uses one VM and gates packaging on prefl
   const directory = fs.mkdtempSync(path.join(tmpdir(), 'muniment-ci-reuse-'))
   try {
     const capture = path.join(directory, 'remote-command')
-    const env = { ...process.env, PLATFORM: platform, REPO_TOKEN: 'fixture-token',
+    const env = { ...process.env, PLATFORM: platform, SERVER_URL: 'https://github.com', REPO_TOKEN: 'fixture-token',
       REPOSITORY: 'owner/repo', SOURCE_SHA: 'a'.repeat(40), REF: 'fixture-branch', RUNNER_TEMP: directory,
       DESKTOP_CI_SSH_KEY: 'fixture-key', DESKTOP_CI_KNOWN_HOSTS: '10.1.10.10 ssh-ed25519 fixture', CAPTURE: capture,
       DESKTOP_CI_SLOT_SECONDS: '7200' }

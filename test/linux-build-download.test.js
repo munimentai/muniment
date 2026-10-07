@@ -90,6 +90,16 @@ describe.skipIf(process.platform === 'win32')('Linux build downloads', () => {
     } finally { f.cleanup() }
   })
 
+  it('calls the API anonymously when GITHUB_API_TOKEN is empty', () => {
+    const f = fixture()
+    try {
+      const result = f.run({ GH_TOKEN: token, GITHUB_API_TOKEN: '' })
+      expect(result.status, result.stderr).toBe(0)
+      expect(f.request().headers).not.toContain('Authorization')
+      expect(JSON.stringify(f.request())).not.toContain(token)
+    } finally { f.cleanup() }
+  })
+
   it('reuses only a cache entry with the pinned digest', () => {
     const f = fixture()
     try {
