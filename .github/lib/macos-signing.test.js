@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { MACOS_BUILD_SECONDS, MACOS_UPLOAD_RESERVE_SECONDS } from "./macos-build-budget.mjs";
+import { MACOS_BUILD_SECONDS, MACOS_NOTARIZATION_RESERVE_SECONDS, MACOS_UPLOAD_RESERVE_SECONDS } from "./macos-build-budget.mjs";
 import {
   SIGNING_VARIABLES,
-  NOTARIZATION_DEADLINE_SECONDS,
   certificateSha1,
   codesignArguments,
   intermediateCertificateImportArguments,
@@ -259,10 +258,11 @@ describe("Signing, notarization, and stapling commands", () => {
     ]);
   });
 
-  it("reserves ten minutes for upload and bounds both notarization batches within the VM budget", () => {
-    expect(MACOS_UPLOAD_RESERVE_SECONDS).toBeGreaterThanOrEqual(600);
-    expect(NOTARIZATION_DEADLINE_SECONDS).toBe(1200);
-    expect(2 * NOTARIZATION_DEADLINE_SECONDS + MACOS_UPLOAD_RESERVE_SECONDS).toBeLessThan(MACOS_BUILD_SECONDS);
+  it("reserves five minutes for packaging and ten minutes for upload within the VM budget", () => {
+    expect(MACOS_BUILD_SECONDS).toBe(4800);
+    expect(MACOS_UPLOAD_RESERVE_SECONDS).toBe(600);
+    expect(MACOS_NOTARIZATION_RESERVE_SECONDS).toBe(300);
+    expect(MACOS_NOTARIZATION_RESERVE_SECONDS + MACOS_UPLOAD_RESERVE_SECONDS).toBeLessThan(MACOS_BUILD_SECONDS);
     const workflow = readFileSync(".github/workflows/nightly.yml", "utf8");
     expect(workflow).toContain(`build_timeout=${MACOS_BUILD_SECONDS}`);
     expect(workflow).toContain("--build-timeout '$build_timeout'");

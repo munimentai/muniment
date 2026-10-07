@@ -1,6 +1,8 @@
 // The nightly VM allows 80 minutes, including setup and asset upload.
 export const MACOS_BUILD_SECONDS = 4800;
 export const MACOS_UPLOAD_RESERVE_SECONDS = 600;
+// Leave five minutes inside the build for stapling, verification, and packaging after a batch.
+export const MACOS_NOTARIZATION_RESERVE_SECONDS = 300;
 
 export const macosBuildDeadline = (value = String(MACOS_BUILD_SECONDS)) => {
   const seconds = Number(value);

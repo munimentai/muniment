@@ -135,9 +135,6 @@ export const codesignArguments = (identityHash, file) => [
   file,
 ];
 
-// Each batch gets 20 minutes after compilation or packaging, within the build deadline.
-export const NOTARIZATION_DEADLINE_SECONDS = 1200;
-
 const notarytoolArguments = (configuration, keyPath) => [
   "--key", keyPath,
   "--key-id", configuration.apiKeyId,
