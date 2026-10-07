@@ -38,11 +38,14 @@ gates:
   # The sandbox has no GTK, WebKit, rustfmt, clippy or desktop-ci access, and the
   # frontend suite needs a muniment-core checkout and a browser. CI runs the Rust
   # checks, the frontend suite and the three-platform compile preflight on every
-  # pull request. The gate runs the release tooling and CI routing tests.
+  # pull request. The gate runs the release tooling and CI routing tests, and
+  # the static test gates of CI smoke, which pin each POSIX shell call and
+  # each Windows-only declaration in the test files by line.
   unit_tests:
     commands:
       - "npx vitest run --root . .github/lib"
       - "node --test test/ci-routing.node.mjs"
+      - "npx vitest run --root . test/posix-shell-gate.test.js test/windows-pr-gate.test.js"
     timeout_s: 1800
   ci:
     provider: forgejo
