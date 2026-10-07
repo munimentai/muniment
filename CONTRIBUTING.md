@@ -6,13 +6,13 @@ and [ROADMAP.md](ROADMAP.md) for product direction.
 
 ## Issues and pull requests
 
-Anyone can report a reproducible bug or propose a feature through GitHub Issues.
+Anyone can report a reproducible bug or propose a feature by email to support@muniment.ai.
 Include the app version, operating system, steps, expected result and actual result.
 Remove credentials, personal files and private conversation content from attachments.
 Report vulnerabilities through [SECURITY.md](SECURITY.md) instead.
 
 The project does not accept outside code contributions or pull requests.
-Bug reports and feature requests are welcome through GitHub Issues.
+Bug reports and feature requests are welcome by email to support@muniment.ai.
 Maintainers review issues and implement accepted changes.
 Keep one focused change per pull request. Explain its behavior and verification.
 Add tests for behavior changes and update the relevant contributor guides.

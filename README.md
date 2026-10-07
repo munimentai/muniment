@@ -88,7 +88,7 @@ brew install --cask muniment
 
 ## Issues and license
 
-[Report a bug or request a feature](https://github.com/munimentai/muniment/issues).
+Report a bug or request a feature by email to [support@muniment.ai](mailto:support@muniment.ai).
 Outside code contributions are not accepted. See [CONTRIBUTING.md](CONTRIBUTING.md)
 and [SECURITY.md](SECURITY.md) for issue and private vulnerability reports.
 
