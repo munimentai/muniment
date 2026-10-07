@@ -376,7 +376,9 @@ it.each([false, true])("replays the slow nightly queue with a stalled installer=
     await delay(5_000);
     const submission = submissions.get(args[2]);
     const stuck = stalled && submission.archive.endsWith("muniment-arm64.pkg");
-    return jsonResult({ id: args[2], status: !stuck && clock >= submission.accepted ? "Accepted" : "In Progress" });
+    const accepted = !stuck && clock >= submission.accepted;
+    if (accepted) submission.reportedAcceptedAt = clock;
+    return jsonResult({ id: args[2], status: accepted ? "Accepted" : "In Progress" });
   };
   const build = import("../build-macos-app.mjs");
   if (stalled) await expect(build).rejects.toThrow("exit 1");
@@ -399,12 +401,37 @@ it.each([false, true])("replays the slow nightly queue with a stalled installer=
     expect(validated).toHaveLength(3);
     expect(console.log.mock.calls.some(([message]) => message.startsWith("kept "))).toBe(false);
   } else {
+    const notaryDeadline = 3900_000;
+    for (const [, submission] of entries) {
+      expect(submission.reportedAcceptedAt).toBeLessThan(notaryDeadline);
+    }
+    const slowInstaller = entries[3][1];
+    expect(slowInstaller.reportedAcceptedAt - slowInstaller.started).toBe(1500_000);
+    expect(slowInstaller.reportedAcceptedAt).toBe(3789_000);
+    expect(notaryDeadline - slowInstaller.reportedAcceptedAt).toBe(111_000);
     expect(clock).toBe(3825_000);
     expect(clock).toBeLessThan(4200_000);
     expect(validated).toHaveLength(9);
     expect(console.log.mock.calls.filter(([message]) => message.includes('last_status="Accepted"'))).toHaveLength(9);
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('last_status="Accepted" waited_seconds=1500'));
-    expect(console.log.mock.calls.filter(([message]) => message.startsWith("kept "))).toHaveLength(6);
+    const downloads = entries.slice(3).map(([, submission]) => submission.archive);
+    for (const file of downloads) {
+      const signing = calls.findIndex(([cmd, args]) => file.endsWith(".pkg")
+        ? cmd === "productbuild" && args.includes("--sign") && args.at(-1) === file
+        : cmd === "codesign" && args.includes("--sign") && args.at(-1) === file);
+      const verification = calls.findIndex(([cmd, args]) => file.endsWith(".pkg")
+        ? cmd === "pkgutil" && args.includes("--check-signature") && args.at(-1) === file
+        : cmd === "codesign" && args.includes("--verify") && args.at(-1) === file);
+      const staple = calls.findIndex(([, args]) => args[0] === "stapler" && args[1] === "staple" && args.at(-1) === file);
+      const validation = calls.findIndex(([, args]) => args[0] === "stapler" && args[1] === "validate" && args.at(-1) === file);
+      expect(signing).toBeGreaterThan(-1);
+      expect(verification).toBeGreaterThan(signing);
+      expect(staple).toBeGreaterThan(verification);
+      expect(validation).toBeGreaterThan(staple);
+    }
+    expect(console.log.mock.calls.filter(([message]) => message.startsWith("kept "))).toEqual(
+      downloads.map(file => [`kept ${file} (signed + notarized + stapled)`]),
+    );
     expect(console.error).not.toHaveBeenCalled();
     expect(process.exit).not.toHaveBeenCalled();
   }
