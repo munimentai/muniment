@@ -51,6 +51,7 @@ const ALLOWED = {
   'test/desktop-e2e-harness.test.js:2739:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/nightly-workflow.test.js:13:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
   'test/nightly-workflow.test.js:50:20': "it.skipIf(process.platform === 'win32')('passes the remaining full build budget after Git and dependency setup')",
+  'test/nightly-workflow.test.js:411:22': "it.skipIf(process.platform === 'win32').each(...)('fails closed for %j')",
 }
 
 const root = process.cwd()
