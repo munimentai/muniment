@@ -228,51 +228,85 @@ export const assertGreenCi = (checkRuns, sha) => {
   }
 };
 
-const getAllCheckRuns = async (fetchImpl, token, repoApi, sha) => {
-  const checkRuns = [];
+// Forgejo reports each job as a commit status named "<workflow> / <job> (<event>)".
+// The promotion's own jobs are not source CI.
+export const PROMOTION_WORKFLOW = "Promote stable desktop release";
+export const forgejoCheckRuns = (statuses) => statuses
+  .filter(({ context }) => !context.startsWith(`${PROMOTION_WORKFLOW} / `))
+  .map(({ context, status }) => ({
+    name: context.match(/^.+? \/ (.+) \([\w-]+\)$/)?.[1] ?? context,
+    status: status === "pending" ? "in_progress" : "completed",
+    conclusion: status,
+  }));
+
+const getAllStatuses = async (fetchImpl, token, repoApi, sha) => {
+  const statuses = [];
   for (let page = 1; ; page += 1) {
-    const response = await request(fetchImpl, token, `${repoApi}/commits/${sha}/check-runs?per_page=100&page=${page}`);
-    const batch = (await response.json()).check_runs;
-    checkRuns.push(...batch);
-    if (batch.length < 100) return checkRuns;
+    const response = await request(fetchImpl, token, `${repoApi}/commits/${sha}/status?limit=50&page=${page}`);
+    const batch = (await response.json()).statuses ?? [];
+    statuses.push(...batch);
+    if (batch.length < 50) return statuses;
   }
 };
 
-// A compile check or a targeted nightly cannot establish all-platform runtime proof.
+// A compile check or a targeted nightly cannot establish all-platform runtime
+// proof. Forgejo lists each job of a run as a task, newest attempt first.
 export async function assertInstalledNightly(fetchImpl, token, repoApi, sha) {
-  const response = await request(fetchImpl, token, `${repoApi}/actions/workflows/nightly.yml/runs?head_sha=${sha}&status=success&per_page=100`);
-  const runs = (await response.json()).workflow_runs;
+  const response = await request(fetchImpl, token, `${repoApi}/actions/runs?workflow_id=nightly.yml&head_sha=${sha}&status=success&limit=50`);
+  const runs = new Set(((await response.json()).workflow_runs ?? [])
+    .filter((run) => run.workflow_id === "nightly.yml" && run.commit_sha === sha && run.status === "success")
+    .map((run) => run.index_in_repo));
   const required = ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"];
-  for (const run of runs) {
-    if (run.head_sha !== sha || run.status !== "completed" || run.conclusion !== "success") continue;
-    const jobs = [];
-    for (let page = 1; ; page += 1) {
-      const result = await request(fetchImpl, token, `${repoApi}/actions/runs/${run.id}/jobs?filter=latest&per_page=100&page=${page}`);
-      const batch = (await result.json()).jobs;
-      jobs.push(...batch);
-      if (batch.length < 100) break;
+  const jobs = new Map();
+  for (let page = 1; runs.size > 0 && page <= 100; page += 1) {
+    const result = await request(fetchImpl, token, `${repoApi}/actions/tasks?limit=50&page=${page}`);
+    const batch = (await result.json()).workflow_runs ?? [];
+    for (const task of batch) {
+      const key = `${task.run_number}/${task.name}`;
+      if (task.workflow_id === "nightly.yml" && task.head_sha === sha && runs.has(task.run_number) && !jobs.has(key)) jobs.set(key, task);
     }
-    if (required.every((name) => jobs.some((job) => job.name === name && job.status === "completed" && job.conclusion === "success"))) return;
+    if (batch.length < 50) break;
+  }
+  for (const run of runs) {
+    if (required.every((name) => jobs.get(`${run}/${name}`)?.status === "success")) return;
   }
   throw new Error(`No successful full installed nightly for ${sha}`);
 }
 
-export async function promoteRelease({ token, repository, sha, version, fetchImpl = fetch, verify = verifyNightlyArtifacts }) {
+// The tag starts on Forgejo, the record. Wait until the push mirror carries
+// it to GitHub, so the release attaches to the mirrored tag.
+const waitForMirroredTag = async ({ fetchImpl, token, releaseApi, version, sha, attempts, wait }) => {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const ref = await getOrNull(fetchImpl, token, `${releaseApi}/git/ref/tags/${encodeURIComponent(version)}`);
+    if (ref) {
+      const { object } = await ref.json();
+      if (object?.type !== "commit" || object.sha !== sha) throw new Error(`GitHub tag ${version} does not point at ${sha}`);
+      return;
+    }
+    if (attempt < attempts) await wait();
+  }
+  throw new Error(`The push mirror did not carry tag ${version} to GitHub`);
+};
+
+export async function promoteRelease({ token, repository, sha, version, repoHost, dryRun = false, fetchImpl = fetch, verify = verifyNightlyArtifacts, wait = () => new Promise((resolve) => setTimeout(resolve, 15000)), tagAttempts = 40, log = console.log }) {
   validatePromotionInputs(sha, version);
   if (!token || !/^[^/]+\/[^/]+$/.test(repository)) throw new Error("token and owner/repository are required");
-  const repoApi = `${API}/repos/${repository}`;
-  if (await getOrNull(fetchImpl, token, `${repoApi}/git/ref/tags/${encodeURIComponent(version)}`)) throw new Error(`tag ${version} already exists`);
-  if (await getOrNull(fetchImpl, token, `${repoApi}/releases/tags/${encodeURIComponent(version)}`)) throw new Error(`release ${version} already exists`);
-  const packageFile = await (await request(fetchImpl, token, `${repoApi}/contents/package.json?ref=${sha}`)).json();
+  if (!repoHost?.token || !/^https?:\/\/.+\/api\/v1\/repos\/[^/]+\/[^/]+$/.test(repoHost.api ?? "")) throw new Error("the Forgejo repository API and token are required");
+  const releaseApi = `${API}/repos/${repository}`;
+  const repoApi = repoHost.api;
+  if (await getOrNull(fetchImpl, token, `${releaseApi}/git/ref/tags/${encodeURIComponent(version)}`)) throw new Error(`tag ${version} already exists`);
+  if (await getOrNull(fetchImpl, token, `${releaseApi}/releases/tags/${encodeURIComponent(version)}`)) throw new Error(`release ${version} already exists`);
+  if (await getOrNull(fetchImpl, repoHost.token, `${repoApi}/tags/${encodeURIComponent(version)}`)) throw new Error(`tag ${version} already exists`);
+  const packageFile = await (await request(fetchImpl, repoHost.token, `${repoApi}/contents/package.json?ref=${sha}`)).json();
   const packageJson = JSON.parse(Buffer.from(packageFile.content, "base64").toString("utf8"));
   if (packageJson.version !== version.slice(1)) throw new Error(`package.json version ${packageJson.version ?? "missing"} does not match ${version}`);
-  const checkRuns = await getAllCheckRuns(fetchImpl, token, repoApi, sha);
-  assertGreenCi(checkRuns, sha);
-  await assertInstalledNightly(fetchImpl, token, repoApi, sha);
-  const nightly = await (await request(fetchImpl, token, `${repoApi}/releases/tags/nightly`)).json();
+  assertGreenCi(forgejoCheckRuns(await getAllStatuses(fetchImpl, repoHost.token, repoApi, sha)), sha);
+  await assertInstalledNightly(fetchImpl, repoHost.token, repoApi, sha);
+  const nightly = await (await request(fetchImpl, token, `${releaseApi}/releases/tags/nightly`)).json();
   if (nightly.draft || !nightly.prerelease || !nightly.body?.includes(sha)) throw new Error(`nightly release is not finalized at ${sha}`);
   const assets = expectedNightlyAssets(nightly.assets, sha);
   const workDir = mkdtempSync(join(tmpdir(), "muniment-promotion-"));
+  let tagged = false;
   let created;
   try {
     // Download and verify every asset before anything is created.
@@ -289,7 +323,14 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
       digests.set(asset.name, digest);
     }
     await verify({ files, workDir });
-    created = await (await request(fetchImpl, token, `${repoApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha, version), draft: true, prerelease: false }) })).json();
+    if (dryRun) {
+      log(`dry run: ${sha} passes every check for ${version}; no tag or release was created`);
+      return;
+    }
+    await request(fetchImpl, repoHost.token, `${repoApi}/tags`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target: sha }) });
+    tagged = true;
+    await waitForMirroredTag({ fetchImpl, token, releaseApi, version, sha, attempts: tagAttempts, wait });
+    created = await (await request(fetchImpl, token, `${releaseApi}/releases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_name: version, target_commitish: sha, name: version, body: releaseBody(sha, version), draft: true, prerelease: false }) })).json();
     const upload = (name, contentType, body) => request(fetchImpl, token, `https://uploads.github.com/repos/${repository}/releases/${created.id}/assets?name=${encodeURIComponent(name)}`, { method: "POST", headers: { "Content-Type": contentType }, body });
     const signatures = new Map();
     const stableAssets = [];
@@ -306,13 +347,24 @@ export async function promoteRelease({ token, repository, sha, version, fetchImp
     await upload("latest.json", "application/json", feed);
     sums.push(["latest.json", sha256(feed)]);
     await upload("SHA256SUMS", "text/plain", sha256Sums(sums.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
-    await request(fetchImpl, token, `${repoApi}/releases/${created.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft: false, prerelease: false }) });
+    await request(fetchImpl, token, `${releaseApi}/releases/${created.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft: false, prerelease: false }) });
   } catch (error) {
-    if (created) { await request(fetchImpl, token, `${repoApi}/releases/${created.id}`, { method: "DELETE" }).catch(() => {}); await request(fetchImpl, token, `${repoApi}/git/refs/tags/${encodeURIComponent(version)}`, { method: "DELETE" }).catch(() => {}); }
+    if (created) await request(fetchImpl, token, `${releaseApi}/releases/${created.id}`, { method: "DELETE" }).catch(() => {});
+    if (tagged) {
+      await request(fetchImpl, repoHost.token, `${repoApi}/tags/${encodeURIComponent(version)}`, { method: "DELETE" }).catch(() => {});
+      await request(fetchImpl, token, `${releaseApi}/git/refs/tags/${encodeURIComponent(version)}`, { method: "DELETE" }).catch(() => {});
+    }
     throw error;
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) { const [repository, sha, version] = process.argv.slice(2); const token = process.env.GH_TOKEN; await promoteRelease({ token, repository, sha, version }); console.log(`promoted ${sha} to ${version}`); }
+// GH_TOKEN reaches GitHub Releases. REPO_TOKEN and REPO_API reach the Forgejo
+// repository that holds the source, its CI, and the tags.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const [repository, sha, version, mode] = process.argv.slice(2);
+  if (mode !== undefined && mode !== "--dry-run") throw new Error("usage: release-promotion.mjs OWNER/REPO SHA VERSION [--dry-run]");
+  await promoteRelease({ token: process.env.GH_TOKEN, repository, sha, version, repoHost: { api: process.env.REPO_API, token: process.env.REPO_TOKEN }, dryRun: mode === "--dry-run" });
+  if (mode !== "--dry-run") console.log(`promoted ${sha} to ${version}`);
+}

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { upload } from './artifact-store.mjs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { proofConfiguration, readProof, reusePullRequest, reuseNightlyBuild } from './ci-proof.mjs'
+import { proofConfiguration, readProof, reusePullRequest } from './ci-proof.mjs'
 
 const toolchain = `sha256:${'1'.repeat(64)}`
 beforeEach(() => vi.stubEnv('CI_PROOF_CONFIGURATION', JSON.stringify({ CI_TOOLCHAIN_REVISION: toolchain })))
@@ -105,43 +105,6 @@ describe('exact tested tree reuse', () => {
     f.github.rest.actions.listWorkflowRuns.mockResolvedValue({ data: { workflow_runs: [{ ...f.run, conclusion: 'failure' }, f.run] } })
     expect(await reusePullRequest(f)).toBe(false)
     expect(f.read).not.toHaveBeenCalled()
-  })
-})
-
-function nightlyFixture() {
-  const f = fixture()
-  f.context.eventName = 'schedule'
-  f.sha = 'a'.repeat(40)
-  Object.assign(f.run, { head_sha: f.sha, path: '.github/workflows/nightly.yml', event: 'schedule' })
-  const binaries = ['linux-app.deb', 'linux-app.AppImage', 'windows-app.msi', 'windows-app-machine.msi', 'windows-app-nsis.exe', ...['', '-arm64', '-x64'].flatMap(arch => ['.app.zip', '.pkg', '.dmg', '.app.tar.gz'].map(format => `macos-muniment${arch}${format}`))]
-  const names = [...binaries, ...binaries.filter(n => /(?:AppImage|msi|exe|tar.gz)$/.test(n)).map(n => `${n}.sig`)]
-  f.assets = names.map((n, i) => ({ id: i + 1, name: `nightly-${f.sha}-${n}`, size: 100, digest: `sha256:${'b'.repeat(64)}` }))
-  f.github.rest.repos.getReleaseByTag.mockImplementation(async () => ({ data: { assets: f.assets } }))
-  Object.assign(f.proof, { workflow: 'nightly.yml', head: f.sha, assets: [...f.assets].sort((a, b) => a.name.localeCompare(b.name)).map(a => ({ ...a })) })
-  f.jobs = ['build (linux)', 'build (windows)', 'build (macos)', 'publish', 'linux-e2e', 'windows-e2e', 'macos-e2e'].map(name => ({ name, status: 'completed', conclusion: 'success' }))
-  f.github.rest.actions.listJobsForWorkflowRun.mockImplementation(async () => ({ data: { jobs: f.jobs } }))
-  return f
-}
-
-describe('unchanged nightly build reuse', () => {
-  it('reuses builds only from a full installed run with unchanged asset identities and bytes', async () => {
-    expect(await reuseNightlyBuild(nightlyFixture())).toBe(true)
-  })
-  it.each([
-    ['manual dispatch', f => { f.context.eventName = 'workflow_dispatch' }],
-    ['changed signing settings', f => { f.settings = { windowsSigning: 'true' } }],
-    ['new source', f => { f.proof.head = 'old' }],
-    ['replaced asset', f => { f.assets[0].id = 99 }],
-    ['changed digest', f => { f.assets[0].digest = `sha256:${'c'.repeat(64)}` }],
-    ['missing digest', f => { delete f.assets[0].digest }],
-    ['missing signature', f => { f.assets.pop() }],
-    ['partial nightly', f => { f.jobs[0].conclusion = 'skipped' }],
-    ['failed installed test', f => { f.jobs[4].conclusion = 'failure' }],
-    ['no proof', f => { f.read.mockResolvedValue(null) }],
-  ])('executes the nightly for %s', async (_, change) => {
-    const f = nightlyFixture()
-    change(f)
-    expect(await reuseNightlyBuild(f)).toBe(false)
   })
 })
 

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  APPLE_TEAM_ID, assertGreenCi, expectedNightlyAssets, macosSigningProvenance, microsoftRootPem, promoteRelease, releaseBody,
+  APPLE_TEAM_ID, assertGreenCi, expectedNightlyAssets, forgejoCheckRuns, macosSigningProvenance, microsoftRootPem, promoteRelease, releaseBody,
   sha256Sums, stableAssetName, validatePromotionInputs, verifyAuthenticode, verifyMacosApp, verifyMacosPackage, verifyMacosDmg,
   verifyNightlyArtifacts, WINDOWS_PUBLISHER, windowsSigningProvenance,
 } from "./release-promotion.mjs";
@@ -28,6 +28,9 @@ const assetNames = [
 ];
 const assets = assetNames.map((name, id) => ({ id, name, url: `https://api.github.test/assets/${id}`, content_type: "application/octet-stream" }));
 const smoke = { name: "smoke", status: "completed", conclusion: "success" };
+const forgejo = "http://forgejo.test/api/v1/repos/factory/muniment";
+const installedJobs = ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"];
+const task = (name, extra = {}) => ({ name, workflow_id: "nightly.yml", head_sha: sha, run_number: 99, status: "success", ...extra });
 
 const response = (body, status = 200, headers = {}) => new Response(
   typeof body === "string" ? body : JSON.stringify(body),
@@ -36,6 +39,7 @@ const response = (body, status = 200, headers = {}) => new Response(
 
 const promotionFetch = (overrides = {}) => {
   const calls = [];
+  let tagged = false;
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url, options });
     const method = options.method ?? "GET";
@@ -43,11 +47,14 @@ const promotionFetch = (overrides = {}) => {
       const result = await overrides.route(url, method, options, calls);
       if (result) return result;
     }
-    if (url.includes(`/git/ref/tags/${version}`) || url.includes(`/releases/tags/${version}`)) return response("missing", 404);
-    if (url.includes("/contents/package.json")) return response({ content: Buffer.from(JSON.stringify({ version: version.slice(1) })).toString("base64") });
-    if (url.includes("/actions/workflows/nightly.yml/runs")) return response({ workflow_runs: [{ id: 99, head_sha: sha, status: "completed", conclusion: "success" }] });
-    if (url.includes("/actions/runs/99/jobs")) return response({ jobs: ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"].map((name) => ({ ...smoke, name })) });
-    if (url.includes("/check-runs")) return response({ check_runs: [smoke] });
+    if (url === `${forgejo}/tags` && method === "POST") { tagged = !overrides.unmirrored; return response({}, 201); }
+    if (url === `${forgejo}/tags/${version}` && method === "DELETE") return response("", 204);
+    if (url.includes(`/git/ref/tags/${version}`) && tagged) return response({ object: { type: "commit", sha } });
+    if (url.includes(`/git/ref/tags/${version}`) || url.includes(`/releases/tags/${version}`) || url === `${forgejo}/tags/${version}`) return response("missing", 404);
+    if (url.startsWith(`${forgejo}/contents/package.json`)) return response({ content: Buffer.from(JSON.stringify({ version: version.slice(1) })).toString("base64") });
+    if (url.startsWith(`${forgejo}/actions/runs?`)) return response({ workflow_runs: [{ workflow_id: "nightly.yml", commit_sha: sha, status: "success", index_in_repo: 99 }] });
+    if (url.startsWith(`${forgejo}/actions/tasks?`)) return response({ workflow_runs: installedJobs.map((name) => task(name)) });
+    if (url.startsWith(`${forgejo}/commits/${sha}/status?`)) return response({ statuses: [{ context: "CI / smoke (push)", status: "success" }] });
     if (url.endsWith("/releases/tags/nightly")) return response({
       id: 1, draft: false, prerelease: true, target_commitish: overrides.targetCommitish ?? "stale-branch-value",
       body: `Automated desktop build from ${sha}.\n\n${windowsSigningProvenance(sha)}${overrides.macosSigned !== false ? `\n\n${macosSigningProvenance(sha)}` : "\n\nmacOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."}`, assets,
@@ -64,7 +71,10 @@ const promotionFetch = (overrides = {}) => {
 
 // The promotion flow tests inject the artifact verifier; the verifier's own
 // checks are covered below against tool output fixtures.
-const promote = (fetchImpl, verify = async () => {}) => promoteRelease({ token: "token", repository: "owner/repo", sha, version, fetchImpl, verify });
+const promote = (fetchImpl, verify = async () => {}, options = {}) => promoteRelease({
+  token: "token", repository: "owner/repo", sha, version, repoHost: { api: forgejo, token: "repo-token" },
+  fetchImpl, verify, wait: async () => {}, tagAttempts: 3, log: () => {}, ...options,
+});
 
 describe("stable release promotion", () => {
   it("uses fresh connections across verification and release writes", async () => {
@@ -111,6 +121,18 @@ describe("stable release promotion", () => {
     expect(() => assertGreenCi([smoke, { name: "security", status: "completed", conclusion: "failure" }], sha)).toThrow("CI is not green");
   });
 
+  it("reads Forgejo job statuses as checks without the promotion's own jobs", () => {
+    const checks = forgejoCheckRuns([
+      { context: "CI / smoke (push)", status: "success" },
+      { context: "secret-scan / gitleaks (push)", status: "pending" },
+      { context: "Promote stable desktop release / promote (workflow_dispatch)", status: "pending" },
+      { context: "Promote stable desktop release / Draft WinGet manifest PR (workflow_dispatch)", status: "pending" },
+    ]);
+    expect(checks).toEqual([smoke, { name: "gitleaks", status: "in_progress", conclusion: "pending" }]);
+    expect(() => assertGreenCi(checks, sha)).toThrow("CI is not green");
+    expect(() => assertGreenCi(checks.slice(0, 1), sha)).not.toThrow();
+  });
+
   it("publishes signing provenance for both platforms", () => {
     const body = releaseBody(sha, version);
     expect(body).toContain(sha);
@@ -120,7 +142,7 @@ describe("stable release promotion", () => {
     expect(body).toContain("Model weights are not included");
   });
 
-  it.each([["tag", `/git/ref/tags/${version}`], ["release", `/releases/tags/${version}`]])("rejects an existing %s", async (kind, endpoint) => {
+  it.each([["tag", `/git/ref/tags/${version}`], ["release", `/releases/tags/${version}`], ["tag", `${forgejo}/tags/${version}`]])("rejects an existing %s at %s", async (kind, endpoint) => {
     const { fetchImpl } = promotionFetch({ route: (url) => url.includes(endpoint) ? response({}) : null });
     await expect(promote(fetchImpl)).rejects.toThrow(`${kind} ${version} already exists`);
   });
@@ -132,15 +154,21 @@ describe("stable release promotion", () => {
   });
 
   it("rejects a later-page CI failure", async () => {
-    const successes = Array.from({ length: 100 }, (_, index) => index === 0 ? smoke : { name: `check-${index}`, status: "completed", conclusion: "success" });
-    const { fetchImpl } = promotionFetch({ route: (url) => url.includes("check-runs") ? response({ check_runs: new URL(url).searchParams.get("page") === "1" ? successes : [{ name: "late failure", status: "completed", conclusion: "failure" }] }) : null });
+    const successes = Array.from({ length: 50 }, (_, index) => ({ context: index === 0 ? "CI / smoke (push)" : `CI / check-${index} (push)`, status: "success" }));
+    const { fetchImpl } = promotionFetch({ route: (url) => url.includes(`/commits/${sha}/status?`) ? response({ statuses: new URL(url).searchParams.get("page") === "1" ? successes : [{ context: "CI / late failure (push)", status: "failure" }] }) : null });
     await expect(promote(fetchImpl)).rejects.toThrow("CI is not green");
   });
 
   it("uses the nightly tag despite stale target_commitish and copies exactly 24 assets without mutating nightly", async () => {
     const { calls, fetchImpl } = promotionFetch();
     await promote(fetchImpl);
-    const create = calls.find(({ url, options }) => url.endsWith("/releases") && options.method === "POST");
+    const tag = calls.findIndex(({ url, options }) => url === `${forgejo}/tags` && options.method === "POST");
+    expect(JSON.parse(calls[tag].options.body)).toEqual({ tag_name: version, target: sha });
+    const createIndex = calls.findIndex(({ url, options }) => url.endsWith("/releases") && options.method === "POST");
+    expect(tag).toBeGreaterThan(-1);
+    expect(createIndex).toBeGreaterThan(tag);
+    const create = calls[createIndex];
+    expect(create.url).toBe("https://api.github.com/repos/owner/repo/releases");
     expect(JSON.parse(create.options.body)).toMatchObject({ tag_name: version, target_commitish: sha, draft: true, prerelease: false });
     expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(24);
     expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(26);
@@ -195,19 +223,46 @@ describe("stable release promotion", () => {
   });
 
   it.each(["linux-e2e", "windows-e2e", "macos-e2e", "publish"])("rejects a nightly missing %s", async (missing) => {
-    const { calls, fetchImpl } = promotionFetch({ route: (url) => url.includes("/actions/runs/99/jobs") ? response({ jobs: ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"].filter((name) => name !== missing).map((name) => ({ ...smoke, name })) }) : null });
+    const { calls, fetchImpl } = promotionFetch({ route: (url) => url.includes("/actions/tasks?") ? response({ workflow_runs: installedJobs.filter((name) => name !== missing).map((name) => task(name)) }) : null });
     await expect(promote(fetchImpl)).rejects.toThrow("No successful full installed nightly");
     expect(calls.some(({ options }) => options.method === "POST")).toBe(false);
   });
 
   it.each(["failure", "skipped"])("rejects an installed check with conclusion %s", async (conclusion) => {
-    const { fetchImpl } = promotionFetch({ route: (url) => url.includes("/actions/runs/99/jobs") ? response({ jobs: ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"].map((name) => ({ ...smoke, name, conclusion: name === "macos-e2e" ? conclusion : "success" })) }) : null });
+    const { fetchImpl } = promotionFetch({ route: (url) => url.includes("/actions/tasks?") ? response({ workflow_runs: installedJobs.map((name) => task(name, { status: name === "macos-e2e" ? conclusion : "success" })) }) : null });
     await expect(promote(fetchImpl)).rejects.toThrow("No successful full installed nightly");
   });
 
+  it("judges each job by its newest attempt", async () => {
+    const retried = (status) => promotionFetch({ route: (url) => url.includes("/actions/tasks?") ? response({ workflow_runs: [task("macos-e2e", { status }), ...installedJobs.map((name) => task(name, { status: name === "macos-e2e" ? (status === "success" ? "failure" : "success") : "success" }))] }) : null });
+    await expect(promote(retried("success").fetchImpl)).resolves.toBeUndefined();
+    await expect(promote(retried("failure").fetchImpl)).rejects.toThrow("No successful full installed nightly");
+  });
+
   it("rejects a successful nightly for another revision", async () => {
-    const { fetchImpl } = promotionFetch({ route: (url) => url.includes("/actions/workflows/nightly.yml/runs") ? response({ workflow_runs: [{ id: 99, head_sha: "b".repeat(40), status: "completed", conclusion: "success" }] }) : null });
+    const { fetchImpl } = promotionFetch({ route: (url) => url.includes("/actions/runs?") ? response({ workflow_runs: [{ workflow_id: "nightly.yml", commit_sha: "b".repeat(40), status: "success", index_in_repo: 99 }] }) : null });
     await expect(promote(fetchImpl)).rejects.toThrow("No successful full installed nightly");
+  });
+
+  it("stops a dry run after verification without a tag or release", async () => {
+    const { calls, fetchImpl } = promotionFetch();
+    const verify = vi.fn(async () => {});
+    await promote(fetchImpl, verify, { dryRun: true });
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(calls.filter(({ options }) => ["POST", "PATCH", "DELETE"].includes(options.method))).toEqual([]);
+  });
+
+  it("removes the Forgejo tag and creates no release when the mirror does not carry it", async () => {
+    const { calls, fetchImpl } = promotionFetch({ unmirrored: true });
+    await expect(promote(fetchImpl)).rejects.toThrow("did not carry tag");
+    expect(calls.some(({ url, options }) => url.endsWith("/releases") && options.method === "POST")).toBe(false);
+    expect(calls.some(({ url, options }) => url === `${forgejo}/tags/${version}` && options.method === "DELETE")).toBe(true);
+  });
+
+  it("requires the Forgejo repository API and token", async () => {
+    const { fetchImpl } = promotionFetch();
+    await expect(promote(fetchImpl, undefined, { repoHost: { api: forgejo } })).rejects.toThrow("Forgejo repository API");
+    await expect(promote(fetchImpl, undefined, { repoHost: { api: "https://api.github.com/repos/o/r", token: "t" } })).rejects.toThrow("Forgejo repository API");
   });
 
   it("fails closed when the nightly release is not finalized at the source commit", async () => {
@@ -224,6 +279,7 @@ describe("stable release promotion", () => {
     } });
     await expect(promote(fetchImpl)).rejects.toThrow("500");
     expect(calls.some(({ url, options }) => url.endsWith("/releases/42") && options.method === "DELETE")).toBe(true);
+    expect(calls.some(({ url, options }) => url === `${forgejo}/tags/${version}` && options.method === "DELETE")).toBe(true);
     expect(calls.some(({ url, options }) => url.includes(`/git/refs/tags/${version}`) && options.method === "DELETE")).toBe(true);
   });
 });
@@ -245,7 +301,7 @@ it.each([
     `);
     expect(() => execFileSync(process.execPath, ["--import", preload,
       path.resolve(".github/lib", script), ...args], {
-      env: { ...process.env, GH_TOKEN: "fixture-only-release-token" }, stdio: "pipe", timeout: 10000,
+      env: { ...process.env, GH_TOKEN: "fixture-only-release-token", REPO_TOKEN: "fixture-only-repo-token", REPO_API: forgejo }, stdio: "pipe", timeout: 10000,
     })).toThrow(/AUTH_CHECK_PASSED/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

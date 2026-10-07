@@ -46,7 +46,7 @@ jobs:
         run: scripts/check-steering.sh .
       - name: Forgejo workflow copy
         run: |
-          for workflow in ci.yml secret-scan.yml muniment-core-update.yml; do
+          for workflow in ci.yml secret-scan.yml muniment-core-update.yml nightly.yml release.yml; do
             cmp ".github/workflows/$workflow" ".forgejo/workflows/$workflow"
           done
       - name: UI copy law

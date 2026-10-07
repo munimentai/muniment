@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { readArtifact } from './artifact-store.mjs'
 import { join } from 'node:path'
-import { expectedNightlyAssets } from './release-promotion.mjs'
 
 // Proofs are data from a successful, same-repository workflow. Never execute
 // downloaded content. A missing proof always falls back to running the checks.
@@ -74,40 +73,6 @@ export async function reusePullRequest({ github, context, core, workflow, tree =
     }
   } catch (error) {
     core.warning(`Cannot reuse ${workflow}: ${error.message}. Running the checks.`)
-  }
-  return false
-}
-
-export async function nightlyAssets(github, repo, sha) {
-  const { data } = await github.rest.repos.getReleaseByTag({ ...repo, tag: 'nightly' })
-  return expectedNightlyAssets(data.assets, sha).map(({ id, name, size, digest }) => {
-    if (!id || !size || !/^sha256:[0-9a-f]{64}$/.test(digest ?? '')) throw new Error('Missing asset identity or digest')
-    return { id, name, size, digest }
-  }).sort((a, b) => a.name.localeCompare(b.name))
-}
-
-export async function reuseNightlyBuild({ github, context, core, sha, settings = {}, read = readProof }) {
-  // A manual dispatch always runs, including requests to recheck infrastructure.
-  if (context.eventName !== 'schedule') return false
-  try {
-    const assets = await nightlyAssets(github, context.repo, sha)
-    const { data } = await github.rest.actions.listWorkflowRuns({
-      ...context.repo, workflow_id: 'nightly.yml', status: 'success', head_sha: sha, per_page: 100,
-    })
-    for (const run of data.workflow_runs) {
-      if (run.id === context.runId || run.head_sha !== sha || run.status !== 'completed' ||
-          run.conclusion !== 'success' || run.path !== '.github/workflows/nightly.yml') continue
-      const proof = await read(github, context.repo, run, 'nightly.yml-proof')
-      if (!proof || proof.workflow !== 'nightly.yml' || proof.head !== sha || JSON.stringify(proof.settings ?? {}) !== JSON.stringify(settings) || JSON.stringify(proof.assets) !== JSON.stringify(assets)) continue
-      const { data: { jobs } } = await github.rest.actions.listJobsForWorkflowRun({ ...context.repo, run_id: run.id, filter: 'latest', per_page: 100 })
-      const required = ['build (linux)', 'build (windows)', 'build (macos)', 'publish', 'linux-e2e', 'windows-e2e', 'macos-e2e']
-      if (!required.every(name => jobs.some(job => job.name === name && job.status === 'completed' && job.conclusion === 'success'))) continue
-      core.notice(`Reuse nightly builds from ${run.html_url}: source and all 24 assets match. Installed tests still run.`)
-      await core.summary.addRaw(`Reused [verified nightly builds](${run.html_url}). Source \`${sha}\` and all 24 asset IDs and SHA-256 digests match. Installed tests run against the current environment.`).write()
-      return true
-    }
-  } catch (error) {
-    core.warning(`Cannot reuse nightly: ${error.message}. Running the build.`)
   }
   return false
 }

@@ -3,9 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { macosSigningProvenance } from '../.github/lib/release-promotion.mjs'
 
 const workflow = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
+const releaseHelper = fs.readFileSync('.github/lib/nightly-release.mjs', 'utf8')
 const ensureJunitReport = 'test/e2e/support/ensure-junit-report.sh'
 
 // This helper needs a POSIX shell, and Windows has none.
@@ -77,10 +77,11 @@ describe('nightly macOS package build', () => {
 
   it('builds and publishes the package while signing stays disabled', () => {
     expect(workflow).toContain('node .github/build-macos-app.mjs')
-    expect(workflow).toContain('[".app.zip", ".pkg", ".dmg", ".app.tar.gz", ".app.tar.gz.sig"]')
+    expect(workflow).toContain('node .github/lib/nightly-release.mjs finalize munimentai/muniment "$SOURCE_SHA"')
+    expect(releaseHelper).toContain('[".app.zip", ".pkg", ".dmg", ".app.tar.gz", ".app.tar.gz.sig"]')
     expect(workflow).toContain("MACOS_SIGNING_ENABLED: ${{ vars.MACOS_SIGNING_ENABLED || 'false' }}")
-    expect(workflow).toContain(macosSigningProvenance('${sha}').replaceAll('`', '\\`'))
-    expect(workflow).toContain('macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74.')
+    expect(releaseHelper).toContain('macosSigningProvenance(sha)')
+    expect(releaseHelper).toContain('macOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74.')
   })
 })
 
@@ -117,9 +118,7 @@ describe('nightly Linux E2E workflow', () => {
     expect(conditionResult({ eventName: 'workflow_dispatch', platform: 'linux', prepare: 'failure' })).toBe(false)
   })
 
-  it('stores platform diagnostics and the reuse proof in MinIO', () => {
-    expect(job('proof')).toContain('name: nightly.yml-proof')
-    expect(job('proof')).toContain('uses: ./.github/actions/store-artifact')
+  it('stores platform diagnostics in MinIO', () => {
     expect(workflow).not.toMatch(/actions\/(?:upload|download)-artifact|actions\/artifacts/)
     for (const platform of ['linux', 'windows', 'macos']) {
       const lane = job(`${platform}-e2e`, platform === 'linux' ? 'windows-e2e' : platform === 'windows' ? 'macos-e2e' : 'verify-requested-e2e')
@@ -152,7 +151,7 @@ describe('nightly Linux E2E workflow', () => {
 
   it('checks out the pinned E2E harness in every installed lane', () => {
     expect(workflow.match(/- name: Check out E2E harness/g)).toHaveLength(3)
-    // Three E2E lanes, the proof job, and the build job's updater signing step.
+    // Three E2E lanes, the build job's updater signing step, and the publish job.
     expect(workflow.match(/ref: \$\{\{ needs\.prepare\.outputs\.source_sha \}\}/g)).toHaveLength(5)
   })
 
@@ -374,4 +373,43 @@ it('runs every installed lane even when the scheduled nightly reuses builds', ()
     const condition = conditionFor(job(`${platform}-e2e`, platform === 'linux' ? 'windows-e2e' : platform === 'windows' ? 'macos-e2e' : 'verify-requested-e2e'))
     expect(evaluateCondition(condition, { eventName: 'schedule', platform: '', reuse: 'true', previous: { linux: 'success', windows: 'success' } })).toBe(true)
   }
+})
+
+describe('release job gate', () => {
+  const read = (file) => fs.readFileSync(`.github/workflows/${file}`, 'utf8')
+  const jobText = (text, name) => text.slice(text.indexOf('\njobs:\n')).match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [\\w-]+:\\n|$(?![\\s\\S]))`, 'm'))[1]
+  const gates = [['nightly.yml', 'prepare'], ['nightly.yml', 'build'], ['release.yml', 'promote'], ['release.yml', 'draft-winget-pr']]
+  const owner = { REPOSITORY: 'factory/muniment', EVENT: 'workflow_dispatch', REF: 'refs/heads/main', ACTOR: 'mikeydiamonds' }
+
+  it.each(gates)('%s %s admits the dispatch in its first step, before any secret', (file, name) => {
+    const text = jobText(read(file), name)
+    const steps = text.slice(text.indexOf('    steps:\n'))
+    expect(steps.match(/^      - .+$/m)[0]).toBe('      - name: Admit only an owner dispatch of main')
+    expect(text.slice(0, text.indexOf('      - name: Admit only an owner dispatch of main'))).not.toContain('secrets.')
+  })
+
+  it('makes every other nightly job wait for the gated prepare job', () => {
+    for (const name of ['build', 'publish', 'linux-e2e', 'windows-e2e', 'macos-e2e']) {
+      expect(jobText(workflow, name)).toMatch(/needs: (?:prepare|\[prepare, )/)
+    }
+    expect(read('release.yml')).toContain('needs: promote')
+  })
+
+  it.skipIf(process.platform === 'win32').each([
+    [{}, 0],
+    [{ ACTOR: 'factory-bot' }, 1],
+    [{ REF: 'refs/heads/agent/branch' }, 1],
+    [{ REF: 'refs/tags/v1.0.0' }, 1],
+    [{ EVENT: 'push' }, 1],
+    [{ REPOSITORY: 'munimentai/muniment' }, 1],
+    [{ ACTOR: '' }, 1],
+  ])('fails closed for %j', (change, status) => {
+    for (const [file, name] of gates) {
+      const text = jobText(read(file), name)
+      const step = text.slice(text.indexOf('      - name: Admit only an owner dispatch of main'))
+      const script = step.split('        run: |\n')[1].split(/\n(?!          )/)[0].replace(/^          /gm, '')
+      const result = spawnSync('bash', ['-e', '-c', script], { env: { PATH: process.env.PATH, ...owner, ...change }, encoding: 'utf8' })
+      expect(result.status, `${file} ${name}`).toBe(status)
+    }
+  })
 })

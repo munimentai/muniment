@@ -90,8 +90,6 @@ test('the client and native jobs leave time for the slot, guest, artifacts, and 
     const minutes = Number(job.match(/timeout-minutes: (\d+)/)[1])
     assert.ok(minutes * 60 > desktopCiBudget.client + 60)
   }
-  const nightly = fs.readFileSync('.github/workflows/nightly.yml', 'utf8')
-  assert.match(nightly.split('\n  targeted-release-acceptance:\n')[1].split(/\n  [\w-]+:\n/)[0], /uses: .\/.github\/workflows\/subscriptions.yml/)
   assert.deepEqual(runDesktopCi({ ...options, output, spawnProcess(command, args, config) {
     if (command === 'ssh') {
       assert.equal(config.timeout, desktopCiBudget.client * 1000)

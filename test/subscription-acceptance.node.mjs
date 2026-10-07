@@ -1685,16 +1685,8 @@ test('targeted subscription runs select one platform without granting full relea
   }
   const collect = workflow.split('\n  collect:\n')[1]
   assert.match(collect, /if: always\(\) && !cancelled\(\) && inputs.platform == 'all'/)
-  const targeted = nightly.split('\n  targeted-release-acceptance:\n')[1].split('\n  proof:')[0]
-  assert.match(targeted, /contains\(fromJSON\('\["linux","windows","macos"\]'\), github.event.inputs.platform\)/)
-  assert.match(targeted, /source_sha: \$\{\{ needs.prepare.outputs.source_sha \}\}/)
-  assert.match(targeted, /platform: \$\{\{ github.event.inputs.platform \}\}/)
-  assert.match(targeted, /uses: \.\/\.github\/workflows\/subscriptions.yml/)
-  assert.match(nightly, /ref: context.sha/)
-  const proof = nightly.split('\n  proof:\n')[1]
-  assert.match(proof, /needs.release-acceptance.result == 'success'/)
-  assert.match(proof, /needs.publish.result == 'success'/)
-  assert.doesNotMatch(proof, /targeted-release-acceptance/)
+  // Forgejo runs the nightly, and the native subscription runners are on GitHub.
+  assert.doesNotMatch(nightly, /uses: .*subscriptions\.yml/)
 })
 
 test('targeted subscription dispatch keeps full release acceptance exclusive to all platforms', () => {
@@ -1749,28 +1741,7 @@ test('the workflow runs a native job per platform and uploads release-acceptance
   assert.equal((workflow.match(/ref: \$\{\{ github.sha \}\}/g) ?? []).length, 5)
   assert.match(workflow, /HARNESS_SHA: \$\{\{ github.sha \}\}/)
   assert.equal((workflow.match(/SOURCE_SHA: \$\{\{ inputs.source_sha \}\}/g) ?? []).length, 5)
-  assert.match(nightly, /uses: \.\/\.github\/workflows\/subscriptions.yml/)
-  assert.match(nightly, /needs\.release-acceptance\.result == 'success'/)
-  const acceptanceJob = nightly.split('  release-acceptance:\n')[1].split('\n  proof:')[0]
-  assert.match(acceptanceJob, /needs: \[prepare, build, publish, linux-e2e, windows-e2e, macos-e2e\]/)
-  assert.match(acceptanceJob, /source_sha: \$\{\{ needs.prepare.outputs.source_sha \}\}/)
-  assert.match(acceptanceJob, /secrets: inherit/)
-  assert.match(acceptanceJob, /github.event.inputs.platform == 'all'/)
-  assert.doesNotMatch(acceptanceJob, /outputs.reuse|continue-on-error/)
-  const condition = acceptanceJob.match(/if: >-\n((?:      .+\n)+)/)[1].trim()
-  const allowed = (platform, prepare = 'success', cancelled = false) => Function(`return (${condition
-    .replace('cancelled()', JSON.stringify(cancelled))
-    .replaceAll('needs.prepare.result', JSON.stringify(prepare))
-    .replaceAll('github.event.inputs.platform', JSON.stringify(platform))})`)()
-  assert.equal(allowed('all'), true)
-  assert.equal(allowed(''), true)
-  assert.equal(allowed('all', 'failure'), false)
-  assert.equal(allowed('all', 'success', true), false)
-  for (const platform of ['linux', 'windows', 'macos']) assert.equal(allowed(platform), false)
-  const proofJob = nightly.split('  proof:\n')[1]
-  for (const gate of ['build', 'publish', 'linux-e2e', 'windows-e2e', 'macos-e2e', 'release-acceptance']) {
-    assert.ok(proofJob.includes(`needs.${gate}.result == 'success'`))
-  }
+  assert.doesNotMatch(nightly, /release-acceptance/)
   assert.match(workflow, /rm -rf "\$RUNNER_TEMP\/subscription-inputs"/)
   assert.equal((workflow.match(/name: Clear platform output/g) ?? []).length, 4)
   assert.ok((workflow.match(/if: always\(\)/g) ?? []).length >= 6)

@@ -19,15 +19,15 @@ const assignments = {
   'secret-scan.yml': { gitleaks: 'muniment-checks' },
   'artifact-store.yml': { checks: 'muniment-checks', upload: 'macos-15', collect: 'muniment-checks' },
   'nightly.yml': {
-    prepare: 'muniment-checks', build: 'muniment-release', publish: 'muniment-checks',
+    prepare: 'muniment-checks', build: 'self-hosted', publish: 'muniment-checks',
     'linux-e2e': 'self-hosted', 'windows-e2e': 'self-hosted', 'macos-e2e': 'self-hosted',
-    'verify-requested-e2e': 'muniment-checks', proof: 'muniment-checks',
+    'verify-requested-e2e': 'muniment-checks',
   },
   'subscriptions.yml': {
     'validate-platform': 'muniment-checks', linux: 'muniment-release', windows: 'muniment-release',
     'macos-arm64': 'macos-15', 'macos-x64': 'muniment-release', collect: 'muniment-checks',
   },
-  'release.yml': { promote: 'muniment-release', 'draft-winget-pr': 'muniment-release' },
+  'release.yml': { promote: 'self-hosted', 'draft-winget-pr': 'self-hosted' },
   'muniment-core-update.yml': { update: 'self-hosted' },
 }
 

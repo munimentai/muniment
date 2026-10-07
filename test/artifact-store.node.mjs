@@ -532,7 +532,7 @@ test('Every workflow uses MinIO while native tests and public distribution keep 
   for (const step of subscriptions.split('      - ').filter(value => value.includes('run: node test/e2e/runner/subscription-'))) {
     assert.doesNotMatch(step, /FACTORY_CI_S3|AWS_SECRET_ACCESS_KEY/)
   }
-  for (const name of ['ci', 'secret-scan', 'nightly']) {
+  for (const name of ['ci', 'secret-scan']) {
     const text = readFileSync(`.github/workflows/${name}.yml`, 'utf8')
     assert.match(text, /uses: .\/.github\/actions\/store-artifact/)
     assert.match(text, /uses: .\/.github\/actions\/setup-artifact-store/)
@@ -540,6 +540,10 @@ test('Every workflow uses MinIO while native tests and public distribution keep 
     assert.match(text, /secrets.FACTORY_CI_S3_ACCESS_KEY/)
     assert.match(text, /secrets.FACTORY_CI_S3_SECRET_KEY/)
   }
+  const nightlyDiagnostics = readFileSync('.github/workflows/nightly.yml', 'utf8')
+  assert.match(nightlyDiagnostics, /uses: .\/.github\/actions\/setup-artifact-store/)
+  assert.match(nightlyDiagnostics, /secrets.FACTORY_CI_S3_ACCESS_KEY/)
+  assert.match(nightlyDiagnostics, /secrets.FACTORY_CI_S3_SECRET_KEY/)
   const proof = readFileSync('.github/lib/ci-proof.mjs', 'utf8')
   assert.match(proof, /attempt: run.run_attempt, source: run.head_sha/)
   assert.doesNotMatch(proof, /listWorkflowRunArtifacts|downloadArtifact/)
