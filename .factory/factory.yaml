@@ -1,0 +1,81 @@
+# The AI factory's contract for the muniment desktop. The factory reads it from
+# the default branch, and only a human commit changes anything under .factory/.
+version: 1
+forge: forgejo
+default_branch: main
+language: rust
+
+# The agent rules are the owner's, and the secret-scan config judges every change.
+protected:
+  - "AGENTS.md"
+  - "CLAUDE.md"
+  - ".gitleaks.toml"
+
+# Packaging, signing, the desktop-ci and release tooling, and the runtime
+# boundary decide what reaches an installed app.
+risk_paths:
+  - "src-tauri/tauri*.conf.json"
+  - "src-tauri/windows/**"
+  - "src-tauri/packaging/**"
+  - "src-tauri/capabilities/**"
+  - ".github/build-*"
+  - ".github/lib/**"
+  - ".github/actions/**"
+  - ".github/desktop-ci-command.py"
+  - "scripts/update-muniment-core.sh"
+  - "SPEC.md"
+  - "DESIGN.md"
+
+gates:
+  build:
+    commands: ["npm run build"]
+    timeout_s: 900
+  lint:
+    commands:
+      - "bash scripts/check-steering.sh ."
+      - "node test/ui-copy-lint.mjs src src-tauri browser-control"
+    timeout_s: 600
+  # The sandbox has no GTK, WebKit, rustfmt, clippy or desktop-ci access, and the
+  # frontend suite needs a muniment-core checkout and a browser. CI runs the Rust
+  # checks, the frontend suite and the three-platform compile preflight on every
+  # pull request. The gate runs the release tooling and CI routing tests.
+  unit_tests:
+    commands:
+      - "npx vitest run --root . .github/lib"
+      - "node --test test/ci-routing.node.mjs"
+    timeout_s: 1800
+  ci:
+    provider: forgejo
+    # Empty: every reported check counts and a skipped one passes. The always
+    # reported checks are `CI / changes (pull_request)`, `CI / checks (pull_request)`,
+    # `CI / smoke (pull_request)` and `secret-scan / gitleaks (pull_request)`.
+    # `CI / Desktop compile preflight (<platform>) (pull_request)` reports when
+    # desktop code changes and then gates the merge as well.
+    required: []
+    # The desktop matrix queues behind the shared desktop-ci slot on pve01.
+    timeout_s: 14400
+
+budgets:
+  run_wall_s: 2700
+  gate_rounds: 3
+  review_rounds: 1
+  # Two long CI runs never compete for the desktop-ci slot.
+  concurrent_runs: 1
+
+sandbox:
+  cpus: 4
+  memory_mib: 8192
+  egress:
+    - "registry.npmjs.org:443"
+  setup:
+    - "for n in 1 2 3; do npm ci --no-audit --no-fund --fetch-retries=5 && exit 0; sleep 20; done; exit 1"
+
+# Releases are owner-gated workflow_dispatch runs, so a merge ships nothing.
+verify:
+  commands:
+    - "npm run build"
+  timeout_s: 900
+
+# The owner files every task: no automatic cleanup task.
+cleanup:
+  enabled: false
