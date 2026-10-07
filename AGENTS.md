@@ -45,7 +45,7 @@ Windows-specific code CANNOT be compiled or tested in the agent's Linux checkout
 
 ## CI logs
 
-CI runs on Forgejo Actions at `factory/muniment`. CI logs land in the Forgejo Actions run linked from the pull request's checks. Open the failed `Desktop compile preflight (windows)` check. Expand `Check (windows) via desktop-ci`, then read the first compiler error and its command output.
+CI runs on Forgejo Actions at `factory/muniment`. The nightly and stable promotion workflows run there from an owner dispatch of `main`. They publish to GitHub Releases on `munimentai/muniment` with the `GH_RELEASE_TOKEN` secret. Installed subscription acceptance (`subscriptions.yml`) runs on GitHub Actions. CI logs land in the Forgejo Actions run linked from the pull request's checks. Open the failed `Desktop compile preflight (windows)` check. Expand `Check (windows) via desktop-ci`, then read the first compiler error and its command output.
 ## Steering files
 
 This repo's steering files are `AGENTS.md`, `README.md`, `SPEC.md`,
