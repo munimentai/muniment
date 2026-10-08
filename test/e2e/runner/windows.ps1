@@ -579,6 +579,7 @@ try {
   Invoke-NativeCommand "npm.cmd" "ci --no-audit --no-fund" $installerLog "npm dependency installation failed"
   Write-ToolchainState "after-npm-ci"
   . (Join-Path $repoRoot "scripts/prepare-cef-windows.ps1")
+  Invoke-NativeCommand "cargo" "fetch --manifest-path src-tauri/Cargo.toml --locked" $installerLog "Locked Rust dependency fetch failed"
   Invoke-NativeCommand "npx.cmd" "vitest run --root . test/desktop-e2e-harness.test.js" $installerLog "Windows contract tests failed for test/desktop-e2e-harness.test.js"
   Write-ToolchainState "after-contract-tests"
 

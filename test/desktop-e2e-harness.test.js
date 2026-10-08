@@ -4430,3 +4430,14 @@ describe('Windows folder dialog diagnostics', () => {
     }
   }, 70_000)
 })
+
+
+it('Fetches locked Rust dependencies before Windows harness contract tests.', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/windows.ps1'), 'utf8')
+  const repo = runner.indexOf('Set-Location -LiteralPath $repoRoot')
+  const fetch = runner.indexOf('Invoke-NativeCommand "cargo" "fetch --manifest-path src-tauri/Cargo.toml --locked" $installerLog "Locked Rust dependency fetch failed"')
+  const contracts = runner.indexOf('Invoke-NativeCommand "npx.cmd" "vitest run --root . test/desktop-e2e-harness.test.js"')
+  expect(repo).toBeGreaterThanOrEqual(0)
+  expect(fetch).toBeGreaterThan(repo)
+  expect(contracts).toBeGreaterThan(fetch)
+})
