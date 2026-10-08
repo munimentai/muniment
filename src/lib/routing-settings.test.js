@@ -28,7 +28,7 @@ describe('Routing settings', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh models' }))
     await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_provider_inventory', { force: true }))
     expect(screen.queryByRole('button', { name: 'Connect account' })).toBeNull()
-    await fireEvent.click(screen.getByRole('tab', { name: 'Routing', exact: true }))
+    await fireEvent.click(screen.getByRole('tab', { name: 'Decisions', exact: true }))
     expect(await screen.findByRole('switch', { name: 'Use routing' })).toBeDisabled()
     expect(screen.queryByText('Classifier and fallback')).toBeNull()
     expect(screen.queryByText('Test routing', { selector: 'summary' })).toBeNull()

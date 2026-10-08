@@ -71,6 +71,7 @@ const APP_COMMANDS: &[&str] = &[
     "model_router_set_classifier",
     "model_router_connect_classifier",
     "model_router_select_classifier",
+    "model_router_set_assist",
     "model_router_update_classifier",
     "model_router_disconnect_classifier",
     "model_router_test_classifier",

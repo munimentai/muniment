@@ -35,13 +35,13 @@
     defaultVoiceShortcut = '',
   } = $props()
 
-  const sections = [['models', 'Models & routing'], ['extend', 'Extend'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Storage'], ...(featureFlags.companyRecord ? [['companies', 'Companies']] : []), ...(featureFlags.cloud ? [['account', 'Account']] : [])]
+  const sections = [['models', 'Models & decisions'], ['extend', 'Extend'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Storage'], ...(featureFlags.companyRecord ? [['companies', 'Companies']] : []), ...(featureFlags.cloud ? [['account', 'Account']] : [])]
   $effect(() => {
     if ((section === 'companies' && !featureFlags.companyRecord) || (section === 'account' && !featureFlags.cloud)) section = 'models'
   })
   let storageError = $state('')
   let panel = $state()
-  const sectionLabel = $derived(section === 'routing' ? 'Models & routing' : sections.find(([id]) => id === section)?.[1] ?? 'Settings')
+  const sectionLabel = $derived(section === 'routing' ? 'Models & decisions' : sections.find(([id]) => id === section)?.[1] ?? 'Settings')
 
   onMount(() => {
     void tick().then(() => panel?.querySelector('[aria-current="true"]')?.focus())

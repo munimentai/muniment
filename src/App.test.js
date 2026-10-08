@@ -1443,8 +1443,8 @@ describe('workspace composer entry', () => {
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*background:\s*var\(--overlay-backdrop\)/)
     const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & routing', 'Extend', 'Preferences', 'Profile & Memory', 'Storage', 'Companies', 'Account'])
-    expect(within(nav).getByRole('button', { name: 'Models & routing' })).toHaveAttribute('aria-current', 'true')
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & decisions', 'Extend', 'Preferences', 'Profile & Memory', 'Storage', 'Companies', 'Account'])
+    expect(within(nav).getByRole('button', { name: 'Models & decisions' })).toHaveAttribute('aria-current', 'true')
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Preferences' }))
     expect(await within(dialog).findByRole('group', { name: 'Mode' })).toBeInTheDocument()
@@ -7997,7 +7997,7 @@ describe('release feature flags', () => {
     const nav = within(dialog).getByRole('navigation', {name: 'Settings sections'})
     expect(Boolean(within(nav).queryByRole('button', {name: 'Account', exact: true}))).toBe(cloud)
     expect(Boolean(within(nav).queryByRole('button', {name: 'Companies', exact: true}))).toBe(companyRecord)
-    expect(within(nav).getByRole('button', {name: 'Models & routing'})).toBeInTheDocument()
+    expect(within(nav).getByRole('button', {name: 'Models & decisions'})).toBeInTheDocument()
     await fireEvent.click(within(dialog).getByRole('button', {name: 'Close settings'}))
     if (!companyRecord) {
       await fireEvent.keyDown(window, {key: 'k', metaKey: true, ctrlKey: true})
@@ -8029,7 +8029,7 @@ describe('release feature flags', () => {
     const Settings = (await import('./lib/Settings.svelte')).default
     for (const section of ['account', 'companies']) {
       const view = render(Settings, {tauri: {invoke}, section, onclose: vi.fn()})
-      await waitFor(() => expect(screen.getByRole('heading', {name: 'Models & routing'})).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByRole('heading', {name: 'Models & decisions'})).toBeInTheDocument())
       expect(invoke).not.toHaveBeenCalledWith('auth_entitlement_snapshot')
       expect(invoke.mock.calls.some(([command]) => command.startsWith('record_'))).toBe(false)
       view.unmount()
@@ -8045,7 +8045,7 @@ it('prepares and routes extensions once across repeated busy refusals', async ()
     .mockRejectedValueOnce('Muniment is busy with another request. Try again.')
     .mockReturnValueOnce(accepted.promise)
   invoke.mockImplementation((command, args) => {
-    if (command === 'extend_command') return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }] })
+    if (command === 'extend_command') return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }], assist: { name: 'Clef Flash' } })
     if (command === 'chat_current_thread') return Promise.resolve('thread-1')
     if (command === 'chat_submit') return submit(args)
     return original(command, args)
@@ -8054,8 +8054,8 @@ it('prepares and routes extensions once across repeated busy refusals', async ()
   const composer = await findReadyWorkspaceComposer()
   await fireEvent.click(screen.getByRole('button', { name: 'Extensions', exact: true }))
   await fireEvent.click(screen.getByRole('button', { name: 'MCPs', exact: true }))
-  // A connected MCP server turns auto-select on by default.
-  expect(screen.getByRole('switch', { name: 'Auto-select for this turn' })).toBeChecked()
+  // Assistance in Settings turns its decision model on for each message.
+  expect(screen.getByRole('switch', { name: 'Clef Flash assists' })).toBeChecked()
   await fireEvent.input(composer, { target: { value: 'Search for the answer' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Send', exact: true }))
   await waitFor(() => expect(submit).toHaveBeenCalledTimes(3))
@@ -8083,7 +8083,7 @@ it.each(['preparation', 'submission'])('keeps extension selection after a failed
   invoke.mockImplementation((command, args) => {
     if (command === 'extend_command') {
       if (args.action === 'route' && stage === 'preparation') return Promise.reject(error)
-      return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }] })
+      return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }], assist: { name: 'Clef Flash' } })
     }
     if (command === 'chat_current_thread') return Promise.resolve('thread-1')
     if (command === 'chat_submit') return Promise.reject(error)
@@ -8093,8 +8093,8 @@ it.each(['preparation', 'submission'])('keeps extension selection after a failed
   const composer = await findReadyWorkspaceComposer()
   await fireEvent.click(screen.getByRole('button', { name: 'Extensions', exact: true }))
   await fireEvent.click(screen.getByRole('button', { name: 'MCPs', exact: true }))
-  // A connected MCP server turns auto-select on by default.
-  expect(screen.getByRole('switch', { name: 'Auto-select for this turn' })).toBeChecked()
+  // Assistance in Settings turns its decision model on for each message.
+  expect(screen.getByRole('switch', { name: 'Clef Flash assists' })).toBeChecked()
   await fireEvent.input(composer, { target: { value: 'Search for the answer' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Send', exact: true }))
   await screen.findAllByText(error.replace(' Try again.', ''))
@@ -8104,7 +8104,7 @@ it.each(['preparation', 'submission'])('keeps extension selection after a failed
   expect(invoke.mock.calls.filter(([command, args]) => command === 'extend_command' && args.action === 'route')).toHaveLength(1)
   expect(invoke.mock.calls.filter(([command]) => command === 'chat_submit')).toHaveLength(stage === 'preparation' ? 0 : 1)
   expect(composer).toHaveValue('Search for the answer')
-  expect(screen.getByRole('switch', { name: 'Auto-select for this turn' })).toBeChecked()
+  expect(screen.getByRole('switch', { name: 'Clef Flash assists' })).toBeChecked()
 })
 
 it('inserts and colors skill commands in the message and prepares them for one turn', async () => {

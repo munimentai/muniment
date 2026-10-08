@@ -14,7 +14,7 @@
         {
           "id": "account",
           "title": "Connect your first account",
-          "body": "Open Settings \u2192 Models & routing \u2192 Accounts. Choose Connect account and a provider. Use a supported subscription sign-in, an API key, or a local model endpoint. Credentials stay on your device. Your provider sets access and usage limits."
+          "body": "Open Settings \u2192 Models & decisions \u2192 Accounts. Choose Connect account and a provider. Use a supported subscription sign-in, an API key, or a local model endpoint. Credentials stay on your device. Your provider sets access and usage limits."
         },
         {
           "id": "first-message",
@@ -110,7 +110,7 @@
         {
           "id": "turn",
           "title": "Use extensions for one turn",
-          "body": "Open the composer\u2019s ellipsis menu. Enable the MCP servers needed for this turn. Choose a skill or plugin to insert its /command into the message. Auto-select uses your configured classifier. Selections reset after submission and remain with an unsent task draft."
+          "body": "Open the composer\u2019s ellipsis menu. Enable the MCP servers needed for this turn. Choose a skill or plugin to insert its /command into the message. With assistance on in Settings → Models & decisions → Decisions, the decision model it names picks MCP servers and skills, and you can turn it off for one message. Selections reset after submission and remain with an unsent task draft."
         }
       ]
     },

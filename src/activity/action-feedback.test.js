@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { actionGroups, actionDuration, responseParts } from './action-feedback.js'
 
 describe('action feedback', () => {
+  it('names an MCP tool call by its server and tool', () => {
+    const labels = actionGroups([
+      { id: 'a', displayName: 'mcp__Context7__resolve_library_id', status: 'completed' },
+      { id: 'b', displayName: 'mcp__extend-a3d717fb-548e-4a91-b750-dcb24918cf99__query_docs', status: 'completed' },
+    ])[0].actions.map(action => action.label)
+    expect(labels).toEqual(['MCP Context7 · resolve library id', 'MCP · query docs'])
+  })
   const actions = [
     { effectId: 'a', displayName: 'read', status: 'completed', input: '{"path":"/project/src/main.rs"}' },
     { effectId: 'b', displayName: 'read', status: 'running', input: '{"path":"C:\\\\project\\\\other.rs"}' },

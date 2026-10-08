@@ -169,6 +169,9 @@ pub(crate) struct RouterSettings {
     min_confidence: f64,
     classifier: ClassifierView,
     classifier_connections: Vec<connections::ConnectionView>,
+    /// Decision-model assistance: whether it is on, and the connection it
+    /// asks, empty while it uses the model routing one.
+    assist: connections::AssistView,
     served_models: Vec<String>,
 }
 
@@ -376,6 +379,7 @@ fn settings(
         min_confidence: config.min_confidence,
         classifier: classifier_view(&config.classifier),
         classifier_connections: connections::views(agent, &config.classifier)?,
+        assist: connections::assist_view(agent, &config.classifier)?,
         served_models: served_models(&config),
     })
 }

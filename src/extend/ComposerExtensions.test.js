@@ -5,7 +5,7 @@ import ComposerExtensions from './ComposerExtensions.svelte'
 import { openComposerPanel } from '../lib/composer-panels.js'
 afterEach(cleanup)
 it('keeps MCP switches local to one turn and resets after submission', async () => {
-  const state={items:[{id:'docs',kind:'mcp',name:'Docs',enabled:true}],threads:{chat:{selected:['docs']}}}
+  const state={items:[{id:'docs',kind:'mcp',name:'Docs',enabled:true}],threads:{chat:{selected:['docs']}},assist:{name:'Clef Flash'}}
   // The window still shows an older thread. The turn goes to the runtime's current one.
   const invoke=vi.fn(async command=>command==='chat_current_thread'?'chat':state)
   const {component}=render(ComposerExtensions,{tauri:{invoke},threadId:'older',onmanage:vi.fn()})
@@ -15,9 +15,9 @@ it('keeps MCP switches local to one turn and resets after submission', async () 
   expect(toggle).not.toBeChecked()
   await fireEvent.click(toggle)
   expect(invoke.mock.calls.some(([,arg])=>arg.action==='turn')).toBe(false)
-  // A connected MCP server turns auto-select on until the user turns it off.
-  expect(screen.getByRole('switch',{name:'Auto-select for this turn'})).toBeChecked()
-  await fireEvent.click(screen.getByRole('switch',{name:'Auto-select for this turn'}))
+  // Assistance in Settings turns the decision model on until the user turns it off.
+  expect(screen.getByRole('switch',{name:'Clef Flash assists'})).toBeChecked()
+  await fireEvent.click(screen.getByRole('switch',{name:'Clef Flash assists'}))
   await component.prepare('Read docs')
   expect(invoke).toHaveBeenCalledWith('extend_command',{action:'turn',data:{threadId:'chat',selected:['docs'],disabled:[],automatic:false}})
   expect(invoke.mock.calls.some(([,arg])=>arg?.action==='route')).toBe(false)
@@ -68,4 +68,14 @@ it('opens one branch at a time on hover after a short delay', async () => {
     expect(mcps).toHaveAttribute('aria-expanded','false')
     expect(screen.getAllByLabelText(/^Available /)).toHaveLength(1)
   } finally { vi.useRealTimers() }
+})
+it('hides assistance and never routes while no decision model assists', async () => {
+  const invoke=vi.fn(async command=>command==='chat_current_thread'?'chat':{items:[{id:'docs',kind:'mcp',name:'Docs',enabled:true}]})
+  const {component}=render(ComposerExtensions,{tauri:{invoke},threadId:'chat',onmanage:vi.fn()})
+  await fireEvent.click(screen.getByRole('button',{name:'Extensions'}))
+  await screen.findByRole('button',{name:'MCPs'})
+  expect(screen.queryByText(/assists$/)).toBeNull()
+  await component.prepare('Read docs')
+  expect(invoke).toHaveBeenCalledWith('extend_command',{action:'turn',data:{threadId:'chat',selected:[],disabled:[],automatic:false}})
+  expect(invoke.mock.calls.some(([,arg])=>arg?.action==='route')).toBe(false)
 })

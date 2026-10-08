@@ -27,9 +27,9 @@
   $effect(() => { void threadId; branch = ''; open = false })
   $effect(() => { commandNames = choices.map(item => item.command) })
   $effect(() => { if (command !== null) { highlighted = 0; openComposerPanel('commands'); void refresh() } })
-  // Auto-select is on by default while an MCP server is connected and turned
-  // on. A switch the user flips holds for the turn.
-  const automatic = $derived(selection.automatic ?? state.items.some(item => item.kind === 'mcp' && item.enabled !== false))
+  // While assistance is on in Settings, its decision model picks extensions
+  // for each message unless the user turns it off for that message.
+  const automatic = $derived(!!state.assist && (selection.automatic ?? true))
   function close() { openComposerPanel(null); open = false }
   function choose(item) {
     const token = `/${item.command} `
@@ -97,13 +97,13 @@
           {#if branch === 'mcp'}
             {#each servers as server}<div class="server">{#if server.entry}<ProviderIcon entry={server.entry} size={22} />{:else}<McpIcon />{/if}<span>{server.name}</span><Toggle checked={selection.enabled.includes(server.id)} label={`Use ${server.name} for this turn`} onchange={checked => toggle(server.id, checked)} /></div>{/each}
             {#if !servers.length}<p>No MCPs installed.</p>{/if}
-            <div class="automatic"><span>Auto-select for this turn</span><Toggle checked={automatic} label="Auto-select for this turn" onchange={checked => selection.automatic = checked} /></div>
           {:else}
             {#each choices.filter(item => item.kind === branch) as item}<button type="button" class="choice" onclick={() => choose(item)}><span>/{item.command}</span><small>{item.description || item.name}</small></button>{/each}
             {#if !choices.some(item => item.kind === branch)}<p>No {branch === 'plugin' ? 'plugins' : 'skills'} installed.</p>{/if}
           {/if}
         </div>{/if}
       </div>
+      {#if state.assist}<div class="automatic"><span>{state.assist.name} assists</span><Toggle checked={automatic} label={`${state.assist.name} assists`} onchange={checked => selection.automatic = checked} /></div>{/if}
       <button type="button" class="manage" onclick={() => { close(); onmanage() }}>Manage extensions</button>
     </div>
   {:else if command !== null && shown.length && !active}

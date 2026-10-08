@@ -373,7 +373,7 @@
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
     <div class="tabs-row">
-      <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Routing',icon:'route'}]} onchange={value => tab = value} />
+      <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Decisions',icon:'route'}]} onchange={value => tab = value} />
       {#if tab === 'accounts'}<div class="tab-action"><Button icon="plus" variant="primary" onclick={openConnector}>Connect account</Button></div>{/if}
       {#if tab === 'models'}<div class="tab-action"><Button icon="refresh-cw" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</Button></div>{/if}
     </div>
@@ -394,10 +394,10 @@
       <section class="provider-group" aria-label="Connected decision models">
         <header><h5>Decision models</h5></header>
         {#each router.classifier_connections as connection (connection.id)}
-          <div class="account-row"><ProviderLogo provider={connection.catalog_id} size={18} /><strong>{connection.name}</strong><span class="tag">{connection.active ? 'Selected for routing' : 'Connected'}</span>
+          <div class="account-row"><ProviderLogo provider={connection.catalog_id} size={18} /><strong>{connection.name}</strong><span class="tag">{connection.active ? 'Selected for routing' : router.assist?.connection === connection.id ? 'Selected for assistance' : 'Connected'}</span>
             <span class="row-actions">
               {#if connection.connection.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
-              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }) } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
+              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { const assisted = router.assist?.enabled; router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }); if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another in Decisions.' } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
             </span>
           </div>
           {#if editingClassifier === connection.id}<ClassifierEdit {connection} {tauri} onsaved={next => { accounts.set(next); editingClassifier = ''; status = 'Decision model saved.' }} oncancel={() => { editingClassifier = '' }} />{/if}

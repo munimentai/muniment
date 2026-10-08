@@ -130,20 +130,20 @@ Pins and archives persist on the device. Projects group ordinary chats and autom
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings is a popup over the workspace with a
-section list on its left: Models & routing, Extend, Preferences, Profile & Memory and Storage.
+section list on its left: Models & decisions, Extend, Preferences, Profile & Memory and Storage.
 The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
 section on its right; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it. Dismissal returns focus to the opener.
 With the company-record flag enabled, Companies lists every company on the machine with Open, Rename and Delete,
 Delete asks once and names the company, and New company sits under the list.
-Models & routing has Accounts, Models, and Routing pill tabs. Account
+Models & decisions has Accounts, Models, and Decisions pill tabs. Account
 rows span the page, with allowances visible and usage in details.
 A searchable model list holds visibility and routing statements. Each provider leads with the newest model of each family and the models turned on.
 The rest fold under Other models and stay out of the picker until turned on. Connect
 account opens the provider catalog and its connection methods. The model
 chip shows the provider's mark in its brand colors beside the model id, and
-opens a picker over the shown models with Models & routing at its foot. The
+opens a picker over the shown models with Models & decisions at its foot. The
 sidebar is resizable by its divider and collapses to nothing: no rail. Each divider
 shows Lucide's vertical ellipsis as its grip, and on hover, focus or drag its gap fills with `border` that fades out at both ends.
 The mark appears on the launch screen and in the thinking state, never in
@@ -208,7 +208,7 @@ component. Hidden features leave no controls, Settings entries or empty space.
 ## Extend
 
 Extend uses the shared Settings panel. MCP servers, Skills and Plugins occupy
-three theme-colored pill tabs through `SettingsTabs`, shared with Models & routing.
+three theme-colored pill tabs through `SettingsTabs`, shared with Models & decisions.
 Tab icons stay neutral on selection. MCPs use the MCP mark, Skills use
 `pencil-sparkles`, and Plugins use `unplug`. Nonzero counts follow labels in smaller type. Search, category, installation and sort filters
 search names, descriptions, publishers and categories in the official remote-server catalog.

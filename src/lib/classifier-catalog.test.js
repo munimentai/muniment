@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { DEDICATED, SELF_HOSTED, catalog, matchSaved, priceLabel } from './classifier-catalog.js'
+import { DEDICATED, SELF_HOSTED, catalog, classifierProvider, matchSaved, priceLabel } from './classifier-catalog.js'
 
 describe('classifier catalog', () => {
+  it('names the connection behind a decision model, so its mark shows', () => {
+    expect(classifierProvider('@cf/cloudflare/clef-flash')).toBe('clef')
+    expect(classifierProvider('clef:latest')).toBe('clef')
+    expect(classifierProvider('gpt-6-luna')).toBe('luna')
+    expect(classifierProvider('jev-latest')).toBe('typesafe')
+  })
+
   it('suggests only dedicated classifiers and compatible endpoints', () => {
     const rows = catalog([{ family: 'openai', enabled: true }], [{ family: 'openai', model: 'gpt-6-sol' }, { family: 'anthropic', model: 'claude-opus-5-5' }])
     expect(rows[0].id).toBe('typesafe/jev-latest')

@@ -772,19 +772,38 @@ mod tests {
         assert_eq!(reply["result"]["protocolVersion"], "2025-11-25");
         assert_eq!(reply["result"]["serverInfo"]["name"], SERVER_NAME);
         assert!(reply["result"]["capabilities"]["tools"].is_object());
-        assert!(send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}).to_string()).is_none());
-        assert_eq!(send(line(6, "ping", json!({}))).unwrap()["result"], json!({}));
+        assert!(
+            send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}).to_string())
+                .is_none()
+        );
+        assert_eq!(
+            send(line(6, "ping", json!({}))).unwrap()["result"],
+            json!({})
+        );
         let reply = send(line(7, "tools/list", json!({}))).unwrap();
         assert_eq!(reply["result"]["tools"].as_array().unwrap().len(), 3);
         assert!(reply["result"].get("resultType").is_none());
-        let reply = send(line(8, "tools/call", json!({"name": "sql", "arguments": {"sql": "select 1"}}))).unwrap();
+        let reply = send(line(
+            8,
+            "tools/call",
+            json!({"name": "sql", "arguments": {"sql": "select 1"}}),
+        ))
+        .unwrap();
         assert_eq!(reply["result"]["isError"], false);
         assert!(reply["result"].get("resultType").is_none());
         // The client declared elicitation, but the server cannot ask, so a
         // missing field is a tool error that names it.
-        let reply = send(line(9, "tools/call", json!({"name": "propose", "arguments": {"op": "create", "kind": "deal"}}))).unwrap();
+        let reply = send(line(
+            9,
+            "tools/call",
+            json!({"name": "propose", "arguments": {"op": "create", "kind": "deal"}}),
+        ))
+        .unwrap();
         assert_eq!(reply["result"]["isError"], true);
-        assert!(reply["result"]["content"][0]["text"].as_str().unwrap().contains("stage"));
+        assert!(reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("stage"));
         // A request in the 2026-07-28 shape still takes that path.
         let reply = send(request(10, "tools/list", json!({}))).unwrap();
         assert_eq!(reply["result"]["resultType"], "complete");
@@ -794,7 +813,11 @@ mod tests {
         let reply = handle_session_line(
             &mut other,
             &mut FakeBackend::default(),
-            &line(1, "initialize", json!({"protocolVersion": "2099-01-01", "capabilities": {}})),
+            &line(
+                1,
+                "initialize",
+                json!({"protocolVersion": "2099-01-01", "capabilities": {}}),
+            ),
         )
         .unwrap();
         assert_eq!(reply["result"]["protocolVersion"], SESSION_VERSIONS[0]);

@@ -43,3 +43,19 @@ it('offers the decision models a llama.cpp server reports and sends that server 
  await fireEvent.click(screen.getByRole('menuitemradio',{name:'kev-4b · llama.cpp'}))
  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('model_router_connect_classifier',{catalogId:'llama',name:'kev-4b · llama.cpp',model:'kev-4b',baseUrl:base,apiKey:null,keyProvider:'llama'}))
 })
+it('turns assistance on with its own decision model apart from routing',async()=>{
+ const jev={id:'jev',name:'Jev · TypeSafe API',catalog_id:'jev',active:true}
+ const clef={id:'clef',name:'Clef Flash · Ollama',catalog_id:'clef',active:false}
+ const settings={enabled:true,options:[{key:'fast'}],routes:[],accounts:[],classifier_connections:[jev,clef],assist:{enabled:false,connection:''}}
+ const on={...settings,assist:{enabled:true,connection:''}}
+ const invoke=vi.fn(async(command,args)=>command==='model_router_set_assist'?{...settings,assist:{enabled:args.enabled,connection:args.id}}:settings)
+ const onsettings=vi.fn()
+ const {rerender}=render(ModelRouterSection,{tauri:{invoke},settings,onsettings,inventory:{providers:[],default_provider:'muniment-router',default_model:'auto'}})
+ await fireEvent.click(screen.getByRole('switch',{name:'Use assistance'}))
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('model_router_set_assist',{enabled:true,id:''}))
+ await rerender({settings:on})
+ await fireEvent.click(screen.getByRole('button',{name:'Assistance decision model: Same as model routing (Jev · TypeSafe API)'}))
+ await fireEvent.click(screen.getByRole('menuitemradio',{name:'Clef Flash · Ollama'}))
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('model_router_set_assist',{enabled:true,id:'clef'}))
+ expect(invoke).not.toHaveBeenCalledWith('model_router_select_classifier',expect.anything())
+})

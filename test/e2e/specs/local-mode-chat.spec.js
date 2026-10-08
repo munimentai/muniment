@@ -81,7 +81,7 @@ describe('installed local-mode chat', () => {
       const modelChip = await localMode.$('.model-chip')
       await modelChip.waitForDisplayed()
       await modelChip.click()
-      await (await $('button=Models & routing')).click()
+      await (await $('button=Models & decisions')).click()
       settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
       await settings.waitForDisplayed()
     }

@@ -91,6 +91,7 @@
     "allow-model-router-set-classifier",
     "allow-model-router-connect-classifier",
     "allow-model-router-select-classifier",
+    "allow-model-router-set-assist",
     "allow-model-router-update-classifier",
     "allow-model-router-disconnect-classifier",
     "allow-model-router-test-classifier",

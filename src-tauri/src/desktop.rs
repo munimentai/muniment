@@ -227,6 +227,7 @@ pub fn run() {
             model_router::model_router_set_classifier,
             model_router::model_router_connect_classifier,
             model_router::model_router_select_classifier,
+            model_router::model_router_set_assist,
             model_router::model_router_update_classifier,
             model_router::model_router_disconnect_classifier,
             model_router::model_router_test_classifier,

@@ -68,6 +68,89 @@ pub(super) fn views(agent: &Path, active: &Classifier) -> Result<Vec<ConnectionV
         .collect())
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct AssistView {
+    enabled: bool,
+    connection: String,
+}
+
+pub(super) fn assist_view(agent: &Path, active: &Classifier) -> Result<AssistView, String> {
+    let assist = config::load_assist(agent).map_err(|_| READ_ERROR.to_string())?;
+    let connection = match &assist.classifier {
+        Some(classifier) => read(agent, active)?
+            .into_iter()
+            .find(|entry| entry.classifier == *classifier)
+            .map(|entry| entry.id)
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    Ok(AssistView {
+        enabled: assist.enabled,
+        connection,
+    })
+}
+
+/// Turns decision-model assistance on or off and names the connection it
+/// asks. An empty id uses the model routing decision model.
+#[tauri::command]
+pub(crate) fn model_router_set_assist(
+    state: tauri::State<'_, RouterState>,
+    enabled: bool,
+    id: String,
+) -> Result<RouterSettings, String> {
+    let _guard = MUTATION.lock().map_err(|_| SAVE_ERROR.to_string())?;
+    let agent = agent()?;
+    let config = load(&agent)?;
+    let classifier = if id.is_empty() {
+        None
+    } else {
+        Some(
+            read(&agent, &config.classifier)?
+                .into_iter()
+                .find(|entry| entry.id == id)
+                .ok_or("Choose a connected decision model.")?
+                .classifier,
+        )
+    };
+    let assist = config::Assist {
+        enabled,
+        classifier,
+    };
+    if enabled && assist.decision_model(&config).is_none() {
+        return Err("Choose a decision model for assistance.".into());
+    }
+    config::save_assist(&agent, &assist).map_err(|_| SAVE_ERROR.to_string())?;
+    settings(
+        &agent,
+        running_endpoint(&state).as_ref(),
+        &running_active(&state),
+    )
+}
+
+/// Assistance follows an edited connection, and turns off when the decision
+/// model it asks is disconnected.
+fn follow_assist(
+    agent: &Path,
+    from: &Classifier,
+    to: Option<&Classifier>,
+    routing: bool,
+) -> Result<(), String> {
+    let mut assist = config::load_assist(agent).map_err(|_| READ_ERROR.to_string())?;
+    let uses = match &assist.classifier {
+        Some(classifier) => classifier == from,
+        None => routing,
+    };
+    if !uses {
+        return Ok(());
+    }
+    match to {
+        Some(next) if assist.classifier.is_some() => assist.classifier = Some(next.clone()),
+        Some(_) => return Ok(()),
+        None => assist = config::Assist::default(),
+    }
+    config::save_assist(agent, &assist).map_err(|_| SAVE_ERROR.to_string())
+}
+
 #[tauri::command]
 pub(crate) async fn model_router_connect_classifier(
     state: tauri::State<'_, RouterState>,
@@ -211,9 +294,10 @@ pub(crate) async fn model_router_update_classifier(
         .find(|entry| entry.id == id)
         .ok_or("Choose a connected classifier.")?;
     let routing = entry.classifier == config.classifier;
+    let previous = std::mem::replace(&mut entry.classifier, classifier.clone());
     entry.name = name;
-    entry.classifier = classifier.clone();
     write(&agent, &connections)?;
+    follow_assist(&agent, &previous, Some(&classifier), routing)?;
     if routing {
         config.classifier = classifier;
         save(&agent, &config)?;
@@ -259,6 +343,10 @@ pub(crate) fn model_router_disconnect_classifier(
     let agent = agent()?;
     let mut config = load(&agent)?;
     let mut connections = read(&agent, &config.classifier)?;
+    let removed = connections
+        .iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| (entry.classifier.clone(), entry.classifier == config.classifier));
     if connections
         .iter()
         .any(|entry| entry.id == id && entry.classifier == config.classifier)
@@ -274,6 +362,9 @@ pub(crate) fn model_router_disconnect_classifier(
         save(&agent, &config)?;
         apply(&agent, &state, &config)?;
     }
+    if let Some((classifier, routing)) = removed {
+        follow_assist(&agent, &classifier, None, routing)?;
+    }
     connections.retain(|entry| entry.id != id);
     write(&agent, &connections)?;
 
@@ -287,6 +378,34 @@ pub(crate) fn model_router_disconnect_classifier(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn assistance_follows_an_edit_and_turns_off_when_its_model_is_disconnected() {
+        let root = std::env::temp_dir().join(format!("assist-test-{}", uuid::Uuid::now_v7()));
+        let endpoint = |model: &str| Classifier::Endpoint {
+            base_url: "http://127.0.0.1:1/v1/systemone".into(),
+            api_key: None,
+            model: model.into(),
+        };
+        let assist = |classifier| config::Assist {
+            enabled: true,
+            classifier,
+        };
+        config::save_assist(&root, &assist(Some(endpoint("clef-flash")))).unwrap();
+        follow_assist(&root, &endpoint("other"), None, false).unwrap();
+        assert_eq!(config::load_assist(&root).unwrap(), assist(Some(endpoint("clef-flash"))));
+        follow_assist(&root, &endpoint("clef-flash"), Some(&endpoint("clef")), false).unwrap();
+        assert_eq!(config::load_assist(&root).unwrap(), assist(Some(endpoint("clef"))));
+        follow_assist(&root, &endpoint("clef"), None, false).unwrap();
+        assert_eq!(config::load_assist(&root).unwrap(), config::Assist::default());
+        // Assistance that uses the model routing decision model turns off with it.
+        config::save_assist(&root, &assist(None)).unwrap();
+        follow_assist(&root, &endpoint("jev"), Some(&endpoint("jev-2")), true).unwrap();
+        assert_eq!(config::load_assist(&root).unwrap(), assist(None));
+        follow_assist(&root, &endpoint("jev-2"), None, true).unwrap();
+        assert!(!config::load_assist(&root).unwrap().enabled);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn migrates_and_redacts_existing_classifier() {
         let root = std::env::temp_dir().join(format!("classifier-test-{}", uuid::Uuid::now_v7()));
