@@ -56,7 +56,7 @@
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import PocketFold from './lib/PocketFold.svelte'
-  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
   import AppUpdate from './lib/AppUpdate.svelte'
   import { createChatController } from './lib/chat-controller.js'
@@ -255,7 +255,7 @@
     pendingCreation = null
     draft = ''
     selectedFiles = []
-    turnExtensions = { enabled: [], blocked: [], automatic: false }
+    turnExtensions = { enabled: [], blocked: [], automatic: null }
     composer?.focus()
   }
   async function openCreation(item) {
@@ -431,14 +431,14 @@
   }
   const taskDrafts = new Map()
   let pendingCreation = $state(null)
-  let turnExtensions = $state({ enabled: [], blocked: [], automatic: false })
+  let turnExtensions = $state({ enabled: [], blocked: [], automatic: null })
   function selectTask(next) {
     if (next === currentThreadId) return
     taskDrafts.set(currentThreadId, { text: draft, files: selectedFiles, extensions: turnExtensions, creation: pendingCreation })
     const saved = taskDrafts.get(next) || (currentThreadId === null && next ? taskDrafts.get(null) : null)
     draft = saved?.text || ''
     selectedFiles = saved?.files || []
-    turnExtensions = saved?.extensions || { enabled: [], blocked: [], automatic: false }
+    turnExtensions = saved?.extensions || { enabled: [], blocked: [], automatic: null }
     pendingCreation = saved?.creation || null
     currentThreadId = next
   }
@@ -2250,9 +2250,17 @@
           {#each messages as message (messageKeys.get(message))}
             {#if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
+                {@const sent = promptFolders(message.text)}
               <div class="user-turn">
                 <div class="user-message">
-                  {#if message.text}<p>{message.text}</p>{:else}<p class="missing-prompt">Prompt unavailable</p>{/if}
+                  {#if sent.text}<p>{sent.text}</p>{:else}<p class="missing-prompt">Prompt unavailable</p>{/if}
+                  {#if sent.folders.length}
+                    <ul class="message-attachments" aria-label="Attached folders">
+                      {#each sent.folders as folder}
+                        <li><span>{folder.split(/[\\/]/).filter(Boolean).at(-1) ?? folder}</span><strong>{folder}</strong></li>
+                      {/each}
+                    </ul>
+                  {/if}
                   {#if message.attachments?.length}
                     <ul class="message-attachments" aria-label="Saved attachments">
                       {#each message.attachments as attachment}
@@ -2264,7 +2272,7 @@
                 </div>
                 <div class="user-message-meta message-actions">
                   {#if messageLocalTime(message.sentAt)}<time class="message-time" datetime={message.sentAt}>{messageLocalTime(message.sentAt)}</time>{/if}
-                  <button type="button" aria-label={copyConfirmed(copy, userCopyId) ? 'Copied message' : 'Copy message'} data-tooltip={copyConfirmed(copy, userCopyId) ? 'Copied' : 'Copy message'} onclick={() => copyResponse({ id: userCopyId, text: message.text })}><LucideIcon name={copyConfirmed(copy, userCopyId) ? 'check' : 'copy'} variant="action" size={14} /></button>
+                  <button type="button" aria-label={copyConfirmed(copy, userCopyId) ? 'Copied message' : 'Copy message'} data-tooltip={copyConfirmed(copy, userCopyId) ? 'Copied' : 'Copy message'} onclick={() => copyResponse({ id: userCopyId, text: sent.text })}><LucideIcon name={copyConfirmed(copy, userCopyId) ? 'check' : 'copy'} variant="action" size={14} /></button>
                 </div>
                 {#if copyFailure(copy, userCopyId, modifierLabel)}<p class="copy-failure">{copyFailure(copy, userCopyId, modifierLabel)}</p>{/if}
               </div>
@@ -2364,7 +2372,7 @@
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
                 {@const rows = receiptRows({ ...message.run.receipt, routing: [] }, { tools: !parts.some((part) => part.type === 'actions' && actionGroups(part.activities, false).length) })}
-                {@const routing = message.run.receipt?.routing ?? []}
+                {@const routing = routedTurns(message.run.receipt)}
                 {@const columns = receiptUsageColumns(message.run.receipt)}
                 {@const hasDetails = rows.length > 0 || columns.length > 0 || routing.length > 0}
                 {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || hasDetails}

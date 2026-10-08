@@ -29,7 +29,7 @@
   <div class="fields">
     <div class="field"><label for={field('name')}>Connection name</label><input id={field('name')} bind:value={name} disabled={pending}></div>
     <div class="field"><label for={field('model')}>Model ID</label><input id={field('model')} bind:value={model} disabled={pending}></div>
-    <div class="field wide"><label for={field('url')}>Classifier URL{hosted ? ' (optional)' : ''}</label><input id={field('url')} type="url" bind:value={url} disabled={pending}></div>
+    <div class="field wide"><label for={field('url')}>Decision model URL{hosted ? ' (optional)' : ''}</label><input id={field('url')} type="url" bind:value={url} disabled={pending}></div>
     <div class="field wide"><label for={field('key')}>API key</label><input id={field('key')} type="password" autocomplete="off" placeholder="Leave blank to keep the saved key" bind:value={key} disabled={pending}></div>
   </div>
   <p class="support">A new model, URL or key runs the connection test before it saves.</p>

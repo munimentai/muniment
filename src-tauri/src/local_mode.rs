@@ -115,6 +115,9 @@ pub(crate) struct InventoryProvider {
     source: &'static str,
     base_url: Option<String>,
     models: Vec<InventoryModel>,
+    /// The decision models the server reported. They answer on its System One
+    /// route, so the classifier list offers them and the chat picker does not.
+    decision_models: Vec<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -391,6 +394,18 @@ pub(crate) fn saved_endpoint_key(models_file: &Path, provider: &str) -> Option<S
         .map(str::to_owned)
 }
 
+/// The key saved with an endpoint, only for a URL on that endpoint, so a
+/// decision model on the server receives the key its chat models use and no
+/// other host does.
+pub(crate) fn endpoint_key_for(models_file: &Path, provider: &str, url: &str) -> Option<String> {
+    let root: serde_json::Value = serde_json::from_slice(&fs::read(models_file).ok()?).ok()?;
+    let base = root["providers"][provider]["baseUrl"].as_str()?.trim_end_matches('/');
+    let rest = url.strip_prefix(base)?;
+    (rest.is_empty() || rest.starts_with('/'))
+        .then(|| saved_endpoint_key(models_file, provider))
+        .flatten()
+}
+
 /// Saves an Ollama server. A server on another host may sit behind a key, which
 /// discovery sends and Pi sends with every turn. With no key, Pi sends a stand-in.
 fn store_local_provider(models_file: &Path, base_url: &str, key: &str) -> Result<(), String> {
@@ -430,12 +445,18 @@ fn store_local_provider(models_file: &Path, base_url: &str, key: &str) -> Result
         .as_object_mut()
         .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
     // The server names its own models; the pinned id stands in when it does not answer.
-    let discovered = muniment_core::endpoint_models::discover_models_with_key(
+    let discovered = muniment_core::endpoint_models::discover_endpoint_models(
         base_url,
         Some(key),
         DISCOVERY_TIMEOUT,
     );
-    let model_ids = discovered.unwrap_or_else(|| vec![OLLAMA_MODEL.to_owned()]);
+    let decisions = discovered
+        .as_ref()
+        .map(|models| models.decisions.clone())
+        .unwrap_or_default();
+    let model_ids = discovered
+        .map(|models| models.chat)
+        .unwrap_or_else(|| vec![OLLAMA_MODEL.to_owned()]);
     if model_ids.is_empty() {
         return Err("The server has no chat models. Add a chat model, then try again.".into());
     }
@@ -466,7 +487,8 @@ fn store_local_provider(models_file: &Path, base_url: &str, key: &str) -> Result
         .check()
         .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     write_json_for_update(&settings_file, &settings)?;
-    write_json_for_update(models_file, &models)
+    write_json_for_update(models_file, &models)?;
+    store_decision_models(parent, OLLAMA_PROVIDER, &decisions)
 }
 
 pub(crate) fn read_json_for_update(
@@ -594,6 +616,41 @@ fn write_models_record(
 ) -> Result<(), String> {
     fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     write_json_for_update(&models_record_file(agent), record)
+}
+
+/// The record key that keeps each endpoint's decision models by provider.
+const DECISION_MODELS: &str = "decisionModels";
+
+fn decision_models(record: &serde_json::Map<String, serde_json::Value>, provider: &str) -> Vec<String> {
+    record
+        .get(DECISION_MODELS)
+        .and_then(|providers| providers.get(provider))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn store_decision_models(agent: &Path, provider: &str, ids: &[String]) -> Result<(), String> {
+    let mut record = read_models_record(agent)?;
+    if decision_models(&record, provider) == ids {
+        return Ok(());
+    }
+    let providers = record
+        .entry(DECISION_MODELS)
+        .or_insert_with(|| serde_json::json!({}));
+    if !providers.is_object() {
+        *providers = serde_json::json!({});
+    }
+    let providers = providers.as_object_mut().expect("an object");
+    if ids.is_empty() {
+        providers.remove(provider);
+    } else {
+        providers.insert(provider.to_owned(), serde_json::json!(ids));
+    }
+    write_models_record(agent, &record)
 }
 
 fn record_strings(record: &serde_json::Map<String, serde_json::Value>, key: &str) -> Vec<String> {
@@ -894,11 +951,12 @@ fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
     let _lock = lock_pi_auth_file(&models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let mut root = read_json_for_update(&models_file)?;
     let mut changed = false;
+    let mut decisions = Vec::new();
     if let Some(providers) = root
         .get_mut("providers")
         .and_then(serde_json::Value::as_object_mut)
     {
-        for (_, entry) in providers
+        for (id, entry) in providers
             .iter_mut()
             .filter(|(id, _)| {
                 id.as_str() != ROUTER_PROVIDER
@@ -914,13 +972,15 @@ fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
                 .get("apiKey")
                 .and_then(serde_json::Value::as_str)
                 .filter(|key| !matches!(*key, "ollama" | "local"));
-            let Some(discovered) = muniment_core::endpoint_models::discover_models_with_key(
+            let Some(found) = muniment_core::endpoint_models::discover_endpoint_models(
                 base_url,
                 key,
                 DISCOVERY_TIMEOUT,
             ) else {
                 continue;
             };
+            decisions.push((id.clone(), found.decisions));
+            let discovered = found.chat;
             let current: Vec<&str> = entry
                 .get("models")
                 .and_then(serde_json::Value::as_array)
@@ -946,6 +1006,13 @@ fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
     if changed {
         write_json_for_update(&models_file, &root)?;
     }
+    for (provider, ids) in decisions {
+        let before = decision_models(&read_models_record(agent)?, &provider);
+        if before != ids {
+            store_decision_models(agent, &provider, &ids)?;
+            changed = true;
+        }
+    }
     Ok(changed)
 }
 
@@ -970,6 +1037,7 @@ fn provider_inventory(
             source,
             base_url: None,
             models: Vec::new(),
+            decision_models: Vec::new(),
         });
     }
     if let Some(endpoints) = models_file
@@ -1012,6 +1080,7 @@ fn provider_inventory(
                         images: false,
                     })
                     .collect(),
+                decision_models: decision_models(&record, provider),
             });
         }
     }
@@ -1026,6 +1095,7 @@ fn provider_inventory(
             source: "claude-code",
             base_url: None,
             models: Vec::new(),
+            decision_models: Vec::new(),
         });
     }
     for (provider, model) in models {
@@ -1412,13 +1482,16 @@ fn store_endpoint_provider(
         .filter(|model| valid_identifier(model, 512))
         .cloned()
         .collect();
+    let mut decisions = None;
     if models.is_empty() {
-        models = muniment_core::endpoint_models::discover_models_with_key(
+        let found = muniment_core::endpoint_models::discover_endpoint_models(
             base_url,
             Some(key),
             DISCOVERY_TIMEOUT,
         )
         .unwrap_or_default();
+        models = found.chat;
+        decisions = Some(found.decisions);
     }
     if models.is_empty() {
         return Err("The server named no models. Start it, or list its models here.".into());
@@ -1451,6 +1524,9 @@ fn store_endpoint_provider(
             .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
         names.insert(provider.clone(), name.into());
         write_models_record(agent, &record)?;
+    }
+    if let Some(ids) = decisions {
+        store_decision_models(agent, &provider, &ids)?;
     }
     Ok(provider)
 }
@@ -1817,6 +1893,35 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         assert_eq!(inventory.providers[0].models.len(), 1);
         assert_eq!(inventory.providers[0].models[0].context, "128K");
         assert!(inventory.providers[0].models[0].images);
+    }
+
+    #[test]
+    fn an_endpoint_carries_the_decision_models_its_server_reported() {
+        let agent = temporary_directory();
+        fs::write(agent.join("models.json"), serde_json::json!({
+            "providers": {"llama": {"baseUrl": "http://localhost:8080/v1", "models": [{"id": "qwen3"}]}}
+        }).to_string()).unwrap();
+        store_decision_models(&agent, "llama", &["kev-4b".to_owned()]).unwrap();
+        let inventory = provider_inventory(&agent, Vec::new()).unwrap();
+        assert_eq!(inventory.providers[0].decision_models, ["kev-4b"]);
+        assert_eq!(inventory.providers[0].models.len(), 1);
+        store_decision_models(&agent, "llama", &[]).unwrap();
+        let inventory = provider_inventory(&agent, Vec::new()).unwrap();
+        assert!(inventory.providers[0].decision_models.is_empty());
+    }
+
+    #[test]
+    fn a_server_key_goes_only_to_that_server() {
+        let agent = temporary_directory();
+        let models = agent.join("models.json");
+        fs::write(&models, serde_json::json!({
+            "providers": {"ollama": {"baseUrl": "https://ollama.example/v1/", "apiKey": "server-key"}}
+        }).to_string()).unwrap();
+        let key = |url: &str| endpoint_key_for(&models, "ollama", url);
+        assert_eq!(key("https://ollama.example/v1/systemone").as_deref(), Some("server-key"));
+        assert_eq!(key("https://ollama.example/v1evil/systemone"), None);
+        assert_eq!(key("https://other.example/v1/systemone"), None);
+        assert_eq!(endpoint_key_for(&models, "missing", "https://ollama.example/v1/systemone"), None);
     }
 
     #[test]

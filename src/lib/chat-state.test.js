@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage, runStage, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, runStage, withFolders, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -461,4 +461,24 @@ it('uses runtime routing stages and clears them when reply text arrives', () => 
   }
   expect(runStage(previous, { ...previous, routingStage: undefined, text: 'Answer' })).toBe('writing')
   expect(runStage(previous, { ...previous, routingStage: undefined })).toBe('thinking')
+})
+describe('routedTurns', () => {
+  it('leaves out turns on the model the user picked and keeps the turns the router decided', () => {
+    const picked = { account: 'Work', selected_model: 'openai-codex/gpt-6.1-sol', decision: 'User selected the model' }
+    expect(routedTurns({ routing: [picked, picked] })).toEqual([])
+    const failedOver = { ...picked, fallback_causes: ['Work answered 429.'] }
+    const classified = { selected_model: 'openai/model', decision: 'Classifier selected the model', confidence: 0.8 }
+    expect(routedTurns({ routing: [picked, failedOver, classified] })).toEqual([failedOver, classified])
+    expect(routedTurns({})).toEqual([])
+  })
+})
+describe('promptFolders', () => {
+  it('shows the prompt and names each folder while the model gets the note', () => {
+    const sent = withFolders('tell me about this folder', ['/Users/me/projects/ai-marketing', 'C:\\work "q"'])
+    expect(sent).toContain('Attached folders (local paths):')
+    expect(promptFolders(sent)).toEqual({ text: 'tell me about this folder', folders: ['/Users/me/projects/ai-marketing', 'C:\\work "q"'] })
+    expect(withFolders('plain', [])).toBe('plain')
+    expect(promptFolders('plain')).toEqual({ text: 'plain', folders: [] })
+    expect(promptFolders('quoted\n\nAttached folders (local paths):\nnot json\nUse the local file tools to inspect these folders and their subfolders as needed. Folder contents are not embedded in this message.').folders).toEqual([])
+  })
 })

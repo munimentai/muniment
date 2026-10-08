@@ -120,6 +120,10 @@ it('keeps installed MCPs in the catalog with a switch and detail controls', asyn
   const dialog = await screen.findByRole('dialog',{name:'Notion'})
   expect(within(dialog).getByRole('button',{name:'Configure'})).toBeInTheDocument()
   expect(within(dialog).getByRole('button',{name:'Uninstall'})).toBeInTheDocument()
+  // Scripts reach the tools by default. The tool list is the other choice.
+  await fireEvent.click(within(dialog).getByRole('button',{name:'How chats reach its tools: Through scripts'}))
+  await fireEvent.click(within(dialog).getByRole('menuitemradio',{name:'In the tool list'}))
+  expect(invoke).toHaveBeenCalledWith('extend_command',{action:'exposure',data:{id:'notion',exposure:'direct'}})
 })
 
 it('keeps custom and excluded installed MCPs available in the catalog', async () => {

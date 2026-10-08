@@ -391,8 +391,8 @@
     {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
     {#if router?.classifier_connections?.length}
-      <section class="provider-group" aria-label="Connected classifiers">
-        <header><h5>Classifiers</h5></header>
+      <section class="provider-group" aria-label="Connected decision models">
+        <header><h5>Decision models</h5></header>
         {#each router.classifier_connections as connection (connection.id)}
           <div class="account-row"><ProviderLogo provider={connection.catalog_id} size={18} /><strong>{connection.name}</strong><span class="tag">{connection.active ? 'Selected for routing' : 'Connected'}</span>
             <span class="row-actions">
@@ -400,7 +400,7 @@
               <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }) } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
             </span>
           </div>
-          {#if editingClassifier === connection.id}<ClassifierEdit {connection} {tauri} onsaved={next => { accounts.set(next); editingClassifier = ''; status = 'Classifier saved.' }} oncancel={() => { editingClassifier = '' }} />{/if}
+          {#if editingClassifier === connection.id}<ClassifierEdit {connection} {tauri} onsaved={next => { accounts.set(next); editingClassifier = ''; status = 'Decision model saved.' }} oncancel={() => { editingClassifier = '' }} />{/if}
         {/each}
       </section>
     {/if}
@@ -452,18 +452,18 @@
     </header>
     {#if view === 'connect'}
       <SearchToolbar label="Search providers" placeholder="Search providers" bind:value={providerQuery} />
-      {#each [['Popular & Subscriptions', catalog.popular], ['Classifiers', searchClassifiers(providerQuery)], ['All providers', catalog.other]] as [group, entries]}
+      {#each [['Popular & Subscriptions', catalog.popular], ['Decision models', searchClassifiers(providerQuery)], ['All providers', catalog.other]] as [group, entries]}
         {#if entries.length}
           <h5 class="group-label">{group}</h5>
           <ul class="provider-list">
             {#each entries as entry (entry.id)}
-              <li><button type="button" class="quiet provider-row" onclick={() => { if (group === 'Classifiers') { classifierId = entry.id; view = 'classifier' } else chooseProvider(entry.id) }}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span> <span class="tag">{group === 'Classifiers' ? (entry.id === 'jev' ? 'Hosted API' : entry.compatible ? 'Local or hosted server · Download' : 'Adapter required · Download') : entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
+              <li><button type="button" class="quiet provider-row" onclick={() => { if (group === 'Decision models') { classifierId = entry.id; view = 'classifier' } else chooseProvider(entry.id) }}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span> <span class="tag">{group === 'Decision models' ? (entry.id === 'jev' ? 'Hosted API' : entry.compatible ? 'Local or hosted server · Download' : 'Adapter required · Download') : entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
             {/each}
           </ul>
         {/if}
       {/each}
     {:else if view === 'classifier' && classifierEntry}
-      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnected={next => { accounts.set(next); status = 'Classifier connected. Select it in Routing.'; view = 'list'; tab = 'accounts' }} />
+      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnected={next => { accounts.set(next); status = 'Decision model connected. Routing and chats can use it.'; view = 'list'; tab = 'accounts' }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
       <div class="connection-field"><label for="provider-key">{provider.name} API key</label><input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>

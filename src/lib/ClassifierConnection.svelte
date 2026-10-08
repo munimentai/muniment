@@ -61,7 +61,7 @@
 {:else}
   {#if CONNECTION_METHODS[method]?.ollama}<p class="support">Ollama answers decision models on its own System One route. Muniment sends the key saved with the server.</p>{/if}
   {#if method === 'server'}<p class="support">Enter the full System One URL for a local or hosted server. Chat completion endpoints do not work here.</p>{/if}
-  <p class="support">When routing is on, Muniment sends the message to this classifier. The connection test sends a sample request.</p>
+  <p class="support">Routing sends each message to this decision model, and chats can use it in scripts. The connection test sends a sample request.</p>
   <div class="fields">
     <div class="field"><label for="classifier-name">Connection name</label><input id="classifier-name" bind:value={name} disabled={pending}></div>
     <div class="field"><label for="classifier-model">Model ID</label><input id="classifier-model" bind:value={model} disabled={pending}></div>
@@ -69,7 +69,7 @@
       {#if method === 'cloudflare'}
         <label for="cloudflare-account">Cloudflare account ID</label><input id="cloudflare-account" bind:value={accountId} disabled={pending}>
       {:else}
-        <label for="classifier-url">Classifier URL</label><input id="classifier-url" type="url" bind:value={url} disabled={pending}>
+        <label for="classifier-url">Decision model URL</label><input id="classifier-url" type="url" bind:value={url} disabled={pending}>
       {/if}
     </div>
     {#if !CONNECTION_METHODS[method]?.ollama}<div class="field wide"><label for="classifier-key">API key{CONNECTION_METHODS[method]?.key ? '' : ' (optional)'}</label><input id="classifier-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>{/if}

@@ -78,11 +78,14 @@ pub(crate) async fn model_router_connect_classifier(
     api_key: Option<String>,
     key_provider: Option<String>,
 ) -> Result<RouterSettings, String> {
-    // A decision model on the connected Ollama server sends the key that server
-    // holds, which Settings never reads back to show.
-    let api_key = api_key.filter(|key| !key.trim().is_empty()).or_else(|| match key_provider.as_deref() {
-        Some("ollama") => crate::local_mode::saved_endpoint_key(&crate::local_mode::pi_models_file(&agent().ok()?), "ollama"),
-        _ => None,
+    // A decision model on a connected server, such as Ollama, sends the key
+    // that server holds, which Settings never reads back to show.
+    let api_key = api_key.filter(|key| !key.trim().is_empty()).or_else(|| {
+        crate::local_mode::endpoint_key_for(
+            &crate::local_mode::pi_models_file(&agent().ok()?),
+            key_provider.as_deref()?,
+            base_url.trim(),
+        )
     });
     let url = url::Url::parse(base_url.trim()).map_err(|_| "Enter a valid classifier URL.")?;
     if !matches!(url.scheme(), "http" | "https")

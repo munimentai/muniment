@@ -93,11 +93,11 @@ The candidate pins these five packages from [pi.dev/packages](https://pi.dev/pac
 | [pi-web-access](https://pi.dev/packages/pi-web-access) | `0.28.0` |
 | [pi-subagents](https://pi.dev/packages/pi-subagents) | `0.65.1` |
 | [pi-background-tasks](https://pi.dev/packages/pi-background-tasks) | `2.5.0` |
-| [pi-mcp-adapter](https://pi.dev/packages/pi-mcp-adapter) | `2.32.1` |
 | [pi-claude-bridge](https://pi.dev/packages/pi-claude-bridge) | `0.7.0` |
 
 Every candidate chat launch merges these exact npm sources into the Pi agent directory's `settings.json`.
-The same merge sets `defaultTools` to `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`.
+The same merge sets `defaultTools` to `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`, and `codemode`.
+Pi's own MCP support reaches the user's MCP servers, so no MCP package is pinned.
 The names match the candidate's [built-in registry](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/src/core/tools/index.ts#L96-L105).
 The desktop never passes `--tools`.
 The merge preserves other keys, including `defaultProvider`, and shares Pi's directory lock with local provider writes.

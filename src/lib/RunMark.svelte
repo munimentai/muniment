@@ -151,15 +151,16 @@
   /* The cycle starts mid-stance with the leg upright. Stance sweeps the foot back slowly. Swing brings it forward fast with the knee bent. */
   @keyframes stride {
     0% { transform: rotate(0deg) scaleY(1); animation-timing-function: linear; }
-    31% { transform: rotate(8deg) scaleY(1); animation-timing-function: ease-in-out; }
-    50% { transform: rotate(0deg) scaleY(.92); animation-timing-function: ease-in-out; }
-    69% { transform: rotate(-8deg) scaleY(1); animation-timing-function: linear; }
+    31% { transform: rotate(16deg) scaleY(1); animation-timing-function: ease-in-out; }
+    50% { transform: rotate(0deg) scaleY(.84); animation-timing-function: ease-in-out; }
+    69% { transform: rotate(-16deg) scaleY(1); animation-timing-function: linear; }
     100% { transform: rotate(0deg) scaleY(1); }
   }
-  /* The body rises a little over each planted foot. */
+  /* The body rises over each planted foot. The swing and the rise are large
+     enough to read at the 20px size the chat shows. */
   @keyframes vault {
     0%, 100% { transform: translateY(0) rotate(0deg); }
-    50% { transform: translateY(-1.5%) rotate(-.6deg); }
+    50% { transform: translateY(-3%) rotate(-1deg); }
   }
   /* The text choice shows only the stage word, with the sheen the tool rows use. */
   .stage-sheen { background: linear-gradient(100deg, var(--muted) 35%, var(--ink) 50%, var(--muted) 65%); background-size: 250% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: stage-sheen 2.4s linear infinite; }

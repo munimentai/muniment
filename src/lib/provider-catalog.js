@@ -1,6 +1,6 @@
 import { modelLabel } from './model-label.js'
 import { leadingModels, newestFirst } from './model-recency.js'
-import { isOllamaDecisionModel } from './classifier-connections.js'
+import { isDecisionModel } from './classifier-connections.js'
 // The provider catalog behind Settings → Models: Pi's built-in providers, the
 // method each one offers, and the helpers the section and the picker share.
 // `account` names the Pi provider that signs in with an account and the label
@@ -175,7 +175,7 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       classifier: '',
       // An Ollama decision model answers only the router's choice, so it lists with the classifiers.
       models: [...new Map((provider.models ?? []).map((model) => [model.id, model])).values()]
-        .filter((model) => !(provider.id === 'ollama' && isOllamaDecisionModel(model.id)))
+        .filter((model) => !isDecisionModel(provider, model.id))
         .map((model) => ({ ...model, label: modelLabel(model.id), provider: provider.id, choice: model.id, accounts: 0, off: hidden.has(modelKey(provider.id, model.id)) })),
     }))
   if (router) {

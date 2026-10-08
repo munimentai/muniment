@@ -7,7 +7,7 @@
   import McpIcon from './McpIcon.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
   let catalog = $state([])
-  let { tauri, threadId, active = false, draft = $bindable(''), commandNames = $bindable([]), selection = $bindable({ enabled: [], blocked: [], automatic: false }), onmanage, onfiles } = $props()
+  let { tauri, threadId, active = false, draft = $bindable(''), commandNames = $bindable([]), selection = $bindable({ enabled: [], blocked: [], automatic: null }), onmanage, onfiles } = $props()
   let state = $state({ items: [] }), open = $state(false), branch = $state(''), error = $state(''), busy = $state(false), highlighted = $state(0), dismissed = $state(null), rootElement = $state(), trigger = $state()
   const choices = $derived(commandChoices(state.items))
   const command = $derived(draft === dismissed ? null : invocationQuery(draft))
@@ -27,6 +27,9 @@
   $effect(() => { void threadId; branch = ''; open = false })
   $effect(() => { commandNames = choices.map(item => item.command) })
   $effect(() => { if (command !== null) { highlighted = 0; openComposerPanel('commands'); void refresh() } })
+  // Auto-select is on by default while an MCP server is connected and turned
+  // on. A switch the user flips holds for the turn.
+  const automatic = $derived(selection.automatic ?? state.items.some(item => item.kind === 'mcp' && item.enabled !== false))
   function close() { openComposerPanel(null); open = false }
   function choose(item) {
     const token = `/${item.command} `
@@ -45,14 +48,16 @@
   }
   async function prepareSelected(prompt) {
     await refresh()
-    const id = threadId || await tauri.invoke('chat_current_thread') || await tauri.invoke('chat_new_thread')
-    await call('turn', { threadId: id, selected: [...selectedCommands(prompt, choices), ...selection.enabled], disabled: selection.blocked, automatic: selection.automatic })
-    if (selection.automatic) {
+    // The runtime sends the turn to its current thread, so the selection is
+    // saved under that thread and not under the one the window last showed.
+    const id = await tauri.invoke('chat_current_thread') || await tauri.invoke('chat_new_thread')
+    await call('turn', { threadId: id, selected: [...selectedCommands(prompt, choices), ...selection.enabled], disabled: selection.blocked, automatic })
+    if (automatic) {
       busy = true
       try { await call('route', { threadId: id, prompt }) } finally { busy = false }
     }
   }
-  export function submitted() { selection.enabled = []; selection.blocked = []; selection.automatic = false; close() }
+  export function submitted() { selection.enabled = []; selection.blocked = []; selection.automatic = null; close() }
   export function handleKey(event) {
     if (command === null || !shown.length) return false
     if (event.key === 'Escape') { dismissed = draft; event.preventDefault(); return true }
@@ -60,6 +65,16 @@
     if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); choose(shown[highlighted % shown.length]); return true }
     return false
   }
+  // Resting the pointer on a branch opens it after a short delay, so a pointer
+  // that crosses a row on its way into the open submenu leaves it open.
+  const HOVER_MS = 180
+  let hoverTimer
+  function hover(kind, event) {
+    clearTimeout(hoverTimer)
+    if ((event.pointerType && event.pointerType !== 'mouse') || branch === kind) return
+    hoverTimer = setTimeout(() => { branch = kind }, HOVER_MS)
+  }
+  $effect(() => () => clearTimeout(hoverTimer))
   async function expand(kind) { branch = branch === kind ? '' : kind; await tick(); rootElement?.querySelector('.submenu button, .submenu input')?.focus() }
   function keys(event) {
     if (event.key === 'Escape') { close(); dismissed = draft; trigger?.focus(); event.stopPropagation() }
@@ -75,14 +90,14 @@
       <div class="tree" class:expanded={!!branch}>
         <div class="branches">
           {#each [['mcp', 'MCPs'], ['plugin', 'Plugins'], ['skill', 'Skills']] as [kind, label]}
-            <button type="button" data-branch={kind} aria-expanded={branch === kind} onclick={() => expand(kind)} onkeydown={event => { if (event.key === 'ArrowRight') { event.preventDefault(); void expand(kind) } }}>{#if kind === 'mcp'}<McpIcon />{:else}<LucideIcon name={kind === 'skill' ? 'pencil-sparkles' : 'unplug'} variant="action" size={16} />{/if}<span>{label}</span><LucideIcon name="chevron-right" size={14} variant="action" /></button>
+            <button type="button" data-branch={kind} aria-expanded={branch === kind} onclick={() => expand(kind)} onpointerenter={event => hover(kind, event)} onpointerleave={() => clearTimeout(hoverTimer)} onkeydown={event => { if (event.key === 'ArrowRight') { event.preventDefault(); void expand(kind) } }}>{#if kind === 'mcp'}<McpIcon />{:else}<LucideIcon name={kind === 'skill' ? 'pencil-sparkles' : 'unplug'} variant="action" size={16} />{/if}<span>{label}</span><LucideIcon name="chevron-right" size={14} variant="action" /></button>
           {/each}
         </div>
         {#if branch}<div class="submenu" aria-label={branch === 'mcp' ? 'Available MCPs' : branch === 'plugin' ? 'Available plugins' : 'Available skills'}>
           {#if branch === 'mcp'}
             {#each servers as server}<div class="server">{#if server.entry}<ProviderIcon entry={server.entry} size={22} />{:else}<McpIcon />{/if}<span>{server.name}</span><Toggle checked={selection.enabled.includes(server.id)} label={`Use ${server.name} for this turn`} onchange={checked => toggle(server.id, checked)} /></div>{/each}
             {#if !servers.length}<p>No MCPs installed.</p>{/if}
-            <div class="automatic"><span>Auto-select for this turn</span><Toggle checked={selection.automatic} label="Auto-select for this turn" onchange={checked => selection.automatic = checked} /></div>
+            <div class="automatic"><span>Auto-select for this turn</span><Toggle checked={automatic} label="Auto-select for this turn" onchange={checked => selection.automatic = checked} /></div>
           {:else}
             {#each choices.filter(item => item.kind === branch) as item}<button type="button" class="choice" onclick={() => choose(item)}><span>/{item.command}</span><small>{item.description || item.name}</small></button>{/each}
             {#if !choices.some(item => item.kind === branch)}<p>No {branch === 'plugin' ? 'plugins' : 'skills'} installed.</p>{/if}

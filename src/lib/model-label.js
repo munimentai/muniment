@@ -7,7 +7,8 @@ const words = {
 
 export function modelLabel(value) {
   if (value === undefined || value === null || value === '') return null
-  return String(value).split('/').map(part => part
+  // Ollama's default tag, `:latest`, names no version, so the label leaves it off.
+  return String(value).replace(/:latest$/i, '').split('/').map(part => part
     .replace(/(claude-[a-z]+-)(\d+)-(\d+)(?=$|-)/gi, '$1$2.$3')
     .replace(/[-_]+/g, ' ')
     .replace(/\b(llama|qwen|granite|gemma|deepseek)(?=\d)/gi, '$1 ')

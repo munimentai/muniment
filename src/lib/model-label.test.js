@@ -21,3 +21,7 @@ it('finds models by readable names or exact IDs and retains the connection ID', 
     })
   }
 })
+it('leaves off the latest tag Ollama names no version with', () => {
+  expect(modelLabel('gpt-oss:latest')).toBe('GPT Oss')
+  expect(modelLabel('clef-flash:latest')).toBe('Clef Flash')
+})

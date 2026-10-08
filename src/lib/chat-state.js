@@ -85,6 +85,33 @@ function usageTokens(tokens) {
   return parts.join(', ')
 }
 
+// Attached folders travel to the model as a note under the prompt, because
+// the model reads their files with its own tools. The transcript shows the
+// prompt and names each folder instead of the note.
+const FOLDER_NOTE = '\n\nAttached folders (local paths):\n'
+const FOLDER_RULE = '\nUse the local file tools to inspect these folders and their subfolders as needed. Folder contents are not embedded in this message.'
+export function withFolders(prompt, folders = []) {
+  return folders.length ? `${prompt}${FOLDER_NOTE}${folders.map(path => JSON.stringify(path)).join('\n')}${FOLDER_RULE}` : prompt
+}
+export function promptFolders(text = '') {
+  const value = String(text ?? '')
+  const start = value.lastIndexOf(FOLDER_NOTE)
+  if (start < 0 || !value.endsWith(FOLDER_RULE)) return { text: value, folders: [] }
+  try {
+    const folders = value.slice(start + FOLDER_NOTE.length, value.length - FOLDER_RULE.length).split('\n').map(line => JSON.parse(line))
+    if (folders.every(path => typeof path === 'string')) return { text: value.slice(0, start), folders }
+  } catch (_) {}
+  return { text: value, folders: [] }
+}
+
+// The turns the router decided: a classifier choice, a fallback or an excluded
+// model. A turn on the model the user picked shows no details unless the
+// router fell back or set a model aside on it.
+const USER_SELECTED = 'User selected the model'
+export function routedTurns(receipt = {}) {
+  return (receipt?.routing ?? []).filter((evidence) => (recorded(evidence?.decision) && evidence.decision !== USER_SELECTED) || Number.isFinite(evidence?.confidence) || evidence?.exclusions?.length || evidence?.fallback_causes?.length)
+}
+
 // The rows under the line: everything the line does not show, in record order.
 // Memory reads stay out. The Tools tally stays out when the transcript shows the calls.
 export function receiptRows(receipt = {}, { tools: tallyTools = true } = {}) {

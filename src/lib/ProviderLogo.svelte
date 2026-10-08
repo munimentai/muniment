@@ -16,7 +16,7 @@
   }
   // Pi ids that share a mark with the provider the user connected.
   const ALIASES = {
-    jev: 'typesafe', 'jev-latest': 'typesafe', clef: 'cloudflare',
+    jev: 'typesafe', 'jev-latest': 'typesafe', clef: 'cloudflare', luna: 'openai',
     'openai-codex': 'openai', 'claude-bridge': 'anthropic', antigravity: 'google',
     'opencode-go': 'opencode', kimi: 'kimi-coding',
     'qwen-token-plan-individual': 'qwen-token-plan', 'qwen-token-plan-cn': 'qwen-token-plan',

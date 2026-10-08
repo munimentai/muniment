@@ -269,7 +269,7 @@ same question shape stands beside them. A running classifier is the first row
 of the model chip's picker, named by the model that picks, `jev-latest picks`,
 and choosing it hands the turn to classification. The picker lists each model
 once under its provider. A model two or more accounts serve carries the
-balancer mark, and picking it balances across them with no other step. A saved classifier connection shows its logo and edits in place. A new model, URL or key passes the connection test before it saves, and a blank key keeps the saved one.
+balancer mark, and picking it balances across them with no other step. A saved classifier connection shows its logo and edits in place. A new model, URL or key passes the connection test before it saves, and a blank key keeps the saved one. GPT-6 Luna answers through OpenAI's Decisions API, which takes an OpenAI API key. Every connected decision model except a pooled one also reaches chats, as the provider `decisions` in codemode scripts. A server that reports its decision models, as llama.cpp does, offers them as classifiers and keeps them out of the chat picker. Ollama's decision models are known by name.
 
 
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one control
@@ -481,10 +481,10 @@ weaker than the one that built it. Four items:
    `bg_result`. They render into `settings.json` as
    `{"packages": [...], "defaultTools": [...]}`. `pi-web-access` needs an
    Anthropic `claude-haiku` model and a Bright Data zone of type `serp`.
-2. **`npm:pi-mcp-adapter`** (MIT). One proxy tool that discovers MCP tools on
-   demand, reads `.pi/mcp.json` as the project override, and speaks stdio,
-   HTTP with SSE fallback, and Unix sockets. Through it the local harness
-   reaches the user's MCP servers and, on a paid account, the cloud graph's tools.
+2. **Pi's MCP support and codemode.** The record server's three tools reach the
+   model directly. The user's servers run through `codemode`, a script that calls
+   tools and decision models and returns only what the model needs. Extend's
+   servers join for the turn that picks them, each through scripts or in the tool list as its details set, and sign-in and tests use Pi's commands. Every enabled skill is listed by name and description and read when a task needs it, and a picked skill is named, not pasted.
 3. **The system prompt.** The desktop passes Pi its own prompt: purpose, tools, the bash
    timeout rule, and the launch facts: the model, earlier thread models, host and shell, and
    the working directory, which is the thread's project or session folder. Each message opens with its
