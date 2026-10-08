@@ -1,4 +1,6 @@
 import { modelLabel } from './model-label.js'
+import { leadingModels, newestFirst } from './model-recency.js'
+import { isOllamaDecisionModel } from './classifier-connections.js'
 // The provider catalog behind Settings → Models: Pi's built-in providers, the
 // method each one offers, and the helpers the section and the picker share.
 // `account` names the Pi provider that signs in with an account and the label
@@ -140,10 +142,16 @@ export function familyName(family) {
   return FAMILY_NAMES[family] ?? family
 }
 
-// The picker's rows: every model of every connected provider that is not
-// hidden, grouped by provider in inventory order, narrowed by a query over the
-// model id. Each row names the provider and the choice a pick saves, so a row
-// the router serves saves the router's own id.
+// The picker's rows: every shown model of every connected provider, grouped by
+// provider in inventory order with each provider's newest model first, narrowed
+// by a query over the model id. Each row
+// names the provider and the choice a pick saves, so a row the router serves
+// saves the router's own id.
+//
+// A model is shown when it leads its provider's list, the newest of its family,
+// or when the user turned it on, unless the user turned it off. The saved
+// default stays shown, so the chip always names a row. With `all`, every row
+// comes back, each marked with whether it leads and whether it is shown.
 //
 // The router's models sit under their provider, each model once: a model the
 // provider also serves directly is one row, and it takes the router's route
@@ -152,9 +160,10 @@ export function familyName(family) {
 // group of its own. A running classifier is the first row of the picker,
 // named by the model that picks, and choosing it hands the turn to
 // classification, which is the router's auto.
-export function pickerGroups(inventory, query = '') {
+export function pickerGroups(inventory, query = '', { all = false } = {}) {
   if (!inventory || !Array.isArray(inventory.providers)) return []
   const hidden = new Set(inventory.hidden ?? [])
+  const turnedOn = new Set(inventory.shown ?? [])
   const needle = query.trim().toLowerCase()
   const router = inventory.providers.find((provider) => provider.source === 'router') ?? null
   const groups = inventory.providers
@@ -164,9 +173,10 @@ export function pickerGroups(inventory, query = '') {
       name: provider.name,
       source: provider.source,
       classifier: '',
+      // An Ollama decision model answers only the router's choice, so it lists with the classifiers.
       models: [...new Map((provider.models ?? []).map((model) => [model.id, model])).values()]
-        .filter((model) => !hidden.has(modelKey(provider.id, model.id)))
-        .map((model) => ({ ...model, label: modelLabel(model.id), provider: provider.id, choice: model.id, accounts: 0 })),
+        .filter((model) => !(provider.id === 'ollama' && isOllamaDecisionModel(model.id)))
+        .map((model) => ({ ...model, label: modelLabel(model.id), provider: provider.id, choice: model.id, accounts: 0, off: hidden.has(modelKey(provider.id, model.id)) })),
     }))
   if (router) {
     for (const entry of inventory.router_models ?? []) {
@@ -176,19 +186,17 @@ export function pickerGroups(inventory, query = '') {
         group = { id: `router:${entry.family}`, name: FAMILY_NAMES[entry.family] ?? entry.family, source: 'router', classifier: '', models: [] }
         groups.push(group)
       }
-      if (hidden.has(modelKey(router.id, entry.id)) || hidden.has(modelKey(group.id, entry.model))) {
-        group.models = group.models.filter((model) => model.id !== entry.model)
-        continue
-      }
+      const off = hidden.has(modelKey(router.id, entry.id)) || hidden.has(modelKey(group.id, entry.model))
       const existing = group.models.find((model) => model.id === entry.model)
       if (existing) {
         existing.accounts = entry.accounts
+        existing.off ||= off
         if (entry.accounts > 0) {
           existing.provider = router.id
           existing.choice = entry.id
         }
       } else {
-        group.models.push({ id: entry.model, context: '', label: modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts })
+        group.models.push({ id: entry.model, context: '', label: modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off })
       }
     }
     if (inventory.router_classifier || inventory.router_models?.length) {
@@ -197,16 +205,49 @@ export function pickerGroups(inventory, query = '') {
         name: router.name,
         source: 'router',
         classifier: inventory.router_classifier || 'Automatic',
-        models: [{ id: 'auto', context: '', label: inventory.router_classifier ? `${modelLabel(inventory.router_classifier)} picks` : 'Automatic', provider: router.id, choice: 'auto', accounts: 0 }],
+        models: [{ id: 'auto', context: '', label: inventory.router_classifier ? `${modelLabel(inventory.router_classifier)} picks` : 'Automatic', provider: router.id, choice: 'auto', accounts: 0, off: false }],
       })
+    }
+  }
+  for (const group of groups) {
+    if (!group.classifier) {
+      const order = newestFirst(groupCatalogId(group.id), group.models.map((model) => model.id))
+      group.models.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
+    }
+    const leading = group.classifier ? null : leadingModels(groupCatalogId(group.id), group.models.map((model) => model.id))
+    for (const model of group.models) {
+      const saved = (inventory.default_provider === model.provider && inventory.default_model === model.choice)
+        || (inventory.default_provider === group.id && inventory.default_model === model.id)
+      model.lead = !leading || leading.has(model.id)
+      model.shown = !model.off && (model.lead || saved || turnedOn.has(modelKey(model.provider, model.choice)) || turnedOn.has(modelKey(group.id, model.id)))
     }
   }
   return groups
     .map((group) => ({
       ...group,
-      models: group.models.filter((model) => !needle || model.id.toLowerCase().includes(needle) || model.label.toLowerCase().includes(needle) || group.name.toLowerCase().includes(needle)),
+      models: group.models
+        .filter((model) => (all || model.shown) && (!needle || model.id.toLowerCase().includes(needle) || model.label.toLowerCase().includes(needle) || group.name.toLowerCase().includes(needle)))
+        .map(({ off, lead, shown, ...model }) => all ? { ...model, lead, shown } : model),
     }))
     .filter((group) => group.models.length > 0)
+}
+
+// The router models the picker hides, as the router's sorted `family/model`
+// keys. The router leaves them out of the running, so a routed turn answers
+// only from a model the picker offers.
+export function routerHidden(inventory) {
+  const groups = pickerGroups(inventory, '', { all: true })
+  return [...new Set((inventory?.router_models ?? []).filter((entry) => {
+    const group = groups.find((candidate) => groupCatalogId(candidate.id) === familyProvider(entry.family))
+    const row = group?.models.find((model) => model.id === entry.model)
+    return row && !row.shown
+  }).map((entry) => `${entry.family}/${entry.model}`))].sort()
+}
+
+// The catalog provider a picker group's models come from, which names its
+// models.dev listing.
+function groupCatalogId(id) {
+  return id.startsWith('router:') ? familyProvider(id.slice('router:'.length)) : connectedCatalogId(id)
 }
 
 // The row in use: the saved default when a row still saves it, else the first

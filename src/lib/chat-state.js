@@ -86,7 +86,8 @@ function usageTokens(tokens) {
 }
 
 // The rows under the line: everything the line does not show, in record order.
-export function receiptRows(receipt = {}, recalls = []) {
+// Memory reads stay out. The Tools tally stays out when the transcript shows the calls.
+export function receiptRows(receipt = {}, { tools: tallyTools = true } = {}) {
   const rows = []
   for (const evidence of receipt?.routing ?? []) {
     if (recorded(evidence.account)) rows.push({ label: 'Account', value: evidence.account, route: false })
@@ -103,15 +104,10 @@ export function receiptRows(receipt = {}, recalls = []) {
     rows.push({ label: 'Tokens', value: usageTokens(tokens), route: false })
   }
   if (recorded(receipt?.turns)) rows.push({ label: 'Turns', value: count(receipt.turns), route: false })
-  const tools = (receipt?.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls))
+  const tools = tallyTools ? (receipt?.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls)) : []
   if (tools.length) {
     const parts = tools.map((tool) => `${tool.name} ${count(tool.calls)}${Number(tool.failed) > 0 ? ` (${count(tool.failed)} failed)` : ''}`)
     rows.push({ label: 'Tools', value: parts.join(', '), route: false })
-  }
-  for (const recall of recalls ?? []) {
-    const files = recall?.files ?? []
-    const total = files.length
-    rows.push({ label: 'Memory', value: `${recall?.query ?? ''}, ${total} ${total === 1 ? 'file' : 'files'}`, files, route: false })
   }
   for (const capability of receipt?.capabilities ?? []) {
     if (capability?.name !== undefined && capability?.name !== null && capability?.version !== undefined && capability?.version !== null) {

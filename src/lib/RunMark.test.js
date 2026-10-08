@@ -1,8 +1,8 @@
+import '@testing-library/jest-dom/vitest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/svelte'
 
 import RunMark from './RunMark.svelte'
-import { graphPaths } from './graph-mark.js'
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
@@ -26,16 +26,28 @@ describe('RunMark', () => {
     expect(container.textContent).toBe('Writing')
   })
 
-  it('draws the reduced graph at 20px with an outline and trace in one rotating group', () => {
+  it('draws the pocket-fold mark at 20px cut into the parts an elephant moves', () => {
     const { container } = render(RunMark, { props: { stage: 'routing' } })
     const svg = container.querySelector('svg')
     expect(svg.getAttribute('width')).toBe('20')
-    expect(svg.getAttribute('viewBox')).toBe('0 0 48 48')
-    const group = svg.querySelector('g')
-    expect(group.getAttribute('transform')).toBe('rotate(0.00 24 24)')
-    expect(group.querySelector('path.body').getAttribute('d')).toBe(graphPaths(20).edges)
-    expect(group.querySelectorAll('path.body')).toHaveLength(2)
-    expect(group.querySelectorAll('path.body')[1].getAttribute('d')).toBe(graphPaths(20).outline)
-    expect(group.querySelector('path.accent').style.opacity).toBe('0')
+    expect(svg.getAttribute('viewBox')).toBe('-20 -20 566 499')
+    expect([...svg.querySelectorAll('path')].map((path) => path.getAttribute('class').replace(/\s*svelte-\S+/, ''))).toEqual(['body leg hind', 'body leg fore', 'body trunk', 'body torso', 'accent'])
+    expect(svg.querySelector('path.torso').getAttribute('d')).toMatch(/^M160 0 H274/)
+    expect(svg.querySelector('path.accent').getAttribute('d')).toBe('M294 0 L510 190 H366 A72 72 0 0 1 294 118 Z')
+    expect(svg.querySelector('path.trunk').getAttribute('d')).toMatch(/L427 449 A10 10 0 0 0 437 459 L490 459 A36 36 0 0 0 526 423 /)
+  })
+
+  it('shows the stage word alone with a sheen for the text choice', () => {
+    const { container } = render(RunMark, { props: { stage: 'writing', mark: 'text' } })
+    expect(container.querySelector('svg')).toBeNull()
+    expect(container.querySelector('.stage-sheen')).toHaveTextContent('Writing')
+  })
+
+  it('stills the elephant for the still choice and keeps only the ear for the ear choice', () => {
+    const still = render(RunMark, { props: { stage: 'routing', mark: 'still' } })
+    expect(still.container.querySelector('.walker')).toHaveClass('still')
+    cleanup()
+    const ear = render(RunMark, { props: { stage: 'routing', mark: 'ear' } })
+    expect(ear.container.querySelector('.walker')).toHaveClass('ear-only')
   })
 })

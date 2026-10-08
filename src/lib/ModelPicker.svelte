@@ -80,5 +80,7 @@
   .model-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-12); }
   .support { margin: 8px; color: var(--muted); font-size: var(--text-13); }
-  .picker-manage { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border: 0; border-top: 1px solid var(--border); text-align: left; font-size: var(--text-13); }
+  .picker-manage { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border: 0; text-align: left; font-size: var(--text-13); }
+  /* The menu separator: a straight line inset to the list's 6px padding at three-quarter strength. */
+  .picker-manage::before { content: ''; position: absolute; top: 0; left: 6px; right: 6px; height: 1px; background: var(--border); opacity: .75; }
 </style>

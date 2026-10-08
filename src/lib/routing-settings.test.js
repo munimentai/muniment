@@ -110,8 +110,22 @@ it('shows allowances and manual refresh for routable subscriptions', async () =>
   render(ModelAccounts, { tauri: { invoke: vi.fn() }, family: 'openai', settings: { ...routing(), accounts: [{ id: 'a', family: 'openai', label: 'Test account', source: 'account', servable: true, enabled: true, weight: 1, models: [], days: [], allowance_readable: true, quota_observed_ms: Date.now(), windows: [{ label: 'Weekly', scope: '', remaining_percent: 70, resets_at_ms: null, limit_reached: false }], requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }] } })
   expect(screen.getByText('70%')).toBeInTheDocument()
   expect(screen.queryByText('Available for routed turns.')).not.toBeInTheDocument()
+  // The card's foot holds the read time with its refresh on the left and Disconnect on the right, outside the details.
+  const foot = screen.getByRole('button', { name: 'Disconnect Test account' }).closest('footer')
+  expect(foot.closest('details')).toBeNull()
+  expect(foot).toHaveTextContent(/^Updated just now/)
+  expect(within(foot).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Refresh Test account allowance', 'Disconnect Test account'])
+  expect(within(foot).getByRole('button', { name: 'Disconnect Test account' }).querySelector('[data-icon="unplug"]')).not.toBeNull()
   await fireEvent.click(screen.getByText('Usage and settings'))
-  expect(screen.getByRole('button', { name: 'Refresh allowance' })).toBeInTheDocument()
+  for (const gone of ['Share', 'Refresh allowance', 'Remove']) expect(screen.queryByText(gone)).toBeNull()
+  expect(screen.queryByRole('switch')).toBeNull()
+})
+
+it('offers a switched-off account one way back on, since every account routes', async () => {
+  const tauri = { invoke: vi.fn(async () => routing()) }
+  render(ModelAccounts, { tauri, family: 'openai', settings: { ...routing(), accounts: [{ id: 'a', family: 'openai', label: 'Old account', source: 'key', servable: true, enabled: false, weight: 0, models: [], days: [], allowance_readable: false, windows: [], requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }] } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Turn on' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('model_router_update_account', { id: 'a', enabled: true, weight: 1 })
 })
 
 it('shows runtime routing eligibility and fallback evidence without starting a chat', async () => {

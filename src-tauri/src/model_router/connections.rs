@@ -76,7 +76,14 @@ pub(crate) async fn model_router_connect_classifier(
     model: String,
     base_url: String,
     api_key: Option<String>,
+    key_provider: Option<String>,
 ) -> Result<RouterSettings, String> {
+    // A decision model on the connected Ollama server sends the key that server
+    // holds, which Settings never reads back to show.
+    let api_key = api_key.filter(|key| !key.trim().is_empty()).or_else(|| match key_provider.as_deref() {
+        Some("ollama") => crate::local_mode::saved_endpoint_key(&crate::local_mode::pi_models_file(&agent().ok()?), "ollama"),
+        _ => None,
+    });
     let url = url::Url::parse(base_url.trim()).map_err(|_| "Enter a valid classifier URL.")?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host().is_none()
@@ -110,6 +117,105 @@ pub(crate) async fn model_router_connect_classifier(
         classifier,
     });
     write(&agent, &connections)?;
+    settings(
+        &agent,
+        running_endpoint(&state).as_ref(),
+        &running_active(&state),
+    )
+}
+
+/// The saved connection with its new details. A blank key keeps the saved key,
+/// because Settings never reads a key back to show it. A pooled classifier
+/// spends an account and is never a saved connection, so it has no form.
+fn edited(
+    saved: &Classifier,
+    model: &str,
+    base_url: &str,
+    api_key: Option<String>,
+) -> Result<Classifier, String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("Enter a model ID.".into());
+    }
+    let key = api_key
+        .map(|key| key.trim().to_owned())
+        .filter(|key| !key.is_empty());
+    let checked = |url: &str| -> Result<String, String> {
+        let parsed = url::Url::parse(url.trim()).map_err(|_| "Enter a valid classifier URL.")?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err("Use an HTTP or HTTPS URL without credentials in the address.".into());
+        }
+        Ok(parsed.to_string())
+    };
+    match saved {
+        Classifier::Endpoint { api_key: saved_key, .. } => Ok(Classifier::Endpoint {
+            base_url: checked(base_url)?,
+            api_key: key.or_else(|| saved_key.clone()),
+            model: model.into(),
+        }),
+        Classifier::Typesafe { api_key: saved_key, .. } => Ok(Classifier::Typesafe {
+            api_key: key.unwrap_or_else(|| saved_key.clone()),
+            model: model.into(),
+            base_url: Some(base_url.trim())
+                .filter(|url| !url.is_empty())
+                .map(checked)
+                .transpose()?,
+        }),
+        _ => Err("This classifier has no saved connection to edit.".into()),
+    }
+}
+
+/// Renames a saved connection or changes where it sends requests. Changed
+/// details pass the connection test before they are saved, and a connection
+/// routing uses switches the router to them at once.
+#[tauri::command]
+pub(crate) async fn model_router_update_classifier(
+    state: tauri::State<'_, RouterState>,
+    id: String,
+    name: String,
+    model: String,
+    base_url: String,
+    api_key: Option<String>,
+) -> Result<RouterSettings, String> {
+    let name = name.trim().to_owned();
+    if name.is_empty() {
+        return Err("Enter a name and model ID.".into());
+    }
+    let agent = agent()?;
+    let saved = {
+        let config = load(&agent)?;
+        read(&agent, &config.classifier)?
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .ok_or("Choose a connected classifier.")?
+    };
+    let classifier = edited(&saved.classifier, &model, &base_url, api_key)?;
+    if classifier != saved.classifier {
+        let probe = classifier.clone();
+        tauri::async_runtime::spawn_blocking(move || classify::check(&probe, CLASSIFIER_TIMEOUT))
+            .await
+            .map_err(|_| "The connection test did not finish.".to_string())??;
+    }
+    let _guard = MUTATION.lock().map_err(|_| SAVE_ERROR.to_string())?;
+    let mut config = load(&agent)?;
+    let mut connections = read(&agent, &config.classifier)?;
+    let entry = connections
+        .iter_mut()
+        .find(|entry| entry.id == id)
+        .ok_or("Choose a connected classifier.")?;
+    let routing = entry.classifier == config.classifier;
+    entry.name = name;
+    entry.classifier = classifier.clone();
+    write(&agent, &connections)?;
+    if routing {
+        config.classifier = classifier;
+        save(&agent, &config)?;
+        apply(&agent, &state, &config)?;
+    }
     settings(
         &agent,
         running_endpoint(&state).as_ref(),
@@ -205,6 +311,33 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn an_edit_keeps_the_saved_key_when_the_key_is_blank() {
+        let saved = Classifier::Endpoint {
+            base_url: "http://127.0.0.1:8000/v1/systemone".into(),
+            api_key: Some("saved-key".into()),
+            model: "kev-latest".into(),
+        };
+        let renamed = edited(&saved, " kev-4b ", "http://127.0.0.1:8009/v1/systemone", Some(" ".into())).unwrap();
+        assert_eq!(
+            renamed,
+            Classifier::Endpoint {
+                base_url: "http://127.0.0.1:8009/v1/systemone".into(),
+                api_key: Some("saved-key".into()),
+                model: "kev-4b".into(),
+            }
+        );
+        // The same details compare equal, so a new name alone skips the test.
+        assert_eq!(edited(&saved, "kev-latest", "http://127.0.0.1:8000/v1/systemone", None).unwrap(), saved);
+        let hosted = Classifier::Typesafe { api_key: "k".into(), model: "jev-latest".into(), base_url: None };
+        assert_eq!(
+            edited(&hosted, "jev-2", "", Some("new".into())).unwrap(),
+            Classifier::Typesafe { api_key: "new".into(), model: "jev-2".into(), base_url: None }
+        );
+        assert!(edited(&saved, "", "http://127.0.0.1:8000/v1/systemone", None).is_err());
+        assert!(edited(&saved, "m", "http://user:pass@127.0.0.1/", None).is_err());
+        assert!(edited(&Classifier::Pooled { family: "openai".into(), model: "m".into() }, "m", "", None).is_err());
     }
     #[test]
     fn corrupt_store_does_not_silently_reset() {

@@ -210,15 +210,18 @@ fn respond_plain(stream: &mut TcpStream, status: &str, body: &str) {
     let _ = stream.flush();
 }
 
+/// The muniment mark the app's sign-in pages share.
+const MARK_SVG: &str = include_str!("../../../icons/muniment-mark-auth.svg");
+
 fn respond_page(stream: &mut TcpStream, heading: &str, detail: &str) {
     // Static page, so the app's design tokens (§1.3) are inlined here.
     let body = format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>muniment</title>\
          <style>:root{{color-scheme:light dark}}\
          body{{font-family:system-ui,sans-serif;display:grid;place-content:center;min-height:100vh;margin:0;background:#F6F7F6;color:#1A1D1C}}\
-         main{{text-align:center}}h1{{font-size:20px;font-weight:600;margin:0 0 8px}}p{{color:#5C6461;font-size:14px;margin:0}}\
+         main{{text-align:center}}main svg{{width:56px;height:56px;margin-bottom:12px}}h1{{font-size:20px;font-weight:600;margin:0 0 8px}}p{{color:#5C6461;font-size:14px;margin:0}}\
          @media (prefers-color-scheme:dark){{body{{background:#000000;color:#ECEFED}}p{{color:#9AA29E}}}}</style></head>\
-         <body><main><h1>{heading}</h1><p>{detail}</p></main></body></html>"
+         <body><main>{MARK_SVG}<h1>{heading}</h1><p>{detail}</p></main></body></html>"
     );
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

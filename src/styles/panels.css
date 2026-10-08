@@ -34,8 +34,9 @@ button:has(> svg[data-icon="x"]) > svg { width: 16px; height: 16px; }
   mask-image: linear-gradient(to bottom, transparent, #000 var(--panel-fade-top, 0px), #000 calc(100% - var(--panel-fade-bottom, 0px)), transparent);
 }
 /* The chat body keeps its larger bottom fade above the floating composer. */
-[data-panel-fade="chat"]::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 48px; background: linear-gradient(to bottom, var(--surface), transparent); pointer-events: none; }
-[data-panel-fade="chat"]::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--composer-height, 120px) + 72px); background: linear-gradient(to bottom, transparent, var(--surface) calc(var(--composer-height, 120px) / 2 + 48px)); pointer-events: none; }
+/* Both fades sit above the transcript's own positioned blocks, so text fades under them instead of covering them. */
+[data-panel-fade="chat"]::before { content: ''; position: absolute; z-index: 1; left: 0; right: 0; top: 0; height: 48px; background: linear-gradient(to bottom, var(--surface), transparent); pointer-events: none; }
+[data-panel-fade="chat"]::after { content: ''; position: absolute; z-index: 1; left: 0; right: 0; bottom: 0; height: calc(var(--composer-height, 120px) + 72px); background: linear-gradient(to bottom, transparent, var(--surface) calc(var(--composer-height, 120px) / 2 + 48px)); pointer-events: none; }
 
 /* Panel headers and corner controls use the same edge inset and hit area. */
 [data-panel-header] { display:flex;align-items:center;gap:8px;min-height:var(--panel-control-size);padding:var(--panel-control-inset);box-sizing:content-box; }

@@ -1,7 +1,12 @@
 <script>
   import { CONNECTION_METHODS, LOCAL_SETUP } from './classifier-connections.js'
-  let { entry, tauri, onconnected } = $props()
+  // `ollama` is the connected Ollama server, when there is one: its decision
+  // models answer under its own System One route, with the key it already holds.
+  let { entry, tauri, onconnected, ollama = null } = $props()
   let method = $state('')
+  // A family of sizes, such as Clef Flash and Clef, picks one before connecting.
+  let variant = $state('')
+  const chosen = $derived(entry.variants?.find(row => row.id === variant) ?? null)
   let name = $state('')
   let model = $state('')
   let url = $state('')
@@ -12,19 +17,22 @@
   let seen = ''
   function choose(next) {
     method = next
-    name = `${entry.name} · ${CONNECTION_METHODS[next].name}`
-    model = CONNECTION_METHODS[next].model || entry.model
-    url = CONNECTION_METHODS[next].url || ''
+    const size = entry.variants?.find(row => row.id === variant) ?? entry.variants?.[0]
+    name = `${size?.name ?? entry.name} · ${CONNECTION_METHODS[next].name}`
+    model = size?.models[next] ?? (CONNECTION_METHODS[next].model || entry.model)
+    url = CONNECTION_METHODS[next].ollama ? (ollama?.base_url ? `${ollama.base_url.replace(/\/+$/, '')}/systemone` : '') : CONNECTION_METHODS[next].url || ''
     if (next === 'server' && entry.id === 'kev') url = 'http://127.0.0.1:8009/v1/systemone'
     key = ''; error = ''
   }
-  $effect(() => { if (seen !== entry.id) { seen = entry.id; choose(entry.methods[0]) } })
+  $effect(() => { if (seen !== entry.id) { seen = entry.id; variant = entry.variants?.[0]?.id ?? ''; choose(entry.methods[0]) } })
+  function pickVariant(next) { variant = next; choose(method) }
   async function open(url) { try { await tauri.invoke('local_mode_open_url', { url }) } catch { error = 'The browser could not open. Use the link shown below.' } }
   async function connect() {
     pending = true; error = ''
     try {
       const baseUrl = method === 'cloudflare' ? `https://api.cloudflare.com/client/v4/accounts/${accountId.trim()}/ai/run` : url
-      const settings = await tauri.invoke('model_router_connect_classifier', { catalogId: entry.id, name, model, baseUrl, apiKey: key || null })
+      const keyProvider = CONNECTION_METHODS[method].ollama ? 'ollama' : null
+      const settings = await tauri.invoke('model_router_connect_classifier', { catalogId: entry.id, name, model, baseUrl, apiKey: key || null, keyProvider })
       key = ''; onconnected(settings)
     } catch (e) { error = String(e?.message ?? e) }
     finally { pending = false }
@@ -32,6 +40,11 @@
 </script>
 <div class="classifier-connection">
 <p class="support">{entry.note}</p>
+{#if entry.variants}
+  <div class="methods" role="group" aria-label="Model">
+    {#each entry.variants as row}<button disabled={pending} type="button" aria-pressed={variant === row.id} onclick={() => pickVariant(row.id)}>{row.name}</button>{/each}
+  </div>
+{/if}
 <div class="methods" role="group" aria-label="Connection method">
   {#each entry.methods as id}<button disabled={pending} type="button" aria-pressed={method === id} onclick={() => choose(id)}>{CONNECTION_METHODS[id].name}</button>{/each}
 </div>
@@ -43,7 +56,10 @@
   <p class="support">The source package does not include model weights. Follow the setup guide to download the weights and start the server.</p>
   <p class="support">{entry.repo}</p>
   <button type="button" onclick={() => choose('server')}>Connect the running server</button>
+{:else if CONNECTION_METHODS[method]?.ollama && !ollama?.base_url}
+  <p class="support">Connect your Ollama server under Accounts first. Its decision models then connect here with the key it already holds.</p>
 {:else}
+  {#if CONNECTION_METHODS[method]?.ollama}<p class="support">Ollama answers decision models on its own System One route. Muniment sends the key saved with the server.</p>{/if}
   {#if method === 'server'}<p class="support">Enter the full System One URL for a local or hosted server. Chat completion endpoints do not work here.</p>{/if}
   <p class="support">When routing is on, Muniment sends the message to this classifier. The connection test sends a sample request.</p>
   <div class="fields">
@@ -56,7 +72,7 @@
         <label for="classifier-url">Classifier URL</label><input id="classifier-url" type="url" bind:value={url} disabled={pending}>
       {/if}
     </div>
-    <div class="field wide"><label for="classifier-key">API key{CONNECTION_METHODS[method]?.key ? '' : ' (optional)'}</label><input id="classifier-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
+    {#if !CONNECTION_METHODS[method]?.ollama}<div class="field wide"><label for="classifier-key">API key{CONNECTION_METHODS[method]?.key ? '' : ' (optional)'}</label><input id="classifier-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>{/if}
   </div>
   <button type="button" disabled={pending || !name.trim() || !model.trim() || (method === 'cloudflare' ? !/^[a-f0-9]{32}$/i.test(accountId.trim()) : !url.trim()) || (CONNECTION_METHODS[method]?.key && !key.trim())} onclick={connect}>{pending ? 'Testing connection…' : 'Test and connect'}</button>
 {/if}

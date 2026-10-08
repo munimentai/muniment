@@ -7,7 +7,7 @@
   import McpIcon from './McpIcon.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
   let catalog = $state([])
-  let { tauri, threadId, active = false, draft = $bindable(''), commandNames = $bindable([]), selection = $bindable({ enabled: [], blocked: [], automatic: false }), onmanage } = $props()
+  let { tauri, threadId, active = false, draft = $bindable(''), commandNames = $bindable([]), selection = $bindable({ enabled: [], blocked: [], automatic: false }), onmanage, onfiles } = $props()
   let state = $state({ items: [] }), open = $state(false), branch = $state(''), error = $state(''), busy = $state(false), highlighted = $state(0), dismissed = $state(null), rootElement = $state(), trigger = $state()
   const choices = $derived(commandChoices(state.items))
   const command = $derived(draft === dismissed ? null : invocationQuery(draft))
@@ -68,9 +68,10 @@
 </script>
 <svelte:window onkeydown={event => { if (open) keys(event) }} onpointerdown={event => { if (open && !rootElement?.contains(event.target)) close() }} />
 <div class="extensions" bind:this={rootElement} role="group" aria-label="Turn extensions">
-  {#if !active}<button type="button" class="trigger" bind:this={trigger} aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} onclick={() => openComposerPanel(open ? null : 'extend')}><LucideIcon name="ellipsis" variant="action" size={14} /></button>{/if}
+  {#if !active}<button type="button" class="trigger" bind:this={trigger} aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} onclick={() => openComposerPanel(open ? null : 'extend')}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>{/if}
   {#if open}
     <div data-composer-panel data-panel="extend" data-panel-variant="overlay" class="menu" role="dialog" tabindex="-1" aria-label="Extensions for this turn">
+      <button type="button" class="files" onclick={() => { close(); onfiles?.() }}><LucideIcon name="paperclip" variant="action" size={16} /><span>Add files and folders</span></button>
       <div class="tree" class:expanded={!!branch}>
         <div class="branches">
           {#each [['mcp', 'MCPs'], ['plugin', 'Plugins'], ['skill', 'Skills']] as [kind, label]}
@@ -115,7 +116,12 @@
   .server, .automatic { display: flex; align-items: center; gap: 8px; padding: 7px; font-size: var(--text-13); }
   .server span, .automatic span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .automatic { border-top: 1px solid var(--border); margin-top: 5px; color: var(--muted); }
-  .manage { display: block; width: 100%; text-align: left; border-top: 1px solid var(--border); margin-top: 5px; padding-top: 10px; }
+  /* Menu separators are straight 1px lines across the menu's padded width at three-quarter strength. A border on a rounded button would curve at its ends. */
+  .files { position: relative; display: flex; align-items: center; width: 100%; gap: 8px; text-align: left; margin-bottom: 5px; padding-bottom: 10px; }
+  .files::after, .manage::before { content: ''; position: absolute; left: 0; right: 0; height: 1px; background: var(--border); opacity: .75; }
+  .files::after { bottom: 0; }
+  .manage::before { top: 0; }
+  .manage { position: relative; display: block; width: 100%; text-align: left; margin-top: 5px; padding-top: 10px; }
   .choice { display: grid; width: 100%; gap: 3px; text-align: left; }
   .choice span { color: var(--reference); }
   small, p { color: var(--muted); font-size: var(--text-12); }

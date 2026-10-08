@@ -166,9 +166,9 @@ provider answers it reads `Connect a model`, and the first Send opens Settings
 → Models. The user supplies model access through a provider or local server.
 
 **Settings → Models & routing is one screen.** Model selection and classifier
-settings lead. Full-width account rows show allowance, with usage and weight
+settings lead. Full-width account rows show allowance, with usage
 in account details. One searchable model list holds visibility and routing
-statements. A sample routing test shows the choice and fallback cause without
+statements. Each provider leads with the newest model of each family, dated from models.dev, and the models the user turned on. Older models fold under Other models and stay out of the picker until turned on. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the desktop owns
 and lands in the same file, or in the router's pool when the router pools
@@ -218,8 +218,8 @@ seconds, never by its slot, because a Pro plan's primary window is the weekly
 one. The card shows what is left, not what is used, with the reset, the plan,
 and Codex's banked resets. The store in `muniment-router-quota.json` carries
 no token and no prompt. Allowances refresh when the settings page opens and
-every two minutes while it is visible, without overlapping probes. Manual
-refresh remains available. Codex and xAI subscriptions use Responses. Claude
+every two minutes while it is visible, without overlapping probes. The card's
+foot shows the read time with a refresh icon on the left and a red Disconnect on the right. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Claude
 and Kimi subscriptions use Messages. Native streams preserve tool calls and
 usage. Other subscriptions remain ineligible until their transport exists.
 
@@ -269,7 +269,7 @@ same question shape stands beside them. A running classifier is the first row
 of the model chip's picker, named by the model that picks, `jev-latest picks`,
 and choosing it hands the turn to classification. The picker lists each model
 once under its provider. A model two or more accounts serve carries the
-balancer mark, and picking it balances across them with no other step.
+balancer mark, and picking it balances across them with no other step. A saved classifier connection shows its logo and edits in place. A new model, URL or key passes the connection test before it saves, and a blank key keeps the saved one.
 
 
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one control

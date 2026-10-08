@@ -23,7 +23,7 @@ describe('classifier catalog', () => {
     expect(matchSaved({ kind: 'pooled', family: 'openai', model: 'gpt-5.6-luna' })).toBe('openai/gpt-5.6-luna')
     expect(matchSaved({ kind: 'pooled', family: 'openai', model: 'gpt-5.6' })).toBe('openai/gpt-5.6')
     expect(matchSaved({ kind: 'endpoint' })).toBe('endpoint')
-    expect(matchSaved({ kind: 'endpoint', model: 'decider-2b' })).toBe('mapika/decider-2b')
+    expect(matchSaved({ kind: 'endpoint', model: 'Mapika/decider-4b' })).toBe('mapika/decider-4b')
     expect(matchSaved({ kind: 'none' })).toBe('')
     expect(matchSaved(null)).toBe('')
   })

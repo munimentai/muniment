@@ -23,12 +23,8 @@ export const DEDICATED = [
 // Open models use an operator-hosted System One endpoint.
 export const SELF_HOSTED = [
   {
-    id: 'semif/qwen3.5-4b', kind: 'endpoint', name: 'SemIf · Qwen 3.5 4B', model: 'semif-qwen3.5-4b',
-    note: 'A self-hosted routing classifier. Requires a System One adapter. Scores come from model logits and need calibration for your routes.',
-  },
-  {
-    id: 'mapika/decider-2b', kind: 'endpoint', name: 'Decider 2B', model: 'decider-2b',
-    note: 'A self-hosted routing classifier. Requires a System One endpoint. Faster on the tested GPU, but less accurate than Jev on complex decisions.',
+    id: 'mapika/decider-4b', kind: 'endpoint', name: 'Decider 4B', model: 'Mapika/decider-4b',
+    note: 'A self-hosted routing classifier. Requires a System One endpoint.',
   },
 ]
 

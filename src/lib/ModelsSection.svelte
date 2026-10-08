@@ -14,9 +14,10 @@
   import ModelRouterSection from './ModelRouterSection.svelte'
   import ModelCatalog from './ModelCatalog.svelte'
   import ClassifierConnection from './ClassifierConnection.svelte'
+  import ClassifierEdit from './ClassifierEdit.svelte'
   import { CLASSIFIERS, searchClassifiers } from './classifier-connections.js'
   import ProviderLogo from './ProviderLogo.svelte'
-  import { catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders, sourceTag } from './provider-catalog.js'
+  import { catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders } from './provider-catalog.js'
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
@@ -38,6 +39,8 @@
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
   let classifierId = $state('')
+  // The saved classifier connection whose form is open in Accounts.
+  let editingClassifier = $state('')
   const classifierEntry = $derived(CLASSIFIERS.find(entry => entry.id === classifierId))
   let providerId = $state('')
   let method = $state('')
@@ -138,9 +141,22 @@
     view = 'connect'
   }
 
+  // The connected endpoint whose form is open for an edit, empty for a new connection.
+  let editingEndpoint = $state('')
+
+  // An endpoint provider edits through its own connect form, filled with what
+  // it holds. The key field stays blank, and a blank key keeps the saved one.
+  function editProvider(entry) {
+    chooseProvider(entry.id.startsWith('custom-') ? 'custom' : entry.id)
+    editingEndpoint = entry.id
+    baseUrl = entry.base_url ?? baseUrl
+    if (entry.id.startsWith('custom-')) endpointName = entry.name
+  }
+
   function chooseProvider(id) {
     origin = view
     providerId = id
+    editingEndpoint = ''
     formError = ''
     key = ''
     endpointName = ''
@@ -171,13 +187,24 @@
     login = null
   }
 
+  // Cloudflare's key works only beside the account it belongs to, and its
+  // gateway's beside the gateway too. Pi reads both from the saved credential.
+  const KEY_SETTINGS = {
+    'cloudflare-workers-ai': [['CLOUDFLARE_ACCOUNT_ID', 'Cloudflare account ID']],
+    'cloudflare-ai-gateway': [['CLOUDFLARE_ACCOUNT_ID', 'Cloudflare account ID'], ['CLOUDFLARE_GATEWAY_ID', 'Gateway ID']],
+  }
+  let keySettings = $state({})
+  const keyFields = $derived(KEY_SETTINGS[provider?.keyProvider ?? providerId] ?? [])
+
   async function saveKey() {
-    if (pending || !key.trim()) return
+    if (pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())) return
     pending = true
     formError = ''
     try {
-      await tauri.invoke('local_mode_store_provider_key', { provider: provider.keyProvider ?? providerId, key })
+      const env = keyFields.length ? Object.fromEntries(keyFields.map(([name]) => [name, keySettings[name].trim()])) : null
+      await tauri.invoke('local_mode_store_provider_key', { provider: provider.keyProvider ?? providerId, key, env })
       key = ''
+      keySettings = {}
       await finishConnect(`Muniment saved the ${provider.name} key.`)
     } catch (error) {
       formError = String(error?.message ?? error) || 'Muniment could not save the provider key. Try again.'
@@ -191,7 +218,8 @@
     pending = true
     formError = ''
     try {
-      await tauri.invoke('local_mode_store_local_provider', { baseUrl })
+      await tauri.invoke('local_mode_store_local_provider', { baseUrl, apiKey: key.trim() || null })
+      key = ''
       await finishConnect('Muniment saved the Ollama server.')
     } catch (error) {
       formError = String(error?.message ?? error) || 'Ollama setup failed. Check the URL, then retry.'
@@ -366,9 +394,13 @@
       <section class="provider-group" aria-label="Connected classifiers">
         <header><h5>Classifiers</h5></header>
         {#each router.classifier_connections as connection (connection.id)}
-          <div class="account-row"><strong>{connection.name}</strong><span class="tag">{connection.active ? 'Selected for routing' : 'Connected'}</span>
-            <button type="button" class="quiet" onclick={async () => { try { router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }) } catch (error) { status = String(error?.message ?? error) } }}>Disconnect {connection.name}</button>
+          <div class="account-row"><ProviderLogo provider={connection.catalog_id} size={18} /><strong>{connection.name}</strong><span class="tag">{connection.active ? 'Selected for routing' : 'Connected'}</span>
+            <span class="row-actions">
+              {#if connection.connection.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
+              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }) } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            </span>
           </div>
+          {#if editingClassifier === connection.id}<ClassifierEdit {connection} {tauri} onsaved={next => { accounts.set(next); editingClassifier = ''; status = 'Classifier saved.' }} oncancel={() => { editingClassifier = '' }} />{/if}
         {/each}
       </section>
     {/if}
@@ -377,15 +409,16 @@
         <header>
           <ProviderLogo provider={entry.id} size={18} />
           <h5>{entry.name}</h5>
-          <button type="button" class="quiet disconnect" onclick={() => disconnect(entry)}>Disconnect</button>
+          {#if entry.source === 'local' || entry.source === 'custom'}
+            <!-- An endpoint the user points at edits and disconnects like a classifier, with icons at the far right. -->
+            <span class="row-actions">
+              <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => editProvider(entry)}><LucideIcon name="square-pen" size={16} variant="action" /></button>
+              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            </span>
+          {:else}
+            <button type="button" class="quiet disconnect" onclick={() => disconnect(entry)}>Disconnect</button>
+          {/if}
         </header>
-        <ul class="account-list">
-          <li class="account-row">
-            <span class="tag">{sourceTag(entry.source)}</span>
-            {#if entry.base_url}<span class="record">{entry.base_url}</span>{/if}
-            <span class="record">direct</span>
-          </li>
-        </ul>
         {#if entry.family && router}
           <ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />
         {/if}
@@ -414,7 +447,7 @@
         <h4>Connect {classifierEntry?.name}</h4>
       {:else}
         <ProviderLogo provider={providerId} size={18} />
-        <h4>Connect {provider?.name}</h4>
+        <h4>{editingEndpoint ? 'Edit' : 'Connect'} {provider?.name}</h4>
       {/if}
     </header>
     {#if view === 'connect'}
@@ -430,24 +463,28 @@
         {/if}
       {/each}
     {:else if view === 'classifier' && classifierEntry}
-      <ClassifierConnection entry={classifierEntry} {tauri} onconnected={next => { accounts.set(next); status = 'Classifier connected. Select it in Routing.'; view = 'list'; tab = 'accounts' }} />
+      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnected={next => { accounts.set(next); status = 'Classifier connected. Select it in Routing.'; view = 'list'; tab = 'accounts' }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
       <div class="connection-field"><label for="provider-key">{provider.name} API key</label><input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
+      {#each keyFields as [name, label] (name)}
+        <div class="connection-field"><label for={`key-setting-${name}`}>{label}</label><input id={`key-setting-${name}`} type="text" autocomplete="off" value={keySettings[name] ?? ''} oninput={(event) => { keySettings = { ...keySettings, [name]: event.currentTarget.value } }} disabled={pending}></div>
+      {/each}
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" disabled={pending || !key.trim()} onclick={saveKey}>Save key</button>
+      <button type="button" disabled={pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())} onclick={saveKey}>Save key</button>
     {:else if method === 'ollama'}
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
       <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
+      <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : 'For a server behind a key'} bind:value={key} disabled={pending}></div>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
     {:else if method === 'endpoint'}
       <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : provider.id === 'vllm' ? 'a running vLLM server.' : 'a LiteLLM proxy or another gateway.'}</p>
       {#if provider.id === 'custom'}
-        <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" bind:value={endpointName} disabled={pending}></div>
+        <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" bind:value={endpointName} disabled={pending || !!editingEndpoint}></div>
       {/if}
       <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
-      <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
+      <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : ''} bind:value={key} disabled={pending}></div>
       <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea></div>
       <p class="support">Leave the list empty and Muniment asks the server for its models.</p>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
@@ -517,8 +554,11 @@
   .models { display: grid; gap: 28px; align-content: start; }
   .models.connecting { gap: 16px; }
   .connection-field { display: grid; gap: 6px; }
-  .account-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 28px; padding: 3px 4px; }
+  /* A classifier's actions sit at the row's far right as icons. Disconnect reads as critical. */
+  .row-actions { display: inline-flex; gap: 2px; margin-left: auto; }
+  .icon-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; padding: 4px; }
+  .icon-action.critical { color: var(--oxide); }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
   .connect-head h4, .models-head h4 { margin: 0; }

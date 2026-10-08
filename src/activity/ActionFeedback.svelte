@@ -4,6 +4,8 @@
 
   let { activities = [], live = false, onopenfile } = $props()
   const groups = $derived(actionGroups(activities, live))
+  const total = $derived(groups.reduce((sum, group) => sum + group.actions.length, 0))
+  const running = $derived(groups.some((group) => group.running))
   let now = $state(Date.now())
   $effect(() => {
     if (!live) return
@@ -48,7 +50,13 @@
 {/snippet}
 
 {#if groups.length}
-  <div class="action-feedback" aria-label="Actions">
+  <!-- The tools a reply used fold under one line. It opens to the groups, and each tool opens to its detail. -->
+  <details class="action-feedback" aria-label="Actions">
+    <summary class="tools-used">
+      <span class:active-sheen={running}>{total} {total === 1 ? 'tool' : 'tools'} used</span>
+      <span class="chevron"><LucideIcon name="chevron-right" /></span>
+    </summary>
+    <div class="tool-groups">
     {#each groups as group (group.id)}
       {#if group.actions.length === 1}
         {@render renderActions(group)}
@@ -63,7 +71,8 @@
       </details>
       {/if}
     {/each}
-  </div>
+    </div>
+  </details>
 {/if}
 
 <style>
@@ -76,8 +85,9 @@
   .file-action .action-label { text-decoration: underline dotted; text-underline-offset: 3px; }
   .file-action:hover { color: var(--ink); }
   .action-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .chevron { opacity: 0; flex: none; }
-  summary:hover .chevron, summary:focus-visible .chevron, details[open] > summary > .chevron { opacity: 1; }
+  .chevron { flex: none; display: inline-flex; }
+  .tools-used { width: max-content; max-width: 100%; }
+  .tool-groups { padding-left: 14px; }
   details[open] > summary > .chevron { transform: rotate(90deg); }
   .action-list.grouped { padding-left: 12px; }
   .action-detail { margin: 6px 0 12px 24px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--faint); }
@@ -89,6 +99,5 @@
   .active-sheen { background: linear-gradient(100deg, var(--muted) 35%, var(--ink) 50%, var(--muted) 65%); background-size: 250% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: action-sheen 2.4s linear infinite; }
   @keyframes action-sheen { from { background-position: 140% 0; } to { background-position: -40% 0; } }
   @media (prefers-reduced-motion: reduce) { .active-sheen { animation: none; background: none; color: var(--muted); } }
-  @media (hover: none) { .chevron { opacity: 1; } }
   @media (forced-colors: active) { .active-sheen { background: none; color: CanvasText; } }
 </style>
