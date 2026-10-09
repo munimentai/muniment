@@ -54,6 +54,15 @@ gates:
         --package muniment-runtime --features muniment-desktop-integration/keyring
         -- --test-threads=1
     timeout_s: 3600
+  # Set explicitly, so a change of the contract defaults leaves these gates as they are.
+  complexity:
+    enabled: false
+  dependencies:
+    enabled: false
+  mutation:
+    enabled: false
+  acceptance:
+    enabled: false
   ci:
     provider: forgejo
     # Empty: every reported check counts and a skipped one passes. The always
