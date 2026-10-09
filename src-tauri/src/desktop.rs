@@ -4,7 +4,9 @@ mod attachment_picker;
 mod agents;
 mod attach_service;
 mod auth;
+mod browser_language;
 mod cef_browser;
+mod cef_locale;
 mod cef_native;
 #[cfg(windows)]
 mod cef_windows;
@@ -242,6 +244,8 @@ pub fn run() {
             chat::chat_file_metadata,
             chat::chat_file_content,
             chat::chat_search_files,
+            browser_language::browser_language,
+            browser_language::browser_language_set,
             local_mode::context_settings,
             local_mode::context_settings_save,
             chat::chat_resume,

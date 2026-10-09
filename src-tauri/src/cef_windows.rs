@@ -20,7 +20,9 @@ pub unsafe extern "C" fn RunWinMain(
     BROKER.store(sandbox_info, Ordering::Release);
     cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
     let args = cef::MainArgs { instance };
-    let code = cef::execute_process(Some(&args), None::<&mut cef::App>, sandbox_info);
+    // A sandboxed child may fail to read the pack and keeps Chromium's strings.
+    let mut app = crate::cef_locale::from_args().map(crate::cef_locale::LocaleApp::new);
+    let code = cef::execute_process(Some(&args), app.as_mut(), sandbox_info);
     if code >= 0 {
         return code;
     }

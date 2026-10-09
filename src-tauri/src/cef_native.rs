@@ -278,22 +278,51 @@ wrap_request_context_handler! {
 }
 // A browser-process handler selects CEF's external pump. Without this handler,
 // CEF falls back to AppKit's own event pump and can trap a quit event inside it.
+// It also hands each child process the chosen language pack.
 wrap_browser_process_handler! {
-    struct Pump;
+    struct Pump {
+        pack: Option<String>,
+    }
     impl BrowserProcessHandler {
         fn on_schedule_message_pump_work(&self,_delay_ms:i64) {}
+        fn on_before_child_process_launch(&self,command:Option<&mut CommandLine>){
+            if let (Some(command),Some(pack))=(command,self.pack.as_deref()) {
+                command.append_switch_with_value(Some(&CefString::from(crate::cef_locale::SWITCH)),Some(&CefString::from(pack)));
+            }
+        }
     }
 }
 wrap_app! {
-    struct BrowserApp;
+    struct BrowserApp {
+        strings: Option<crate::cef_locale::Strings>,
+        pack: Option<String>,
+    }
     impl App {
-        fn browser_process_handler(&self)->Option<BrowserProcessHandler>{Some(Pump::new())}
+        fn browser_process_handler(&self)->Option<BrowserProcessHandler>{Some(Pump::new(self.pack.clone()))}
+        fn resource_bundle_handler(&self)->Option<ResourceBundleHandler>{
+            self.strings.clone().map(crate::cef_locale::LocaleStrings::new)
+        }
         fn on_before_command_line_processing(&self,_process:Option<&CefString>,command:Option<&mut CommandLine>){
             if let Some(command)=command {
                 command.append_switch(Some(&CefString::from("no-first-run")));
             }
         }
     }
+}
+/// The folder that holds libcef and its data on Linux: beside the executable
+/// in a development build, or in the package's library folder.
+#[cfg(target_os = "linux")]
+pub fn cef_directory() -> Result<std::path::PathBuf, String> {
+    let directory = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    Ok(if directory.join("libcef.so").is_file() {
+        directory
+    } else {
+        directory.join("../lib/muniment/cef")
+    })
 }
 pub fn initialize(_app: Option<&tauri::AppHandle>, root: &Path) -> Result<(), String> {
     if RUNNING.load(Ordering::Acquire) {
@@ -331,17 +360,7 @@ pub fn initialize(_app: Option<&tauri::AppHandle>, root: &Path) -> Result<(), St
     #[cfg(windows)]
     let helper = std::env::current_exe().map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
-    let cef_directory = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    #[cfg(target_os = "linux")]
-    let cef_directory = if cef_directory.join("libcef.so").is_file() {
-        cef_directory
-    } else {
-        cef_directory.join("../lib/muniment/cef")
-    };
+    let cef_directory = cef_directory()?;
     #[cfg(target_os = "linux")]
     let helper = cef_directory.join("muniment-cef-helper");
     #[cfg(target_os = "linux")]
@@ -350,7 +369,16 @@ pub fn initialize(_app: Option<&tauri::AppHandle>, root: &Path) -> Result<(), St
     let sandbox = crate::cef_windows::broker();
     #[cfg(not(windows))]
     let sandbox = std::ptr::null_mut();
+    let pack = crate::browser_language::startup_pack(root);
+    let strings = pack
+        .as_ref()
+        .and_then(|(_, path)| crate::cef_locale::load(path));
+    let accept = match (&pack, &strings) {
+        (Some((code, _)), Some(_)) => crate::browser_language::accept_languages(code),
+        _ => String::new(),
+    };
     let settings = Settings {
+        accept_language_list: CefString::from(accept.as_str()),
         no_sandbox: 0,
         external_message_pump: 1,
         root_cache_path: CefString::from(root.join("profiles").to_string_lossy().as_ref()),
@@ -366,7 +394,12 @@ pub fn initialize(_app: Option<&tauri::AppHandle>, root: &Path) -> Result<(), St
     if cef::initialize(
         Some(args.as_main_args()),
         Some(&settings),
-        Some(&mut BrowserApp::new()),
+        Some(&mut BrowserApp::new(
+            strings.clone(),
+            strings
+                .and(pack)
+                .map(|(_, path)| path.to_string_lossy().into_owned()),
+        )),
         sandbox,
     ) != 1
     {

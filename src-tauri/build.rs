@@ -86,6 +86,8 @@ const APP_COMMANDS: &[&str] = &[
     "chat_file_metadata",
     "chat_file_content",
     "chat_search_files",
+    "browser_language",
+    "browser_language_set",
     "context_settings",
     "context_settings_save",
     "chat_resume",

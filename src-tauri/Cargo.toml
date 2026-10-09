@@ -26,8 +26,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 sha2 = "0.10"
 base64 = "0.22"
+flate2 = "1"
+tar = "0.4"
 ureq = { version = "2", default-features = false, features = ["tls", "proxy-from-env"] }
-cef = { version = "=152.3.0", default-features = false, features = ["sandbox"] }
+cef = { version = "=154.5.0", default-features = false, features = ["sandbox"] }
 tiny_http = "0.12"
 cpal = "0.16"
 libc = "0.2"

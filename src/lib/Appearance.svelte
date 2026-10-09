@@ -1,6 +1,7 @@
 <script>
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import ContextSettings from '../activity/ContextSettings.svelte'
+  import BrowserLanguage from './BrowserLanguage.svelte'
   import { onMount } from 'svelte'
   import { VIBRANT_THEMES, DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
   import RunMark from './RunMark.svelte'
@@ -141,6 +142,8 @@
 </section>
 
 <ContextSettings {tauri} />
+
+<BrowserLanguage {tauri} />
 
 <style>
   .access-label { margin: 0 0 6px; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; }

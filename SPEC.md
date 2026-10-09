@@ -375,9 +375,9 @@ stay inside the tab strip, clear of the maximize and panel-collapse controls.
 Browser labels show the host, path, query and fragment without the scheme or
 leading `www.`. Long browser labels fade on the right. Terminal and Files labels
 show readable folder names without generated task suffixes and fade on the left. Hover reveals full paths. Artifact tabs show artifact names. Open file tabs retain file names.
-Terminal and Files path headers share `OverflowText.svelte`: the full path stays
-on one line, starts at its end, and scrolls horizontally without a scrollbar.
-Fades mark clipped content and clear when the content fits. The browser defaults to bundled offline desktop docs. Closing a browser tab releases its native view.
+Terminal and Files path headers share `OverflowText.svelte`: the full path stays on one line, starts at its end, and scrolls horizontally without a scrollbar.
+Fades mark clipped content and clear when the content fits. A new browser tab opens https://muniment.ai/docs/. Closing a browser tab releases its native view.
+Preferences sets the browser language. The installer carries 15 Chromium languages. The rest download once from the release archive, which the installer pins by size and SHA-256. A change applies at the next launch.
 
 **The file panel.** A read or edited file opens in the shared rail, exclusive
 with records and artifacts, with the same resize and maximize controls.

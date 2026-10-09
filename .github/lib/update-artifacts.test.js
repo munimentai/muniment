@@ -13,12 +13,12 @@ describe('update artifact preparation', () => {
     vi.stubEnv('TAURI_SIGNING_PRIVATE_KEY', '');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-update-artifacts-'));
     try {
-      for (const [directory, name] of [['deb', 'muniment.deb'], ['appimage', 'muniment.AppImage']]) {
+      for (const [directory, name] of [['deb', 'muniment.deb'], ['appimage', 'muniment.AppImage'], ['locales', 'muniment-chromium-locales.tar.gz']]) {
         fs.mkdirSync(path.join(root, directory));
         fs.writeFileSync(path.join(root, directory, name), name);
       }
       const run = vi.fn();
-      expect(await prepareUpdateArtifacts('linux', root, run)).toEqual([path.join(root, 'deb/muniment.deb'), path.join(root, 'appimage/muniment.AppImage')]);
+      expect(await prepareUpdateArtifacts('linux', root, run)).toEqual([path.join(root, 'deb/muniment.deb'), path.join(root, 'appimage/muniment.AppImage'), path.join(root, 'locales/muniment-chromium-locales.tar.gz')]);
       expect(run).not.toHaveBeenCalled();
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
@@ -37,13 +37,15 @@ describe('update artifact preparation', () => {
         fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'fixture');
       }
     }
+    fs.mkdirSync(path.join(root, 'locales'));
+    fs.writeFileSync(path.join(root, 'locales/muniment-chromium-locales.tar.gz'), 'packs');
     const calls = [];
     try {
       const files = await prepareUpdateArtifacts('macos', root, (command, args, options) => {
         calls.push([command, args]);
         return spawnSync(command, args, options);
       });
-      expect(files).toHaveLength(12);
+      expect(files).toHaveLength(13);
       expect(files.some((file) => file.endsWith('.sig'))).toBe(false);
       const archive = path.join(macos, 'muniment.app.tar.gz');
       const unpacked = path.join(root, 'unpacked'); fs.mkdirSync(unpacked);

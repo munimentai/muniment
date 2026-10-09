@@ -106,6 +106,8 @@
     "allow-chat-file-metadata",
     "allow-chat-file-content",
     "allow-chat-search-files",
+    "allow-browser-language",
+    "allow-browser-language-set",
     "allow-context-settings",
     "allow-context-settings-save",
     "allow-chat-resume",
