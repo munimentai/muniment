@@ -192,6 +192,7 @@ pub fn run() {
             terminal::terminal_resize,
             terminal::terminal_close,
             cef_browser::browser_command,
+            cef_browser::browser_tool,
             cef_browser::browser_view,
             cef_browser::artifact_list,
             cef_browser::artifact_from_file,

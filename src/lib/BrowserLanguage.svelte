@@ -43,7 +43,7 @@
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 <style>
-  section { display: grid; gap: 10px; border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
+  section { display: grid; gap: 10px; align-content: start; }
   h3 { margin: 0; font: var(--text-13) var(--font-mono); color: var(--muted); }
   p { margin: 0; font-size: var(--text-13); color: var(--muted); }
 </style>

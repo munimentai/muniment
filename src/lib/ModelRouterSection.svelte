@@ -83,7 +83,7 @@
     {#if !settings.options.length}<p>Connect an account to choose models automatically.</p>{/if}
   </section>
   <section aria-label="Assistance" class="job">
-    <div class="heading"><div><h5>Assistance</h5><p>Let a decision model pick the MCP servers and skills for each message.</p></div><Toggle checked={assist.enabled} label="Use assistance" disabled={pending || (!assist.enabled && !choices.length)} onchange={enabled => setAssist(enabled, assist.connection)} /></div>
+    <div class="heading"><div><h5>Assistance</h5><p>Let a decision model pick the MCP servers and skills for each message, and drive the Browser tab for a chat, which sends it the page text.</p></div><Toggle checked={assist.enabled} label="Use assistance" disabled={pending || (!assist.enabled && !choices.length)} onchange={enabled => setAssist(enabled, assist.connection)} /></div>
     {#if assist.enabled}
       <ChoiceField label="Assistance decision model" value={assist.connection} options={assistChoices} disabled={pending} onchange={id => setAssist(true, id)} />
       <p>The composer shows the decision model that assists, and you can turn it off for one message.</p>

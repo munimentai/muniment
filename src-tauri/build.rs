@@ -34,6 +34,7 @@ const APP_COMMANDS: &[&str] = &[
     "terminal_resize",
     "terminal_close",
     "browser_command",
+    "browser_tool",
     "browser_view",
     "artifact_list",
     "artifact_from_file",

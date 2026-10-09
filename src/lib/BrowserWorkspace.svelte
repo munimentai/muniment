@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { readHomepage, saveHomepage, DEFAULT_HOMEPAGE } from './browser-settings.js'
+  import { readHomepage, saveHomepage, addressFor, DEFAULT_HOMEPAGE } from './browser-settings.js'
   import LucideIcon from './LucideIcon.svelte'
   let { tauri, artifacts = false, requestedArtifact = null, suspended = false, navigation = null, onnavigationhandled, onurl, onartifact } = $props()
   let homepage = $state(readHomepage())
@@ -52,8 +52,8 @@
   }
   function navigate(event) {
     event.preventDefault()
-    const value = address.trim()
-    if (value) void action('navigate', value.includes('://') ? value : `https://${value}`)
+    const target = addressFor(address)
+    if (target) void action('navigate', target)
   }
   $effect(() => { if (artifacts && requestedArtifact) { selected=requestedArtifact; void layout() } })
   $effect(() => { visible; host; view; selected; void layout() })
@@ -101,7 +101,7 @@
       <button type="button" aria-label="Forward" onclick={() => action('forward')}><LucideIcon name="arrow-right" /></button>
       <button type="button" aria-label="Reload" onclick={() => action('reload')}><LucideIcon name="refresh-cw" /></button>
       <button type="button" aria-label="Home" onclick={() => action('navigate', homepage)}><LucideIcon name="house" /></button>
-      <input aria-label="Website address" placeholder="Enter a URL" bind:value={address} spellcheck="false" />
+      <input aria-label="Search or enter address" placeholder="Search or enter address" bind:value={address} spellcheck="false" />
       <button type="button" aria-label="Browser settings" aria-expanded={settingsOpen} onclick={() => { homepageDraft = homepage; settingsError = ''; settingsOpen = !settingsOpen }}><LucideIcon name="settings" /></button>
     </form>
   {/if}

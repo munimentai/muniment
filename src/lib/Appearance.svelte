@@ -2,6 +2,7 @@
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import ContextSettings from '../activity/ContextSettings.svelte'
   import BrowserLanguage from './BrowserLanguage.svelte'
+  import BrowserSearch from './BrowserSearch.svelte'
   import { onMount } from 'svelte'
   import { VIBRANT_THEMES, DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
   import RunMark from './RunMark.svelte'
@@ -143,7 +144,10 @@
 
 <ContextSettings {tauri} />
 
-<BrowserLanguage {tauri} />
+<div class="browser-preferences">
+  <BrowserLanguage {tauri} />
+  <BrowserSearch />
+</div>
 
 <style>
   .access-label { margin: 0 0 6px; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; }
@@ -196,4 +200,6 @@
   .font-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
   .font-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .font-note { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  /* Browser language and search sit side by side, and stack when the panel is narrow. */
+  .browser-preferences { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px 24px; border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
 </style>

@@ -1303,6 +1303,49 @@
     }
   }
 
+  // A chat in the background runtime hands its browser request to the app as
+  // a gate. The app works it in the Browser tab and answers each gate once.
+  const browserGates = new Set()
+  let browsing = null
+  $effect(() => {
+    for (const message of messages) {
+      const run = message.run
+      const gate = run?.pendingPermission
+      if (run?.phase !== 'pending-permission' || gate?.kind !== 'editor' || gate.title !== 'muniment:browser') continue
+      const key = `${run.id}:${gate.gateId}`
+      if (browserGates.has(key)) continue
+      browserGates.add(key)
+      browsing = run.id
+      void runBrowserGate(run, gate)
+    }
+    // A stopped reply stops its browse between steps.
+    const running = browsing && messages.find((message) => message.run?.id === browsing)?.run
+    if (running && ['cancelled', 'failed', 'interrupted'].includes(running.phase)) {
+      browsing = null
+      void tauri.invoke('browser_command', { request: { view: 'browser', action: 'stop', value: '' } }).catch(() => {})
+    }
+  })
+  // The browser tool opens the Browser tab when it is closed, then works the page.
+  async function openBrowserForChat() {
+    showBrowser('browser')
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      try { return await tauri.invoke('browser_command', { request: { view: 'browser', action: 'status', value: '' } }) }
+      catch (_) { await new Promise((resolve) => setTimeout(resolve, 250)) }
+    }
+    throw new Error('The Browser tab did not open.')
+  }
+  async function runBrowserGate(run, gate) {
+    let value
+    try {
+      await openBrowserForChat()
+      value = await tauri.invoke('browser_tool', { request: gate.prefill ?? '' })
+    } catch (error) {
+      value = JSON.stringify({ error: String(error?.message ?? error) })
+    }
+    browsing = null
+    answerPermission(run, { type: 'editor', value })
+  }
+
   function permissionState(run) {
     const gate = run.pendingPermission
     return gate && permissionAnswer?.runId === run.id && permissionAnswer.gateId === gate.gateId
@@ -2311,6 +2354,8 @@
                 {@const answerState = permissionState(message.run)}
                 {#if gate.kind === 'editor' && gate.title === 'muniment:ask_user_question'}
                   {#key gate.gateId}<UserQuestion anchor={composerBox} payload={gate.prefill} pending={answerState?.pending ?? false} error={answerState?.error ?? ''} onanswer={(value) => answerPermission(message.run, { type: 'editor', value })} />{/key}
+                {:else if gate.kind === 'editor' && gate.title === 'muniment:browser'}
+                  <p class="run-status" role="status">Using the browser…</p>
                 {:else}
                 <div class="permission-card tool-card">
                   <strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>

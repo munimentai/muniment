@@ -55,6 +55,7 @@
     "allow-terminal-resize",
     "allow-terminal-close",
     "allow-browser-command",
+    "allow-browser-tool",
     "allow-browser-view",
     "allow-artifact-list",
     "allow-artifact-from-file",

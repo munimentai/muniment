@@ -142,7 +142,7 @@
         {
           "id": "browser",
           "title": "Browser",
-          "body": "The browser opens the online docs at muniment.ai/docs. Use the address bar to visit a site. The tab shows the domain and path. Browser settings let you choose another homepage. Hiding the panel keeps the page available. Closing the tab releases its browser view."
+          "body": "The browser opens the online docs at muniment.ai/docs. Type an address to visit a site, or words to search with the engine Preferences names. A bang such as !w or !yt searches one site. The tab shows the domain and path. Browser settings let you choose another homepage. Hiding the panel keeps the page available. Closing the tab releases its browser view. A chat can use the browser too: its browser tool opens the Browser tab and picks each click with your assistance decision model, which receives the page text. It asks you before a click that buys, sends, deletes, or changes an account, and you type passwords yourself. Stop the reply to stop it."
         },
         {
           "id": "artifacts",
@@ -186,7 +186,7 @@
         {
           "id": "browser-language",
           "title": "Browser language",
-          "body": "Browser language sets the language of the Browser tab’s menus and error pages, and the language sites receive first. The installer includes 15 languages. Choose another to download it once, then restart muniment to use it."
+          "body": "Browser language sets the language of the Browser tab’s menus and error pages, and the language sites receive first. The installer includes 15 languages. Choose another to download it once, then restart muniment to use it. Browser search beside it chooses the engine the address bar searches with: Google, Brave Search, DuckDuckGo, Bing, or Startpage."
         },
         {
           "id": "memory",
