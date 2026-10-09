@@ -77,9 +77,6 @@ gates:
     timeout_s: 14400
 
 budgets:
-  run_wall_s: 2700
-  gate_rounds: 3
-  review_rounds: 1
   # Two long CI runs never compete for the desktop-ci slot.
   concurrent_runs: 1
 
