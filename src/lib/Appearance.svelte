@@ -62,7 +62,7 @@
   const STYLE_NOTES = {
     normal: 'Quiet neutrals with one color for activity.',
     vibrant: 'Tinted surfaces with an accent for actions.',
-    contrast: 'Black and white with strong hairlines.',
+    contrast: 'Black and white, with the color on hairlines and hovers.',
   }
 
   function commit(next) {
