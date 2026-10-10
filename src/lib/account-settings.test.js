@@ -123,7 +123,7 @@ describe('account settings layout', () => {
     renderPanel(companionInvoke())
 
     const sections = [...document.querySelectorAll('.account-sections > section')]
-    expect(sections.slice(-3, -1).map((section) => section.getAttribute('aria-labelledby'))).toEqual([
+    expect(sections.slice(-2).map((section) => section.getAttribute('aria-labelledby'))).toEqual([
       'entitlements-heading',
       'retention-heading',
     ])

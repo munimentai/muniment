@@ -7,9 +7,8 @@
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
   import PhonePairing from './PhonePairing.svelte'
-  import { shortcutFromKeyboardEvent } from './dictation-state.js'
 
-  let { tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut, subject = '', onsignout = null } = $props()
+  let { tauri, subject = '', onsignout = null } = $props()
   let access = $state(accessIdleState)
   let devices = $state(devicesIdleState)
   let companions = $state(companionsIdleState)
@@ -30,9 +29,6 @@
   ]
   const plan = $derived((access.capabilities ?? []).some((capability) => /share|schedul|rout/i.test(capability)) ? 'pro' : 'free')
   let expandedGrants = $state(new Set())
-  let capturingShortcut = $state(false)
-  let pendingShortcut = $state('')
-  let shortcutStatus = $state('')
   let revokingIdentity = $state(null)
   let revokePending = $state(false)
   let revokeError = $state('')
@@ -211,32 +207,6 @@
     return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
   }
 
-  function captureShortcut(event) {
-    if (!capturingShortcut) return
-    event.preventDefault()
-    event.stopPropagation()
-    if (event.key === 'Escape') {
-      capturingShortcut = false
-      pendingShortcut = ''
-      return
-    }
-    const shortcut = shortcutFromKeyboardEvent(event)
-    if (shortcut) {
-      pendingShortcut = shortcut
-      shortcutStatus = ''
-    } else if (!['Alt', 'Control', 'Meta', 'Shift'].includes(event.key)) shortcutStatus = 'Include at least one modifier key.'
-  }
-
-  async function applyShortcut(shortcut) {
-    shortcutStatus = ''
-    const result = await onVoiceShortcutChange(shortcut)
-    if (result) {
-      capturingShortcut = false
-      pendingShortcut = ''
-    } else if (result === null) shortcutStatus = 'The shortcut could not be updated. Voice remains available from the button.'
-    else shortcutStatus = 'That shortcut is unavailable. Your previous shortcut still works.'
-  }
-
   function toggleGrant(index) {
     const next = new Set(expandedGrants)
     next.has(index) ? next.delete(index) : next.add(index)
@@ -373,18 +343,6 @@
     </div>
     {#if retentionError}<div class="access-status" role="alert"><p>{retentionError}</p><button onclick={() => chooseRetention(retentionRetryChoice)}>Try again</button></div>{/if}
   </section>
-  <section class="voice-section" aria-labelledby="voice-heading">
-    <h3 id="voice-heading" class="settings-heading">Voice shortcut</h3>
-    <p class="section-help">Hold this shortcut to dictate from anywhere.</p>
-    <button class="shortcut-capture" aria-label={capturingShortcut ? 'Record voice shortcut' : `Change voice shortcut, current ${voiceShortcut}`} onclick={() => { capturingShortcut = true; pendingShortcut = ''; shortcutStatus = '' }} onkeydown={captureShortcut} disabled={voiceShortcutChanging}>
-      <span>{capturingShortcut ? pendingShortcut || 'Press a shortcut…' : voiceShortcut}</span><small>{capturingShortcut ? 'Modifier + key' : 'Change'}</small>
-    </button>
-    {#if capturingShortcut}
-      <div class="shortcut-actions"><button onclick={() => { capturingShortcut = false; pendingShortcut = ''; shortcutStatus = '' }}>Cancel</button><button onclick={() => applyShortcut(pendingShortcut)} disabled={!pendingShortcut || voiceShortcutChanging}>{voiceShortcutChanging ? 'Applying…' : 'Apply'}</button></div>
-    {/if}
-    <button class="quiet restore-shortcut" onclick={() => applyShortcut(defaultVoiceShortcut)} disabled={voiceShortcut === defaultVoiceShortcut || voiceShortcutChanging}>Restore default</button>
-    {#if shortcutStatus}<p class="shortcut-error" role="alert">{shortcutStatus}</p>{/if}
-  </section>
 </div>
 
 <style>
@@ -393,7 +351,7 @@
   .account-sections { display: grid; gap: 28px; max-width: 760px; }
   .account-sections section > .settings-heading, .access-heading { margin: 0 0 4px; }
   .section-help { margin: 0 0 10px; color: var(--muted); font-size: var(--text-13); }
-  .plan-section, .devices-section, .companions-section, .entitlements-section, .retention-section, .voice-section { min-width: 0; }
+  .plan-section, .devices-section, .companions-section, .entitlements-section, .retention-section { min-width: 0; }
   .account-signout { flex: none; }
   .account-card { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--faint); }
   .account-avatar { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--radius-panel); background: var(--surface); border: 1px solid var(--border); font: var(--weight-semibold) var(--text-15) var(--font-human); }
@@ -426,13 +384,8 @@
   .access-status p { margin: 0 0 6px; }
   .retention-options { display: grid; }
   .retention-options label { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); cursor: pointer; }
-  .retention-options input { min-width: 24px; min-height: 24px; margin: 0; accent-color: var(--ink); cursor: pointer; }
+  .retention-options input { min-width: 24px; min-height: 24px; margin: 0; accent-color: var(--ink); cursor: pointer; transform: scale(.67); /* a 24px box drawn at 16px, and its whole row is the label */ }
   .access-note { margin: 10px 0 0; color: var(--muted); font-size: var(--text-12); }
-  .shortcut-capture { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 9px; font-family: var(--font-mono); text-align: left; }
-  .shortcut-capture small { color: var(--muted); font: var(--text-12) var(--font-human); }
-  .shortcut-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 7px; }
-  .restore-shortcut { margin-top: 6px; padding: 3px 0; color: var(--muted); }
-  .shortcut-error { margin: 5px 0 0; color: var(--oxide); font-size: var(--text-12); }
   .device-list { margin: 0; padding: 0; list-style: none; }
   .device-list li { padding: 10px 0; border-top: 1px solid var(--border); }
   .device-list li:first-child { border-top: 0; }
@@ -464,5 +417,4 @@
   .companion-actions button { padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); }
   .companion-actions button:hover:not(:disabled) { background: var(--faint); }
   .revoke-error { margin-top: 5px !important; color: var(--muted); }
-  .quiet { background: transparent; border-color: transparent; }
 </style>

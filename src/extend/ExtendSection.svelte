@@ -85,7 +85,7 @@
 </script>
 <section class="extend" aria-label="Extend">
   <p class="intro settings-intro">Add tools and instructions to your local workspace.</p>
-  {#if !sidebarTab}<SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'unplug',count:counts.plugin}]} onchange={showTab} />{/if}
+  {#if !sidebarTab}<SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'plug-zap',count:counts.plugin}]} onchange={showTab} />{/if}
   <SearchToolbar bind:value={query} label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" filters={tab === 'mcp'} expanded={filtersOpen} controls="mcp-filters" ontoggle={() => filtersOpen = !filtersOpen} oninput={() => page = 0}>
     {#snippet actions()}<Button disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Install'}</Button>{#if tab !== 'mcp'}{#if oncreate}<Button onclick={() => oncreate(tab)}>Create from chat</Button>{/if}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}{/snippet}
   </SearchToolbar>

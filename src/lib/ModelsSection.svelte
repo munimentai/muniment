@@ -386,13 +386,13 @@
   {#if view === 'list'}
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
-    <div class="page-head">
+    <div class="page-head" class:inline={!!sidebarTab}>
     {#if sidebarTab}<p class="settings-intro">{INTROS[tab]}</p>{/if}
     {#if !sidebarTab || tab !== 'routing'}
     <div class="tabs-row">
       {#if !sidebarTab}<SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Decisions',icon:'route'}]} onchange={value => tab = value} />{/if}
-      {#if tab === 'accounts'}<div class="tab-action"><Button icon="plus" variant="primary" onclick={openConnector}>Connect account</Button></div>{/if}
-      {#if tab === 'models'}<div class="tab-action"><Button icon="refresh-cw" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</Button></div>{/if}
+      {#if tab === 'accounts'}<div class="tab-action"><Button icon="plus" aria-label="Connect account" onclick={openConnector}><span class="action-label">Connect account</span></Button></div>{/if}
+      {#if tab === 'models'}<div class="tab-action"><Button icon="refresh-cw" aria-label={discovering ? 'Refreshing models…' : 'Refresh models'} disabled={discovering} onclick={() => load(true)}><span class="action-label">{discovering ? 'Refreshing models…' : 'Refresh models'}</span></Button></div>{/if}
     </div>
     {/if}
     </div>
@@ -428,15 +428,12 @@
         <header>
           <ProviderLogo provider={entry.id} size={18} />
           <h5>{entry.name}</h5>
-          {#if entry.source === 'local' || entry.source === 'custom'}
-            <!-- An endpoint the user points at edits and disconnects like a classifier, with icons at the far right. -->
-            <span class="row-actions">
-              <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => editProvider(entry)}><LucideIcon name="square-pen" size={16} variant="action" /></button>
-              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
-            </span>
-          {:else}
-            <button type="button" class="quiet disconnect" onclick={() => disconnect(entry)}>Disconnect</button>
-          {/if}
+          <!-- Every provider edits and disconnects with icons at the far right. An endpoint edits its
+               address; a key or account provider opens its connect form. -->
+          <span class="row-actions">
+            <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => entry.source === 'local' || entry.source === 'custom' ? editProvider(entry) : chooseProvider(entry.id)}><LucideIcon name="square-pen" size={16} variant="action" /></button>
+            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+          </span>
         </header>
         {#if entry.family && router}
           <ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />
@@ -595,13 +592,18 @@
   .provider-group { display: grid; gap: 4px; padding: 10px 0 6px; border-top: 1px solid var(--border); }
   .provider-group:first-of-type { border-top: 0; padding-top: 0; }
   .page-head { display: grid; gap: 14px; }
+  /* In Settings the page action sits on the intro line, and a narrow page keeps its icon only. */
+  .models { container-type: inline-size; }
+  .page-head.inline { display: flex; align-items: center; gap: 16px; }
+  .page-head.inline .settings-intro { flex: 1; margin: 0; }
+  .page-head.inline .tabs-row { flex: none; }
+  @container (max-width: 560px) { .action-label { display: none; } }
   .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .tab-action { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
   .provider-group header { display: flex; align-items: center; gap: 8px; min-height: 28px; }
   .provider-group h5 { margin: 0; font-size: var(--text-13); font-weight: 600; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .record { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .disconnect { margin-left: auto; min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
   .model-list, .provider-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
   .use { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
   /* The show switch: a hairline track and a muted knob when the model is hidden, a signal track and knob at the right when it shows. §1.2 lists the switch. */

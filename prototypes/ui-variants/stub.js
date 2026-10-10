@@ -262,6 +262,7 @@ export function buildProbeCommandTable(fixtureName) {
   const olderThreadSummaries = history.length
     ? [{ threadId: 'probe-older', title: 'Older correspondence', updatedAt: '2026-07-20T12:00:00Z' }]
     : []
+  let speechInstalled = false
   const browserLanguage = { selected: null, active: null, downloadSize: 9e6, languages: [['en-US', 'installed'], ['de', 'installed'], ['es', 'installed'], ['fr', 'installed'], ['ja', 'installed'], ['pt-BR', 'installed'], ['nl', 'available'], ['ko', 'available']].map(([code, state]) => ({ code, state })) }
   let profileMemory = '# Profile\n\n## Preferred name\n\nAlex\n\n## Instructions\n\nUse clear, concise answers.\n'
   let savedFacts = []
@@ -493,6 +494,11 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'attach_revoke_companion') return null
     unknownCommands.push(command)
     if (command === 'browser_command') return { url: '' }
+    // The speech model: about 700 MB to download, installed on the first Install.
+    if (command === 'parakeet_install_facts') return { totalDownloadBytes: 734003200, requiredFreeBytes: 1610612736, sourceRepository: 'nvidia/parakeet-tdt-0.6b-v2', speechModelLicense: 'CC-BY-4.0', voiceActivityModelLicense: 'MIT' }
+    if (command === 'parakeet_install_status') return { state: speechInstalled ? 'installed' : 'notInstalled' }
+    if (command === 'parakeet_install_start') { speechInstalled = true; return { state: 'installed' } }
+    if (command === 'parakeet_install_cancel') return { state: 'cancelled' }
     // The app language: a few installed languages and one that downloads on demand.
     if (command === 'browser_language' || command === 'browser_language_set') {
       if (command === 'browser_language_set') browserLanguage.selected = payload?.code ?? null
@@ -566,7 +572,7 @@ function fixtureRendered() {
   if (accessFixture) {
     const sections = document.querySelector('.account-sections')
     const headings = Array.from(sections?.querySelectorAll('.settings-heading') ?? [], (heading) => heading.textContent)
-    return ['Plan', 'Devices', 'Phone pairing', 'Connected programs', 'Your access', 'Thread retention', 'Voice shortcut']
+    return ['Plan', 'Devices', 'Phone pairing', 'Connected programs', 'Your access', 'Thread retention']
       .every((heading) => headings.includes(heading))
       && sections.querySelector('.current-device')?.textContent === 'This device'
       && sections.querySelector('.revoked .device-state')?.textContent === 'Revoked'

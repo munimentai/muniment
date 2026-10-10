@@ -14,6 +14,7 @@
   const CompaniesSection = () => import('./CompaniesSection.svelte')
   const ContextSettings = () => import('../activity/ContextSettings.svelte')
   const LanguageSection = () => import('./LanguageSection.svelte')
+  const VoiceSection = () => import('./VoiceSection.svelte')
 
   let {
     tauri,
@@ -83,6 +84,8 @@
       <SettingsSection load={Appearance} properties={{tauri}} />
     {:else if section === 'context'}
       <SettingsSection load={ContextSettings} properties={{tauri}} />
+    {:else if section === 'voice'}
+      <SettingsSection load={VoiceSection} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
     {:else if section === 'language'}
       <SettingsSection load={LanguageSection} properties={{tauri}} />
     {:else if section === 'profile' || section === 'memory'}
@@ -111,7 +114,7 @@
         {#if accountStatus}<p class="support" role="status">{accountStatus}</p>{/if}
         {#if !local}
           <p class="settings-intro">Your account links this desktop to your phone and devices, and holds your plan.</p>
-          <SettingsSection load={AccountSettings} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut, subject, onsignout}} />
+          <SettingsSection load={AccountSettings} properties={{tauri, subject, onsignout}} />
         {/if}
       </section>
     {/if}

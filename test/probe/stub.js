@@ -553,7 +553,7 @@ function fixtureRendered() {
   if (accessFixture) {
     const sections = document.querySelector('.account-sections')
     const headings = Array.from(sections?.querySelectorAll('.settings-heading') ?? [], (heading) => heading.textContent)
-    return ['Plan', 'Devices', 'Phone pairing', 'Connected programs', 'Your access', 'Thread retention', 'Voice shortcut']
+    return ['Plan', 'Devices', 'Phone pairing', 'Connected programs', 'Your access', 'Thread retention']
       .every((heading) => headings.includes(heading))
       && sections.querySelector('.current-device')?.textContent === 'This device'
       && sections.querySelector('.revoked .device-state')?.textContent === 'Revoked'

@@ -90,7 +90,7 @@
       <div class="tree" class:expanded={!!branch}>
         <div class="branches">
           {#each [['mcp', 'MCPs'], ['plugin', 'Plugins'], ['skill', 'Skills']] as [kind, label]}
-            <button type="button" data-branch={kind} aria-expanded={branch === kind} onclick={() => expand(kind)} onpointerenter={event => hover(kind, event)} onpointerleave={() => clearTimeout(hoverTimer)} onkeydown={event => { if (event.key === 'ArrowRight') { event.preventDefault(); void expand(kind) } }}>{#if kind === 'mcp'}<McpIcon />{:else}<LucideIcon name={kind === 'skill' ? 'pencil-sparkles' : 'unplug'} variant="action" size={16} />{/if}<span>{label}</span><LucideIcon name="chevron-right" size={14} variant="action" /></button>
+            <button type="button" data-branch={kind} aria-expanded={branch === kind} onclick={() => expand(kind)} onpointerenter={event => hover(kind, event)} onpointerleave={() => clearTimeout(hoverTimer)} onkeydown={event => { if (event.key === 'ArrowRight') { event.preventDefault(); void expand(kind) } }}>{#if kind === 'mcp'}<McpIcon />{:else}<LucideIcon name={kind === 'skill' ? 'pencil-sparkles' : 'plug-zap'} variant="action" size={16} />{/if}<span>{label}</span><LucideIcon name="chevron-right" size={14} variant="action" /></button>
           {/each}
         </div>
         {#if branch}<div class="submenu" aria-label={branch === 'mcp' ? 'Available MCPs' : branch === 'plugin' ? 'Available plugins' : 'Available skills'}>

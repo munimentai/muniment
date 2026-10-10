@@ -18,6 +18,8 @@ window.__variantReady = async () => {
     ;(await until(() => document.querySelector('#sidebar .side-foot .side-action')))?.click()
     const rows = '#sidebar nav[aria-label="Settings sections"] button'
     await until(() => document.querySelector(rows))
-    ;[...document.querySelectorAll(rows)].find(b => b.textContent.trim() === 'Appearance')?.click()
+    // A hash names the page to open, such as preferences.html#Voice.
+    const page = decodeURIComponent(location.hash.slice(1)) || 'Appearance'
+    ;[...document.querySelectorAll(rows)].find(b => b.textContent.trim() === page)?.click()
   }
 }

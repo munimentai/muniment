@@ -1451,7 +1451,7 @@ describe('workspace composer entry', () => {
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     // Pages sit under group headings: Models, Extend, Preferences, Personal and Workspace.
     expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Models', 'Extend', 'Preferences', 'Personal', 'Workspace'])
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Voice', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
     expect(within(nav).getByRole('button', { name: 'Model providers' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
@@ -4653,7 +4653,7 @@ describe('voice dictation', () => {
     const composer = await findReadyWorkspaceComposer()
     await fireEvent.keyDown(composer, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
     expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
-    const dialog = await openSettings('Account')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
 
     await fireEvent.click(capture)
@@ -4666,7 +4666,7 @@ describe('voice dictation', () => {
     await waitFor(() => expect(localStorage.getItem('muniment.voice-shortcut')).toBe('Control+Alt+K'))
     expect(registerGlobalShortcut).toHaveBeenCalledWith('Control+Alt+K', expect.any(Function))
     expect(unregisterGlobalShortcut).toHaveBeenCalledWith('Control+Shift+Space')
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Alt+K'))
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Voice' }).find((button) => button.hasAttribute('aria-keyshortcuts'))).toHaveAttribute('aria-keyshortcuts', 'Control+Alt+K'))
 
     const restore = within(dialog).getByRole('button', { name: 'Restore default' })
     await waitFor(() => expect(restore).toBeEnabled())
@@ -4678,7 +4678,7 @@ describe('voice dictation', () => {
   it('captures the artifact rail chord without toggling the rail', async () => {
     render(App)
     const railToggle = await screen.findByRole('button', { name: 'Artifacts' })
-    const dialog = await openSettings('Account')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     const mac = navigator.platform.startsWith('Mac')
 
@@ -4696,7 +4696,7 @@ describe('voice dictation', () => {
       globalShortcutHandler = handler
     })
     render(App)
-    const dialog = await openSettings('Account')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -4706,13 +4706,13 @@ describe('voice dictation', () => {
     expect(dialog).not.toHaveTextContent('SecretApp')
     expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
     expect(unregisterGlobalShortcut).not.toHaveBeenCalledWith('Control+Shift+Space')
-    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+    expect(screen.getAllByRole('button', { name: 'Voice' }).find((button) => button.hasAttribute('aria-keyshortcuts'))).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
   })
 
   it('keeps the registered and displayed shortcut when persistence fails', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('private storage detail', 'QuotaExceededError') })
     const view = render(App)
-    const dialog = await openSettings('Account')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -4722,7 +4722,7 @@ describe('voice dictation', () => {
     expect(dialog).not.toHaveTextContent('private storage detail')
     expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space']))
     expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+    expect(screen.getAllByRole('button', { name: 'Voice' }).find((button) => button.hasAttribute('aria-keyshortcuts'))).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
     setItem.mockRestore()
     view.unmount()
   })
@@ -4733,7 +4733,7 @@ describe('voice dictation', () => {
       registeredShortcuts.delete(shortcut)
     })
     render(App)
-    const dialog = await openSettings('Account')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -4743,7 +4743,7 @@ describe('voice dictation', () => {
     expect(dialog).not.toHaveTextContent('private failure')
     expect(registeredShortcuts).toEqual(new Set(['Control+Shift+Space', 'Control+Alt+K']))
     expect(localStorage.getItem('muniment.voice-shortcut')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
+    expect(screen.getAllByRole('button', { name: 'Voice' }).find((button) => button.hasAttribute('aria-keyshortcuts'))).toHaveAttribute('aria-keyshortcuts', 'Control+Shift+Space')
   })
 
   it('disables rebinding until deferred startup registration settles', async () => {
@@ -4754,7 +4754,7 @@ describe('voice dictation', () => {
       globalShortcutHandler = handler
     })
     render(App)
-    await openSettings('Account')
+    await openSettings('Voice')
     const capture = within(screen.getByRole('dialog', { name: 'Settings' })).getByRole('button', { name: /Change voice shortcut/ })
     expect(capture).toBeDisabled()
     await fireEvent.click(capture)
@@ -4780,7 +4780,7 @@ describe('voice dictation', () => {
         registeredShortcuts.delete(shortcut)
       })
     }
-    const dialog = await openSettings('Account')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -7707,7 +7707,6 @@ describe('signed-in access popover', () => {
       'companions-heading',
       'entitlements-heading',
       'retention-heading',
-      'voice-heading',
     ])
     expect(content.querySelector('.entitlements-section')).toHaveTextContent('Your admins set access.')
   })

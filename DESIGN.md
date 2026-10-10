@@ -130,7 +130,7 @@ Pins and archives persist on the device. Projects group ordinary chats and autom
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under mono group headings: Back to threads where New thread sits,
-then Models, Extend, Preferences (Appearance, Context, Language), Personal (Profile, Memory) and Workspace (Storage). Each page has a Lucide icon and no title of its own, and opens with a muted 15px intro, its actions right-aligned under it, then semibold sentence-case headings and no dividers.
+then Models, Extend, Preferences (Appearance, Context, Voice, Language), Personal (Profile, Memory) and Workspace (Storage). Each page has a Lucide icon and no title of its own, and opens with a muted 15px intro, its actions right-aligned under it, then semibold sentence-case headings and no dividers.
 The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
 section across the thread and rail; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
@@ -211,7 +211,7 @@ component. Hidden features leave no controls, Settings entries or empty space.
 Extend uses the shared Settings panel. MCP servers, Skills and Plugins are
 three sidebar pages of one component, and `SettingsTabs` draws its pill tabs only outside Settings.
 Their sidebar icons are the MCP mark,
-`pencil-sparkles` and `unplug`, and catalog cards keep the MCP mark. Search, category, installation and sort filters
+`pencil-sparkles` and `plug-zap`, the composer menu uses the same three, `unplug` means disconnect only, and catalog cards keep the MCP mark. Search, category, installation and sort filters
 search names, descriptions, publishers and categories in the official remote-server catalog.
 Details open an in-app dialog with descriptions, connection details and provider links.
 Directory relays and example servers stay out. Popularity uses the source catalog score.
