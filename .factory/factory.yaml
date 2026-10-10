@@ -50,11 +50,13 @@ gates:
       - "node --test test/ci-routing.node.mjs"
       - "npm run browser-control"
       - "cd src-tauri/reader && go test ./..."
+      # The sandbox kernel has no inet_diag, so the test that reads real socket
+      # owners through NETLINK_SOCK_DIAG runs only in CI.
       - >-
         CARGO_HOME=$HOME/.cargo cargo test --manifest-path src-tauri/Cargo.toml --locked
         --package muniment-desktop-integration --package muniment-cli --package muniment-acp
         --package muniment-runtime --features muniment-desktop-integration/keyring
-        -- --test-threads=1
+        -- --test-threads=1 --skip real_diagnostic_selects_the_browser_client_half
     timeout_s: 3600
   # Set explicitly, so a change of the contract defaults leaves these gates as they are.
   complexity:
