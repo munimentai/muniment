@@ -32,7 +32,8 @@
 
 <div class="project-row" bind:this={row}>
   <button class="project-title" aria-label={label} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span></button>
-  <button class="project-control" aria-label={newLabel} {disabled} onclick={onnew}><LucideIcon name="square-pen" size={14} /></button>
+  <!-- A project folder starts a thread with the pencil. The Agents, Artifacts and Projects rows create with the plus. -->
+  <button class="project-control" aria-label={newLabel} {disabled} onclick={onnew}><LucideIcon name={icon === 'folder' ? 'square-pen' : 'plus'} size={14} /></button>
   <!-- A section with nothing in it has nothing to expand, so it shows no chevron. -->
   {#if collapsible}<button class="project-control" class:visible={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`} aria-expanded={expanded} bind:this={trigger} onclick={ontoggle}><LucideIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={14} /></button>{/if}
   {#if open}

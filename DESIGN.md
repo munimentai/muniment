@@ -151,8 +151,8 @@ Both share one geometry, a one-pixel frame and a 35px title band, so a switch mo
 and draws the thread and rail as `surface` cards clipped `--card-ring` inside their boxes with a hairline. Frameless fills it with `border` seams, a sidebar panel a step toward `ink`, and flat panels. The update control is a circular
 down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
 `Update` on hover or focus after a signed download. Click installs and restarts.
-The composer band is one mono row under the composer. The vertical ellipsis,
-model selector and capacity control share their height and spacing. The ellipsis menu
+The composer band is one mono row under the composer. The plus,
+model selector and capacity control share their height and spacing. The plus menu
 opens with Add files and folders. Voice sits beside the send control. The band's one action control sits at its right
 end: absent while the draft is empty, an ink up-arrow button once the draft has
 text, and the same button with a filled stop square while a reply is in flight. Enter sends. A
@@ -224,7 +224,7 @@ A sliders icon reveals filters. Custom opens a dialog and attempts to load the s
 Package review separates instructions, MCP servers and executable code.
 Icon notices live in the bundled third-party notices, outside the catalog.
 
-The horizontal composer ellipsis sits first at the left and matches the model and capacity controls.
+The composer plus sits first at the left and matches the model and capacity controls. The Agents, Artifacts and Projects rows reveal a plus on hover that creates one.
 It has a background only on hover or keyboard focus.
 Its three branches are MCPs, Plugins and Skills, followed by Manage extensions.
 The paperclip opens the OS picker directly. macOS accepts multiple files and folders together. Attachment chips are one 28px row: icon, name with extension, hover-only X. Folder paths reach local tools. All composer panels share one

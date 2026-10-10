@@ -83,7 +83,7 @@
 </script>
 <svelte:window onkeydown={event => { if (open) keys(event) }} onpointerdown={event => { if (open && !rootElement?.contains(event.target)) close() }} />
 <div class="extensions" bind:this={rootElement} role="group" aria-label="Turn extensions">
-  {#if !active}<button type="button" class="trigger" bind:this={trigger} aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} onclick={() => openComposerPanel(open ? null : 'extend')}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>{/if}
+  {#if !active}<button type="button" class="trigger" bind:this={trigger} aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} onclick={() => openComposerPanel(open ? null : 'extend')}><LucideIcon name="plus" variant="action" size={14} /></button>{/if}
   {#if open}
     <div data-composer-panel data-panel="extend" data-panel-variant="overlay" class="menu" role="dialog" tabindex="-1" aria-label="Extensions for this turn">
       <button type="button" class="files" onclick={() => { close(); onfiles?.() }}><LucideIcon name="paperclip" variant="action" size={16} /><span>Add files and folders</span></button>
