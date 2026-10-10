@@ -78,7 +78,7 @@ it('lists each connected classifier with its logo and edits it in place, keeping
   const renamed = { ...connected, classifier_connections: [{ ...connection, name: 'Kev 4B', connection: { ...connection.connection, model: 'kev-4b' } }] }
   const tauri = { invoke: vi.fn(async command => command === 'model_router_update_classifier' ? renamed : command === 'model_router_settings' ? connected : inventory) }
   render(ModelsSection, { tauri, inventory, initialTab: 'accounts' })
-  const row = (await screen.findByText('Kev local')).closest('.account-row')
+  const row = (await screen.findByText('Kev local')).closest('.row')
   expect(row.querySelector('.provider-logo, svg, img')).not.toBeNull()
   // The row's actions are icons with names, and no words.
   expect(screen.getByRole('button', { name: 'Edit Kev local' }).querySelector('[data-icon="square-pen"]')).not.toBeNull()

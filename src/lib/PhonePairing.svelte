@@ -1,6 +1,8 @@
 <script>
   import { onDestroy, onMount, tick } from 'svelte'
   import PopupClose from './PopupClose.svelte'
+  import Row from './ui/Row.svelte'
+  import Button from './ui/Button.svelte'
   import { pairingRequests } from './pairing-requests.js'
   import { dialogDismiss } from './dialog-dismiss.js'
   import {
@@ -191,10 +193,11 @@
 
 <section class="pairing-section" aria-labelledby="pairing-heading">
   <h3 id="pairing-heading" class="settings-heading">Phone pairing</h3>
+  <div class="pairing-card">
   {#if pairing.name === 'loading'}
     <p class="access-status" aria-live="polite">Loading phone pairing…</p>
   {:else if pairing.name === 'error'}
-    <div class="access-status" role="alert"><p>Phone pairing could not be loaded.</p><button type="button" onclick={loadStatus}>Try again</button></div>
+    <div role="alert"><Row description="Phone pairing could not be loaded."><Button onclick={loadStatus}>Try again</Button></Row></div>
   {:else if pairing.pair}
     {#if revoking}
       <div class="pairing-confirm" role="group" aria-label="Revoke this phone?">
@@ -206,15 +209,18 @@
         </div>
       </div>
     {:else}
-      <p class="paired-phone">Paired phone <span>{pairing.pair.mobile_device_id}</span></p>
-      <time datetime={pairing.pair.created_at}>Paired {lastActive(pairing.pair.created_at)}</time>
-      <button type="button" class="pairing-revoke" onclick={() => { revoking = true; error = '' }}>Revoke phone</button>
+      <Row title="Paired phone" meta={pairing.pair.mobile_device_id}>
+        {#snippet detail()}<time datetime={pairing.pair.created_at}>Paired {lastActive(pairing.pair.created_at)}</time>{/snippet}
+        <Button onclick={() => { revoking = true; error = '' }}>Revoke phone</Button>
+      </Row>
     {/if}
   {:else}
-    <p class="empty-grant">No phone is paired.</p>
+    <Row title="Phone" description="No phone is paired.">
+      <Button disabled={requesting} onclick={requestChallenge}>Pair a phone</Button>
+    </Row>
     {#if error && !open}<p class="revoke-error" role="alert">{error}</p>{/if}
-    <button type="button" disabled={requesting} onclick={requestChallenge}>Pair a phone</button>
   {/if}
+  </div>
 </section>
 
 {#if open}
@@ -242,21 +248,19 @@
 {/if}
 
 <style>
-  /* A heading, then the paired phone or Pair a phone, as on every Settings page. */
-  .pairing-section { display: grid; justify-items: start; gap: 6px; }
-  .pairing-section > h3 { margin: 0 0 4px; }
-  .access-status, .empty-grant { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .access-status p { margin: 0 0 6px; }
-  .paired-phone { margin: 0; font-size: var(--text-13); }
-  .paired-phone span, time, .expiry { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  time { display: block; margin-top: 3px; }
-  .pairing-revoke { margin-top: 8px; }
+  /* A heading, then the paired phone or Pair a phone in one card row, as on every Settings page. */
+  .pairing-section { display: grid; gap: 10px; }
+  .pairing-section > h3 { margin: 0; }
+  .pairing-card { display: grid; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .access-status { margin: 0; padding: 12px 0; color: var(--muted); font-size: var(--text-13); }
+  time, .expiry { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .pairing-confirm { padding: 12px 0; }
   .pairing-confirm { color: var(--ink); font-size: var(--text-12); }
   .pairing-confirm p { margin: 0; }
   .pairing-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 6px; }
   .pairing-actions button { padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); }
   .pairing-actions button:hover:not(:disabled) { background: var(--faint); }
-  .revoke-error { margin-top: 5px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .revoke-error { margin: 0; padding: 0 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; min-height: 24px; min-width: 24px; }
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }

@@ -1582,7 +1582,7 @@ describe('workspace composer entry', () => {
     expect(within(dialog).getByRole('heading', { name: 'Popular & Subscriptions' })).toBeInTheDocument()
     expect(within(dialog).getByRole('heading', { name: 'All providers' })).toBeInTheDocument()
     // The featured eight lead, in the SPEC order.
-    const popular = within(dialog).getByRole('heading', { name: 'Popular & Subscriptions' }).nextElementSibling
+    const popular = within(dialog).getByRole('region', { name: 'Popular & Subscriptions' })
     expect([...popular.querySelectorAll('button')].map((button) => button.querySelector('span:not(.logo)').textContent)).toEqual(['Anthropic', 'OpenAI', 'xAI', 'Google', 'OpenRouter', 'Ollama', 'LM Studio', 'Custom OpenAI-compatible endpoint', 'Meta Muse', 'Devin', 'Kimi', 'vLLM'])
 
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Ollama/ }))

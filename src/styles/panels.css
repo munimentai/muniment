@@ -2,6 +2,9 @@
 [data-panel] {
   --panel-control-inset: 12px;
   --panel-control-size: 28px;
+  /* Every full panel body pads and spaces its sections alike. See ui/PanelPage. */
+  --page-pad: 24px;
+  --page-gap: 28px;
   min-width: 0;
   min-height: 0;
   background: var(--surface);
@@ -85,7 +88,7 @@ button:has(> svg[data-icon="x"]) > svg { width: 16px; height: 16px; }
 }
 /* A scrollbar rests on its box's right edge, so a card's scrollers step inside the ring and keep their content in place. */
 :root[data-frame="framed"] .workspace > [data-panel] .thread { width: calc(100% - var(--card-ring)); padding-right: calc(36px - var(--card-ring)); }
-:root[data-frame="framed"] .workspace > [data-panel] .settings-content { margin-right: var(--card-ring); padding-right: calc(36px - var(--card-ring)); }
+:root[data-frame="framed"] .workspace > [data-panel] .panel-page { margin-right: var(--card-ring); padding-right: calc(var(--page-pad) - var(--card-ring)); }
 /* The native browser view ignores CSS clipping, so its host stays inside the card. */
 :root[data-frame="framed"] .workspace > [data-panel] .browser-host { margin: 0 var(--card-ring) var(--card-ring); }
 

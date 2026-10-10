@@ -1,5 +1,8 @@
 <script>
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
+  import PageHead from './ui/PageHead.svelte'
+  import Group from './ui/Group.svelte'
+  import Row from './ui/Row.svelte'
   import { onMount } from 'svelte'
   import { VIBRANT_THEMES, DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
   import RunMark from './RunMark.svelte'
@@ -80,14 +83,17 @@
   }
 </script>
 
-<section aria-labelledby="appearance-heading">
-  <p class="settings-intro">Choose how Muniment looks on this device.</p>
-  <h3 id="appearance-heading" class="section-heading settings-heading">Theme</h3>
+<section class="appearance" aria-label="Appearance">
+  <PageHead intro="Choose how Muniment looks on this device." />
+  <Group heading="Theme">
+  <Row title="Mode" description="Follow the system, or keep one.">
   <div class="theme-options" role="group" aria-label="Mode">
     {#each modeOptions as option}
       <button type="button" aria-pressed={theme.mode === option[1]} onclick={() => chooseMode(option[1])}>{option[0]}</button>
     {/each}
   </div>
+  </Row>
+  <Row title="Frame" description="Framed sets each panel as a card. Frameless joins the panels with hairlines.">
   <div class="frame-options" role="group" aria-label="Frame">
     {#each FRAME_OPTIONS as [id, label] (id)}
       <button type="button" class="frame-pick" aria-pressed={frame === id} onclick={() => { frame = commitFrame(id) }}>
@@ -96,6 +102,7 @@
       </button>
     {/each}
   </div>
+  </Row>
   <details class="theme-browser"><DisclosureSummary>Browse color schemes</DisclosureSummary>
   <div class="themes" role="group" aria-label="Color schemes">
     {#each themeGroups as [label, row]}
@@ -111,15 +118,17 @@
     {/each}
   </div>
   </details>
+  </Group>
 
-  <div class="type-section" role="group" aria-labelledby="type-heading">
-  <h3 id="type-heading" class="section-heading settings-heading">Type</h3>
+  <Group heading="Type">
+  <Row title="Size" description="The body size every register scales from.">
   <div class="type-size" role="group" aria-label="Size">
     <button type="button" aria-label="Smaller type" aria-keyshortcuts={typeSizeShortcut('smaller')} disabled={type.step <= SIZE_STEP_MIN} onclick={() => step(-1)}>Smaller <kbd>{typeSizeShortcutLabel('smaller')}</kbd></button>
     <span class="type-readout" role="status">{bodySize(type.step)} px body</span>
     <button type="button" aria-label="Larger type" aria-keyshortcuts={typeSizeShortcut('larger')} disabled={type.step >= SIZE_STEP_MAX} onclick={() => step(1)}>Larger <kbd>{typeSizeShortcutLabel('larger')}</kbd></button>
     <button type="button" class="type-reset" aria-label="Default type size" aria-keyshortcuts={typeSizeShortcut('default')} disabled={type.step === 0} onclick={() => step(0)}>Default <kbd>{typeSizeShortcutLabel('default')}</kbd></button>
   </div>
+  </Row>
   {#each registers as [register, label] (register)}
     <div class="type-font" role="group" aria-label="{label} font">
       <details class="font-picker">
@@ -135,25 +144,25 @@
       </details>
     </div>
   {/each}
-  </div>
+  </Group>
 
-  <div class="mark-section" role="group" aria-labelledby="mark-heading">
-  <h3 id="mark-heading" class="section-heading settings-heading">Thinking indicator</h3>
+  <Group heading="Thinking indicator">
+  <Row title="Style" description="The mark a reply shows while it works.">
   <div class="theme-options" role="group" aria-label="Thinking indicator">
     {#each MARK_OPTIONS as [id, label] (id)}
       <button type="button" aria-pressed={mark === id} onclick={() => { mark = commitMark(id) }}>{label}</button>
     {/each}
   </div>
+  </Row>
   <div class="mark-preview" aria-label="Thinking indicator preview">
     <RunMark stage={previewStage} {mark} size={40} />
   </div>
-  </div>
+  </Group>
 </section>
 
 
 <style>
-  .settings-intro { margin: 0 0 22px; }
-  .section-heading { margin: 0 0 8px; }
+  .appearance { display: grid; gap: var(--page-gap); }
   .theme-options { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); }
   .theme-options button { position: relative; font: inherit; font-size: var(--text-13); border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; cursor: pointer; }
   .theme-options button + button { border-left: 1px solid var(--border); }
@@ -162,7 +171,7 @@
   .theme-options button:hover { background: var(--faint); color: var(--ink); }
   .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
   /* Each frame pick sketches its layout in the current theme: a title band, the sidebar with three lines, and the thread. */
-  .frame-options { display: flex; gap: 8px; margin-top: 12px; }
+  .frame-options { display: flex; gap: 8px; }
   .frame-pick { display: grid; justify-items: start; gap: 6px; padding: 6px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); cursor: pointer; }
   .frame-pick:hover, .frame-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
   .frame-sketch { display: grid; grid-template-columns: 32% minmax(0, 1fr); grid-template-rows: 9px minmax(0, 1fr); box-sizing: border-box; width: 112px; height: 68px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-chip); }
@@ -176,10 +185,9 @@
   .frame-sketch[data-sketch="frameless"] .sketch-side { background-color: var(--frame-sidebar-panel); }
   .frame-sketch[data-sketch="frameless"] .sketch-main { background: var(--surface); }
   /* The light themes under one label and the dark under another, four to a row, a swatch of each theme's paper and surface beside its name. */
-  .theme-browser { margin-top: 14px; }
-  .mark-section { margin-top: 28px; }
-  .mark-preview { display: flex; align-items: center; min-height: 64px; margin-top: 10px; padding: 0 16px; max-width: 560px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
-  .themes { margin-top: 10px; max-width: 560px; }
+  .theme-browser { padding: 12px 0; font-size: var(--text-13); }
+  .mark-preview { display: flex; align-items: center; min-height: 64px; }
+  .themes { margin-top: 10px; }
   .group-label { margin: 10px 0 4px; }
   .theme-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .theme-pick { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }
@@ -196,7 +204,6 @@
   .swatch-card { position: relative; }
   .swatch-signal { width: 8px; background: var(--signal); }
   /* Type: the size row is three quiet buttons around a mono readout, and each register is one search over the installed families with the shipped family first. */
-  .type-section { margin-top: 28px; max-width: 560px; }
   .type-size { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .type-size button { display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 10px; cursor: pointer; }
   .type-size button:hover:not(:disabled) { background: var(--faint); }
@@ -204,11 +211,11 @@
   .type-size kbd { font: var(--text-12) var(--font-mono); color: var(--muted); }
   .type-readout { min-width: 96px; text-align: center; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .type-reset { margin-left: 4px; }
-  .type-font { margin-top: 10px; }
-  .font-picker { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 10px; }
-  .font-picker summary { cursor: pointer; font-size: var(--text-13); overflow-wrap: anywhere; }
-  .font-current { float: right; max-width: 65%; color: var(--muted); }
-  .font-picker[open] summary { margin-bottom: 10px; }
+  .type-font { min-width: 0; }
+  .font-picker { padding: 12px 0; }
+  .font-picker > :global(summary) { cursor: pointer; font-size: var(--text-13); font-weight: 600; overflow-wrap: anywhere; }
+  .font-current { float: right; max-width: 65%; color: var(--muted); font-weight: 400; }
+  .font-picker[open] > :global(summary) { margin-bottom: 10px; }
   .font-search { box-sizing: border-box; width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); }
   .font-search:focus { outline: none; border-color: var(--muted); }
   .font-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin: 6px 0 0; }

@@ -3,6 +3,9 @@
   import ChoiceField from '../lib/ui/ChoiceField.svelte'
   import SearchToolbar from '../lib/ui/SearchToolbar.svelte'
   import Button from '../lib/ui/Button.svelte'
+  import PageHead from '../lib/ui/PageHead.svelte'
+  import Group from '../lib/ui/Group.svelte'
+  import Row from '../lib/ui/Row.svelte'
   import PopupClose from '../lib/PopupClose.svelte'
   import { dialogDismiss } from '../lib/dialog-dismiss.js'
   import SettingsTabs from '../lib/SettingsTabs.svelte'
@@ -84,11 +87,11 @@
   function update(item) { form = {}; source = item.source; replaceId = item.id; preview = null; error = '' }
 </script>
 <section class="extend" aria-label="Extend">
-  <p class="intro settings-intro">Add tools and instructions to your local workspace.</p>
-  {#if !sidebarTab}<SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'plug-zap',count:counts.plugin}]} onchange={showTab} />{/if}
-  <SearchToolbar bind:value={query} label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" filters={tab === 'mcp'} expanded={filtersOpen} controls="mcp-filters" ontoggle={() => filtersOpen = !filtersOpen} oninput={() => page = 0}>
+  <PageHead intro="Add tools and instructions to your local workspace.">
     {#snippet actions()}<Button disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Install'}</Button>{#if tab !== 'mcp'}{#if oncreate}<Button onclick={() => oncreate(tab)}>Create from chat</Button>{/if}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}{/snippet}
-  </SearchToolbar>
+  </PageHead>
+  {#if !sidebarTab}<SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'plug-zap',count:counts.plugin}]} onchange={showTab} />{/if}
+  <SearchToolbar bind:value={query} label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" filters={tab === 'mcp'} expanded={filtersOpen} controls="mcp-filters" ontoggle={() => filtersOpen = !filtersOpen} oninput={() => page = 0} />
   {#if tab === 'mcp' && filtersOpen}
     <div class="filters" id="mcp-filters">
       <ChoiceField label="Category" inline={false} value={category} options={[{value:'',label:'All categories'}, ...categories.map(value => ({value,label:categoryLabel(value)}))]} onchange={value => { category = value; page = 0 }} />
@@ -128,16 +131,23 @@
       {#if error}<p role="alert">{error}</p>{/if}
     </dialog>
   {/if}
-  {#if tab !== 'mcp' && installed.length}
-    <h4>Installed</h4>
-    <div class="list" aria-label="Installed extensions">{#each installed as item (item.id)}<article class="entry">
-      <div class="head"><strong>{#if item.kind === 'mcp'}<ProviderIcon entry={item} size={24} />{/if}{item.name}</strong><Toggle checked={item.enabled !== false} label={`Use ${item.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: item.id, enabled })} /></div>
-      <p>{item.description || (item.kind === 'mcp' ? item.definition.url || item.definition.command : item.source)}</p>
-      {#if item.lastCheck}<p>Last connection test: {item.lastCheck.status}. {item.lastCheck.tools} tools.</p>{/if}
-      {#if item.kind === 'plugin'}{#each Object.entries(item.servers || {}) as [serverName, definition]}<div class="actions"><McpIcon /><span>{serverName}</span><button type="button" disabled={busy} onclick={() => connection({id: `${item.id}:${serverName}`,name: serverName}, 'test')}>Test connection</button>{#if definition.url}<button type="button" disabled={busy} onclick={() => connection({id: `${item.id}:${serverName}`,name: serverName}, 'auth')}>Sign in</button>{/if}</div>{/each}{/if}
-      <div class="actions">{#if item.kind === 'mcp'}<button type="button" disabled={busy} onclick={() => connection(item, 'test')}>Test connection</button>{#if item.definition.url}<button type="button" disabled={busy} onclick={() => connection(item, 'auth')}>Sign in</button>{/if}<button type="button" disabled={busy} onclick={() => { add(item); config = JSON.stringify(item.definition, null, 2) }}>Configure</button>{:else}<button type="button" disabled={busy} onclick={() => work(() => call('open_folder', { id: item.id }))}>Open folder</button><button type="button" disabled={busy} onclick={() => update(item)}>Check for update</button>{#if item.previous}<button type="button" disabled={busy} onclick={() => mutate('rollback', { id: item.id })}>Restore previous version</button>{/if}{/if}<button type="button" disabled={busy} onclick={() => mutate('remove', { id: item.id })}>Uninstall</button></div>
-    </article>{/each}</div>
-  {:else if tab !== 'mcp'}<p>No {tab === 'skill' ? 'skills' : 'plugins'} installed. Add a GitHub repository, local folder, or archive to get started.</p>{/if}
+  {#if tab !== 'mcp'}
+    <Group heading="Installed" count={installed.length}>
+      {#each installed as item (item.id)}
+        <Row title={item.name} description={item.description || (item.kind === 'mcp' ? item.definition.url || item.definition.command : item.source)}>
+          {#snippet lead()}{#if item.kind === 'mcp'}<ProviderIcon entry={item} size={24} />{/if}{/snippet}
+          {#snippet detail()}
+            {#if item.lastCheck}<p class="note">Last connection test: {item.lastCheck.status}. {item.lastCheck.tools} tools.</p>{/if}
+            {#if item.kind === 'plugin'}{#each Object.entries(item.servers || {}) as [serverName, definition]}<div class="actions"><McpIcon /><span>{serverName}</span><button type="button" disabled={busy} onclick={() => connection({id: `${item.id}:${serverName}`,name: serverName}, 'test')}>Test connection</button>{#if definition.url}<button type="button" disabled={busy} onclick={() => connection({id: `${item.id}:${serverName}`,name: serverName}, 'auth')}>Sign in</button>{/if}</div>{/each}{/if}
+            <div class="actions">{#if item.kind === 'mcp'}<button type="button" disabled={busy} onclick={() => connection(item, 'test')}>Test connection</button>{#if item.definition.url}<button type="button" disabled={busy} onclick={() => connection(item, 'auth')}>Sign in</button>{/if}<button type="button" disabled={busy} onclick={() => { add(item); config = JSON.stringify(item.definition, null, 2) }}>Configure</button>{:else}<button type="button" disabled={busy} onclick={() => work(() => call('open_folder', { id: item.id }))}>Open folder</button><button type="button" disabled={busy} onclick={() => update(item)}>Check for update</button>{#if item.previous}<button type="button" disabled={busy} onclick={() => mutate('rollback', { id: item.id })}>Restore previous version</button>{/if}{/if}<button type="button" disabled={busy} onclick={() => mutate('remove', { id: item.id })}>Uninstall</button></div>
+          {/snippet}
+          <Toggle checked={item.enabled !== false} label={`Use ${item.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: item.id, enabled })} />
+        </Row>
+      {:else}
+        <p>No {tab === 'skill' ? 'skills' : 'plugins'} installed. Add a GitHub repository, local folder, or archive to get started.</p>
+      {/each}
+    </Group>
+  {/if}
   {#if tab === 'mcp'}
     {#snippet cards(entries, label)}
       <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}{@const connected = state.items.find(item => item.kind === 'mcp' && (item.source ? item.source === entry.source : `custom:${item.id}` === entry.source))}<article class="entry catalog-card" class:connected={!!connected}>
@@ -148,12 +158,12 @@
       </article>{/each}</div>
     {/snippet}
     {#if featured.length}
-      <h4>Popular MCPs</h4>
-      {@render cards(featured, 'Popular MCP servers')}
-      <h4>More MCPs</h4>
+      <Group heading="Popular MCPs" plain>{@render cards(featured, 'Popular MCP servers')}</Group>
     {/if}
-    {@render cards(results, 'MCP catalog')}
-    {#if !filtered.length}<p>No servers match these filters.</p>{/if}
+    <Group heading={featured.length ? 'More MCPs' : ''} label="MCP servers" plain>
+      {@render cards(results, 'MCP catalog')}
+      {#if !filtered.length}<p>No servers match these filters.</p>{/if}
+    </Group>
     {#if remaining.length > 30}<nav class="pages" aria-label="Catalog pages"><button type="button" disabled={page === 0} onclick={() => page--}>Previous</button><span>Page {page + 1} of {Math.ceil(remaining.length / 30)}</span><button type="button" disabled={(page + 1) * 30 >= remaining.length} onclick={() => page++}>Next</button></nav>{/if}
   {/if}
 </section>
@@ -210,7 +220,7 @@
   .detail-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
   button.details-link { padding: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px; }
 
-  .extend { display: grid; gap: 14px; min-width: 0; } .intro { color: var(--muted); } p, h4 { margin: 0; } .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; }  label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); } .list { display: grid; gap: 8px; } .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
+  .extend { display: grid; gap: var(--page-gap); min-width: 0; } .note { margin: 4px 0 0; color: var(--muted); font-size: var(--text-12); } p, h4 { margin: 0; } .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; }  label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); }  .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
   .extend { container-type: inline-size; }
   button { font-family: var(--font-human); border: 0; border-radius: var(--radius-control); padding: 5px 9px; color: var(--ink); background: var(--faint); cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }

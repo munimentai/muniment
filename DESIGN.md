@@ -99,7 +99,7 @@ writes, raises its front on the hind hip with both feet down and curls its trunk
 ## Grammar
 
 Layout is sidebar, thread, and one rail column for workspace tabs or the optional Record panel (⌘K).
-Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
+Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. The Agents, Artifacts and Projects catalogs share PanelPage and PageHead with Settings, so an intro, not a title, leads each. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
 messages sit right in `faint` bubbles at radius 10. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
 36px gutter, and render as Markdown from the first token. The composer keeps
@@ -130,12 +130,12 @@ Pins and archives persist on the device. Projects group ordinary chats and autom
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under mono group headings: Back to threads where New thread sits,
-then Models, Extend, Preferences (Appearance, Context, Voice, Language), Personal (Profile, Memory) and Workspace (Storage). Each page has a Lucide icon and no title of its own, and opens with a muted 15px intro, its actions right-aligned under it, then semibold sentence-case headings and no dividers.
+then Models, Extend, Preferences (Appearance, Context, Voice, Language), Personal (Profile, Memory) and Workspace (Storage). Each page has a Lucide icon and no title of its own, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: a muted 15px intro with its actions at the right, then semibold headings over bordered cards of rows.
 The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
 section across the thread and rail; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it. Back to threads or Escape returns focus to the opener.
-Companies leads with New company, shows each company as a card with Open, Rename and Delete, where Delete asks once and names it, then Sources and the sample company,
+Companies lists each company as a row with Open, Rename and Delete, where Delete asks once and names it, and New company last, then Sources and the sample company,
 which open the record panel, and Backups. Account leads with the signed-in card, Sign out and the plan tiers. Memory carries Recall, the saved facts and Export.
 Model providers, Model list and Decision models are three pages of one component. Account
 rows span the page, with allowances visible and usage in details.

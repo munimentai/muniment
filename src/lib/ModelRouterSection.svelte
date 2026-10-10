@@ -2,6 +2,8 @@
   import ChoiceField from './ui/ChoiceField.svelte'
   import Button from './ui/Button.svelte'
   import Toggle from './Toggle.svelte'
+  import Group from './ui/Group.svelte'
+  import Row from './ui/Row.svelte'
   import { pickerGroups } from './provider-catalog.js'
   import { serverDecisionModels } from './classifier-connections.js'
   let { tauri, settings, onsettings, inventory, oninventory, onconnect } = $props()
@@ -74,29 +76,39 @@
   }
 </script>
 <section aria-label="Decisions" class="decisions">
-  <section aria-label="Model routing" class="job">
-    <div class="heading"><div><h5 class="settings-heading">Model routing</h5><p>Let a decision model choose the model for each message.</p></div><Toggle checked={automatic} label="Use routing" disabled={pending || (!automatic && (!choices.length || !settings.options.length))} onchange={toggle} /></div>
+  <Group heading="Model routing">
+    <Row title="Route each message" description="Let a decision model choose the model for each message.">
+      <Toggle checked={automatic} label="Use routing" disabled={pending || (!automatic && (!choices.length || !settings.options.length))} onchange={toggle} />
+    </Row>
     {#if automatic}
-      <ChoiceField label="Decision model" value={active} options={choices} disabled={pending} onchange={select} />
-      <p>Account balancing stays on. Your message goes to the selected decision model to choose an answer model.</p>
+      <Row title="Decision model" description="Account balancing stays on. Your message goes to this model to choose an answer model.">
+        <div class="choice"><ChoiceField label="Decision model" hideLabel value={active} options={choices} disabled={pending} onchange={select} /></div>
+      </Row>
     {/if}
     {#if !settings.options.length}<p>Connect an account to choose models automatically.</p>{/if}
-  </section>
-  <section aria-label="Assistance" class="job">
-    <div class="heading"><div><h5 class="settings-heading">Assistance</h5><p>Let a decision model pick the MCP servers and skills for each message, and drive the Browser tab for a chat, which sends it the page text.</p></div><Toggle checked={assist.enabled} label="Use assistance" disabled={pending || (!assist.enabled && !choices.length)} onchange={enabled => setAssist(enabled, assist.connection)} /></div>
+  </Group>
+  <Group heading="Assistance">
+    <Row title="Assist each message" description="Let a decision model pick the MCP servers and skills for each message, and drive the Browser tab for a chat, which sends it the page text.">
+      <Toggle checked={assist.enabled} label="Use assistance" disabled={pending || (!assist.enabled && !choices.length)} onchange={enabled => setAssist(enabled, assist.connection)} />
+    </Row>
     {#if assist.enabled}
-      <ChoiceField label="Assistance decision model" value={assist.connection} options={assistChoices} disabled={pending} onchange={id => setAssist(true, id)} />
-      <p>The composer shows the decision model that assists, and you can turn it off for one message.</p>
+      <Row title="Decision model" description="The composer shows the decision model that assists, and you can turn it off for one message.">
+        <div class="choice"><ChoiceField label="Assistance decision model" hideLabel value={assist.connection} options={assistChoices} disabled={pending} onchange={id => setAssist(true, id)} /></div>
+      </Row>
     {/if}
-  </section>
+  </Group>
   {#if pending}<p role="status">Testing the decision model…</p>{/if}
-  {#if !choices.length}<p>Connect a decision model in Model providers to use routing or assistance.</p><Button onclick={onconnect}>Connect decision model</Button>{/if}
+  {#if !choices.length}
+    <Group heading="Decision model">
+      <Row title="No decision model" description="Connect a decision model in Model providers to use routing or assistance.">
+        <Button onclick={onconnect}>Connect decision model</Button>
+      </Row>
+    </Group>
+  {/if}
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 <style>
-  .decisions, .job { display: grid; gap: 14px; }
-  .decisions { gap: 24px; }
-  h5 { margin: 0 0 4px; }
-  .heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .decisions { display: grid; gap: var(--page-gap); }
+  .choice { width: 280px; max-width: 100%; }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
 </style>

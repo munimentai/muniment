@@ -24,6 +24,19 @@ navigation, Escape dismissal and focus return. It uses the overlay shadow token.
 Field label gaps are 6px, action gaps are 8px, field rows are 12px apart, and
 connection sections use 16px gaps. `SettingsTabs`, `Toggle` and `ProviderLogo` remain the shared tabs, switches and marks.
 
+Every full panel builds from five layout components. `PanelPage` is the
+scrolling body of Settings and the Agents, Artifacts and Projects catalogs, with
+`--page-pad` 24px and `--page-gap` 28px from `panels.css`. Settings pages set
+`measure` for a 760px width. `PageHead` is the first row: the muted 15px intro
+at the left and the page actions at the right, icon-only below 560px. `Group`
+is one section: a semibold heading, an optional support line and actions, and
+its rows in one bordered card with hairlines between them. `plain` keeps the
+heading and drops the card for a grid of cards. `Row` is one card row: the
+title, a mono meta note, a muted support line, and the control at the right.
+`CardGrid` and `CatalogCard` lay out catalog cards with the item menu in the
+corner. A panel names no section after its sidebar row. Its title stays as a
+visually hidden heading.
+
 Screens own layout and data. They import these controls instead of copying their
 CSS. Colors, fonts, radii and shadows come from `src/styles/tokens.css`.
 `settings-controls.css` applies the same native field and button treatment to

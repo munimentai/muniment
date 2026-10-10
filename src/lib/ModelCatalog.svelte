@@ -4,6 +4,7 @@
   import SearchToolbar from './ui/SearchToolbar.svelte'
   import ChoiceField from './ui/ChoiceField.svelte'
   import Button from './ui/Button.svelte'
+  import Group from './ui/Group.svelte'
   let filtersOpen = $state(false)
   import Toggle from './Toggle.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
@@ -86,8 +87,8 @@
   {#each groups as group (group.id)}
     {@const leading = group.models.filter((model) => model.lead || model.shown)}
     {@const others = group.models.filter((model) => !model.lead && !model.shown)}
-    <section aria-label={`${group.name} models`}>
-      <h5><ProviderLogo provider={group.id.replace('router:', '')} size={16} />{group.name}</h5>
+    <Group heading={group.name} label={`${group.name} models`}>
+      {#snippet lead()}<ProviderLogo provider={group.id.replace('router:', '')} size={16} />{/snippet}
       {#each leading as model (model.id)}{@render row(model)}{/each}
       {#if others.length}
         <details class="others" open={!!query.trim() || undefined}>
@@ -95,7 +96,7 @@
           {#each others as model (model.id)}{@render row(model)}{/each}
         </details>
       {/if}
-    </section>
+    </Group>
   {/each}
 </section>
 {#snippet row(model)}
@@ -121,16 +122,16 @@
         </div>
 {/snippet}
 <style>
-  .catalog { display: grid; gap: 14px; min-width: 0; }
+  .catalog { display: grid; gap: var(--page-gap); min-width: 0; }
   .filter-fields { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) auto auto; align-items: end; gap: 12px 16px; font-size: var(--text-13); }
   .capability-filter { display: grid; gap: 6px; }
   .capability-filter > span { color: var(--muted); }
   .capability-options { display: flex; gap: 8px; }
   @media (max-width: 1050px) { .filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .clear-filters { justify-self: end; } }
   @media (max-width: 600px) { .filter-fields { grid-template-columns: 1fr; } .clear-filters { justify-self: start; } }
-  h5 { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); font-weight: 600; margin: 8px 0; }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
-  .model { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .model { padding: 10px 0; }
+  .others .model { border-top: 1px solid var(--border); }
   .model-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
   .identity { flex: 1 1 220px; min-width: 0; display: grid; gap: 4px; }
   .model-id { font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }

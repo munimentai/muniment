@@ -1,5 +1,10 @@
 <script>
-  import { panelScroll } from './panel-scroll.js'
+  import PanelPage from './ui/PanelPage.svelte'
+  import PageHead from './ui/PageHead.svelte'
+  import CardGrid from './ui/CardGrid.svelte'
+  import CatalogCard from './ui/CatalogCard.svelte'
+  import SearchToolbar from './ui/SearchToolbar.svelte'
+  import Button from './ui/Button.svelte'
   import CatalogActions from './CatalogActions.svelte'
   import LucideIcon from './LucideIcon.svelte'
   let { selected = $bindable(null), projects = [], threads = [], assignments = {}, busy = false, error = '', loading = false, oncreate, onthread, onnewthread, onrename, onopen, onclose } = $props()
@@ -14,53 +19,51 @@
     if (await oncreate(name.trim())) { creating = false; name = '' }
   }
 </script>
-<section data-panel="projects" use:panelScroll class="panel" aria-label="Projects catalog">
-  <header data-panel-header>
-    {#if project}<button aria-label="Back to projects" onclick={() => selected = null}><LucideIcon name="arrow-left" /></button>{/if}
-    <h2>{project ? project[1] : 'Projects'}</h2>
-    {#if project}<button disabled={busy} onclick={() => onnewthread(selected)}><LucideIcon name="square-pen" />New thread</button>
-    {:else}<button disabled={busy} onclick={() => creating = true}><LucideIcon name="square-pen" />New project</button>{/if}
-    <button aria-label="Close projects" onclick={onclose}><LucideIcon name="x" /></button>
-  </header>
-  {#if error}<p role="alert">{error}</p>{/if}
-  {#if creating}
-    <form onsubmit={create}>
-      <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={name} disabled={busy} />
-      <button disabled={busy || !name.trim()}>Create</button>
-      <button type="button" disabled={busy} onclick={() => creating = false}>Cancel</button>
-    </form>
-  {/if}
-  {#if project}
-    <div class="catalog" aria-label="Project threads">
-      {#each projectThreads as thread (thread.threadId)}<button class="card" disabled={busy} onclick={() => onthread(thread.threadId)}><LucideIcon name="file-text" size={24}/><strong>{thread.title || 'Untitled thread'}</strong></button>{/each}
-    </div>
-    {#if !projectThreads.length}<p>{loading ? 'Loading threads…' : 'No threads yet. Start a new thread in this project.'}</p>{/if}
-  {:else}
-    <input type="search" aria-label="Search projects" placeholder="Search projects" bind:value={search} />
-    <div class="catalog">
-      {#each matches as [id, title] (id)}
-        {@const count = threads.filter(thread => assignments[thread.threadId] === id).length}
-        <div class="card-wrap">
-          <CatalogActions name={title} disabled={busy} allowArchive={false} allowDelete={false} maxNameLength={80} extraActions={[{id:'new',label:'New thread',icon:'square-pen'},{id:'open',label:'Open folder',icon:'folder-open'}]} onaction={(action, name) => action === 'rename' ? onrename(id, name) : action === 'new' ? onnewthread(id) : onopen(id)}/>
-          <button class="card" aria-label={`${title} ${count} ${count === 1 ? 'thread' : 'threads'}`} disabled={busy} onclick={() => selected = id}><LucideIcon name="folder" size={32}/><strong>{title}</strong><span>{count} {count === 1 ? 'thread' : 'threads'}</span></button>
-        </div>
-      {/each}
-    </div>
-    {#if !matches.length}<p>{search ? 'No matching projects.' : 'Create a project to keep related threads together.'}</p>{/if}
-  {/if}
+<section data-panel="projects" class="panel" aria-label="Projects catalog">
+  <h2 class="visually-hidden">{project ? project[1] : 'Projects'}</h2>
+  <PanelPage>
+    <PageHead intro={project ? `Threads in ${project[1]}.` : 'Projects group related threads, and each reply recalls context from the others.'}>
+      {#snippet lead()}{#if project}<button type="button" class="back" aria-label="Back to projects" onclick={() => selected = null}><LucideIcon name="arrow-left" /></button>{/if}{/snippet}
+      {#snippet actions()}
+        {#if project}<Button icon="square-pen" disabled={busy} onclick={() => onnewthread(selected)}>New thread</Button>
+        {:else}<Button icon="square-pen" disabled={busy} onclick={() => creating = true}>New project</Button>{/if}
+        <button type="button" aria-label="Close projects" onclick={onclose}><LucideIcon name="x" /></button>
+      {/snippet}
+    </PageHead>
+    {#if error}<p role="alert">{error}</p>{/if}
+    {#if creating}
+      <form onsubmit={create}>
+        <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={name} disabled={busy} />
+        <Button type="submit" disabled={busy || !name.trim()}>Create</Button>
+        <Button disabled={busy} onclick={() => creating = false}>Cancel</Button>
+      </form>
+    {/if}
+    {#if project}
+      <CardGrid aria-label="Project threads">
+        {#each projectThreads as thread (thread.threadId)}<CatalogCard disabled={busy} onclick={() => onthread(thread.threadId)}><LucideIcon name="file-text" size={24}/><strong>{thread.title || 'Untitled thread'}</strong></CatalogCard>{/each}
+      </CardGrid>
+      {#if !projectThreads.length}<p>{loading ? 'Loading threads…' : 'No threads yet. Start a new thread in this project.'}</p>{/if}
+    {:else}
+      <SearchToolbar label="Search projects" placeholder="Search projects" bind:value={search} />
+      <CardGrid>
+        {#each matches as [id, title] (id)}
+          {@const count = threads.filter(thread => assignments[thread.threadId] === id).length}
+          <CatalogCard aria-label={`${title} ${count} ${count === 1 ? 'thread' : 'threads'}`} disabled={busy} onclick={() => selected = id}>
+            {#snippet menu()}<CatalogActions name={title} disabled={busy} allowArchive={false} allowDelete={false} maxNameLength={80} extraActions={[{id:'new',label:'New thread',icon:'square-pen'},{id:'open',label:'Open folder',icon:'folder-open'}]} onaction={(action, name) => action === 'rename' ? onrename(id, name) : action === 'new' ? onnewthread(id) : onopen(id)}/>{/snippet}
+            <LucideIcon name="folder" size={32}/><strong>{title}</strong><span>{count} {count === 1 ? 'thread' : 'threads'}</span>
+          </CatalogCard>
+        {/each}
+      </CardGrid>
+      {#if !matches.length}<p>{search ? 'No matching projects.' : 'Create a project to keep related threads together.'}</p>{/if}
+    {/if}
+  </PanelPage>
 </section>
 <style>
-  .panel { grid-area: thread; overflow: auto; padding: 0; }
-  header, form { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-  h2 { flex: 1; font-size: var(--text-22); }
-  button { display: inline-flex; align-items: center; gap: 8px; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 12px; cursor: pointer; font: var(--text-13) var(--font-human); }
-  button:hover:not(:disabled) { background: var(--faint); }
-  input { min-width: 0; flex: 1; margin-bottom: 12px; }
-  form input { margin-bottom: 0; }
-  .panel > :global(:not(header):not(.catalog)) {margin-left:12px;margin-right:12px;}
-  .catalog {padding:0 12px 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-  .card-wrap { position:relative; display:flex; }
-  .card-wrap :global(.catalog-actions) { position:absolute; right:8px; top:8px; }
-  .card { width:100%; flex-direction: column; align-items: flex-start; gap: 12px; text-align: left; padding: 20px; overflow-wrap: anywhere; }
-  span, p { color: var(--muted); }
+  .panel { grid-area: thread; display: flex; flex-direction: column; overflow: hidden; }
+  .back { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: pointer; }
+  .back:hover { background: var(--faint); color: var(--ink); }
+  form { display: flex; align-items: center; gap: 8px; }
+  input { flex: 1; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
+  input:focus { outline: none; border-color: var(--muted); }
+  p { margin: 0; color: var(--muted); font-size: var(--text-13); }
 </style>

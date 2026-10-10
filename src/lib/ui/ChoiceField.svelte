@@ -2,7 +2,7 @@
   import { tick, onMount } from 'svelte'
   import ProviderLogo from '../ProviderLogo.svelte'
   import LucideIcon from '../LucideIcon.svelte'
-  let { label, value, options, onchange, disabled = false, placeholder = 'Choose', inline = true } = $props()
+  let { label, value, options, onchange, disabled = false, placeholder = 'Choose', inline = true, hideLabel = false } = $props()
   let open = $state(false), root = $state(), trigger = $state()
   const selected = $derived(options.find(option => option.value === value))
   async function show() { open = !open; if (open) { await tick(); root.querySelector('[aria-checked="true"], [role="menuitemradio"]')?.focus() } }
@@ -25,7 +25,7 @@
 </script>
 <svelte:window onpointerdown={event => { if (open && !root?.contains(event.target)) open = false }} />
 <div class="field" class:inline bind:this={root}>
-  <span>{label}</span>
+  {#if !hideLabel}<span>{label}</span>{/if}
   <div class="control">
     <button data-ui-choice type="button" bind:this={trigger} {disabled} aria-label={`${label}: ${selected?.label ?? placeholder}`} aria-haspopup="menu" aria-expanded={open} onclick={show}>
       {#if selected?.provider}<ProviderLogo provider={selected.provider} size={16} />{/if}<span>{selected?.label ?? placeholder}</span><LucideIcon name="chevron-down" size={14} variant="action" />

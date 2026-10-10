@@ -2,6 +2,10 @@
   import { onMount } from 'svelte'
   import { parseProfile, serializeProfile } from './profile-fields.js'
   import Toggle from './Toggle.svelte'
+  import PageHead from './ui/PageHead.svelte'
+  import Group from './ui/Group.svelte'
+  import Row from './ui/Row.svelte'
+  import Button from './ui/Button.svelte'
   import { readDevicePreference, saveDevicePreference } from './device-preferences.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
   let { tauri, agentId = null, part = 'all' } = $props()
@@ -88,110 +92,100 @@
     finally { busy = false }
   }
 </script>
-<section class:page={part === 'memory'} aria-label={agentId ? "Agent memory" : part === 'profile' ? "Profile" : part === 'memory' ? "Saved memories" : "Profile and memory"}>
+<section class="memory" aria-label={agentId ? "Agent memory" : part === 'profile' ? "Profile" : part === 'memory' ? "Saved memories" : "Profile and memory"}>
   {#if showProfile}
-  <p class="settings-intro">{part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}</p>
-  <div class="profile-fields">
-    <label>Name<input bind:value={profile.name} disabled={!loaded || busy} autocomplete="name" /></label>
-    <label>Preferred name<input bind:value={profile.preferredName} disabled={!loaded || busy} autocomplete="nickname" /></label>
-    <label>Work<input bind:value={profile.work} disabled={!loaded || busy} placeholder="What do you do?" /></label>
-    <label>Instructions<textarea bind:value={profile.instructions} disabled={!loaded || busy} rows="5" placeholder="How should Muniment respond?"></textarea></label>
-    {#if profile.extra}<label>Other profile details<textarea bind:value={profile.extra} disabled={!loaded || busy} rows="4"></textarea></label>{/if}
-  </div>
-  <p class="path">Saved in memory/profile.md</p>
-  <div class="actions">
-    <button disabled={!loaded || busy} onclick={saveProfile}>Save profile</button>
-    <label class="import">Load Markdown<input type="file" accept=".md,.txt,text/plain,text/markdown" disabled={!loaded || busy} onchange={importProfile} /></label>
-  </div>
+    <PageHead intro={part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}>
+      {#snippet actions()}
+        <label class="import">Load Markdown<input type="file" accept=".md,.txt,text/plain,text/markdown" disabled={!loaded || busy} onchange={importProfile} /></label>
+        <Button disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
+      {/snippet}
+    </PageHead>
+    <Group heading="About you" description="Saved in memory/profile.md.">
+      <Row title="Name"><input class="row-input" aria-label="Name" bind:value={profile.name} disabled={!loaded || busy} autocomplete="name" /></Row>
+      <Row title="Preferred name" description="What replies call you."><input class="row-input" aria-label="Preferred name" bind:value={profile.preferredName} disabled={!loaded || busy} autocomplete="nickname" /></Row>
+      <Row title="Work"><input class="row-input" aria-label="Work" bind:value={profile.work} disabled={!loaded || busy} placeholder="What do you do?" /></Row>
+    </Group>
+    <Group heading="Instructions" description="How Muniment should respond to you.">
+      <div class="field"><textarea aria-label="Instructions" bind:value={profile.instructions} disabled={!loaded || busy} rows="5" placeholder="How should Muniment respond?"></textarea></div>
+      {#if profile.extra}<label class="field">Other profile details<textarea bind:value={profile.extra} disabled={!loaded || busy} rows="4"></textarea></label>{/if}
+    </Group>
   {:else if agentId}<p>Facts saved here belong to this agent. Its chat can create, correct, and remove them.</p>{/if}
   {#if showMemory}
-  {#if part === 'all'}<h4>Saved memories</h4>{/if}
-  <p class="settings-intro">Save one fact and its source. Muniment recalls the facts that fit each message.</p>
-  {#if part === 'memory'}
-    <div class="toolbar">
-      {#if facts.length}<input aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{:else}<span class="spacer"></span>{/if}
-      <button type="button" disabled={!loaded || busy} onclick={() => { draft = { id: '', title: '', content: '', source: 'Added in settings' }; titleInput?.focus() }}>Add memory</button>
-      <button type="button" disabled={!facts.length} onclick={exportMemories}>Export</button>
-    </div>
-    <section class="block" aria-labelledby="recall-heading">
-      <h4 id="recall-heading" class="settings-heading">Recall</h4>
-      <div class="rows">
+    {#if !agentId}
+      <PageHead intro="Save one fact and its source. Muniment recalls the facts that fit each message.">
+        {#snippet actions()}
+          <Button disabled={!loaded || busy} onclick={() => { draft = { id: '', title: '', content: '', source: 'Added in settings' }; titleInput?.focus() }}>Add memory</Button>
+          <Button disabled={!facts.length} onclick={exportMemories}>Export</Button>
+        {/snippet}
+      </PageHead>
+    {/if}
+    {#if part === 'memory'}
+      <Group heading="Recall">
         {#each RECALL as [key, label, help] (key)}
-          <div class="row"><div><strong>{label}</strong><p>{help}</p></div><Toggle checked={recall[key]} {label} onchange={(on) => { recall = saveDevicePreference('muniment.memory-recall', { ...recall, [key]: on }) }} /></div>
+          <Row title={label} description={help}><Toggle checked={recall[key]} {label} onchange={(on) => { recall = saveDevicePreference('muniment.memory-recall', { ...recall, [key]: on }) }} /></Row>
         {/each}
-      </div>
-    </section>
-    <h4 class="settings-heading">Saved memories <span class="count">{facts.length}</span></h4>
-  {:else if facts.length}<input aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{/if}
-  {#each shown as fact (fact.id)}
-    <article>
-      <strong>{fact.title}</strong>
-      <p class="fact">{fact.content}</p>
-      <p class="source">{fact.source}</p>
-      <div class="actions">
-        <button disabled={busy} onclick={() => { draft = { ...fact }; deleting = '' }}>Edit</button>
-        {#if deleting === fact.id}
-          <button disabled={busy} onclick={() => removeFact(fact.id)}>Confirm delete</button>
-          <button onclick={() => { deleting = '' }}>Cancel</button>
-        {:else}<button disabled={busy} onclick={() => { deleting = fact.id }}>Delete</button>{/if}
-      </div>
-    </article>
-  {:else}<p>{filter ? 'No matching memories.' : 'No saved memories yet.'}</p>{/each}
-  <button aria-expanded={showDeleted} onclick={() => { showDeleted = !showDeleted; if (showDeleted) void refreshDeleted() }}>Deleted memories</button>
-  {#if showDeleted}
-    <p>Deleted memories stay out of recall. Restore one if it was removed by mistake.</p>
-    {#each deletedFacts as fact (fact.id)}
-      <article><strong>{fact.title}</strong><p class="fact">{fact.content}</p><p class="source">{fact.source}</p><div class="actions"><button disabled={busy} onclick={() => restoreFact(fact.id)}>Restore {fact.title}</button></div></article>
-    {:else}<p>No deleted memories.</p>{/each}
-  {/if}
-  <form onsubmit={saveFact}>
-    <h4 class="settings-heading">{draft.id ? 'Edit memory' : 'Add memory'}</h4>
-    <label>Title<input bind:this={titleInput} bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
-    <label>Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
-    <label>Source<input bind:value={draft.source} required disabled={!loaded || busy} /></label>
-    <div class="actions"><button disabled={!loaded || busy}>Save memory</button>
-      {#if draft.id}<button type="button" onclick={() => { draft = { id: '', title: '', content: '', source: 'Added in settings' } }}>Cancel edit</button>{/if}
-    </div>
-  </form>
+      </Group>
+    {/if}
+    <Group heading="Saved memories" count={facts.length}>
+      {#snippet actions()}
+        {#if facts.length}<input class="search" type="search" aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{/if}
+        <button class="disclosure" aria-expanded={showDeleted} onclick={() => { showDeleted = !showDeleted; if (showDeleted) void refreshDeleted() }}>Deleted memories</button>
+      {/snippet}
+      {#each shown as fact (fact.id)}
+        <Row title={fact.title}>
+          {#snippet detail()}<p class="fact">{fact.content}</p><p class="source">{fact.source}</p>{/snippet}
+          {#if deleting === fact.id}
+            <Button disabled={busy} onclick={() => removeFact(fact.id)}>Confirm delete</Button>
+            <Button onclick={() => { deleting = '' }}>Cancel</Button>
+          {:else}
+            <Button disabled={busy} onclick={() => { draft = { ...fact }; deleting = ''; titleInput?.focus() }}>Edit</Button>
+            <Button disabled={busy} onclick={() => { deleting = fact.id }}>Delete</Button>
+          {/if}
+        </Row>
+      {:else}<p>{filter ? 'No matching memories.' : 'No saved memories yet.'}</p>{/each}
+    </Group>
+    {#if showDeleted}
+      <Group heading="Deleted memories" description="Deleted memories stay out of recall. Restore one if it was removed by mistake.">
+        {#each deletedFacts as fact (fact.id)}
+          <Row title={fact.title}>
+            {#snippet detail()}<p class="fact">{fact.content}</p><p class="source">{fact.source}</p>{/snippet}
+            <Button disabled={busy} onclick={() => restoreFact(fact.id)}>Restore {fact.title}</Button>
+          </Row>
+        {:else}<p>No deleted memories.</p>{/each}
+      </Group>
+    {/if}
+    <form onsubmit={saveFact}>
+      <Group heading={draft.id ? 'Edit memory' : 'Add memory'}>
+        <label class="field">Title<input bind:this={titleInput} bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
+        <label class="field">Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
+        <label class="field">Source<input bind:value={draft.source} required disabled={!loaded || busy} /></label>
+        <div class="field-actions">
+          {#if draft.id}<Button onclick={() => { draft = { id: '', title: '', content: '', source: 'Added in settings' } }}>Cancel edit</Button>{/if}
+          <Button type="submit" disabled={!loaded || busy}>Save memory</Button>
+        </div>
+      </Group>
+    </form>
   {/if}
   {#if status}<p role="status">{status}</p>{/if}
 </section>
 <style>
-  /* Settings → Memory: the intro, a toolbar, Recall, then the saved facts in one
-     bordered list and the add form as a card. An agent's memory keeps its plain list. */
-  .page { gap: 14px; max-width: 760px; }
-  .page > .settings-heading { margin: 14px 0 0; }
-  .toolbar { display: flex; align-items: center; gap: 8px; }
-  .toolbar input { flex: 1; }
-  .toolbar .spacer { flex: 1; }
-  .toolbar button, .page form button { background: var(--faint); border-color: transparent; }
-  .block { display: grid; gap: 10px; margin-top: 14px; }
-  .block h4 { margin: 0; }
-  .rows { display: grid; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
-  .row + .row { border-top: 1px solid var(--border); }
-  .row > div { display: grid; gap: 2px; }
-  .count { margin-left: 6px; color: var(--muted); font: var(--weight-regular) var(--text-12) var(--font-mono); }
-  .page article { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
-  .page form { padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
-  .page form h4 { margin: 0; }
-  .page > button[aria-expanded] { justify-self: start; border-color: transparent; background: transparent; color: var(--muted); }
-  .page > button[aria-expanded]:hover { background: var(--faint); color: var(--ink); }
-  section, form, .profile-fields { display: grid; gap: 10px; }
+  /* Profile and Memory build from PageHead, Group and Row like every Settings
+     page. Form fields sit in their Group card, one per row. */
+  .memory { display: grid; gap: var(--page-gap, 28px); }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); }
-  label, strong { font-size: var(--text-13); }
-  label { display: grid; gap: 5px; }
-  input, textarea { box-sizing: border-box; width: 100%; padding: 9px 10px; font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .field { display: grid; gap: 6px; padding: 12px 0; color: var(--muted); font-size: var(--text-13); }
+  .field-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 0; }
+  input:not([type="file"]), textarea { box-sizing: border-box; width: 100%; min-height: 32px; padding: 7px 10px; font: var(--text-13) var(--font-human); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); }
+  input:focus, textarea:focus { outline: none; border-color: var(--muted); }
+  .row-input { width: 280px; max-width: 100%; }
+  .search { width: 220px; }
   textarea { resize: vertical; line-height: 1.5; }
-  button, .import { font: inherit; font-size: var(--text-13); padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); cursor: pointer; }
-  button:hover, .import:hover { background: var(--faint); }
-  button:disabled { opacity: .5; cursor: default; }
-  .import { position: relative; overflow: hidden; }
+  .import { position: relative; overflow: hidden; display: inline-flex; align-items: center; min-height: 32px; box-sizing: border-box; padding: 6px 10px; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font: var(--text-13) var(--font-human); cursor: pointer; }
+  .import:hover { background: var(--border); }
   .import input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   .import:focus-within { outline: 2px solid var(--ink); }
-  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  h4 { margin: 16px 0 0; font-size: var(--text-13); }
-  article { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .disclosure { min-height: 32px; padding: 6px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-13) var(--font-human); cursor: pointer; }
+  .disclosure:hover { background: var(--faint); color: var(--ink); }
   .fact { white-space: pre-wrap; color: var(--ink); }
-  .source, .path { font-size: var(--text-12); overflow-wrap: anywhere; }
+  .source { font-size: var(--text-12); overflow-wrap: anywhere; }
 </style>

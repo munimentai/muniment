@@ -7,6 +7,9 @@
 
   import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
   import PhonePairing from './PhonePairing.svelte'
+  import Group from './ui/Group.svelte'
+  import Row from './ui/Row.svelte'
+  import Button from './ui/Button.svelte'
 
   let { tauri, subject = '', onsignout = null } = $props()
   let access = $state(accessIdleState)
@@ -227,12 +230,13 @@
 </script>
 
 <div class="account-sections" bind:this={sectionRoot}>
-  <section class="account-card" aria-label="Signed-in account">
-    <span class="account-avatar" aria-hidden="true">{initials}</span>
-    <div class="account-who"><strong>{displayName}</strong><span>{orgLine}</span></div>
-    <span class="plan-chip">{PLANS.find((tier) => tier.id === plan).label}</span>
-    {#if onsignout}<button type="button" class="account-signout" onclick={onsignout}>Sign out</button>{/if}
-  </section>
+  <Group label="Signed-in account">
+    <Row title={displayName} description={orgLine}>
+      {#snippet lead()}<span class="account-avatar" aria-hidden="true">{initials}</span>{/snippet}
+      <span class="plan-chip">{PLANS.find((tier) => tier.id === plan).label}</span>
+      {#if onsignout}<Button onclick={onsignout}>Sign out</Button>{/if}
+    </Row>
+  </Group>
   <section class="plan-section" aria-labelledby="plan-heading">
     <h3 id="plan-heading" class="settings-heading">Plan</h3>
     <p class="section-help">Plans add what needs a server. Everything local stays free.</p>
@@ -253,7 +257,7 @@
     {:else if devices.name === 'error'}
       <div class="access-status" role="alert"><p>Devices could not be loaded.</p><button onclick={loadDevices}>Try again</button></div>
     {:else if devices.name === 'ready'}
-      {#if devices.devices.length === 0}<p class="empty-grant">No devices found</p>{/if}
+      {#if devices.devices.length === 0}<p class="empty-grant">No devices found</p>{:else}
       <ul class="device-list">
         {#each devices.devices as device (device.device_id)}
           <li class:revoked={device.revoked_at}>
@@ -262,6 +266,7 @@
           </li>
         {/each}
       </ul>
+      {/if}
     {/if}
   </section>
   <PhonePairing {tauri} />
@@ -285,6 +290,7 @@
       {:else if attachListener.stopped}
         <div class="access-status" role="status"><p>The connected programs listener stopped.</p><button onclick={restartMuniment}>Restart Muniment</button></div>
       {:else if companions.companions.length === 0}<p class="empty-grant">No connected programs found</p>{/if}
+      {#if companions.companions.length}
       <ul class="companion-list">
         {#each companions.companions as companion (companion.identity)}
           <li class="companion-row">
@@ -306,6 +312,7 @@
           </li>
         {/each}
       </ul>
+      {/if}
     {/if}
   </section>
   <section class="entitlements-section" role="group" aria-labelledby="entitlements-heading">
@@ -315,6 +322,7 @@
     {:else if access.name === 'error'}
       <div class="access-status" role="alert"><p>Your access could not be loaded.</p><button onclick={reload}>Try again</button></div>
     {:else if access.name === 'ready'}
+      <div class="access-card">
       <div class="grant-grid">
         <div><h3>Capabilities</h3>{#if access.capabilities.length}<ul>{#each access.capabilities as capability}<li>{capability}</li>{/each}</ul>{:else}<p class="empty-grant">The snapshot lists no capabilities.</p>{/if}</div>
       </div>
@@ -330,6 +338,7 @@
           </div>{/if}
         </div>
       {/each}
+      </div>
     {/if}
     <p class="access-note">Your admins set access. The snapshot is a display hint. The server checks each request.</p>
   </section>
@@ -348,16 +357,11 @@
 <style>
   /* Account reads like every Settings page: sections under semibold headings,
      28px apart, with lists in bordered groups instead of dividers between sections. */
-  .account-sections { display: grid; gap: 28px; max-width: 760px; }
+  .account-sections { display: grid; gap: var(--page-gap); }
   .account-sections section > .settings-heading, .access-heading { margin: 0 0 4px; }
   .section-help { margin: 0 0 10px; color: var(--muted); font-size: var(--text-13); }
   .plan-section, .devices-section, .companions-section, .entitlements-section, .retention-section { min-width: 0; }
-  .account-signout { flex: none; }
-  .account-card { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--faint); }
-  .account-avatar { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--radius-panel); background: var(--surface); border: 1px solid var(--border); font: var(--weight-semibold) var(--text-15) var(--font-human); }
-  .account-who { flex: 1; min-width: 0; display: grid; gap: 2px; }
-  .account-who strong { font-size: var(--text-15); font-weight: 600; overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
-  .account-who span { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .account-avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-control); background: var(--surface); border: 1px solid var(--border); font: var(--weight-semibold) var(--text-13) var(--font-human); }
   .plan-chip { flex: none; padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .plan-tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
   .plan-tiers > li { display: grid; align-content: start; gap: 6px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
@@ -374,13 +378,18 @@
   .access-heading { display: flex; align-items: baseline; justify-content: space-between; }
   .access-heading p { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-group { border-top: 1px solid var(--border); }
+  .access-card > .grant-grid { padding: 12px 0; }
   .group-toggle { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 9px 2px; border: 0; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); text-align: left; }
   .group-toggle > span:first-child { min-width: 0; overflow-wrap: anywhere; }
   .grant-grid { display: grid; gap: 10px; padding: 1px 2px 12px 12px; }
   .grant-grid h3 { margin: 0 0 3px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .grant-grid ul, .grant-grid p, .grant-grid time { margin: 0; padding: 0; list-style: none; font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .grant-grid li + li { margin-top: 2px; }
-  .empty-grant, .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  /* An empty list reads as one row in its card. */
+  .empty-grant { margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); color: var(--muted); font-size: var(--text-13); }
+  .access-card { padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .access-card .empty-grant { padding: 12px 0; border: 0; border-top: 1px solid var(--border); }
   .access-status p { margin: 0 0 6px; }
   .retention-options { display: grid; }
   .retention-options label { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); cursor: pointer; }

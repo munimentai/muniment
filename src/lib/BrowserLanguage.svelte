@@ -1,6 +1,8 @@
 <script>
   // Settings → Language: one language for the app and its Browser tab.
   import ChoiceField from './ui/ChoiceField.svelte'
+  import Group from './ui/Group.svelte'
+  import Row from './ui/Row.svelte'
   import { onMount } from 'svelte'
   let { tauri } = $props()
   let view = $state(null)
@@ -32,19 +34,14 @@
     finally { pending = false; downloading = false }
   }
 </script>
-<section aria-labelledby="app-language-heading">
-  <h3 id="app-language-heading" class="settings-heading">App language</h3>
-  <p>Muniment's menus, messages and settings use this language, and so do the Browser tab's pages and site requests.</p>
-  {#if view}
-    <ChoiceField label="Language" value={view.selected ?? 'system'} {options} disabled={pending} onchange={choose} />
-    {#if view.languages.some(language => language.state === 'available')}<p>Languages marked Download fetch about {megabytes} MB once.</p>{/if}
-  {/if}
+<Group heading="App language" description="Muniment's menus, messages and settings use this language, and so do the Browser tab's pages and site requests.">
+  <Row title="Language" description={view?.languages.some(language => language.state === 'available') ? `Languages marked Download fetch about ${megabytes} MB once.` : 'The system language unless you pick one.'}>
+    {#if view}<div class="choice"><ChoiceField label="Language" hideLabel value={view.selected ?? 'system'} {options} disabled={pending} onchange={choose} /></div>{/if}
+  </Row>
   {#if downloading}<p role="status">Downloading the language…</p>{/if}
   {#if restart && !pending}<p role="status">Restart Muniment to change the language.</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
-</section>
+</Group>
 <style>
-  section { display: grid; gap: 10px; align-content: start; }
-  h3 { margin: 0; font: var(--text-13) var(--font-mono); color: var(--muted); }
-  p { margin: 0; font-size: var(--text-13); color: var(--muted); }
+  .choice { width: 280px; max-width: 100%; }
 </style>

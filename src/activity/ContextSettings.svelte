@@ -1,6 +1,10 @@
 <script>
   import Toggle from '../lib/Toggle.svelte'
   import { onMount } from 'svelte'
+  import PageHead from '../lib/ui/PageHead.svelte'
+  import Group from '../lib/ui/Group.svelte'
+  import Row from '../lib/ui/Row.svelte'
+  import Button from '../lib/ui/Button.svelte'
   let { tauri } = $props()
   let enabled = $state(true)
   let reserveTokens = $state(16384)
@@ -26,28 +30,30 @@
   }
 </script>
 <section aria-label="Conversation context">
-  <p class="settings-intro">Summarize older messages to make room. Full history stays saved.</p>
+  <PageHead intro="Summarize older messages to make room. Full history stays saved.">
+    {#snippet actions()}{#if ready}<Button type="submit" form="context-settings" disabled={saving}>{saving ? 'Saving…' : 'Save context settings'}</Button>{/if}{/snippet}
+  </PageHead>
   {#if ready}
-    <form onsubmit={(event) => { event.preventDefault(); void save() }}>
-      <label class="toggle"><Toggle bind:checked={enabled} disabled={saving} /> Compact automatically</label>
-      <p>When off, a full conversation can stop replies.</p>
-      <details><summary>Context limits</summary>
-        <label>Room for the next reply (tokens)<input type="number" min="4096" max="131072" step="1" bind:value={reserveTokens} required disabled={saving} /></label>
-        <label>Recent messages to keep (tokens)<input type="number" min="4096" max="131072" step="1" bind:value={keepRecentTokens} required disabled={saving} /></label>
-      </details>
-      <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save context settings'}</button>
+    <form id="context-settings" onsubmit={(event) => { event.preventDefault(); void save() }}>
+      <Group heading="Compaction">
+        <Row title="Compact automatically" description="When off, a full conversation can stop replies.">
+          <Toggle bind:checked={enabled} label="Compact automatically" disabled={saving} />
+        </Row>
+        <Row title="Room for the next reply" description="Tokens kept free for the model's answer.">
+          <input type="number" aria-label="Room for the next reply (tokens)" min="4096" max="131072" step="1" bind:value={reserveTokens} required disabled={saving} />
+        </Row>
+        <Row title="Recent messages to keep" description="Tokens of the latest messages kept word for word.">
+          <input type="number" aria-label="Recent messages to keep (tokens)" min="4096" max="131072" step="1" bind:value={keepRecentTokens} required disabled={saving} />
+        </Row>
+      </Group>
     </form>
   {/if}
   {#if error}<p role="alert">{error}</p>{/if}
   {#if status}<p role="status">{status}</p>{/if}
 </section>
 <style>
-  section { display: grid; gap: 14px; }
-  p { font-size: var(--text-13); color: var(--muted); }
-  form, details[open] { display: grid; gap: 10px; }
-  label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--text-13); }
-  .toggle { justify-content: flex-start; }
-  input[type="number"] { width: 100px; padding: 5px; color: var(--ink); background: var(--paper); border: 1px solid var(--border); font: var(--text-13) var(--font-mono); }
-  button { width: fit-content; padding: 6px 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font: inherit; cursor: pointer; }
-  summary { cursor: pointer; font-size: var(--text-13); }
+  section { display: grid; gap: var(--page-gap); }
+  p { margin: 0; font-size: var(--text-13); color: var(--muted); }
+  input[type="number"] { width: 110px; height: 32px; box-sizing: border-box; padding: 0 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-13) var(--font-mono); }
+  input:focus { outline: none; border-color: var(--muted); }
 </style>
