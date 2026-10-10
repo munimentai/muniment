@@ -190,7 +190,7 @@
 </script>
 
 <section class="pairing-section" aria-labelledby="pairing-heading">
-  <h3 id="pairing-heading" class="access-label">Phone pairing</h3>
+  <h3 id="pairing-heading" class="settings-heading">Phone pairing</h3>
   {#if pairing.name === 'loading'}
     <p class="access-status" aria-live="polite">Loading phone pairing…</p>
   {:else if pairing.name === 'error'}
@@ -242,8 +242,9 @@
 {/if}
 
 <style>
-  .pairing-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .access-label { margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+  /* A heading, then the paired phone or Pair a phone, as on every Settings page. */
+  .pairing-section { display: grid; justify-items: start; gap: 6px; }
+  .pairing-section > h3 { margin: 0 0 4px; }
   .access-status, .empty-grant { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-status p { margin: 0 0 6px; }
   .paired-phone { margin: 0; font-size: var(--text-13); }

@@ -34,6 +34,9 @@
     voiceShortcutChanging = false,
     onVoiceShortcutChange = async () => true,
     defaultVoiceShortcut = '',
+    subject = '',
+    onsignout = null,
+    onrecord = null,
   } = $props()
 
   const sections = settingsSections()
@@ -98,7 +101,7 @@
         {#if storageError}<p role="alert">{storageError}</p>{/if}
       </section>
     {:else if featureFlags.companyRecord && section === 'companies'}
-      <SettingsSection load={CompaniesSection} properties={{tauri, onchanged:oncompanieschange}} />
+      <SettingsSection load={CompaniesSection} properties={{tauri, onchanged:oncompanieschange, onrecord}} />
     {:else if featureFlags.cloud && section === 'account'}
       <section class="settings-account" aria-label="Account">
         {#if local}
@@ -107,7 +110,8 @@
         {/if}
         {#if accountStatus}<p class="support" role="status">{accountStatus}</p>{/if}
         {#if !local}
-          <SettingsSection load={AccountSettings} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
+          <p class="settings-intro">Your account links this desktop to your phone and devices, and holds your plan.</p>
+          <SettingsSection load={AccountSettings} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut, subject, onsignout}} />
         {/if}
       </section>
     {/if}
@@ -121,7 +125,9 @@
   /* Settings takes the thread and rail columns under the title band. The sidebar beside it lists the sections. */
   .settings-layout { grid-row: 2; grid-column: 2 / -1; position: relative; z-index: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
   .settings-content { flex: 1; min-height: 0; padding: 32px 36px 36px; overflow-y: auto; }
-  .settings-home, .settings-account { display: grid; gap: 8px; justify-items: start; }
+  .settings-home { display: grid; gap: 8px; justify-items: start; }
+  .settings-account { display: grid; gap: 22px; }
+  .settings-account > button { justify-self: start; }
   .settings-home .settings-heading { margin-top: 14px; }
   .settings-path { margin: 0; overflow-wrap: anywhere; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }

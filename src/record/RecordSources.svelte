@@ -6,8 +6,9 @@
   import ProviderLogo from '../lib/ProviderLogo.svelte'
   import { sourceOptions } from './record-import-state.js'
 
-  let { onconnect, selected = undefined } = $props()
-  const sources = sourceOptions()
+  // `limit` shows the first sources only; Settings lists a few and offers the rest.
+  let { onconnect, selected = undefined, limit = Infinity } = $props()
+  const sources = $derived(sourceOptions().slice(0, limit))
 </script>
 
 <ul class="record-sources" aria-label="Sources">

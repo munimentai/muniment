@@ -1,10 +1,26 @@
 <script>
   import { onMount } from 'svelte'
   import { parseProfile, serializeProfile } from './profile-fields.js'
+  import Toggle from './Toggle.svelte'
+  import { readDevicePreference, saveDevicePreference } from './device-preferences.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
   let { tauri, agentId = null, part = 'all' } = $props()
   const showProfile = $derived(!agentId && part !== 'memory')
   const showMemory = $derived(part !== 'profile')
+  // Recall is a design ahead of the runtime: these choices stay on this device until recall reads them.
+  let recall = $state(readDevicePreference('muniment.memory-recall', { learn: true, use: true, ask: true }))
+  const RECALL = [
+    ['learn', 'Save facts from chats', 'A chat proposes a memory when it states something lasting about you or your work.'],
+    ['ask', 'Ask before saving', 'Proposed memories wait for your approval in the chat.'],
+    ['use', 'Use memories in replies', 'Muniment recalls the saved facts that fit each message.'],
+  ]
+  let titleInput = $state()
+  function exportMemories() {
+    const text = facts.map((fact) => `## ${fact.title}\n\n${fact.content}\n\nSource: ${fact.source}\n`).join('\n')
+    const url = URL.createObjectURL(new Blob([`# Saved memories\n\n${text}`], { type: 'text/markdown' }))
+    Object.assign(document.createElement('a'), { href: url, download: 'memories.md' }).click()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
   const memory = { invoke: (action, args = {}) => agentId ? tauri.invoke("agent_memory", { id: agentId, action, fact: args.fact, factId: args.id }) : tauri.invoke(action, args) }
   let profile = $state(parseProfile())
   let facts = $state([])
@@ -72,7 +88,7 @@
     finally { busy = false }
   }
 </script>
-<section aria-label={agentId ? "Agent memory" : part === 'profile' ? "Profile" : part === 'memory' ? "Saved memories" : "Profile and memory"}>
+<section class:page={part === 'memory'} aria-label={agentId ? "Agent memory" : part === 'profile' ? "Profile" : part === 'memory' ? "Saved memories" : "Profile and memory"}>
   {#if showProfile}
   <p class="settings-intro">{part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}</p>
   <div class="profile-fields">
@@ -90,8 +106,23 @@
   {:else if agentId}<p>Facts saved here belong to this agent. Its chat can create, correct, and remove them.</p>{/if}
   {#if showMemory}
   {#if part === 'all'}<h4>Saved memories</h4>{/if}
-  <p class="settings-intro">Save one fact and its source.</p>
-  {#if facts.length}<input aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{/if}
+  <p class="settings-intro">Save one fact and its source. Muniment recalls the facts that fit each message.</p>
+  {#if part === 'memory'}
+    <div class="toolbar">
+      {#if facts.length}<input aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{:else}<span class="spacer"></span>{/if}
+      <button type="button" disabled={!loaded || busy} onclick={() => { draft = { id: '', title: '', content: '', source: 'Added in settings' }; titleInput?.focus() }}>Add memory</button>
+      <button type="button" disabled={!facts.length} onclick={exportMemories}>Export</button>
+    </div>
+    <section class="block" aria-labelledby="recall-heading">
+      <h4 id="recall-heading" class="settings-heading">Recall</h4>
+      <div class="rows">
+        {#each RECALL as [key, label, help] (key)}
+          <div class="row"><div><strong>{label}</strong><p>{help}</p></div><Toggle checked={recall[key]} {label} onchange={(on) => { recall = saveDevicePreference('muniment.memory-recall', { ...recall, [key]: on }) }} /></div>
+        {/each}
+      </div>
+    </section>
+    <h4 class="settings-heading">Saved memories <span class="count">{facts.length}</span></h4>
+  {:else if facts.length}<input aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{/if}
   {#each shown as fact (fact.id)}
     <article>
       <strong>{fact.title}</strong>
@@ -115,7 +146,7 @@
   {/if}
   <form onsubmit={saveFact}>
     <h4 class="settings-heading">{draft.id ? 'Edit memory' : 'Add memory'}</h4>
-    <label>Title<input bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
+    <label>Title<input bind:this={titleInput} bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
     <label>Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
     <label>Source<input bind:value={draft.source} required disabled={!loaded || busy} /></label>
     <div class="actions"><button disabled={!loaded || busy}>Save memory</button>
@@ -126,6 +157,26 @@
   {#if status}<p role="status">{status}</p>{/if}
 </section>
 <style>
+  /* Settings → Memory: the intro, a toolbar, Recall, then the saved facts in one
+     bordered list and the add form as a card. An agent's memory keeps its plain list. */
+  .page { gap: 14px; max-width: 760px; }
+  .page > .settings-heading { margin: 14px 0 0; }
+  .toolbar { display: flex; align-items: center; gap: 8px; }
+  .toolbar input { flex: 1; }
+  .toolbar .spacer { flex: 1; }
+  .toolbar button, .page form button { background: var(--faint); border-color: transparent; }
+  .block { display: grid; gap: 10px; margin-top: 14px; }
+  .block h4 { margin: 0; }
+  .rows { display: grid; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .row > div { display: grid; gap: 2px; }
+  .count { margin-left: 6px; color: var(--muted); font: var(--weight-regular) var(--text-12) var(--font-mono); }
+  .page article { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .page form { padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .page form h4 { margin: 0; }
+  .page > button[aria-expanded] { justify-self: start; border-color: transparent; background: transparent; color: var(--muted); }
+  .page > button[aria-expanded]:hover { background: var(--faint); color: var(--ink); }
   section, form, .profile-fields { display: grid; gap: 10px; }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   label, strong { font-size: var(--text-13); }

@@ -7690,19 +7690,23 @@ describe('signed-in access popover', () => {
     expect(system).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('orders the account sections and leaves sign out to the sidebar', async () => {
+  it('leads the account page with the signed-in card and its plan, then orders the sections', async () => {
     render(App)
     const dialog = await openSettings('Account')
     const content = dialog.querySelector('.account-sections')
 
     expect(content).toBeInTheDocument()
-    expect(within(dialog).queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
-    expect([...content.querySelectorAll(':scope > section')].map((section) => section.getAttribute('aria-labelledby'))).toEqual([
-      'retention-heading',
-      'entitlements-heading',
+    // The card names the person and carries Sign out beside the plan.
+    const card = within(dialog).getByRole('region', { name: 'Signed-in account' })
+    expect(within(card).getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    expect([...content.querySelectorAll(':scope > section')].map((section) => section.getAttribute('aria-labelledby') ?? section.getAttribute('aria-label'))).toEqual([
+      'Signed-in account',
+      'plan-heading',
       'devices-heading',
       'pairing-heading',
       'companions-heading',
+      'entitlements-heading',
+      'retention-heading',
       'voice-heading',
     ])
     expect(content.querySelector('.entitlements-section')).toHaveTextContent('Your admins set access.')

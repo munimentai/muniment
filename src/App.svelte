@@ -693,6 +693,13 @@
     void tick().then(() => composer?.focus())
   }
   const toggleRecordMaximized = () => railController.toggleMaximized()
+  // Settings → Companies opens the record panel on the sample or on one source's connect step.
+  let recordRequest = $state(null)
+  function openRecordFromSettings(request) {
+    closeSettings()
+    recordRequest = { ...request }
+    if (!recordPanelOpen) toggleRecordPanel()
+  }
 
   const sidebarResizeController = createSidebarResizeController({
     readWidth: () => sidebarWidth,
@@ -2667,7 +2674,7 @@
               onkeydown={artifactRailKeydown}
             ><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
           {/if}
-          <RecordPanel {tauri} maximized={recordMaximized} refresh={recordRefresh} ontogglemaximized={toggleRecordMaximized} onask={askAboutView} />
+          <RecordPanel {tauri} maximized={recordMaximized} refresh={recordRefresh} ontogglemaximized={toggleRecordMaximized} onask={askAboutView} request={recordRequest} />
         {/if}
         {#if filePanelOpen}
           {#if !recordMaximized}
@@ -2710,7 +2717,7 @@
         {#if settingsOpen}
           {#await loadSettings() then module}
           {@const Settings = module.default}
-          <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} />
+          <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} />
           {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a

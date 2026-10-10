@@ -565,8 +565,8 @@ function fixtureRendered() {
   }
   if (accessFixture) {
     const sections = document.querySelector('.account-sections')
-    const headings = Array.from(sections?.querySelectorAll('.access-label') ?? [], (heading) => heading.textContent)
-    return ['Thread retention', 'Your access', 'Devices', 'Connected programs', 'Voice shortcut']
+    const headings = Array.from(sections?.querySelectorAll('.settings-heading') ?? [], (heading) => heading.textContent)
+    return ['Plan', 'Devices', 'Phone pairing', 'Connected programs', 'Your access', 'Thread retention', 'Voice shortcut']
       .every((heading) => headings.includes(heading))
       && sections.querySelector('.current-device')?.textContent === 'This device'
       && sections.querySelector('.revoked .device-state')?.textContent === 'Revoked'
@@ -591,8 +591,10 @@ function advanceScanFixture() {
 }
 
 // The account sections live in Settings, so the fixture opens that section.
+// The prototype opens Account once and then leaves the sidebar to the viewer.
+let accessOpened = false
 function advanceAccessFixture() {
-  if (!accessFixture || fixtureRendered()) return
+  if (!accessFixture || accessOpened || fixtureRendered()) return
   const panel = document.querySelector('.settings-layout')
   if (!panel) {
     document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
@@ -600,7 +602,7 @@ function advanceAccessFixture() {
   }
   const account = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
     .find((button) => button.textContent.trim() === 'Account')
-  if (account && account.getAttribute('aria-current') !== 'true') account.click()
+  if (account && account.getAttribute('aria-current') !== 'true') { account.click(); accessOpened = true }
 }
 
 async function markProbeReady() {

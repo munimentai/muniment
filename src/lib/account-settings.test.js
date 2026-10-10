@@ -119,13 +119,13 @@ describe('contract entitlement snapshot', () => {
 })
 
 describe('account settings layout', () => {
-  it('renders thread retention after appearance with the default choice selected', async () => {
+  it('renders thread retention after access with the default choice selected', async () => {
     renderPanel(companionInvoke())
 
     const sections = [...document.querySelectorAll('.account-sections > section')]
-    expect(sections.slice(0, 2).map((section) => section.getAttribute('aria-labelledby'))).toEqual([
-      'retention-heading',
+    expect(sections.slice(-3, -1).map((section) => section.getAttribute('aria-labelledby'))).toEqual([
       'entitlements-heading',
+      'retention-heading',
     ])
     expect(screen.getByText('Choose how long Muniment keeps completed threads.')).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'Keep every thread' })).toBeChecked()

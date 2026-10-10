@@ -18,7 +18,8 @@
   import { companyEmpty, currentCompany, kindLabel, kindSummary, orderKinds, recordErrorLine, validCompanyName } from './record-panel-state.js'
   import { askSql, diffLines, stateLabel, viewData, viewSettings, viewsFor } from './record-table-state.js'
 
-  let { tauri, maximized = false, refresh = 0, ontogglemaximized, onask } = $props()
+  // `request` lets Settings open the panel on the sample company or on one source's connect step.
+  let { tauri, maximized = false, refresh = 0, ontogglemaximized, onask, request = null } = $props()
 
   let companies = $state([])
   let company = $derived(currentCompany(companies))
@@ -63,6 +64,14 @@
   let pendingSource = $state(null)
   // Whether the sample company's report stands in place of the first screen.
   let sampling = $state(false)
+  let handledRequest = null
+  $effect(() => {
+    if (!request || request === handledRequest || loading) return
+    handledRequest = request
+    if (request.sample) sampling = true
+    else if (request.source && company) { error = null; importing = { source: request.source } }
+    else if (request.source) pendingSource = request.source
+  })
   // A company with records opens on its report. The kind list is one step away.
   let listing = $state(false)
   let loadVersion = 0
@@ -467,7 +476,7 @@
     <p class="record-state" role="alert">{error}</p>
   {:else if loading && companies.length === 0}
     <p class="record-state">Reading the record</p>
-  {:else if companies.length === 0 && sampling}
+  {:else if sampling}
     <RecordSample onclose={() => { sampling = false }} />
   {:else if companies.length === 0}
     <RecordStart bind:name={newCompanyName} bind:source={pendingSource} oncreate={createCompany} onsample={() => { sampling = true }} />

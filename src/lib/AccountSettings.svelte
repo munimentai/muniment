@@ -9,12 +9,26 @@
   import PhonePairing from './PhonePairing.svelte'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
 
-  let { tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut } = $props()
+  let { tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut, subject = '', onsignout = null } = $props()
   let access = $state(accessIdleState)
   let devices = $state(devicesIdleState)
   let companions = $state(companionsIdleState)
   let attachListener = $state({ started: false, failure: null, pending: true, stopped: false })
   let sectionRoot = $state()
+  // The account card reads the entitlement snapshot: the person, their
+  // organization and role, and the plan its capabilities imply.
+  const snapshot = $derived(access.name === 'ready' ? access.snapshot : null)
+  const displayName = $derived(snapshot?.user_display_name ?? (subject || 'Signed in'))
+  const orgLine = $derived(snapshot ? [snapshot.organization_display_name ?? snapshot.org_id, snapshot.role].filter(Boolean).join(' · ') : 'Muniment account')
+  const initials = $derived(displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0].toUpperCase()).join('') || 'M')
+  // Local needs no account, a free account adds the mobile relay, and payment
+  // adds sharing, scheduled execution and routing.
+  const PLANS = [
+    { id: 'local', label: 'Local', summary: 'This desktop with your own providers, no account.', features: ['Chats, agents and artifacts', 'Your models and keys'] },
+    { id: 'free', label: 'Free', summary: 'Adds the mobile relay.', features: ['Phone pairing and remote control', 'Devices on one account'] },
+    { id: 'pro', label: 'Pro', summary: 'Adds sharing, scheduled execution and routing.', features: ['Shared threads and artifacts', 'Scheduled agents', 'Cloud routing'] },
+  ]
+  const plan = $derived((access.capabilities ?? []).some((capability) => /share|schedul|rout/i.test(capability)) ? 'pro' : 'free')
   let expandedGrants = $state(new Set())
   let capturingShortcut = $state(false)
   let pendingShortcut = $state('')
@@ -243,43 +257,27 @@
 </script>
 
 <div class="account-sections" bind:this={sectionRoot}>
-  <section class="retention-section" aria-labelledby="retention-heading">
-    <h3 id="retention-heading" class="access-label">Thread retention</h3>
-    <p class="retention-help">Choose how long Muniment keeps completed threads.</p>
-    <div class="retention-options">
-      {#each retentionOptions as option}
-        <label><input type="radio" name="thread-retention" value={option[1]} checked={retentionChoice === option[1]} disabled={retentionSaving} onchange={() => chooseRetention(option[1])} /> <span>{option[0]}</span></label>
-      {/each}
-    </div>
-    {#if retentionError}<div class="access-status" role="alert"><p>{retentionError}</p><button onclick={() => chooseRetention(retentionRetryChoice)}>Try again</button></div>{/if}
+  <section class="account-card" aria-label="Signed-in account">
+    <span class="account-avatar" aria-hidden="true">{initials}</span>
+    <div class="account-who"><strong>{displayName}</strong><span>{orgLine}</span></div>
+    <span class="plan-chip">{PLANS.find((tier) => tier.id === plan).label}</span>
+    {#if onsignout}<button type="button" class="account-signout" onclick={onsignout}>Sign out</button>{/if}
   </section>
-  <section class="entitlements-section" role="group" aria-labelledby="entitlements-heading">
-    <div class="access-heading"><h3 id="entitlements-heading" class="access-label">Your access</h3>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div>
-    {#if access.name === 'loading'}
-      <p class="access-status" aria-live="polite">Checking your current access…</p>
-    {:else if access.name === 'error'}
-      <div class="access-status" role="alert"><p>Your access could not be loaded.</p><button onclick={reload}>Try again</button></div>
-    {:else if access.name === 'ready'}
-      <div class="grant-grid">
-        <div><h3>Capabilities</h3>{#if access.capabilities.length}<ul>{#each access.capabilities as capability}<li>{capability}</li>{/each}</ul>{:else}<p class="empty-grant">The snapshot lists no capabilities.</p>{/if}</div>
-      </div>
-      {#if access.grants.length === 0}<p class="empty-grant">The snapshot lists no grants.</p>{/if}
-      {#each access.grants as grant, index}
-        {@const open = expandedGrants.has(index)}
-        <div class="access-group">
-          <button class="group-toggle" aria-expanded={open} aria-controls={`access-grant-${index}`} onclick={() => toggleGrant(index)}><span>{grant.effect} {grant.action} · {grant.resource_id ?? grant.resource_type}</span><span aria-hidden="true">{open ? '−' : '+'}</span></button>
-          {#if open}<div class="grant-grid" id={`access-grant-${index}`}>
-            <div><h3>Principal</h3><p>{grant.principal_type} · {grant.principal_id ?? 'Not specified'}</p></div>
-            <div><h3>Resource type</h3><p>{grant.resource_type}</p></div>
-            <div><h3>Expiration</h3>{#if grant.expires_at}<time datetime={grant.expires_at}>{lastActive(grant.expires_at)}</time>{:else}<p>The grant has no expiration.</p>{/if}</div>
-          </div>{/if}
-        </div>
+  <section class="plan-section" aria-labelledby="plan-heading">
+    <h3 id="plan-heading" class="settings-heading">Plan</h3>
+    <p class="section-help">Plans add what needs a server. Everything local stays free.</p>
+    <ul class="plan-tiers">
+      {#each PLANS as tier (tier.id)}
+        <li class:current={tier.id === plan} aria-current={tier.id === plan ? 'true' : undefined}>
+          <div class="plan-name"><strong>{tier.label}</strong>{#if tier.id === plan}<span class="plan-chip">Your plan</span>{/if}</div>
+          <p>{tier.summary}</p>
+          <ul>{#each tier.features as feature}<li>{feature}</li>{/each}</ul>
+        </li>
       {/each}
-    {/if}
-    <p class="access-note">Your admins set access. The snapshot is a display hint. The server checks each request.</p>
+    </ul>
   </section>
   <section class="devices-section" aria-labelledby="devices-heading">
-    <h3 id="devices-heading" class="access-label">Devices</h3>
+    <h3 id="devices-heading" class="settings-heading">Devices</h3>
     {#if devices.name === 'loading'}
       <p class="access-status" aria-live="polite">Loading devices…</p>
     {:else if devices.name === 'error'}
@@ -298,7 +296,7 @@
   </section>
   <PhonePairing {tauri} />
   <section class="companions-section" aria-labelledby="companions-heading">
-    <h3 id="companions-heading" class="access-label">Connected programs</h3>
+    <h3 id="companions-heading" class="settings-heading">Connected programs</h3>
     {#if companions.name === 'loading'}
       <p class="access-status" aria-live="polite">Loading connected programs…</p>
     {:else if companions.name === 'error'}
@@ -340,9 +338,44 @@
       </ul>
     {/if}
   </section>
+  <section class="entitlements-section" role="group" aria-labelledby="entitlements-heading">
+    <div class="access-heading"><h3 id="entitlements-heading" class="settings-heading">Your access</h3>{#if access.name === 'ready'}<p>Snapshot v{access.snapshot.snapshot_version}</p>{/if}</div>
+    {#if access.name === 'loading'}
+      <p class="access-status" aria-live="polite">Checking your current access…</p>
+    {:else if access.name === 'error'}
+      <div class="access-status" role="alert"><p>Your access could not be loaded.</p><button onclick={reload}>Try again</button></div>
+    {:else if access.name === 'ready'}
+      <div class="grant-grid">
+        <div><h3>Capabilities</h3>{#if access.capabilities.length}<ul>{#each access.capabilities as capability}<li>{capability}</li>{/each}</ul>{:else}<p class="empty-grant">The snapshot lists no capabilities.</p>{/if}</div>
+      </div>
+      {#if access.grants.length === 0}<p class="empty-grant">The snapshot lists no grants.</p>{/if}
+      {#each access.grants as grant, index}
+        {@const open = expandedGrants.has(index)}
+        <div class="access-group">
+          <button class="group-toggle" aria-expanded={open} aria-controls={`access-grant-${index}`} onclick={() => toggleGrant(index)}><span>{grant.effect} {grant.action} · {grant.resource_id ?? grant.resource_type}</span><span aria-hidden="true">{open ? '−' : '+'}</span></button>
+          {#if open}<div class="grant-grid" id={`access-grant-${index}`}>
+            <div><h3>Principal</h3><p>{grant.principal_type} · {grant.principal_id ?? 'Not specified'}</p></div>
+            <div><h3>Resource type</h3><p>{grant.resource_type}</p></div>
+            <div><h3>Expiration</h3>{#if grant.expires_at}<time datetime={grant.expires_at}>{lastActive(grant.expires_at)}</time>{:else}<p>The grant has no expiration.</p>{/if}</div>
+          </div>{/if}
+        </div>
+      {/each}
+    {/if}
+    <p class="access-note">Your admins set access. The snapshot is a display hint. The server checks each request.</p>
+  </section>
+  <section class="retention-section" aria-labelledby="retention-heading">
+    <h3 id="retention-heading" class="settings-heading">Thread retention</h3>
+    <p class="section-help">Choose how long Muniment keeps completed threads.</p>
+    <div class="retention-options">
+      {#each retentionOptions as option}
+        <label><input type="radio" name="thread-retention" value={option[1]} checked={retentionChoice === option[1]} disabled={retentionSaving} onchange={() => chooseRetention(option[1])} /> <span>{option[0]}</span></label>
+      {/each}
+    </div>
+    {#if retentionError}<div class="access-status" role="alert"><p>{retentionError}</p><button onclick={() => chooseRetention(retentionRetryChoice)}>Try again</button></div>{/if}
+  </section>
   <section class="voice-section" aria-labelledby="voice-heading">
-    <h3 id="voice-heading" class="access-label">Voice shortcut</h3>
-    <p class="shortcut-help">Hold this shortcut to dictate from anywhere.</p>
+    <h3 id="voice-heading" class="settings-heading">Voice shortcut</h3>
+    <p class="section-help">Hold this shortcut to dictate from anywhere.</p>
     <button class="shortcut-capture" aria-label={capturingShortcut ? 'Record voice shortcut' : `Change voice shortcut, current ${voiceShortcut}`} onclick={() => { capturingShortcut = true; pendingShortcut = ''; shortcutStatus = '' }} onkeydown={captureShortcut} disabled={voiceShortcutChanging}>
       <span>{capturingShortcut ? pendingShortcut || 'Press a shortcut…' : voiceShortcut}</span><small>{capturingShortcut ? 'Modifier + key' : 'Change'}</small>
     </button>
@@ -355,12 +388,33 @@
 </div>
 
 <style>
-  .account-sections { display: block; margin-top: 14px; }
+  /* Account reads like every Settings page: sections under semibold headings,
+     28px apart, with lists in bordered groups instead of dividers between sections. */
+  .account-sections { display: grid; gap: 28px; max-width: 760px; }
+  .account-sections section > .settings-heading, .access-heading { margin: 0 0 4px; }
+  .section-help { margin: 0 0 10px; color: var(--muted); font-size: var(--text-13); }
+  .plan-section, .devices-section, .companions-section, .entitlements-section, .retention-section, .voice-section { min-width: 0; }
+  .account-signout { flex: none; }
+  .account-card { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--faint); }
+  .account-avatar { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--radius-panel); background: var(--surface); border: 1px solid var(--border); font: var(--weight-semibold) var(--text-15) var(--font-human); }
+  .account-who { flex: 1; min-width: 0; display: grid; gap: 2px; }
+  .account-who strong { font-size: var(--text-15); font-weight: 600; overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  .account-who span { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .plan-chip { flex: none; padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .plan-tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .plan-tiers > li { display: grid; align-content: start; gap: 6px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .plan-tiers > li.current { background: var(--faint); }
+  .plan-name { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .plan-name strong { font-size: var(--text-15); font-weight: 600; }
+  .plan-tiers p { margin: 0; color: var(--muted); font-size: var(--text-13); }
+  .plan-tiers ul { display: grid; gap: 3px; margin: 4px 0 0; padding: 0; list-style: none; font: var(--text-12) var(--font-mono); color: var(--muted); }
+  .account-sections :is(.device-list, .companion-list, .retention-options) { padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
+  .retention-options label { min-height: 36px; border-top: 1px solid var(--border); }
+  .retention-options label:first-child { border-top: 0; }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
   .access-heading { display: flex; align-items: baseline; justify-content: space-between; }
   .access-heading p { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .access-label { margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
   .access-group { border-top: 1px solid var(--border); }
   .group-toggle { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 9px 2px; border: 0; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); text-align: left; }
   .group-toggle > span:first-child { min-width: 0; overflow-wrap: anywhere; }
@@ -370,25 +424,19 @@
   .grant-grid li + li { margin-top: 2px; }
   .empty-grant, .access-status { margin: 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .access-status p { margin: 0 0 6px; }
-  .retention-section, .entitlements-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .retention-help { margin: 0 0 5px; color: var(--muted); font-size: var(--text-12); }
   .retention-options { display: grid; }
-  .retention-options label { display: flex; min-height: 24px; align-items: center; gap: 7px; font-size: var(--text-12); cursor: pointer; }
+  .retention-options label { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); cursor: pointer; }
   .retention-options input { min-width: 24px; min-height: 24px; margin: 0; accent-color: var(--ink); cursor: pointer; }
   .access-note { margin: 10px 0 0; color: var(--muted); font-size: var(--text-12); }
-  .devices-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .companions-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .voice-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .shortcut-help { margin: 0 0 8px; color: var(--muted); font-size: var(--text-12); }
   .shortcut-capture { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 9px; font-family: var(--font-mono); text-align: left; }
   .shortcut-capture small { color: var(--muted); font: var(--text-12) var(--font-human); }
   .shortcut-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 7px; }
   .restore-shortcut { margin-top: 6px; padding: 3px 0; color: var(--muted); }
   .shortcut-error { margin: 5px 0 0; color: var(--oxide); font-size: var(--text-12); }
   .device-list { margin: 0; padding: 0; list-style: none; }
-  .device-list li { padding: 9px 2px; border-top: 1px solid var(--border); }
+  .device-list li { padding: 10px 0; border-top: 1px solid var(--border); }
   .device-list li:first-child { border-top: 0; }
-  .device-heading { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); }
+  .device-heading { display: flex; align-items: center; gap: 7px; font-size: var(--text-13); }
   .device-heading strong { font-weight: 600; }
   .revoked .device-heading strong { color: var(--oxide); font-weight: 400; text-decoration: line-through; }
   /* §1.2 forbids signal on badges at rest; §1.5 puts chips on radius 2. */
@@ -397,10 +445,10 @@
   .device-state { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .device-list time { display: block; margin-top: 3px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .companion-list { margin: 0; padding: 0; list-style: none; }
-  .companion-list li { min-width: 0; padding: 9px 2px; border-top: 1px solid var(--border); }
+  .companion-list li { min-width: 0; padding: 10px 0; border-top: 1px solid var(--border); }
   .companion-list li:first-child { border-top: 0; }
   .companion-row { position: relative; }
-  .companion-heading { display: flex; min-width: 0; align-items: center; gap: 7px; font-size: var(--text-12); }
+  .companion-heading { display: flex; min-width: 0; align-items: center; gap: 7px; font-size: var(--text-13); }
   .companion-heading strong, .companion-version { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .companion-heading strong { min-width: 0; font-weight: 600; }
   .companion-heading span { flex: none; margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); }

@@ -135,8 +135,8 @@ The company-record flag adds Companies. The cloud flag adds Account, with phone 
 section across the thread and rail; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it. Back to threads or Escape returns focus to the opener.
-With the company-record flag enabled, Companies lists every company on the machine with Open, Rename and Delete,
-Delete asks once and names the company, and New company sits under the list.
+Companies leads with New company, shows each company as a card with Open, Rename and Delete, where Delete asks once and names it, then Sources and the sample company,
+which open the record panel, and Backups. Account leads with the signed-in card, Sign out and the plan tiers. Memory carries Recall, the saved facts and Export.
 Model providers, Model list and Decision models are three pages of one component. Account
 rows span the page, with allowances visible and usage in details.
 A searchable model list holds visibility and routing statements. Each provider leads with the newest model of each family and the models turned on.
