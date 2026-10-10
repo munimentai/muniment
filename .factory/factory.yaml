@@ -81,6 +81,9 @@ budgets:
   concurrent_runs: 1
 
 sandbox:
+  # The factory's desktop lane image holds the locked crates, the npm cache and
+  # a warm build of the Rust test crates, so setup and the Rust tests reuse them.
+  lane: desktop
   cpus: 4
   memory_mib: 8192
   # crates.io for the locked crates, and GitHub for the muniment-core git dependency.
