@@ -63,6 +63,30 @@ impl Drop for TemporaryProfile {
 }
 
 pub fn remove_journal_tables(profile: &Path, tables: &[&str]) {
+    // A `cargo test` run that includes the integration package already built the
+    // example beside this test binary. Reusing it avoids a second target directory
+    // that can exhaust the disk on the smoke runner.
+    let built = std::env::current_exe().ok().and_then(|test_binary| {
+        let example = test_binary
+            .parent()?
+            .parent()?
+            .join("examples")
+            .join(format!("remove-journal-tables{}", std::env::consts::EXE_SUFFIX));
+        example.is_file().then_some(example)
+    });
+    if let Some(example) = built {
+        let output = Command::new(example)
+            .arg(profile.join("runs.sqlite3"))
+            .args(tables)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "journal fixture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut workspace_hasher = DefaultHasher::new();
     manifest_dir.hash(&mut workspace_hasher);
@@ -86,6 +110,10 @@ pub fn remove_journal_tables(profile: &Path, tables: &[&str]) {
         .arg(profile.join("runs.sqlite3"))
         .args(tables)
         .current_dir(manifest_dir)
+        // The fixture build needs no debug symbols or incremental state, which keeps
+        // its target directory small.
+        .env("CARGO_PROFILE_DEV_DEBUG", "0")
+        .env("CARGO_INCREMENTAL", "0")
         .output()
         .unwrap();
     assert!(
@@ -305,6 +333,10 @@ pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
         ])
         .arg(&build_root)
         .current_dir(manifest_dir)
+        // The stub needs no debug symbols or incremental state, which keeps this
+        // second target directory small on the shared smoke runner.
+        .env("CARGO_PROFILE_DEV_DEBUG", "0")
+        .env("CARGO_INCREMENTAL", "0")
         .status()
         .unwrap();
     assert!(status.success());
