@@ -4,11 +4,13 @@ import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { signUpdaterBytes, verifyUpdaterSignature } from './updater-signature.mjs';
+import { LOCALE_ARCHIVE } from '../../scripts/chromium-locales.mjs';
 
+// Each platform also publishes the Chromium language packs its installer leaves out.
 export const artifactSpecs = {
-  linux: [['deb', '.deb'], ['appimage', '.AppImage']],
-  windows: [['msi', '.msi', '-machine.msi'], ['msi', '-machine.msi'], ['nsis', '-setup.exe']],
-  macos: macosArchitectures.flatMap(suffix => macosFormats.map(format => [format === '.pkg' ? 'pkg' : format === '.dmg' ? 'dmg' : 'macos', `muniment${suffix}${format}`])),
+  linux: [['deb', '.deb'], ['appimage', '.AppImage'], ['locales', LOCALE_ARCHIVE]],
+  windows: [['msi', '.msi', '-machine.msi'], ['msi', '-machine.msi'], ['nsis', '-setup.exe'], ['locales', LOCALE_ARCHIVE]],
+  macos: [...macosArchitectures.flatMap(suffix => macosFormats.map(format => [format === '.pkg' ? 'pkg' : format === '.dmg' ? 'dmg' : 'macos', `muniment${suffix}${format}`])), ['locales', LOCALE_ARCHIVE]],
 };
 export const isUpdateArtifact = (name) => name.endsWith('.AppImage') || name.endsWith('.app.tar.gz') ||
   name.endsWith('.msi') || name.endsWith('-setup.exe') || name.endsWith('-nsis.exe');

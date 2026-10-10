@@ -70,4 +70,5 @@ fi
 npm run tauri build -- --verbose --no-bundle "$@"
 node "$repo_root/scripts/stage-cef-linux.mjs"
 npm run tauri bundle -- --verbose "$@" --config '{"bundle":{"resources":{"target/release/cef-resources/":"cef/"}}}'
+node scripts/recompress-deb-linux.mjs
 node scripts/package-appimage-linux.mjs

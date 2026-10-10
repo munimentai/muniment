@@ -9,12 +9,12 @@
         {
           "id": "workspace",
           "title": "Choose a workspace",
-          "body": "Open muniment and choose a workspace folder. The local desktop needs no Muniment account. Keep project files in folders you control. Settings \u2192 Storage shows your workspace and opens managed extension storage."
+          "body": "Open muniment and choose a workspace folder. The local desktop needs no Muniment account. Keep project files in folders you control. Settings → Storage shows your workspace and opens managed extension storage."
         },
         {
           "id": "account",
           "title": "Connect your first account",
-          "body": "Open Settings \u2192 Models & routing \u2192 Accounts. Choose Connect account and a provider. Use a supported subscription sign-in, an API key, or a local model endpoint. Credentials stay on your device. Your provider sets access and usage limits."
+          "body": "Open Settings → Models & decisions → Accounts. Choose Connect account and a provider. Use a supported subscription sign-in, an API key, or a local model endpoint. Credentials stay on your device. Your provider sets access and usage limits."
         },
         {
           "id": "first-message",
@@ -24,14 +24,14 @@
         {
           "id": "next",
           "title": "Make it your workspace",
-          "body": "Open the files, terminal, or browser panel beside the chat. Add tools in Settings \u2192 Extend. Use Preferences to choose a theme, text size, and separate fonts for headers, prose, and records."
+          "body": "Open the files, terminal, or browser panel beside the chat. Add tools in Settings → Extend. Use Preferences to choose a theme, text size, and separate fonts for headers, prose, and records."
         }
       ]
     },
     {
       "slug": "models",
-      "title": "Accounts, models, and routing",
-      "description": "Connect providers, choose models, and set routing preferences.",
+      "title": "Accounts, models, and decisions",
+      "description": "Connect providers, choose models, and set up decision models for routing and assistance.",
       "sections": [
         {
           "id": "accounts",
@@ -41,12 +41,17 @@
         {
           "id": "models",
           "title": "Models",
-          "body": "The Models tab shows the shared model list from connected providers. Choose a model in the composer for a specific request. Local endpoints such as Ollama and LM Studio need a running server. Check the endpoint and model name if no models appear."
+          "body": "The Models tab lists each provider’s newest model of every family first, with the models you turned on. Older models fold under Other models and stay out of the composer picker until you turn them on. Local endpoints such as Ollama and LM Studio need a running server. Check the endpoint and model name if no models appear."
         },
         {
           "id": "routing",
-          "title": "Routing",
-          "body": "The Routing tab controls account balancing, candidate models, and the classifier. Use Test routing to inspect a choice before relying on it. Routing can use only the accounts and models you configure. Disabled accounts stay excluded."
+          "title": "Decision models",
+          "body": "A decision model is a small, fast model that answers typed questions about your message. Connect one in Accounts, such as Clef on Cloudflare, GPT-6 Luna with an OpenAI API key, a System One endpoint, or a llama.cpp or Ollama server. A new model, URL, or key passes a connection test before it saves. Chats can also call connected decision models from codemode scripts."
+        },
+        {
+          "id": "decisions",
+          "title": "Routing and assistance",
+          "body": "The Decisions tab has two parts. Model routing sends your message to the decision model you choose, which picks the answer model and balances across accounts. Use Test routing to inspect a choice. Assistance picks MCP servers and skills for each message, with its own decision model or the routing one. While assistance is on, the composer names the model, such as Clef Flash assists, and you can turn it off for one message. A timeout or a low-confidence answer adds nothing."
         },
         {
           "id": "capacity",
@@ -90,12 +95,12 @@
         {
           "id": "mcp",
           "title": "Connect an MCP server",
-          "body": "Open Settings \u2192 Extend \u2192 MCP servers. Search names, descriptions, publishers, or categories. Use the sliders button for category, installed, and sort filters. Details opens an in-app description. Connect starts provider authentication for supported servers. Complete consent in your browser."
+          "body": "Open Settings → Extend → MCP servers. Search names, descriptions, publishers, or categories. Use the sliders button for category, installed, and sort filters. Details opens an in-app description. Connect starts provider authentication for supported servers. Complete consent in your browser."
         },
         {
           "id": "custom",
           "title": "Custom servers",
-          "body": "Use Custom to enter a server URL or advanced local command configuration. Providers can require account access or a registered OAuth client. A directory entry does not guarantee access. Check the provider\u2019s own instructions if connection fails. Test the connection from Details."
+          "body": "Use Custom to enter a server URL or advanced local command configuration. Providers can require account access or a registered OAuth client. A directory entry does not guarantee access. Check the provider’s own instructions if connection fails. Test the connection from Details."
         },
         {
           "id": "packages",
@@ -110,7 +115,12 @@
         {
           "id": "turn",
           "title": "Use extensions for one turn",
-          "body": "Open the composer\u2019s ellipsis menu. Enable the MCP servers needed for this turn. Choose a skill or plugin to insert its /command into the message. Auto-select uses your configured classifier. Selections reset after submission and remain with an unsent task draft."
+          "body": "Open the composer’s ellipsis menu. Enable the MCP servers needed for this turn. Choose a skill or plugin to insert its /command into the message. With assistance on, the decision model named in the composer picks MCP servers and skills, and you can turn it off for one message. Selections reset after submission and remain with an unsent task draft."
+        },
+        {
+          "id": "tools",
+          "title": "How chats use tools",
+          "body": "The model calls your MCP servers through codemode, a short script that calls tools and returns only what the reply needs. Each server keeps its own name, and the reply labels its calls, such as MCP Context7. Enabled skills are listed by name and description, and the model reads a skill when a task needs it."
         }
       ]
     },
@@ -132,7 +142,7 @@
         {
           "id": "browser",
           "title": "Browser",
-          "body": "The browser starts with the desktop docs. Use the address bar to visit a site. The tab shows the domain and path. Browser settings let you choose another homepage. Hiding the panel keeps the page available. Closing the tab releases its browser view."
+          "body": "The browser opens the online docs at muniment.ai/docs. Type an address to visit a site, or words to search with the engine Preferences names. A bang such as !w or !yt searches one site. The tab shows the domain and path. Browser settings let you choose another homepage. Hiding the panel keeps the page available. Closing the tab releases its browser view. A chat can use the browser too: its browser tool opens the Browser tab and picks each click with your assistance decision model, which receives the page text. It asks you before a click that buys, sends, deletes, or changes an account, and you type passwords yourself. Stop the reply to stop it."
         },
         {
           "id": "artifacts",
@@ -174,6 +184,11 @@
           "body": "Select light, dark, or system mode. Browse themes to view the full gallery. Adjust text size and choose fonts separately for headers, prose, and records. Keyboard focus and enabled switches use the current theme."
         },
         {
+          "id": "browser-language",
+          "title": "Browser language",
+          "body": "Browser language sets the language of the Browser tab’s menus and error pages, and the language sites receive first. The installer includes 15 languages. Choose another to download it once, then restart muniment to use it. Browser search beside it chooses the engine the address bar searches with: Google, Brave Search, DuckDuckGo, Bing, or Startpage."
+        },
+        {
           "id": "memory",
           "title": "Profile and memory",
           "body": "Edit your name, work, and response instructions in Profile & Memory. Save the profile to use it in new replies. Add facts with a source. Search appears when memories exist. Deleted memories can be restored."
@@ -203,7 +218,7 @@
         {
           "id": "mcp",
           "title": "An MCP cannot connect",
-          "body": "Open its Details and test the connection. Check that your provider account can use the service. Sign in again if consent expired. Some custom servers require a client registered by the provider. Do not substitute another app\u2019s client credentials."
+          "body": "Open its Details and test the connection. Check that your provider account can use the service. Sign in again if consent expired. Some custom servers require a client registered by the provider. Do not substitute another app’s client credentials."
         },
         {
           "id": "files",
@@ -213,7 +228,7 @@
         {
           "id": "browser",
           "title": "A page will not load",
-          "body": "Check the URL and network connection. Reload the page or close and reopen its tab. The bundled desktop docs work offline. External sites and provider authentication need network access."
+          "body": "Check the URL and network connection. Reload the page or close and reopen its tab. The docs, external sites, and provider authentication need network access. A language download needs a published release of your version."
         }
       ]
     }

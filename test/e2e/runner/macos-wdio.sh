@@ -269,6 +269,10 @@ current_step=validate-app
 [[ -x $app_binary ]] || { echo 'E2E application binary is unavailable' >&2; status=1; exit; }
 run_step webdriver-marker node test/e2e/support/webdriver-release-guard.mjs present "$app_binary" || exit
 
+# Resolve pins while Cargo still has the login home's toolchain and checkout.
+MUNIMENT_CORE_ROOT=$(run_step resolve-core-root node scripts/muniment-core.mjs) || { first_failed_step=resolve-core-root; status=1; exit; }
+export MUNIMENT_CORE_ROOT
+
 # The installed smoke removes its bundle. Restore the pinned bundle for WDIO.
 sha=${MUNIMENT_E2E_SOURCE_SHA:-}
 current_step=validate-source
@@ -295,10 +299,6 @@ run_step verify-webdriver-app cmp -s "$app_binary" "$installed_desktop" || exit
 run_step sign-webdriver-app log_command "$raw/installer.log" codesign --force --sign - --entitlements src-tauri/packaging/entitlements.plist "$installed_bundle" || exit
 run_step verify-webdriver-signature log_command "$raw/installer.log" codesign --verify --deep --strict "$installed_bundle" || exit
 unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
-
-# Resolve pins while Cargo still has the login home's toolchain and checkout.
-MUNIMENT_CORE_ROOT=$(run_step resolve-core-root node scripts/muniment-core.mjs) || { first_failed_step=resolve-core-root; status=1; exit; }
-export MUNIMENT_CORE_ROOT
 
 export MUNIMENT_E2E_APP_BINARY="$PWD/test/e2e/support/macos-wdio-app.sh" MUNIMENT_E2E_RAW_DIR="$raw"
 export MUNIMENT_E2E_REAL_APP_BINARY="$installed_desktop"

@@ -57,6 +57,8 @@ export function prepareMacosVariants(base, run = execute) {
   }
   return variants;
 }
+// LZMA (ULMO) images open on macOS 10.15 and later and are about a quarter
+// smaller than zlib (UDZO) images.
 export function packageMacosDmg(app, output, run = execute) {
   const temporary = mkdtempSync(join(tmpdir(), 'muniment-dmg-'));
   try {
@@ -64,7 +66,7 @@ export function packageMacosDmg(app, output, run = execute) {
     run('ditto', [app, join(contents, 'muniment.app')]);
     symlinkSync('/Applications', join(contents, 'Applications'));
     mkdirSync(dirname(output), { recursive: true });
-    run('hdiutil', ['create', '-volname', 'Muniment', '-srcfolder', contents, '-format', 'UDZO', '-fs', 'HFS+', '-ov', output]);
+    run('hdiutil', ['create', '-volname', 'Muniment', '-srcfolder', contents, '-format', 'ULMO', '-fs', 'HFS+', '-ov', output]);
     run('hdiutil', ['verify', output]);
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 }

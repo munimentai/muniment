@@ -60,3 +60,16 @@ it('allows custom server hosts outside the discovery catalog', () => {
   }
   expect(call('server',{name:'Notion',definition:{url:'https://mcp.notion.com/mcp'}}).ok).toBe(true)
 })
+
+it('saves a bearer token privately and sets how chats reach a server',()=>{
+  const {root,call}=fixture()
+  const saved=call('server',{id:'docs',name:'Docs',definition:{url:'https://docs.example/mcp'},token:'secret-token'}).result.items[0]
+  expect(saved.definition).toEqual({url:'https://docs.example/mcp',bearerToken:true})
+  const tokens=path.join(root,'extensions/mcp-tokens.json')
+  expect(JSON.parse(fs.readFileSync(tokens,'utf8'))).toEqual({'extend-docs':'secret-token'})
+  if(process.platform!=='win32')expect(fs.statSync(tokens).mode&0o777).toBe(0o600)
+  expect(fs.readFileSync(path.join(root,'extensions/inventory.json'),'utf8')).not.toContain('secret-token')
+  expect(call('exposure',{id:'docs',exposure:'direct'}).result.items[0].definition.exposure).toBe('direct')
+  expect(call('exposure',{id:'docs',exposure:'codemode'}).result.items[0].definition.exposure).toBeUndefined()
+  expect(call('exposure',{id:'docs',exposure:'everywhere'}).ok).toBe(false)
+})

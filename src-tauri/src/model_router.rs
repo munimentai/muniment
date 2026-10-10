@@ -23,7 +23,7 @@ use muniment_core::model_router::family::{family_for_pi_provider, SUBSCRIPTION_P
 use muniment_core::model_router::model_catalog;
 use muniment_core::model_router::quota;
 use muniment_core::model_router::usage::{self, AccountUsage};
-use muniment_core::model_router::{classify, options, pi_provider, served_models, server};
+use muniment_core::model_router::{all_options, classify, options, pi_provider, served_models, server};
 
 use crate::local_mode::{
     harness_agent_directory, lock_pi_auth_file, pi_models_file, read_json_for_update,
@@ -159,13 +159,19 @@ pub(crate) struct RouterSettings {
     /// The sign-ins the pool can take, one per Pi provider.
     subscriptions: Vec<SubscriptionView>,
     accounts: Vec<AccountView>,
-    /// Every model an enabled account serves, in the order the classifier sees.
+    /// Every model an enabled account serves, in the order the classifier sees,
+    /// the hidden ones too, so Settings can turn them back on.
     options: Vec<OptionView>,
+    /// The `family/model` keys the picker hides, which the router leaves out of the running.
+    hidden: Vec<String>,
     routes: Vec<Route>,
     fallback: Option<String>,
     min_confidence: f64,
     classifier: ClassifierView,
     classifier_connections: Vec<connections::ConnectionView>,
+    /// Decision-model assistance: whether it is on, and the connection it
+    /// asks, empty while it uses the model routing one.
+    assist: connections::AssistView,
     served_models: Vec<String>,
 }
 
@@ -342,7 +348,7 @@ fn settings(
                 )
             })
             .collect(),
-        options: options(&config)
+        options: all_options(&config)
             .into_iter()
             .map(|option| {
                 let entry = model_catalog::entry(&option.family, &option.model);
@@ -367,11 +373,13 @@ fn settings(
                 }
             })
             .collect(),
+        hidden: config.hidden.clone(),
         routes: config.routes.clone(),
         fallback: config.fallback.clone(),
         min_confidence: config.min_confidence,
         classifier: classifier_view(&config.classifier),
         classifier_connections: connections::views(agent, &config.classifier)?,
+        assist: connections::assist_view(agent, &config.classifier)?,
         served_models: served_models(&config),
     })
 }
@@ -604,6 +612,38 @@ pub(crate) fn model_router_remove_account(
     )
 }
 
+/// Keeps the models the picker hides out of the running, so a routed turn
+/// answers only from a model the picker offers. Each key is `family/model`.
+#[tauri::command]
+pub(crate) fn model_router_set_hidden(
+    state: tauri::State<'_, RouterState>,
+    keys: Vec<String>,
+) -> Result<RouterSettings, String> {
+    let mut keys: Vec<String> = keys.into_iter().map(|key| key.trim().to_owned()).collect();
+    if keys.iter().any(|key| {
+        key.len() > 300
+            || key
+                .split_once('/')
+                .is_none_or(|(family, model)| family.is_empty() || model.is_empty())
+    }) {
+        return Err("Name each hidden model as provider/model.".into());
+    }
+    keys.sort();
+    keys.dedup();
+    let agent = agent()?;
+    let mut config = load(&agent)?;
+    if config.hidden != keys {
+        config.hidden = keys;
+        save(&agent, &config)?;
+        apply(&agent, &state, &config)?;
+    }
+    settings(
+        &agent,
+        running_endpoint(&state).as_ref(),
+        &running_active(&state),
+    )
+}
+
 #[tauri::command]
 pub(crate) fn model_router_save_routes(
     state: tauri::State<'_, RouterState>,
@@ -630,9 +670,10 @@ pub(crate) fn model_router_save_routes(
     config.routes = routes;
     config.fallback = fallback;
     // One name is one model: the classifier answers with a name, and `auto`
-    // is the name that asks it to pick.
+    // is the name that asks it to pick. A hidden model keeps its name.
     let running = options(&config);
-    let mut keys: Vec<&str> = running.iter().map(|option| option.key.as_str()).collect();
+    let every = all_options(&config);
+    let mut keys: Vec<&str> = every.iter().map(|option| option.key.as_str()).collect();
     keys.sort_unstable();
     if keys.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err("Two models share a name. Give each its own.".into());

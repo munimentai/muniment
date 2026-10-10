@@ -10,6 +10,7 @@ import { randomBytes } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { nativeFiles } from "../.github/lib/macos-variants.mjs";
 import {
   codesignArguments,
   intermediateCertificateImportArguments,
@@ -86,6 +87,10 @@ cpSync(readerSource, readerBundled);
 mustRun("build browser helper", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--bin", "muniment-cef-helper", "--release", "--locked"]);
 mustRun("build app", "npm", ["run", "tauri", "build", "--", "--bundles", "app", "--features", "local-runtime", "--no-sign"]);
 mustRun("package direct CEF", process.execPath, ["scripts/package-cef-macos.mjs", app]);
+// A local build is arm64 only. The vendored speech libraries are universal.
+for (const file of nativeFiles(app)) {
+  if (capture("read architectures", "lipo", ["-archs", file]).trim().split(/\s+/).length > 1) mustRun("thin native code", "lipo", [file, "-thin", "arm64", "-output", file]);
+}
 
 // Everything secret-bearing lives in a throwaway directory removed on exit.
 const workDir = mkdtempSync(join(tmpdir(), "muniment-local-signing-"));

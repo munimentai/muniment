@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage, runStage, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, runStage, withFolders, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -271,31 +271,25 @@ describe('chat composer and projection', () => {
     expect(receiptRows(null)).toEqual([])
   })
 
-  it('projects the local run record as Tokens, Turns and Tools rows after Cost', () => {
-    expect(receiptRows({
+  it('projects the local run record as Tokens, Turns and Tools rows after Cost, and drops Tools when the transcript shows the calls', () => {
+    const receipt = {
       model: 'ollama/llama3.2:3b', cost: '$0.013 est.', time: '4.2s',
       tokens: { input: 11414, output: 64, cacheRead: 1200, cacheWrite: 0, reasoning: 0, total: 12678 },
       turns: 2,
       tools: [{ name: 'bash', calls: 1, failed: 1 }, { name: 'grep', calls: 4, failed: 0 }],
-    })).toEqual([
+    }
+    const record = [
       { label: 'Cost', value: '$0.013 est.', route: false },
       { label: 'Tokens', value: '11,414 in, 64 out, 1,200 cached', route: false },
       { label: 'Turns', value: '2', route: false },
-      { label: 'Tools', value: 'bash 1 (1 failed), grep 4', route: false },
-    ])
+    ]
+    expect(receiptRows(receipt)).toEqual([...record, { label: 'Tools', value: 'bash 1 (1 failed), grep 4', route: false }])
+    expect(receiptRows(receipt, { tools: false })).toEqual(record)
   })
 
-  it('projects one memory row per recall before capabilities', () => {
-    expect(receiptRows(
-      { route: 'fast', model: 'glm-5.2', cost: '$0.04', time: '1.8s', capabilities: [{ name: 'files', version: '1' }] },
-      [
-        { query: 'lease', files: ['/Documents/Muniment/lease.pdf', '/Documents/Muniment/notes.md'] },
-        { query: 'missing clause', files: [] },
-      ],
-    )).toEqual([
+  it('leaves memory reads to the transcript', () => {
+    expect(receiptRows({ route: 'fast', model: 'glm-5.2', cost: '$0.04', time: '1.8s', capabilities: [{ name: 'files', version: '1' }] })).toEqual([
       { label: 'Cost', value: '$0.04', route: false },
-      { label: 'Memory', value: 'lease, 2 files', files: ['/Documents/Muniment/lease.pdf', '/Documents/Muniment/notes.md'], route: false },
-      { label: 'Memory', value: 'missing clause, 0 files', files: [], route: false },
       { label: 'Capability', value: 'files@1', route: false },
     ])
   })
@@ -467,4 +461,24 @@ it('uses runtime routing stages and clears them when reply text arrives', () => 
   }
   expect(runStage(previous, { ...previous, routingStage: undefined, text: 'Answer' })).toBe('writing')
   expect(runStage(previous, { ...previous, routingStage: undefined })).toBe('thinking')
+})
+describe('routedTurns', () => {
+  it('leaves out turns on the model the user picked and keeps the turns the router decided', () => {
+    const picked = { account: 'Work', selected_model: 'openai-codex/gpt-6.1-sol', decision: 'User selected the model' }
+    expect(routedTurns({ routing: [picked, picked] })).toEqual([])
+    const failedOver = { ...picked, fallback_causes: ['Work answered 429.'] }
+    const classified = { selected_model: 'openai/model', decision: 'Classifier selected the model', confidence: 0.8 }
+    expect(routedTurns({ routing: [picked, failedOver, classified] })).toEqual([failedOver, classified])
+    expect(routedTurns({})).toEqual([])
+  })
+})
+describe('promptFolders', () => {
+  it('shows the prompt and names each folder while the model gets the note', () => {
+    const sent = withFolders('tell me about this folder', ['/Users/me/projects/ai-marketing', 'C:\\work "q"'])
+    expect(sent).toContain('Attached folders (local paths):')
+    expect(promptFolders(sent)).toEqual({ text: 'tell me about this folder', folders: ['/Users/me/projects/ai-marketing', 'C:\\work "q"'] })
+    expect(withFolders('plain', [])).toBe('plain')
+    expect(promptFolders('plain')).toEqual({ text: 'plain', folders: [] })
+    expect(promptFolders('quoted\n\nAttached folders (local paths):\nnot json\nUse the local file tools to inspect these folders and their subfolders as needed. Folder contents are not embedded in this message.').folders).toEqual([])
+  })
 })

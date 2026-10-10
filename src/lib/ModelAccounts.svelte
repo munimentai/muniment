@@ -1,6 +1,5 @@
 <script>
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
-  import Toggle from '../lib/Toggle.svelte'
   import AllowanceMeter from './AllowanceMeter.svelte'
   // One provider's accounts in the router's pool: each a named card with what
   // the subscription has left and what the account has served, the sign-ins
@@ -218,7 +217,10 @@
             <span class="tag">{account.source === 'key' ? 'API key' : account.plan || 'Subscription'}</span>
           </header>
           {#if !account.enabled || account.servable === false || cooling(account) || account.weight === 0}
-            <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Routing unavailable' : cooling(account) ? `Rate limited · retry ${until(account.cooldown_until_ms)}` : 'Excluded from routing'}</p>
+            <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Routing unavailable' : cooling(account) ? `Rate limited · retry ${until(account.cooldown_until_ms)}` : 'Excluded from routing'}
+              <!-- Every account routes. One switched off or set to no share before the card dropped those controls gets one way back. -->
+              {#if !account.enabled || account.weight === 0}<button type="button" class="quiet small" disabled={pending} onclick={() => run('model_router_update_account', { id: account.id, enabled: true, weight: 1 })}>Turn on</button>{/if}
+            </p>
           {/if}
           {#if account.source !== 'key'}
             {#if !account.allowance_readable}
@@ -241,7 +243,6 @@
           {#if account.source === 'key' || (account.email && account.email !== account.label) || account.models.length}
           <p class="record tier">{[account.source === 'key' ? account.base_url ?? familyRow?.base_url : null, account.email !== account.label ? account.email : null, ...account.models].filter(Boolean).join(' · ')}</p>
           {/if}
-          {#if account.quota_observed_ms}<p class="support">Updated {when(account.quota_observed_ms)}.</p>{/if}
           <div class="bars" aria-label={`${account.label} turns per day`}>
             {#each account.days as [day, requests] (day)}
               <span class="bar" style={`height: ${Math.max(2, Math.round((requests / busiest) * 22))}px`} aria-label={`${day}: ${requests} turns`}></span>
@@ -250,19 +251,20 @@
           </div>
           <dl class="figures">
             <div><dt>Turns</dt><dd>{account.requests}</dd></div>
-            <div><dt>Tokens</dt><dd>{tokens(account.input_tokens)} in · {tokens(account.output_tokens)} out</dd></div>
             <div><dt>Active</dt><dd>{account.active}</dd></div>
-            <div><dt>Last used</dt><dd>{when(account.last_used_ms)}</dd></div>
             <div><dt>Errors</dt><dd>{account.errors}</dd></div>
-            <div><dt>Share</dt><dd><input type="number" min="0" max="100" aria-label={`${account.label} share`} value={account.weight} onchange={(event) => run('model_router_update_account', { id: account.id, weight: Math.max(0, Math.round(Number(event.currentTarget.value) || 0)) })}></dd></div>
+            <div class="wide"><dt>Tokens</dt><dd>{tokens(account.input_tokens)} in · {tokens(account.output_tokens)} out</dd></div>
+            <div class="wide"><dt>Last used</dt><dd>{when(account.last_used_ms)}</dd></div>
           </dl>
           {#if account.last_error}<p class="record error">{account.last_error}</p>{/if}
-          <footer>
-            <button type="button" class="quiet small" onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is removed.`)}>Remove</button>
-            {#if account.source !== 'key' && account.allowance_readable}<button type="button" class="quiet small" onclick={() => refreshQuota(account)}>Refresh allowance</button>{/if}
-            <Toggle checked={account.enabled} label={`Use ${account.label}`} disabled={pending} onchange={enabled => run('model_router_update_account', { id: account.id, enabled })} />
-          </footer>
           </details>
+          <!-- The allowance reads itself every two minutes. The refresh icon reads it now. -->
+          <footer>
+            {#if account.source !== 'key' && account.allowance_readable}
+              <span class="refreshed">{account.quota_observed_ms ? `Updated ${when(account.quota_observed_ms)}` : 'Not read yet'}<button type="button" class="quiet small refresh" aria-label={`Refresh ${account.label} allowance`} disabled={pending} onclick={() => refreshQuota(account)}><LucideIcon name="refresh-cw" size={14} variant="action" /></button></span>
+            {/if}
+            <button type="button" class="quiet small disconnect" aria-label={`Disconnect ${account.label}`} onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is disconnected.`)}><LucideIcon name="unplug" size={14} variant="action" />Disconnect</button>
+          </footer>
         </li>
       {/each}
     </ul>
@@ -327,6 +329,8 @@
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
   .small { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
+  /* Disconnecting drops the account from every pool, so it reads as critical. */
+  .disconnect { display: inline-flex; align-items: center; gap: 6px; color: var(--oxide); }
   .accounts { container-type: inline-size; display: grid; gap: 8px; min-width: 0; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); overflow-wrap: anywhere; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -352,14 +356,18 @@
   .window { display: grid; min-width: 0; gap: 4px; }
   .window-head { display: grid; gap: 2px; }
   .window-head strong { color: var(--ink); font-weight: 600; }
-  .bars { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 2px; min-height: 26px; }
+  .bars { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 2px; min-height: 26px; margin-bottom: 10px; }
   .bar { width: 5px; background: var(--muted); }
-  .figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin: 0; }
-  .figures div { display: grid; min-width: 0; gap: 1px; }
+  /* The three counts share the first row and the two wider figures the second, each value beside its label. */
+  .figures { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px 10px; margin: 0; }
+  .figures div { display: flex; flex-wrap: wrap; align-items: baseline; grid-column: span 2; min-width: 0; gap: 2px 8px; }
+  .figures div.wide { grid-column: span 3; }
   .figures dt { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .figures dd { margin: 0; font: var(--text-12) var(--font-mono); }
-  .figures input { width: 52px; }
   .card footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 2px; }
+  .refreshed { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: var(--text-12); }
+  .refresh { padding: 2px 4px; }
+  .card footer .disconnect { margin-left: auto; }
   .sign-ins { display: flex; flex-wrap: wrap; gap: 6px; }
   .sign-in { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
   .login { display: grid; gap: 8px; justify-items: start; }

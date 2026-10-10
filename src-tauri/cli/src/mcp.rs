@@ -1,14 +1,22 @@
 //! `muniment mcp`: the company record as one MCP server over stdio. It speaks
-//! the 2026-07-28 revision and nothing older: there is no handshake, every
+//! two revisions. In the stateless revision there is no handshake, every
 //! request carries its protocol version and the client's capabilities in
-//! `_meta`, `server/discover` answers what the server is, every result names
-//! its `resultType`, and a missing field comes back as an `input_required`
-//! result the client answers by retrying the call.
+//! `_meta`,
+//! `server/discover` answers what the server is, every result names its
+//! `resultType`, and a missing field comes back as an `input_required` result
+//! the client answers by retrying the call. A client on a session revision
+//! (`SESSION_VERSIONS`) opens with `initialize`, and the connection then
+//! answers `tools/list`, `tools/call` and `ping` in that revision's shape. The
+//! server sends no requests of its own, so there a missing field is a tool
+//! error that names it.
 
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
 
 pub const PROTOCOL_VERSION: &str = "2026-07-28";
+/// The session revisions an `initialize` may name, newest first. A client
+/// that names another gets the newest, as the handshake allows.
+pub const SESSION_VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 pub const SERVER_NAME: &str = "muniment";
 const SERVER_TITLE: &str = "Muniment company record";
 const WEBSITE: &str = "https://muniment.ai";
@@ -58,6 +66,18 @@ pub trait RecordBackend {
     fn commit(&mut self, body: Value) -> Result<Value, String>;
 }
 
+/// One stdio connection. A client on a session revision opens it with
+/// `initialize`, and its name then travels with every call.
+#[derive(Debug, Default)]
+pub struct Session {
+    opened: Option<Opened>,
+}
+
+#[derive(Debug)]
+struct Opened {
+    client_name: Option<String>,
+}
+
 /// Reads newline-delimited JSON-RPC from `input` until it closes and writes
 /// one reply line per request. Notifications get no reply.
 pub fn serve(
@@ -65,12 +85,13 @@ pub fn serve(
     input: impl BufRead,
     mut output: impl Write,
 ) -> std::io::Result<()> {
+    let mut session = Session::default();
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(reply) = handle_line(backend, &line) {
+        if let Some(reply) = handle_session_line(&mut session, backend, &line) {
             let mut text = serde_json::to_string(&reply)?;
             text.push('\n');
             output.write_all(text.as_bytes())?;
@@ -80,8 +101,18 @@ pub fn serve(
     Ok(())
 }
 
-/// Handles one line. `None` means the line asked for no reply.
+/// Handles one line on a connection with no session. `None` means the line
+/// asked for no reply.
 pub fn handle_line(backend: &mut dyn RecordBackend, line: &str) -> Option<Value> {
+    handle_session_line(&mut Session::default(), backend, line)
+}
+
+/// Handles one line on `session`. `None` means the line asked for no reply.
+pub fn handle_session_line(
+    session: &mut Session,
+    backend: &mut dyn RecordBackend,
+    line: &str,
+) -> Option<Value> {
     let message: Value = match serde_json::from_str(line) {
         Ok(message) => message,
         Err(_) => return Some(error_reply(Value::Null, PARSE_ERROR, "Parse error", None)),
@@ -108,7 +139,7 @@ pub fn handle_line(backend: &mut dyn RecordBackend, line: &str) -> Option<Value>
         (None, Some(_)) => None,
         (Some(id), Some(method)) if !id.is_null() => {
             let params = object.get("params").cloned().unwrap_or(Value::Null);
-            Some(handle_request(backend, id, method, &params))
+            Some(handle_request(session, backend, id, method, &params))
         }
         (id, _) => Some(error_reply(
             id.unwrap_or(Value::Null),
@@ -120,22 +151,22 @@ pub fn handle_line(backend: &mut dyn RecordBackend, line: &str) -> Option<Value>
 }
 
 fn handle_request(
+    session: &mut Session,
     backend: &mut dyn RecordBackend,
     id: Value,
     method: &str,
     params: &Value,
 ) -> Value {
     if method == "initialize" {
-        return error_reply(
-            id,
-            METHOD_NOT_FOUND,
-            &format!(
-                "Method not found: this server speaks MCP {PROTOCOL_VERSION}. Send server/discover, and carry {META_PROTOCOL_VERSION} and {META_CLIENT_CAPABILITIES} in _meta on every request."
-            ),
-            Some(json!({"supported": [PROTOCOL_VERSION]})),
-        );
+        return initialize(session, id, params);
     }
     let meta = params.get("_meta").and_then(Value::as_object);
+    if let (Some(opened), None) = (
+        &session.opened,
+        meta.and_then(|meta| meta.get(META_PROTOCOL_VERSION)),
+    ) {
+        return session_request(backend, id, method, params, opened.client_name.clone());
+    }
     let Some(version) = meta
         .and_then(|meta| meta.get(META_PROTOCOL_VERSION))
         .and_then(Value::as_str)
@@ -185,6 +216,62 @@ fn handle_request(
             None,
         ),
     }
+}
+
+/// Opens a session for a client on a session revision. The reply names the
+/// revision the connection speaks: the client's own when the server knows it.
+fn initialize(session: &mut Session, id: Value, params: &Value) -> Value {
+    let requested = params.get("protocolVersion").and_then(Value::as_str);
+    let version = requested
+        .filter(|version| SESSION_VERSIONS.contains(version))
+        .unwrap_or(SESSION_VERSIONS[0]);
+    session.opened = Some(Opened {
+        client_name: params
+            .pointer("/clientInfo/name")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    });
+    json!({"jsonrpc": "2.0", "id": id, "result": {
+        "protocolVersion": version,
+        "capabilities": {"tools": {}},
+        "serverInfo": server_info(),
+        "instructions": instructions(),
+    }})
+}
+
+/// A request on an open session: the same tools in the session revision's
+/// shape, with no `resultType` and no cache fields. The client cannot answer
+/// an `input_required` result, so the call runs as for a client without
+/// elicitation.
+fn session_request(
+    backend: &mut dyn RecordBackend,
+    id: Value,
+    method: &str,
+    params: &Value,
+    client_name: Option<String>,
+) -> Value {
+    let result = match method {
+        "ping" => json!({}),
+        "tools/list" => json!({"tools": tools()}),
+        "tools/call" => match tools_call(backend, params, &Map::new(), client_name) {
+            Ok(mut result) => {
+                if let Some(object) = result.as_object_mut() {
+                    object.remove("resultType");
+                }
+                result
+            }
+            Err((code, message)) => return error_reply(id, code, &message, None),
+        },
+        _ => {
+            return error_reply(
+                id,
+                METHOD_NOT_FOUND,
+                &format!("Method not found: {method}"),
+                None,
+            )
+        }
+    };
+    json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
 fn server_info() -> Value {
@@ -665,22 +752,76 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_initialize_is_refused_and_names_the_version() {
-        let mut backend = FakeBackend::default();
-        let legacy = json!({"jsonrpc": "2.0", "id": 5, "method": "initialize",
-            "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "x", "version": "1"}}}).to_string();
-        let reply = handle_line(&mut backend, &legacy).unwrap();
-        assert_eq!(reply["error"]["code"], METHOD_NOT_FOUND);
-        assert!(reply["error"]["message"]
+    fn a_session_client_initializes_and_calls_the_tools_in_its_revision() {
+        let mut backend = FakeBackend {
+            propose_answer: Some(
+                json!({"error": {"code": "missing_required", "message": "stage is required for kind deal. What is it?", "field": "stage", "prompt": "stage is required for kind deal. What is it?"}}),
+            ),
+            ..FakeBackend::default()
+        };
+        let mut session = Session::default();
+        let line = |id: u64, method: &str, params: Value| {
+            json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string()
+        };
+        let mut send = |text: String| handle_session_line(&mut session, &mut backend, &text);
+        // Before the handshake, a request with no `_meta` stays invalid.
+        let reply = send(line(4, "tools/list", json!({}))).unwrap();
+        assert_eq!(reply["error"]["code"], INVALID_PARAMS);
+        let reply = send(line(5, "initialize", json!({"protocolVersion": "2025-11-25",
+            "capabilities": {"elicitation": {}}, "clientInfo": {"name": "harness", "version": "1.1.0"}})))
+        .unwrap();
+        assert_eq!(reply["result"]["protocolVersion"], "2025-11-25");
+        assert_eq!(reply["result"]["serverInfo"]["name"], SERVER_NAME);
+        assert!(reply["result"]["capabilities"]["tools"].is_object());
+        assert!(
+            send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}).to_string())
+                .is_none()
+        );
+        assert_eq!(
+            send(line(6, "ping", json!({}))).unwrap()["result"],
+            json!({})
+        );
+        let reply = send(line(7, "tools/list", json!({}))).unwrap();
+        assert_eq!(reply["result"]["tools"].as_array().unwrap().len(), 3);
+        assert!(reply["result"].get("resultType").is_none());
+        let reply = send(line(
+            8,
+            "tools/call",
+            json!({"name": "sql", "arguments": {"sql": "select 1"}}),
+        ))
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], false);
+        assert!(reply["result"].get("resultType").is_none());
+        // The client declared elicitation, but the server cannot ask, so a
+        // missing field is a tool error that names it.
+        let reply = send(line(
+            9,
+            "tools/call",
+            json!({"name": "propose", "arguments": {"op": "create", "kind": "deal"}}),
+        ))
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], true);
+        assert!(reply["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains(PROTOCOL_VERSION));
-        assert_eq!(
-            reply["error"]["data"]["supported"],
-            json!([PROTOCOL_VERSION])
-        );
-        let reply = handle_line(&mut backend, &request(6, "ping", json!({}))).unwrap();
-        assert_eq!(reply["error"]["code"], METHOD_NOT_FOUND);
+            .contains("stage"));
+        // A request in the stateless shape still takes that path.
+        let reply = send(request(10, "tools/list", json!({}))).unwrap();
+        assert_eq!(reply["result"]["resultType"], "complete");
+        assert_eq!(backend.calls[0].1["client"], "harness");
+
+        let mut other = Session::default();
+        let reply = handle_session_line(
+            &mut other,
+            &mut FakeBackend::default(),
+            &line(
+                1,
+                "initialize",
+                json!({"protocolVersion": "2099-01-01", "capabilities": {}}),
+            ),
+        )
+        .unwrap();
+        assert_eq!(reply["result"]["protocolVersion"], SESSION_VERSIONS[0]);
     }
 
     #[test]

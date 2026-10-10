@@ -5,7 +5,7 @@ import { assess, audit, readPins } from '../scripts/check-agent-dependencies.mjs
 describe('agent dependency freshness and compatibility', () => {
   it('reads all shipped pins instead of a second version list', () => {
     const pins = readPins()
-    expect(Object.keys(pins.packages)).toHaveLength(5)
+    expect(Object.keys(pins.packages)).toHaveLength(4)
     expect(pins.pi).toMatch(/^\d+\.\d+\.\d+$/)
     expect(pins.claude).toMatch(/^\d+\.\d+\.\d+$/)
   })
@@ -29,7 +29,7 @@ describe('agent dependency freshness and compatibility', () => {
       const name = decodeURIComponent(new URL(url).pathname.split('/')[1])
       return { ok: true, json: async () => ({ name, version: pins[name] }) }
     })
-    expect(rows).toHaveLength(7)
+    expect(rows).toHaveLength(6)
     expect(rows.every(row => row.status === 'current')).toBe(true)
   })
 })

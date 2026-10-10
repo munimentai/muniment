@@ -47,6 +47,10 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
         storage.journal.run_thread_id(&self.run_id).ok().flatten()
     }
 
+    fn browser_host(&self) -> Option<Box<dyn muniment_core::browser_agent::BrowserHost>> {
+        crate::cef_browser::chat_browser()
+    }
+
     fn renew_chat_grant(&self, _access_token: &str) -> Result<ChatGrant, FetchGrantError> {
         Err(FetchGrantError::Unavailable)
     }

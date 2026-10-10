@@ -4,7 +4,6 @@
   // A provider's real mark, vendored as SVG. A provider with a light and a dark
   // variant shows the one for the current theme; the rest are one file.
   const files = import.meta.glob('./logos/*.svg', { query: '?raw', import: 'default', eager: true })
-  // Rizzo Flow publishes a raster mark: https://github.com/Rizzo-AI-Academy/rizzo-flow/blob/HEAD/docs/assets/logo.webp
   // Nimble uses Bespoke Labs’ favicon: https://framerusercontent.com/images/tBmIC2QpuzBT566Qth8NNaI5CJE.png
   const images = import.meta.glob('./logos/*.{webp,png}', { query: '?url', import: 'default', eager: true })
   const classifiers = new Set(CLASSIFIERS.map(entry => entry.id))
@@ -17,7 +16,7 @@
   }
   // Pi ids that share a mark with the provider the user connected.
   const ALIASES = {
-    jev: 'typesafe', 'jev-latest': 'typesafe',
+    jev: 'typesafe', 'jev-latest': 'typesafe', clef: 'cloudflare', luna: 'openai',
     'openai-codex': 'openai', 'claude-bridge': 'anthropic', antigravity: 'google',
     'opencode-go': 'opencode', kimi: 'kimi-coding',
     'qwen-token-plan-individual': 'qwen-token-plan', 'qwen-token-plan-cn': 'qwen-token-plan',

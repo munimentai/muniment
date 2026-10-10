@@ -9,7 +9,7 @@
   import ComposerReferences from './composer/ComposerReferences.svelte'
   import FileMentions from './composer/FileMentions.svelte'
   import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
-  import { responseParts } from './activity/action-feedback.js'
+  import { actionGroups, responseParts } from './activity/action-feedback.js'
   import ActionFeedback from './activity/ActionFeedback.svelte'
   import { onMount, tick, untrack } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -34,7 +34,7 @@
   import ModelPicker from './lib/ModelPicker.svelte'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './lib/composer-panels.js'
   import Capacity from './lib/Capacity.svelte'
-  import { currentModel, currentModelAvailable, modelChipLabel } from './lib/provider-catalog.js'
+  import { currentModel, currentModelAvailable, modelChipLabel, routerHidden } from './lib/provider-catalog.js'
   import { classifierProvider } from './lib/classifier-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
@@ -46,6 +46,7 @@
   let codeDiffModule
   const loadCodeDiff = () => codeDiffModule ??= import('./lib/CodeDiff.svelte')
   import FileChanges from './files/FileChanges.svelte'
+  import RoutingDetails from './lib/RoutingDetails.svelte'
   import { createChangedFiles, fileName } from './files/file-changes.js'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
@@ -54,8 +55,8 @@
   import RecordPanel from './record/RecordPanel.svelte'
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
-  import GraphMark from './lib/GraphMark.svelte'
-  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
+  import PocketFold from './lib/PocketFold.svelte'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
   import AppUpdate from './lib/AppUpdate.svelte'
   import { createChatController } from './lib/chat-controller.js'
@@ -118,6 +119,17 @@
       }
     }).catch(() => { if (!disposed) { hasSubscriptions = false; capacityOpen = false } })
     return () => { disposed = true }
+  })
+  // The router leaves the models the picker hides out of the running, so a
+  // routed turn answers only from a model the picker offers.
+  $effect(() => {
+    const hidden = routerHidden(inventory)
+    if (!tauri || !inventory?.router_models?.length) return
+    const cache = accountCache(tauri)
+    void cache.read().then(settings => {
+      if (!settings?.enabled || (settings.hidden ?? []).join('\n') === hidden.join('\n')) return
+      return tauri.invoke('model_router_set_hidden', { keys: hidden }).then(next => cache.set(next))
+    }).catch(() => {})
   })
   let inventoryError = $state('')
   let inventoryRequestVersion = 0
@@ -243,7 +255,7 @@
     pendingCreation = null
     draft = ''
     selectedFiles = []
-    turnExtensions = { enabled: [], blocked: [], automatic: false }
+    turnExtensions = { enabled: [], blocked: [], automatic: null }
     composer?.focus()
   }
   async function openCreation(item) {
@@ -419,14 +431,14 @@
   }
   const taskDrafts = new Map()
   let pendingCreation = $state(null)
-  let turnExtensions = $state({ enabled: [], blocked: [], automatic: false })
+  let turnExtensions = $state({ enabled: [], blocked: [], automatic: null })
   function selectTask(next) {
     if (next === currentThreadId) return
     taskDrafts.set(currentThreadId, { text: draft, files: selectedFiles, extensions: turnExtensions, creation: pendingCreation })
     const saved = taskDrafts.get(next) || (currentThreadId === null && next ? taskDrafts.get(null) : null)
     draft = saved?.text || ''
     selectedFiles = saved?.files || []
-    turnExtensions = saved?.extensions || { enabled: [], blocked: [], automatic: false }
+    turnExtensions = saved?.extensions || { enabled: [], blocked: [], automatic: null }
     pendingCreation = saved?.creation || null
     currentThreadId = next
   }
@@ -768,7 +780,7 @@
       projectCatalog = catalog
       if (threadId && threadId === currentThreadId) selectedProject = catalog.threads[threadId] || null
       projectError = ''
-    } catch (_) { projectError = 'Projects could not be loaded.' }
+    } catch (error) { projectError = `Projects could not be loaded. ${String(error?.message ?? error)}` }
   }
 
   async function showProjects() {
@@ -1289,6 +1301,49 @@
         }
       }
     }
+  }
+
+  // A chat in the background runtime hands its browser request to the app as
+  // a gate. The app works it in the Browser tab and answers each gate once.
+  const browserGates = new Set()
+  let browsing = null
+  $effect(() => {
+    for (const message of messages) {
+      const run = message.run
+      const gate = run?.pendingPermission
+      if (run?.phase !== 'pending-permission' || gate?.kind !== 'editor' || gate.title !== 'muniment:browser') continue
+      const key = `${run.id}:${gate.gateId}`
+      if (browserGates.has(key)) continue
+      browserGates.add(key)
+      browsing = run.id
+      void runBrowserGate(run, gate)
+    }
+    // A stopped reply stops its browse between steps.
+    const running = browsing && messages.find((message) => message.run?.id === browsing)?.run
+    if (running && ['cancelled', 'failed', 'interrupted'].includes(running.phase)) {
+      browsing = null
+      void tauri.invoke('browser_command', { request: { view: 'browser', action: 'stop', value: '' } }).catch(() => {})
+    }
+  })
+  // The browser tool opens the Browser tab when it is closed, then works the page.
+  async function openBrowserForChat() {
+    showBrowser('browser')
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      try { return await tauri.invoke('browser_command', { request: { view: 'browser', action: 'status', value: '' } }) }
+      catch (_) { await new Promise((resolve) => setTimeout(resolve, 250)) }
+    }
+    throw new Error('The Browser tab did not open.')
+  }
+  async function runBrowserGate(run, gate) {
+    let value
+    try {
+      await openBrowserForChat()
+      value = await tauri.invoke('browser_tool', { request: gate.prefill ?? '' })
+    } catch (error) {
+      value = JSON.stringify({ error: String(error?.message ?? error) })
+    }
+    browsing = null
+    answerPermission(run, { type: 'editor', value })
   }
 
   function permissionState(run) {
@@ -2052,7 +2107,7 @@
 <main class:onboarding-active={tauri && onboarding.name !== 'complete'}>
   {#if !workspaceMode() || onboarding.name !== 'complete'}
     <div class="lockup">
-      <GraphMark size={160} />
+      <PocketFold size={96} />
       {#if onboarding.name === 'complete' && (auth.name === 'signed-out' || auth.name === 'signing-in')}
         <h1 class="name">muniment</h1>
       {:else}
@@ -2106,7 +2161,7 @@
             {:else}
               <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" disabled={!currentThreadId || freshThread} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
             {/if}
-            <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} disabled={!currentThreadId || freshThread || threadSwitching} bind:this={titleActionsButton} onclick={(event) => openThreadMenu(event, currentThreadId, true)}><LucideIcon name="ellipsis" variant="action" size={14} /></button>
+            <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} disabled={!currentThreadId || freshThread || threadSwitching} bind:this={titleActionsButton} onclick={(event) => openThreadMenu(event, currentThreadId, true)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
             {/if}
 
             <span class="title-spacer" data-tauri-drag-region></span>
@@ -2156,7 +2211,7 @@
             </section>
             <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
             <section class="project-section" aria-label="Projects">
-              <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded} disabled={!!active || threadSwitching || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
+              <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length > 0} collapsible={projectRows.length > 0} disabled={!!active || threadSwitching || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
               {#if projectForm}
                 <form class="row-rename" onsubmit={(event) => { event.preventDefault(); void saveProject() }}>
                   <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={projectName} disabled={projectBusy} />
@@ -2164,14 +2219,13 @@
                   <button type="button" disabled={projectBusy} onclick={() => { projectForm = null }}>Cancel</button>
                 </form>
               {/if}
-              {#if projectsExpanded}<div class="collection-children">
+              {#if projectsExpanded && projectRows.length}<div class="collection-children">
               {#each projectRows as [projectId, name] (projectId)}
                 <ProjectRow {name} expanded={expandedProjects.has(projectId)} disabled={!!active || threadSwitching || projectBusy}
                   ontoggle={() => selectProject(projectId)} onnew={() => newProjectThread(projectId)}
                   onrename={() => { projectForm = projectId; projectName = name }} onopen={() => openProjectFolder(projectId)} />
                 {#if expandedProjects.has(projectId)}<div class="project-threads">{@render projectThreadList(projectId)}</div>{/if}
               {/each}
-              {#if !projectRows.length && !projectError}<p class="side-empty">Create a project for your files.</p>{/if}
               </div>{/if}
               {#if projectError}<p class="side-empty" role="status">{projectError} <button class="quiet" onclick={() => refreshProjects()}>Retry</button></p>{/if}
             </section>
@@ -2223,7 +2277,7 @@
             onpointerup={sidebarPointerEnd}
             onpointercancel={sidebarPointerEnd}
             onkeydown={sidebarKeydown}
-          ></div>
+          ><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
         {/if}
         <div data-panel="chat" class="thread-panel" style:--composer-height="{composerBoxHeight}px" style:--file-chip-height={changed.length ? '40px' : '0px'}>
           {#if profileAgent && !agentProfileOpen && !agentsOpen}<button type="button" data-panel-control="corner" class="quiet" aria-label="Reveal agent profile" onclick={revealAgentProfile}><LucideIcon name="panel-right-open" /></button>{/if}
@@ -2239,9 +2293,17 @@
           {#each messages as message (messageKeys.get(message))}
             {#if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
+                {@const sent = promptFolders(message.text)}
               <div class="user-turn">
                 <div class="user-message">
-                  {#if message.text}<p>{message.text}</p>{:else}<p class="missing-prompt">Prompt unavailable</p>{/if}
+                  {#if sent.text}<p>{sent.text}</p>{:else}<p class="missing-prompt">Prompt unavailable</p>{/if}
+                  {#if sent.folders.length}
+                    <ul class="message-attachments" aria-label="Attached folders">
+                      {#each sent.folders as folder}
+                        <li><span>{folder.split(/[\\/]/).filter(Boolean).at(-1) ?? folder}</span><strong>{folder}</strong></li>
+                      {/each}
+                    </ul>
+                  {/if}
                   {#if message.attachments?.length}
                     <ul class="message-attachments" aria-label="Saved attachments">
                       {#each message.attachments as attachment}
@@ -2253,7 +2315,7 @@
                 </div>
                 <div class="user-message-meta message-actions">
                   {#if messageLocalTime(message.sentAt)}<time class="message-time" datetime={message.sentAt}>{messageLocalTime(message.sentAt)}</time>{/if}
-                  <button type="button" aria-label={copyConfirmed(copy, userCopyId) ? 'Copied message' : 'Copy message'} data-tooltip={copyConfirmed(copy, userCopyId) ? 'Copied' : 'Copy message'} onclick={() => copyResponse({ id: userCopyId, text: message.text })}><LucideIcon name={copyConfirmed(copy, userCopyId) ? 'check' : 'copy'} variant="action" size={14} /></button>
+                  <button type="button" aria-label={copyConfirmed(copy, userCopyId) ? 'Copied message' : 'Copy message'} data-tooltip={copyConfirmed(copy, userCopyId) ? 'Copied' : 'Copy message'} onclick={() => copyResponse({ id: userCopyId, text: sent.text })}><LucideIcon name={copyConfirmed(copy, userCopyId) ? 'check' : 'copy'} variant="action" size={14} /></button>
                 </div>
                 {#if copyFailure(copy, userCopyId, modifierLabel)}<p class="copy-failure">{copyFailure(copy, userCopyId, modifierLabel)}</p>{/if}
               </div>
@@ -2292,6 +2354,8 @@
                 {@const answerState = permissionState(message.run)}
                 {#if gate.kind === 'editor' && gate.title === 'muniment:ask_user_question'}
                   {#key gate.gateId}<UserQuestion anchor={composerBox} payload={gate.prefill} pending={answerState?.pending ?? false} error={answerState?.error ?? ''} onanswer={(value) => answerPermission(message.run, { type: 'editor', value })} />{/key}
+                {:else if gate.kind === 'editor' && gate.title === 'muniment:browser'}
+                  <p class="run-status" role="status">Using the browser…</p>
                 {:else}
                 <div class="permission-card tool-card">
                   <strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>
@@ -2352,8 +2416,8 @@
               {/if}
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
-                {@const rows = receiptRows({ ...message.run.receipt, routing: [] }, message.run.recalls)}
-                {@const routing = message.run.receipt?.routing ?? []}
+                {@const rows = receiptRows({ ...message.run.receipt, routing: [] }, { tools: !parts.some((part) => part.type === 'actions' && actionGroups(part.activities, false).length) })}
+                {@const routing = routedTurns(message.run.receipt)}
                 {@const columns = receiptUsageColumns(message.run.receipt)}
                 {@const hasDetails = rows.length > 0 || columns.length > 0 || routing.length > 0}
                 {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || hasDetails}
@@ -2392,23 +2456,11 @@
                   {/if}
                   <dl class="receipt-record">
                     {#each rows as row}
-                      <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}{#each row.files ?? [] as file}<span class="recall-file">{file}</span>{/each}</dd></div>
+                      <div><dt>{row.label}</dt><dd class:route-value={row.route}>{row.value}</dd></div>
                     {/each}
                   </dl>
                   {#if routing.length}
-                    <details class="receipt-routing">
-                      <summary>Routing details · {routing.length} {routing.length === 1 ? 'turn' : 'turns'}</summary>
-                      {#each routing as evidence, index}
-                        <section aria-label={`Routing turn ${index + 1}`}>
-                          <h4>Turn {index + 1}</h4>
-                          <dl class="receipt-record">
-                            {#each receiptRows({ routing: [evidence] }) as row}
-                              <div><dt>{row.label}</dt><dd>{row.value}</dd></div>
-                            {/each}
-                          </dl>
-                        </section>
-                      {/each}
-                    </details>
+                    <RoutingDetails {routing} />
                   {/if}
                 {/if}
                 {#if failure}<div class="run-error copy-failure">{failure}</div>{/if}
@@ -2417,7 +2469,6 @@
             </div>{/if}
           {/each}
         </div>
-        {#if !pinned && hasContentBelow}<button class="latest" onclick={scrollToLatest}>↓ latest</button>{/if}
         <!-- Always mounted so the region is live before text lands in it; atomic so each
              run phase is read as one sentence, and never re-read per streamed chunk. -->
         <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
@@ -2480,7 +2531,13 @@
             {#if speechInstallError}<p class="speech-install-error" role="alert">{speechInstallError}</p>{/if}
           </section>
         {/if}
-          <FileChanges files={changed} onopen={openFile} />
+          <!-- The changed-files chip and the jump to the latest message sit side by side, centered above the composer. -->
+          {#if changed.length || (!pinned && hasContentBelow)}
+            <div class="composer-chips">
+              <FileChanges files={changed} onopen={openFile} />
+              {#if !pinned && hasContentBelow}<button type="button" class="latest" aria-label="Jump to latest" onclick={scrollToLatest}><LucideIcon name="arrow-down" variant="action" size={14} /></button>{/if}
+            </div>
+          {/if}
           {#if selectedFiles.length}
             <ul class="attachments" aria-label="Selected files">
               {#each selectedFiles as file}
@@ -2511,7 +2568,7 @@
           {/if}
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
-            <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} />
+            <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} />
             {#if auth.name === 'local'}
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
               {#if hasSubscriptions}<button type="button" class="quiet capacity-trigger" aria-haspopup="dialog" aria-expanded={capacityOpen} onclick={() => openComposerPanel(capacityOpen ? null : 'capacity')}><LucideIcon name="gauge" size={14} /><span class="model-chip-label">Capacity</span></button>{/if}
@@ -2528,11 +2585,10 @@
             {/if}
             </div>
             <div class="composer-actions">
-            {#if !active}<button type="button" class="quiet attachment-trigger" aria-label="Add files or folders" onclick={chooseFiles}><LucideIcon name="paperclip" size={16} /></button>{/if}
               <button type="button" class="quiet composer-icon" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
               {#if active || draft.trim()}
-                <button type="button" class="composer-action" class:primary={!active} class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
-                  <LucideIcon name={active ? 'square' : 'arrow-up'} variant="action" />
+                <button type="button" class="composer-action primary" class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
+                  <LucideIcon name={active ? 'square' : 'arrow-up'} variant="action" size={active ? 12 : 16} />
                 </button>
               {/if}
             </div>
@@ -2562,7 +2618,7 @@
             onpointerup={artifactRailPointerEnd}
             onpointercancel={artifactRailPointerEnd}
             onkeydown={artifactRailKeydown}
-          ></div>
+          ><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
           <aside data-panel="artifact-rail" id="artifact-rail" class="artifact-rail" aria-labelledby="artifact-rail-title">
             <header>
               <h2 id="artifact-rail-title">Artifacts</h2>
@@ -2590,7 +2646,7 @@
               onpointerup={artifactRailPointerEnd}
               onpointercancel={artifactRailPointerEnd}
               onkeydown={artifactRailKeydown}
-            ></div>
+            ><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
           {/if}
           <RecordPanel {tauri} maximized={recordMaximized} refresh={recordRefresh} ontogglemaximized={toggleRecordMaximized} onask={askAboutView} />
         {/if}
@@ -2612,19 +2668,19 @@
               onpointerup={artifactRailPointerEnd}
               onpointercancel={artifactRailPointerEnd}
               onkeydown={artifactRailKeydown}
-            ></div>
+            ><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
           {/if}
           {#await loadFilePanel() then module}{@const FilePanel = module.default}<FilePanel file={viewedFile} {tauri} threadId={currentThreadId} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onclose={closeRail} />{/await}
         {/if}
     {#if agentProfileOpen && profileAgent && !agentsOpen}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-      <div class="artifact-divider agent-divider" role="separator" aria-label="Agent profile width" aria-orientation="vertical" aria-valuemin="240" aria-valuemax={agentPanelMaximum} aria-valuenow={agentPanelWidth} tabindex="0" onpointerdown={agentResize.pointerDown} onpointermove={agentResize.pointerMove} onpointerup={agentResize.pointerEnd} onpointercancel={agentResize.pointerEnd} onkeydown={agentResize.keydown}></div>
+      <div class="artifact-divider agent-divider" role="separator" aria-label="Agent profile width" aria-orientation="vertical" aria-valuemin="240" aria-valuemax={agentPanelMaximum} aria-valuenow={agentPanelWidth} tabindex="0" onpointerdown={agentResize.pointerDown} onpointermove={agentResize.pointerMove} onpointerup={agentResize.pointerEnd} onpointercancel={agentResize.pointerEnd} onkeydown={agentResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
       {#key profileAgent.id}<AgentProfile earlierConversations={Object.entries(agentListing.state.threads).filter(([thread, agent]) => agent === selectedAgent && thread !== agentListing.state.primaryThreads?.[selectedAgent]).map(([threadId]) => ({ threadId, title: threadSummaries.find(item => item.threadId === threadId)?.title || "Earlier conversation" }))} history={agentListing.state.history?.[selectedAgent] || []} agent={profileAgent} {tauri} projects={projectRows} run={agentListing.state.runs[profileAgent.id]}
         onclose={() => { agentProfileOpen = false }} onchange={refreshAgents}
         ondelete={() => { agentProfileOpen = false; selectedAgent = null; void refreshAgents() }}
         onopen={(id) => chatController.openThread(id, true)} />{/key}
     {/if}
-  {#if browserPanel}<div class="artifact-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}></div>{/if}
+  {#if browserPanel}<div class="artifact-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={settingsOpen || !!deletingThreadId} />
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} agents={agentListing.agents} isArchived={catalogArchived} onaction={catalogAction} projects={projectRows} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={()=>startCreation('agent')} onclose={() => { agentsOpen = false }} onselect={openAgent} onopen={openCreation} onchange={(next) => { agentListing = next }} />
@@ -2692,18 +2748,14 @@
     padding: 24px;
   }
 
-  /* The full static graph surrounds the centered wordmark. */
+  /* The pocket-fold symbol stands over the wordmark, as in the stacked brand lockup. */
   .lockup {
-    position: relative;
     display: grid;
-    place-items: center;
-    width: 160px;
-    height: 160px;
-    color: var(--signal);
+    justify-items: center;
+    gap: 14px;
   }
 
   .name {
-    position: absolute;
     color: var(--ink);
     font-size: var(--text-15);
     font-weight: 600;
@@ -2779,7 +2831,7 @@
   }
 
   /* The band above the panels is --titlebar-band tall: the title row, then the paper gap to the panels. */
-  .workspace { --frame-width: 8px; --titlebar-band: 36px; --titlebar-height: 30px; position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-height) minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); row-gap: calc(var(--titlebar-band) - var(--titlebar-height)); column-gap: var(--frame-width); background: var(--paper); }
+  .workspace { --frame-width: 4px; --titlebar-band: 36px; --titlebar-height: 30px; position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-height) minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); row-gap: calc(var(--titlebar-band) - var(--titlebar-height)); column-gap: var(--frame-width); background: var(--paper); }
   /* The sidebar column is the element's --sidebar-column: the kept width, or zero collapsed, and the 180ms slide carries both. */
   .workspace { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
   .creation-goal { padding:12px 0; font-size:var(--text-13); color:var(--muted); } .creation-goal p { margin:4px 0; } .creation-suggestions { display:flex; flex-wrap:wrap; gap:8px; }
@@ -2821,11 +2873,11 @@
      on a subgrid shifts its tracks past the frame in WebKit, which pushed the
      artifact control off the window. The native clearance is the sidebar
      part's padding, so both parts track their panel columns in every engine. */
-  .workspace.macos .titlebar { display: grid; grid-template-columns: subgrid; margin: 0; padding: 0; }
+  .workspace.macos .titlebar { display: grid; grid-template-columns: subgrid; column-gap: var(--frame-width); margin: 0; padding: 0; }
   /* The sidebar part is at least as wide as its controls, so a narrow sidebar column never hides the toggle. */
   .workspace.macos .titlebar-sidebar { grid-column: 1; position: relative; z-index: 1; box-sizing: content-box; display: flex; align-items: end; gap: 8px; min-width: calc(var(--titlebar-controls-end) - var(--titlebar-inset)); padding-left: calc(var(--titlebar-inset) - var(--frame-width)); }
   /* Artifacts sits flush right: 4px inside the 8px frame matches the 12px row padding elsewhere. */
-  .workspace.macos .titlebar-thread { grid-column: 2 / -1; display: flex; align-items: end; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: 4px; }
+  .workspace.macos .titlebar-thread { grid-column: 2 / -1; display: flex; align-items: end; gap: 8px; min-width: 0; padding-left: max(0px, calc(var(--titlebar-controls-end) - var(--sidebar-column) - 2 * var(--frame-width))); padding-right: calc(12px - var(--frame-width)); }
   /* Artifacts then Record sit flush right, the update control beside them. */
   .workspace.macos .update-slot { order: 1; }
   .workspace.macos .titlebar-thread :global(.record-toggle) { order: 3; }
@@ -2896,7 +2948,9 @@
   /* A narrow sidebar shortens the first control, never its start. */
   .side-action span { flex: 1; min-width: 0; }
   /* The foot of the sidebar: Settings above the account row, under one edge-to-edge hairline. */
-  .side-foot { margin-top: auto; padding: 4px 6px 6px; border-top: 1px solid var(--border); }
+  .side-foot { position: relative; margin-top: auto; padding: 4px 6px 6px; }
+  /* The menu separator: a straight line inset to the foot's 6px padding at three-quarter strength. */
+  .side-foot::before { content: ''; position: absolute; top: 0; left: 6px; right: 6px; height: 1px; background: var(--border); opacity: .75; }
   /* Settings and the account share one footer without an internal divider. */
   .settings-block { padding: 0; }
   .side-foot :global(.profile-block) { margin-top: 0; padding-top: 0; border-top: 0; }
@@ -2909,9 +2963,13 @@
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
   .quiet { background: transparent; border-color: transparent; }
-  /* Both dividers sit over the panel gap and draw nothing while hovered or dragged. */
+  /* Each divider covers its panel gap with a few pixels of grab on either side. A three-dot grip marks the gap. On hover, focus or drag, the gap fills with the hairline border color, which fades out at both ends. */
   .agent-divider { grid-area: rail; }
-  .artifact-divider, .sidebar-divider { z-index: 2; align-self: stretch; justify-self: start; width: var(--frame-width); margin-left: calc(-.5 * var(--frame-width)); padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
+  .artifact-divider, .sidebar-divider { --divider-grab: 3px; --divider-glow: 100%; position: relative; z-index: 2; align-self: stretch; justify-self: start; width: calc(var(--frame-width) + 2 * var(--divider-grab)); margin-left: calc(-1 * var(--frame-width) - var(--divider-grab)); padding: 0; border: 0; border-radius: 0; background: linear-gradient(transparent, var(--border) 20%, var(--border) 80%, transparent) center / var(--frame-width) var(--divider-glow) no-repeat; background-color: transparent; background-size: 0 var(--divider-glow); cursor: col-resize; touch-action: none; }
+  /* The grip is Lucide's vertical ellipsis, centered on the gap. */
+  .divider-grip { position: absolute; top: 50%; left: 50%; display: grid; color: var(--muted); transform: translate(-50%, -50%); pointer-events: none; }
+  .artifact-divider:hover, .sidebar-divider:hover, .artifact-divider:focus-visible, .sidebar-divider:focus-visible, .artifact-divider:active, .sidebar-divider:active { background-size: var(--frame-width) var(--divider-glow); outline: none; }
+  .artifact-divider:hover .divider-grip, .sidebar-divider:hover .divider-grip, .artifact-divider:focus-visible .divider-grip, .sidebar-divider:focus-visible .divider-grip, .artifact-divider:active .divider-grip, .sidebar-divider:active .divider-grip { opacity: 0; }
   .artifact-divider { grid-area: rail; }
   .sidebar-divider { grid-area: thread; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
@@ -2930,7 +2988,8 @@
   /* The transcript fades into the surface at both ends: a short fade under the top edge, and one above the composer that reaches the surface at the composer's midpoint, so text stays readable halfway under it. */
   /* Responses run the panel's full width inside a 36px gutter. The bottom padding is the composer and the fade, so the last line scrolls clear of both. */
   .thread { width: 100%; height: 100%; margin: 0; padding: 42px 36px calc(var(--composer-height, 120px) + var(--file-chip-height, 0px) + 64px); overflow-y: auto; }
-  .latest { position: absolute; z-index: 2; left: 50%; bottom: calc(var(--composer-height, 120px) + var(--file-chip-height, 0px) + 38px); transform: translateX(-50%); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
+  .composer-chips { position: absolute; z-index: 5; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; max-width: 100%; }
+  .latest { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--ink); cursor: pointer; }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-turn { margin: 0 0 28px auto; }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
@@ -2996,12 +3055,8 @@
   .receipt-usage td { min-width: 180px; }
   .receipt-record { display: grid; row-gap: 6px; box-sizing: border-box; width: min(100%, 560px); margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-record div { display: grid; grid-template-columns: minmax(0, 140px) minmax(0, 1fr); gap: 12px; }
-  .receipt-routing { margin-top: 10px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .receipt-routing summary { cursor: pointer; }
-  .receipt-routing h4 { margin: 12px 0 0; font: inherit; color: var(--ink); }
   .receipt-record dt { overflow-wrap: anywhere; }
   .receipt-record dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-  .receipt-record .recall-file { display: block; }
   .receipt-record .route-value { color: var(--signal); }
   /* §3.2: hover or focus reveals the row. Only opacity carries the reveal. The row
      always holds its space, so nothing reflows and nothing is ever obscured, and the
@@ -3018,6 +3073,7 @@
   /* Same §1.7 icon geometry as the rail, tracking whatever ink its button carries. */
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
+  .run-status { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .history-error { overflow-wrap: anywhere; }
   /* The notice keeps the background service register at the composer 12px scale.
@@ -3042,7 +3098,6 @@
   /* The input no longer keeps a spare empty row once it grows, so the action
      row carries the gap itself, matching the owner mockup's 8px .comprow rhythm. */
   .composer-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
-  .attachment-trigger { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; }
   .composer-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
   /* The three composer controls share the plus button's box: 4px padding, a 24px minimum, the control radius. */
@@ -3057,7 +3112,8 @@
   .composer-icon:hover:not(:disabled), .composer-icon[aria-pressed="true"] { color: var(--ink); background: var(--faint); }
   /* The band's one action control: an ink up arrow while the draft has text, a muted stop square in flight. */
   .composer-action { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; }
-  .composer-action.stop { background: transparent; border-color: var(--border); color: var(--muted); }
+  /* During a run the send button becomes Stop in the same place and color, with a filled square. */
+  .composer-action.stop :global(svg) { fill: currentColor; }
   .composer-action.stop[aria-disabled="true"] { border-color: transparent; }
   .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
   .capture-meter { height: 14px; display: flex; align-items: center; gap: 2px; }

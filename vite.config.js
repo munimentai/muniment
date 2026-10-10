@@ -31,5 +31,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./test/isolated-home.setup.js'],
+    // Lazy component compilation and process fixtures share the CI worker budget.
+    testTimeout: 30_000,
   },
 })

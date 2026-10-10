@@ -1,4 +1,4 @@
-import { applyChatEvent, historyMessages, settledPhases, unsettledRun } from './chat-state.js'
+import { applyChatEvent, historyMessages, settledPhases, unsettledRun, withFolders } from './chat-state.js'
 
 const historyPageCap = 100
 const historyPageLimit = 100
@@ -774,8 +774,7 @@ export function createChatController({
     if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
     const selected = readFiles()
     const folders = selected.filter(file => file.isDirectory).map(file => file.path)
-    const context = folders.length ? `${prompt}\n\nAttached folders (local paths):\n${folders.map(path => JSON.stringify(path)).join('\n')}\nUse the local file tools to inspect these folders and their subfolders as needed. Folder contents are not embedded in this message.` : prompt
-    return submitPrompt(context, selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })))
+    return submitPrompt(withFolders(prompt, folders), selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })))
   }
 
   async function submitWhenAvailable(payload) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PROVIDERS, catalogProvider, connectableProviders, currentModel, currentModelAvailable, methodLabel, modelChipLabel, pickerGroups, providerName, searchProviders, sourceTag } from './provider-catalog.js'
+import { PROVIDERS, catalogProvider, connectableProviders, currentModel, currentModelAvailable, methodLabel, modelChipLabel, pickerGroups, providerName, routerHidden, searchProviders, sourceTag } from './provider-catalog.js'
 
 const inventory = {
   providers: [
@@ -86,7 +86,7 @@ describe('provider catalog', () => {
   it('reads the saved default when it is shown, else the first shown model, and labels the chip', () => {
     expect(currentModel(inventory)).toMatchObject({ provider: 'ollama', model: 'llama3.2:3b' })
     expect(modelChipLabel(inventory)).toBe('Llama 3.2:3B')
-    const hiddenDefault = { ...inventory, hidden: ['ollama/llama3.2:3b'] }
+    const hiddenDefault = { ...inventory, hidden: ['openai-codex/gpt-5.5-mini', 'ollama/llama3.2:3b'] }
     expect(currentModel(hiddenDefault)).toMatchObject({ provider: 'openai-codex', model: 'gpt-5.5' })
     expect(modelChipLabel({ providers: [], hidden: [] })).toBe('Connect a model')
     expect(modelChipLabel(null)).toBe('Connect a model')
@@ -188,4 +188,45 @@ describe('current model availability', () => {
     expect(currentModelAvailable(null)).toBe(false)
     expect(currentModelAvailable({ providers: [] })).toBe(false)
   })
+})
+
+describe('models that lead the picker', () => {
+  const served = {
+    providers: [{ id: 'anthropic', name: 'Anthropic', source: 'key', models: [{ id: 'claude-opus-5-5' }, { id: 'claude-opus-4-8' }, { id: 'claude-sonnet-4-6' }, { id: 'claude-sonnet-5-5' }] }],
+    default_provider: 'anthropic', default_model: 'claude-opus-5-5', hidden: [], shown: [],
+  }
+  const ids = (inventory) => pickerGroups(inventory).flatMap((group) => group.models.map((model) => model.id))
+
+  it('shows the newest model of each family and the older models the user turned on', () => {
+    expect(ids(served)).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5'])
+    expect(ids({ ...served, shown: ['anthropic/claude-opus-4-8'] })).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-opus-4-8'])
+    expect(ids({ ...served, hidden: ['anthropic/claude-sonnet-5-5'] })).toEqual(['claude-opus-5-5'])
+  })
+
+  it('keeps an older saved default shown so the chip names a row', () => {
+    expect(ids({ ...served, default_model: 'claude-sonnet-4-6' })).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-sonnet-4-6'])
+  })
+
+  it('returns every row newest first with whether it leads and is shown for the Models list', () => {
+    expect(pickerGroups(served, '', { all: true })[0].models.map(({ id, lead, shown }) => [id, lead, shown])).toEqual([
+      ['claude-sonnet-5-5', true, true], ['claude-opus-5-5', true, true], ['claude-opus-4-8', false, false], ['claude-sonnet-4-6', false, false],
+    ])
+  })
+})
+
+it('names the router models the picker hides, so the router leaves them out of the running', () => {
+  const routed = {
+    providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }],
+    default_provider: 'muniment-router', default_model: 'auto', hidden: ['muniment-router/openai/gpt-6-luna'], shown: [],
+    router_models: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-luna', 'gpt-5.5'].map((model) => ({ id: `openai/${model}`, family: 'openai', model, accounts: 1 })),
+  }
+  // GPT 5.6 Luna trails GPT 6 Luna in its family, and GPT 6 Luna is turned off.
+  expect(routerHidden(routed)).toEqual(['openai/gpt-5.6-luna', 'openai/gpt-6-luna'])
+  expect(routerHidden({ ...routed, shown: ['muniment-router/openai/gpt-5.6-luna'] })).toEqual(['openai/gpt-6-luna'])
+  expect(routerHidden(null)).toEqual([])
+})
+
+it('keeps Ollama decision models out of the picker and the Models list', () => {
+  const ollama = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', models: ['gpt-oss:latest', 'clef-flash:latest', 'nimble:latest', 'laya:latest', 'tev1:latest', 'qwen3.6-32k:latest'].map((id) => ({ id })) }], hidden: [] }
+  expect(pickerGroups(ollama, '', { all: true })[0].models.map((model) => model.id)).toEqual(['gpt-oss:latest', 'qwen3.6-32k:latest'])
 })

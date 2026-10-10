@@ -88,7 +88,7 @@ const ACCOUNT_PROVIDERS: &[(&str, &str)] = &[
 const CLAUDE_BRIDGE_PROVIDER: &str = "claude-bridge";
 const LM_STUDIO_PROVIDER: &str = "lmstudio";
 const CUSTOM_PROVIDER_PREFIX: &str = "custom-";
-/// The desktop's own record beside Pi's files: hidden models, endpoint names, the Claude Code connection.
+/// The desktop's own record beside Pi's files: the models turned off and on, endpoint names, the Claude Code connection.
 const MODELS_RECORD_FILE: &str = "muniment-models.json";
 const CLAUDE_BRIDGE_CONFIG_FILE: &str = "claude-bridge.json";
 const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(30);
@@ -115,6 +115,9 @@ pub(crate) struct InventoryProvider {
     source: &'static str,
     base_url: Option<String>,
     models: Vec<InventoryModel>,
+    /// The decision models the server reported. They answer on its System One
+    /// route, so the classifier list offers them and the chat picker does not.
+    decision_models: Vec<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -123,6 +126,9 @@ pub(crate) struct ProviderInventory {
     default_provider: Option<String>,
     default_model: Option<String>,
     hidden: Vec<String>,
+    /// The models the user turned on. The newest model of each family is on
+    /// until turned off, and an older model is off until turned on here.
+    shown: Vec<String>,
     /// The classifier model that picks a route per turn, when the router runs
     /// one. The composer's picker puts the router first and names it.
     router_classifier: Option<String>,
@@ -288,13 +294,41 @@ fn key_provider_name(provider: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(), String> {
+/// The settings a provider needs beside its key, which Pi reads from the
+/// credential's `env`. Cloudflare names the account, and its gateway the
+/// gateway too.
+pub(crate) fn provider_key_settings(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "cloudflare-workers-ai" => &["CLOUDFLARE_ACCOUNT_ID"],
+        "cloudflare-ai-gateway" => &["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"],
+        _ => &[],
+    }
+}
+
+fn store_provider_key(
+    auth_file: &Path,
+    provider: &str,
+    key: &str,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
     if key_provider_name(provider).is_none()
         || key.is_empty()
         || key.len() > 16 * 1024
         || key.trim() != key
     {
         return Err("Enter a valid provider and API key.".into());
+    }
+    let names = provider_key_settings(provider);
+    if env.keys().any(|name| !names.contains(&name.as_str()))
+        || names.iter().any(|name| {
+            env.get(*name).is_none_or(|value| {
+                value.is_empty()
+                    || value.len() > 128
+                    || !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            })
+        })
+    {
+        return Err("Enter the account details this provider needs.".into());
     }
     let parent = auth_file
         .parent()
@@ -324,10 +358,11 @@ fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
         Err(_) => return Err(SAVE_SETTINGS_ERROR.into()),
     };
-    auth.insert(
-        provider.to_owned(),
-        serde_json::json!({"type": "api_key", "key": key}),
-    );
+    let mut credential = serde_json::json!({"type": "api_key", "key": key});
+    if !env.is_empty() {
+        credential["env"] = serde_json::json!(env);
+    }
+    auth.insert(provider.to_owned(), credential);
     let bytes = serde_json::to_vec_pretty(&auth).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let temporary = auth_file.with_extension(format!("tmp-{}", Uuid::new_v4()));
     let result = (|| {
@@ -349,10 +384,39 @@ fn store_provider_key(auth_file: &Path, provider: &str, key: &str) -> Result<(),
     result.map_err(|_| SAVE_SETTINGS_ERROR.into())
 }
 
-fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String> {
+/// The key an endpoint provider already holds, never a stand-in. Settings never
+/// reads a key back to show it, so an edit with a blank key keeps this one.
+pub(crate) fn saved_endpoint_key(models_file: &Path, provider: &str) -> Option<String> {
+    let root: serde_json::Value = serde_json::from_slice(&fs::read(models_file).ok()?).ok()?;
+    root["providers"][provider]["apiKey"]
+        .as_str()
+        .filter(|key| !matches!(*key, "ollama" | "local") && !key.is_empty())
+        .map(str::to_owned)
+}
+
+/// The key saved with an endpoint, only for a URL on that endpoint, so a
+/// decision model on the server receives the key its chat models use and no
+/// other host does.
+pub(crate) fn endpoint_key_for(models_file: &Path, provider: &str, url: &str) -> Option<String> {
+    let root: serde_json::Value = serde_json::from_slice(&fs::read(models_file).ok()?).ok()?;
+    let base = root["providers"][provider]["baseUrl"].as_str()?.trim_end_matches('/');
+    let rest = url.strip_prefix(base)?;
+    (rest.is_empty() || rest.starts_with('/'))
+        .then(|| saved_endpoint_key(models_file, provider))
+        .flatten()
+}
+
+/// Saves an Ollama server. A server on another host may sit behind a key, which
+/// discovery sends and Pi sends with every turn. With no key, Pi sends a stand-in.
+fn store_local_provider(models_file: &Path, base_url: &str, key: &str) -> Result<(), String> {
     if base_url.is_empty() || base_url.len() > 16 * 1024 || base_url.trim() != base_url {
         return Err("Enter a valid Ollama server URL.".into());
     }
+    if key.len() > 16 * 1024 || key.trim() != key {
+        return Err("Enter a valid API key.".into());
+    }
+    let saved = if key.is_empty() { saved_endpoint_key(models_file, OLLAMA_PROVIDER) } else { None };
+    let key = saved.as_deref().unwrap_or(key);
     let parsed = url::Url::parse(base_url).map_err(|_| "Enter a valid Ollama server URL.")?;
     if !matches!(parsed.scheme(), "http" | "https")
         || parsed.host().is_none()
@@ -381,8 +445,18 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
         .as_object_mut()
         .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
     // The server names its own models; the pinned id stands in when it does not answer.
-    let discovered = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT);
-    let model_ids = discovered.unwrap_or_else(|| vec![OLLAMA_MODEL.to_owned()]);
+    let discovered = muniment_core::endpoint_models::discover_endpoint_models(
+        base_url,
+        Some(key),
+        DISCOVERY_TIMEOUT,
+    );
+    let decisions = discovered
+        .as_ref()
+        .map(|models| models.decisions.clone())
+        .unwrap_or_default();
+    let model_ids = discovered
+        .map(|models| models.chat)
+        .unwrap_or_else(|| vec![OLLAMA_MODEL.to_owned()]);
     if model_ids.is_empty() {
         return Err("The server has no chat models. Add a chat model, then try again.".into());
     }
@@ -396,7 +470,7 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
         serde_json::json!({
             "baseUrl": base_url,
             "api": "openai-completions",
-            "apiKey": OLLAMA_PROVIDER,
+            "apiKey": if key.is_empty() { OLLAMA_PROVIDER } else { key },
             "compat": {
                 "supportsDeveloperRole": false,
                 "supportsReasoningEffort": false
@@ -413,7 +487,8 @@ fn store_local_provider(models_file: &Path, base_url: &str) -> Result<(), String
         .check()
         .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     write_json_for_update(&settings_file, &settings)?;
-    write_json_for_update(models_file, &models)
+    write_json_for_update(models_file, &models)?;
+    store_decision_models(parent, OLLAMA_PROVIDER, &decisions)
 }
 
 pub(crate) fn read_json_for_update(
@@ -494,10 +569,11 @@ pub(crate) async fn local_mode_store_provider_key(
     _app: tauri::AppHandle,
     provider: String,
     key: String,
+    env: Option<std::collections::BTreeMap<String, String>>,
 ) -> Result<(), String> {
     let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
     tauri::async_runtime::spawn_blocking(move || {
-        store_provider_key(&pi_auth_file(&agent), &provider, &key)?;
+        store_provider_key(&pi_auth_file(&agent), &provider, &key, &env.unwrap_or_default())?;
         if default_model_unset(&agent) {
             let _ = adopt_provider_default(&agent, &provider, false);
         }
@@ -511,9 +587,11 @@ pub(crate) async fn local_mode_store_provider_key(
 pub(crate) fn local_mode_store_local_provider(
     _app: tauri::AppHandle,
     base_url: String,
+    api_key: Option<String>,
 ) -> Result<(), String> {
     let agent = harness_agent_directory(SAVE_SETTINGS_ERROR)?;
-    store_local_provider(&pi_models_file(&agent), &base_url)
+    let key = api_key.unwrap_or_default();
+    store_local_provider(&pi_models_file(&agent), &base_url, key.trim())
 }
 
 fn models_record_file(agent: &Path) -> PathBuf {
@@ -538,6 +616,41 @@ fn write_models_record(
 ) -> Result<(), String> {
     fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     write_json_for_update(&models_record_file(agent), record)
+}
+
+/// The record key that keeps each endpoint's decision models by provider.
+const DECISION_MODELS: &str = "decisionModels";
+
+fn decision_models(record: &serde_json::Map<String, serde_json::Value>, provider: &str) -> Vec<String> {
+    record
+        .get(DECISION_MODELS)
+        .and_then(|providers| providers.get(provider))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn store_decision_models(agent: &Path, provider: &str, ids: &[String]) -> Result<(), String> {
+    let mut record = read_models_record(agent)?;
+    if decision_models(&record, provider) == ids {
+        return Ok(());
+    }
+    let providers = record
+        .entry(DECISION_MODELS)
+        .or_insert_with(|| serde_json::json!({}));
+    if !providers.is_object() {
+        *providers = serde_json::json!({});
+    }
+    let providers = providers.as_object_mut().expect("an object");
+    if ids.is_empty() {
+        providers.remove(provider);
+    } else {
+        providers.insert(provider.to_owned(), serde_json::json!(ids));
+    }
+    write_models_record(agent, &record)
 }
 
 fn record_strings(record: &serde_json::Map<String, serde_json::Value>, key: &str) -> Vec<String> {
@@ -838,11 +951,12 @@ fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
     let _lock = lock_pi_auth_file(&models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let mut root = read_json_for_update(&models_file)?;
     let mut changed = false;
+    let mut decisions = Vec::new();
     if let Some(providers) = root
         .get_mut("providers")
         .and_then(serde_json::Value::as_object_mut)
     {
-        for (_, entry) in providers
+        for (id, entry) in providers
             .iter_mut()
             .filter(|(id, _)| {
                 id.as_str() != ROUTER_PROVIDER
@@ -853,11 +967,20 @@ fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
             let Some(base_url) = entry.get("baseUrl").and_then(serde_json::Value::as_str) else {
                 continue;
             };
-            let Some(discovered) =
-                muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT)
-            else {
+            // The stand-in keys Pi sends to a server with no key are not keys.
+            let key = entry
+                .get("apiKey")
+                .and_then(serde_json::Value::as_str)
+                .filter(|key| !matches!(*key, "ollama" | "local"));
+            let Some(found) = muniment_core::endpoint_models::discover_endpoint_models(
+                base_url,
+                key,
+                DISCOVERY_TIMEOUT,
+            ) else {
                 continue;
             };
+            decisions.push((id.clone(), found.decisions));
+            let discovered = found.chat;
             let current: Vec<&str> = entry
                 .get("models")
                 .and_then(serde_json::Value::as_array)
@@ -883,6 +1006,13 @@ fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
     if changed {
         write_json_for_update(&models_file, &root)?;
     }
+    for (provider, ids) in decisions {
+        let before = decision_models(&read_models_record(agent)?, &provider);
+        if before != ids {
+            store_decision_models(agent, &provider, &ids)?;
+            changed = true;
+        }
+    }
     Ok(changed)
 }
 
@@ -907,6 +1037,7 @@ fn provider_inventory(
             source,
             base_url: None,
             models: Vec::new(),
+            decision_models: Vec::new(),
         });
     }
     if let Some(endpoints) = models_file
@@ -949,6 +1080,7 @@ fn provider_inventory(
                         images: false,
                     })
                     .collect(),
+                decision_models: decision_models(&record, provider),
             });
         }
     }
@@ -963,6 +1095,7 @@ fn provider_inventory(
             source: "claude-code",
             base_url: None,
             models: Vec::new(),
+            decision_models: Vec::new(),
         });
     }
     for (provider, model) in models {
@@ -985,6 +1118,7 @@ fn provider_inventory(
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
         hidden: record_strings(&record, "hidden"),
+        shown: record_strings(&record, "shown"),
         router_classifier: router_classifier(agent),
         router_models: router_models(agent),
     })
@@ -994,14 +1128,15 @@ fn provider_inventory(
 /// account of the model's family that can take a turn on it. Empty while the
 /// router is off.
 fn router_models(agent: &Path) -> Vec<RouterModel> {
-    use muniment_core::model_router::options;
+    use muniment_core::model_router::all_options;
     let Ok(config) = muniment_core::model_router::config::load(agent) else {
         return Vec::new();
     };
     if !config.enabled {
         return Vec::new();
     }
-    options(&config)
+    // The hidden ones too: the picker hides them, and Settings turns them back on.
+    all_options(&config)
         .into_iter()
         .map(|option| {
             let accounts = config
@@ -1216,12 +1351,15 @@ fn set_model_hidden(agent: &Path, provider: &str, model: &str, hidden: bool) -> 
     }
     let key = format!("{provider}/{model}");
     let mut record = read_models_record(agent)?;
-    let mut list = record_strings(&record, "hidden");
-    list.retain(|entry| *entry != key);
-    if hidden {
-        list.push(key);
+    // A model sits on one list at most: off on the hidden list, on on the shown list.
+    for (name, add) in [("hidden", hidden), ("shown", !hidden)] {
+        let mut list = record_strings(&record, name);
+        list.retain(|entry| *entry != key);
+        if add {
+            list.push(key.clone());
+        }
+        record.insert(name.into(), list.into());
     }
-    record.insert("hidden".into(), list.into());
     write_models_record(agent, &record)
 }
 
@@ -1331,24 +1469,33 @@ fn store_endpoint_provider(
     if key.len() > 16 * 1024 || key.trim() != key {
         return Err("Enter a valid API key.".into());
     }
-    let mut models: Vec<String> = models
-        .iter()
-        .filter(|model| valid_identifier(model, 512))
-        .cloned()
-        .collect();
-    if models.is_empty() {
-        models = muniment_core::endpoint_models::discover_models(base_url, DISCOVERY_TIMEOUT)
-            .unwrap_or_default();
-    }
-    if models.is_empty() {
-        return Err("The server named no models. Start it, or list its models here.".into());
-    }
     let provider = match kind {
         "lmstudio" => LM_STUDIO_PROVIDER.to_owned(),
         "custom" if valid_identifier(name, 80) => custom_provider_id(name),
         _ => return Err("Name the endpoint.".into()),
     };
     let models_file = pi_models_file(agent);
+    let saved = if key.is_empty() { saved_endpoint_key(&models_file, &provider) } else { None };
+    let key = saved.as_deref().unwrap_or(key);
+    let mut models: Vec<String> = models
+        .iter()
+        .filter(|model| valid_identifier(model, 512))
+        .cloned()
+        .collect();
+    let mut decisions = None;
+    if models.is_empty() {
+        let found = muniment_core::endpoint_models::discover_endpoint_models(
+            base_url,
+            Some(key),
+            DISCOVERY_TIMEOUT,
+        )
+        .unwrap_or_default();
+        models = found.chat;
+        decisions = Some(found.decisions);
+    }
+    if models.is_empty() {
+        return Err("The server named no models. Start it, or list its models here.".into());
+    }
     fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
     let _models_lock =
         lock_pi_auth_file(&models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
@@ -1377,6 +1524,9 @@ fn store_endpoint_provider(
             .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
         names.insert(provider.clone(), name.into());
         write_models_record(agent, &record)?;
+    }
+    if let Some(ids) = decisions {
+        store_decision_models(agent, &provider, &ids)?;
     }
     Ok(provider)
 }
@@ -1746,6 +1896,35 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
     }
 
     #[test]
+    fn an_endpoint_carries_the_decision_models_its_server_reported() {
+        let agent = temporary_directory();
+        fs::write(agent.join("models.json"), serde_json::json!({
+            "providers": {"llama": {"baseUrl": "http://localhost:8080/v1", "models": [{"id": "qwen3"}]}}
+        }).to_string()).unwrap();
+        store_decision_models(&agent, "llama", &["kev-4b".to_owned()]).unwrap();
+        let inventory = provider_inventory(&agent, Vec::new()).unwrap();
+        assert_eq!(inventory.providers[0].decision_models, ["kev-4b"]);
+        assert_eq!(inventory.providers[0].models.len(), 1);
+        store_decision_models(&agent, "llama", &[]).unwrap();
+        let inventory = provider_inventory(&agent, Vec::new()).unwrap();
+        assert!(inventory.providers[0].decision_models.is_empty());
+    }
+
+    #[test]
+    fn a_server_key_goes_only_to_that_server() {
+        let agent = temporary_directory();
+        let models = agent.join("models.json");
+        fs::write(&models, serde_json::json!({
+            "providers": {"ollama": {"baseUrl": "https://ollama.example/v1/", "apiKey": "server-key"}}
+        }).to_string()).unwrap();
+        let key = |url: &str| endpoint_key_for(&models, "ollama", url);
+        assert_eq!(key("https://ollama.example/v1/systemone").as_deref(), Some("server-key"));
+        assert_eq!(key("https://ollama.example/v1evil/systemone"), None);
+        assert_eq!(key("https://other.example/v1/systemone"), None);
+        assert_eq!(endpoint_key_for(&models, "missing", "https://ollama.example/v1/systemone"), None);
+    }
+
+    #[test]
     fn the_inventory_reads_keys_accounts_endpoints_the_bridge_and_the_default() {
         let agent = temporary_directory();
         fs::write(agent.join("auth.json"), r#"{"anthropic":{"type":"api_key","key":"k"},"openai-codex":{"type":"oauth","access":"a"}}"#).unwrap();
@@ -1888,6 +2067,12 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         set_model_hidden(&agent, "anthropic", "claude-haiku-4-5", false).unwrap();
         let record = read_models_record(&agent).unwrap();
         assert_eq!(record_strings(&record, "hidden"), vec!["google/gemini"]);
+        assert_eq!(record_strings(&record, "shown"), vec!["anthropic/claude-haiku-4-5"]);
+        set_model_hidden(&agent, "anthropic", "claude-haiku-4-5", true).unwrap();
+        let record = read_models_record(&agent).unwrap();
+        assert_eq!(record_strings(&record, "hidden"), vec!["google/gemini", "anthropic/claude-haiku-4-5"]);
+        assert!(record_strings(&record, "shown").is_empty());
+        set_model_hidden(&agent, "anthropic", "claude-haiku-4-5", false).unwrap();
 
         disconnect_provider(&agent, "anthropic").unwrap();
         let auth: serde_json::Value =
@@ -1982,12 +2167,20 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         let agent = temporary_directory();
         let auth_file = agent.join("auth.json");
         for (provider, _) in KEY_PROVIDERS {
-            store_provider_key(&auth_file, provider, "k").unwrap();
+            let env = provider_key_settings(provider)
+                .iter()
+                .map(|name| (name.to_string(), "abc123".to_string()))
+                .collect();
+            store_provider_key(&auth_file, provider, "k", &env).unwrap();
         }
-        assert!(store_provider_key(&auth_file, "nobody", "k").is_err());
+        assert!(store_provider_key(&auth_file, "nobody", "k", &Default::default()).is_err());
+        // Cloudflare needs its account beside the key, in the env Pi reads.
+        assert!(store_provider_key(&auth_file, "cloudflare-workers-ai", "k", &Default::default()).is_err());
         let auth: serde_json::Value =
             serde_json::from_slice(&fs::read(&auth_file).unwrap()).unwrap();
         assert_eq!(auth.as_object().unwrap().len(), KEY_PROVIDERS.len());
+        assert_eq!(auth["cloudflare-workers-ai"]["env"]["CLOUDFLARE_ACCOUNT_ID"], "abc123");
+        assert!(auth["openai"].get("env").is_none());
         fs::remove_dir_all(agent).unwrap();
     }
 
@@ -2121,7 +2314,7 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         let agent = directory.join("agent");
         let auth_file = pi_auth_file(&agent);
 
-        store_provider_key(&auth_file, "openai", "test-key").unwrap();
+        store_provider_key(&auth_file, "openai", "test-key", &Default::default()).unwrap();
 
         assert_eq!(auth_file, agent.join("auth.json"));
         let auth: serde_json::Value =
@@ -2140,7 +2333,7 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
             r#"{"github-copilot":{"type":"oauth","access":"saved"}}"#,
         )
         .unwrap();
-        store_provider_key(&auth_file, "anthropic", "test-key").unwrap();
+        store_provider_key(&auth_file, "anthropic", "test-key", &Default::default()).unwrap();
         let auth: serde_json::Value =
             serde_json::from_slice(&fs::read(&auth_file).unwrap()).unwrap();
         assert_eq!(
@@ -2161,7 +2354,7 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         let (finished_tx, finished_rx) = std::sync::mpsc::channel();
         let writer_file = auth_file.clone();
         let writer = std::thread::spawn(move || {
-            let result = store_provider_key(&writer_file, "anthropic", "test-key");
+            let result = store_provider_key(&writer_file, "anthropic", "test-key", &Default::default());
             finished_tx.send(()).unwrap();
             result
         });
@@ -2188,9 +2381,9 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
     fn provider_key_command_rejects_unknown_providers_and_blank_keys() {
         let directory = temporary_directory();
         let auth_file = directory.join("auth.json");
-        assert!(store_provider_key(&auth_file, "other", "key").is_err());
-        assert!(store_provider_key(&auth_file, "ollama", "key").is_err());
-        assert!(store_provider_key(&auth_file, "openai", " ").is_err());
+        assert!(store_provider_key(&auth_file, "other", "key", &Default::default()).is_err());
+        assert!(store_provider_key(&auth_file, "ollama", "key", &Default::default()).is_err());
+        assert!(store_provider_key(&auth_file, "openai", " ", &Default::default()).is_err());
         assert!(!auth_file.exists());
         fs::remove_dir_all(directory).unwrap();
     }
@@ -2205,7 +2398,7 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         )
         .unwrap();
 
-        store_local_provider(&models_file, "http://127.0.0.1:11434/v1").unwrap();
+        store_local_provider(&models_file, "http://127.0.0.1:11434/v1", "").unwrap();
 
         let models: serde_json::Value =
             serde_json::from_slice(&fs::read(&models_file).unwrap()).unwrap();
@@ -2235,6 +2428,17 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
             serde_json::from_slice(&fs::read(directory.join("settings.json")).unwrap()).unwrap();
         assert_eq!(settings["defaultProvider"], "ollama");
         assert_eq!(settings["defaultModel"], "llama3.2:latest");
+        // A server behind a key keeps the key Pi sends with every turn.
+        store_local_provider(&models_file, "http://127.0.0.1:11434/v1", "sk-ollama").unwrap();
+        let models: serde_json::Value =
+            serde_json::from_slice(&fs::read(&models_file).unwrap()).unwrap();
+        assert_eq!(models["providers"]["ollama"]["apiKey"], "sk-ollama");
+        // An edit with a blank key keeps the saved one.
+        store_local_provider(&models_file, "http://127.0.0.1:11434/v1", "").unwrap();
+        let models: serde_json::Value =
+            serde_json::from_slice(&fs::read(&models_file).unwrap()).unwrap();
+        assert_eq!(models["providers"]["ollama"]["apiKey"], "sk-ollama");
+        assert!(store_local_provider(&models_file, "http://127.0.0.1:11434/v1", " sk ").is_err());
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -2254,7 +2458,7 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         )
         .unwrap();
 
-        store_local_provider(&models_file, "http://127.0.0.1:11434/v1").unwrap();
+        store_local_provider(&models_file, "http://127.0.0.1:11434/v1", "").unwrap();
 
         let settings: serde_json::Value =
             serde_json::from_slice(&fs::read(directory.join("settings.json")).unwrap()).unwrap();
@@ -2280,7 +2484,7 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
             "http://user:secret@localhost/v1",
             "http://localhost/v1?token=secret",
         ] {
-            assert!(store_local_provider(&models_file, base_url).is_err());
+            assert!(store_local_provider(&models_file, base_url, "").is_err());
         }
         assert!(!models_file.exists());
         fs::remove_dir_all(directory).unwrap();
