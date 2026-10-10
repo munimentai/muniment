@@ -71,7 +71,10 @@ pub fn remove_journal_tables(profile: &Path, tables: &[&str]) {
             .parent()?
             .parent()?
             .join("examples")
-            .join(format!("remove-journal-tables{}", std::env::consts::EXE_SUFFIX));
+            .join(format!(
+                "remove-journal-tables{}",
+                std::env::consts::EXE_SUFFIX
+            ));
         example.is_file().then_some(example)
     });
     if let Some(example) = built {
